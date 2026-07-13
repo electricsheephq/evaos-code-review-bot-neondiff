@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   selectAndSealPhase1Cohort,
   verifyPhase1CohortSeal,
@@ -23,6 +23,25 @@ import {
 } from "../src/phase1-cohort-selection.js";
 import * as cohortSelectionModule from "../src/phase1-cohort-selection.js";
 import { runPhase1CohortSelectionCli } from "../src/phase1-cohort-selection-cli.js";
+
+const inputPathRace = vi.hoisted(() => ({ armed: false, path: "", target: "", swapped: false }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    lstatSync(path: Parameters<typeof actual.lstatSync>[0]) {
+      const metadata = actual.lstatSync(path);
+      if (inputPathRace.armed && path === inputPathRace.path) {
+        inputPathRace.armed = false;
+        inputPathRace.swapped = true;
+        actual.rmSync(path);
+        actual.symlinkSync(inputPathRace.target, path);
+      }
+      return metadata;
+    }
+  };
+});
 
 const PHASE1_COHORT_PROOF_BOUNDARY = "This may prove only that a metadata-only 14-case advisory cohort is selected and immutably sealed under the named workload and privacy contracts. It does not admit Corpus v1 scenarios, prove labels, review quality, noninferiority, production routing, runtime safety, customer readiness, or public claims. No model run may begin until separate hidden outcomes, blinded adjudication, and restricted identity sidecars pass their own gates.";
 const CANONICAL_LANGUAGES = ["typescript", "javascript", "swift", "python", "go", "rust", "java", "kotlin", "csharp", "cpp", "ruby", "php", "shell", "sql"] as const;
@@ -246,6 +265,24 @@ describe("phase 1 cohort selection", () => {
       policyPath: policyLink
     })).toThrow(/policy.*symlink/i);
     expect(existsSync(policyInput.outputDir)).toBe(false);
+  });
+
+  it("does not follow an input swapped to a symlink after lstat", () => {
+    const f = fixture();
+    const swappedTarget = join(f.root, "swapped-candidates.json");
+    writeFileSync(swappedTarget, readFileSync(f.candidatePoolPath));
+    inputPathRace.path = f.candidatePoolPath;
+    inputPathRace.target = swappedTarget;
+    inputPathRace.swapped = false;
+    inputPathRace.armed = true;
+
+    try {
+      expect(() => selectAndSealPhase1Cohort(selectionOptions(f))).toThrow();
+      expect(inputPathRace.swapped).toBe(true);
+      expect(existsSync(f.outputDir)).toBe(false);
+    } finally {
+      inputPathRace.armed = false;
+    }
   });
 
   it("selects deterministically under input reordering with exact cohort and first-five strata", () => {

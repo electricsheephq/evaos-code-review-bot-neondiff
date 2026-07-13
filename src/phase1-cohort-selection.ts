@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
+  constants,
   chmodSync,
   closeSync,
   existsSync,
@@ -756,7 +757,7 @@ function readBoundedFile(path: string, maximumBytes: number, label: string): Buf
   const pathEntry = lstatSync(path);
   if (pathEntry.isSymbolicLink()) throw new Error(`${label} must be a regular file, not a symlink`);
   if (!pathEntry.isFile()) throw new Error(`${label} must be a regular file`);
-  const descriptor = openSync(path, "r");
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const input = fstatSync(descriptor);
     if (!input.isFile()) throw new Error(`${label} must be a regular file`);
