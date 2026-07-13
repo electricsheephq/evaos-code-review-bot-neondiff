@@ -429,9 +429,40 @@ describe("checkout subscription lifecycle renewal", () => {
       assert.ok(!JSON.stringify(result).includes(paymentReference));
       const ledger = inspectDatabase<Record<string, unknown>>(
         path,
-        "select * from license_subscription_lifecycle_events"
+        `select
+          event_id,
+          issuance_idempotency_key,
+          license_key_hash,
+          external_subscription_id,
+          request_hash,
+          event_created_at,
+          provider,
+          provider_account_id,
+          provider_mode,
+          provider_event_type,
+          command,
+          payment_reference_fingerprint,
+          normalized_transition,
+          result
+        from license_subscription_lifecycle_events`
       );
       assert.equal(ledger.length, 1);
+      assert.deepEqual({ ...ledger[0] }, {
+        event_id: request.eventId,
+        issuance_idempotency_key: issued.request.idempotencyKey,
+        license_key_hash: issued.licenseKeyHash,
+        external_subscription_id: issued.request.externalSubscriptionId,
+        request_hash: request.requestHash,
+        event_created_at: request.eventCreatedAt,
+        provider: issued.request.provider,
+        provider_account_id: issued.request.providerAccountId,
+        provider_mode: issued.request.providerMode,
+        provider_event_type: request.providerEventType,
+        command: request.command,
+        payment_reference_fingerprint: request.paymentReferenceFingerprint,
+        normalized_transition: "renew_paid",
+        result: "updated"
+      });
       assert.equal(ledger[0]?.payment_reference_fingerprint, request.paymentReferenceFingerprint);
       assert.ok(!JSON.stringify(ledger).includes(paymentReference));
       const bytes = readFileSync(path);
