@@ -161,8 +161,8 @@ the focused evidence for secret-shaped text. The capability packet is bound to
 the `tab-repos` fixture and requested `1040x680` content size, is capped at 4096
 bytes, and contains only schema/OS metadata, typed acquisition state, and
 sanitized capability booleans. It uses `AXUIElementCopyActionNames` only to
-check the verified Boundary and outer vertical scrollbar; it does not perform
-accessibility actions. Missing, malformed, or failed action-name acquisition is
+check the verified Boundary and outer vertical scrollbar; it does not perform accessibility actions.
+Missing, malformed, or failed action-name acquisition is
 a typed acquisition failure rather than a false capability result. It never
 reads live configuration, Keychain, GitHub, provider, daemon, network, or
 customer state.
@@ -184,8 +184,8 @@ failures and unrelated checker failures remain ordinary checker failures.
 Boundary is a sibling of Table, so a Table scroll does not satisfy the checker.
 The DEBUG fixture may
 mutate only its deterministic test UI to exercise scroll reachability; it does
-not authorize live product or runtime mutation. A checker failure preserves
-`reachability.json` and `scroll-capabilities.json`.
+not authorize live product or runtime mutation. A checker failure preserves `reachability.json`
+and `scroll-capabilities.json`.
 The normalized checker status and public-safety result are written before the
 runner returns the nonzero checker exit.
 
