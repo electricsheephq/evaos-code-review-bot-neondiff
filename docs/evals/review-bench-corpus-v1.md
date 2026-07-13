@@ -126,7 +126,10 @@ adjudicators. The coordinator MUST generate the nonce from 32 CSPRNG bytes,
 never reuse it across candidate manifests, and keep it outside the packet. The
 validator enforces the 256-bit encoding and rejects the all-zero value, but it
 cannot prove entropy; resistance to guess-and-confirm recovery depends on this
-operational requirement.
+operational requirement. Allegation-text dictionaries do not enable offline
+verification without the secret nonce because the commitment is keyed; the
+remaining risk is nonce generation, reuse, or coordinator disclosure rather
+than low-entropy allegation wording alone.
 Each path/line anchor asks the same fixed rubric-bound actionability question.
 This binds both humans to one frozen source-candidate universe without exposing
 source identities, allegation wording, or expected outcomes. Its copied
@@ -151,6 +154,17 @@ while preserving the immutable receipt for the resolver workflow. This is a
 structured routing signal, not evidence corruption; automation must branch on
 the emitted `status` field instead of treating every nonzero result as a broken
 run.
+
+Every receipt also records a machine-readable lifecycle kind:
+`initial_ready` when the two initial adjudicators agree,
+`initial_needs_resolution` when a resolver is still owed, and `resolved` when a
+valid third response closes the frozen disagreement queue. Multiple immutable
+receipts for one packet may coexist at different paths; corpus assembly must
+prefer `resolved` over `initial_needs_resolution`, must reject competing
+receipts of the same terminal kind, and must never treat a
+`needs_resolution` receipt as admission-ready. The four artifact-level
+`*Count` fields are intentionally one-hot per packet; summing them across
+receipts counts packet verdict-agreement categories, not candidate decisions.
 
 These commands make claimed independent human decisions inspectable; they do
 not authenticate a human identity, establish oracle truth, assemble a final

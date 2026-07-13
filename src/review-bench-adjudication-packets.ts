@@ -151,6 +151,7 @@ export interface ReviewBenchAdjudicationReceiptV1 {
   secondaryAdjudicatorId: string;
   resolverAdjudicatorId?: string;
   status: "ready" | "needs_resolution";
+  receiptKind: "initial_ready" | "initial_needs_resolution" | "resolved";
   artifactBothDefectCount: number;
   artifactPrimaryOnlyDefectCount: number;
   artifactSecondaryOnlyDefectCount: number;
@@ -181,6 +182,7 @@ export interface ReviewBenchAdjudicationPrepareSummary {
 export interface ReviewBenchAdjudicationVerifySummary {
   schemaVersion: "review-bench-adjudication-verify-summary/v1";
   status: "ready" | "needs_resolution";
+  receiptKind: ReviewBenchAdjudicationReceiptV1["receiptKind"];
   packetFingerprint: string;
   disagreementCount: number;
   resolvedDecisionSha256?: string;
@@ -383,6 +385,11 @@ export function verifyReviewBenchAdjudicationResponses(input: {
   const counts = computeAgreementCounts(packet, primary, secondary, primaryById, secondaryById);
   const status: ReviewBenchAdjudicationReceiptV1["status"] =
     resolvedDecisionSha256 === undefined ? "needs_resolution" : "ready";
+  const receiptKind: ReviewBenchAdjudicationReceiptV1["receiptKind"] = resolverRead !== undefined
+    ? "resolved"
+    : status === "ready"
+      ? "initial_ready"
+      : "initial_needs_resolution";
   const receiptBasis = {
     schemaVersion: "review-bench-adjudication-receipt/v1" as const,
     packetFingerprint: packet.packetFingerprint,
@@ -394,6 +401,7 @@ export function verifyReviewBenchAdjudicationResponses(input: {
     secondaryAdjudicatorId: secondary.adjudicatorId,
     ...(resolverRead === undefined ? {} : { resolverAdjudicatorId: resolverRead.value.adjudicatorId }),
     status,
+    receiptKind,
     ...counts,
     disagreementCount,
     disagreementQueue: queue,
@@ -414,6 +422,7 @@ export function verifyReviewBenchAdjudicationResponses(input: {
   return {
     schemaVersion: "review-bench-adjudication-verify-summary/v1",
     status,
+    receiptKind,
     packetFingerprint: packet.packetFingerprint,
     disagreementCount,
     ...(resolvedDecisionSha256 === undefined ? {} : { resolvedDecisionSha256 }),
@@ -736,7 +745,7 @@ function computeAgreementCounts(
   secondaryById: Map<string, ReviewBenchAdjudicationDecisionV1>
 ): Omit<ReviewBenchAdjudicationReceiptV1,
   "schemaVersion" | "packetFingerprint" | "packetSha256" | "primaryResponseSha256" |
-  "secondaryResponseSha256" | "primaryAdjudicatorId" | "secondaryAdjudicatorId" | "status" |
+  "secondaryResponseSha256" | "primaryAdjudicatorId" | "secondaryAdjudicatorId" | "status" | "receiptKind" |
   "disagreementCount" | "disagreementQueue" | "disagreementQueueSha256" | "verifiedAt" | "receiptSha256" |
   "resolverResponseSha256" | "resolverAdjudicatorId" | "resolvedDecisionSha256"> {
   let both = 0;

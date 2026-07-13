@@ -629,6 +629,10 @@ describe("review-bench adjudication response verification", () => {
     ], { cwd: process.cwd(), encoding: "utf8" });
     expect(verifyResult.status).toBe(0);
     expect(JSON.parse(verifyResult.stdout)).toMatchObject({ status: "ready" });
+    expect(JSON.parse(readFileSync(paths.receiptPath, "utf8"))).toMatchObject({
+      status: "ready",
+      receiptKind: "initial_ready"
+    });
   }, 20_000);
 
   it("exits one while emitting a needs_resolution routing summary", () => {
@@ -672,6 +676,7 @@ describe("review-bench adjudication response verification", () => {
     expect(receipt).toMatchObject({
       schemaVersion: "review-bench-adjudication-receipt/v1",
       status: "ready",
+      receiptKind: "initial_ready",
       artifactBothDefectCount: 1,
       actionabilityBothActionableCount: 1,
       severityWithinOneTierCount: 1,
@@ -781,6 +786,7 @@ describe("review-bench adjudication response verification", () => {
 
     expect(summary.status).toBe("needs_resolution");
     expect(receipt.status).toBe("needs_resolution");
+    expect(receipt.receiptKind).toBe("initial_needs_resolution");
     expect(receipt.resolvedDecisionSha256).toBeUndefined();
     expect(receipt.disagreementQueue).toMatchObject({
       schemaVersion: "review-bench-adjudication-disagreement/v1",
@@ -830,6 +836,10 @@ describe("review-bench adjudication response verification", () => {
     });
     expect(summary.status).toBe("ready");
     expect(summary.resolvedDecisionSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.parse(readFileSync(paths.receiptPath, "utf8"))).toMatchObject({
+      status: "ready",
+      receiptKind: "resolved"
+    });
 
     const unnecessary = prepare(fixture());
     const agreePaths = responsePaths(
