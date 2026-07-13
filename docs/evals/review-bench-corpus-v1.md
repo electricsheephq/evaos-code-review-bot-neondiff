@@ -112,6 +112,46 @@ that human judgment is correct. It makes the judgment independently reviewable,
 immutable, and bound to the exact bytes and admission receipt; blinded human
 adjudication and adversarial review remain part of the trust boundary.
 
+## Blinded adjudication intake
+
+`review-bench prepare-adjudication` creates a private, provider-free packet from
+one canonical candidate manifest plus digest-named source, rubric, and protocol
+artifacts. The packet is allowlist-projected and excludes oracle/gold answers,
+provider or model identity, split assignment, peer decisions, and resolver
+decisions. Source candidate IDs are replaced by deterministic opaque
+packet-local IDs. Original allegation text is represented only by a SHA-256
+HMAC commitment keyed by a coordinator-only 256-bit blinding nonce and bound
+into the packet fingerprint; neither the nonce nor allegation text is shown to
+adjudicators, preventing low-entropy guess-and-confirm recovery from the packet.
+Each path/line anchor asks the same fixed rubric-bound actionability question.
+This binds both humans to one frozen source-candidate universe without exposing
+source identities, allegation wording, or expected outcomes. Its copied
+artifacts and packet bytes are immutable, hash-bound,
+private-permissioned, and must be written outside a Git checkout under a
+current-user-owned parent that is not writable by group or other users. Parent
+device/inode identity is rechecked through publication. A malicious process
+already running as the same operating-system user remains inside the local
+evidence trust boundary; Node does not expose portable descriptor-relative
+creation for eliminating that same-account pathname race.
+
+`review-bench verify-adjudication` binds two complete canonical `human:*`
+responses to that exact packet. It records agreement counts and either returns
+`ready` or emits a deterministic `needs_resolution` queue. A third distinct,
+later resolver may close only disputed units; it cannot rewrite an undisputed
+verdict or candidate decision. One-tier severity proximity remains an agreement
+metric; any non-identical final severity still requires resolution. A
+`defect_present` verdict requires at least one actionable, severity-bearing
+candidate, while an empty candidate universe is reserved for clean controls
+such as deletion-only diffs. The CLI exits nonzero for `needs_resolution`
+while preserving the immutable receipt for the resolver workflow.
+
+These commands make claimed independent human decisions inspectable; they do
+not authenticate a human identity, establish oracle truth, assemble a final
+Corpus v1 scenario, or issue a source-admission receipt. Real human completion,
+oracle assembly, live source verification, and final admission remain separate
+gates. Packet and response material stays in the private Lexar evaluation root,
+not in fixtures or public documentation.
+
 ## Supported provenance
 
 Corpus v1 supports immutable public GitHub pull-request, commit, and revert

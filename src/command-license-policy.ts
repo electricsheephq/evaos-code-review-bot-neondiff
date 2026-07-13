@@ -56,7 +56,11 @@ export function classifyCommandLicensePolicy(input: {
     }
     if (input.subcommand === "list" || input.subcommand === "doctor") return { mode: "setup_safe" };
   }
-  if (input.command === "review-bench" && input.subcommand === "verify-sources") {
+  if (input.command === "review-bench" && (
+    input.subcommand === "verify-sources" ||
+    input.subcommand === "prepare-adjudication" ||
+    input.subcommand === "verify-adjudication"
+  )) {
     return { mode: "setup_safe" };
   }
   if (input.command === "daemon") {

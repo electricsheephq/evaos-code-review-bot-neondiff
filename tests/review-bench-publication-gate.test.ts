@@ -150,12 +150,39 @@ describe("Review Bench public corpus gate", () => {
     expect(result.status).toBe(0);
     const help = JSON.parse(result.stdout);
     expect(help.commands.existing).toContain("review-bench verify-sources");
+    expect(help.commands.existing).toContain("review-bench prepare-adjudication");
+    expect(help.commands.existing).toContain("review-bench verify-adjudication");
     expect(help.usage.flags.map((flag: { name: string }) => flag.name)).toEqual([
+      "--candidate",
+      "--output",
+      "--packet",
+      "--primary",
+      "--secondary",
+      "--resolver",
       "--corpus",
       "--artifacts",
       "--receipt"
     ]);
-  });
+  }, 15_000);
+
+  it("redacts secret-shaped path components from terminal CLI failures", () => {
+    const syntheticToken = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
+    const result = spawnSync("npx", [
+      "tsx",
+      "src/cli.ts",
+      "review-bench",
+      "prepare-adjudication",
+      "--candidate",
+      `/tmp/${syntheticToken}/candidate.json`,
+      "--artifacts",
+      "/tmp/missing-artifacts",
+      "--output",
+      "/tmp/missing-output"
+    ], { cwd: repoRoot, encoding: "utf8" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain(syntheticToken);
+  }, 15_000);
 });
 
 function receipt(overrides: Partial<{
