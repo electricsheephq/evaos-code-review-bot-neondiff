@@ -565,6 +565,19 @@ async function runPhase1ScreenWithLease(
       }
       continue;
     }
+    try {
+      assertSecretSafe("resident argv", resident.argv.join("\n"));
+      assertSecretSafe("resident logs", resident.logs ?? "");
+    } catch (error) {
+      infrastructureFailure = errorMessage(error);
+      for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, "resident_evidence_rejected");
+      try { await adapter.stop(resident); } catch (stopError) { infrastructureFailure = `resident stop after evidence rejection failed: ${errorMessage(stopError)}`; }
+      if (resolvedOptions.monitor && monitorSession) {
+        const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
+        if (finalized.infrastructureFailure) infrastructureFailure = finalized.infrastructureFailure;
+      }
+      continue;
+    }
     if (resolvedOptions.monitor && monitorSession && resolvedOptions.monitor.attach) {
       try { await resolvedOptions.monitor.attach(monitorSession, resident); }
       catch (error) {
@@ -577,8 +590,6 @@ async function runPhase1ScreenWithLease(
       }
     }
     try {
-      assertSecretSafe("resident argv", resident.argv.join("\n"));
-      assertSecretSafe("resident logs", resident.logs ?? "");
       let cellTerminal: { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined;
       for (const input of spec.inputs) {
         const resultPath = resultFile(spec.outputDir, cell.id, input.id);
@@ -1126,7 +1137,9 @@ async function finalizeMonitorEvidence(
     if (Array.isArray(stopped)) {
       if (stopped.length > 16_384) throw new Error("monitor terminal trace exceeds the evidence sample cap");
       const validated = stopped.map((sample, index) => validateResourceSample(sample, `monitor stop resource sample ${index}`));
-      samples.splice(0, samples.length, ...validated);
+      const merged = mergeResourceSamples(samples, validated);
+      if (merged.length > 16_384) throw new Error("combined reconstructed and terminal resource trace exceeds the evidence sample cap");
+      samples.splice(0, samples.length, ...merged);
     } else samples.push(validateResourceSample(stopped, "monitor stop resource sample"));
   }
   catch (error) { infrastructureFailure = `monitor stop failed: ${errorMessage(error)}`; }
@@ -1162,6 +1175,18 @@ async function finalizeMonitorEvidence(
     }
   }
   return { infrastructureFailure, terminalClassification };
+}
+
+function mergeResourceSamples(existing: Phase1ResourceSample[], terminal: Phase1ResourceSample[]): Phase1ResourceSample[] {
+  const merged: Phase1ResourceSample[] = [];
+  const seen = new Set<string>();
+  for (const sample of [...existing, ...terminal]) {
+    const identity = canonicalJson(sample);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    merged.push(sample);
+  }
+  return merged;
 }
 
 function writeResourceUnavailableFallback(

@@ -65,6 +65,7 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
   writeFileSync(modulePath, `
     const kind = ${JSON.stringify(kind)};
     let sequence = 0;
+    let attachObserved = false;
     export function createMonitor() {
       return {
         async start() {
@@ -76,6 +77,7 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
         },
         async attach(_session, resident) {
           if (kind === "attach-error") throw new Error("monitor attach exploded");
+          if (kind === "attach-unsafe-probe") attachObserved = true;
           if (!resident.metadata || resident.metadata.pid !== 42) throw new Error("monitor did not receive resident metadata");
         },
         async sample(_session, context) {
@@ -97,7 +99,7 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
           return undefined;
         },
         async stop() {
-          const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0 };
+          const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0, attachObserved: attachObserved ? 1 : 0 };
           if (kind === "stop-array") return [{ ...base, capturedAt: "periodic", phase: "periodic" }, base];
           if (kind === "secret-stop") return { ...base, diagnostic: "Authorization: Bearer sk-secret-value-1234567890" };
           if (kind === "secret-fingerprint-stop") return { ...base, evidenceSha256: "sk-secret-value-1234567890" };
@@ -510,7 +512,7 @@ describe("Phase 1 screening runner", () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-"));
     await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("stop-array") });
     const resource = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
-    expect(resource.samples.map((sample: { phase: string }) => sample.phase)).toEqual(["periodic", "stopped"]);
+    expect(resource.samples.map((sample: { phase: string }) => sample.phase)).toEqual(["before", "after", "before", "after", "periodic", "stopped"]);
   });
 
   it("fails closed and stops the resident when monitor attachment fails", async () => {
@@ -519,6 +521,32 @@ describe("Phase 1 screening runner", () => {
     await expect(runPhase1Screen(spec(outputDir), adapter({ async stop() { stopped = true; } }), { monitorModule: monitorModule("attach-error") })).rejects.toThrow(/monitor attach exploded/i);
     expect(stopped).toBe(true);
     expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+  });
+
+  it("rejects unsafe resident evidence before it can reach monitor attachment", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-secret-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start() {
+        return { id: "resident", argv: ["/opt/llama-server"], logs: "Authorization: Bearer sk-secret-value-1234567890", metadata: { pid: 42 } };
+      }
+    }), { monitorModule: monitorModule("attach-unsafe-probe") })).rejects.toThrow(/secret-like text/i);
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.every((sample: { attachObserved?: number }) => sample.attachObserved === 0)).toBe(true);
+  });
+
+  it("preserves reconstructed resource samples when a resumed monitor returns a terminal trace array", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-resume-trace-"));
+    const identity = monitorModule("stop-array");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const firstResult = JSON.parse(readFileSync(join(outputDir, "results", "warm-8k", "pr-1.json"), "utf8"));
+    const reconstructedCapturedAt = firstResult.resourceSamples.map((sample: { capturedAt: string }) => sample.capturedAt);
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.map((sample: { capturedAt: string }) => sample.capturedAt)).toEqual(expect.arrayContaining(reconstructedCapturedAt));
   });
 
   it("rejects relative or package imports because pinned monitors load as self-contained exact bytes", async () => {
