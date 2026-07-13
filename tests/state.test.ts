@@ -1677,6 +1677,12 @@ describe("review state store", () => {
     });
 
     expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 123)).toBe(true);
+    expect(store.getProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 123)).toMatchObject({
+      action: "review",
+      status: "triggered",
+      headSha: "head-a"
+    });
+    expect(store.getProcessedCommand("electricsheephq/WorldOS", 1161, "head-b", 123)).toBeUndefined();
     expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-b", 123)).toBe(true);
     expect(store.hasProcessedCommand("electricsheephq/WorldOS", 1161, "head-a", 124)).toBe(false);
     store.close();
@@ -1704,8 +1710,115 @@ describe("review state store", () => {
       author: "100yenadmin",
       consumedAt: "2026-07-13T00:00:00.000Z"
     });
+    store.recordAuthorizedReviewPosted({
+      ...authorization,
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-1",
+      now: new Date("2026-07-13T00:01:00.000Z")
+    });
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "A".repeat(40))).toEqual({
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: "a".repeat(40),
+      commentId: 41,
+      author: "100yenadmin",
+      consumedAt: "2026-07-13T00:00:00.000Z",
+      postedEvent: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-1",
+      postedAt: "2026-07-13T00:01:00.000Z"
+    });
+    expect(store.getProcessedReview("owner/repo", 7, "A".repeat(40))).toMatchObject({
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-1"
+    });
+    expect(store.recordReviewEventAuthorizationIncident({
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: "A".repeat(40),
+      triggerCommentId: 44,
+      error: "late_incident_must_lose"
+    })).toBe(false);
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "A".repeat(40))).not.toHaveProperty("incidentError");
+    expect(store.getReviewReadiness("owner/repo", 7, "A".repeat(40))).toMatchObject({
+      state: "needs_fix",
+      event: "REQUEST_CHANGES",
+      reason: "request_changes_review_posted"
+    });
     expect(store.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 42 })).toBe(false);
     expect(store.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 42, headSha: "b".repeat(40) })).toBe(true);
+    expect(store.recordReviewEventAuthorizationIncident({
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: "b".repeat(40),
+      triggerCommentId: 43,
+      error: "exact_authorization_already_consumed",
+      now: new Date("2026-07-13T00:02:00.000Z")
+    })).toBe(true);
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "b".repeat(40))).toMatchObject({
+      commentId: 42,
+      incidentError: "exact_authorization_already_consumed",
+      incidentCommentId: 43,
+      incidentAt: "2026-07-13T00:02:00.000Z"
+    });
+    expect(store.getProcessedReview("owner/repo", 7, "b".repeat(40))).toBeUndefined();
+    expect(store.getReviewReadiness("owner/repo", 7, "b".repeat(40))).toMatchObject({
+      state: "failed",
+      reason: "exact_authorization_already_consumed"
+    });
+    store.recordAuthorizedReviewPosted({
+      ...authorization,
+      headSha: "b".repeat(40),
+      commentId: 42,
+      event: "COMMENT",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-2",
+      now: new Date("2026-07-13T00:03:00.000Z")
+    });
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "b".repeat(40))).toMatchObject({
+      postedEvent: "COMMENT",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-2"
+    });
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "b".repeat(40))).not.toHaveProperty("incidentError");
+    expect(store.getReviewReadiness("owner/repo", 7, "b".repeat(40))).toMatchObject({
+      state: "ready_for_human",
+      event: "COMMENT",
+      reason: "comment_review_posted"
+    });
+    const legacyBlockingHead = "d".repeat(40);
+    store.recordProcessed({
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: legacyBlockingHead,
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-blocking"
+    });
+    expect(store.tryConsumeReviewEventAuthorization({
+      ...authorization,
+      headSha: legacyBlockingHead,
+      commentId: 45
+    })).toBe(true);
+    store.recordAuthorizedReviewPosted({
+      ...authorization,
+      headSha: legacyBlockingHead,
+      commentId: 45,
+      event: "COMMENT",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-advisory",
+      preserveExistingBlocking: true
+    });
+    expect(store.getProcessedReview("owner/repo", 7, legacyBlockingHead)).toMatchObject({
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-blocking"
+    });
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, legacyBlockingHead)).toMatchObject({
+      postedEvent: "COMMENT",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-advisory"
+    });
+    expect(store.getReviewReadiness("owner/repo", 7, legacyBlockingHead)).toMatchObject({
+      state: "needs_fix",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-blocking"
+    });
     expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, repo: "invalid" })).toThrow("repo must be an owner/repo name");
     expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, pullNumber: 0 })).toThrow("pullNumber must be a positive integer");
     expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, headSha: "short" })).toThrow("headSha must be a 40-character hexadecimal SHA");
@@ -1756,11 +1869,31 @@ describe("review state store", () => {
         primary key (repo, pull_number, head_sha)
       );
       insert into processed_reviews (repo, pull_number, head_sha, status) values ('owner/repo', 7, '${"c".repeat(40)}', 'posted');
+      create table review_event_authorization_consumptions (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        comment_id integer not null,
+        author text not null,
+        consumed_at text not null,
+        primary key (repo, pull_number, head_sha)
+      );
+      insert into review_event_authorization_consumptions
+        (repo, pull_number, head_sha, comment_id, author, consumed_at)
+      values ('owner/repo', 7, '${"c".repeat(40)}', 41, '100yenadmin', '2026-07-13T00:00:00.000Z');
     `);
     legacyDb.close();
 
     const store = new ReviewStateStore(dbPath);
     expect(store.hasProcessed("owner/repo", 7, "c".repeat(40))).toBe(true);
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "c".repeat(40))).toEqual({
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: "c".repeat(40),
+      commentId: 41,
+      author: "100yenadmin",
+      consumedAt: "2026-07-13T00:00:00.000Z"
+    });
     expect(store.tryConsumeReviewEventAuthorization({
       repo: "owner/repo",
       pullNumber: 7,
@@ -1773,7 +1906,7 @@ describe("review state store", () => {
     const migratedDb = new DatabaseSync(dbPath);
     try {
       expect(migratedDb.prepare("select count(*) as count from processed_reviews").get()).toEqual({ count: 1 });
-      expect(migratedDb.prepare("select count(*) as count from review_event_authorization_consumptions").get()).toEqual({ count: 1 });
+      expect(migratedDb.prepare("select count(*) as count from review_event_authorization_consumptions").get()).toEqual({ count: 2 });
     } finally {
       migratedDb.close();
     }

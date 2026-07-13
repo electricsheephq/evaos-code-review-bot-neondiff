@@ -629,6 +629,28 @@ async function enqueuePullIfEligible(input: {
   }
 
   await retireSupersededQueueJobsForPull(input);
+  const unresolvedAuthorization = /^[0-9a-f]{40}$/i.test(input.pull.head.sha)
+    ? input.state.getReviewEventAuthorizationConsumption(
+        input.repo,
+        input.pull.number,
+        input.pull.head.sha
+      )
+    : undefined;
+  if (unresolvedAuthorization?.incidentError && !unresolvedAuthorization.postedAt) {
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      readinessState: "failed",
+      reason: unresolvedAuthorization.incidentError,
+      commandAction: "request-changes",
+      ...(unresolvedAuthorization.incidentCommentId
+        ? { commandCommentId: unresolvedAuthorization.incidentCommentId }
+        : {}),
+      now: input.now
+    });
+    return "skipped_processed";
+  }
   if (processed || input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) {
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     await repairProcessedHeadStatusCommentIfNeeded({ ...input, processed });
@@ -1196,9 +1218,34 @@ function latestPendingRequestChanges(input: {
   repo: string;
   pull: PullRequestSummary;
 }): ReviewEventAuthorizationReviewRequest | undefined {
-  return input.requests.filter((request) =>
+  const pending = input.requests.filter((request) =>
     !input.state.hasProcessedCommand(input.repo, input.pull.number, input.pull.head.sha, request.commentId)
-  ).at(-1);
+  );
+  if (pending.length === 0) return undefined;
+  const consumed = input.state.getReviewEventAuthorizationConsumption(
+    input.repo,
+    input.pull.number,
+    input.pull.head.sha
+  );
+  if (
+    consumed?.postedEvent &&
+    consumed.reviewUrl &&
+    consumed.postedAt
+  ) {
+    for (const request of pending) {
+      input.state.recordProcessedCommand({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        commentId: request.commentId,
+        action: "request-changes",
+        status: "ignored",
+        author: request.author
+      });
+    }
+    return undefined;
+  }
+  return pending.at(-1);
 }
 
 export function admitPublicCommands(input: {
@@ -2198,8 +2245,7 @@ function updateQueueJobAfterReviewStatus(input: {
       });
       return;
     }
-    case "posted_head_unverified":
-    case "skipped_consumed_authorization": {
+    case "posted_head_unverified": {
       const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
@@ -2210,6 +2256,14 @@ function updateQueueJobAfterReviewStatus(input: {
       });
       return;
     }
+    case "skipped_consumed_authorization":
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "failed",
+        lastError: input.status,
+        now: input.now
+      });
+      return;
     case "skipped_provider_cooldown":
       markQueueJobProviderDeferredFromProcessed({ ...input, now: input.now });
       return;
