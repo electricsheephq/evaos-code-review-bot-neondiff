@@ -56,9 +56,14 @@ CodeRabbit parity, enterprise readiness, or legal adequacy from this file.
 ## Validation Rules
 
 - Prefer a focused failing test first, then the minimal implementation.
-- Run the narrowest relevant local test before broader validation.
-- Use `npm test` and `npm run build` before PR readiness unless CI is the
-  recorded validation path.
+- Coding agents default to the narrowest relevant local test or smoke, followed
+  by `git diff --check`.
+- `npm test` and `npm run build` are broad GitHub CI checks by default.
+- The existing required GitHub Actions `Build, test, and package` job is the
+  authoritative full test, build, package, and safety gate; focused local checks
+  are not a substitute.
+- Run broad local validation only for CI reproduction, a missing focused
+  harness, or an explicit user request.
 - For review-behavior changes, include dry-run evidence and current-head proof.
 - Keep evidence public-safe: summaries, counts, refs, hashes, setup states, and
   command names are fine; raw secrets, raw private diffs, private logs, keys,
