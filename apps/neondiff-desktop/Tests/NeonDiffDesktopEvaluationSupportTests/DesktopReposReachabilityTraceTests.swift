@@ -320,6 +320,10 @@ struct DesktopReposReachabilityTraceTests {
     }
 
     @Test func semanticCandidateCardinalityFailsClosed() {
+        #expect(DesktopReposReachabilitySemanticContract.tableRole == "AXOutline")
+        #expect(DesktopReposReachabilitySemanticContract.matchesTable(role: "AXOutline"))
+        #expect(!DesktopReposReachabilitySemanticContract.matchesTable(role: "AXTable"))
+        #expect(!DesktopReposReachabilitySemanticContract.matchesTable(role: "AXScrollArea"))
         #expect(DesktopReposReachabilitySemanticContract.failureReason(
             tableCount: 1,
             applyAllowlistCount: 1,

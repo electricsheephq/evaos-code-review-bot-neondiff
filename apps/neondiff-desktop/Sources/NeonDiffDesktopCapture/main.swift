@@ -658,7 +658,7 @@ private struct DesktopReposReachabilityAXTracer {
         let description = try optionalString(element, kAXDescriptionAttribute as CFString)
         let value = try optionalTextValue(element, kAXValueAttribute as CFString)
         let identifier = try optionalString(element, kAXIdentifierAttribute as CFString)
-        if role == (kAXTableRole as String) {
+        if DesktopReposReachabilitySemanticContract.matchesTable(role: role) {
             candidates.table.append(element)
         }
         if DesktopReposReachabilitySemanticContract.matchesApplyAllowlist(

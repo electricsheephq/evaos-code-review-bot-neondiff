@@ -104,10 +104,15 @@ public enum DesktopReposReachabilityRegion: String, Codable, CaseIterable, Equat
 }
 
 public enum DesktopReposReachabilitySemanticContract {
+    public static let tableRole = "AXOutline"
     public static let boundaryIdentifier = "neondiff-repos-boundary"
     public static let boundaryValue = "Repo changes are written through config patch only; the desktop does not post reviews or bypass daemon gates."
     public static let applyAllowlistIdentifier = "neondiff-repo-apply-patch"
     public static let applyAllowlistValue = "Apply Allowlist"
+
+    public static func matchesTable(role: String?) -> Bool {
+        role == tableRole
+    }
 
     public static func matchesApplyAllowlist(
         isButton: Bool,
