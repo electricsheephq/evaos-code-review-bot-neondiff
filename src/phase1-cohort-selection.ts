@@ -740,7 +740,13 @@ function buildRuntimeInputManifest(
 }
 
 function finalizeNewArtifacts(outputDir: string, artifacts: Map<string, string>): void {
-  mkdirSync(outputDir, { mode: 0o700 });
+  try {
+    mkdirSync(outputDir, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    verifyArtifactBytes(outputDir, artifacts);
+    return;
+  }
   for (const [name, expected] of artifacts) {
     atomicCreatePrivateFile(join(outputDir, name), expected);
   }

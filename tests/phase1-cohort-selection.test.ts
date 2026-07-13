@@ -25,11 +25,27 @@ import * as cohortSelectionModule from "../src/phase1-cohort-selection.js";
 import { runPhase1CohortSelectionCli } from "../src/phase1-cohort-selection-cli.js";
 
 const inputPathRace = vi.hoisted(() => ({ armed: false, path: "", target: "", swapped: false }));
+const outputDirectoryRace = vi.hoisted(() => ({ armed: false, path: "", sourceDir: "", raced: false }));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
+  const { join: joinPath } = await import("node:path");
   return {
     ...actual,
+    mkdirSync(path: Parameters<typeof actual.mkdirSync>[0], options?: Parameters<typeof actual.mkdirSync>[1]) {
+      if (outputDirectoryRace.armed && path === outputDirectoryRace.path) {
+        outputDirectoryRace.armed = false;
+        outputDirectoryRace.raced = true;
+        actual.mkdirSync(path, options);
+        for (const name of actual.readdirSync(outputDirectoryRace.sourceDir)) {
+          const sourcePath = joinPath(outputDirectoryRace.sourceDir, name);
+          const targetPath = joinPath(String(path), name);
+          actual.writeFileSync(targetPath, actual.readFileSync(sourcePath), { mode: 0o600 });
+          actual.chmodSync(targetPath, 0o600);
+        }
+      }
+      return actual.mkdirSync(path, options);
+    },
     lstatSync(path: Parameters<typeof actual.lstatSync>[0]) {
       const metadata = actual.lstatSync(path);
       if (inputPathRace.armed && path === inputPathRace.path) {
@@ -345,6 +361,24 @@ describe("phase 1 cohort selection", () => {
       expect(existsSync(f.outputDir)).toBe(false);
     } finally {
       inputPathRace.armed = false;
+    }
+  });
+
+  it("verifies a complete deterministic seal created during the output-directory creation race", () => {
+    const f = fixture();
+    const sourceManifest = seal(f);
+    const racedOutputDir = join(f.root, "sealed", "run-2");
+    outputDirectoryRace.path = racedOutputDir;
+    outputDirectoryRace.sourceDir = f.outputDir;
+    outputDirectoryRace.raced = false;
+    outputDirectoryRace.armed = true;
+
+    try {
+      expect(selectAndSealPhase1Cohort({ ...selectionOptions(f), outputDir: racedOutputDir }).manifestSha256)
+        .toBe(sourceManifest.manifestSha256);
+      expect(outputDirectoryRace.raced).toBe(true);
+    } finally {
+      outputDirectoryRace.armed = false;
     }
   });
 
