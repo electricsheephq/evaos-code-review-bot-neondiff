@@ -123,7 +123,13 @@ jobs:
       - name: Node and Foundation secret-rule differential
         run: npm run check:secret-rule-differential
 
+      - name: Build Swift manifest checks target
+        working-directory: apps/neondiff-desktop
+        timeout-minutes: 10
+        run: swift build --product NeonDiffDesktopManifestChecks
+
       - name: Desktop evaluation boundary contracts
+        timeout-minutes: 3
         run: npm test -- --run tests/desktop-evaluation-boundary.test.ts
 
       - name: Build Swift Keychain checks target

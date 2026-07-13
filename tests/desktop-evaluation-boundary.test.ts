@@ -73,6 +73,9 @@ describe("desktop evaluation production boundary", () => {
     expect(gate).toMatch(
       /name:\s*Desktop evaluation boundary contracts[\s\S]*?npm test -- --run tests\/desktop-evaluation-boundary\.test\.ts/
     );
+    expect(gate).toMatch(
+      /name:\s*Build Swift manifest checks target[\s\S]*?swift build --product NeonDiffDesktopManifestChecks[\s\S]*?name:\s*Desktop evaluation boundary contracts/
+    );
     expect(gate).toMatch(/npm run check:desktop-fixture-boundary/);
     expect(gate).toMatch(/release_bin\/NeonDiffDesktop/);
     expect(gate).toMatch(/NEONDIFF_DESKTOP_DIST_DIR=.*dist-release/);
@@ -194,7 +197,7 @@ describe("desktop evaluation production boundary", () => {
 
   it.runIf(process.platform === "darwin")(
     "routes missing manifest files through the stable exit-65 contract",
-    { timeout: 30_000 },
+    { timeout: 60_000 },
     () => {
       const root = mkdtempSync(join(tmpdir(), "neondiff-manifest-checks-"));
       roots.push(root);
@@ -202,6 +205,7 @@ describe("desktop evaluation production boundary", () => {
         "swift",
         [
           "run",
+          "--skip-build",
           "--package-path",
           "apps/neondiff-desktop",
           "NeonDiffDesktopManifestChecks",
@@ -210,6 +214,7 @@ describe("desktop evaluation production boundary", () => {
         { encoding: "utf8", timeout: 30_000 }
       );
 
+      expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
       expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(65);
       expect(result.stderr).toContain("manifest must be an absolute regular non-symlink file");
       expect(result.stderr).not.toMatch(/Fatal error|uncaught/i);
