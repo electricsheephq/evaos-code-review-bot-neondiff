@@ -378,7 +378,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
     expect(lifecycleEvidence.join("\n")).not.toContain(key);
   });
 
-  it("maps a terminal lifecycle revocation to revoked without leaking the bound key", async () => {
+  it("keeps a terminally revoked entitlement revoked when a later paid renewal arrives", async () => {
     const root = mkdtempSync(join(tmpdir(), "nd-contract-lifecycle-"));
     roots.push(root);
     const { service, close } = buildInProcessService(root);
@@ -408,5 +408,28 @@ describe("client ↔ service contract (real src/license.ts against real service)
     });
     expect(revoked.status).toBe("revoked");
     expect(JSON.stringify(revoked)).not.toContain(key);
+
+    const laterRenewal = await applyLifecycle(
+      service,
+      lifecycleRequest(
+        "revoke",
+        "renew_paid",
+        new Date(LIFECYCLE_START.getTime() + 60_000),
+        {
+          eventId: "evt_contract_revoke_later_renew_paid"
+        }
+      )
+    );
+    expect(laterRenewal.status, laterRenewal.text).toBe(409);
+    expect(laterRenewal.json).toEqual({ status: "terminally_revoked" });
+    expect(laterRenewal.text).not.toContain(key);
+
+    const stillRevoked = await getLicenseStatus({
+      config,
+      refresh: true,
+      fetchImpl: service.fetchFor("machine-r")
+    });
+    expect(stillRevoked.status).toBe("revoked");
+    expect(JSON.stringify(stillRevoked)).not.toContain(key);
   });
 });
