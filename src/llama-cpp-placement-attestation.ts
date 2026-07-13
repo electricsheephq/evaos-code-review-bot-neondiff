@@ -52,11 +52,12 @@ export interface LlamaCppPlacementRequirement {
 
 export interface LlamaCppPlacementReceipt {
   schemaVersion: "neondiff-llama-cpp-placement/v1";
-  parser: { version: "llama.cpp-b9977-placement/v1"; backendCommit: string };
+  parser: { version: "llama.cpp-b9977-placement/v2"; backendCommit: string };
   requestedGpuLayers: number | "all";
   observedGpuLayers: number;
   totalModelLayers: number;
   repeatingGpuLayers: number;
+  loadEpochsObserved: number;
   outputLayerOffloaded: boolean;
   layerAssignments: Array<{ layer: number; device: string; isSwa: boolean }>;
   modelBuffers: Array<{ device: string; mib: number }>;
@@ -106,6 +107,7 @@ const RECURRENT_LAYER = new RegExp(`^llama_memory_recurrent,\\s+layer\\s+(\\d+):
 const RECURRENT_BUFFER = new RegExp(`^llama_memory_recurrent:\\s+${DEVICE}\\s+RS buffer size\\s*=\\s*${NUMBER}\\s+MiB\\s*$`);
 const COMPUTE_BUFFER = new RegExp(`^(?:sched_reserve|~llama_context):\\s+${DEVICE}\\s+compute buffer size\\s+(?:=|is)\\s+${NUMBER}\\s+MiB(?:,\\s+matches expectation of\\s+[0-9]+(?:\\.[0-9]+)?\\s+MiB)?\\s*$`);
 const CPU_EXPERT_OVERRIDE = /^tensor\s+(blk\.(\d+)\.ffn_(?:up|down|gate|gate_up)_(?:ch)?exps(?:\.[A-Za-z0-9_.-]+)?)\s+\((\d+)\s+MiB\s+[A-Za-z0-9_.:-]+\)\s+buffer type overridden to\s+(CPU[A-Za-z0-9_.:-]*)\s*$/;
+const B9977_LOG_PREFIX = /^\d+\.\d{2}\.\d{3}\.\d{3}\s+[A-Z]\s+/;
 
 export function llamaCppPlacementAttestationModulePath(): string {
   return fileURLToPath(import.meta.url);
@@ -143,6 +145,10 @@ function placementRelevantLine(line: string): boolean {
     COMPUTE_BUFFER,
     CPU_EXPERT_OVERRIDE
   ].some((pattern) => pattern.test(line));
+}
+
+function normalizeB9977LogLine(line: string): string {
+  return line.replace(B9977_LOG_PREFIX, "");
 }
 
 export function captureLlamaCppStartup(
@@ -195,10 +201,11 @@ export function createLlamaCppStartupCapture(
       reject(new Error("llama.cpp startup line exceeds the implementation line limit"));
     }
     for (const rawLine of lines) {
-      const line = rawLine.replace(/\r$/, "");
-      if (line.length > LLAMA_CPP_STARTUP_MAX_LINE_CHARS) {
+      const unnormalizedLine = rawLine.replace(/\r$/, "");
+      if (unnormalizedLine.length > LLAMA_CPP_STARTUP_MAX_LINE_CHARS) {
         reject(new Error("llama.cpp startup line exceeds the implementation line limit"));
       }
+      const line = normalizeB9977LogLine(unnormalizedLine);
       if (!placementRelevantLine(line)) continue;
       if (events.length >= options.maxLines) {
         truncated = true;
@@ -242,8 +249,11 @@ export function createLlamaCppStartupCapture(
           return reject(error);
         }
         if (pending[stream]) {
-          if (events.length >= options.maxLines) truncated = true;
-          else if (placementRelevantLine(pending[stream])) events.push({ sequence: events.length, stream, line: redactSecrets(pending[stream]) });
+        if (events.length >= options.maxLines) truncated = true;
+          else {
+            const line = normalizeB9977LogLine(pending[stream]);
+            if (placementRelevantLine(line)) events.push({ sequence: events.length, stream, line: redactSecrets(line) });
+          }
         }
       }
       const identity = {
@@ -294,6 +304,75 @@ function contiguousRanges(layers: number[]): Array<{ firstLayer: number; lastLay
   return ranges;
 }
 
+interface PlacementEpoch {
+  layerAssignments: LlamaCppPlacementReceipt["layerAssignments"];
+  modelBuffers: LlamaCppPlacementReceipt["modelBuffers"];
+  kvLayerAssignments: LlamaCppPlacementReceipt["kv"]["layerAssignments"];
+  kvBuffers: LlamaCppPlacementReceipt["kv"]["buffers"];
+  kvTypes: Array<{ k: string; v: string }>;
+  outputBuffers: LlamaCppPlacementReceipt["outputBuffers"];
+  recurrentLayerAssignments: LlamaCppPlacementReceipt["recurrentState"]["layerAssignments"];
+  recurrentBuffers: LlamaCppPlacementReceipt["recurrentState"]["buffers"];
+  computeBuffers: LlamaCppPlacementReceipt["computeBuffers"];
+  cpuExpertTensors: Array<{ name: string; layer: number; device: string }>;
+  repeating: number[];
+  totals: Array<{ observed: number; total: number }>;
+  outputLayerOffloaded: boolean;
+}
+
+function emptyPlacementEpoch(): PlacementEpoch {
+  return {
+    layerAssignments: [],
+    modelBuffers: [],
+    kvLayerAssignments: [],
+    kvBuffers: [],
+    kvTypes: [],
+    outputBuffers: [],
+    recurrentLayerAssignments: [],
+    recurrentBuffers: [],
+    computeBuffers: [],
+    cpuExpertTensors: [],
+    repeating: [],
+    totals: [],
+    outputLayerOffloaded: false
+  };
+}
+
+function placementEpochCore(epoch: PlacementEpoch, index: number): {
+  repeatingGpuLayers: number;
+  total: { observed: number; total: number };
+  fingerprint: string;
+} {
+  rejectDuplicateLayers(epoch.layerAssignments, "model assignment");
+  rejectDuplicateLayers(epoch.kvLayerAssignments, "KV assignment");
+  rejectDuplicateLayers(epoch.recurrentLayerAssignments, "recurrent assignment");
+  if (new Set(epoch.cpuExpertTensors.map((tensor) => tensor.name)).size !== epoch.cpuExpertTensors.length) {
+    throw new Error("duplicate llama.cpp CPU expert tensor override record");
+  }
+  const total = epoch.totals.length === 1 ? epoch.totals[0] : undefined;
+  if (!total) throw new Error(`llama.cpp placement epoch ${index + 1} requires exactly one total GPU offload record`);
+  if (epoch.modelBuffers.length === 0) {
+    throw new Error(`llama.cpp placement epoch ${index + 1} is missing model buffer evidence`);
+  }
+  const repeatingGpuLayers = uniqueNumber("repeating-layer", epoch.repeating);
+  const gpuAssignments = epoch.layerAssignments.filter((item) => !item.device.startsWith("CPU")).length;
+  if (repeatingGpuLayers + (epoch.outputLayerOffloaded ? 1 : 0) !== total.observed
+    || epoch.layerAssignments.length !== total.total
+    || gpuAssignments !== total.observed) {
+    throw new Error(`contradictory llama.cpp placement evidence in load epoch ${index + 1}`);
+  }
+  return {
+    repeatingGpuLayers,
+    total,
+    fingerprint: canonical({
+      layerAssignments: epoch.layerAssignments,
+      repeatingGpuLayers,
+      total,
+      outputLayerOffloaded: epoch.outputLayerOffloaded
+    })
+  };
+}
+
 export function parseLlamaCppPlacementAttestation(
   source: LlamaCppStartupSource,
   requirement: LlamaCppPlacementRequirement
@@ -321,61 +400,68 @@ export function parseLlamaCppPlacementAttestation(
   }
   if (source.truncated) throw new Error("llama.cpp startup capture is truncated");
 
-  const layerAssignments: LlamaCppPlacementReceipt["layerAssignments"] = [];
-  const modelBuffers: LlamaCppPlacementReceipt["modelBuffers"] = [];
-  const kvLayerAssignments: LlamaCppPlacementReceipt["kv"]["layerAssignments"] = [];
-  const kvBuffers: LlamaCppPlacementReceipt["kv"]["buffers"] = [];
-  const kvTypes: Array<{ k: string; v: string }> = [];
-  const outputBuffers: LlamaCppPlacementReceipt["outputBuffers"] = [];
-  const recurrentLayerAssignments: LlamaCppPlacementReceipt["recurrentState"]["layerAssignments"] = [];
-  const recurrentBuffers: LlamaCppPlacementReceipt["recurrentState"]["buffers"] = [];
-  const computeBuffers: LlamaCppPlacementReceipt["computeBuffers"] = [];
-  const cpuExpertTensors: Array<{ name: string; layer: number; device: string }> = [];
-  const repeating: number[] = [];
-  const totals: Array<{ observed: number; total: number }> = [];
-  let outputLayerOffloaded = false;
+  const epochs: PlacementEpoch[] = [];
+  let epoch = emptyPlacementEpoch();
 
   for (const { line } of source.events) {
     let match: RegExpExecArray | null;
     if ((match = LAYER_ASSIGNMENT.exec(line))) {
-      layerAssignments.push({ layer: Number(match[1]), device: match[2], isSwa: match[3] === "1" });
+      const layer = Number(match[1]);
+      if (layer === 0 && epoch.totals.length === 1) {
+        epochs.push(epoch);
+        epoch = emptyPlacementEpoch();
+      }
+      epoch.layerAssignments.push({ layer, device: match[2], isSwa: match[3] === "1" });
     } else if (OUTPUT_OFFLOAD.test(line)) {
-      if (outputLayerOffloaded) throw new Error("duplicate llama.cpp output-layer placement record");
-      outputLayerOffloaded = true;
+      if (epoch.outputLayerOffloaded) throw new Error("duplicate llama.cpp output-layer placement record");
+      epoch.outputLayerOffloaded = true;
     } else if ((match = REPEATING_OFFLOAD.exec(line))) {
-      repeating.push(Number(match[1]));
+      epoch.repeating.push(Number(match[1]));
     } else if ((match = TOTAL_OFFLOAD.exec(line))) {
-      totals.push({ observed: Number(match[1]), total: Number(match[2]) });
+      epoch.totals.push({ observed: Number(match[1]), total: Number(match[2]) });
     } else if ((match = MODEL_BUFFER.exec(line))) {
-      modelBuffers.push({ device: match[1], mib: parseMib(match[2]) });
+      epoch.modelBuffers.push({ device: match[1], mib: parseMib(match[2]) });
     } else if ((match = KV_LAYER.exec(line))) {
-      kvLayerAssignments.push({ layer: Number(match[1]), device: match[2] });
+      epoch.kvLayerAssignments.push({ layer: Number(match[1]), device: match[2] });
     } else if ((match = KV_BUFFER.exec(line))) {
-      kvBuffers.push({ device: match[1], mib: parseMib(match[2]) });
+      epoch.kvBuffers.push({ device: match[1], mib: parseMib(match[2]) });
     } else if ((match = KV_TYPES.exec(line))) {
-      kvTypes.push({ k: match[1], v: match[2] });
+      epoch.kvTypes.push({ k: match[1], v: match[2] });
     } else if ((match = OUTPUT_BUFFER.exec(line))) {
-      outputBuffers.push({ device: match[1], mib: parseMib(match[2]) });
+      epoch.outputBuffers.push({ device: match[1], mib: parseMib(match[2]) });
     } else if ((match = RECURRENT_LAYER.exec(line))) {
-      recurrentLayerAssignments.push({ layer: Number(match[1]), device: match[2] });
+      epoch.recurrentLayerAssignments.push({ layer: Number(match[1]), device: match[2] });
     } else if ((match = RECURRENT_BUFFER.exec(line))) {
-      recurrentBuffers.push({ device: match[1], mib: parseMib(match[2]) });
+      epoch.recurrentBuffers.push({ device: match[1], mib: parseMib(match[2]) });
     } else if ((match = COMPUTE_BUFFER.exec(line))) {
-      computeBuffers.push({ device: match[1], mib: parseMib(match[2]) });
+      epoch.computeBuffers.push({ device: match[1], mib: parseMib(match[2]) });
     } else if ((match = CPU_EXPERT_OVERRIDE.exec(line))) {
-      cpuExpertTensors.push({ name: match[1], layer: Number(match[2]), device: match[4] });
+      epoch.cpuExpertTensors.push({ name: match[1], layer: Number(match[2]), device: match[4] });
     }
   }
+  epochs.push(epoch);
 
-  const repeatingGpuLayers = uniqueNumber("repeating-layer", repeating);
-  const total = totals.length === 1 ? totals[0] : undefined;
-  if (!total) throw new Error("llama.cpp placement requires exactly one total GPU offload record");
-  rejectDuplicateLayers(layerAssignments, "model assignment");
-  rejectDuplicateLayers(kvLayerAssignments, "KV assignment");
-  rejectDuplicateLayers(recurrentLayerAssignments, "recurrent assignment");
-  if (new Set(cpuExpertTensors.map((tensor) => tensor.name)).size !== cpuExpertTensors.length) {
-    throw new Error("duplicate llama.cpp CPU expert tensor override record");
+  const epochCores = epochs.map(placementEpochCore);
+  const finalCore = epochCores.at(-1);
+  if (!finalCore) throw new Error("llama.cpp placement has no load epoch");
+  if (epochCores.some((core) => core.fingerprint !== finalCore.fingerprint)) {
+    throw new Error("llama.cpp placement epochs disagree");
   }
+  const finalEpoch = epochs.at(-1)!;
+  const {
+    layerAssignments,
+    modelBuffers,
+    kvLayerAssignments,
+    kvBuffers,
+    kvTypes,
+    outputBuffers,
+    recurrentLayerAssignments,
+    recurrentBuffers,
+    computeBuffers,
+    cpuExpertTensors,
+    outputLayerOffloaded
+  } = finalEpoch;
+  const { repeatingGpuLayers, total } = finalCore;
   const contradictions: string[] = [];
   if (repeatingGpuLayers + (outputLayerOffloaded ? 1 : 0) !== total.observed) contradictions.push("GPU offload totals disagree");
   const gpuAssignments = layerAssignments.filter((item) => !item.device.startsWith("CPU")).length;
@@ -430,11 +516,12 @@ export function parseLlamaCppPlacementAttestation(
 
   return {
     schemaVersion: "neondiff-llama-cpp-placement/v1",
-    parser: { version: "llama.cpp-b9977-placement/v1", backendCommit: requirement.backendCommit },
+    parser: { version: "llama.cpp-b9977-placement/v2", backendCommit: requirement.backendCommit },
     requestedGpuLayers: requirement.requestedGpuLayers,
     observedGpuLayers: total.observed,
     totalModelLayers: total.total,
     repeatingGpuLayers,
+    loadEpochsObserved: epochs.length,
     outputLayerOffloaded,
     layerAssignments,
     modelBuffers,

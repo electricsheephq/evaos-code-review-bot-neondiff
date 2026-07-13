@@ -64,7 +64,7 @@ export interface Phase1PlacementPolicy {
     layerCount: number;
     minimumMatchedTensors: number;
   };
-  parserVersion: "llama.cpp-b9977-placement/v1";
+  parserVersion: "llama.cpp-b9977-placement/v2";
   parserSourcePath: string;
   parserSourceSha256: string;
   maxStartupBytes: number;
@@ -1350,7 +1350,7 @@ function validateSpec(spec: Phase1RunSpec): void {
   for (const cell of spec.cells) {
     if (!cell.placement) continue;
     const policy = cell.placement;
-    if (policy.mode !== "offload_comparison" || policy.parserVersion !== "llama.cpp-b9977-placement/v1") {
+    if (policy.mode !== "offload_comparison" || policy.parserVersion !== "llama.cpp-b9977-placement/v2") {
       throw new Error(`cell ${cell.id} placement policy is unsupported`);
     }
     if (!(["full_gpu", "partial_gpu", "all_plus_cpu_moe"] as string[]).includes(policy.profile)) {
