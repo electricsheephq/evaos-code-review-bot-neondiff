@@ -1,5 +1,3 @@
-import type { RepoVisibilityScope } from "./store.js";
-
 export const CHECKOUT_LOOKUP_KEYS = [
   "neondiff_monthly",
   "neondiff_yearly",
@@ -14,7 +12,7 @@ export interface CheckoutPolicy {
   maximumPeriodDays: number;
   currency: "usd";
   seats: 1;
-  repoVisibilityScope: RepoVisibilityScope;
+  repoVisibilityScope: "private";
   privateRepoAllowed: true;
   updateEntitlement: true;
 }

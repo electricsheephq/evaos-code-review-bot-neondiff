@@ -2,8 +2,27 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  checkoutPolicyFor,
+  type CheckoutLookupKey,
+  type CheckoutPolicy
+} from "./checkout-policy.js";
 
 const SCHEMA_VERSION = 2;
+const DEFAULT_BUSY_TIMEOUT_MS = 250;
+const MAX_BUSY_TIMEOUT_MS = 1_000;
+const BOUND_CHECKOUT_INPUT_FIELDS = new Set([
+  "idempotencyKey",
+  "checkoutLookupKey",
+  "binding"
+]);
+const BOUND_CHECKOUT_BINDING_FIELDS = new Set([
+  "provider",
+  "providerAccountId",
+  "providerMode",
+  "externalSubscriptionId",
+  "externalCheckoutId"
+]);
 
 export type SchemaMigrationStep =
   | "transaction-started"
@@ -14,6 +33,8 @@ export type SchemaMigrationStep =
 
 export interface LicenseStoreOptions {
   migrationHook?: (step: SchemaMigrationStep) => void;
+  now?: () => Date;
+  busyTimeoutMs?: number;
 }
 
 interface SchemaObjectSignature {
@@ -215,19 +236,24 @@ export interface CheckoutSubscriptionBindingRecord extends CheckoutSubscriptionB
   createdAt: string;
 }
 
-export interface IssueBoundCheckoutLicenseInput extends IssueIdempotentLicenseInput {
-  source: "checkout";
+export interface IssueBoundCheckoutLicenseInput {
+  idempotencyKey: string;
+  checkoutLookupKey: CheckoutLookupKey;
   binding: CheckoutSubscriptionBindingInput;
 }
 
 export class CheckoutIssuanceConflictError extends Error {}
+export class CheckoutIssuancePolicyError extends Error {}
+export class CheckoutIssuanceTransientError extends Error {}
 
 export class LicenseStore {
   private readonly db: DatabaseSync;
+  private readonly now: () => Date;
 
   constructor(dbPath: string, options: LicenseStoreOptions = {}) {
     if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
-    this.db = new DatabaseSync(dbPath);
+    this.now = options.now ?? (() => new Date());
+    this.db = new DatabaseSync(dbPath, { timeout: resolveBusyTimeout(options.busyTimeoutMs) });
     try {
       this.db.exec("pragma foreign_keys = on");
       this.ensureSchema(options);
@@ -351,20 +377,21 @@ export class LicenseStore {
    */
   issueBoundCheckoutLicense(
     rawKey: string,
-    input: IssueBoundCheckoutLicenseInput
+    input: IssueBoundCheckoutLicenseInput,
+    issuedAt: Date = this.now()
   ): {
     rawKey: string;
     record: LicenseRecord;
     binding: CheckoutSubscriptionBindingRecord;
     replayed: boolean;
   } {
-    this.db.exec("begin immediate");
+    validateBoundCheckoutInput(input);
+    const policy = checkoutPolicyFor(input.checkoutLookupKey);
+    const requestHash = boundCheckoutRequestHash(input);
+    let transactionStarted = false;
     try {
-      if (input.seats !== 1) {
-        throw new CheckoutIssuanceConflictError(
-          "bound checkout issuance requires exactly one seat"
-        );
-      }
+      this.db.exec("begin immediate");
+      transactionStarted = true;
       const existing = this.getIssuanceEvent(input.idempotencyKey);
       if (existing) {
         if (existing.source !== "checkout") {
@@ -378,15 +405,13 @@ export class LicenseStore {
         if (!record) {
           throw new Error("issuance reference points to a missing license record");
         }
-        if (record.seats !== 1) {
-          throw new CheckoutIssuanceConflictError("multi-seat checkout issuance requires owner review");
-        }
+        validateStoredCheckoutEntitlement(record, policy);
         if (hashLicenseKey(rawKey) !== existing.license_key_hash) {
           throw new CheckoutIssuanceConflictError(
             "issuance reference was issued with a different key derivation secret"
           );
         }
-        if (existing.request_hash !== input.requestHash) {
+        if (existing.request_hash !== requestHash) {
           throw new CheckoutIssuanceConflictError(
             "issuance reference was already used with different request data"
           );
@@ -400,14 +425,32 @@ export class LicenseStore {
         return { rawKey, record, binding, replayed: true };
       }
 
-      const { record } = this.insertLicense(rawKey, input);
+      if (!Number.isFinite(issuedAt.getTime())) {
+        throw new Error("license store clock returned an invalid date");
+      }
+      const expiresAt = new Date(
+        issuedAt.getTime() + policy.trialDays * 24 * 60 * 60 * 1_000
+      ).toISOString();
+      const { record } = this.insertLicense(rawKey, {
+        plan: policy.plan,
+        repoVisibilityScope: policy.repoVisibilityScope,
+        privateRepoAllowed: policy.privateRepoAllowed,
+        updateEntitlement: policy.updateEntitlement,
+        seats: policy.seats,
+        expiresAt
+      });
       this.db
         .prepare(
           `insert into license_issuance_events (
             idempotency_key, license_key_hash, request_hash, source, external_ref
           ) values (?, ?, ?, 'checkout', ?)`
         )
-        .run(input.idempotencyKey, record.licenseKeyHash, input.requestHash, input.externalRef ?? null);
+        .run(
+          input.idempotencyKey,
+          record.licenseKeyHash,
+          requestHash,
+          input.binding.externalCheckoutId
+        );
       this.db
         .prepare(
           `insert into checkout_subscription_bindings (
@@ -429,7 +472,10 @@ export class LicenseStore {
       this.db.exec("commit");
       return { rawKey, record, binding, replayed: false };
     } catch (error) {
-      this.db.exec("rollback");
+      if (transactionStarted) this.db.exec("rollback");
+      if (isSqliteBusy(error)) {
+        throw new CheckoutIssuanceTransientError("checkout issuance storage is busy");
+      }
       if (
         error instanceof Error &&
         error.message.includes("UNIQUE constraint failed: checkout_subscription_bindings")
@@ -609,6 +655,64 @@ function sameCheckoutBinding(
     existing.externalSubscriptionId === requested.externalSubscriptionId &&
     existing.externalCheckoutId === requested.externalCheckoutId
   );
+}
+
+function resolveBusyTimeout(value: number | undefined): number {
+  const timeout = value ?? DEFAULT_BUSY_TIMEOUT_MS;
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > MAX_BUSY_TIMEOUT_MS) {
+    throw new Error(`busyTimeoutMs must be an integer from 1 to ${MAX_BUSY_TIMEOUT_MS}`);
+  }
+  return timeout;
+}
+
+function validateBoundCheckoutInput(input: IssueBoundCheckoutLicenseInput): void {
+  for (const key of Object.keys(input)) {
+    if (!BOUND_CHECKOUT_INPUT_FIELDS.has(key)) {
+      throw new CheckoutIssuancePolicyError(`unsupported bound checkout field: ${key}`);
+    }
+  }
+  for (const key of Object.keys(input.binding)) {
+    if (!BOUND_CHECKOUT_BINDING_FIELDS.has(key)) {
+      throw new CheckoutIssuancePolicyError(`unsupported checkout binding field: ${key}`);
+    }
+  }
+}
+
+function boundCheckoutRequestHash(input: IssueBoundCheckoutLicenseInput): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        checkoutLookupKey: input.checkoutLookupKey,
+        provider: input.binding.provider,
+        providerAccountId: input.binding.providerAccountId,
+        providerMode: input.binding.providerMode,
+        externalSubscriptionId: input.binding.externalSubscriptionId,
+        externalCheckoutId: input.binding.externalCheckoutId
+      })
+    )
+    .digest("hex");
+}
+
+function validateStoredCheckoutEntitlement(record: LicenseRecord, policy: CheckoutPolicy): void {
+  if (
+    record.plan !== policy.plan ||
+    record.repoVisibilityScope !== policy.repoVisibilityScope ||
+    record.privateRepoAllowed !== policy.privateRepoAllowed ||
+    record.updateEntitlement !== policy.updateEntitlement ||
+    record.seats !== policy.seats ||
+    !record.expiresAt ||
+    !Number.isFinite(Date.parse(record.expiresAt))
+  ) {
+    throw new CheckoutIssuanceConflictError(
+      "checkout issuance entitlement does not match server policy"
+    );
+  }
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as Error & { code?: string }).code;
+  return code === "ERR_SQLITE_ERROR" && /database is (?:locked|busy)/i.test(error.message);
 }
 
 function expectedSchemaSignature(schema: string): SchemaObjectSignature[] {

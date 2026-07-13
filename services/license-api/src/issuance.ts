@@ -1,12 +1,12 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import {
   CheckoutIssuanceConflictError,
+  CheckoutIssuanceTransientError,
   type LicenseRecord,
   type LicenseStore
 } from "./store.js";
 import {
   CHECKOUT_LOOKUP_KEYS,
-  checkoutPolicyFor,
   isCheckoutLookupKey,
   type CheckoutLookupKey
 } from "./checkout-policy.js";
@@ -106,19 +106,9 @@ export function issueCheckoutLicense(
   issuanceSecret: string,
   now: Date
 ): ServiceResult {
-  const policy = checkoutPolicyFor(req.checkoutLookupKey);
-  const expiresAt = new Date(now.getTime() + policy.trialDays * 24 * 60 * 60 * 1000).toISOString();
   const issueInput = {
     idempotencyKey: req.idempotencyKey,
-    requestHash: issuanceRequestHash(req),
-    source: "checkout" as const,
-    externalRef: req.externalCheckoutId,
-    plan: policy.plan,
-    repoVisibilityScope: policy.repoVisibilityScope,
-    privateRepoAllowed: policy.privateRepoAllowed,
-    updateEntitlement: policy.updateEntitlement,
-    seats: policy.seats,
-    expiresAt,
+    checkoutLookupKey: req.checkoutLookupKey,
     binding: {
       provider: req.provider,
       providerAccountId: req.providerAccountId,
@@ -130,7 +120,7 @@ export function issueCheckoutLicense(
   const rawKey = deriveCheckoutLicenseKey(issuanceSecret, req.idempotencyKey);
 
   try {
-    const issued = store.issueBoundCheckoutLicense(rawKey, issueInput);
+    const issued = store.issueBoundCheckoutLicense(rawKey, issueInput, now);
     return {
       httpStatus: 200,
       body: {
@@ -145,6 +135,15 @@ export function issueCheckoutLicense(
   } catch (error) {
     if (error instanceof CheckoutIssuanceConflictError) {
       return { httpStatus: 409, body: { status: "conflict", detail: error.message } };
+    }
+    if (error instanceof CheckoutIssuanceTransientError) {
+      return {
+        httpStatus: 503,
+        body: {
+          status: "unavailable",
+          detail: "license issuance temporarily unavailable"
+        }
+      };
     }
     return { httpStatus: 500, body: { status: "server", detail: "license issuance failed" } };
   }
@@ -165,21 +164,6 @@ export function validateBearerSecret(header: string | string[] | undefined, expe
 function deriveCheckoutLicenseKey(secret: string, idempotencyKey: string): string {
   const digest = createHmac("sha256", secret).update(`checkout-license:${idempotencyKey}`).digest();
   return ["nd", "live", digest.subarray(0, 24).toString("base64url")].join("_");
-}
-
-function issuanceRequestHash(req: LicenseIssuanceRequest): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        checkoutLookupKey: req.checkoutLookupKey,
-        provider: req.provider,
-        providerAccountId: req.providerAccountId,
-        providerMode: req.providerMode,
-        externalSubscriptionId: req.externalSubscriptionId,
-        externalCheckoutId: req.externalCheckoutId
-      })
-    )
-    .digest("hex");
 }
 
 function entitlementFromRecord(record: LicenseRecord): Record<string, unknown> {

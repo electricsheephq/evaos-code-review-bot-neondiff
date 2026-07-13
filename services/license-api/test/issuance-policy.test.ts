@@ -36,6 +36,24 @@ function derivedKey(idempotencyKey: string): string {
   return ["nd", "live", digest.subarray(0, 24).toString("base64url")].join("_");
 }
 
+function directBoundInput(
+  req: LicenseIssuanceRequest,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    idempotencyKey: req.idempotencyKey,
+    checkoutLookupKey: req.checkoutLookupKey,
+    binding: {
+      provider: req.provider,
+      providerAccountId: req.providerAccountId,
+      providerMode: req.providerMode,
+      externalSubscriptionId: req.externalSubscriptionId,
+      externalCheckoutId: req.externalCheckoutId
+    },
+    ...overrides
+  };
+}
+
 describe("server-owned checkout policy", () => {
   it("defines the authoritative plan, trial, renewal cap, currency, and seat policy", () => {
     assert.deepEqual(checkoutPolicyFor("neondiff_monthly"), {
@@ -130,6 +148,36 @@ describe("checkout issuance request authority", () => {
 });
 
 describe("atomic bound checkout issuance", () => {
+  for (const [field, value] of [
+    ["plan", "caller_plan"],
+    ["repoVisibilityScope", "public"],
+    ["privateRepoAllowed", false],
+    ["updateEntitlement", false],
+    ["seats", 50],
+    ["expiresAt", "2099-01-01T00:00:00.000Z"],
+    ["requestHash", "caller-request-hash"],
+    ["externalRef", "caller-external-reference"],
+    ["source", "admin"]
+  ] as const) {
+    it(`rejects direct-store caller authority over ${field}`, () => {
+      const store = new LicenseStore(":memory:", { now: () => NOW });
+      const req = request({ idempotencyKey: `checkout-session:direct-${field}` });
+      try {
+        assert.throws(
+          () =>
+            store.issueBoundCheckoutLicense(
+              derivedKey(req.idempotencyKey),
+              directBoundInput(req, { [field]: value }) as any
+            ),
+          new RegExp(`unsupported bound checkout field: ${field}`)
+        );
+        assert.equal(store.listLicenses().length, 0);
+      } finally {
+        store.close();
+      }
+    });
+  }
+
   it("derives plan, one seat, and initial expiry from policy and the injected clock", () => {
     const cases = [
       ["neondiff_monthly", "monthly_support", "2026-07-20T00:00:00.000Z"],
@@ -138,7 +186,7 @@ describe("atomic bound checkout issuance", () => {
     ] as const;
 
     for (const [checkoutLookupKey, plan, expiresAt] of cases) {
-      const store = new LicenseStore(":memory:");
+      const store = new LicenseStore(":memory:", { now: () => NOW });
       try {
         const result = issueCheckoutLicense(
           store,
@@ -168,7 +216,7 @@ describe("atomic bound checkout issuance", () => {
   });
 
   it("replays only an exact bound request without minting a second license", () => {
-    const store = new LicenseStore(":memory:");
+    const store = new LicenseStore(":memory:", { now: () => NOW });
     try {
       const first = issueCheckoutLicense(store, request(), ISSUANCE_SECRET, NOW);
       const second = issueCheckoutLicense(store, request(), ISSUANCE_SECRET, NOW);
@@ -192,7 +240,7 @@ describe("atomic bound checkout issuance", () => {
   });
 
   it("quarantines an unbound legacy checkout replay", () => {
-    const store = new LicenseStore(":memory:");
+    const store = new LicenseStore(":memory:", { now: () => NOW });
     try {
       const idempotencyKey = "checkout-session:legacy-unbound";
       store.issueIdempotentLicense(derivedKey(idempotencyKey), {
@@ -266,40 +314,8 @@ describe("atomic bound checkout issuance", () => {
     }
   });
 
-  it("rejects direct attempts to bypass the one-seat checkout policy", () => {
-    const store = new LicenseStore(":memory:");
-    const req = request({ idempotencyKey: "checkout-session:store-policy-bypass" });
-    try {
-      assert.throws(
-        () =>
-          store.issueBoundCheckoutLicense(derivedKey(req.idempotencyKey), {
-            idempotencyKey: req.idempotencyKey,
-            requestHash: "direct-policy-bypass",
-            source: "checkout",
-            externalRef: req.externalCheckoutId,
-            plan: "org_yearly_support",
-            repoVisibilityScope: "private",
-            privateRepoAllowed: true,
-            updateEntitlement: true,
-            seats: 3,
-            binding: {
-              provider: req.provider,
-              providerAccountId: req.providerAccountId,
-              providerMode: req.providerMode,
-              externalSubscriptionId: req.externalSubscriptionId,
-              externalCheckoutId: req.externalCheckoutId
-            }
-          }),
-        /bound checkout issuance requires exactly one seat/
-      );
-      assert.equal(store.listLicenses().length, 0);
-    } finally {
-      store.close();
-    }
-  });
-
   it("rolls back license and issuance rows when immutable binding insertion conflicts", () => {
-    const store = new LicenseStore(":memory:");
+    const store = new LicenseStore(":memory:", { now: () => NOW });
     try {
       const first = issueCheckoutLicense(
         store,
@@ -335,6 +351,83 @@ describe("atomic bound checkout issuance", () => {
       assert.equal(store.listLicenses().length, 2);
     } finally {
       store.close();
+    }
+  });
+});
+
+describe("bound checkout issuance lock contention", () => {
+  it("returns a bounded transient result and then converges on exact replay after lock release", () => {
+    const directory = mkdtempSync(join(tmpdir(), "neondiff-checkout-lock-replay-"));
+    const databasePath = join(directory, "licenses.sqlite");
+    const store = new LicenseStore(databasePath, { busyTimeoutMs: 25, now: () => NOW });
+    const blocker = new DatabaseSync(databasePath);
+    const req = request({ idempotencyKey: "checkout-session:locked-exact-replay" });
+    try {
+      blocker.exec("begin immediate");
+      const startedAt = Date.now();
+      const unavailable = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      const elapsedMs = Date.now() - startedAt;
+      assert.equal(unavailable.httpStatus, 503);
+      assert.deepEqual(unavailable.body, {
+        status: "unavailable",
+        detail: "license issuance temporarily unavailable"
+      });
+      assert.ok(elapsedMs >= 10 && elapsedMs < 1_000, `bounded wait was ${elapsedMs}ms`);
+      assert.equal(store.listLicenses().length, 0);
+
+      blocker.exec("rollback");
+      const issued = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      const replayed = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      assert.equal(issued.httpStatus, 200);
+      assert.equal(replayed.httpStatus, 200);
+      assert.equal(replayed.body.replayed, true);
+      assert.equal(replayed.body.licenseKey, issued.body.licenseKey);
+      assert.equal(store.listLicenses().length, 1);
+    } finally {
+      try {
+        blocker.exec("rollback");
+      } catch {}
+      blocker.close();
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a bounded transient result and then a deterministic conflict after lock release", () => {
+    const directory = mkdtempSync(join(tmpdir(), "neondiff-checkout-lock-conflict-"));
+    const databasePath = join(directory, "licenses.sqlite");
+    const store = new LicenseStore(databasePath, { busyTimeoutMs: 25, now: () => NOW });
+    const blocker = new DatabaseSync(databasePath);
+    const req = request({ idempotencyKey: "checkout-session:locked-conflict" });
+    try {
+      const issued = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      assert.equal(issued.httpStatus, 200);
+
+      blocker.exec("begin immediate");
+      const changed = request({
+        idempotencyKey: req.idempotencyKey,
+        externalCheckoutId: "cs_changed_after_lock"
+      });
+      const startedAt = Date.now();
+      const unavailable = issueCheckoutLicense(store, changed, ISSUANCE_SECRET, NOW);
+      const elapsedMs = Date.now() - startedAt;
+      assert.equal(unavailable.httpStatus, 503);
+      assert.ok(elapsedMs >= 10 && elapsedMs < 1_000, `bounded wait was ${elapsedMs}ms`);
+
+      blocker.exec("rollback");
+      const conflict = issueCheckoutLicense(store, changed, ISSUANCE_SECRET, NOW);
+      const replayed = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      assert.equal(conflict.httpStatus, 409);
+      assert.equal(replayed.httpStatus, 200);
+      assert.equal(replayed.body.replayed, true);
+      assert.equal(store.listLicenses().length, 1);
+    } finally {
+      try {
+        blocker.exec("rollback");
+      } catch {}
+      blocker.close();
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });

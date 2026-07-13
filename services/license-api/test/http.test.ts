@@ -124,7 +124,9 @@ describe("license issuance transport", () => {
   const auth = { Authorization: `Bearer ${issuanceSecret}` };
 
   before(async () => {
-    store = new LicenseStore(":memory:");
+    store = new LicenseStore(":memory:", {
+      now: () => new Date("2026-07-08T00:00:00.000Z")
+    });
     const started = await startLicenseServer({
       store,
       issuanceSecret,
