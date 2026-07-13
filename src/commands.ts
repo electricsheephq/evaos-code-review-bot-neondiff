@@ -307,17 +307,18 @@ function parseRequestChangesCommand(
 ): ParsedRequestChangesCommand | undefined {
   if (!body) return undefined;
   const normalizedMentions = new Set(mentions.map((mention) => mention.toLowerCase()));
-  const candidateLines = body
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/\s+/g, " "))
-    .filter((line) => {
-      const [mention, action] = line.toLowerCase().split(" ", 2);
-      return normalizedMentions.has(mention) && action === "request-changes";
-    });
-  if (candidateLines.length === 0) return undefined;
-  if (candidateLines.length !== 1) return { status: "malformed" };
+  const trimmed = body.trim();
+  const normalized = trimmed.replace(/\s+/g, " ");
+  const mentionsRequestChanges = [...normalizedMentions].some((mention) =>
+    normalized.toLowerCase().includes(`${mention} request-changes`)
+  );
+  if (!mentionsRequestChanges) return undefined;
+  if (!trimmed || /[\r\n]/.test(trimmed)) return { status: "malformed" };
 
-  const tokens = candidateLines[0].split(" ");
+  const tokens = normalized.split(" ");
+  if (!normalizedMentions.has(tokens[0].toLowerCase()) || tokens[1]?.toLowerCase() !== "request-changes") {
+    return { status: "malformed" };
+  }
   if (tokens.length !== 8 || tokens[2] !== "--repo" || tokens[4] !== "--pr" || tokens[6] !== "--head") {
     return { status: "malformed" };
   }

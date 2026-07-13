@@ -261,6 +261,25 @@ describe("trusted request-changes authorization commands (#557)", () => {
     }
   });
 
+  it("requires the entire trimmed body to be exactly one request-changes command", () => {
+    const command = `@neondiff request-changes --repo owner/repo --pr 7 --head ${HEAD}`;
+    const bodies = [
+      `Please review this carefully. ${command}`,
+      `${command} Thank you.`,
+      `\`\`\`text\n${command}\n\`\`\``,
+      `${command}\nThis must not be an embedded multi-line command.`
+    ];
+
+    for (const [index, body] of bodies.entries()) {
+      const attempts = collectReviewEventAuthorizationAttempts([comment(60 + index, "100yenadmin", body)], config, target);
+      expect(attempts).toEqual({
+        attempts: [{ status: "malformed", author: "100yenadmin", commentId: 60 + index }],
+        selected: { status: "malformed", author: "100yenadmin", commentId: 60 + index },
+        reviewRequests: []
+      });
+    }
+  });
+
   it("does not treat ordinary review or re-review commands as authorization attempts", () => {
     const attempts = collectReviewEventAuthorizationAttempts([
       comment(41, "100yenadmin", "@neondiff review"),

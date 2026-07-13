@@ -1658,6 +1658,30 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("uses the SQLite one-shot key across independent state-store connections", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-event-authorization-connections-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const first = new ReviewStateStore(dbPath);
+    const second = new ReviewStateStore(dbPath);
+    const authorization = {
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: "e".repeat(40),
+      commentId: 41,
+      author: "100yenadmin"
+    };
+
+    try {
+      expect(first.tryConsumeReviewEventAuthorization(authorization)).toBe(true);
+      expect(second.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 42 })).toBe(false);
+      expect(second.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 43, headSha: "f".repeat(40) })).toBe(true);
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
   it("adds authorization state to a legacy database without losing prior rows", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-event-authorization-legacy-"));
     roots.push(root);
