@@ -24,6 +24,7 @@ const reviewPostControl = vi.hoisted((): {
   afterCreate?: () => void;
   afterAuxiliaryPost?: () => void;
 } => ({}));
+const evidenceWriteControl = vi.hoisted((): { failPostedReview?: boolean } => ({}));
 
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
@@ -94,6 +95,19 @@ vi.mock("../src/github.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/temp-files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/temp-files.js")>();
+  return {
+    ...actual,
+    writeSecureFileSync: (path: string, contents: string) => {
+      if (evidenceWriteControl.failPostedReview && path.endsWith("posted-review.json")) {
+        throw new Error("injected posted-review evidence failure");
+      }
+      return actual.writeSecureFileSync(path, contents);
+    }
+  };
+});
+
 const { localDateFolder, prepareFailedHeadRetry, reviewPull: reviewPullImpl } = await import("../src/worker.js");
 const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
   ...input,
@@ -116,6 +130,7 @@ describe("worker context budget preflight", () => {
     delete reviewPostControl.error;
     delete reviewPostControl.afterCreate;
     delete reviewPostControl.afterAuxiliaryPost;
+    delete evidenceWriteControl.failPostedReview;
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -1125,6 +1140,68 @@ describe("worker context budget preflight", () => {
     expect(JSON.stringify(readDecision(first.evidenceDir))).not.toContain("request-changes");
     expect(JSON.stringify(readDecision(second.evidenceDir))).not.toContain("request-changes");
     second.state.close();
+  });
+
+  it("keeps a successful remote review durable when posted-review evidence cannot be written", async () => {
+    const headSha = "1".repeat(40);
+    evidenceWriteControl.failPostedReview = true;
+    const first = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 520,
+      headSha,
+      commandComment: requestChangesComment(61, 520, headSha),
+      commandCommentId: 61
+    });
+
+    expect(first.error).toBeUndefined();
+    expect(first.result).toBe("reviewed_command");
+    expect(first.state.getProcessedReview("electricsheephq/WorldOS", 520, headSha)).toMatchObject({
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/520#pullrequestreview-1"
+    });
+    expect(existsSync(join(first.evidenceDir, "posted-review.json"))).toBe(false);
+
+    const replay = await runOwnerPolicyReview({
+      roots,
+      existing: first,
+      pullNumber: 520,
+      headSha,
+      commandComment: requestChangesComment(61, 520, headSha),
+      commandCommentId: 61
+    });
+    expect(replay.result).toBe("skipped_processed");
+    expect(createdReviews).toHaveLength(1);
+    replay.state.close();
+  });
+
+  it("does not contaminate a verified blocking row when a later advisory head reread fails", async () => {
+    const headSha = "2".repeat(40);
+    const first = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 521,
+      headSha,
+      commandComment: requestChangesComment(62, 521, headSha),
+      commandCommentId: 62
+    });
+    const blocking = first.state.getProcessedReview("electricsheephq/WorldOS", 521, headSha);
+    expect(blocking).toMatchObject({ status: "posted", event: "REQUEST_CHANGES" });
+    expect(blocking?.error).toBeUndefined();
+
+    const advisory = await runOwnerPolicyReview({
+      roots,
+      existing: first,
+      pullNumber: 521,
+      headSha,
+      commandComment: requestChangesComment(63, 521, headSha),
+      commandCommentId: 63,
+      postReviewHeadLookupError: new Error("advisory reread unavailable")
+    });
+
+    expect(advisory.result).toBe("posted_head_unverified");
+    expect(createdReviews.map((review) => review.event)).toEqual(["REQUEST_CHANGES", "COMMENT"]);
+    expect(advisory.state.getProcessedReview("electricsheephq/WorldOS", 521, headSha)).toEqual(blocking);
+    advisory.state.close();
   });
 });
 

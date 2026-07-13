@@ -1990,6 +1990,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })) {
       return "skipped_stale_head";
     }
+    const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    const preservedPriorBlockingRow = Boolean(
+      priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT"
+    );
+    const preservedPriorVerifiedBlockingRow = preservedPriorBlockingRow && !priorPosted?.error;
     const review = await reviewGithub.createReview({
       repo,
       pullNumber: pull.number,
@@ -1998,13 +2003,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
-    writeRedactedJson(join(evidenceDir, "posted-review.json"), {
-      event: plan.event,
-      reviewId: review.id,
-      reviewUrl: review.html_url
-    });
-    const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
-    if (!(priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT")) {
+    if (!preservedPriorBlockingRow) {
       state.recordProcessed({
         repo,
         pullNumber: pull.number,
@@ -2014,6 +2013,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         reviewUrl: review.html_url
       });
     }
+    writeRedactedJsonBestEffort(join(evidenceDir, "posted-review.json"), {
+      event: plan.event,
+      reviewId: review.id,
+      reviewUrl: review.html_url
+    });
     // Public-safe findings ledger (#357): record the coordinates we just posted publicly so the
     // daemon calibration-observe pass can re-derive outcome labels later. BEST-EFFORT / FAIL-OPEN —
     // the review is already durable; observation bookkeeping must never block or fail the review.
@@ -2024,7 +2028,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       const liveAfterPost = await github.getPull(repo, pull.number);
       headChangedDuringPost = liveAfterPost.head.sha !== pull.head.sha;
       if (headChangedDuringPost) {
-        writeRedactedJson(join(evidenceDir, "head-changed-during-post.json"), {
+        writeRedactedJsonBestEffort(join(evidenceDir, "head-changed-during-post.json"), {
           reason: "head_changed_during_post",
           repo,
           pullNumber: pull.number,
@@ -2035,7 +2039,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       }
     } catch (error) {
       postReviewHeadLookupFailed = true;
-      writeRedactedJson(join(evidenceDir, "post-review-head-lookup-failed.json"), {
+      writeRedactedJsonBestEffort(join(evidenceDir, "post-review-head-lookup-failed.json"), {
         reason: "post_review_head_lookup_failed",
         repo,
         pullNumber: pull.number,
@@ -2044,7 +2048,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 300)
       });
     }
-    if (headChangedDuringPost || postReviewHeadLookupFailed) {
+    if ((headChangedDuringPost || postReviewHeadLookupFailed) && !preservedPriorVerifiedBlockingRow) {
       const durablePosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
       if (durablePosted?.status === "posted") {
         state.recordProcessed({
@@ -3899,6 +3903,14 @@ function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"], publicConfidenc
 
 function writeRedactedJson(path: string, value: unknown): void {
   writeSecureFileSync(path, `${redactSecrets(JSON.stringify(value, null, 2))}\n`);
+}
+
+function writeRedactedJsonBestEffort(path: string, value: unknown): void {
+  try {
+    writeRedactedJson(path, value);
+  } catch {
+    // A successful remote review POST is already durable. Optional local evidence must never make it retryable.
+  }
 }
 
 function writeRedactedText(path: string, value: string): void {

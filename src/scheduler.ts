@@ -1815,8 +1815,9 @@ function readinessStateForReviewResult(
     case "reviewed_command":
       return processed?.event === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
     case "posted_stale_head":
-      return "stale";
+      return isPriorVerifiedBlockingReview(processed) ? "needs_fix" : "stale";
     case "posted_head_unverified":
+      return isPriorVerifiedBlockingReview(processed) ? "needs_fix" : "failed";
     case "skipped_consumed_authorization":
       return "failed";
     case "skipped_processed":
@@ -1853,9 +1854,9 @@ function readinessReasonForReviewResult(
     case "reviewed_command":
       return processed?.event === "REQUEST_CHANGES" ? "request_changes_review_posted" : "comment_review_posted";
     case "posted_stale_head":
-      return REVIEW_POSTED_HEAD_CHANGED_ERROR;
+      return isPriorVerifiedBlockingReview(processed) ? "request_changes_review_posted" : REVIEW_POSTED_HEAD_CHANGED_ERROR;
     case "posted_head_unverified":
-      return POST_REVIEW_HEAD_UNVERIFIED_ERROR;
+      return isPriorVerifiedBlockingReview(processed) ? "request_changes_review_posted" : POST_REVIEW_HEAD_UNVERIFIED_ERROR;
     case "skipped_consumed_authorization":
       return EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR;
     case "skipped_processed":
@@ -1885,6 +1886,12 @@ function readinessReasonForReviewResult(
     default:
       return assertNever(status);
   }
+}
+
+function isPriorVerifiedBlockingReview(
+  processed?: { status: ProcessedStatus; event?: ReviewEvent; error?: string }
+): boolean {
+  return processed?.status === "posted" && processed.event === "REQUEST_CHANGES" && !processed.error;
 }
 
 function readinessStateForProcessedStatus(

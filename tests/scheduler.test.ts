@@ -322,7 +322,8 @@ describe("provider-aware review scheduler", () => {
             headSha: reviewPull.head.sha,
             status: "posted",
             event: "REQUEST_CHANGES",
-            reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-incident"
+            reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-incident",
+            error: workerStatus === "posted_stale_head" ? "review_posted_head_changed" : "post_review_head_unverified"
           });
         }
         return workerStatus;
@@ -436,6 +437,56 @@ describe("provider-aware review scheduler", () => {
     expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({ state: "failed" });
     state.close();
   });
+
+  it.each(["posted_head_unverified", "posted_stale_head"] as const)(
+    "keeps prior verified REQUEST_CHANGES readiness after a later advisory returns %s",
+    async (workerStatus) => {
+      const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-prior-blocking-${workerStatus}-`));
+      roots.push(root);
+      const config = schedulerConfig(root, ["org/repo-a"]);
+      const state = new ReviewStateStore(config.statePath);
+      const reviewUrl = "https://github.com/org/repo-a/pull/1#pullrequestreview-blocking";
+      state.recordProcessed({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        headSha: HEAD_A,
+        status: "posted",
+        event: "REQUEST_CHANGES",
+        reviewUrl
+      });
+      let reviewCalls = 0;
+      const reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult> = async () => {
+        reviewCalls += 1;
+        return workerStatus;
+      };
+      const comments = new Map([["org/repo-a#1", [
+        comment(931, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`)
+      ]]]);
+      config.commands = {
+        enabled: true,
+        botMentions: ["@neondiff"],
+        trustedAuthors: ["maintainer"],
+        acknowledge: false
+      };
+      const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), comments);
+
+      await runScheduledCycleWithDeps({ config, github, state, options: { dryRun: false }, reviewPullImpl });
+      const immediate = state.getReviewReadiness("org/repo-a", 1, HEAD_A);
+      comments.set("org/repo-a#1", []);
+      await runScheduledCycleWithDeps({ config, github, state, options: { dryRun: false }, reviewPullImpl });
+
+      expect(reviewCalls).toBe(1);
+      expect(state.getProcessedReview("org/repo-a", 1, HEAD_A)).toMatchObject({
+        status: "posted",
+        event: "REQUEST_CHANGES",
+        reviewUrl
+      });
+      expect(state.getProcessedReview("org/repo-a", 1, HEAD_A)?.error).toBeUndefined();
+      expect(immediate).toMatchObject({ state: "needs_fix", event: "REQUEST_CHANGES", reviewUrl });
+      expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toEqual(immediate);
+      state.close();
+    }
+  );
 
   it("maps context-budget skips into skipped readiness and failed durable queue state", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-context-budget-skip-"));
