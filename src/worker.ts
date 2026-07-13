@@ -115,17 +115,17 @@ const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
 const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private" | "unknown"; expiresAtMs: number }>();
 
-function hasDurableAuthorizedReviewReceipt(
+function hasDurableAuthorizedReviewOutcome(
   consumption: ReviewEventAuthorizationConsumptionRecord | undefined
-): consumption is ReviewEventAuthorizationConsumptionRecord & {
-  postedEvent: ReviewEvent;
-  reviewUrl: string;
-  postedAt: string;
-} {
+): boolean {
   if (!consumption) return false;
-  return Boolean(consumption.postedEvent) &&
+  const receipt = Boolean(consumption.postedEvent) &&
     Boolean(consumption.reviewUrl) &&
     Boolean(consumption.postedAt);
+  const terminalNoop = consumption.terminalOutcome === "no_op" &&
+    Boolean(consumption.terminalReason) &&
+    Boolean(consumption.terminalAt);
+  return receipt || terminalNoop;
 }
 
 function recordConsumedAuthorizationIncident(input: {
@@ -1522,7 +1522,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const queuedRequestChanges = queuedOwnerRequestChanges ||
       consumption?.commentId === input.commandCommentId;
     if (consumption && queuedRequestChanges) {
-      if (hasDurableAuthorizedReviewReceipt(consumption)) {
+      if (hasDurableAuthorizedReviewOutcome(consumption)) {
         await reconcileProcessedHeadAfterDirectReviewSafely({ config, github, state, repo, pull, dryRun: input.dryRun });
         return "skipped_processed";
       }
@@ -1918,16 +1918,33 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Atomic per-head claim (#295): acquired here — after every eligibility/stale check and after the
     // dry-run branch, immediately before posting — so exactly one of a racing manual-review-pr and
     // daemon posts a review on this head. The loser records a structured skip and no-ops.
-    headClaim = state.tryClaimReviewHead({
+    const headClaimAttempt = state.tryClaimReviewHeadWithOutcome({
       repo,
       pullNumber: pull.number,
       headSha: pull.head.sha,
-      claimTtlMs: config.reviewConcurrency.leaseTtlMs
+      claimTtlMs: config.reviewConcurrency.leaseTtlMs,
+      // retry_failed_head is admitted only after the earlier processed-status validation; it must
+      // be able to replace that failed/deferred row after a successful provider retry.
+      allowProcessedOwnerSupersession: commandReviewRequested ||
+        (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
+        input.processedHeadPolicy === "retry_failed_head"
     });
-    if (!headClaim) {
-      recordConcurrentClaimSkip({ state, repo, pull, evidenceDir });
+    if (headClaimAttempt.status === "blocked") {
+      if (headClaimAttempt.reason === "active_claim") {
+        recordConcurrentClaimSkip({ state, repo, pull, evidenceDir });
+      } else {
+        await reconcileProcessedHeadAfterDirectReviewSafely({
+          config,
+          github,
+          state,
+          repo,
+          pull,
+          dryRun: input.dryRun
+        });
+      }
       return "skipped_processed";
     }
+    headClaim = headClaimAttempt.claim;
 
     const liveBeforePost = await github.getPull(repo, pull.number);
     const staleBeforePost = detectStalePullHead({ expected: pull, live: liveBeforePost, phase: "before_post" });
@@ -1949,7 +1966,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       if (concurrentConsumption) {
         const triggerCommentId = input.commandCommentId ??
           (commandDecision.action === "request-changes" ? commandDecision.commandId : concurrentConsumption.commentId);
-        if (hasDurableAuthorizedReviewReceipt(concurrentConsumption)) {
+        if (hasDurableAuthorizedReviewOutcome(concurrentConsumption)) {
           await reconcileProcessedHeadAfterDirectReviewSafely({
             config,
             github,
@@ -2020,6 +2037,43 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       reviewEventDecisionEvidence
     );
     plan.event = reviewEventResolution.decision.selectedEvent;
+    const priorPostedBeforePublicPost = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    if (
+      reviewEventResolution.consumed &&
+      plan.event === "COMMENT" &&
+      priorPostedBeforePublicPost?.status === "posted" &&
+      priorPostedBeforePublicPost.event === "COMMENT"
+    ) {
+      if (reviewEventResolution.authorization.status !== "eligible") {
+        throw new Error("consumed owner authorization was not eligible for terminal no-op resolution");
+      }
+      const recorded = state.recordAuthorizedReviewNoop({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: reviewEventResolution.authorization.commentId,
+        author: reviewEventResolution.authorization.author,
+        reason: "candidate_comment_already_posted"
+      });
+      writeRedactedJson(join(evidenceDir, "authorized-review-noop.json"), {
+        reason: "candidate_comment_already_posted",
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: reviewEventResolution.authorization.commentId,
+        priorReviewUrl: priorPostedBeforePublicPost.reviewUrl,
+        recorded
+      });
+      await reconcileProcessedHeadAfterDirectReviewSafely({
+        config,
+        github,
+        state,
+        repo,
+        pull,
+        dryRun: input.dryRun
+      });
+      return "skipped_processed";
+    }
     if (config.walkthrough.enabled) {
       plan.walkthrough = buildWalkthroughComment({
         repo,
@@ -3074,8 +3128,9 @@ export function recordConcurrentClaimSkip(input: {
   evidenceDir: string;
 }): void {
   // The other claimant owns this head (#295). Do NOT recordProcessed here: that would `insert or
-  // replace` the winner's row AND retire the winner's live claim. Record a skipped readiness note
-  // (separate table) plus an evidence file, matching the existing skip-evidence idiom, and log it.
+  // replace` the winner's row AND retire the winner's live claim. Do not write readiness either:
+  // the loser cannot distinguish an active winner from a winner that has just made terminal
+  // REQUEST_CHANGES/needs_fix truth durable. The winning claimant exclusively owns readiness.
   const evidence = {
     reason: "concurrent_review_claim_held",
     repo: input.repo,
@@ -3088,13 +3143,6 @@ export function recordConcurrentClaimSkip(input: {
   // network-data-to-evidence-file pattern itself is the evidence-packet design, triaged as a
   // class under #249).
   writeRedactedJson(join(input.evidenceDir, "concurrent-claim-skip.json"), evidence);
-  input.state.recordReviewReadiness({
-    repo: input.repo,
-    pullNumber: input.pull.number,
-    headSha: input.pull.head.sha,
-    state: "skipped",
-    reason: "concurrent_review_claim_held"
-  });
   console.warn(
     `[head-claim] concurrent claim held repo=${input.repo} pr=${input.pull.number} sha=${input.pull.head.sha}: skipping duplicate same-head review`
   );

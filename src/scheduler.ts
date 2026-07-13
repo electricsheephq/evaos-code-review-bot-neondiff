@@ -636,7 +636,11 @@ async function enqueuePullIfEligible(input: {
         input.pull.head.sha
       )
     : undefined;
-  if (unresolvedAuthorization?.incidentError && !unresolvedAuthorization.postedAt) {
+  if (
+    unresolvedAuthorization?.incidentError &&
+    !unresolvedAuthorization.postedAt &&
+    !unresolvedAuthorization.terminalAt
+  ) {
     recordReadinessTransition({
       state: input.state,
       repo: input.repo,
@@ -1228,9 +1232,8 @@ function latestPendingRequestChanges(input: {
     input.pull.head.sha
   );
   if (
-    consumed?.postedEvent &&
-    consumed.reviewUrl &&
-    consumed.postedAt
+    (consumed?.postedEvent && consumed.reviewUrl && consumed.postedAt) ||
+    (consumed?.terminalOutcome === "no_op" && consumed.terminalReason && consumed.terminalAt)
   ) {
     for (const request of pending) {
       input.state.recordProcessedCommand({
@@ -1771,6 +1774,22 @@ function syncReadinessForReviewResult(input: {
   status: ReviewPullResult;
   now: Date;
 }): void {
+  if (input.status === "skipped_processed") {
+    const authorization = input.state.getReviewEventAuthorizationConsumption(
+      input.job.repo,
+      input.pull.number,
+      input.pull.head.sha
+    );
+    if (
+      authorization?.terminalOutcome === "no_op" &&
+      authorization.terminalReason &&
+      authorization.terminalAt
+    ) {
+      // recordAuthorizedReviewNoop already restored the prior advisory readiness atomically.
+      // Preserve that exact terminal outcome instead of relabeling it as a generic processed skip.
+      return;
+    }
+  }
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
   const readinessState = readinessStateForReviewResult(input.status, processed);
   if (!readinessState) return;

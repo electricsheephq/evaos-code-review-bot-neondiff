@@ -1071,6 +1071,54 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("does not reserve capacity for a later manual job on a head selected by background work", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-head-aware-manual-reserve-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-07-01T00:00:00.000Z");
+
+    const backgroundX = store.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "head-x",
+      providerId: "zai",
+      priority: 1,
+      now
+    }).job;
+    const backgroundY = store.enqueueReviewQueueJob({
+      repo: "org/repo-b",
+      pullNumber: 2,
+      headSha: "head-y",
+      providerId: "zai",
+      priority: 2,
+      now
+    }).job;
+    const manualX = store.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "head-x",
+      source: "manual_command",
+      commentId: 10,
+      providerId: "zai",
+      priority: 3,
+      now
+    }).job;
+
+    const leased = store.leaseNextReviewQueueJobs({
+      maxGlobalActive: 2,
+      maxProviderActive: 2,
+      maxOrgActive: 2,
+      maxRepoActive: 1,
+      manualCommandReserve: 1,
+      limit: 2,
+      now: new Date("2026-07-01T00:00:10.000Z")
+    });
+
+    expect(leased.map((job) => job.jobId)).toEqual([backgroundX.jobId, backgroundY.jobId]);
+    expect(store.getReviewQueueJob(manualX.jobId)).toMatchObject({ state: "queued" });
+    store.close();
+  });
+
   it("honors repo-specific active caps while leasing queued work", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-repo-specific-lease-"));
     roots.push(root);
@@ -1851,6 +1899,248 @@ describe("review state store", () => {
     }
   });
 
+  it("records a terminal owner-authorization no-op without replacing the prior advisory review", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-event-authorization-noop-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const headSha = "7".repeat(40);
+    const priorReviewUrl = "https://github.com/owner/repo/pull/7#pullrequestreview-prior";
+    const authorization = {
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha,
+      commentId: 81,
+      author: "100yenadmin"
+    };
+
+    store.recordProcessed({
+      repo: authorization.repo,
+      pullNumber: authorization.pullNumber,
+      headSha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: priorReviewUrl
+    });
+    store.recordReviewReadiness({
+      repo: authorization.repo,
+      pullNumber: authorization.pullNumber,
+      headSha,
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: priorReviewUrl,
+      now: new Date("2026-07-13T01:00:00.000Z")
+    });
+    const priorProcessed = store.getProcessedReview(authorization.repo, authorization.pullNumber, headSha);
+    const priorReadiness = store.getReviewReadiness(authorization.repo, authorization.pullNumber, headSha);
+    expect(store.tryConsumeReviewEventAuthorization({
+      ...authorization,
+      now: new Date("2026-07-13T01:01:00.000Z")
+    })).toBe(true);
+
+    expect(store.recordAuthorizedReviewNoop({
+      ...authorization,
+      reason: "candidate_comment_already_posted",
+      now: new Date("2026-07-13T01:02:00.000Z")
+    })).toBe(true);
+
+    expect(store.getReviewEventAuthorizationConsumption(authorization.repo, authorization.pullNumber, headSha)).toEqual({
+      repo: authorization.repo,
+      pullNumber: authorization.pullNumber,
+      headSha,
+      commentId: authorization.commentId,
+      author: authorization.author,
+      consumedAt: "2026-07-13T01:01:00.000Z",
+      terminalOutcome: "no_op",
+      terminalReason: "candidate_comment_already_posted",
+      terminalAt: "2026-07-13T01:02:00.000Z"
+    });
+    expect(store.getProcessedReview(authorization.repo, authorization.pullNumber, headSha)).toEqual(priorProcessed);
+    expect(store.getReviewReadiness(authorization.repo, authorization.pullNumber, headSha)).toEqual(priorReadiness);
+    expect(store.recordReviewEventAuthorizationIncident({
+      repo: authorization.repo,
+      pullNumber: authorization.pullNumber,
+      headSha,
+      triggerCommentId: 82,
+      error: "late_incident_must_lose"
+    })).toBe(false);
+    store.recordAuthorizedReviewPosted({
+      ...authorization,
+      event: "COMMENT",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-late"
+    });
+    expect(store.getReviewEventAuthorizationConsumption(authorization.repo, authorization.pullNumber, headSha)).toMatchObject({
+      postedEvent: "COMMENT",
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-late",
+      postedAt: expect.any(String)
+    });
+    expect(store.getReviewEventAuthorizationConsumption(authorization.repo, authorization.pullNumber, headSha)).not.toHaveProperty("terminalOutcome");
+    expect(store.recordAuthorizedReviewNoop({
+      ...authorization,
+      commentId: 82,
+      reason: "candidate_comment_already_posted"
+    })).toBe(false);
+    store.close();
+  });
+
+  it("orders authorization outcomes as receipt over no-op over incident", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-event-authorization-races-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const repo = "owner/repo";
+    const pullNumber = 8;
+    const priorReviewUrl = "https://github.com/owner/repo/pull/8#pullrequestreview-prior";
+    const preparePriorComment = (headSha: string, commentId: number) => {
+      store.recordProcessed({ repo, pullNumber, headSha, status: "posted", event: "COMMENT", reviewUrl: priorReviewUrl });
+      store.recordReviewReadiness({
+        repo,
+        pullNumber,
+        headSha,
+        state: "ready_for_human",
+        reason: "comment_review_posted",
+        event: "COMMENT",
+        reviewUrl: priorReviewUrl,
+        now: new Date("2026-07-13T03:00:00.000Z")
+      });
+      expect(store.tryConsumeReviewEventAuthorization({
+        repo,
+        pullNumber,
+        headSha,
+        commentId,
+        author: "100yenadmin",
+        now: new Date("2026-07-13T03:01:00.000Z")
+      })).toBe(true);
+    };
+
+    const incidentFirstHead = "8".repeat(40);
+    preparePriorComment(incidentFirstHead, 91);
+    expect(store.recordReviewEventAuthorizationIncident({
+      repo,
+      pullNumber,
+      headSha: incidentFirstHead,
+      triggerCommentId: 92,
+      error: "exact_authorization_already_consumed",
+      now: new Date("2026-07-13T03:02:00.000Z")
+    })).toBe(true);
+    expect(store.recordAuthorizedReviewNoop({
+      repo,
+      pullNumber,
+      headSha: incidentFirstHead,
+      commentId: 91,
+      author: "100yenadmin",
+      reason: "candidate_comment_already_posted",
+      now: new Date("2026-07-13T03:03:00.000Z")
+    })).toBe(true);
+    expect(store.getReviewEventAuthorizationConsumption(repo, pullNumber, incidentFirstHead)).toMatchObject({
+      terminalOutcome: "no_op",
+      terminalReason: "candidate_comment_already_posted",
+      terminalAt: "2026-07-13T03:03:00.000Z"
+    });
+    expect(store.getReviewEventAuthorizationConsumption(repo, pullNumber, incidentFirstHead)).not.toHaveProperty("incidentError");
+    expect(store.getReviewReadiness(repo, pullNumber, incidentFirstHead)).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: priorReviewUrl,
+      commandAction: "request-changes",
+      commandCommentId: 91
+    });
+    expect(store.recordReviewEventAuthorizationIncident({
+      repo,
+      pullNumber,
+      headSha: incidentFirstHead,
+      triggerCommentId: 93,
+      error: "late_incident_must_lose"
+    })).toBe(false);
+
+    const receiptFirstHead = "9".repeat(40);
+    preparePriorComment(receiptFirstHead, 94);
+    store.recordAuthorizedReviewPosted({
+      repo,
+      pullNumber,
+      headSha: receiptFirstHead,
+      commentId: 94,
+      author: "100yenadmin",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/owner/repo/pull/8#pullrequestreview-blocking",
+      now: new Date("2026-07-13T03:04:00.000Z")
+    });
+    expect(store.recordAuthorizedReviewNoop({
+      repo,
+      pullNumber,
+      headSha: receiptFirstHead,
+      commentId: 94,
+      author: "100yenadmin",
+      reason: "candidate_comment_already_posted"
+    })).toBe(false);
+    expect(store.getReviewEventAuthorizationConsumption(repo, pullNumber, receiptFirstHead)).toMatchObject({
+      postedEvent: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/owner/repo/pull/8#pullrequestreview-blocking"
+    });
+    expect(store.getReviewEventAuthorizationConsumption(repo, pullNumber, receiptFirstHead)).not.toHaveProperty("terminalOutcome");
+
+    const supersededIncidentHead = "b".repeat(40);
+    preparePriorComment(supersededIncidentHead, 96);
+    expect(store.recordReviewEventAuthorizationIncident({
+      repo,
+      pullNumber,
+      headSha: supersededIncidentHead,
+      triggerCommentId: 97,
+      error: "exact_authorization_already_consumed",
+      now: new Date("2026-07-13T03:05:00.000Z")
+    })).toBe(true);
+    store.recordReviewReadiness({
+      repo,
+      pullNumber,
+      headSha: supersededIncidentHead,
+      state: "failed",
+      reason: "post_review_head_unverified",
+      event: "COMMENT",
+      reviewUrl: priorReviewUrl,
+      commandAction: "request-changes",
+      commandCommentId: 98,
+      now: new Date("2026-07-13T03:06:00.000Z")
+    });
+    expect(() => store.recordAuthorizedReviewNoop({
+      repo,
+      pullNumber,
+      headSha: supersededIncidentHead,
+      commentId: 96,
+      author: "100yenadmin",
+      reason: "candidate_comment_already_posted",
+      now: new Date("2026-07-13T03:07:00.000Z")
+    })).toThrow(/existing posted COMMENT.*readiness/i);
+    expect(store.getReviewEventAuthorizationConsumption(repo, pullNumber, supersededIncidentHead)).toMatchObject({
+      incidentError: "exact_authorization_already_consumed",
+      incidentCommentId: 97
+    });
+    expect(store.getReviewEventAuthorizationConsumption(repo, pullNumber, supersededIncidentHead)).not.toHaveProperty("terminalOutcome");
+    expect(store.getReviewReadiness(repo, pullNumber, supersededIncidentHead)).toMatchObject({
+      state: "failed",
+      reason: "post_review_head_unverified",
+      commandCommentId: 98
+    });
+
+    const missingReadinessHead = "a".repeat(40);
+    store.recordProcessed({ repo, pullNumber, headSha: missingReadinessHead, status: "posted", event: "COMMENT", reviewUrl: priorReviewUrl });
+    expect(store.tryConsumeReviewEventAuthorization({
+      repo,
+      pullNumber,
+      headSha: missingReadinessHead,
+      commentId: 95,
+      author: "100yenadmin"
+    })).toBe(true);
+    expect(() => store.recordAuthorizedReviewNoop({
+      repo,
+      pullNumber,
+      headSha: missingReadinessHead,
+      commentId: 95,
+      author: "100yenadmin",
+      reason: "candidate_comment_already_posted"
+    })).toThrow(/existing posted COMMENT.*readiness/i);
+    store.close();
+  });
+
   it("adds authorization state to a legacy database without losing prior rows", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-event-authorization-legacy-"));
     roots.push(root);
@@ -2026,7 +2316,87 @@ describe("review state store", () => {
     store.close();
   });
 
-  it("retires the per-head claim when the review is recorded so it is not re-claimed (#295)", () => {
+  it("refuses an ordinary claim after a processed head retires its prior claim", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-processed-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "r/x", pullNumber: 31, headSha: "sha-processed" };
+
+    const first = store.tryClaimReviewHead({
+      ...head,
+      claimTtlMs: 900_000,
+      now: new Date("2026-07-06T00:00:00.000Z")
+    });
+    expect(first).toBeDefined();
+    store.recordProcessed({
+      ...head,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/r/x/pull/31#pullrequestreview-prior"
+    });
+
+    expect(store.tryClaimReviewHead({
+      ...head,
+      claimTtlMs: 900_000,
+      now: new Date("2026-07-06T00:00:01.000Z")
+    })).toBeUndefined();
+    store.close();
+  });
+
+  it("distinguishes an active claim from a durable processed-head rejection", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-outcomes-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const activeHead = { repo: "r/x", pullNumber: 33, headSha: "sha-active" };
+    const processedHead = { repo: "r/x", pullNumber: 34, headSha: "sha-processed-outcome" };
+
+    expect(store.tryClaimReviewHeadWithOutcome({
+      ...activeHead,
+      claimTtlMs: 900_000,
+      now: new Date("2026-07-06T00:00:00.000Z")
+    })).toMatchObject({ status: "acquired", claim: { ownerPid: process.pid } });
+    expect(store.tryClaimReviewHeadWithOutcome({
+      ...activeHead,
+      claimTtlMs: 900_000,
+      now: new Date("2026-07-06T00:00:01.000Z")
+    })).toEqual({ status: "blocked", reason: "active_claim" });
+
+    store.recordProcessed({
+      ...processedHead,
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/r/x/pull/34#pullrequestreview-blocking"
+    });
+    expect(store.tryClaimReviewHeadWithOutcome({
+      ...processedHead,
+      claimTtlMs: 900_000,
+      now: new Date("2026-07-06T00:00:02.000Z")
+    })).toEqual({ status: "blocked", reason: "processed" });
+    store.close();
+  });
+
+  it("allows only an explicit validated-owner supersession to claim a processed head", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-owner-supersession-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "r/x", pullNumber: 32, headSha: "sha-owner-supersession" };
+    store.recordProcessed({
+      ...head,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/r/x/pull/32#pullrequestreview-prior"
+    });
+
+    expect(store.tryClaimReviewHead({
+      ...head,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      now: new Date("2026-07-06T00:00:01.000Z")
+    })).toBeDefined();
+    store.close();
+  });
+
+  it("retires the per-head claim and refuses ordinary re-claim after the review is recorded (#295)", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-retire-"));
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
@@ -2036,9 +2406,10 @@ describe("review state store", () => {
     expect(claim).toBeDefined();
     store.recordProcessed({ repo: head.repo, pullNumber: head.pullNumber, headSha: head.headSha, status: "posted" });
 
-    // A completed review supersedes the claim: the claim row is retired (no stale row lingers to TTL).
+    // A completed review supersedes the claim: the claim row is retired and the processed row keeps
+    // ordinary workers from acquiring the exact head again.
     const afterRecord = store.tryClaimReviewHead({ ...head, claimTtlMs: 900_000, now: new Date("2026-07-06T00:00:02.000Z") });
-    expect(afterRecord).toBeDefined();
+    expect(afterRecord).toBeUndefined();
     store.close();
   });
 

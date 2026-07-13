@@ -1865,6 +1865,7 @@ function describeActionableProviderDeferredJobs(
   actionableCount: number
 ): string {
   if (!budget) return `${actionableCount} retryable provider-deferred durable queue job(s)`;
+  const waitingHeadActive = budget.providerDeferred.waitingHeadActive ?? 0;
   const waitingCapacity =
     budget.providerDeferred.waitingProviderCapacity +
     budget.providerDeferred.waitingOrgCapacity +
@@ -1876,6 +1877,7 @@ function describeActionableProviderDeferredJobs(
     `; provider_deferred total=${budget.providerDeferred.total}` +
     ` retryable=${budget.providerDeferred.retryable}` +
     ` waiting_cooldown=${budget.providerDeferred.waitingCooldown}` +
+    (waitingHeadActive > 0 ? ` waiting_head_active=${waitingHeadActive}` : "") +
     ` waiting_capacity=${waitingCapacity}`
   );
 }
