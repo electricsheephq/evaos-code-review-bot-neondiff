@@ -291,6 +291,27 @@ Classify whether the bot is idle, healthy-active, or blocked:
 npx tsx src/cli.ts runtime-inventory --json --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
+Recover the standard macOS LaunchAgent only after runtime inventory shows no
+active work. Inspect both plans first; these dry runs do not mutate launchd:
+
+```bash
+npx tsx src/cli.ts daemon stop --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
+npx tsx src/cli.ts daemon start --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
+```
+
+After approving the exact label, config, detected launchd state, plist path,
+and planned commands, run the confirmed stop/start sequence:
+
+```bash
+npx tsx src/cli.ts daemon stop --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
+npx tsx src/cli.ts daemon start --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
+```
+
+Confirmed start remains activation-gated. If the operator-owned plist is not
+the standard `~/Library/LaunchAgents/<label>.plist`, pass its exact path with
+`--plist`; confirmed external paths additionally require
+`--allow-external-plist true`.
+
 `runtime-inventory` treats issue-enrichment runtime as a separate lane from PR
 review health. Failed issue-enrichment records remain blocking because an
 operator must inspect them before promotion. Deferred issue-enrichment records
