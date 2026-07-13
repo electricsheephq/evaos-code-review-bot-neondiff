@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { fork, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { afterEach, describe, it } from "node:test";
 import { tmpdir } from "node:os";
@@ -32,10 +33,15 @@ function binding(overrides: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
-function issueLegacyCheckout(store: LicenseStore, source = "checkout"): void {
-  store.issueIdempotentLicense("nd_live_legacybackfillrawmaterial", {
-    idempotencyKey: "checkout-session:legacy-backfill",
-    requestHash: "legacy-request-hash",
+function issueLegacyCheckout(
+  store: LicenseStore,
+  source = "checkout",
+  idempotencyKey = "checkout-session:legacy-backfill",
+  rawKey = "nd_live_legacybackfillrawmaterial"
+): void {
+  store.issueIdempotentLicense(rawKey, {
+    idempotencyKey,
+    requestHash: `legacy-request-hash:${idempotencyKey}`,
     source,
     externalRef: "legacy-checkout-reference",
     plan: "monthly_support",
@@ -73,6 +79,120 @@ function bindingCount(path: string): number {
 
 function errorName(error: unknown): string {
   return error instanceof Error ? error.constructor.name : "";
+}
+
+interface WorkerOutcome {
+  type: "result" | "error";
+  result?: string;
+  errorName?: string;
+}
+
+function startBindingWorker(
+  path: string,
+  input: Record<string, unknown>
+): {
+  child: ChildProcess;
+  ready: Promise<void>;
+  outcome: Promise<WorkerOutcome>;
+  exited: Promise<void>;
+} {
+  const child = fork(new URL("./fixtures/checkout-binding-worker.ts", import.meta.url), [], {
+    execArgv: ["--import", "tsx"],
+    env: {
+      ...process.env,
+      CHECKOUT_BINDING_DB_PATH: path,
+      CHECKOUT_BINDING_INPUT: JSON.stringify(input)
+    },
+    stdio: ["ignore", "pipe", "pipe", "ipc"]
+  });
+  let stderr = "";
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  let readyResolve!: () => void;
+  let readyReject!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  let outcomeResolve!: (outcome: WorkerOutcome) => void;
+  let outcomeReject!: (error: Error) => void;
+  const outcome = new Promise<WorkerOutcome>((resolve, reject) => {
+    outcomeResolve = resolve;
+    outcomeReject = reject;
+  });
+  let exitResolve!: () => void;
+  let exitReject!: (error: Error) => void;
+  const exited = new Promise<void>((resolve, reject) => {
+    exitResolve = resolve;
+    exitReject = reject;
+  });
+  let readyReceived = false;
+  let outcomeReceived = false;
+  const timeout = setTimeout(() => {
+    child.kill("SIGKILL");
+    const error = new Error(`checkout binding worker timed out${stderr ? `: ${stderr}` : ""}`);
+    readyReject(error);
+    outcomeReject(error);
+    exitReject(error);
+  }, 5_000);
+  child.on("message", (message: unknown) => {
+    const value = message as WorkerOutcome & { type: string };
+    if (value.type === "ready") {
+      readyReceived = true;
+      readyResolve();
+    } else if (value.type === "result" || value.type === "error") {
+      outcomeReceived = true;
+      outcomeResolve(value);
+    }
+  });
+  child.on("error", (error) => {
+    clearTimeout(timeout);
+    readyReject(error);
+    outcomeReject(error);
+    exitReject(error);
+  });
+  child.on("exit", (code, signal) => {
+    clearTimeout(timeout);
+    if (code !== 0 || signal !== null || stderr.length > 0 || !readyReceived || !outcomeReceived) {
+      const details = [
+        `checkout binding worker exited ${code ?? signal}`,
+        !readyReceived ? "without READY" : "",
+        !outcomeReceived ? "without outcome" : "",
+        stderr ? `stderr: ${stderr}` : ""
+      ].filter(Boolean).join("; ");
+      const error = new Error(details);
+      readyReject(error);
+      outcomeReject(error);
+      exitReject(error);
+      return;
+    }
+    exitResolve();
+  });
+  return { child, ready, outcome, exited };
+}
+
+async function concurrentBindings(
+  path: string,
+  firstInput: Record<string, unknown>,
+  secondInput: Record<string, unknown>
+): Promise<WorkerOutcome[]> {
+  const first = startBindingWorker(path, firstInput);
+  const second = startBindingWorker(path, secondInput);
+  try {
+    await Promise.all([first.ready, second.ready]);
+    first.child.send("GO");
+    second.child.send("GO");
+    const outcomes = await Promise.all([first.outcome, second.outcome]);
+    await Promise.all([first.exited, second.exited]);
+    return outcomes;
+  } finally {
+    for (const child of [first.child, second.child]) {
+      if (child.connected) child.disconnect();
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+  }
 }
 
 describe("checkout subscription binding backfill store", () => {
@@ -130,6 +250,164 @@ describe("checkout subscription binding backfill store", () => {
       assert.equal(bindingCount(path), 1);
     } finally {
       store.close();
+    }
+  });
+
+  it("conflicts without overwrite when a second real issuance claims the same unique tuple", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path);
+    try {
+      issueLegacyCheckout(store);
+      issueLegacyCheckout(
+        store,
+        "checkout",
+        "checkout-session:second-legacy-backfill",
+        "nd_live_secondlegacybackfillraw"
+      );
+      bind(store);
+      const second = binding({
+        issuanceIdempotencyKey: "checkout-session:second-legacy-backfill"
+      });
+
+      assert.throws(
+        () => bind(store, second),
+        (error: unknown) => errorName(error) === "CheckoutBindingConflictError"
+      );
+      const db = new DatabaseSync(path);
+      try {
+        const rows = db
+          .prepare(
+            `select issuance_idempotency_key, external_subscription_id
+             from checkout_subscription_bindings`
+          )
+          .all() as unknown as Array<Record<string, unknown>>;
+        assert.deepEqual(rows.map((row) => ({ ...row })), [{
+          issuance_idempotency_key: "checkout-session:legacy-backfill",
+          external_subscription_id: "sub_legacy_backfill"
+        }]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  it("conflicts without overwrite when issuance and binding point to different real licenses", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path);
+    try {
+      issueLegacyCheckout(store);
+      issueLegacyCheckout(
+        store,
+        "checkout",
+        "checkout-session:other-real-license",
+        "nd_live_otherreallicensebackfillraw"
+      );
+      bind(store);
+      const db = new DatabaseSync(path);
+      try {
+        db.exec("pragma foreign_keys = off");
+        db.prepare(
+          `update license_issuance_events
+           set license_key_hash = (
+             select license_key_hash from license_issuance_events where idempotency_key = ?
+           )
+           where idempotency_key = ?`
+        ).run("checkout-session:other-real-license", "checkout-session:legacy-backfill");
+      } finally {
+        db.close();
+      }
+
+      assert.throws(
+        () => bind(store),
+        (error: unknown) => errorName(error) === "CheckoutBindingConflictError"
+      );
+      const verification = new DatabaseSync(path);
+      try {
+        const row = verification
+          .prepare(
+            `select issuance_idempotency_key, license_key_hash
+             from checkout_subscription_bindings`
+          )
+          .get() as Record<string, unknown>;
+        assert.equal(row.issuance_idempotency_key, "checkout-session:legacy-backfill");
+        assert.notEqual(
+          row.license_key_hash,
+          store.getLicenseByKey("nd_live_otherreallicensebackfillraw")!.licenseKeyHash
+        );
+      } finally {
+        verification.close();
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  it("serializes genuinely concurrent identical attempts to bound and already_bound", async () => {
+    const path = databasePath();
+    const store = new LicenseStore(path);
+    issueLegacyCheckout(store);
+    store.close();
+
+    const outcomes = await concurrentBindings(path, binding(), binding());
+    assert.deepEqual(
+      outcomes.map((outcome) => outcome.result ?? outcome.errorName).sort(),
+      ["already_bound", "bound"]
+    );
+    assert.equal(bindingCount(path), 1);
+  });
+
+  it("serializes genuinely concurrent competing tuples to bound and typed conflict", async () => {
+    const path = databasePath();
+    const store = new LicenseStore(path);
+    issueLegacyCheckout(store);
+    const licenseKeyHash = store.getLicenseByKey("nd_live_legacybackfillrawmaterial")!
+      .licenseKeyHash;
+    store.close();
+
+    const firstInput = binding();
+    const secondInput = binding({ externalSubscriptionId: "sub_competing_backfill" });
+    const outcomes = await concurrentBindings(
+      path,
+      firstInput,
+      secondInput
+    );
+    assert.deepEqual(
+      outcomes.map((outcome) => outcome.result ?? outcome.errorName).sort(),
+      ["CheckoutBindingConflictError", "bound"]
+    );
+    const db = new DatabaseSync(path);
+    try {
+      const rows = db.prepare(
+        `select issuance_idempotency_key, license_key_hash, provider, provider_account_id,
+                provider_mode, external_subscription_id, external_checkout_id
+         from checkout_subscription_bindings`
+      ).all() as unknown as Array<Record<string, unknown>>;
+      assert.equal(rows.length, 1);
+      const persisted = { ...rows[0] };
+      const candidates = [firstInput, secondInput].map((candidate) => ({
+        issuance_idempotency_key: candidate.issuanceIdempotencyKey,
+        license_key_hash: licenseKeyHash,
+        provider: candidate.provider,
+        provider_account_id: candidate.providerAccountId,
+        provider_mode: candidate.providerMode,
+        external_subscription_id: candidate.externalSubscriptionId,
+        external_checkout_id: candidate.externalCheckoutId
+      }));
+      assert.ok(
+        candidates.some((candidate) => {
+          try {
+            assert.deepEqual(persisted, candidate);
+            return true;
+          } catch {
+            return false;
+          }
+        }),
+        "persisted binding must equal one complete competing tuple"
+      );
+    } finally {
+      db.close();
     }
   });
 
@@ -192,6 +470,40 @@ describe("checkout subscription binding backfill store", () => {
           (error: unknown) => errorName(error) === "CheckoutBindingPolicyError"
         );
       }
+    } finally {
+      store.close();
+    }
+  });
+
+  it("does not echo caller-controlled unknown field or option names", () => {
+    const store = new LicenseStore(":memory:");
+    try {
+      issueLegacyCheckout(store);
+      const fieldSentinel = "private_customer_field_sentinel";
+      const optionSentinel = "private_customer_option_sentinel";
+      assert.throws(
+        () => bind(store, binding({ [fieldSentinel]: "value" })),
+        (error: unknown) =>
+          errorName(error) === "CheckoutBindingPolicyError" &&
+          error instanceof Error &&
+          error.message === "unsupported checkout binding field" &&
+          !error.message.includes(fieldSentinel)
+      );
+      assert.throws(
+        () => (
+          store as unknown as {
+            bindCheckoutSubscription(
+              input: Record<string, unknown>,
+              options: Record<string, unknown>
+            ): unknown;
+          }
+        ).bindCheckoutSubscription(binding(), { [optionSentinel]: true }),
+        (error: unknown) =>
+          errorName(error) === "CheckoutBindingPolicyError" &&
+          error instanceof Error &&
+          error.message === "unsupported checkout binding option" &&
+          !error.message.includes(optionSentinel)
+      );
     } finally {
       store.close();
     }

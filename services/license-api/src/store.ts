@@ -580,7 +580,7 @@ export class LicenseStore {
     const validated = validateCheckoutBindingBackfillInput(input);
     for (const key of Object.keys(options)) {
       if (key !== "dryRun") {
-        throw new CheckoutBindingPolicyError(`unsupported checkout binding option: ${key}`);
+        throw new CheckoutBindingPolicyError("unsupported checkout binding option");
       }
     }
     if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
@@ -1165,7 +1165,7 @@ function validateCheckoutBindingBackfillInput(
   }
   for (const key of Object.keys(input)) {
     if (!CHECKOUT_BINDING_BACKFILL_FIELDS.has(key)) {
-      throw new CheckoutBindingPolicyError(`unsupported checkout binding field: ${key}`);
+      throw new CheckoutBindingPolicyError("unsupported checkout binding field");
     }
   }
   const issuanceIdempotencyKey = readCheckoutBindingString(
