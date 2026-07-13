@@ -9,6 +9,11 @@ import {
   type CheckoutLookupKey,
   type CheckoutPolicy
 } from "./checkout-policy.js";
+import {
+  canonicalSubscriptionLifecycleRequestHash,
+  type ParsedSubscriptionLifecycleRequest,
+  type RenewPaidSubscriptionLifecycleRequest
+} from "./subscription-lifecycle.js";
 
 const SCHEMA_VERSION = 2;
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
@@ -190,6 +195,24 @@ interface CheckoutSubscriptionBindingRow {
   created_at: string;
 }
 
+interface SubscriptionLifecycleEventRow {
+  event_id: string;
+  issuance_idempotency_key: string;
+  license_key_hash: string;
+  external_subscription_id: string;
+  request_hash: string;
+  event_created_at: number;
+  provider: string;
+  provider_account_id: string;
+  provider_mode: string;
+  provider_event_type: string;
+  command: string;
+  payment_reference_fingerprint: string | null;
+  normalized_transition: string;
+  result: string;
+  created_at: string;
+}
+
 /**
  * Deterministic at-rest identifier for a license key. Only the hash is ever
  * stored or logged; the raw key is printed once by the admin CLI at issuance
@@ -248,6 +271,26 @@ export interface IssueBoundCheckoutLicenseInput {
 export class CheckoutIssuanceConflictError extends Error {}
 export class CheckoutIssuancePolicyError extends Error {}
 export class CheckoutIssuanceTransientError extends Error {}
+
+export class SubscriptionLifecycleNotFoundError extends Error {}
+export class SubscriptionLifecycleConflictError extends Error {}
+export class SubscriptionLifecyclePolicyError extends Error {}
+export class SubscriptionLifecycleTerminalError extends Error {}
+export class SubscriptionLifecycleTransientError extends Error {}
+export class SubscriptionLifecycleUnsupportedCommandError extends Error {}
+
+export interface SubscriptionLifecycleEntitlement {
+  status: "active";
+  plan: string;
+  seats: number;
+  expiresAt: string;
+}
+
+export interface SubscriptionLifecycleApplyResult {
+  status: "updated" | "replayed";
+  replayed: boolean;
+  entitlement: SubscriptionLifecycleEntitlement;
+}
 
 export class LicenseStore {
   private readonly db: DatabaseSync;
@@ -489,6 +532,123 @@ export class LicenseStore {
     }
   }
 
+  /**
+   * Apply a paid checkout renewal against its immutable issuance binding.
+   * Task 5 owns the remaining lifecycle transitions and their ordering rules.
+   */
+  applyCheckoutSubscriptionLifecycle(
+    input: ParsedSubscriptionLifecycleRequest
+  ): SubscriptionLifecycleApplyResult {
+    if (input.command !== "renew_paid") {
+      throw new SubscriptionLifecycleUnsupportedCommandError(
+        "subscription lifecycle command is not implemented"
+      );
+    }
+
+    const appliedAt = this.now();
+    if (!Number.isFinite(appliedAt.getTime())) {
+      throw new SubscriptionLifecyclePolicyError("license store clock is invalid");
+    }
+    const requestHash = canonicalSubscriptionLifecycleRequestHash(input);
+    let transactionStarted = false;
+    try {
+      this.db.exec("begin immediate");
+      transactionStarted = true;
+
+      const issuance = this.getIssuanceEvent(input.issuanceIdempotencyKey);
+      if (!issuance || issuance.source !== "checkout") {
+        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
+      }
+      const binding = this.getCheckoutSubscriptionBinding(input.issuanceIdempotencyKey);
+      if (
+        !binding ||
+        binding.licenseKeyHash !== issuance.license_key_hash ||
+        !sameLifecycleBinding(binding, input)
+      ) {
+        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
+      }
+      const record = this.getLicenseByHash(issuance.license_key_hash);
+      if (!record) {
+        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
+      }
+
+      const existingEvent = this.getSubscriptionLifecycleEvent(input.eventId);
+      if (existingEvent) {
+        if (existingEvent.request_hash !== requestHash) {
+          throw new SubscriptionLifecycleConflictError(
+            "subscription lifecycle event conflicts with an existing event"
+          );
+        }
+        const replayedRecord = this.getLicenseByHash(existingEvent.license_key_hash);
+        if (!replayedRecord?.expiresAt || replayedRecord.status !== "active") {
+          throw new SubscriptionLifecycleTerminalError("subscription entitlement is terminal");
+        }
+        this.db.exec("commit");
+        return lifecycleResult("replayed", true, replayedRecord);
+      }
+
+      if (record.status === "revoked") {
+        throw new SubscriptionLifecycleTerminalError("subscription entitlement is terminal");
+      }
+      if (record.status !== "active" && record.status !== "expired") {
+        throw new SubscriptionLifecyclePolicyError("subscription entitlement state is invalid");
+      }
+
+      const incomingPeriodEnd = validatePaidPeriodEnd(input, record.plan, appliedAt);
+      const storedPeriodEnd = record.expiresAt ? Date.parse(record.expiresAt) : Number.NaN;
+      if (!Number.isFinite(storedPeriodEnd)) {
+        throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+      }
+      const effectivePeriodEnd = Math.max(storedPeriodEnd, incomingPeriodEnd);
+      const expiresAt = new Date(effectivePeriodEnd).toISOString();
+
+      this.db
+        .prepare(
+          `update licenses
+           set expires_at = ?, status = 'active'
+           where license_key_hash = ?`
+        )
+        .run(expiresAt, record.licenseKeyHash);
+      this.db
+        .prepare(
+          `insert into license_subscription_lifecycle_events (
+            event_id, issuance_idempotency_key, license_key_hash,
+            external_subscription_id, request_hash, event_created_at,
+            provider, provider_account_id, provider_mode, provider_event_type,
+            command, payment_reference_fingerprint, normalized_transition, result
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'renew_paid', 'updated')`
+        )
+        .run(
+          input.eventId,
+          input.issuanceIdempotencyKey,
+          record.licenseKeyHash,
+          input.externalSubscriptionId,
+          requestHash,
+          input.eventCreatedAt,
+          input.provider,
+          input.providerAccountId,
+          input.providerMode,
+          input.providerEventType,
+          input.command,
+          input.paymentReferenceFingerprint
+        );
+      const updated = this.getLicenseByHash(record.licenseKeyHash);
+      if (!updated?.expiresAt || updated.status !== "active") {
+        throw new Error("subscription entitlement update did not persist");
+      }
+      this.db.exec("commit");
+      return lifecycleResult("updated", false, updated);
+    } catch (error) {
+      if (transactionStarted) this.db.exec("rollback");
+      if (isSqliteBusy(error)) {
+        throw new SubscriptionLifecycleTransientError(
+          "subscription lifecycle storage is temporarily unavailable"
+        );
+      }
+      throw error;
+    }
+  }
+
   private insertLicense(rawKey: string, input: IssueLicenseInput): { rawKey: string; record: LicenseRecord } {
     const licenseKeyHash = hashLicenseKey(rawKey);
     const seats = input.seats ?? 1;
@@ -531,6 +691,14 @@ export class LicenseStore {
       )
       .get(idempotencyKey) as CheckoutSubscriptionBindingRow | undefined;
     return row ? mapCheckoutSubscriptionBinding(row) : undefined;
+  }
+
+  private getSubscriptionLifecycleEvent(
+    eventId: string
+  ): SubscriptionLifecycleEventRow | undefined {
+    return this.db
+      .prepare("select * from license_subscription_lifecycle_events where event_id = ?")
+      .get(eventId) as SubscriptionLifecycleEventRow | undefined;
   }
 
   getLicenseByHash(licenseKeyHash: string): LicenseRecord | undefined {
@@ -664,6 +832,70 @@ function sameCheckoutBinding(
     existing.externalSubscriptionId === requested.externalSubscriptionId &&
     existing.externalCheckoutId === requested.externalCheckoutId
   );
+}
+
+function sameLifecycleBinding(
+  binding: CheckoutSubscriptionBindingRecord,
+  request: ParsedSubscriptionLifecycleRequest
+): boolean {
+  return (
+    binding.provider === request.provider &&
+    binding.providerAccountId === request.providerAccountId &&
+    binding.providerMode === request.providerMode &&
+    binding.externalSubscriptionId === request.externalSubscriptionId
+  );
+}
+
+function validatePaidPeriodEnd(
+  request: RenewPaidSubscriptionLifecycleRequest,
+  plan: string,
+  now: Date
+): number {
+  const value = request.currentPeriodEnd;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    throw new SubscriptionLifecyclePolicyError("paid period end is invalid");
+  }
+  const milliseconds = Date.parse(value);
+  if (
+    !Number.isFinite(milliseconds) ||
+    new Date(milliseconds).toISOString() !== value ||
+    milliseconds <= now.getTime()
+  ) {
+    throw new SubscriptionLifecyclePolicyError("paid period end is invalid");
+  }
+  const maximumPeriodDays = maximumPeriodDaysForPlan(plan);
+  if (milliseconds > now.getTime() + maximumPeriodDays * 24 * 60 * 60 * 1_000) {
+    throw new SubscriptionLifecyclePolicyError("paid period end exceeds the plan maximum");
+  }
+  return milliseconds;
+}
+
+function maximumPeriodDaysForPlan(plan: string): number {
+  for (const lookupKey of CHECKOUT_LOOKUP_KEYS) {
+    const policy = checkoutPolicyFor(lookupKey);
+    if (policy.plan === plan) return policy.maximumPeriodDays;
+  }
+  throw new SubscriptionLifecyclePolicyError("subscription entitlement plan is invalid");
+}
+
+function lifecycleResult(
+  status: SubscriptionLifecycleApplyResult["status"],
+  replayed: boolean,
+  record: LicenseRecord
+): SubscriptionLifecycleApplyResult {
+  if (!record.expiresAt) {
+    throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+  }
+  return {
+    status,
+    replayed,
+    entitlement: {
+      status: "active",
+      plan: record.plan,
+      seats: record.seats,
+      expiresAt: record.expiresAt
+    }
+  };
 }
 
 function resolveBusyTimeout(value: number | undefined): number {
