@@ -250,7 +250,7 @@ export function createLlamaCppStartupCapture(
           return reject(error);
         }
         if (pending[stream]) {
-        if (events.length >= options.maxLines) truncated = true;
+          if (events.length >= options.maxLines) truncated = true;
           else {
             const line = normalizeB9977LogLine(pending[stream]);
             if (placementRelevantLine(line)) events.push({ sequence: events.length, stream, line: redactSecrets(line) });

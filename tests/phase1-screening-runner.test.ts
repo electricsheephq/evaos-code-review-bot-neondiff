@@ -357,6 +357,14 @@ describe("Phase 1 screening runner", () => {
     });
     expect(placement.evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
 
+    const partialResultPath = join(runSpec.outputDir, "results", "warm-8k", "pr-2.json");
+    const partialResult = readFileSync(partialResultPath);
+    rmSync(partialResultPath);
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("partial placement resume must not start a resident"); }
+    }))).rejects.toThrow(/placement evidence exists while terminal results are missing.*manual reconciliation/i);
+    writeFileSync(partialResultPath, partialResult);
+
     const startPath = join(runSpec.outputDir, placement.identity.processStartReceiptRelativePath);
     const start = JSON.parse(readFileSync(startPath, "utf8"));
     start.targetId = "tampered-target";
@@ -406,11 +414,42 @@ describe("Phase 1 screening runner", () => {
     const first = JSON.parse(readFileSync(join(outputDir, "results", "warm-8k", "pr-1.json"), "utf8"));
     expect(first.status).toBe("failed");
     expect(first.invocationDisposition).toBe("not_invoked_infrastructure");
+    const unavailablePath = join(outputDir, "placement-unavailable-warm-8k.json");
+    expect(existsSync(unavailablePath)).toBe(true);
+    const unavailable = JSON.parse(readFileSync(unavailablePath, "utf8"));
+    expect(unavailable).toMatchObject({
+      schemaVersion: "neondiff-phase1-placement-unavailable/v1",
+      cellId: "warm-8k",
+      terminalErrorCode: expect.stringMatching(/required_placement_evidence_is_missing/i),
+      evidenceSha256: expect.stringMatching(/^[a-f0-9]{64}$/)
+    });
+
+    const partialResultPath = join(outputDir, "results", "warm-8k", "pr-2.json");
+    const partialResult = readFileSync(partialResultPath);
+    rmSync(partialResultPath);
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("partial unavailable resume must not start a resident"); }
+    }))).rejects.toThrow(/placement unavailable evidence exists while terminal results are missing.*manual reconciliation/i);
+    writeFileSync(partialResultPath, partialResult);
 
     const resumed = await runPhase1Screen(runSpec, adapter({
       async start() { throw new Error("resume must not start a resident"); }
     }));
     expect(resumed.status).toBe("failed");
+
+    const placementDir = join(outputDir, "placements", "warm-8k");
+    const placementPath = join(placementDir, "placement.json");
+    mkdirSync(placementDir, { recursive: true });
+    writeFileSync(placementPath, "{}\n");
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("conflict resume must not start a resident"); }
+    }))).rejects.toThrow(/placement evidence conflicts with unavailable evidence/i);
+
+    rmSync(placementPath);
+    rmSync(unavailablePath);
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("missing-evidence resume must not start a resident"); }
+    }))).rejects.toThrow(/terminal placement evidence is missing/i);
   });
 
   it("rejects an all-layers request for a partial-GPU policy before resident startup", async () => {

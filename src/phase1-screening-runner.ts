@@ -333,6 +333,9 @@ export function createLlamaServerExecutableAdapter(
       };
       residents.set(id, state);
       const inspectChunk = (stream: LlamaCppStartupStream) => (chunk: Buffer): void => {
+        // These scans are intentionally independent and union-fail: the outer UTF-8 scan
+        // covers the resident lifecycle, while the bounded startup capture scans raw bytes
+        // across chunk boundaries and treats any capture error as terminal for this resident.
         const text = chunk.toString("utf8");
         state.unsafeEvidence ||= containsSecretLikeText(text);
         state.stderrTail = `${state.stderrTail}${redactSecrets(text)}`.slice(-4096);
@@ -651,11 +654,20 @@ async function runPhase1ScreenWithLease(
       const [placementPath, sourcePath] = placementEvidencePaths(spec.outputDir, cell.id);
       const unavailablePath = placementUnavailablePath(spec.outputDir, cell.id);
       const anyResultExists = spec.inputs.some((input) => existsSync(resultFile(spec.outputDir, cell.id, input.id)));
+      const anyResultMissing = spec.inputs.some((input) => !existsSync(resultFile(spec.outputDir, cell.id, input.id)));
       if (existsSync(placementPath) || existsSync(sourcePath)) {
         if (existsSync(unavailablePath)) throw new Error(`placement evidence conflicts with unavailable evidence for cell ${cell.id}`);
         validatePlacementEvidence(spec.outputDir, manifest, cell);
+        if (anyResultMissing) {
+          throw new Error(`placement evidence exists while terminal results are missing for cell ${cell.id}; manual reconciliation is required`);
+        }
       }
-      else if (existsSync(unavailablePath)) validatePlacementUnavailable(unavailablePath, manifest, cell);
+      else if (existsSync(unavailablePath)) {
+        validatePlacementUnavailable(unavailablePath, manifest, cell);
+        if (anyResultMissing) {
+          throw new Error(`placement unavailable evidence exists while terminal results are missing for cell ${cell.id}; manual reconciliation is required`);
+        }
+      }
       else if (anyResultExists) throw new Error(`terminal placement evidence is missing for cell ${cell.id}`);
     }
   }
