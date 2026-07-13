@@ -92,9 +92,8 @@ function startBindingWorker(
   input: Record<string, unknown>
 ): {
   child: ChildProcess;
-  ready: Promise<void>;
-  outcome: Promise<WorkerOutcome>;
-  exited: Promise<void>;
+  ready: Promise<boolean>;
+  completion: Promise<WorkerOutcome>;
 } {
   const child = fork(new URL("./fixtures/checkout-binding-worker.ts", import.meta.url), [], {
     execArgv: ["--import", "tsx"],
@@ -110,67 +109,81 @@ function startBindingWorker(
   child.stderr?.on("data", (chunk: string) => {
     stderr += chunk;
   });
-  let readyResolve!: () => void;
-  let readyReject!: (error: Error) => void;
-  const ready = new Promise<void>((resolve, reject) => {
+  let readyResolve!: (ready: boolean) => void;
+  const ready = new Promise<boolean>((resolve) => {
     readyResolve = resolve;
-    readyReject = reject;
   });
-  let outcomeResolve!: (outcome: WorkerOutcome) => void;
-  let outcomeReject!: (error: Error) => void;
-  const outcome = new Promise<WorkerOutcome>((resolve, reject) => {
-    outcomeResolve = resolve;
-    outcomeReject = reject;
+  let completionResolve!: (outcome: WorkerOutcome) => void;
+  let completionReject!: (error: Error) => void;
+  const completion = new Promise<WorkerOutcome>((resolve, reject) => {
+    completionResolve = resolve;
+    completionReject = reject;
   });
-  let exitResolve!: () => void;
-  let exitReject!: (error: Error) => void;
-  const exited = new Promise<void>((resolve, reject) => {
-    exitResolve = resolve;
-    exitReject = reject;
-  });
+  let readySettled = false;
   let readyReceived = false;
-  let outcomeReceived = false;
+  let outcome: WorkerOutcome | undefined;
+  let failure: Error | undefined;
+
+  const settleReady = (value: boolean): void => {
+    if (readySettled) return;
+    readySettled = true;
+    readyResolve(value);
+  };
+  const failAndKill = (error: Error): void => {
+    failure ??= error;
+    settleReady(false);
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  };
   const timeout = setTimeout(() => {
-    child.kill("SIGKILL");
-    const error = new Error(`checkout binding worker timed out${stderr ? `: ${stderr}` : ""}`);
-    readyReject(error);
-    outcomeReject(error);
-    exitReject(error);
+    failAndKill(
+      new Error(`checkout binding worker timed out${stderr ? `: ${stderr}` : ""}`)
+    );
   }, 5_000);
   child.on("message", (message: unknown) => {
-    const value = message as WorkerOutcome & { type: string };
+    const value = message as WorkerOutcome & { type: string; storeOpened?: boolean };
     if (value.type === "ready") {
+      if (readyReceived || value.storeOpened !== true) {
+        failAndKill(new Error("checkout binding worker READY before store opened"));
+        return;
+      }
       readyReceived = true;
-      readyResolve();
+      settleReady(true);
     } else if (value.type === "result" || value.type === "error") {
-      outcomeReceived = true;
-      outcomeResolve(value);
+      if (!readyReceived || outcome) {
+        failAndKill(new Error("checkout binding worker sent an invalid outcome"));
+        return;
+      }
+      outcome = value;
+    } else {
+      failAndKill(new Error("checkout binding worker sent an invalid protocol message"));
     }
   });
   child.on("error", (error) => {
-    clearTimeout(timeout);
-    readyReject(error);
-    outcomeReject(error);
-    exitReject(error);
+    failAndKill(error);
   });
   child.on("exit", (code, signal) => {
     clearTimeout(timeout);
-    if (code !== 0 || signal !== null || stderr.length > 0 || !readyReceived || !outcomeReceived) {
+    settleReady(false);
+    if (
+      failure ||
+      code !== 0 ||
+      signal !== null ||
+      stderr.length > 0 ||
+      !readyReceived ||
+      !outcome
+    ) {
       const details = [
         `checkout binding worker exited ${code ?? signal}`,
         !readyReceived ? "without READY" : "",
-        !outcomeReceived ? "without outcome" : "",
+        !outcome ? "without outcome" : "",
         stderr ? `stderr: ${stderr}` : ""
       ].filter(Boolean).join("; ");
-      const error = new Error(details);
-      readyReject(error);
-      outcomeReject(error);
-      exitReject(error);
+      completionReject(failure ?? new Error(details));
       return;
     }
-    exitResolve();
+    completionResolve(outcome);
   });
-  return { child, ready, outcome, exited };
+  return { child, ready, completion };
 }
 
 async function concurrentBindings(
@@ -180,18 +193,31 @@ async function concurrentBindings(
 ): Promise<WorkerOutcome[]> {
   const first = startBindingWorker(path, firstInput);
   const second = startBindingWorker(path, secondInput);
+  const workers = [first, second];
+  const completions = Promise.allSettled(workers.map((worker) => worker.completion));
   try {
-    await Promise.all([first.ready, second.ready]);
+    const ready = await Promise.all(workers.map((worker) => worker.ready));
+    if (!ready.every(Boolean)) {
+      const settled = await completions;
+      const failure = settled.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected"
+      );
+      throw failure?.reason ?? new Error("checkout binding worker exited before READY");
+    }
     first.child.send("GO");
     second.child.send("GO");
-    const outcomes = await Promise.all([first.outcome, second.outcome]);
-    await Promise.all([first.exited, second.exited]);
-    return outcomes;
+    const settled = await completions;
+    const failure = settled.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    if (failure) throw failure.reason;
+    return settled.map((result) => (result as PromiseFulfilledResult<WorkerOutcome>).value);
   } finally {
-    for (const child of [first.child, second.child]) {
-      if (child.connected) child.disconnect();
+    for (const { child } of workers) {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (child.connected) child.disconnect();
     }
+    await completions;
   }
 }
 
