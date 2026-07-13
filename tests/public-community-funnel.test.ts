@@ -264,6 +264,27 @@ describe("NeonDiff public community funnel", () => {
     }
   });
 
+  it("AGENTS defaults coding agents to focused local validation and broad GitHub CI", () => {
+    const validationRules = read("AGENTS.md").match(
+      /(?:^|\n)## Validation Rules\s*\n([\s\S]*?)(?=\n## |\n?$)/
+    )?.[1];
+    expect(validationRules, "AGENTS.md must contain a Validation Rules section").toBeDefined();
+    const rules = validationRules!.replace(/\s+/g, " ");
+
+    expect(rules).toMatch(
+      /coding agents?.*default.*narrowest relevant local test or smoke/i
+    );
+    expect(rules).toMatch(/git diff --check/i);
+    expect(rules).toMatch(/npm test.*npm run build.*broad.*GitHub CI checks by default/i);
+    expect(rules).toMatch(
+      /broad local validation.*CI reproduction.*missing focused harness.*explicit user request/i
+    );
+    expect(rules).toMatch(
+      /required GitHub Actions.*Build, test, and package.*authoritative full test, build, package, and safety gate/i
+    );
+    expect(rules).toMatch(/focused local checks are not a substitute/i);
+  });
+
   it("GitHub issue and PR templates exist and require public-safe evidence", () => {
     for (const path of [
       "CODE_OF_CONDUCT.md",
