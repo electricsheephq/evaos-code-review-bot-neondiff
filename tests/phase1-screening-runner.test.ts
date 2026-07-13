@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { execFileSync, spawn } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   runPhase1Screen as executePhase1Screen,
   createLlamaServerExecutableAdapter,
@@ -64,6 +64,9 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
       return {
         async start() {
           if (kind === "start-error") throw new Error("monitor start exploded");
+          if (kind === "start-null") return null;
+          if (kind === "start-undefined") return undefined;
+          if (kind === "start-empty") return {};
           return { id: "monitor" };
         },
         async sample(_session, context) {
@@ -77,6 +80,9 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
         },
         classify(samples) {
           if (kind === "throw-classify") throw new Error("monitor classify exploded");
+          if (kind === "classify-invalid-status") return { status: "completed", errorCode: "invalid" };
+          if (kind === "classify-missing-code") return { status: "stopped" };
+          if (kind === "classify-scalar") return "stopped";
           if (kind === "swap" && samples.some(sample => sample.swapBytes >= 4096)) return { status: "stopped", errorCode: "sustained_swap_growth" };
           if (kind === "stop-oom" && samples.some(sample => sample.phase === "stopped")) return { status: "oom", errorCode: "stop_time_oom" };
           return undefined;
@@ -184,12 +190,14 @@ describe("Phase 1 screening runner", () => {
     runSpec.target.executable = process.execPath;
     runSpec.target.executableSha256 = digest(readFileSync(process.execPath));
     runSpec.target.args = [script, "--model", modelPath, "--host", "127.0.0.1", "--port", String(port), "--ctx-size", "8192"];
+    let freshIdentityChecks = 0;
     const result = await runPhase1Screen(runSpec, createLlamaServerExecutableAdapter({
       baseUrl: `http://127.0.0.1:${port}`,
       readinessTimeoutMs: 5_000,
       requestTimeoutMs: 5_000,
       stopTimeoutMs: 2_000,
-      ...ownershipProof
+      ...ownershipProof,
+      async verifyProcessIdentity() { freshIdentityChecks += 1; return true; }
     }));
     expect(result.status).toBe("completed");
     const first = JSON.parse(readFileSync(join(runSpec.outputDir, "results", "warm-8k", "pr-1.json"), "utf8"));
@@ -197,6 +205,22 @@ describe("Phase 1 screening runner", () => {
     expect(first.metrics.latencyMs).toBeGreaterThanOrEqual(0);
     expect(first.metrics.promptMs).toBe(20);
     expect(first.metrics.decodeTokensPerSecond).toBe(300);
+    expect(freshIdentityChecks).toBeGreaterThanOrEqual(1);
+
+    const rejectedSpec = { ...runSpec, outputDir: join(root, "identity-rejected"), safeOutputRoot: join(root, "identity-rejected") };
+    await expect(runPhase1Screen(rejectedSpec, createLlamaServerExecutableAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      readinessTimeoutMs: 5_000,
+      stopTimeoutMs: 2_000,
+      ...ownershipProof,
+      async verifyProcessIdentity() { return false; }
+    }))).rejects.toThrow(/process identity could not be proven/i);
+    const probe = createNetServer();
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      probe.once("error", rejectPromise);
+      probe.listen(port, "127.0.0.1", resolvePromise);
+    });
+    await new Promise<void>((resolvePromise) => probe.close(() => resolvePromise()));
   });
 
   it("captures TTFT from a bounded streaming response", async () => {
@@ -301,9 +325,11 @@ describe("Phase 1 screening runner", () => {
   it("turns parser and deterministic gate failures into explicit schema_failed terminals", async () => {
     const parserDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-parser-"));
     const parserResult = await runPhase1Screen(spec(parserDir), adapter({
-      async invoke() { return { status: "completed", rawOutput: "not json" }; }
+      async invoke() { return { status: "completed", rawOutput: "not json", parsedOutput: { stale: true }, gatedOutput: { stale: true } }; }
     }));
     expect(parserResult.counts.schema_failed).toBe(2);
+    expect(JSON.parse(readFileSync(join(parserDir, "results", "warm-8k", "pr-1.json"), "utf8"))).not.toHaveProperty("parsedOutput");
+    expect(JSON.parse(readFileSync(join(parserDir, "results", "warm-8k", "pr-1.json"), "utf8"))).not.toHaveProperty("gatedOutput");
 
     const gateDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-gate-"));
     const gateSpec = spec(gateDir);
@@ -313,9 +339,11 @@ describe("Phase 1 screening runner", () => {
       sha256: digest("phase1-gate/v1:findings")
     };
     const gateResult = await runPhase1Screen(gateSpec, adapter({
-      async invoke() { return { status: "completed", rawOutput: "{}" }; }
+      async invoke() { return { status: "completed", rawOutput: "{}", parsedOutput: { stale: true }, gatedOutput: { stale: true } }; }
     }));
     expect(gateResult.counts.schema_failed).toBe(2);
+    expect(JSON.parse(readFileSync(join(gateDir, "results", "warm-8k", "pr-1.json"), "utf8"))).not.toHaveProperty("parsedOutput");
+    expect(JSON.parse(readFileSync(join(gateDir, "results", "warm-8k", "pr-1.json"), "utf8"))).not.toHaveProperty("gatedOutput");
   });
 
   it("rejects unsafe output placement and prompt/input identity drift before writing evidence", async () => {
@@ -487,6 +515,23 @@ describe("Phase 1 screening runner", () => {
     expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
   });
 
+  it.each(["node:module", "node:vm", "node:worker_threads"])("rejects monitor module-loading escape hatch %s", async (specifier) => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-escape-"));
+    const identity = monitorModule("normal");
+    writeFileSync(identity.modulePath, `import * as escape from ${JSON.stringify(specifier)};\nexport function createMonitor(){ return escape; }\n`);
+    identity.moduleSha256 = digest(readFileSync(identity.modulePath));
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity })).rejects.toThrow(/escape hatch.*forbidden/i);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+  });
+
+  it("rejects process.getBuiltinModule monitor escape hatches", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-runtime-escape-"));
+    const identity = monitorModule("normal");
+    writeFileSync(identity.modulePath, `export function createMonitor(){ return process.getBuiltinModule("module").createRequire(import.meta.url); }\n`);
+    identity.moduleSha256 = digest(readFileSync(identity.modulePath));
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity })).rejects.toThrow(/runtime module-loading escape hatch/i);
+  });
+
   it("rejects resource monitor source-byte drift before monitor execution", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-drift-"));
     const drift = { ...monitorModule("normal"), moduleSha256: "0".repeat(64) };
@@ -528,6 +573,27 @@ describe("Phase 1 screening runner", () => {
     expect(resource.samples).toEqual([]);
     expect(resource.terminalInfrastructureErrorCode).toBe("monitor_start_exploded");
     expect(resource.evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each(["start-null", "start-undefined", "start-empty"])("rejects malformed monitor session %s with durable evidence", async (kind) => {
+    const outputDir = mkdtempSync(join(tmpdir(), `neondiff-phase1-monitor-session-${kind}-`));
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule(kind) })).rejects.toThrow(/monitor session/i);
+    expect(existsSync(join(outputDir, "resources", "warm-8k.json"))).toBe(true);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+  });
+
+  it.each(["classify-invalid-status", "classify-missing-code", "classify-scalar"])("rejects malformed monitor classification %s", async (kind) => {
+    const outputDir = mkdtempSync(join(tmpdir(), `neondiff-phase1-monitor-classification-${kind}-`));
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule(kind) })).rejects.toThrow(/monitor classification/i);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+  });
+
+  it("falls back to root unavailable evidence when monitor start fails and resources is unwritable", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-start-fallback-"));
+    writeFileSync(join(outputDir, "resources"), "blocks directory");
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("start-error") })).rejects.toThrow(/monitor start exploded/i);
+    expect(existsSync(join(outputDir, "resource-unavailable-warm-8k.json"))).toBe(true);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
   });
 
   it("fails closed with resumable unavailable evidence when monitor stop data is secret-like", async () => {
@@ -668,7 +734,7 @@ describe("Phase 1 screening runner", () => {
       readinessTimeoutMs: 5_000,
       stopTimeoutMs: 1_000,
       ownershipVerifierSha256: ownershipProof.ownershipVerifierSha256,
-      async verifyProcessIdentity(pid) { return pid === stale.pid; },
+      async verifyProcessIdentity() { return true; },
       async verifyListenerOwnership() {
         replacementOwnershipCheckedAfterExit = stale.exitCode !== null || stale.signalCode !== null;
         return replacementOwnershipCheckedAfterExit;
@@ -727,6 +793,21 @@ describe("Phase 1 screening runner", () => {
       await expect(runPhase1Screen(spec(blockedDir), adapter())).rejects.toThrow(/lease acquisition is already coordinated/i);
     } finally {
       await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("treats EPERM from process liveness probing as a live lease owner", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-eperm-lease-"));
+    writeFileSync(join(outputDir, ".phase1-run.lock"), JSON.stringify({ pid: 424242 }));
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      const error = new Error("not permitted") as NodeJS.ErrnoException;
+      error.code = "EPERM";
+      throw error;
+    });
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).rejects.toThrow(/active exclusive run lease/i);
+    } finally {
+      kill.mockRestore();
     }
   });
 
@@ -800,6 +881,16 @@ describe("Phase 1 screening runner", () => {
     const changed = spec(outputDir);
     changed.gate = { ...changed.gate, version: "phase1-gate/v2", sha256: digest("phase1-gate/v2:") };
     await expect(runPhase1Screen(changed, counting)).rejects.toThrow(/manifest fingerprint mismatch/i);
+  });
+
+  it("runs resident recovery for every cell before an all-results fast-path return", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-fast-recovery-"));
+    let recoveries = 0;
+    const recovering = adapter({ async recover() { recoveries += 1; } });
+    await runPhase1Screen(spec(outputDir), recovering);
+    expect(recoveries).toBe(1);
+    await runPhase1Screen(spec(outputDir), recovering);
+    expect(recoveries).toBe(2);
   });
 
   it("reconciles summary and terminal markers after a crash following the last atomic result", async () => {
@@ -953,6 +1044,14 @@ describe("Phase 1 screening runner", () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-manifest-exact-key-secret-"));
     const runSpec = spec(outputDir);
     runSpec.inputs[0].metadata = { nested: { targetFingerprint: "sk-secret-value-1234567890" } };
+    await expect(runPhase1Screen(runSpec, adapter())).rejects.toThrow(/secret-like text/i);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+  });
+
+  it("scans secret-like JSON object keys in untrusted payloads", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-secret-key-"));
+    const runSpec = spec(outputDir);
+    runSpec.inputs[0].metadata = { "Authorization: Bearer sk-secret-value-1234567890": "safe" };
     await expect(runPhase1Screen(runSpec, adapter())).rejects.toThrow(/secret-like text/i);
     expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
   });

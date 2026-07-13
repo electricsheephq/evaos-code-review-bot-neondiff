@@ -81,6 +81,13 @@ export interface Phase1InvocationResult {
 }
 
 export interface Phase1ResidentAdapter {
+  recover?(context: {
+    outputDir: string;
+    target: Phase1Target;
+    cell: Phase1Cell;
+    targetFingerprint: string;
+    cellFingerprint: string;
+  }): Promise<void>;
   start(context: {
     outputDir: string;
     target: Phase1Target;
@@ -187,6 +194,9 @@ export function createLlamaServerExecutableAdapter(
   const stopTimeoutMs = options.stopTimeoutMs ?? 5_000;
   const maxResponseBytes = options.maxResponseBytes ?? 8 * 1024 * 1024;
   return {
+    async recover({ target, cell, outputDir }) {
+      await recoverResidentJournal(join(outputDir, "processes", `${cell.id}.json`), target.executableSha256, verifyProcessIdentity, stopTimeoutMs);
+    },
     async start({ target, cell, outputDir }) {
       const effectiveArgs = [...target.args, ...(cell.executableArgs ?? [])];
       const argv = [target.executable, ...effectiveArgs];
@@ -249,6 +259,9 @@ export function createLlamaServerExecutableAdapter(
         if (state.exited) throw new Error(`llama-server exited after readiness: ${state.stderrTail || "no redacted diagnostics"}`);
         if (!child.pid || !await verifyListenerOwnership(child.pid, endpoint.hostname, Number(endpoint.port))) {
           throw new Error("llama-server listener ownership could not be proven for the spawned PID");
+        }
+        if (!child.pid || !await verifyProcessIdentity(child.pid, target.executableSha256, argvFingerprint)) {
+          throw new Error("llama-server process identity could not be proven for the spawned PID");
         }
       } catch (error) {
         try { await stopProcess(state, stopTimeoutMs); }
@@ -470,6 +483,15 @@ async function runPhase1ScreenWithLease(
   } else {
     atomicWriteJson(manifestPath, manifest);
   }
+  for (const cell of manifest.cells) {
+    if (adapter.recover) await adapter.recover({
+      outputDir: spec.outputDir,
+      target: spec.target,
+      cell,
+      targetFingerprint: manifest.targetFingerprint,
+      cellFingerprint: cell.fingerprint
+    });
+  }
   let missingResults = 0;
   for (const cell of manifest.cells) {
     for (const input of spec.inputs) {
@@ -511,7 +533,7 @@ async function runPhase1ScreenWithLease(
       ? reconstructResourceSamples(spec.outputDir, manifest, cell)
       : [];
     if (resolvedOptions.monitor) {
-      try { monitorSession = await resolvedOptions.monitor.start({ target: spec.target, cell, outputDir: spec.outputDir }); }
+      try { monitorSession = validateMonitorSession(await resolvedOptions.monitor.start({ target: spec.target, cell, outputDir: spec.outputDir })); }
       catch (error) { infrastructureFailure = errorMessage(error); }
     }
     const resident = infrastructureFailure ? undefined : await startResident(adapter, spec, manifest, cell).catch((error) => {
@@ -573,6 +595,7 @@ async function runPhase1ScreenWithLease(
             };
           }
           result = applyReviewContract(result, spec);
+          if (result.status === "schema_failed") result = { ...result, parsedOutput: undefined, gatedOutput: undefined };
           result.retryCount ??= 0;
           result.metrics = { ...(result.metrics ?? {}), residentLoadDurationMs: numericMetadata(resident.metadata?.loadDurationMs) };
           if (result.status === "completed") {
@@ -642,10 +665,14 @@ function writeUnavailableMonitorEvidence(
     terminalInfrastructureErrorCode: sanitizeIdentifier(error)
   };
   assertJsonValuesSecretSafe("resource samples", resourceRecord.samples);
-  atomicWriteJson(join(outputDir, "resources", `${cell.id}.json`), {
-    ...resourceRecord,
-    evidenceSha256: fingerprint(resourceRecord)
-  });
+  try {
+    atomicWriteJson(join(outputDir, "resources", `${cell.id}.json`), {
+      ...resourceRecord,
+      evidenceSha256: fingerprint(resourceRecord)
+    });
+  } catch (error) {
+    writeResourceUnavailableFallback(outputDir, manifest, cell, `monitor unavailable evidence write failed: ${errorMessage(error)}`);
+  }
 }
 
 async function startResident(
@@ -960,6 +987,7 @@ async function acquireRunLease(path: string): Promise<number> {
       // Every conforming writer must own the crash-released loopback
       // coordinator before touching the canonical lease, so no new lease can
       // appear between this removal and the exclusive replacement open.
+      // lgtm[js/file-system-race]
       rmSync(path, { force: true });
       const fd = openSync(path, "wx", 0o600);
       writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
@@ -1012,11 +1040,38 @@ function monitorClassify(
 ): { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined {
   try {
     for (const sample of samples) validateResourceSample(sample, "monitor classification resource sample");
-    const classification = monitor.classify?.(samples);
+    const classification = validateMonitorClassification(monitor.classify?.(samples));
     for (const sample of samples) validateResourceSample(sample, "monitor classification resource sample");
     return classification;
   }
   catch (error) { throw new MonitorInfrastructureError(`monitor classify failed: ${errorMessage(error)}`); }
+}
+
+function validateMonitorClassification(value: unknown): { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("monitor classification must be an object");
+  const candidate = value as Record<string, unknown>;
+  if (candidate.status !== "failed" && candidate.status !== "stopped" && candidate.status !== "oom") {
+    throw new Error("monitor classification status is invalid");
+  }
+  if (typeof candidate.errorCode !== "string" || candidate.errorCode.length === 0) {
+    throw new Error("monitor classification errorCode is invalid");
+  }
+  assertJsonValuesSecretSafe("monitor classification", candidate);
+  return { status: candidate.status, errorCode: candidate.errorCode };
+}
+
+function validateMonitorSession(value: unknown): { id: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("monitor session must be an object");
+  const candidate = value as Record<string, unknown>;
+  if (Object.keys(candidate).length !== 1 || !Object.prototype.hasOwnProperty.call(candidate, "id")) {
+    throw new Error("monitor session shape is invalid");
+  }
+  assertJsonValuesSecretSafe("monitor session", candidate);
+  const id = candidate.id;
+  if (typeof id !== "string" || id.length === 0 || id.length > 128) throw new Error("monitor session id is invalid");
+  assertSecretSafe("monitor session id", id);
+  return { id };
 }
 
 async function finalizeMonitorEvidence(
@@ -1168,7 +1223,10 @@ function assertJsonValuesSecretSafe(label: string, value: unknown): void {
   }
   if (Array.isArray(value)) { for (const item of value) assertJsonValuesSecretSafe(label, item); return; }
   if (value && typeof value === "object") {
-    for (const item of Object.values(value)) assertJsonValuesSecretSafe(label, item);
+    for (const [key, item] of Object.entries(value)) {
+      assertSecretSafe(`${label} key`, key);
+      assertJsonValuesSecretSafe(label, item);
+    }
   }
 }
 
@@ -1334,7 +1392,7 @@ function signalProcessGroup(pid: number | undefined, signal: NodeJS.Signals): vo
 
 function isProcessAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
-  catch { return false; }
+  catch (error) { return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EPERM"; }
 }
 
 async function recoverResidentJournal(
@@ -1427,6 +1485,9 @@ function assertMonitorModuleImportsAreLoadable(source: string): void {
   if (/\bimport\s*\(/.test(lexicalSource)) {
     throw new Error("resource monitor module must be self-contained; dynamic import syntax is forbidden");
   }
+  if (/\bprocess\s*\.\s*getBuiltinModule\b/.test(lexicalSource) || /\brequire\s*\(/.test(lexicalSource)) {
+    throw new Error("resource monitor module must be self-contained; runtime module-loading escape hatch is forbidden");
+  }
   const specifiers: string[] = [];
   for (const pattern of [/\bfrom\s*["']([^"']+)["']/g, /\bimport\s*["']([^"']+)["']/g]) {
     for (const match of lexicalSource.matchAll(pattern)) specifiers.push(match[1]);
@@ -1434,6 +1495,10 @@ function assertMonitorModuleImportsAreLoadable(source: string): void {
   const unsupported = specifiers.find((specifier) => !specifier.startsWith("node:"));
   if (unsupported) {
     throw new Error(`resource monitor module must be self-contained; unsupported import specifier: ${sanitizeIdentifier(unsupported)}`);
+  }
+  const moduleLoadingEscape = specifiers.find((specifier) => specifier === "node:module" || specifier === "node:vm" || specifier === "node:worker_threads");
+  if (moduleLoadingEscape) {
+    throw new Error(`resource monitor module must be self-contained; module-loading escape hatch is forbidden: ${sanitizeIdentifier(moduleLoadingEscape)}`);
   }
 }
 
