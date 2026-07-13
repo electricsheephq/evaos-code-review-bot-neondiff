@@ -16,6 +16,7 @@ import {
   type Phase1ResourceMonitorModule,
   type Phase1RunSpec
 } from "../src/phase1-screening-runner.js";
+import { llamaCppPlacementAttestationModulePath } from "../src/llama-cpp-placement-attestation.js";
 
 function digest(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -35,6 +36,32 @@ function canonical(value: unknown): string {
 
 function evidenceDigest(value: unknown): string {
   return digest(canonical(value));
+}
+
+function fullPlacementFixture(): string[] {
+  return [
+    "load_tensors: layer 0 assigned to device CUDA0, is_swa = 0",
+    "load_tensors: layer 1 assigned to device CUDA0, is_swa = 0",
+    "load_tensors: layer 2 assigned to device CUDA0, is_swa = 0",
+    "load_tensors: offloading output layer to GPU",
+    "load_tensors: offloading 2 repeating layers to GPU",
+    "load_tensors: offloaded 3/3 layers to GPU",
+    "load_tensors: CPU_Mapped model buffer size = 128.00 MiB",
+    "load_tensors: CUDA0 model buffer size = 2048.00 MiB",
+    "llama_kv_cache_unified: CUDA0 KV buffer size = 256.00 MiB",
+    "llama_kv_cache_unified: size = 256.00 MiB (4096 cells, 3 layers, 1/1 seqs), K (f16): 128.00 MiB, V (f16): 128.00 MiB",
+    "llama_context: CUDA0 output buffer size = 4.00 MiB",
+    "sched_reserve: CUDA0 compute buffer size = 64.00 MiB"
+  ];
+}
+
+function cpuMoePlacementFixture(): string[] {
+  return [
+    ...fullPlacementFixture(),
+    ...[0, 1].flatMap((layer) => ["gate", "up", "down"].map((kind) =>
+      `tensor blk.${layer}.ffn_${kind}_exps.weight (512 MiB q4_K) buffer type overridden to CPU`
+    ))
+  ];
 }
 
 const ownershipProof = {
@@ -255,6 +282,286 @@ describe("Phase 1 screening runner", () => {
       probe.listen(port, "127.0.0.1", resolvePromise);
     });
     await new Promise<void>((resolvePromise) => probe.close(() => resolvePromise()));
+  });
+
+  it("persists immutable placement evidence before invoking an explicit offload-comparison cell", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-phase1-placement-"));
+    const port = 24000 + Math.floor(Math.random() * 10000);
+    const script = join(root, "fake-placement-server.mjs");
+    writeFileSync(script, `
+      import http from "node:http";
+      const verbosityIndex = Math.max(process.argv.lastIndexOf("-lv"), process.argv.lastIndexOf("--verbosity"), process.argv.lastIndexOf("--log-verbosity"));
+      const debugEnabled = process.argv.some((arg) => ["-v", "--verbose", "--log-verbose"].includes(arg)) || (verbosityIndex >= 0 && Number(process.argv[verbosityIndex + 1]) >= 5);
+      if (debugEnabled) for (const line of ${JSON.stringify(fullPlacementFixture())}) process.stderr.write(line + "\\n");
+      const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+      const server = http.createServer((req, res) => {
+        if (req.url === "/health") { res.writeHead(200); res.end("ok"); return; }
+        req.resume(); req.on("end", () => {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ choices: [{ message: { content: '{"findings":[]}' } }] }));
+        });
+      });
+      server.listen(port, "127.0.0.1");
+      process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    `);
+    const runSpec = spec(join(root, "evidence"));
+    const modelPath = join(root, "model.gguf");
+    writeFileSync(modelPath, "test-model");
+    runSpec.target.modelPath = modelPath;
+    runSpec.target.modelSha256 = digest(readFileSync(modelPath));
+    runSpec.target.executable = process.execPath;
+    runSpec.target.executableSha256 = digest(readFileSync(process.execPath));
+    runSpec.target.args = [script, "--model", modelPath, "--host", "127.0.0.1", "--port", String(port), "--ctx-size", "8192", "-ngl", "999", "-lv", "5"];
+    const placementModulePath = realpathSync(llamaCppPlacementAttestationModulePath());
+    runSpec.cells[0].placement = {
+      mode: "offload_comparison",
+      profile: "full_gpu",
+      requestedGpuLayers: 999,
+      parserVersion: "llama.cpp-b9977-placement/v2",
+      parserSourcePath: placementModulePath,
+      parserSourceSha256: digest(readFileSync(placementModulePath)),
+      maxStartupBytes: 16_384,
+      maxStartupLines: 128
+    };
+
+    const noDebugSpec = structuredClone(runSpec);
+    noDebugSpec.outputDir = join(root, "no-debug");
+    noDebugSpec.safeOutputRoot = noDebugSpec.outputDir;
+    noDebugSpec.target.args = noDebugSpec.target.args.filter((arg) => arg !== "-lv" && arg !== "5");
+    await expect(runPhase1Screen(noDebugSpec, createLlamaServerExecutableAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      readinessTimeoutMs: 5_000,
+      stopTimeoutMs: 2_000,
+      ...ownershipProof
+    }))).rejects.toThrow(/debug-enabling verbosity/i);
+
+    const summary = await runPhase1Screen(runSpec, createLlamaServerExecutableAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      readinessTimeoutMs: 5_000,
+      stopTimeoutMs: 2_000,
+      ...ownershipProof
+    }));
+
+    expect(summary.status).toBe("completed");
+    const placementPath = join(runSpec.outputDir, "placements", "warm-8k", "placement.json");
+    const sourcePath = join(runSpec.outputDir, "placements", "warm-8k", "startup-source.json");
+    expect(existsSync(placementPath)).toBe(true);
+    expect(existsSync(sourcePath)).toBe(true);
+    const placement = JSON.parse(readFileSync(placementPath, "utf8"));
+    expect(placement).toMatchObject({
+      schemaVersion: "neondiff-phase1-placement/v1",
+      runFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      targetFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      cellId: "warm-8k",
+      observed: { observedGpuLayers: 3 }
+    });
+    expect(placement.evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    const partialResultPath = join(runSpec.outputDir, "results", "warm-8k", "pr-2.json");
+    const partialResult = readFileSync(partialResultPath);
+    rmSync(partialResultPath);
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("partial placement resume must not start a resident"); }
+    }))).rejects.toThrow(/placement evidence exists while terminal results are missing.*manual reconciliation/i);
+    expect(existsSync(join(runSpec.outputDir, "COMPLETED"))).toBe(false);
+    expect(existsSync(join(runSpec.outputDir, "summary.json"))).toBe(false);
+    writeFileSync(partialResultPath, partialResult);
+
+    const startPath = join(runSpec.outputDir, placement.identity.processStartReceiptRelativePath);
+    const start = JSON.parse(readFileSync(startPath, "utf8"));
+    start.targetId = "tampered-target";
+    writeFileSync(startPath, `${JSON.stringify(start, null, 2)}\n`);
+    await expect(runPhase1Screen(runSpec, createLlamaServerExecutableAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      readinessTimeoutMs: 5_000,
+      stopTimeoutMs: 2_000,
+      ...ownershipProof
+    }))).rejects.toThrow(/process attestation mismatch/i);
+    start.targetId = runSpec.target.id;
+    writeFileSync(startPath, `${JSON.stringify(start, null, 2)}\n`);
+
+    placement.observed.observedGpuLayers = 2;
+    writeFileSync(placementPath, `${JSON.stringify(placement, null, 2)}\n`);
+    await expect(runPhase1Screen(runSpec, createLlamaServerExecutableAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      readinessTimeoutMs: 5_000,
+      stopTimeoutMs: 2_000,
+      ...ownershipProof
+    }))).rejects.toThrow(/placement evidence fingerprint mismatch/i);
+  });
+
+  it("fails closed and cleans up when an offload-comparison adapter omits placement evidence", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-placement-missing-"));
+    const runSpec = spec(outputDir);
+    const placementModulePath = realpathSync(llamaCppPlacementAttestationModulePath());
+    runSpec.cells[0].placement = {
+      mode: "offload_comparison",
+      profile: "full_gpu",
+      requestedGpuLayers: 3,
+      parserVersion: "llama.cpp-b9977-placement/v2",
+      parserSourcePath: placementModulePath,
+      parserSourceSha256: digest(readFileSync(placementModulePath)),
+      maxStartupBytes: 16_384,
+      maxStartupLines: 128
+    };
+    let stopped = false;
+
+    await expect(runPhase1Screen(runSpec, adapter({
+      async stop() { stopped = true; }
+    }))).rejects.toThrow(/required placement evidence is missing/i);
+
+    expect(stopped).toBe(true);
+    expect(existsSync(join(outputDir, "placements", "warm-8k", "placement.json"))).toBe(false);
+    expect(existsSync(join(outputDir, "placements", "warm-8k", "startup-source.json"))).toBe(false);
+    const first = JSON.parse(readFileSync(join(outputDir, "results", "warm-8k", "pr-1.json"), "utf8"));
+    expect(first.status).toBe("failed");
+    expect(first.invocationDisposition).toBe("not_invoked_infrastructure");
+    const unavailablePath = join(outputDir, "placement-unavailable-warm-8k.json");
+    expect(existsSync(unavailablePath)).toBe(true);
+    const unavailable = JSON.parse(readFileSync(unavailablePath, "utf8"));
+    expect(unavailable).toMatchObject({
+      schemaVersion: "neondiff-phase1-placement-unavailable/v1",
+      cellId: "warm-8k",
+      terminalErrorCode: expect.stringMatching(/required_placement_evidence_is_missing/i),
+      evidenceSha256: expect.stringMatching(/^[a-f0-9]{64}$/)
+    });
+
+    const partialResultPath = join(outputDir, "results", "warm-8k", "pr-2.json");
+    const partialResult = readFileSync(partialResultPath);
+    rmSync(partialResultPath);
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("partial unavailable resume must not start a resident"); }
+    }))).rejects.toThrow(/placement unavailable evidence exists while terminal results are missing.*manual reconciliation/i);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(false);
+    expect(existsSync(join(outputDir, "summary.json"))).toBe(false);
+    writeFileSync(partialResultPath, partialResult);
+
+    const resumed = await runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("resume must not start a resident"); }
+    }));
+    expect(resumed.status).toBe("failed");
+
+    const placementDir = join(outputDir, "placements", "warm-8k");
+    const placementPath = join(placementDir, "placement.json");
+    mkdirSync(placementDir, { recursive: true });
+    writeFileSync(placementPath, "{}\n");
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("conflict resume must not start a resident"); }
+    }))).rejects.toThrow(/placement evidence conflicts with unavailable evidence/i);
+
+    rmSync(placementPath);
+    rmSync(unavailablePath);
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { throw new Error("missing-evidence resume must not start a resident"); }
+    }))).rejects.toThrow(/terminal placement evidence is missing/i);
+  });
+
+  it("rejects an all-layers request for a partial-GPU policy before resident startup", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-partial-all-"));
+    const runSpec = spec(outputDir);
+    const placementModulePath = realpathSync(llamaCppPlacementAttestationModulePath());
+    runSpec.cells[0].placement = {
+      mode: "offload_comparison",
+      profile: "partial_gpu",
+      requestedGpuLayers: "all",
+      parserVersion: "llama.cpp-b9977-placement/v2",
+      parserSourcePath: placementModulePath,
+      parserSourceSha256: digest(readFileSync(placementModulePath)),
+      maxStartupBytes: 16_384,
+      maxStartupLines: 128
+    };
+    let starts = 0;
+
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() {
+        starts += 1;
+        return { id: "resident", argv: ["/opt/llama-server"] };
+      }
+    }))).rejects.toThrow(/partial-GPU.*finite.*layer request/i);
+    expect(starts).toBe(0);
+  });
+
+  it("persists explicit CPU-MoE expert placement from the pinned b9977 debug grammar", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-phase1-placement-cpu-moe-"));
+    const port = 24000 + Math.floor(Math.random() * 10000);
+    const script = join(root, "fake-cpu-moe-server.mjs");
+    writeFileSync(script, `
+      import http from "node:http";
+      const verbosityIndex = Math.max(process.argv.lastIndexOf("-lv"), process.argv.lastIndexOf("--verbosity"), process.argv.lastIndexOf("--log-verbosity"));
+      const debugEnabled = process.argv.some((arg) => ["-v", "--verbose", "--log-verbose"].includes(arg)) || (verbosityIndex >= 0 && Number(process.argv[verbosityIndex + 1]) >= 5);
+      if (debugEnabled) for (const line of ${JSON.stringify(cpuMoePlacementFixture())}) process.stderr.write(line + "\\n");
+      const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+      const server = http.createServer((req, res) => {
+        if (req.url === "/health") { res.writeHead(200); res.end("ok"); return; }
+        req.resume(); req.on("end", () => {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ choices: [{ message: { content: '{"findings":[]}' } }] }));
+        });
+      });
+      server.listen(port, "127.0.0.1");
+      process.on("SIGTERM", () => server.close(() => process.exit(0)));
+    `);
+    const runSpec = spec(join(root, "evidence"));
+    const modelPath = join(root, "model.gguf");
+    writeFileSync(modelPath, "test-model");
+    runSpec.target.modelPath = modelPath;
+    runSpec.target.modelSha256 = digest(readFileSync(modelPath));
+    runSpec.target.executable = process.execPath;
+    runSpec.target.executableSha256 = digest(readFileSync(process.execPath));
+    runSpec.target.args = [script, "--model", modelPath, "--host", "127.0.0.1", "--port", String(port), "--ctx-size", "8192", "-ngl", "999", "--n-cpu-moe", "2", "-lv", "5"];
+    const placementModulePath = realpathSync(llamaCppPlacementAttestationModulePath());
+    runSpec.cells[0].placement = {
+      mode: "offload_comparison",
+      profile: "all_plus_cpu_moe",
+      requestedGpuLayers: 999,
+      expectedCpuMoe: { requestKind: "first_n", firstLayer: 0, lastLayer: 1, layerCount: 2, minimumMatchedTensors: 6 },
+      parserVersion: "llama.cpp-b9977-placement/v2",
+      parserSourcePath: placementModulePath,
+      parserSourceSha256: digest(readFileSync(placementModulePath)),
+      maxStartupBytes: 32_768,
+      maxStartupLines: 256
+    };
+
+    const conflictingSpec = structuredClone(runSpec);
+    conflictingSpec.outputDir = join(root, "conflicting-cpu-moe");
+    conflictingSpec.safeOutputRoot = conflictingSpec.outputDir;
+    conflictingSpec.target.args.push("--cpu-moe");
+    await expect(runPhase1Screen(conflictingSpec, createLlamaServerExecutableAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      readinessTimeoutMs: 5_000,
+      stopTimeoutMs: 2_000,
+      ...ownershipProof
+    }))).rejects.toThrow(/CPU-MoE arguments conflict or are duplicated/i);
+
+    const summary = await runPhase1Screen(runSpec, createLlamaServerExecutableAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      readinessTimeoutMs: 5_000,
+      stopTimeoutMs: 2_000,
+      ...ownershipProof
+    }));
+    expect(summary.status).toBe("completed");
+    const placement = JSON.parse(readFileSync(join(runSpec.outputDir, "placements", "warm-8k", "placement.json"), "utf8"));
+    expect(placement.observed.cpuExpertOverrides).toMatchObject({
+      residency: "host",
+      observedDevices: ["CPU"],
+      affectedLayerCount: 2,
+      matchedTensorCount: 6
+    });
+
+    const allExpertsSpec = structuredClone(runSpec);
+    allExpertsSpec.outputDir = join(root, "all-experts");
+    allExpertsSpec.safeOutputRoot = allExpertsSpec.outputDir;
+    allExpertsSpec.target.args = allExpertsSpec.target.args.flatMap((argument, index, arguments_) =>
+      argument === "--n-cpu-moe" ? ["--cpu-moe"] : arguments_[index - 1] === "--n-cpu-moe" ? [] : [argument]
+    );
+    allExpertsSpec.cells[0].placement!.expectedCpuMoe!.requestKind = "all";
+    const allExpertsSummary = await runPhase1Screen(allExpertsSpec, createLlamaServerExecutableAdapter({
+      baseUrl: `http://127.0.0.1:${port}`,
+      readinessTimeoutMs: 5_000,
+      stopTimeoutMs: 2_000,
+      ...ownershipProof
+    }));
+    expect(allExpertsSummary.status).toBe("completed");
   });
 
   it("captures TTFT from a bounded streaming response", async () => {
