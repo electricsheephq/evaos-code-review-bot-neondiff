@@ -344,6 +344,32 @@ describe("paired Review Bench promotion statistics", () => {
     }
   });
 
+  it("stops for futility at ten points behind while continuing just above the boundary", () => {
+    const finalCohort = Array.from({ length: 150 }, (_, index) => observation(index));
+    const sealed = input(finalCohort);
+    const analyzeFutilityLook = (misses: number) => analyzePairedReviewBench(input(
+      finalCohort.slice(0, 75).map((item, index) => index < misses
+        ? {
+            ...item,
+            candidate: arm({ findingCount: 0, truePositive: 0, falseNegative: 1 })
+          }
+        : item),
+      {
+        look: { label: "50_percent", fraction: 0.5 },
+        expectedCohort: sealed.expectedCohort,
+        cohortManifestSha256: sealed.cohortManifestSha256
+      }
+    ));
+
+    const atOrBelowBoundary = analyzeFutilityLook(8);
+    expect(atOrBelowBoundary.metrics.macroPr.recallDifference).toBeLessThanOrEqual(-0.1);
+    expect(atOrBelowBoundary.decision).toBe("stop_for_futility");
+
+    const justAboveBoundary = analyzeFutilityLook(7);
+    expect(justAboveBoundary.metrics.macroPr.recallDifference).toBeGreaterThan(-0.1);
+    expect(justAboveBoundary.decision).toBe("interim_continue");
+  });
+
   it("stops an interim lane immediately on an acceptance-set safety failure", () => {
     const finalCohort = Array.from({ length: 150 }, (_, index) => observation(index));
     const sealed = input(finalCohort);
