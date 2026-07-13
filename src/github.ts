@@ -249,6 +249,15 @@ export class GitHubApi {
     }
   }
 
+  async getIssueComment(repo: string, commentId: number): Promise<IssueCommentCommandSource> {
+    if (!Number.isSafeInteger(commentId) || commentId < 1) {
+      throw new Error("commentId must be a positive safe integer");
+    }
+    return this.request<IssueCommentCommandSource>(`/repos/${repo}/issues/comments/${commentId}`, {
+      token: await this.getReadToken(repo)
+    });
+  }
+
   async getIssueOrPull(
     repo: string,
     issueNumber: number,
@@ -307,10 +316,14 @@ export class GitHubApi {
   async createReview(input: {
     repo: string;
     pullNumber: number;
+    headSha: string;
     event: ReviewEvent;
     body: string;
     comments: ReviewComment[];
   }): Promise<{ html_url?: string; id: number }> {
+    if (!/^[0-9a-f]{40}$/i.test(input.headSha)) {
+      throw new Error("headSha must be a 40-character hexadecimal commit SHA");
+    }
     if (!this.canPostAsApp()) {
       throw new Error("GitHub App credentials are required before posting reviews.");
     }
@@ -319,6 +332,7 @@ export class GitHubApi {
       method: "POST",
       token,
       body: {
+        commit_id: input.headSha.toLowerCase(),
         event: input.event,
         body: input.body,
         comments: input.comments.map((comment) => ({

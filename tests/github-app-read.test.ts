@@ -46,6 +46,98 @@ describe("GitHub App read authentication", () => {
     expect(readCall?.authorization).not.toBe("Bearer fallback-token");
   });
 
+  it("binds a created review to the validated expected commit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-create-review-head-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const headSha = "a".repeat(40);
+    const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+    globalThis.fetch = vi.fn(async (url, init) => {
+      calls.push({
+        url: String(url),
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : undefined
+      });
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) {
+        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (String(url).endsWith("/repos/owner/repo/pulls/42/reviews")) {
+        return jsonResponse({ id: 77, html_url: "https://github.test/review/77" });
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    await github.createReview({
+      repo: "owner/repo",
+      pullNumber: 42,
+      headSha,
+      event: "COMMENT",
+      body: "Review summary",
+      comments: []
+    });
+
+    expect(calls.find((call) => call.url.endsWith("/repos/owner/repo/pulls/42/reviews"))).toMatchObject({
+      method: "POST",
+      body: {
+        commit_id: headSha,
+        event: "COMMENT",
+        body: "Review summary",
+        comments: []
+      }
+    });
+  });
+
+  it("reads only the exact queued issue comment id", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-exact-comment-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      calls.push(String(url));
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+      if (String(url).endsWith("/app/installations/123/access_tokens")) {
+        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (String(url).endsWith("/repos/owner/repo/issues/comments/41")) {
+        return jsonResponse({ id: 41, body: "bounded command", user: { login: "owner", type: "User" } });
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    await expect(github.getIssueComment("owner/repo", 41)).resolves.toMatchObject({ id: 41 });
+
+    expect(calls.filter((url) => url.includes("/issues/"))).toEqual([
+      expect.stringMatching(/\/repos\/owner\/repo\/issues\/comments\/41$/)
+    ]);
+  });
+
+  it("rejects an invalid review head before posting", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-create-review-invalid-head-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    globalThis.fetch = vi.fn(async () => jsonResponse({ message: "must not be called" }, 500)) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    await expect(github.createReview({
+      repo: "owner/repo",
+      pullNumber: 42,
+      headSha: "not-a-head",
+      event: "COMMENT",
+      body: "Review summary",
+      comments: []
+    })).rejects.toThrow(/headSha must be a 40-character hexadecimal commit SHA/);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it("preserves GitHub Enterprise API base paths for read calls", async () => {
     const calls: string[] = [];
     globalThis.fetch = vi.fn(async (url) => {

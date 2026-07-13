@@ -4,6 +4,7 @@ import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
   buildCommandStatusBody,
   buildCommandStatusMarker,
+  collectReviewEventAuthorizationAttempts,
   collectTrustedReviewCommands,
   decideCommandAction,
   isFinishingTouchCommandAction,
@@ -47,6 +48,12 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import {
+  decideReviewEventPolicy,
+  type ReviewEventAuthorizationAttempt,
+  type ReviewEventDecision,
+  type ReviewEventPolicyMode
+} from "./review-event-policy.js";
 import { selectReviewMode } from "./review-mode-router.js";
 import type { ReviewModeAnalysisPlan } from "./review-mode-types.js";
 import {
@@ -1656,7 +1663,22 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
     const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
-    const event = selfConsistency.event;
+    const candidateEvent = selfConsistency.event;
+    const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
+    const dryRunReviewEventResolution = input.dryRun
+      ? await resolveReviewEventDecision({
+          mode: reviewEventPolicyMode,
+          candidateEvent,
+          github,
+          state,
+          repo,
+          pull,
+          commandCommentId: input.commandCommentId,
+          commandConfig: config.commands,
+          dryRun: true
+        })
+      : undefined;
+    const selectedEvent = dryRunReviewEventResolution?.decision.selectedEvent ?? candidateEvent;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
     const summary = buildSummary({
       repo,
@@ -1673,7 +1695,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           files: reviewFiles,
           comments,
           dropped,
-          event,
+          event: selectedEvent,
           validation,
           proof,
           settingsPreview,
@@ -1697,7 +1719,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         })
       : undefined;
     const plan: ReviewPlan = {
-      event,
+      event: selectedEvent,
       comments,
       dropped,
       summary,
@@ -1708,9 +1730,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(enrichment ? { enrichment } : {})
     };
 
-    if (walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
-    if (enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
+    if (input.dryRun && walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
+    if (input.dryRun && enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
     if (input.dryRun) {
+      writeRedactedJson(
+        join(evidenceDir, "review-event-decision.json"),
+        buildReviewEventDecisionEvidence(dryRunReviewEventResolution!, true)
+      );
       writeDryRunOutcomeLedgerEvidence({
         evidenceDir,
         repo,
@@ -1731,12 +1757,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
             }
       });
     }
-    writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
+    if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     if (input.dryRun) {
       // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
       // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
-      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
+      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event: plan.event });
       return commandReviewRequested ? "reviewed_command" : "reviewed";
     }
 
@@ -1761,6 +1787,55 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_stale_head";
     }
 
+    const authorization = await lookupQueuedReviewEventAuthorization({
+      mode: reviewEventPolicyMode,
+      github,
+      repo,
+      pull,
+      commandCommentId: input.commandCommentId,
+      commandConfig: config.commands
+    });
+    if (reviewEventPolicyMode === "trusted_command_only") {
+      const liveBeforeConsume = await github.getPull(repo, pull.number);
+      const staleBeforeConsume = detectStalePullHead({ expected: pull, live: liveBeforeConsume, phase: "before_post" });
+      if (staleBeforeConsume) {
+        recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeConsume, evidenceDir });
+        return "skipped_stale_head";
+      }
+    }
+    const reviewEventResolution = decideAndConsumeReviewEvent({
+      mode: reviewEventPolicyMode,
+      candidateEvent,
+      authorization,
+      state,
+      repo,
+      pull,
+      dryRun: false
+    });
+    writeRedactedJson(
+      join(evidenceDir, "review-event-decision.json"),
+      buildReviewEventDecisionEvidence(reviewEventResolution, false)
+    );
+    plan.event = reviewEventResolution.decision.selectedEvent;
+    if (config.walkthrough.enabled) {
+      plan.walkthrough = buildWalkthroughComment({
+        repo,
+        pull,
+        files: reviewFiles,
+        comments,
+        dropped,
+        event: plan.event,
+        validation,
+        proof,
+        settingsPreview,
+        provider: buildReviewProviderMetadata(config),
+        postIssueComment: config.walkthrough.postIssueComment,
+        publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+      });
+    }
+    if (plan.walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), plan.walkthrough.body);
+    if (plan.enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), plan.enrichment.body);
+
     const reviewGithub = new GitHubApi(config.github);
     plan.walkthroughComment = await postWalkthroughComment({
       github: reviewGithub,
@@ -1782,7 +1857,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const review = await reviewGithub.createReview({
       repo,
       pullNumber: pull.number,
-      event,
+      headSha: pull.head.sha,
+      event: plan.event,
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
@@ -1791,15 +1867,27 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pullNumber: pull.number,
       headSha: pull.head.sha,
       status: "posted",
-      event,
+      event: plan.event,
       reviewUrl: review.html_url
     });
     // Public-safe findings ledger (#357): record the coordinates we just posted publicly so the
     // daemon calibration-observe pass can re-derive outcome labels later. BEST-EFFORT / FAIL-OPEN —
     // the review is already durable; observation bookkeeping must never block or fail the review.
     recordPostedReviewFindings({ state, repo, pull, comments });
+    const liveAfterPost = await github.getPull(repo, pull.number);
+    const headChangedDuringPost = liveAfterPost.head.sha !== pull.head.sha;
+    if (headChangedDuringPost) {
+      writeRedactedJson(join(evidenceDir, "head-changed-during-post.json"), {
+        reason: "head_changed_during_post",
+        repo,
+        pullNumber: pull.number,
+        expectedHeadSha: pull.head.sha,
+        liveHeadSha: liveAfterPost.head.sha,
+        reviewId: review.id
+      });
+    }
     releaseReviewCapacity();
-    if (input.processedHeadPolicy !== "retry_failed_head") {
+    if (!headChangedDuringPost && input.processedHeadPolicy !== "retry_failed_head") {
       await reconcileProcessedHeadAfterDirectReviewSafely({
         config,
         github,
@@ -3391,6 +3479,128 @@ function retryFailureError(previousError: string | undefined, error: unknown): s
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled retry status: ${String(value)}`);
+}
+
+interface ReviewEventResolution {
+  decision: ReviewEventDecision;
+  authorization: ReviewEventAuthorizationAttempt;
+  consumed: boolean;
+}
+
+async function resolveReviewEventDecision(input: {
+  mode: ReviewEventPolicyMode;
+  candidateEvent: ReviewEvent;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  commandCommentId?: number;
+  commandConfig: BotConfig["commands"];
+  dryRun: boolean;
+}): Promise<ReviewEventResolution> {
+  const authorization = await lookupQueuedReviewEventAuthorization({
+    mode: input.mode,
+    github: input.github,
+    repo: input.repo,
+    pull: input.pull,
+    commandCommentId: input.commandCommentId,
+    commandConfig: input.commandConfig
+  });
+  return decideAndConsumeReviewEvent({ ...input, authorization });
+}
+
+async function lookupQueuedReviewEventAuthorization(input: {
+  mode: ReviewEventPolicyMode;
+  github: GitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+  commandCommentId?: number;
+  commandConfig: BotConfig["commands"];
+}): Promise<ReviewEventAuthorizationAttempt> {
+  if (input.mode === "automatic") return { status: "missing" };
+  if (!input.commandCommentId) return { status: "missing" };
+
+  try {
+    const comment = await input.github.getIssueComment(input.repo, input.commandCommentId);
+    if (comment.id !== input.commandCommentId) {
+      return { status: "lookup_failed", commentId: input.commandCommentId };
+    }
+    const selected = collectReviewEventAuthorizationAttempts([comment], input.commandConfig, {
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha
+    }).selected;
+    return selected.status === "missing"
+      ? { status: "missing", commentId: input.commandCommentId }
+      : selected;
+  } catch {
+    return { status: "lookup_failed", commentId: input.commandCommentId };
+  }
+}
+
+function decideAndConsumeReviewEvent(input: {
+  mode: ReviewEventPolicyMode;
+  candidateEvent: ReviewEvent;
+  authorization: ReviewEventAuthorizationAttempt;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+}): ReviewEventResolution {
+  let authorization = input.authorization;
+  let consumed = false;
+  if (input.mode === "trusted_command_only" && !input.dryRun && authorization.status === "eligible") {
+    try {
+      consumed = input.state.tryConsumeReviewEventAuthorization({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        commentId: authorization.commentId,
+        author: authorization.author
+      });
+      if (!consumed) {
+        authorization = {
+          status: "consumed",
+          author: authorization.author,
+          commentId: authorization.commentId
+        };
+      }
+    } catch {
+      authorization = {
+        status: "state_error",
+        author: authorization.author,
+        commentId: authorization.commentId
+      };
+    }
+  }
+
+  return {
+    decision: decideReviewEventPolicy({
+      mode: input.mode,
+      candidateEvent: input.candidateEvent,
+      headSha: input.pull.head.sha,
+      authorization
+    }),
+    authorization,
+    consumed
+  };
+}
+
+function buildReviewEventDecisionEvidence(resolution: ReviewEventResolution, dryRun: boolean): Record<string, unknown> {
+  const { decision, authorization } = resolution;
+  const author = decision.author ?? authorization.author;
+  const commentId = decision.commentId ?? authorization.commentId;
+  return {
+    candidateEvent: decision.candidateEvent,
+    selectedEvent: decision.selectedEvent,
+    mode: decision.mode,
+    reason: decision.reason,
+    headSha: decision.headSha,
+    ...(author ? { author } : {}),
+    ...(commentId ? { commentId } : {}),
+    consumed: resolution.consumed,
+    dryRun
+  };
 }
 
 async function resolvePullCommandDecision(input: {

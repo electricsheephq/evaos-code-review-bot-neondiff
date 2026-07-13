@@ -12,7 +12,7 @@ type AuthorizationMetadata = {
 };
 
 export type ReviewEventAuthorizationAttempt =
-  | ({ status: "missing" | "malformed" | "untrusted" | "lookup_failed" | "consumed" } & AuthorizationMetadata)
+  | ({ status: "missing" | "malformed" | "untrusted" | "lookup_failed" | "consumed" | "state_error" } & AuthorizationMetadata)
   | ({ status: "stale_head"; headSha: string } & AuthorizationMetadata)
   | ({ status: "eligible"; headSha: string; author: string; commentId: number });
 
@@ -25,6 +25,7 @@ export type ReviewEventDecisionReason =
   | "authorization_stale_head"
   | "authorization_lookup_failed"
   | "authorization_consumed"
+  | "authorization_state_error"
   | "authorization_eligible";
 
 export interface ReviewEventDecision {
@@ -110,6 +111,8 @@ function authorizationReason(status: Exclude<ReviewEventAuthorizationAttempt["st
       return "authorization_lookup_failed";
     case "consumed":
       return "authorization_consumed";
+    case "state_error":
+      return "authorization_state_error";
   }
 }
 

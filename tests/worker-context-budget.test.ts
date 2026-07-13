@@ -14,10 +14,15 @@ const zcodeFailuresByPath = vi.hoisted(() => new Map<string, string>());
 const createdReviews = vi.hoisted((): Array<{
   repo: string;
   pullNumber: number;
+  headSha: string;
   event: string;
   body: string;
   comments: Array<{ path: string; line: number; title: string }>;
 }> => []);
+const reviewPostControl = vi.hoisted((): {
+  error?: Error;
+  afterCreate?: () => void;
+} => ({}));
 
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
@@ -66,11 +71,14 @@ vi.mock("../src/github.js", async (importOriginal) => {
       async createReview(input: {
         repo: string;
         pullNumber: number;
+        headSha: string;
         event: string;
         body: string;
         comments: Array<{ path: string; line: number; title: string }>;
       }): Promise<{ html_url: string; id: number }> {
+        if (reviewPostControl.error) throw reviewPostControl.error;
         createdReviews.push(input);
+        reviewPostControl.afterCreate?.();
         return {
           html_url: `https://github.com/${input.repo}/pull/${input.pullNumber}#pullrequestreview-${createdReviews.length}`,
           id: createdReviews.length
@@ -99,6 +107,8 @@ describe("worker context budget preflight", () => {
     zcodeFindingsByPath.clear();
     zcodeFailuresByPath.clear();
     createdReviews.length = 0;
+    delete reviewPostControl.error;
+    delete reviewPostControl.afterCreate;
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -573,7 +583,402 @@ describe("worker context budget preflight", () => {
     expect(existsSync(join(evidenceDir, "review-error.json"))).toBe(false);
     state.close();
   });
+
+  it("downgrades an unauthorized P1 candidate to COMMENT without dropping inline findings", async () => {
+    const scenario = await runOwnerPolicyReview({ roots, pullNumber: 501, enableWalkthrough: true });
+
+    expect(scenario.result).toBe("reviewed");
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]).toMatchObject({
+      headSha: scenario.pull.head.sha,
+      event: "COMMENT",
+      comments: [expect.objectContaining({ severity: "P1" })]
+    });
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 501, scenario.pull.head.sha)).toMatchObject({
+      status: "posted",
+      event: "COMMENT"
+    });
+    expect(readDecision(scenario.evidenceDir)).toEqual({
+      candidateEvent: "REQUEST_CHANGES",
+      selectedEvent: "COMMENT",
+      mode: "trusted_command_only",
+      reason: "authorization_missing",
+      headSha: scenario.pull.head.sha,
+      consumed: false,
+      dryRun: false
+    });
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "review-plan.json"), "utf8")).walkthrough.body).toContain(
+      "Review event: `COMMENT`."
+    );
+    scenario.state.close();
+  });
+
+  it("posts and persists REQUEST_CHANGES only for the exact queued trusted owner command", async () => {
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 502,
+      commandComment: requestChangesComment(41, 502, "b".repeat(40)),
+      commandCommentId: 41
+    });
+
+    expect(scenario.result).toBe("reviewed");
+    expect(createdReviews[0]).toMatchObject({ headSha: scenario.pull.head.sha, event: "REQUEST_CHANGES" });
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 502, scenario.pull.head.sha)).toMatchObject({
+      status: "posted",
+      event: "REQUEST_CHANGES"
+    });
+    expect(readDecision(scenario.evidenceDir)).toMatchObject({
+      candidateEvent: "REQUEST_CHANGES",
+      selectedEvent: "REQUEST_CHANGES",
+      reason: "authorization_eligible",
+      author: "100yenadmin",
+      commentId: 41,
+      consumed: true,
+      dryRun: false
+    });
+    expect(JSON.stringify(readDecision(scenario.evidenceDir))).not.toContain("request-changes");
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "review-plan.json"), "utf8")).event).toBe("REQUEST_CHANGES");
+    scenario.state.close();
+  });
+
+  it("fails closed when the exact authorization was already consumed", async () => {
+    const headSha = "c".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 503,
+      headSha,
+      commandComment: requestChangesComment(42, 503, headSha),
+      commandCommentId: 42,
+      configureState: (state) => {
+        expect(state.tryConsumeReviewEventAuthorization({
+          repo: "electricsheephq/WorldOS",
+          pullNumber: 503,
+          headSha,
+          commentId: 42,
+          author: "100yenadmin"
+        })).toBe(true);
+      }
+    });
+
+    expect(createdReviews[0]?.event).toBe("COMMENT");
+    expect(readDecision(scenario.evidenceDir)).toMatchObject({
+      selectedEvent: "COMMENT",
+      reason: "authorization_consumed",
+      commentId: 42,
+      consumed: false
+    });
+    scenario.state.close();
+  });
+
+  it("re-fetches only the queued ordinary command id and ignores another valid authorization", async () => {
+    const headSha = "d".repeat(40);
+    const ordinaryComment = {
+      id: 43,
+      body: "@evaos-code-review-bot re-review",
+      user: { login: "100yenadmin", type: "User" }
+    };
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 504,
+      headSha,
+      commandComment: ordinaryComment,
+      otherListedComments: [requestChangesComment(44, 504, headSha)],
+      commandCommentId: 43
+    });
+
+    expect(scenario.exactCommentLookups).toEqual([43]);
+    expect(createdReviews[0]?.event).toBe("COMMENT");
+    expect(readDecision(scenario.evidenceDir)).toMatchObject({
+      selectedEvent: "COMMENT",
+      reason: "authorization_missing",
+      commentId: 43,
+      consumed: false
+    });
+    scenario.state.close();
+  });
+
+  it("fails closed to COMMENT when the exact comment lookup fails", async () => {
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 505,
+      commandCommentId: 45,
+      commentLookupError: new Error("GitHub comment read failed")
+    });
+
+    expect(createdReviews[0]?.event).toBe("COMMENT");
+    expect(readDecision(scenario.evidenceDir)).toMatchObject({
+      selectedEvent: "COMMENT",
+      reason: "authorization_lookup_failed",
+      commentId: 45,
+      consumed: false
+    });
+    scenario.state.close();
+  });
+
+  it("fails closed to COMMENT when atomic authorization consumption throws", async () => {
+    const headSha = "e".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 506,
+      headSha,
+      commandComment: requestChangesComment(46, 506, headSha),
+      commandCommentId: 46,
+      configureState: (state) => {
+        vi.spyOn(state, "tryConsumeReviewEventAuthorization").mockImplementation(() => {
+          throw new Error("database is busy");
+        });
+      }
+    });
+
+    expect(createdReviews[0]?.event).toBe("COMMENT");
+    expect(readDecision(scenario.evidenceDir)).toMatchObject({
+      selectedEvent: "COMMENT",
+      reason: "authorization_state_error",
+      commentId: 46,
+      consumed: false
+    });
+    scenario.state.close();
+  });
+
+  it("records an explicit dry-run decision without consuming or posting", async () => {
+    const headSha = "f".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 507,
+      headSha,
+      commandComment: requestChangesComment(47, 507, headSha),
+      commandCommentId: 47,
+      dryRun: true
+    });
+
+    expect(createdReviews).toEqual([]);
+    expect(readDecision(scenario.evidenceDir)).toMatchObject({
+      candidateEvent: "REQUEST_CHANGES",
+      selectedEvent: "REQUEST_CHANGES",
+      reason: "authorization_eligible",
+      commentId: 47,
+      consumed: false,
+      dryRun: true
+    });
+    expect(scenario.state.tryConsumeReviewEventAuthorization({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 507,
+      headSha,
+      commentId: 47,
+      author: "100yenadmin"
+    })).toBe(true);
+    scenario.state.close();
+  });
+
+  it("does not consume when the head moves after exact authorization lookup and before post", async () => {
+    const headSha = "1".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 508,
+      headSha,
+      commandComment: requestChangesComment(48, 508, headSha),
+      commandCommentId: 48,
+      moveHeadAfterCommentLookup: "2".repeat(40)
+    });
+
+    expect(scenario.result).toBe("skipped_stale_head");
+    expect(createdReviews).toEqual([]);
+    expect(scenario.state.tryConsumeReviewEventAuthorization({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 508,
+      headSha,
+      commentId: 48,
+      author: "100yenadmin"
+    })).toBe(true);
+    scenario.state.close();
+  });
+
+  it("never restores consumed authority after a review POST failure", async () => {
+    const headSha = "2".repeat(40);
+    reviewPostControl.error = new Error("GitHub review POST failed");
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 509,
+      headSha,
+      commandComment: requestChangesComment(49, 509, headSha),
+      commandCommentId: 49
+    });
+
+    expect(scenario.error).toEqual(expect.objectContaining({ message: "GitHub review POST failed" }));
+    expect(scenario.state.tryConsumeReviewEventAuthorization({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 509,
+      headSha,
+      commentId: 49,
+      author: "100yenadmin"
+    })).toBe(false);
+    scenario.state.close();
+  });
+
+  it("records a bounded incident and withholds current-head readiness when the head moves during POST", async () => {
+    const headSha = "3".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 510,
+      headSha,
+      commandComment: requestChangesComment(50, 510, headSha),
+      commandCommentId: 50,
+      moveHeadDuringPost: "4".repeat(40)
+    });
+
+    expect(scenario.result).toBe("reviewed");
+    expect(createdReviews[0]).toMatchObject({ headSha, event: "REQUEST_CHANGES" });
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "head-changed-during-post.json"), "utf8"))).toEqual({
+      reason: "head_changed_during_post",
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 510,
+      expectedHeadSha: headSha,
+      liveHeadSha: "4".repeat(40),
+      reviewId: 1
+    });
+    expect(scenario.state.getReviewReadiness("electricsheephq/WorldOS", 510, headSha)).toBeUndefined();
+    scenario.state.close();
+  });
+
+  it("consumes an exact eligible command even when the deterministic candidate is already COMMENT", async () => {
+    const headSha = "5".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 511,
+      headSha,
+      commandComment: requestChangesComment(51, 511, headSha),
+      commandCommentId: 51,
+      candidateSeverity: "P2"
+    });
+
+    expect(createdReviews[0]?.event).toBe("COMMENT");
+    expect(readDecision(scenario.evidenceDir)).toMatchObject({
+      candidateEvent: "COMMENT",
+      selectedEvent: "COMMENT",
+      reason: "candidate_comment",
+      commentId: 51,
+      consumed: true
+    });
+    expect(scenario.state.tryConsumeReviewEventAuthorization({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 511,
+      headSha,
+      commentId: 51,
+      author: "100yenadmin"
+    })).toBe(false);
+    scenario.state.close();
+  });
 });
+
+async function runOwnerPolicyReview(input: {
+  roots: string[];
+  pullNumber: number;
+  headSha?: string;
+  commandComment?: { id: number; body: string; user: { login: string; type: string } };
+  otherListedComments?: Array<{ id: number; body: string; user: { login: string; type: string } }>;
+  commandCommentId?: number;
+  dryRun?: boolean;
+  commentLookupError?: Error;
+  moveHeadAfterCommentLookup?: string;
+  moveHeadDuringPost?: string;
+  enableWalkthrough?: boolean;
+  candidateSeverity?: "P1" | "P2";
+  configureState?: (state: ReviewStateStore) => void;
+}) {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-owner-policy-"));
+  input.roots.push(root);
+  const config = minimalConfig(root);
+  config.commands = {
+    enabled: true,
+    botMentions: ["@evaos-code-review-bot"],
+    trustedAuthors: ["100yenadmin"],
+    acknowledge: false
+  };
+  config.reviewGate = {
+    maxInlineComments: 25,
+    reviewEventPolicy: { mode: "trusted_command_only" }
+  };
+  config.walkthrough.enabled = input.enableWalkthrough ?? false;
+  const state = new ReviewStateStore(config.statePath);
+  input.configureState?.(state);
+  const headSha = input.headSha ?? "b".repeat(40);
+  const pull = pullSummary(input.pullNumber, headSha);
+  let livePull = pull;
+  const file = pullFile(`src/policy-${input.pullNumber}.ts`, 200);
+  zcodeFindingsByPath.set(file.filename, [
+    input.candidateSeverity === "P2"
+      ? finding(file.filename, `P2 policy finding ${input.pullNumber}`)
+      : p1Finding(file.filename, `P1 policy finding ${input.pullNumber}`)
+  ]);
+  const exactCommentLookups: number[] = [];
+  if (input.moveHeadDuringPost) {
+    reviewPostControl.afterCreate = () => {
+      livePull = pullSummary(input.pullNumber, input.moveHeadDuringPost!);
+    };
+  }
+  const github = {
+    getPull: async () => livePull,
+    listPullFiles: async () => [file],
+    listIssueComments: async () => [
+      ...(input.commandComment ? [input.commandComment] : []),
+      ...(input.otherListedComments ?? [])
+    ],
+    getIssueComment: async (_repo: string, commentId: number) => {
+      exactCommentLookups.push(commentId);
+      if (input.commentLookupError) throw input.commentLookupError;
+      if (input.moveHeadAfterCommentLookup) {
+        livePull = pullSummary(input.pullNumber, input.moveHeadAfterCommentLookup);
+      }
+      return input.commandComment ?? {
+        id: commentId,
+        body: "ordinary non-authorization comment",
+        user: { login: "100yenadmin", type: "User" }
+      };
+    },
+    canPostAsApp: () => false
+  } as unknown as GitHubApi;
+
+  let result: Awaited<ReturnType<typeof reviewPull>> | undefined;
+  let error: unknown;
+  try {
+    result = await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: input.dryRun ?? false,
+      useZCode: true,
+      ...(input.commandCommentId ? { commandCommentId: input.commandCommentId } : {})
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  const commandSubdir = input.commandComment?.body.endsWith("re-review") ? `command-${input.commandComment.id}` : undefined;
+  const evidenceDir = join(
+    root,
+    "evidence",
+    localDateFolder(),
+    "electricsheephq__WorldOS",
+    `pr-${input.pullNumber}`,
+    headSha,
+    ...(commandSubdir ? [commandSubdir] : [])
+  );
+  return { root, config, state, pull, result, error, evidenceDir, exactCommentLookups };
+}
+
+function requestChangesComment(id: number, pullNumber: number, headSha: string) {
+  return {
+    id,
+    body: `@evaos-code-review-bot request-changes --repo electricsheephq/WorldOS --pr ${pullNumber} --head ${headSha}`,
+    user: { login: "100yenadmin", type: "User" }
+  };
+}
+
+function readDecision(evidenceDir: string) {
+  return JSON.parse(readFileSync(join(evidenceDir, "review-event-decision.json"), "utf8"));
+}
 
 function minimalConfig(root: string): BotConfig {
   return {
@@ -705,6 +1110,14 @@ function finding(path: string, title: string): Finding {
     confidence: 0.9,
     category: "runtime_correctness",
     why_this_matters: `${title} matters`
+  };
+}
+
+function p1Finding(path: string, title: string): Finding {
+  return {
+    ...finding(path, title),
+    severity: "P1",
+    confidence: 0.99
   };
 }
 

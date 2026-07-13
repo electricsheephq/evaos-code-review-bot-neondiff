@@ -41,7 +41,8 @@ describe("review event policy", () => {
     ["untrusted", { status: "untrusted", author: "outside-contributor", commentId: 41 }],
     ["stale head", { status: "stale_head", headSha: "b".repeat(40), author: "100yenadmin", commentId: 41 }],
     ["lookup failure", { status: "lookup_failed" }],
-    ["consumed", { status: "consumed", author: "100yenadmin", commentId: 41 }]
+    ["consumed", { status: "consumed", author: "100yenadmin", commentId: 41 }],
+    ["state error", { status: "state_error", author: "100yenadmin", commentId: 41 }]
   ] as const)("fails closed for %s authorization", (_label, authorization) => {
     expect(decideReviewEventPolicy({
       mode: "trusted_command_only",
