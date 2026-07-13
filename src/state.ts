@@ -7,7 +7,7 @@ import type { FinishingTouchAction } from "./finishing-touches.js";
 import type { ReviewEvent } from "./types.js";
 
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
-export type ProcessedCommandAction = "review" | "re-review" | "explain" | "stop" | FinishingTouchAction;
+export type ProcessedCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
 export type ProcessedCommandStatus = "triggered" | "explained" | "stopped" | "ignored";
 export type FinishingTouchDraftStatus = "drafted" | "rejected";
 export type ReviewerSessionState = "warming" | "active" | "draining" | "expired" | "failed";
@@ -116,6 +116,9 @@ export interface RepoActivationRecord {
 }
 
 export const ACTIVATION_BASELINE_EXISTING_HEAD_ERROR = "activation_baseline_existing_head";
+export const EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR = "exact_authorization_already_consumed";
+export const POST_REVIEW_HEAD_UNVERIFIED_ERROR = "post_review_head_unverified";
+export const REVIEW_POSTED_HEAD_CHANGED_ERROR = "review_posted_head_changed";
 
 export function isActivationBaselineProcessedReview(
   processed: Pick<StoredProcessedReviewRecord, "status" | "error"> | undefined
@@ -335,6 +338,24 @@ export interface ProcessedCommandRecord {
   status: ProcessedCommandStatus;
   author?: string;
   url?: string;
+}
+
+export interface ReviewEventAuthorizationConsumptionInput {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  commentId: number;
+  author: string;
+  now?: Date;
+}
+
+export interface ReviewEventAuthorizationConsumptionRecord {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  commentId: number;
+  author: string;
+  consumedAt: string;
 }
 
 export interface RepoMemoryNoteRecord {
@@ -763,6 +784,16 @@ export class ReviewStateStore {
         url text,
         created_at text not null default (datetime('now')),
         primary key (repo, pull_number, head_sha, comment_id)
+      );
+
+      create table if not exists review_event_authorization_consumptions (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        comment_id integer not null,
+        author text not null,
+        consumed_at text not null,
+        primary key (repo, pull_number, head_sha)
       );
 
       create table if not exists finishing_touch_drafts (
@@ -1493,6 +1524,60 @@ export class ReviewStateStore {
       this.db.exec("rollback");
       throw error;
     }
+  }
+
+  /** Atomically consumes one explicit trusted-owner authorization for an exact review head. */
+  tryConsumeReviewEventAuthorization(input: ReviewEventAuthorizationConsumptionInput): boolean {
+    validateReviewEventAuthorizationConsumption(input);
+    const result = this.db
+      .prepare(
+        `insert into review_event_authorization_consumptions
+          (repo, pull_number, head_sha, comment_id, author, consumed_at)
+         values (?, ?, ?, ?, ?, ?)
+         on conflict(repo, pull_number, head_sha) do nothing`
+      )
+      .run(
+        input.repo,
+        input.pullNumber,
+        input.headSha.toLowerCase(),
+        input.commentId,
+        input.author,
+        (input.now ?? new Date()).toISOString()
+      );
+    return Number(result.changes) === 1;
+  }
+
+  /** Reads the one-shot authorization ledger without mutating or renewing it. */
+  getReviewEventAuthorizationConsumption(
+    repo: string,
+    pullNumber: number,
+    headSha: string
+  ): ReviewEventAuthorizationConsumptionRecord | undefined {
+    validateReviewEventAuthorizationCoordinates(repo, pullNumber, headSha);
+    const row = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, comment_id, author, consumed_at
+         from review_event_authorization_consumptions
+         where repo = ? and pull_number = ? and head_sha = ?`
+      )
+      .get(repo, pullNumber, headSha.toLowerCase()) as {
+        repo: string;
+        pull_number: number;
+        head_sha: string;
+        comment_id: number;
+        author: string;
+        consumed_at: string;
+      } | undefined;
+    return row
+      ? {
+          repo: row.repo,
+          pullNumber: row.pull_number,
+          headSha: row.head_sha,
+          commentId: row.comment_id,
+          author: row.author,
+          consumedAt: row.consumed_at
+        }
+      : undefined;
   }
 
   tryAcquireIssueEnrichmentRunLease(
@@ -3015,6 +3100,25 @@ function validatePullAndCommand(pullNumber: number, commandCommentId: number): v
   if (!Number.isInteger(pullNumber) || pullNumber < 1) throw new Error("pullNumber must be a positive integer");
   if (!Number.isInteger(commandCommentId) || commandCommentId < 1) {
     throw new Error("commandCommentId must be a positive integer");
+  }
+}
+
+function validateReviewEventAuthorizationConsumption(input: ReviewEventAuthorizationConsumptionInput): void {
+  validateReviewEventAuthorizationCoordinates(input.repo, input.pullNumber, input.headSha);
+  if (!Number.isInteger(input.commentId) || input.commentId < 1) throw new Error("commentId must be a positive integer");
+  if (!/^[A-Za-z0-9-]{1,39}$/.test(input.author)) {
+    throw new Error("author must be a non-empty string");
+  }
+}
+
+function validateReviewEventAuthorizationCoordinates(repo: string, pullNumber: number, headSha: string): void {
+  validateRepoName(repo, "repo");
+  if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo)) {
+    throw new Error("repo must be an owner/repo name");
+  }
+  if (!Number.isInteger(pullNumber) || pullNumber < 1) throw new Error("pullNumber must be a positive integer");
+  if (!/^[0-9a-f]{40}$/i.test(headSha)) {
+    throw new Error("headSha must be a 40-character hexadecimal SHA");
   }
 }
 

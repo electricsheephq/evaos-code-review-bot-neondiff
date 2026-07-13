@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyCommandAuthorization,
+  collectReviewEventAuthorizationAttempts,
   collectTrustedReviewCommands,
   decideCommandAction,
   isBotCommandComment,
@@ -214,6 +215,86 @@ describe("public command authorization classification (#345)", () => {
     const reviewOnly = { ...trusted, publicCommands: { enabled: true, actions: ["review"] as Array<"review" | "re-review">, cooldownMinutes: 10 } };
     expect(classifyCommandAuthorization({ action: "review", author: "randopublic" }, reviewOnly)).toBe("public-eligible");
     expect(classifyCommandAuthorization({ action: "re-review", author: "randopublic" }, reviewOnly)).toBe("unauthorized");
+  });
+});
+
+describe("trusted request-changes authorization commands (#557)", () => {
+  const HEAD = "a".repeat(40);
+  const config = { enabled: true, botMentions: ["@neondiff"], trustedAuthors: ["100yenadmin"], acknowledge: false };
+  const target = { repo: "owner/repo", pullNumber: 7, headSha: HEAD };
+
+  it("collects an exact trusted command as bounded exact-head metadata and queues one review", () => {
+    const commandBody = `@neondiff request-changes --repo owner/repo --pr 7 --head ${HEAD.toUpperCase()}`;
+    const comments = [comment(41, "100yenadmin", commandBody)];
+    const attempts = collectReviewEventAuthorizationAttempts(comments, config, target);
+
+    expect(attempts.selected).toEqual({
+      status: "eligible",
+      author: "100yenadmin",
+      commentId: 41,
+      headSha: HEAD
+    });
+    expect(attempts).not.toHaveProperty("body");
+    expect(JSON.stringify(attempts)).not.toContain(commandBody);
+    expect(attempts.reviewRequests).toEqual([
+      { action: "request-changes", commentId: 41, author: "100yenadmin", repo: "owner/repo", pullNumber: 7, headSha: HEAD }
+    ]);
+  });
+
+  it("fails closed for malformed commands, mismatched targets, untrusted authors, and wildcard-only trust", () => {
+    const cases = [
+      { comment: comment(41, "100yenadmin", `@neondiff request-changes --repo owner/repo --pr 7 --head ${"a".repeat(39)}`), config, expected: "malformed" },
+      { comment: comment(42, "100yenadmin", `@neondiff request-changes --repo other/repo --pr 7 --head ${HEAD}`), config, expected: "stale_head" },
+      { comment: comment(43, "100yenadmin", `@neondiff request-changes --repo owner/repo --pr 8 --head ${HEAD}`), config, expected: "stale_head" },
+      { comment: comment(44, "100yenadmin", `@neondiff request-changes --repo owner/repo --pr 7 --head ${"b".repeat(40)}`), config, expected: "stale_head" },
+      { comment: comment(45, "outside", `@neondiff request-changes --repo owner/repo --pr 7 --head ${HEAD}`), config, expected: "untrusted" },
+      { comment: comment(46, "outside", `@neondiff request-changes --repo owner/repo --pr 7 --head ${HEAD}`), config: { ...config, trustedAuthors: ["*"] }, expected: "untrusted" },
+      { comment: comment(47, "100yenadmin", `@neondiff request-changes --pr 7 --repo owner/repo --head ${HEAD}`), config, expected: "malformed" },
+      { comment: comment(48, "100yenadmin", `@neondiff request-changes --repo owner/repo --pr 7 --head ${HEAD} extra`), config, expected: "malformed" }
+    ] as const;
+
+    for (const entry of cases) {
+      expect(collectReviewEventAuthorizationAttempts([entry.comment], entry.config, target).selected).toMatchObject({
+        status: entry.expected,
+        commentId: entry.comment.id
+      });
+    }
+  });
+
+  it("requires the entire trimmed body to be exactly one request-changes command", () => {
+    const command = `@neondiff request-changes --repo owner/repo --pr 7 --head ${HEAD}`;
+    const bodies = [
+      `Please review this carefully. ${command}`,
+      `${command} Thank you.`,
+      `\`\`\`text\n${command}\n\`\`\``,
+      `${command}\nThis must not be an embedded multi-line command.`
+    ];
+
+    for (const [index, body] of bodies.entries()) {
+      const attempts = collectReviewEventAuthorizationAttempts([comment(60 + index, "100yenadmin", body)], config, target);
+      expect(attempts).toEqual({
+        attempts: [{ status: "malformed", author: "100yenadmin", commentId: 60 + index }],
+        selected: { status: "malformed", author: "100yenadmin", commentId: 60 + index },
+        reviewRequests: []
+      });
+    }
+  });
+
+  it("does not treat ordinary review or re-review commands as authorization attempts", () => {
+    const attempts = collectReviewEventAuthorizationAttempts([
+      comment(41, "100yenadmin", "@neondiff review"),
+      comment(42, "100yenadmin", "@neondiff re-review")
+    ], config, target);
+
+    expect(attempts).toEqual({ attempts: [], selected: { status: "missing" }, reviewRequests: [] });
+  });
+
+  it("deduplicates a repeated comment ID before returning review requests", () => {
+    const repeated = comment(41, "100yenadmin", `@neondiff request-changes --repo owner/repo --pr 7 --head ${HEAD}`);
+    const attempts = collectReviewEventAuthorizationAttempts([repeated, repeated], config, target);
+
+    expect(attempts.attempts).toHaveLength(1);
+    expect(attempts.reviewRequests).toHaveLength(1);
   });
 });
 

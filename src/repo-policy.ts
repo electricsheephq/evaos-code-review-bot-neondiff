@@ -75,6 +75,11 @@ export interface UnsupportedReviewSettingEvidence {
 
 export interface ReviewSettingsPreview {
   profile: "chill" | "assertive";
+  reviewGate: {
+    reviewEventPolicy: {
+      mode: "automatic" | "trusted_command_only";
+    };
+  };
   sampleProfile?: ReviewSettingsProfileMetadata;
   sections: ReviewSettingsPreviewSection[];
   pathInstructions: ReviewSettingsPathInstruction[];
@@ -313,6 +318,11 @@ export function buildReviewSettingsPreview(config: BotConfig, profile: ResolvedR
   const unsupportedSettings = buildUnsupportedReviewSettingsMatrix();
   return {
     profile: profile.reviewProfile ?? "assertive",
+    reviewGate: {
+      reviewEventPolicy: {
+        mode: config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only"
+      }
+    },
     sampleProfile: sampleProfileForReviewProfile(profile.reviewProfile ?? "assertive"),
     sections: [
       { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" },

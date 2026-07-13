@@ -30,6 +30,7 @@ import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChange
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
 import { validateRelativePacketPath, type RepoWikiContextConfig } from "./repo-wiki-context.js";
 import { DEFAULT_REVIEW_LENS_CONFIG, validateReviewLensConfig, type ReviewLensConfig } from "./review-lenses.js";
+import type { ReviewEventPolicyConfig } from "./review-event-policy.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
 
@@ -222,6 +223,8 @@ export interface ReviewSchedulerConfig {
 export interface ReviewGateConfig {
   /** Max inline comments posted per review; the highest-ranked findings survive the cap. */
   maxInlineComments: number;
+  /** The public GitHub event selection policy; defaults to trusted owner authorization only. */
+  reviewEventPolicy: ReviewEventPolicyConfig;
   /** Optional per-severity confidence floors for REQUEST_CHANGES eligibility (default off). */
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
   /** Optional confidence subtracted (0..1, floor 0) from findings recovered via the strict-JSON
@@ -350,7 +353,10 @@ const DEFAULT_CONFIG: BotConfig = {
     publicDisplay: buildPublicConfidencePolicy()
   },
   reviewGate: {
-    maxInlineComments: 25
+    maxInlineComments: 25,
+    reviewEventPolicy: {
+      mode: "trusted_command_only"
+    }
   },
   repoMemory: {
     enabled: false,
@@ -810,6 +816,7 @@ function validatePublicCommandsConfig(value: unknown, label: string): void {
 function validateReviewGateConfig(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   validatePositiveInteger(value.maxInlineComments, `${label}.maxInlineComments`);
+  validateReviewEventPolicyConfig(value.reviewEventPolicy, `${label}.reviewEventPolicy`);
   if (value.requestChangesConfidenceFloors !== undefined) {
     if (!isRecord(value.requestChangesConfidenceFloors)) {
       throw new Error(`${label}.requestChangesConfidenceFloors must be an object`);
@@ -839,6 +846,16 @@ function validateReviewGateConfig(value: unknown, label: string): void {
     }
   }
   if (value.selfConsistency !== undefined) validateSelfConsistencyConfig(value.selfConsistency, `${label}.selfConsistency`);
+}
+
+function validateReviewEventPolicyConfig(value: unknown, label: string): void {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "mode") throw new Error(`${label} has unknown key "${key}"; expected only mode`);
+  }
+  if (value.mode !== "automatic" && value.mode !== "trusted_command_only") {
+    throw new Error(`${label}.mode must be one of automatic or trusted_command_only`);
+  }
 }
 
 function validateSelfConsistencyConfig(value: unknown, label: string): void {

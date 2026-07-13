@@ -4,6 +4,7 @@ import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
   buildCommandStatusBody,
   buildCommandStatusMarker,
+  collectReviewEventAuthorizationAttempts,
   collectTrustedReviewCommands,
   decideCommandAction,
   isFinishingTouchCommandAction,
@@ -47,6 +48,12 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import {
+  decideReviewEventPolicy,
+  type ReviewEventAuthorizationAttempt,
+  type ReviewEventDecision,
+  type ReviewEventPolicyMode
+} from "./review-event-policy.js";
 import { selectReviewMode } from "./review-mode-router.js";
 import type { ReviewModeAnalysisPlan } from "./review-mode-types.js";
 import {
@@ -76,6 +83,9 @@ import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skil
 import { writeSecureFileSync } from "./temp-files.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+  POST_REVIEW_HEAD_UNVERIFIED_ERROR,
+  REVIEW_POSTED_HEAD_CHANGED_ERROR,
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
@@ -241,6 +251,9 @@ export interface ProviderErrorClassification {
 export type ReviewPullResult =
   | "reviewed"
   | "reviewed_command"
+  | "posted_stale_head"
+  | "posted_head_unverified"
+  | "skipped_consumed_authorization"
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_policy"
@@ -274,6 +287,9 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "skipped_context_budget":
     case "skipped_provider_cooldown":
     case "skipped_stale_head":
+    case "posted_stale_head":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
       return false;
     default:
       return assertNever(status);
@@ -386,25 +402,68 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
           result.failed += 1;
           continue;
         }
-        if (status === "reviewed" || status === "reviewed_command") result.reviewed += 1;
-        if (status === "skipped_draft") result.skippedDraft += 1;
-        if (status === "skipped_canary") result.skippedCanary += 1;
-        if (status === "skipped_policy" || status === "skipped_license_gate") result.skippedPolicy += 1;
-        if (status === "skipped_license_gate") result.skippedLicenseGate += 1;
-        if (status === "skipped_command_stop") result.skippedCommandStop += 1;
-        if (status === "skipped_command_explain") result.skippedCommandExplain += 1;
-        if (status === "skipped_finishing_touch_draft") result.skippedFinishingTouchDraft += 1;
-        if (status === "reviewed_command") result.commandReviewRequested += 1;
-        if (status === "skipped_processed") result.skippedProcessed += 1;
-        if (status === "skipped_capacity") result.skippedCapacity += 1;
-        if (status === "skipped_context_budget") result.skippedContextBudget += 1;
-        if (status === "skipped_provider_cooldown") result.skippedProviderCooldown += 1;
-        if (status === "skipped_stale_head") result.skippedStaleHead += 1;
+        applyReviewPullResultToRunOnceResult(result, status);
       }
     }
     return result;
   } finally {
     state.close();
+  }
+}
+
+export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, status: ReviewPullResult): void {
+  switch (status) {
+    case "reviewed":
+      result.reviewed += 1;
+      return;
+    case "reviewed_command":
+      result.reviewed += 1;
+      result.commandReviewRequested += 1;
+      return;
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      result.failed += 1;
+      return;
+    case "posted_stale_head":
+    case "skipped_stale_head":
+      result.skippedStaleHead += 1;
+      return;
+    case "skipped_draft":
+      result.skippedDraft += 1;
+      return;
+    case "skipped_canary":
+      result.skippedCanary += 1;
+      return;
+    case "skipped_policy":
+      result.skippedPolicy += 1;
+      return;
+    case "skipped_license_gate":
+      result.skippedPolicy += 1;
+      result.skippedLicenseGate += 1;
+      return;
+    case "skipped_command_stop":
+      result.skippedCommandStop += 1;
+      return;
+    case "skipped_command_explain":
+      result.skippedCommandExplain += 1;
+      return;
+    case "skipped_finishing_touch_draft":
+      result.skippedFinishingTouchDraft += 1;
+      return;
+    case "skipped_processed":
+      result.skippedProcessed += 1;
+      return;
+    case "skipped_capacity":
+      result.skippedCapacity += 1;
+      return;
+    case "skipped_context_budget":
+      result.skippedContextBudget += 1;
+      return;
+    case "skipped_provider_cooldown":
+      result.skippedProviderCooldown += 1;
+      return;
+    default:
+      assertNever(status);
   }
 }
 
@@ -850,10 +909,13 @@ function retryStatusCommentState(
     case "skipped_context_budget":
       return "skipped";
     case "skipped_stale_head":
+    case "posted_stale_head":
       return "stale_head";
     case "skipped_closed":
       return "closed_or_merged_before_review";
     case "failed":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
       return "failed";
     case "skipped_capacity":
       return "provider_deferred";
@@ -1054,7 +1116,17 @@ function retryQueuePatchForStatus(input: {
         lastError: input.processedError ?? "license_entitlement_required",
         sessionJobState: "assigned"
       };
+    case "posted_stale_head":
+      return {
+        state: "stale_retired",
+        ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
+        lastError: "retry_did_not_review=posted_stale_head",
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
+      };
     case "failed":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -1237,6 +1309,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !input.allowActivationBaselineCommandLookup &&
@@ -1385,18 +1458,61 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
-  if (commandReviewRequested) {
+  // The scheduler pre-records request-changes before the worker re-resolves it, so only a
+  // non-command decision needs this early exact-comment lookup to bypass a processed advisory head.
+  let exactOwnerReviewRequested = Boolean(
+    processed &&
+    input.commandCommentId &&
+    !commandReviewRequested &&
+    (await lookupQueuedReviewEventAuthorization({
+      mode: "trusted_command_only",
+      github,
+      repo,
+      pull,
+      commandCommentId: input.commandCommentId,
+      commandConfig: config.commands
+    })).status === "eligible"
+  );
+  let manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
+  if (manualReviewRequested) {
     const livePull = await github.getPull(repo, pull.number);
     const stale = detectStalePullHead({ expected: pull, live: livePull, phase: "before_review" });
     if (stale) {
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
       recordStaleHeadSkip({ state, repo, pull, stale, evidenceDir });
       return "skipped_stale_head";
     }
   }
+  if (input.commandCommentId) {
+    const consumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
+    if (consumption?.commentId === input.commandCommentId) {
+      if (processed?.status === "posted") {
+        await reconcileProcessedHeadAfterDirectReviewSafely({ config, github, state, repo, pull, dryRun: input.dryRun });
+        return "skipped_processed";
+      }
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
+      mkdirSync(evidenceDir, { recursive: true });
+      writeRedactedJson(join(evidenceDir, "consumed-authorization-incident.json"), {
+        reason: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: input.commandCommentId,
+        consumedAt: consumption.consumedAt
+      });
+      state.recordProcessed({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        status: "skipped",
+        error: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR
+      });
+      return "skipped_consumed_authorization";
+    }
+  }
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
-    !commandReviewRequested &&
+    !manualReviewRequested &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1430,7 +1546,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
       return "skipped_processed";
     }
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
     const liveBeforeReview = await github.getPull(repo, pull.number);
     const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
     if (staleBeforeReview) {
@@ -1473,7 +1589,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   try {
     if (!acquireReviewCapacity()) return "skipped_capacity";
 
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
     if (commandReviewRequested) {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
     }
@@ -1656,7 +1772,23 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Gate output is already public-safe; this second pass keeps evidence redacted
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
     const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
-    const event = selfConsistency.event;
+    const candidateEvent = selfConsistency.event;
+    const dryRunReviewEventResolution = input.dryRun
+      ? await resolveReviewEventDecision({
+          mode: reviewEventPolicyMode,
+          candidateEvent,
+          github,
+          state,
+          repo,
+          pull,
+          commandCommentId: input.commandCommentId,
+          commandConfig: config.commands,
+          dryRun: true
+        })
+      : undefined;
+    exactOwnerReviewRequested = exactOwnerReviewRequested || dryRunReviewEventResolution?.authorization.status === "eligible";
+    manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
+    const selectedEvent = dryRunReviewEventResolution?.decision.selectedEvent ?? candidateEvent;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
     const summary = buildSummary({
       repo,
@@ -1666,14 +1798,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dryRun: input.dryRun,
       commandDecision
     });
-    const walkthrough = config.walkthrough.enabled
+    const walkthrough = config.walkthrough.enabled && input.dryRun
       ? buildWalkthroughComment({
           repo,
           pull,
           files: reviewFiles,
           comments,
           dropped,
-          event,
+          event: selectedEvent,
           validation,
           proof,
           settingsPreview,
@@ -1697,7 +1829,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         })
       : undefined;
     const plan: ReviewPlan = {
-      event,
+      event: selectedEvent,
       comments,
       dropped,
       summary,
@@ -1708,9 +1840,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(enrichment ? { enrichment } : {})
     };
 
-    if (walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
-    if (enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
+    if (input.dryRun && walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), walkthrough.body);
+    if (input.dryRun && enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), enrichment.body);
     if (input.dryRun) {
+      writeRedactedJson(
+        join(evidenceDir, "review-event-decision.json"),
+        buildReviewEventDecisionEvidence(dryRunReviewEventResolution!, true)
+      );
       writeDryRunOutcomeLedgerEvidence({
         evidenceDir,
         repo,
@@ -1731,13 +1867,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
             }
       });
     }
-    writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
+    if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     if (input.dryRun) {
       // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
       // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
-      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event });
-      return commandReviewRequested ? "reviewed_command" : "reviewed";
+      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event: plan.event });
+      return manualReviewRequested ? "reviewed_command" : "reviewed";
     }
 
     // Atomic per-head claim (#295): acquired here — after every eligibility/stale check and after the
@@ -1761,7 +1897,67 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_stale_head";
     }
 
+    const authorization = await lookupQueuedReviewEventAuthorization({
+      mode: reviewEventPolicyMode,
+      github,
+      repo,
+      pull,
+      commandCommentId: input.commandCommentId,
+      commandConfig: config.commands
+    });
+    exactOwnerReviewRequested = exactOwnerReviewRequested || authorization.status === "eligible";
+    manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
+    if (reviewEventPolicyMode === "trusted_command_only") {
+      const liveBeforeConsume = await github.getPull(repo, pull.number);
+      const staleBeforeConsume = detectStalePullHead({ expected: pull, live: liveBeforeConsume, phase: "before_post" });
+      if (staleBeforeConsume) {
+        recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeConsume, evidenceDir });
+        return "skipped_stale_head";
+      }
+    }
+    const reviewEventResolution = decideAndConsumeReviewEvent({
+      mode: reviewEventPolicyMode,
+      candidateEvent,
+      authorization,
+      state,
+      repo,
+      pull,
+      dryRun: false
+    });
+    const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
+    if (
+      reviewEventResolution.consumed &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      writeRedactedJson(join(evidenceDir, "review-event-decision.json"), reviewEventDecisionEvidence);
+      return "skipped_stale_head";
+    }
+    writeRedactedJson(
+      join(evidenceDir, "review-event-decision.json"),
+      reviewEventDecisionEvidence
+    );
+    plan.event = reviewEventResolution.decision.selectedEvent;
+    if (config.walkthrough.enabled) {
+      plan.walkthrough = buildWalkthroughComment({
+        repo,
+        pull,
+        files: reviewFiles,
+        comments,
+        dropped,
+        event: plan.event,
+        validation,
+        proof,
+        settingsPreview,
+        provider: buildReviewProviderMetadata(config),
+        postIssueComment: config.walkthrough.postIssueComment,
+        publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+      });
+    }
+    if (plan.walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), plan.walkthrough.body);
+    if (plan.enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), plan.enrichment.body);
+
     const reviewGithub = new GitHubApi(config.github);
+    const walkthroughPostAttempted = Boolean(plan.walkthrough?.postIssueComment && reviewGithub.canPostAsApp());
     plan.walkthroughComment = await postWalkthroughComment({
       github: reviewGithub,
       repo,
@@ -1769,6 +1965,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       evidenceDir,
       walkthrough: plan.walkthrough
     });
+    if (
+      walkthroughPostAttempted &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      return "skipped_stale_head";
+    }
+    const enrichmentPostAttempted = Boolean(
+      config.enrichment?.enabled === true && plan.enrichment?.postIssueComment && reviewGithub.canPostAsApp()
+    );
     plan.enrichmentComment = await postEnrichmentComment({
       enabled: config.enrichment?.enabled === true,
       dryRun: input.dryRun,
@@ -1778,28 +1983,92 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       enrichment: plan.enrichment,
       evidenceDir
     });
+    if (
+      enrichmentPostAttempted &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      return "skipped_stale_head";
+    }
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
+    if (await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })) {
+      return "skipped_stale_head";
+    }
+    const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    const preservedPriorBlockingRow = Boolean(
+      priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT"
+    );
+    const preservedPriorVerifiedBlockingRow = preservedPriorBlockingRow && !priorPosted?.error;
     const review = await reviewGithub.createReview({
       repo,
       pullNumber: pull.number,
-      event,
+      headSha: pull.head.sha,
+      event: plan.event,
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
-    state.recordProcessed({
-      repo,
-      pullNumber: pull.number,
-      headSha: pull.head.sha,
-      status: "posted",
-      event,
+    if (!preservedPriorBlockingRow) {
+      state.recordProcessed({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        status: "posted",
+        event: plan.event,
+        reviewUrl: review.html_url
+      });
+    }
+    writeRedactedJsonBestEffort(join(evidenceDir, "posted-review.json"), {
+      event: plan.event,
+      reviewId: review.id,
       reviewUrl: review.html_url
     });
     // Public-safe findings ledger (#357): record the coordinates we just posted publicly so the
     // daemon calibration-observe pass can re-derive outcome labels later. BEST-EFFORT / FAIL-OPEN —
     // the review is already durable; observation bookkeeping must never block or fail the review.
     recordPostedReviewFindings({ state, repo, pull, comments });
+    let headChangedDuringPost = false;
+    let postReviewHeadLookupFailed = false;
+    try {
+      const liveAfterPost = await github.getPull(repo, pull.number);
+      headChangedDuringPost = liveAfterPost.head.sha !== pull.head.sha;
+      if (headChangedDuringPost) {
+        writeRedactedJsonBestEffort(join(evidenceDir, "head-changed-during-post.json"), {
+          reason: "head_changed_during_post",
+          repo,
+          pullNumber: pull.number,
+          expectedHeadSha: pull.head.sha,
+          liveHeadSha: liveAfterPost.head.sha,
+          reviewId: review.id
+        });
+      }
+    } catch (error) {
+      postReviewHeadLookupFailed = true;
+      writeRedactedJsonBestEffort(join(evidenceDir, "post-review-head-lookup-failed.json"), {
+        reason: "post_review_head_lookup_failed",
+        repo,
+        pullNumber: pull.number,
+        expectedHeadSha: pull.head.sha,
+        reviewId: review.id,
+        error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 300)
+      });
+    }
+    if ((headChangedDuringPost || postReviewHeadLookupFailed) && !preservedPriorVerifiedBlockingRow) {
+      const durablePosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
+      if (durablePosted?.status === "posted") {
+        state.recordProcessed({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          ...(durablePosted.event ? { event: durablePosted.event } : {}),
+          ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
+          error: headChangedDuringPost ? REVIEW_POSTED_HEAD_CHANGED_ERROR : POST_REVIEW_HEAD_UNVERIFIED_ERROR
+        });
+      }
+    }
     releaseReviewCapacity();
-    if (input.processedHeadPolicy !== "retry_failed_head") {
+    if (headChangedDuringPost) return "posted_stale_head";
+    if (postReviewHeadLookupFailed) return "posted_head_unverified";
+    if (!headChangedDuringPost && !postReviewHeadLookupFailed && input.processedHeadPolicy !== "retry_failed_head") {
       await reconcileProcessedHeadAfterDirectReviewSafely({
         config,
         github,
@@ -1809,7 +2078,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         dryRun: input.dryRun
       });
     }
-    return commandReviewRequested ? "reviewed_command" : "reviewed";
+    return manualReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
     releaseReviewCapacity();
   }
@@ -2241,10 +2510,12 @@ function buildEvidenceDir(
   config: BotConfig,
   repo: string,
   pull: PullRequestSummary,
-  commandDecision: CommandDecision
+  commandDecision: CommandDecision,
+  commandCommentId?: number
 ): string {
   const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
-  return commandDecision.action !== "none" ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+  const scopedCommentId = commandDecision.action !== "none" ? commandDecision.commandId : commandCommentId;
+  return scopedCommentId ? join(evidenceBaseDir, `command-${scopedCommentId}`) : evidenceBaseDir;
 }
 
 function recordLicenseAdmissionBlock(input: {
@@ -2615,6 +2886,7 @@ function recordStaleHeadSkip(input: {
 }): void {
   mkdirSync(input.evidenceDir, { recursive: true });
   writeRedactedJson(join(input.evidenceDir, "stale-head.json"), input.stale);
+  if (input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha)?.status === "posted") return;
   input.state.recordProcessed({
     repo: input.repo,
     pullNumber: input.pull.number,
@@ -2622,6 +2894,20 @@ function recordStaleHeadSkip(input: {
     status: "skipped",
     error: `${input.stale.reason}: live=${input.stale.liveHeadSha}`
   });
+}
+
+async function recordStaleHeadBeforePostIfMoved(input: {
+  state: ReviewStateStore;
+  github: GitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+  evidenceDir: string;
+}): Promise<boolean> {
+  const live = await input.github.getPull(input.repo, input.pull.number);
+  const stale = detectStalePullHead({ expected: input.pull, live, phase: "before_post" });
+  if (!stale) return false;
+  recordStaleHeadSkip({ ...input, stale });
+  return true;
 }
 
 /**
@@ -3393,6 +3679,128 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled retry status: ${String(value)}`);
 }
 
+interface ReviewEventResolution {
+  decision: ReviewEventDecision;
+  authorization: ReviewEventAuthorizationAttempt;
+  consumed: boolean;
+}
+
+async function resolveReviewEventDecision(input: {
+  mode: ReviewEventPolicyMode;
+  candidateEvent: ReviewEvent;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  commandCommentId?: number;
+  commandConfig: BotConfig["commands"];
+  dryRun: boolean;
+}): Promise<ReviewEventResolution> {
+  const authorization = await lookupQueuedReviewEventAuthorization({
+    mode: input.mode,
+    github: input.github,
+    repo: input.repo,
+    pull: input.pull,
+    commandCommentId: input.commandCommentId,
+    commandConfig: input.commandConfig
+  });
+  return decideAndConsumeReviewEvent({ ...input, authorization });
+}
+
+async function lookupQueuedReviewEventAuthorization(input: {
+  mode: ReviewEventPolicyMode;
+  github: GitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+  commandCommentId?: number;
+  commandConfig: BotConfig["commands"];
+}): Promise<ReviewEventAuthorizationAttempt> {
+  if (input.mode === "automatic") return { status: "missing" };
+  if (!input.commandCommentId) return { status: "missing" };
+
+  try {
+    const comment = await input.github.getIssueComment(input.repo, input.commandCommentId);
+    if (comment.id !== input.commandCommentId) {
+      return { status: "lookup_failed", commentId: input.commandCommentId };
+    }
+    const selected = collectReviewEventAuthorizationAttempts([comment], input.commandConfig, {
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha
+    }).selected;
+    return selected.status === "missing"
+      ? { status: "missing", commentId: input.commandCommentId }
+      : selected;
+  } catch {
+    return { status: "lookup_failed", commentId: input.commandCommentId };
+  }
+}
+
+function decideAndConsumeReviewEvent(input: {
+  mode: ReviewEventPolicyMode;
+  candidateEvent: ReviewEvent;
+  authorization: ReviewEventAuthorizationAttempt;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  dryRun: boolean;
+}): ReviewEventResolution {
+  let authorization = input.authorization;
+  let consumed = false;
+  if (input.mode === "trusted_command_only" && !input.dryRun && authorization.status === "eligible") {
+    try {
+      consumed = input.state.tryConsumeReviewEventAuthorization({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        commentId: authorization.commentId,
+        author: authorization.author
+      });
+      if (!consumed) {
+        authorization = {
+          status: "consumed",
+          author: authorization.author,
+          commentId: authorization.commentId
+        };
+      }
+    } catch {
+      authorization = {
+        status: "state_error",
+        author: authorization.author,
+        commentId: authorization.commentId
+      };
+    }
+  }
+
+  return {
+    decision: decideReviewEventPolicy({
+      mode: input.mode,
+      candidateEvent: input.candidateEvent,
+      headSha: input.pull.head.sha,
+      authorization
+    }),
+    authorization,
+    consumed
+  };
+}
+
+function buildReviewEventDecisionEvidence(resolution: ReviewEventResolution, dryRun: boolean): Record<string, unknown> {
+  const { decision, authorization } = resolution;
+  const author = decision.author ?? authorization.author;
+  const commentId = decision.commentId ?? authorization.commentId;
+  return {
+    candidateEvent: decision.candidateEvent,
+    selectedEvent: decision.selectedEvent,
+    mode: decision.mode,
+    reason: decision.reason,
+    headSha: decision.headSha,
+    ...(author ? { author } : {}),
+    ...(commentId ? { commentId } : {}),
+    consumed: resolution.consumed,
+    dryRun
+  };
+}
+
 async function resolvePullCommandDecision(input: {
   config: BotConfig;
   github: GitHubApi;
@@ -3498,6 +3906,14 @@ function sanitizeDroppedFindings(dropped: ReviewPlan["dropped"], publicConfidenc
 
 function writeRedactedJson(path: string, value: unknown): void {
   writeSecureFileSync(path, `${redactSecrets(JSON.stringify(value, null, 2))}\n`);
+}
+
+function writeRedactedJsonBestEffort(path: string, value: unknown): void {
+  try {
+    writeRedactedJson(path, value);
+  } catch {
+    // A successful remote review POST is already durable. Optional local evidence must never make it retryable.
+  }
 }
 
 function writeRedactedText(path: string, value: string): void {

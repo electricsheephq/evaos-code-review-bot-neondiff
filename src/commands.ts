@@ -1,11 +1,15 @@
 import type { CommandConfig } from "./config.js";
 import {
+  selectReviewEventAuthorizationAttempt,
+  type ReviewEventAuthorizationAttempt
+} from "./review-event-policy.js";
+import {
   FINISHING_TOUCH_ACTIONS,
   parseFinishingTouchCommand,
   type FinishingTouchAction
 } from "./finishing-touches.js";
 
-export type ReviewCommandAction = "review" | "re-review" | "explain" | "stop" | FinishingTouchAction;
+export type ReviewCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
 
 export interface IssueCommentCommandSource {
   id: number;
@@ -37,6 +41,29 @@ export interface CollectedReviewCommands {
    * is enabled. NOT yet authorized — the caller must apply the stateful bot + cooldown gate. */
   publicEligible: ReviewCommand[];
   unauthorized: UnauthorizedReviewCommand[];
+}
+
+export interface ReviewEventAuthorizationTarget {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+}
+
+/** Bounded request metadata only: the source command body must never leave the parser. */
+export interface ReviewEventAuthorizationReviewRequest {
+  action: "request-changes";
+  commentId: number;
+  author: string;
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+}
+
+export interface CollectedReviewEventAuthorizationAttempts {
+  attempts: ReviewEventAuthorizationAttempt[];
+  selected: ReviewEventAuthorizationAttempt;
+  /** Valid exact-target commands for the scheduler to enqueue as manual review requests. */
+  reviewRequests: ReviewEventAuthorizationReviewRequest[];
 }
 
 export type CommandDecision =
@@ -92,6 +119,73 @@ export function collectTrustedReviewCommands(
     commands: commands.sort((left, right) => left.commentId - right.commentId),
     publicEligible: publicEligible.sort((left, right) => left.commentId - right.commentId),
     unauthorized
+  };
+}
+
+/**
+ * Parses only whole-line request-changes commands. It deliberately returns bounded metadata rather
+ * than the raw GitHub comment body; legacy review/re-review command handling remains separate.
+ */
+export function collectReviewEventAuthorizationAttempts(
+  comments: IssueCommentCommandSource[],
+  config: CommandConfig,
+  target: ReviewEventAuthorizationTarget
+): CollectedReviewEventAuthorizationAttempts {
+  if (!config.enabled) return { attempts: [], selected: { status: "missing" }, reviewRequests: [] };
+
+  const attempts: ReviewEventAuthorizationAttempt[] = [];
+  const reviewRequests: ReviewEventAuthorizationReviewRequest[] = [];
+  const seenCommentIds = new Set<number>();
+  for (const comment of comments) {
+    if (!Number.isSafeInteger(comment.id) || comment.id < 1 || seenCommentIds.has(comment.id)) continue;
+    seenCommentIds.add(comment.id);
+
+    const parsed = parseRequestChangesCommand(comment.body, config.botMentions);
+    if (!parsed) continue;
+    const author = boundedAuthor(comment.user?.login);
+    const metadata = {
+      ...(author === undefined ? {} : { author }),
+      commentId: comment.id
+    };
+
+    if (parsed.status === "malformed") {
+      attempts.push({ status: "malformed", ...metadata });
+      continue;
+    }
+    if (!author || !isExplicitTrustedAuthor(author, config)) {
+      attempts.push({ status: "untrusted", ...metadata });
+      continue;
+    }
+    if (
+      parsed.repo !== target.repo ||
+      parsed.pullNumber !== target.pullNumber ||
+      parsed.headSha !== normalizeHeadSha(target.headSha)
+    ) {
+      attempts.push({ status: "stale_head", headSha: parsed.headSha, ...metadata });
+      continue;
+    }
+
+    const attempt: ReviewEventAuthorizationAttempt = {
+      status: "eligible",
+      headSha: parsed.headSha,
+      author,
+      commentId: comment.id
+    };
+    attempts.push(attempt);
+    reviewRequests.push({
+      action: "request-changes",
+      commentId: comment.id,
+      author,
+      repo: parsed.repo,
+      pullNumber: parsed.pullNumber,
+      headSha: parsed.headSha
+    });
+  }
+
+  return {
+    attempts,
+    selected: selectReviewEventAuthorizationAttempt(attempts, target.headSha),
+    reviewRequests
   };
 }
 
@@ -160,7 +254,7 @@ export function isBotCommandComment(user: { login: string; type?: string } | nul
 }
 
 export function isReviewCommandAction(action: ReviewCommandAction): boolean {
-  return action === "review" || action === "re-review";
+  return action === "review" || action === "re-review" || action === "request-changes";
 }
 
 export function isFinishingTouchCommandAction(action: ReviewCommandAction): action is FinishingTouchAction {
@@ -203,6 +297,56 @@ function parseCommandAction(body: string | null | undefined, mentions: string[])
   return parseFinishingTouchCommand({ body, botMentions: mentions })?.action;
 }
 
+type ParsedRequestChangesCommand =
+  | { status: "malformed" }
+  | { status: "parsed"; repo: string; pullNumber: number; headSha: string };
+
+function parseRequestChangesCommand(
+  body: string | null | undefined,
+  mentions: string[]
+): ParsedRequestChangesCommand | undefined {
+  if (!body) return undefined;
+  const normalizedMentions = new Set(mentions.map((mention) => mention.toLowerCase()));
+  const trimmed = body.trim();
+  const normalized = trimmed.replace(/\s+/g, " ");
+  const mentionsRequestChanges = [...normalizedMentions].some((mention) =>
+    normalized.toLowerCase().includes(`${mention} request-changes`)
+  );
+  if (!mentionsRequestChanges) return undefined;
+  if (!trimmed || /[\r\n]/.test(trimmed)) return { status: "malformed" };
+
+  const tokens = normalized.split(" ");
+  if (!normalizedMentions.has(tokens[0].toLowerCase()) || tokens[1]?.toLowerCase() !== "request-changes") {
+    return { status: "malformed" };
+  }
+  if (tokens.length !== 8 || tokens[2] !== "--repo" || tokens[4] !== "--pr" || tokens[6] !== "--head") {
+    return { status: "malformed" };
+  }
+  const repo = tokens[3];
+  const pullNumber = Number(tokens[5]);
+  const headSha = normalizeHeadSha(tokens[7]);
+  if (!isRepoName(repo) || !/^[1-9]\d*$/.test(tokens[5]) || !Number.isSafeInteger(pullNumber) || !headSha) {
+    return { status: "malformed" };
+  }
+  return { status: "parsed", repo, pullNumber, headSha };
+}
+
+function normalizeHeadSha(headSha: string): string | undefined {
+  return /^[0-9a-f]{40}$/i.test(headSha) ? headSha.toLowerCase() : undefined;
+}
+
+function isRepoName(repo: string): boolean {
+  return /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo);
+}
+
+function boundedAuthor(author: string | undefined): string | undefined {
+  return author && /^[A-Za-z0-9-]{1,39}$/.test(author) ? author : undefined;
+}
+
 function isTrustedAuthor(author: string, config: CommandConfig): boolean {
   return config.trustedAuthors.includes(author) || config.trustedAuthors.includes("*");
+}
+
+function isExplicitTrustedAuthor(author: string, config: CommandConfig): boolean {
+  return author !== "*" && config.trustedAuthors.includes(author);
 }

@@ -88,6 +88,10 @@ describe("worker review settings preview evidence", () => {
       enabled: true,
       mode: "inline_review"
     });
+    expect(preview.reviewGate).toEqual({
+      reviewEventPolicy: { mode: "trusted_command_only" }
+    });
+    expect(preview).not.toHaveProperty("reviewEventAuthorization");
     expect(walkthrough).toContain("### Review Settings Preview");
     expect(walkthrough).toContain("Provider: GLM/Z.ai through ZCode (`zcode-glm`, zcode, model `GLM-5.2`).");
     expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");

@@ -123,6 +123,13 @@ describe("NeonDiff config schema draft", () => {
     }
 
     expect(get("properties.review.properties.profile.default", schema)).toBe("conservative");
+    expect(get("properties.reviewGate.properties.reviewEventPolicy.properties.mode.default", schema)).toBe(
+      "trusted_command_only"
+    );
+    expect(get("properties.reviewGate.properties.reviewEventPolicy.properties.mode.enum", schema)).toEqual([
+      "trusted_command_only",
+      "automatic"
+    ]);
     expect(get("properties.safetyGates.properties.mutation.properties.enabled.default", schema)).toBe(false);
     expect(get("properties.finishingTouches.properties.enabled.default", schema)).toBe(false);
     expect(get("properties.issueEnrichment.properties.enabled.default", schema)).toBe(false);
@@ -152,6 +159,31 @@ describe("NeonDiff config schema draft", () => {
     expect(get("$defs.repoSlug.pattern", schema)).toBe(
       "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$"
     );
+  });
+
+  it("accepts the safe review-event default and only the explicit legacy compatibility mode", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+
+    expectValidFixture(validate, "omitted review event policy", baseConfig);
+    for (const mode of ["trusted_command_only", "automatic"]) {
+      expectValidFixture(validate, `review event policy ${mode}`, {
+        ...baseConfig,
+        reviewGate: { reviewEventPolicy: { mode } }
+      });
+    }
+
+    const invalidErrors = validateConfig(validate, {
+      ...baseConfig,
+      reviewGate: { reviewEventPolicy: { mode: "always_request_changes" } }
+    });
+    expect(errorPaths(invalidErrors)).toContain("/reviewGate/reviewEventPolicy/mode");
+  });
+
+  it("publishes the safe runtime review-event mode in committed JSON examples", () => {
+    for (const path of ["config.example.json", "config.active-profiles.example.json"]) {
+      expect(get("reviewGate.reviewEventPolicy.mode", readJson(path)), path).toBe("trusted_command_only");
+    }
   });
 
   it("validates JSON fixtures against the published JSON Schema", () => {

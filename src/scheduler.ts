@@ -2,12 +2,14 @@ import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./config.js";
 import {
+  collectReviewEventAuthorizationAttempts,
   collectTrustedReviewCommands,
   decideCommandAction,
   isBotCommandComment,
   isFinishingTouchCommandAction,
   isReviewCommandAction,
   type CommandDecision,
+  type ReviewEventAuthorizationReviewRequest,
   type ReviewCommand
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
@@ -36,6 +38,9 @@ import {
 } from "./review-budget.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+  POST_REVIEW_HEAD_UNVERIFIED_ERROR,
+  REVIEW_POSTED_HEAD_CHANGED_ERROR,
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
@@ -534,6 +539,17 @@ async function enqueuePullIfEligible(input: {
       await retireSupersededQueueJobsForPull(input);
     }
     const queued = enqueueReviewJob(input, commandDecision);
+    if (commandDecision.action === "request-changes") {
+      input.state.recordProcessedCommand({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        commentId: commandDecision.commandId,
+        action: "request-changes",
+        status: "triggered",
+        author: commandDecision.command.author
+      });
+    }
     recordReadinessForEnqueue({
       state: input.state,
       repo: input.repo,
@@ -1078,6 +1094,11 @@ async function resolveSchedulerCommandDecision(input: {
     return { action: "none", shouldReview: false };
   }
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  const authorizationRequests = collectReviewEventAuthorizationAttempts(comments, input.config.commands, {
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha
+  }).reviewRequests;
   const repoProfile = resolveRepoProfile(input.config, input.repo);
   // Public review/re-review policy (#345): the stateful bot + per-head cooldown gate runs HERE, where
   // the store and head SHA are in scope (mirrors the #295 per-head-claim placement). Admitted public
@@ -1092,6 +1113,39 @@ async function resolveSchedulerCommandDecision(input: {
     comments
   });
   const authorizedCommands = [...collected.commands, ...admittedPublic].sort((left, right) => left.commentId - right.commentId);
+  const requestChanges = latestPendingRequestChanges({
+    requests: authorizationRequests,
+    state: input.state,
+    repo: input.repo,
+    pull: input.pull
+  });
+  const newerStop = requestChanges
+    ? collected.commands.filter((command) => command.action === "stop" && command.commentId > requestChanges.commentId).at(-1)
+    : undefined;
+  if (requestChanges && !newerStop) {
+    return {
+      action: "request-changes",
+      shouldReview: true,
+      commandId: requestChanges.commentId,
+      command: {
+        action: "request-changes",
+        commentId: requestChanges.commentId,
+        author: requestChanges.author,
+        body: ""
+      }
+    };
+  }
+  if (requestChanges && newerStop) {
+    input.state.recordProcessedCommand({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      commentId: requestChanges.commentId,
+      action: "request-changes",
+      status: "ignored",
+      author: requestChanges.author
+    });
+  }
   return decideCommandAction({
     commands: authorizedCommands.filter((command) =>
       !isFinishingTouchCommandAction(command.action) ||
@@ -1103,6 +1157,17 @@ async function resolveSchedulerCommandDecision(input: {
     hasProcessedCommand: (repo, pullNumber, headSha, commentId) =>
       input.state.hasProcessedCommand(repo, pullNumber, headSha, commentId)
   });
+}
+
+function latestPendingRequestChanges(input: {
+  requests: ReviewEventAuthorizationReviewRequest[];
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+}): ReviewEventAuthorizationReviewRequest | undefined {
+  return input.requests.filter((request) =>
+    !input.state.hasProcessedCommand(input.repo, input.pull.number, input.pull.head.sha, request.commentId)
+  ).at(-1);
 }
 
 export function admitPublicCommands(input: {
@@ -1589,6 +1654,11 @@ function reviewResultStatusCommentState(
     case "reviewed":
     case "reviewed_command":
       return "completed";
+    case "posted_stale_head":
+      return "stale_head";
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      return "failed";
     case "skipped_processed":
       return reviewStatusCommentStateForProcessedStatus(processed);
     case "skipped_provider_cooldown":
@@ -1744,6 +1814,12 @@ function readinessStateForReviewResult(
     case "reviewed":
     case "reviewed_command":
       return processed?.event === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
+    case "posted_stale_head":
+      return isPriorVerifiedBlockingReview(processed) ? "needs_fix" : "stale";
+    case "posted_head_unverified":
+      return isPriorVerifiedBlockingReview(processed) ? "needs_fix" : "failed";
+    case "skipped_consumed_authorization":
+      return "failed";
     case "skipped_processed":
       return readinessStateForProcessedStatus(processed?.status, processed?.event, processed?.error);
     case "skipped_provider_cooldown":
@@ -1777,6 +1853,12 @@ function readinessReasonForReviewResult(
     case "reviewed":
     case "reviewed_command":
       return processed?.event === "REQUEST_CHANGES" ? "request_changes_review_posted" : "comment_review_posted";
+    case "posted_stale_head":
+      return isPriorVerifiedBlockingReview(processed) ? "request_changes_review_posted" : REVIEW_POSTED_HEAD_CHANGED_ERROR;
+    case "posted_head_unverified":
+      return isPriorVerifiedBlockingReview(processed) ? "request_changes_review_posted" : POST_REVIEW_HEAD_UNVERIFIED_ERROR;
+    case "skipped_consumed_authorization":
+      return EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR;
     case "skipped_processed":
       return processed ? readinessReasonForProcessedHead(processed) : "processed_head_already_unknown";
     case "skipped_provider_cooldown":
@@ -1806,12 +1888,20 @@ function readinessReasonForReviewResult(
   }
 }
 
+function isPriorVerifiedBlockingReview(
+  processed?: { status: ProcessedStatus; event?: ReviewEvent; error?: string }
+): boolean {
+  return processed?.status === "posted" && processed.event === "REQUEST_CHANGES" && !processed.error;
+}
+
 function readinessStateForProcessedStatus(
   status?: ProcessedStatus,
   event?: ReviewEvent,
   error?: string
 ): ReviewReadinessState {
   if (parseProviderCooldownError(error)) return "provider_deferred";
+  if (error === POST_REVIEW_HEAD_UNVERIFIED_ERROR || error === EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR) return "failed";
+  if (error === REVIEW_POSTED_HEAD_CHANGED_ERROR) return "stale";
   switch (status) {
     case "posted":
     case "dry_run":
@@ -1832,6 +1922,13 @@ function readinessReasonForProcessedHead(processed: { status: ProcessedStatus; e
   if (providerCooldown) return `processed_head_provider_deferred: ${providerCooldown.reason ?? "provider_cooldown"}`;
   if (processed.status === "skipped" && processed.error === ACTIVATION_BASELINE_EXISTING_HEAD_ERROR) {
     return ACTIVATION_BASELINE_EXISTING_HEAD_ERROR;
+  }
+  if (
+    processed.error === POST_REVIEW_HEAD_UNVERIFIED_ERROR ||
+    processed.error === REVIEW_POSTED_HEAD_CHANGED_ERROR ||
+    processed.error === EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR
+  ) {
+    return processed.error;
   }
   return `processed_head_already_${processed.status}`;
 }
@@ -1965,6 +2062,11 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "reviewed_command":
       updateReviewerSessionJobFromQueueStatus(input, "completed", input.dryRun ? "dry_run" : "posted");
       return;
+    case "posted_stale_head":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      updateReviewerSessionJobFromQueueStatus(input, "failed", "failed");
+      return;
     case "skipped_processed": {
       const processed = input.state.getProcessedReview(input.job.repo, input.job.pullNumber, input.job.headSha);
       if (parseProviderCooldownError(processed?.error)) {
@@ -2029,6 +2131,27 @@ function updateQueueJobAfterReviewStatus(input: {
       });
       return;
     }
+    case "posted_stale_head": {
+      const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "stale_retired",
+        ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+        lastError: "review_posted_head_changed"
+      });
+      return;
+    }
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization": {
+      const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "failed",
+        ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+        lastError: input.status
+      });
+      return;
+    }
     case "skipped_provider_cooldown":
       markQueueJobProviderDeferredFromProcessed(input);
       return;
@@ -2047,7 +2170,7 @@ function updateQueueJobAfterReviewStatus(input: {
       }
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun),
+        state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun, processed?.error),
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
         lastError: `processed_head_already_${processed?.status ?? "unknown"}`
       });
@@ -2149,6 +2272,10 @@ function reviewStatusCommentStateForProcessedStatus(
   processed?: { status: ProcessedStatus; error?: string }
 ): ReviewStatusCommentState {
   if (parseProviderCooldownError(processed?.error)) return "provider_deferred";
+  if (processed?.error === POST_REVIEW_HEAD_UNVERIFIED_ERROR || processed?.error === EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR) {
+    return "failed";
+  }
+  if (processed?.error === REVIEW_POSTED_HEAD_CHANGED_ERROR) return "stale_head";
   const status = processed?.status;
   switch (status) {
     case "posted":
@@ -2165,7 +2292,13 @@ function reviewStatusCommentStateForProcessedStatus(
   }
 }
 
-function reviewQueueJobStateForProcessedStatus(status: ProcessedStatus | undefined, dryRun: boolean): ReviewQueueJobState {
+function reviewQueueJobStateForProcessedStatus(
+  status: ProcessedStatus | undefined,
+  dryRun: boolean,
+  error?: string
+): ReviewQueueJobState {
+  if (error === POST_REVIEW_HEAD_UNVERIFIED_ERROR || error === EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR) return "failed";
+  if (error === REVIEW_POSTED_HEAD_CHANGED_ERROR) return "stale_retired";
   switch (status) {
     case "posted":
       return "posted";
@@ -2330,6 +2463,15 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       result.reviewed += 1;
       result.queue.completed += 1;
       if (status === "reviewed_command") result.commandReviewRequested += 1;
+      break;
+    case "posted_stale_head":
+      result.skippedStaleHead += 1;
+      result.queue.staleRetired += 1;
+      break;
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      result.failed += 1;
+      result.queue.failedQueueJobs += 1;
       break;
     case "skipped_draft":
       result.skippedDraft += 1;
