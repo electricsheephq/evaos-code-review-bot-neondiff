@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { execFileSync, spawn } from "node:child_process";
@@ -971,14 +971,36 @@ describe("Phase 1 screening runner", () => {
     expect(result.status).toBe("completed");
 
     const blockedDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-coordinated-lease-"));
-    const coordinator = createNetServer();
+    const blockedLeasePath = join(blockedDir, ".phase1-run.lock");
+    const coordinator = createNetServer((socket) => socket.end(`${digest(resolve(blockedLeasePath))}\n`));
     await new Promise<void>((resolvePromise) => coordinator.listen({
       host: "127.0.0.1",
-      port: phase1LeaseCoordinationPort(join(blockedDir, ".phase1-run.lock")),
+      port: phase1LeaseCoordinationPort(blockedLeasePath),
       exclusive: true
     }, resolvePromise));
     try {
       await expect(runPhase1Screen(spec(blockedDir), adapter())).rejects.toThrow(/lease acquisition is already coordinated/i);
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("falls through a loopback coordination-port collision owned by a different output path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-phase1-port-collision-"));
+    const seen = new Map<number, string>();
+    let collision: { first: string; second: string; port: number } | undefined;
+    for (let index = 0; index < 2_000 && !collision; index += 1) {
+      const candidate = join(root, `candidate-${index}`);
+      const port = phase1LeaseCoordinationPort(join(candidate, ".phase1-run.lock"));
+      const first = seen.get(port);
+      if (first) collision = { first, second: candidate, port };
+      else seen.set(port, candidate);
+    }
+    expect(collision).toBeDefined();
+    const coordinator = createNetServer((socket) => socket.end(`${digest(resolve(join(collision!.first, ".phase1-run.lock")))}\n`));
+    await new Promise<void>((resolvePromise) => coordinator.listen({ host: "127.0.0.1", port: collision!.port, exclusive: true }, resolvePromise));
+    try {
+      await expect(runPhase1Screen(spec(collision!.second), adapter())).resolves.toMatchObject({ status: "completed" });
     } finally {
       await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
     }

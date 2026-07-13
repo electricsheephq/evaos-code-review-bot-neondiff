@@ -1017,23 +1017,7 @@ function canonicalProspectivePath(path: string): string {
 }
 
 async function acquireRunLease(path: string): Promise<number> {
-  const coordinator = createServer((socket) => socket.destroy());
-  const coordinationPort = phase1LeaseCoordinationPort(path);
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    const fail = (error: Error & { code?: string }) => {
-      coordinator.removeListener("listening", ready);
-      rejectPromise(new Error(error.code === "EADDRINUSE"
-        ? "Phase 1 lease acquisition is already coordinated by another writer"
-        : `Phase 1 lease coordination failed: ${errorMessage(error)}`));
-    };
-    const ready = () => {
-      coordinator.removeListener("error", fail);
-      resolvePromise();
-    };
-    coordinator.once("error", fail);
-    coordinator.once("listening", ready);
-    coordinator.listen({ host: "127.0.0.1", port: coordinationPort, exclusive: true });
-  });
+  const coordinator = await startLeaseCoordinator(path);
   try {
     try {
       const fd = openSync(path, "wx", 0o600);
@@ -1062,6 +1046,72 @@ async function acquireRunLease(path: string): Promise<number> {
   } finally {
     await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
   }
+}
+
+async function startLeaseCoordinator(path: string): Promise<ReturnType<typeof createServer>> {
+  const token = sha256(resolve(path));
+  for (const port of phase1LeaseCoordinationPorts(path)) {
+    const coordinator = createServer((socket) => socket.end(`${token}\n`));
+    try {
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        const fail = (error: Error & { code?: string }) => {
+          coordinator.removeListener("listening", ready);
+          rejectPromise(error);
+        };
+        const ready = () => {
+          coordinator.removeListener("error", fail);
+          resolvePromise();
+        };
+        coordinator.once("error", fail);
+        coordinator.once("listening", ready);
+        coordinator.listen({ host: "127.0.0.1", port, exclusive: true });
+      });
+      return coordinator;
+    } catch (error) {
+      coordinator.removeAllListeners();
+      if (!(typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EADDRINUSE")) {
+        throw new Error(`Phase 1 lease coordination failed: ${errorMessage(error)}`);
+      }
+      if (await readLeaseCoordinatorToken(port) === token) {
+        throw new Error("Phase 1 lease acquisition is already coordinated by another writer");
+      }
+    }
+  }
+  throw new Error("Phase 1 lease coordination exhausted collision-safe loopback ports");
+}
+
+function phase1LeaseCoordinationPorts(path: string): number[] {
+  const token = sha256(resolve(path));
+  const ports = [phase1LeaseCoordinationPort(path)];
+  for (let attempt = 1; attempt < 16; attempt += 1) {
+    const port = 20_000 + (Number.parseInt(sha256(`${token}:${attempt}`).slice(0, 8), 16) % 20_000);
+    if (!ports.includes(port)) ports.push(port);
+  }
+  return ports;
+}
+
+async function readLeaseCoordinatorToken(port: number): Promise<string> {
+  return new Promise((resolvePromise) => {
+    let value = "";
+    let settled = false;
+    const socket = connect({ host: "127.0.0.1", port });
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolvePromise(value.trim());
+    };
+    socket.setEncoding("utf8");
+    socket.setTimeout(1000);
+    socket.on("data", (chunk: string) => {
+      value = `${value}${chunk}`.slice(0, 256);
+      if (value.includes("\n")) finish();
+    });
+    socket.once("end", finish);
+    socket.once("close", finish);
+    socket.once("timeout", finish);
+    socket.once("error", finish);
+  });
 }
 
 export function phase1LeaseCoordinationPort(path: string): number {
