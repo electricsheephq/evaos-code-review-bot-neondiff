@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +13,18 @@ import {
   verifyLinuxListenerOwnership,
   verifyLinuxProcessIdentity
 } from "../src/linux-phase1-runtime.js";
+
+function nvidiaSmiIsFunctional(): boolean {
+  if (process.platform !== "linux" || !existsSync("/usr/bin/nvidia-smi")) return false;
+  try {
+    execFileSync("/usr/bin/nvidia-smi", ["-L"], { stdio: "ignore", timeout: 2000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const functionalNvidiaSmi = nvidiaSmiIsFunctional();
 
 describe("GEX44 Linux Phase 1 runtime", () => {
   it("uses the runner's canonical sorted-object argv identity", () => {
@@ -99,7 +111,14 @@ describe("GEX44 Linux Phase 1 runtime", () => {
     expect(() => createGex44ResourceMonitor({ nvidiaSmiSha256: "not-a-digest" })).toThrow(/nvidia-smi SHA-256/i);
   });
 
-  it.skipIf(process.platform !== "linux" || !existsSync("/usr/bin/nvidia-smi"))("executes the opened pinned nvidia-smi image through procfs", async () => {
+  it.skipIf(!functionalNvidiaSmi)("rejects a well-formed but incorrect pinned nvidia-smi digest", async () => {
+    const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "f".repeat(64) });
+    const session = await monitor.start();
+    await expect(monitor.attach(session, { metadata: { pid: process.pid } })).rejects.toThrow(/SHA-256.*drifted/i);
+    await expect(monitor.stop(session)).rejects.toThrow(/no pinned nvidia-smi descriptor/i);
+  });
+
+  it.skipIf(!functionalNvidiaSmi)("executes the opened pinned nvidia-smi image through procfs", async () => {
     const expectedSha256 = createHash("sha256").update(readFileSync("/usr/bin/nvidia-smi")).digest("hex");
     const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: expectedSha256 });
     const session = await monitor.start();

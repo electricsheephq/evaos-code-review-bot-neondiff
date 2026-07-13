@@ -39,7 +39,9 @@ describe("private Phase 1 characterization entrypoint", () => {
     expect(() => assertPinnedLoadedJavaScript(entrypoint, entrypoint, entrypointSha256, "characterization entrypoint")).not.toThrow();
     expect(() => assertPinnedLoadedJavaScript(entrypoint, runner, entrypointSha256, "characterization entrypoint")).toThrow(/loaded path/i);
     expect(() => assertPinnedLoadedJavaScript(entrypoint, entrypoint, "0".repeat(64), "characterization entrypoint")).toThrow(/SHA-256/i);
-    expect(() => assertPinnedLoadedJavaScript(entrypoint.replace(/\.js$/, ".ts"), entrypoint.replace(/\.js$/, ".ts"), entrypointSha256, "characterization entrypoint")).toThrow(/built JavaScript/i);
+    const TypeScriptPath = entrypoint.replace(/\.js$/, ".ts");
+    expect(() => assertPinnedLoadedJavaScript(entrypoint, TypeScriptPath, entrypointSha256, "characterization entrypoint")).toThrow(/built JavaScript/i);
+    expect(() => assertPinnedLoadedJavaScript(TypeScriptPath, entrypoint, entrypointSha256, "characterization entrypoint")).toThrow(/built JavaScript/i);
   });
 
   it("requires both the loaded entrypoint and imported runner bytes named by the plan", () => {
