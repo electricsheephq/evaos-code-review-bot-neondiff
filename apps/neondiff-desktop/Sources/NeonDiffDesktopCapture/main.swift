@@ -409,8 +409,11 @@ private struct DesktopReposReachabilityAXTracer {
                 let binding = try incrementPagePressBinding()
                 pre = acquireStableSamples(binding: binding.semantic)
                 failure = pre.failure
-                if failure == nil {
-                    scrollInteraction = try performIncrementPagePress(binding)
+                if failure == nil, let settledBefore = pre.samples.last?.outerClip {
+                    scrollInteraction = try performIncrementPagePress(
+                        binding,
+                        settledOuterClipBefore: settledBefore
+                    )
                 }
             } catch let reason as Failure {
                 failure = reason
@@ -421,6 +424,14 @@ private struct DesktopReposReachabilityAXTracer {
                scrollInteraction?.incrementPagePress?.performResult == .success {
                 post = acquireStableSamples()
                 failure = post.failure
+                if failure == nil,
+                   let interaction = scrollInteraction,
+                   let settledAfter = post.samples.last?.outerClip {
+                    scrollInteraction = interactionWithSettledOuterClipAfter(
+                        interaction,
+                        settledOuterClipAfter: settledAfter
+                    )
+                }
             }
         } else {
             failure = .messagingTimeoutUnavailable
@@ -517,8 +528,7 @@ private struct DesktopReposReachabilityAXTracer {
             if let providedBinding {
                 binding = providedBinding
             } else {
-                let window = try verifiedWindow()
-                binding = SemanticBinding(window: window, elements: try semanticElements(in: window))
+                binding = try semanticBinding()
             }
         } catch let reason as DesktopReposReachabilityAcquisitionFailureReason {
             return PhaseAcquisition(
@@ -603,76 +613,89 @@ private struct DesktopReposReachabilityAXTracer {
     }
 
     private func incrementPagePressBinding() throws -> ScrollBehaviorBinding {
-        let window = try verifiedWindow()
-        let elements = try semanticElements(in: window)
-        guard let scrollArea = try outermostScrollArea(from: elements.boundaryBody, to: window),
-              let scrollBar = try verticalScrollBar(in: scrollArea),
+        let semantic = try semanticBinding()
+        guard let scrollBar = try verticalScrollBar(in: semantic.outerScrollArea),
               let incrementPage = try incrementPageButton(in: scrollBar) else {
             throw Failure.semanticMissing
         }
         let advertised = try actionNames(incrementPage).contains(NSAccessibility.Action.press.rawValue)
         return ScrollBehaviorBinding(
-            semantic: .init(window: window, elements: elements),
+            semantic: semantic,
+            verticalScrollBar: scrollBar,
             incrementPage: incrementPage,
-            actionAdvertised: advertised,
-            outerClipBefore: try elementFrame(scrollArea)
+            actionAdvertised: advertised
         )
     }
 
     private func performIncrementPagePress(
-        _ binding: ScrollBehaviorBinding
+        _ binding: ScrollBehaviorBinding,
+        settledOuterClipBefore: DesktopReposReachabilityFrame
     ) throws -> DesktopReposScrollInteraction {
-        guard binding.actionAdvertised else {
+        let current = try revalidatedIncrementPagePressBinding(binding)
+        guard current.actionAdvertised else {
             return DesktopReposScrollInteraction(
                 mechanism: .incrementPagePress,
                 incrementPagePress: .init(
                     actionAdvertised: false,
                     attemptCount: 0,
                     performResult: nil,
-                    outerClipBefore: binding.outerClipBefore,
-                    outerClipAfter: nil
-                ),
-                valueMutation: nil
-            )
-        }
-        try requireTargetPID(binding.incrementPage)
-        guard try actionNames(binding.incrementPage).contains(NSAccessibility.Action.press.rawValue) else {
-            return DesktopReposScrollInteraction(
-                mechanism: .incrementPagePress,
-                incrementPagePress: .init(
-                    actionAdvertised: false,
-                    attemptCount: 0,
-                    performResult: nil,
-                    outerClipBefore: binding.outerClipBefore,
+                    outerClipBefore: settledOuterClipBefore,
                     outerClipAfter: nil
                 ),
                 valueMutation: nil
             )
         }
         let result = AXUIElementPerformAction(
-            binding.incrementPage,
+            current.incrementPage,
             NSAccessibility.Action.press.rawValue as CFString
         )
         let performResult = scrollActionResult(result)
-        var clipAfter: DesktopReposReachabilityFrame?
-        if result == .success {
-            let window = try verifiedWindow()
-            let elements = try semanticElements(in: window)
-            guard let scrollArea = try outermostScrollArea(from: elements.boundaryBody, to: window) else {
-                throw Failure.ancestryUnavailable
-            }
-            clipAfter = try elementFrame(scrollArea)
-        }
         return DesktopReposScrollInteraction(
             mechanism: .incrementPagePress,
             incrementPagePress: .init(
                 actionAdvertised: true,
                 attemptCount: 1,
                 performResult: performResult,
-                outerClipBefore: binding.outerClipBefore,
-                outerClipAfter: clipAfter
+                outerClipBefore: settledOuterClipBefore,
+                outerClipAfter: nil
             ),
             valueMutation: nil
+        )
+    }
+
+    private func revalidatedIncrementPagePressBinding(
+        _ original: ScrollBehaviorBinding
+    ) throws -> ScrollBehaviorBinding {
+        let current = try incrementPagePressBinding()
+        guard CFEqual(original.semantic.window, current.semantic.window),
+              CFEqual(original.semantic.elements.table, current.semantic.elements.table),
+              CFEqual(original.semantic.elements.applyAllowlist, current.semantic.elements.applyAllowlist),
+              CFEqual(original.semantic.elements.boundaryBody, current.semantic.elements.boundaryBody),
+              CFEqual(original.semantic.outerScrollArea, current.semantic.outerScrollArea),
+              original.semantic.boundaryScrollAncestorCount == current.semantic.boundaryScrollAncestorCount,
+              CFEqual(original.verticalScrollBar, current.verticalScrollBar),
+              CFEqual(original.incrementPage, current.incrementPage),
+              original.actionAdvertised == current.actionAdvertised else {
+            throw Failure.semanticChanged
+        }
+        return current
+    }
+
+    private func interactionWithSettledOuterClipAfter(
+        _ interaction: DesktopReposScrollInteraction,
+        settledOuterClipAfter: DesktopReposReachabilityFrame
+    ) -> DesktopReposScrollInteraction {
+        guard let press = interaction.incrementPagePress else { return interaction }
+        return DesktopReposScrollInteraction(
+            mechanism: interaction.mechanism,
+            incrementPagePress: .init(
+                actionAdvertised: press.actionAdvertised,
+                attemptCount: press.attemptCount,
+                performResult: press.performResult,
+                outerClipBefore: press.outerClipBefore,
+                outerClipAfter: settledOuterClipAfter
+            ),
+            valueMutation: interaction.valueMutation
         )
     }
 
@@ -697,6 +720,7 @@ private struct DesktopReposReachabilityAXTracer {
     ) -> Result<DesktopReposReachabilitySample, DesktopReposReachabilityAcquisitionFailureReason> {
         do {
             let viewport = try elementFrame(binding.window)
+            let outerClip = try elementFrame(binding.outerScrollArea)
             let pairs: [(DesktopReposReachabilityRegion, AXUIElement)] = [
                 (.table, binding.elements.table),
                 (.applyAllowlist, binding.elements.applyAllowlist),
@@ -708,6 +732,8 @@ private struct DesktopReposReachabilityAXTracer {
             return .success(DesktopReposReachabilitySample(
                 elapsedMilliseconds: elapsedMilliseconds,
                 viewport: viewport,
+                outerClip: outerClip,
+                boundaryScrollAncestorCount: binding.boundaryScrollAncestorCount,
                 regions: regions
             ))
         } catch let reason as DesktopReposReachabilityAcquisitionFailureReason {
@@ -717,11 +743,28 @@ private struct DesktopReposReachabilityAXTracer {
         }
     }
 
+    private func semanticBinding() throws -> SemanticBinding {
+        let window = try verifiedWindow()
+        let elements = try semanticElements(in: window)
+        guard let ancestry = try scrollAreaAncestry(from: elements.boundaryBody, to: window) else {
+            throw Failure.ancestryUnavailable
+        }
+        return SemanticBinding(
+            window: window,
+            elements: elements,
+            outerScrollArea: ancestry.outermost,
+            boundaryScrollAncestorCount: ancestry.count
+        )
+    }
+
     private func samplesMatch(
         _ lhs: DesktopReposReachabilitySample,
         _ rhs: DesktopReposReachabilitySample
     ) -> Bool {
-        guard framesMatch(lhs.viewport, rhs.viewport), lhs.regions.count == rhs.regions.count else {
+        guard framesMatch(lhs.viewport, rhs.viewport),
+              framesMatch(lhs.outerClip, rhs.outerClip),
+              lhs.boundaryScrollAncestorCount == rhs.boundaryScrollAncestorCount,
+              lhs.regions.count == rhs.regions.count else {
             return false
         }
         let right = Dictionary(uniqueKeysWithValues: rhs.regions.map { ($0.id, $0.frame) })
@@ -972,8 +1015,16 @@ private struct DesktopReposReachabilityAXTracer {
         from boundary: AXUIElement,
         to window: AXUIElement
     ) throws -> AXUIElement? {
+        try scrollAreaAncestry(from: boundary, to: window)?.outermost
+    }
+
+    private func scrollAreaAncestry(
+        from boundary: AXUIElement,
+        to window: AXUIElement
+    ) throws -> ScrollAncestry? {
         var current = boundary
         var outermost: AXUIElement?
+        var count = 0
         var visited = Set<CFHashCode>()
         for _ in 0..<64 {
             guard visited.insert(CFHash(current)).inserted else { throw Failure.ancestryCycle }
@@ -984,10 +1035,11 @@ private struct DesktopReposReachabilityAXTracer {
             let parent = rawParent as! AXUIElement
             try requireTargetPID(parent)
             if CFEqual(parent, window) {
-                return outermost
+                return outermost.map { ScrollAncestry(outermost: $0, count: count) }
             }
             if try optionalString(parent, kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
                 outermost = parent
+                count += 1
             }
             current = parent
         }
@@ -1129,13 +1181,20 @@ private struct DesktopReposReachabilityAXTracer {
     private struct SemanticBinding {
         let window: AXUIElement
         let elements: SemanticElements
+        let outerScrollArea: AXUIElement
+        let boundaryScrollAncestorCount: Int
     }
 
     private struct ScrollBehaviorBinding {
         let semantic: SemanticBinding
+        let verticalScrollBar: AXUIElement
         let incrementPage: AXUIElement
         let actionAdvertised: Bool
-        let outerClipBefore: DesktopReposReachabilityFrame
+    }
+
+    private struct ScrollAncestry {
+        let outermost: AXUIElement
+        let count: Int
     }
 
     private struct SemanticElements {

@@ -178,12 +178,24 @@ customer state.
 The separate schema-v2 reachability behavior is enabled only by this focused
 DEBUG runner. After binding the freshly launched fixture PID, unique Table,
 Apply, Boundary, Boundary's outermost scroll ancestor, and the exact direct
-Increment Page child, it rechecks advertised `AXPress` and performs that public
-action exactly once. It does not retry, substitute arrows, use a private action,
-or target an installed/live app. API acceptance is recorded but is not treated
-as reachability: the checker requires stable window and outer-clip geometry,
-one rigid upward translation of Table, Apply, and Boundary, and post-action
-Apply/Boundary containment in the outer clip.
+Increment Page child, it collects settled pre-action samples. Every settled
+pre/post sample records the current window frame, outer scroll clip, Boundary
+scroll-ancestor count, and semantic-region frames. Immediately before the sole
+press, the helper re-resolves the full Boundary -> outer scroll -> vertical
+scrollbar -> direct Increment Page chain and requires every cached semantic and
+action element plus the ancestry count to match. A replaced or stale chain is a
+typed `semantic-changed` acquisition failure and no action is performed.
+
+Only after that revalidation does the helper recheck advertised `AXPress`; the
+helper performs that public action exactly once. It does not retry, substitute
+arrows, use a private action, or target an installed/live app. The successful action
+ledger is persisted before any post-action read, so a later acquisition failure
+retains `attemptCount: 1` and `performResult: success` without inventing a
+settled post clip. API acceptance is recorded but is not treated as
+reachability: the checker requires a one-point all-phase envelope for the
+window, every settled outer clip, and the Boundary ancestry count; one rigid
+upward translation of Table, Apply, and Boundary; and Apply/Boundary containment
+against every settled post-action outer clip.
 
 Capture output remains in the private workspace until the helper exits
 successfully and every required file is present. A fixture exit before
@@ -195,13 +207,18 @@ marker are published only after the packet scan passes and a final clean
 exact-HEAD check succeeds.
 
 All checker failures are ordinary typed failures; there is no legacy
-"expected pre-fix" exception. Boundary is a sibling of Table, so nested Table
-scrolling cannot satisfy the rigid page-translation contract. The DEBUG fixture
-may mutate only its deterministic test UI to exercise scroll reachability; it
-does not authorize live product or runtime mutation. A checker failure preserves `reachability.json`
-and `scroll-capabilities.json`.
-The normalized checker status and public-safety result are written before the
-runner returns the nonzero checker exit.
+"expected pre-fix" exception. The checker emits one strict public-safe JSON
+result with `input`, `contract`, `acquisition`, `action`, or `geometry`
+classification and an allowlisted reason code. The runner validates that
+result and its exit-status relationship; malformed output fails closed as
+`checker-result-invalid` and the runner does not infer a result from the raw
+trace. Boundary is a sibling of Table, so nested Table scrolling cannot satisfy
+the rigid page-translation contract. The DEBUG fixture may mutate only its
+deterministic test UI to exercise scroll reachability; it does not authorize
+live product or runtime mutation. A checker failure preserves
+`reachability.json` and `scroll-capabilities.json`. The normalized checker
+status and public-safety result are written before the runner returns the
+nonzero checker exit.
 
 This focused packet does not prove:
 

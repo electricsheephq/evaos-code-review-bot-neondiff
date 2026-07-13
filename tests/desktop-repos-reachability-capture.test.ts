@@ -140,10 +140,13 @@ case " $* " in
 esac
 if [ "$1" = build ]; then exit 0; fi
 if [ "$1" = run ]; then
-  if [ "\${FAKE_CHECKER_STATUS:-0}" -eq 0 ]; then
-    printf '%s\\n' '{"ok":true}'
+  if [ -n "\${FAKE_CHECKER_OUTPUT:-}" ]; then
+    printf '%s\\n' "$FAKE_CHECKER_OUTPUT"
+  elif [ "\${FAKE_CHECKER_STATUS:-0}" -eq 0 ]; then
+    printf '%s\\n' '{"category":"none","ok":true,"reasonCode":"none","schemaVersion":1,"status":"reachable"}'
   else
-    printf '%s\\n' '{"ok":false,"failure":"behavior trace rejected"}'
+    printf '{"category":"%s","ok":false,"reasonCode":"%s","schemaVersion":1,"status":"failed"}\\n' \\
+      "\${FAKE_CHECKER_CATEGORY:-geometry}" "\${FAKE_CHECKER_REASON:-no-upward-movement}"
   fi
   if [ -n "\${FAKE_CHECKER_MESSAGE:-}" ]; then printf '%s\\n' "$FAKE_CHECKER_MESSAGE" >&2; fi
   exit "\${FAKE_CHECKER_STATUS:-0}"
@@ -171,6 +174,11 @@ printf 'png' >"$output_dir/screenshot.png"
 printf '%s\\n' '{"role":"AXWindow","children":[]}' >"$output_dir/accessibility.json"
 printf '%s\\n' '{"schemaVersion":1,"fixtureId":"tab-repos"}' >"$output_dir/geometry.json"
 printf '%s\\n' '{"schemaVersion":2,"fixture":"tab-repos","ready":true,"quiescent":true,"requestedContentSize":{"width":1040,"height":680},"sampleIntervalMilliseconds":100,"preScrollAcquisitionMilliseconds":200,"postScrollAcquisitionMilliseconds":200,"tolerancePoints":1,"acquisition":{"status":"complete","failureReason":null},"preScrollSamples":[{"elapsedMilliseconds":0,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":100,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":600,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":650,"width":760,"height":40}}]},{"elapsedMilliseconds":100,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":100,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":600,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":650,"width":760,"height":40}}]},{"elapsedMilliseconds":200,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":100,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":600,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":650,"width":760,"height":40}}]}],"scrollInteraction":{"mechanism":"increment-page-press","incrementPagePress":{"actionAdvertised":true,"attemptCount":1,"performResult":"success","outerClipBefore":{"x":20,"y":50,"width":1000,"height":580},"outerClipAfter":{"x":20,"y":50,"width":1000,"height":580}},"valueMutation":null},"postScrollSamples":[{"elapsedMilliseconds":0,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":0,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":500,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":550,"width":760,"height":40}}]},{"elapsedMilliseconds":100,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":0,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":500,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":550,"width":760,"height":40}}]},{"elapsedMilliseconds":200,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":0,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":500,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":550,"width":760,"height":40}}]}]}' >"$output_dir/reachability.json"
+jq '(.preScrollSamples[]?, .postScrollSamples[]?) |= . + {
+      outerClip:{x:20,y:50,width:1000,height:580},
+      boundaryScrollAncestorCount:1
+    }' "$output_dir/reachability.json" >"$output_dir/reachability.tmp"
+mv "$output_dir/reachability.tmp" "$output_dir/reachability.json"
 if [ "\${FAKE_ACQUISITION_STATUS:-complete}" != complete ]; then
   jq --arg status "$FAKE_ACQUISITION_STATUS" --argjson reason "$FAKE_ACQUISITION_FAILURE_REASON" \
     '.acquisition = {status:$status,failureReason:$reason}
@@ -223,6 +231,9 @@ fi
       FAKE_SWIFT_BIN: swiftBin,
       FAKE_CHECKER_STATUS: "7",
       FAKE_CHECKER_MESSAGE: "Reachability behavior trace was rejected.",
+      FAKE_CHECKER_OUTPUT: "",
+      FAKE_CHECKER_CATEGORY: "geometry",
+      FAKE_CHECKER_REASON: "no-upward-movement",
       FAKE_CAPTURE_STATUS: "0",
       FAKE_CAPTURE_MESSAGE: "",
       FAKE_CAPTURE_HANG: "false",
@@ -320,7 +331,7 @@ describe("focused Repos reachability capture", () => {
     expect(script).not.toContain("1440x900");
   });
 
-  it("keeps the Increment Page probe direct-child, PID-bound, and action-free", () => {
+  it("keeps the Increment Page action full-chain rebound, single-shot, and ledger-first", () => {
     const captureSource = readFileSync(
       "apps/neondiff-desktop/Sources/NeonDiffDesktopCapture/main.swift",
       "utf8"
@@ -341,11 +352,33 @@ describe("focused Repos reachability capture", () => {
     )?.[0];
     expect(capabilityProbe).not.toContain("AXUIElementPerformAction");
     const behaviorPress = captureSource.match(
-      /private func performIncrementPagePress[\s\S]*?private func scrollActionResult/
+      /private func performIncrementPagePress[\s\S]*?private func revalidatedIncrementPagePressBinding/
     )?.[0];
     expect(behaviorPress?.match(/AXUIElementPerformAction/g)).toHaveLength(1);
     expect(behaviorPress).toContain("NSAccessibility.Action.press.rawValue");
     expect(behaviorPress).not.toMatch(/for |while |repeat /);
+    expect(behaviorPress).not.toMatch(/verifiedWindow\(|semanticElements\(|outermostScrollArea\(/);
+    const revalidation = captureSource.match(
+      /private func revalidatedIncrementPagePressBinding[\s\S]*?private func interactionWithSettledOuterClipAfter/
+    )?.[0];
+    expect(revalidation).toContain("let current = try incrementPagePressBinding()");
+    expect(revalidation?.match(/CFEqual\(/g)).toHaveLength(7);
+    expect(revalidation).toContain("boundaryScrollAncestorCount == current.semantic.boundaryScrollAncestorCount");
+    expect(revalidation).toContain("original.actionAdvertised == current.actionAdvertised");
+    expect(revalidation).toContain("throw Failure.semanticChanged");
+    const captureFlow = captureSource.match(
+      /func capture\(\)[\s\S]*?func captureScrollCapabilities/
+    )?.[0];
+    expect(captureFlow).toMatch(
+      /scrollInteraction = try performIncrementPagePress[\s\S]*?post = acquireStableSamples\(\)[\s\S]*?interactionWithSettledOuterClipAfter/
+    );
+    expect(captureSource).toMatch(
+      /outerClip: outerClip,[\s\S]*?boundaryScrollAncestorCount: binding\.boundaryScrollAncestorCount/
+    );
+    const checkerSection = readFileSync(scriptPath, "utf8").match(
+      /checker_status=0[\s\S]*?reachability_sha=/
+    )?.[0];
+    expect(checkerSection).not.toMatch(/jq[\s\S]*?"\$reachability"/);
   });
 
   it.runIf(process.platform === "darwin")(
@@ -381,11 +414,12 @@ describe("focused Repos reachability capture", () => {
         .toMatchObject({ scrollCapabilities: { path: "scroll-capabilities.json", sha256: expect.any(String) } });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/reachability-check-status.json"), "utf8")))
         .toEqual({
-          schemaVersion: 1,
+          schemaVersion: 2,
           status: "failed",
           checkerFailed: true,
           exitCode: 7,
-          reasonCode: "checker_nonzero"
+          category: "geometry",
+          reasonCode: "no-upward-movement"
         });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/packet-safety-scan.json"), "utf8")))
         .toMatchObject({ ok: true, findings: [], sensitiveFiles: [] });
@@ -501,7 +535,11 @@ describe("focused Repos reachability capture", () => {
     { timeout: 30_000 },
     () => {
       const harness = createFakeHarnessRepository();
-      const result = runHarness(harness, { FAKE_CHECKER_MESSAGE: "Reachability trace schema is invalid." });
+      const result = runHarness(harness, {
+        FAKE_CHECKER_MESSAGE: "Reachability trace action was unavailable.",
+        FAKE_CHECKER_CATEGORY: "action",
+        FAKE_CHECKER_REASON: "action-not-advertised"
+      });
 
       expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(7);
       expect(JSON.parse(readFileSync(join(harness.output, "validation/reachability-check-status.json"), "utf8")))
@@ -509,7 +547,28 @@ describe("focused Repos reachability capture", () => {
           status: "failed",
           checkerFailed: true,
           exitCode: 7,
-          reasonCode: "checker_nonzero"
+          category: "action",
+          reasonCode: "action-not-advertised"
+        });
+    }
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "fails closed on malformed checker output without inferring from the raw trace",
+    { timeout: 30_000 },
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, { FAKE_CHECKER_OUTPUT: "{}" });
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(7);
+      expect(JSON.parse(readFileSync(join(harness.output, "validation/reachability-check-status.json"), "utf8")))
+        .toEqual({
+          schemaVersion: 2,
+          status: "failed",
+          checkerFailed: true,
+          exitCode: 7,
+          category: "checker",
+          reasonCode: "checker-result-invalid"
         });
     }
   );
@@ -521,7 +580,9 @@ describe("focused Repos reachability capture", () => {
       const harness = createFakeHarnessRepository();
       const result = runHarness(harness, {
         FAKE_ACQUISITION_STATUS: "failed",
-        FAKE_ACQUISITION_FAILURE_REASON: '"semantic-missing"'
+        FAKE_ACQUISITION_FAILURE_REASON: '"semantic-missing"',
+        FAKE_CHECKER_CATEGORY: "acquisition",
+        FAKE_CHECKER_REASON: "acquisition-semantic-missing"
       });
 
       expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(7);
@@ -539,7 +600,8 @@ describe("focused Repos reachability capture", () => {
         .toMatchObject({
           checkerFailed: true,
           exitCode: 7,
-          reasonCode: "checker_nonzero"
+          category: "acquisition",
+          reasonCode: "acquisition-semantic-missing"
         });
     }
   );
@@ -745,7 +807,13 @@ describe("focused Repos reachability capture", () => {
         focusedProof: "emitted"
       });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/reachability-check-status.json"), "utf8")))
-        .toMatchObject({ checkerFailed: false, exitCode: 0, reasonCode: "none" });
+        .toMatchObject({
+          schemaVersion: 2,
+          checkerFailed: false,
+          exitCode: 0,
+          category: "none",
+          reasonCode: "none"
+        });
       expect(existsSync(join(harness.output, "focused-proof.json"))).toBe(true);
       expect(existsSync(join(harness.output, "validation/packet-safety-scan.ok"))).toBe(true);
       expect(() => process.kill(launchedPID(harness), 0)).toThrow();
@@ -761,9 +829,13 @@ describe("focused Repos reachability capture", () => {
     expect(docs).toMatch(/focused partial #517 proof/i);
     expect(docs).toMatch(/outside the canonical #515 packet/i);
     expect(docs).toMatch(/performs that public\s+action exactly once/i);
-    expect(docs).toMatch(/rigid upward translation/i);
+    expect(docs).toMatch(/re-resolves the full Boundary -> outer scroll -> vertical\s+scrollbar -> direct Increment Page chain/i);
+    expect(docs).toMatch(/successful action\s+ledger is persisted before any post-action read/i);
+    expect(docs).toMatch(/every settled post-action outer clip/i);
+    expect(docs).toMatch(/rigid\s+upward translation/i);
     expect(docs).toMatch(/nested Table/i);
-    expect(docs).toMatch(/checker failure preserves `reachability\.json`/i);
+    expect(docs).toMatch(/checker failure preserves\s+`reachability\.json`/i);
+    expect(docs).toMatch(/runner does not infer a result from the raw\s+trace/i);
     expect(docs).toMatch(/`scroll-capabilities\.json`/i);
     expect(docs).toMatch(/does not perform accessibility actions/i);
     expect(docs).toMatch(/TCC/i);

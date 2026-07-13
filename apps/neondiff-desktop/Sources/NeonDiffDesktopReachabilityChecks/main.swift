@@ -2,18 +2,22 @@ import Darwin
 import Foundation
 import NeonDiffDesktopEvaluationSupport
 
-private enum CheckerError: LocalizedError {
+private enum CheckerError: Error {
     case usage
     case unsafeInput
+}
 
-    var errorDescription: String? {
-        switch self {
-        case .usage:
-            return "usage: NeonDiffDesktopReachabilityChecks <absolute-reachability-json>"
-        case .unsafeInput:
-            return "reachability trace must be an absolute regular non-symlink file"
-        }
+private func emit(_ result: DesktopReposReachabilityCheckResult) {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    guard let data = try? encoder.encode(result) else {
+        FileHandle.standardOutput.write(Data(
+            "{\"category\":\"contract\",\"ok\":false,\"reasonCode\":\"checker-encoding-failed\",\"schemaVersion\":1,\"status\":\"failed\"}\n".utf8
+        ))
+        exit(70)
     }
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data("\n".utf8))
 }
 
 do {
@@ -30,8 +34,17 @@ do {
     }
     let trace = try DesktopReposReachabilityTrace.decode(data: Data(contentsOf: input, options: [.mappedIfSafe]))
     _ = try DesktopReposReachabilityValidator.validate(trace)
-    FileHandle.standardOutput.write(Data("{\"ok\":true,\"status\":\"reachable\"}\n".utf8))
+    emit(.reachable)
+} catch CheckerError.usage {
+    emit(.inputFailure("usage"))
+    exit(64)
+} catch CheckerError.unsafeInput {
+    emit(.inputFailure("unsafe-input"))
+    exit(65)
+} catch let error as DesktopReposReachabilityValidationError {
+    emit(.failure(error))
+    exit(65)
 } catch {
-    FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+    emit(.inputFailure("input-read-failed"))
     exit(65)
 }

@@ -44,6 +44,7 @@ public enum DesktopReposReachabilityAcquisitionFailureReason: String, Codable, E
     case windowMismatch = "window-mismatch"
     case semanticMissing = "semantic-missing"
     case semanticDuplicate = "semantic-duplicate"
+    case semanticChanged = "semantic-changed"
     case timeout
     case ancestryUnavailable = "ancestry-unavailable"
     case ancestryCycle = "ancestry-cycle"
@@ -294,15 +295,23 @@ public struct DesktopReposReachabilitySample: Codable, Equatable, Sendable {
     public let elapsedMilliseconds: Int
     /// The verified Accessibility window frame, in AX screen coordinates.
     public let viewport: DesktopReposReachabilityFrame
+    /// The outermost Boundary ancestor scroll area's settled AX frame.
+    public let outerClip: DesktopReposReachabilityFrame
+    /// Number of Boundary ancestor scroll areas from Boundary to the window.
+    public let boundaryScrollAncestorCount: Int
     public let regions: [DesktopReposReachabilityRegionFrame]
 
     public init(
         elapsedMilliseconds: Int,
         viewport: DesktopReposReachabilityFrame,
+        outerClip: DesktopReposReachabilityFrame,
+        boundaryScrollAncestorCount: Int,
         regions: [DesktopReposReachabilityRegionFrame]
     ) {
         self.elapsedMilliseconds = elapsedMilliseconds
         self.viewport = viewport
+        self.outerClip = outerClip
+        self.boundaryScrollAncestorCount = boundaryScrollAncestorCount
         self.regions = regions
     }
 }
@@ -595,8 +604,11 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
 
     private static func validateSample(_ object: Any) -> Bool {
         guard let sample = object as? [String: Any],
-              hasOnly(sample, ["elapsedMilliseconds", "viewport", "regions"]),
+              hasOnly(sample, [
+                  "elapsedMilliseconds", "viewport", "outerClip", "boundaryScrollAncestorCount", "regions"
+              ]),
               validateFrame(sample["viewport"]),
+              validateFrame(sample["outerClip"]),
               let regions = sample["regions"] as? [Any] else {
             return false
         }
@@ -651,6 +663,7 @@ public enum DesktopReposReachabilityValidationError: LocalizedError, Equatable, 
     case actionPerformFailed(DesktopReposScrollActionResult)
     case unstableWindow
     case unstableOuterClip
+    case unstableScrollAncestry
     case outerClipOutsideWindow
     case boundaryInitiallyInsideOuterClip
     case noUpwardMovement
@@ -685,6 +698,8 @@ public enum DesktopReposReachabilityValidationError: LocalizedError, Equatable, 
             return "Reachability trace window changed across the scroll interaction."
         case .unstableOuterClip:
             return "Reachability trace outer clip changed across the scroll interaction."
+        case .unstableScrollAncestry:
+            return "Reachability trace Boundary scroll ancestry changed across the scroll interaction."
         case .outerClipOutsideWindow:
             return "Reachability trace outer clip is outside the verified window."
         case .boundaryInitiallyInsideOuterClip:
@@ -698,6 +713,103 @@ public enum DesktopReposReachabilityValidationError: LocalizedError, Equatable, 
         case .regionOutsideViewport(let phase, let index, let region):
             return "Reachability trace \(region.rawValue) is outside the viewport in \(phase.rawValue) sample \(index)."
         }
+    }
+}
+
+public enum DesktopReposReachabilityCheckStatus: String, Codable, Equatable, Sendable {
+    case reachable
+    case failed
+}
+
+public enum DesktopReposReachabilityCheckCategory: String, Codable, Equatable, Sendable {
+    case none
+    case input
+    case contract
+    case acquisition
+    case action
+    case geometry
+}
+
+public struct DesktopReposReachabilityCheckResult: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let ok: Bool
+    public let status: DesktopReposReachabilityCheckStatus
+    public let category: DesktopReposReachabilityCheckCategory
+    public let reasonCode: String
+
+    public init(
+        schemaVersion: Int = 1,
+        ok: Bool,
+        status: DesktopReposReachabilityCheckStatus,
+        category: DesktopReposReachabilityCheckCategory,
+        reasonCode: String
+    ) {
+        self.schemaVersion = schemaVersion
+        self.ok = ok
+        self.status = status
+        self.category = category
+        self.reasonCode = reasonCode
+    }
+
+    public static let reachable = Self(
+        ok: true,
+        status: .reachable,
+        category: .none,
+        reasonCode: "none"
+    )
+
+    public static func inputFailure(_ reasonCode: String) -> Self {
+        Self(ok: false, status: .failed, category: .input, reasonCode: reasonCode)
+    }
+
+    public static func failure(_ error: DesktopReposReachabilityValidationError) -> Self {
+        switch error {
+        case .invalidContract:
+            return failed(.contract, "invalid-contract")
+        case .acquisitionFailed(let reason):
+            return failed(.acquisition, "acquisition-\(reason.rawValue)")
+        case .insufficientSamples(let phase):
+            return failed(.geometry, "insufficient-\(phase.rawValue)-samples")
+        case .nonfiniteFrame:
+            return failed(.contract, "nonfinite-frame")
+        case .duplicateRegion:
+            return failed(.contract, "duplicate-region")
+        case .missingRegion:
+            return failed(.contract, "missing-region")
+        case .excessiveDrift:
+            return failed(.geometry, "excessive-drift")
+        case .missingScrollInteraction:
+            return failed(.contract, "missing-scroll-interaction")
+        case .actionNotAdvertised:
+            return failed(.action, "action-not-advertised")
+        case .actionPerformFailed(let result):
+            return failed(.action, "action-perform-\(result.rawValue)")
+        case .unstableWindow:
+            return failed(.geometry, "unstable-window")
+        case .unstableOuterClip:
+            return failed(.geometry, "unstable-outer-clip")
+        case .unstableScrollAncestry:
+            return failed(.geometry, "unstable-scroll-ancestry")
+        case .outerClipOutsideWindow:
+            return failed(.geometry, "outer-clip-outside-window")
+        case .boundaryInitiallyInsideOuterClip:
+            return failed(.geometry, "boundary-initially-inside-outer-clip")
+        case .noUpwardMovement:
+            return failed(.geometry, "no-upward-movement")
+        case .nonRigidMovement:
+            return failed(.geometry, "non-rigid-movement")
+        case .pressInsufficient(let region):
+            return failed(.geometry, "press-insufficient-\(region.rawValue)")
+        case .regionOutsideViewport:
+            return failed(.geometry, "region-outside-viewport")
+        }
+    }
+
+    private static func failed(
+        _ category: DesktopReposReachabilityCheckCategory,
+        _ reasonCode: String
+    ) -> Self {
+        Self(ok: false, status: .failed, category: category, reasonCode: reasonCode)
     }
 }
 
@@ -777,8 +889,13 @@ public enum DesktopReposReachabilityValidator {
         }
         let baseline = samples[0]
         for (index, sample) in samples.enumerated() {
-            guard sample.viewport.isFiniteAndNonempty else {
+            guard sample.viewport.isFiniteAndNonempty,
+                  sample.outerClip.isFiniteAndNonempty,
+                  sample.boundaryScrollAncestorCount > 0 else {
                 throw DesktopReposReachabilityValidationError.nonfiniteFrame(phase, index)
+            }
+            guard sample.viewport.contains(sample.outerClip) else {
+                throw DesktopReposReachabilityValidationError.outerClipOutsideWindow
             }
             var byID: [DesktopReposReachabilityRegion: DesktopReposReachabilityFrame] = [:]
             for region in sample.regions {
@@ -795,6 +912,12 @@ public enum DesktopReposReachabilityValidator {
             guard index > 0 else { continue }
             if sample.viewport.differs(from: baseline.viewport, byMoreThan: tolerance) {
                 throw DesktopReposReachabilityValidationError.excessiveDrift(phase, index, nil)
+            }
+            if sample.outerClip.differs(from: baseline.outerClip, byMoreThan: tolerance) {
+                throw DesktopReposReachabilityValidationError.unstableOuterClip
+            }
+            if sample.boundaryScrollAncestorCount != baseline.boundaryScrollAncestorCount {
+                throw DesktopReposReachabilityValidationError.unstableScrollAncestry
             }
             let baselineByID = Dictionary(uniqueKeysWithValues: baseline.regions.map { ($0.id, $0.frame) })
             for id in DesktopReposReachabilityRegion.allCases {
@@ -856,15 +979,19 @@ public enum DesktopReposReachabilityValidator {
         if exceedsEnvelopeTolerance((pre + post).map(\.viewport), tolerance: tolerance) {
             throw DesktopReposReachabilityValidationError.unstableWindow
         }
-        if press.outerClipBefore.differs(from: clipAfter, byMoreThan: tolerance) {
+        let allClips = [press.outerClipBefore, clipAfter] + (pre + post).map(\.outerClip)
+        if exceedsEnvelopeTolerance(allClips, tolerance: tolerance) {
             throw DesktopReposReachabilityValidationError.unstableOuterClip
+        }
+        if Set((pre + post).map(\.boundaryScrollAncestorCount)).count != 1 {
+            throw DesktopReposReachabilityValidationError.unstableScrollAncestry
         }
         guard beforeSample.viewport.contains(press.outerClipBefore),
               afterSample.viewport.contains(clipAfter) else {
             throw DesktopReposReachabilityValidationError.outerClipOutsideWindow
         }
         guard let beforeBoundary = frame(.boundaryBody, in: beforeSample),
-              !press.outerClipBefore.contains(beforeBoundary) else {
+              !beforeSample.outerClip.contains(beforeBoundary) else {
             throw DesktopReposReachabilityValidationError.boundaryInitiallyInsideOuterClip
         }
         let beforeByID = Dictionary(uniqueKeysWithValues: beforeSample.regions.map { ($0.id, $0.frame) })
@@ -887,7 +1014,7 @@ public enum DesktopReposReachabilityValidator {
         }
         for id in [DesktopReposReachabilityRegion.applyAllowlist, .boundaryBody] {
             for sample in post {
-                guard let region = frame(id, in: sample), clipAfter.contains(region) else {
+                guard let region = frame(id, in: sample), sample.outerClip.contains(region) else {
                     throw DesktopReposReachabilityValidationError.pressInsufficient(id)
                 }
             }

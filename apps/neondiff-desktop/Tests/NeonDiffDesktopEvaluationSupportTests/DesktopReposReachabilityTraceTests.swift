@@ -11,6 +11,27 @@ struct DesktopReposReachabilityTraceTests {
         #expect(try DesktopReposReachabilityTrace.decode(data: JSONEncoder().encode(trace)) == trace)
     }
 
+    @Test func schemaRequiresSettledOuterClipAndBoundaryAncestryInEverySample() throws {
+        let encoded = try JSONEncoder().encode(makeTrace())
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        for key in ["preScrollSamples", "postScrollSamples"] {
+            var samples = try #require(object[key] as? [[String: Any]])
+            for index in samples.indices {
+                samples[index].removeValue(forKey: "outerClip")
+                samples[index].removeValue(forKey: "boundaryScrollAncestorCount")
+            }
+            object[key] = samples
+        }
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+
+        #expect(throws: Never.self) {
+            try DesktopReposReachabilityTrace.decode(data: encoded)
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(data: legacy)
+        }
+    }
+
     @Test(arguments: [
         DesktopReposReachabilityRegion.table,
         .applyAllowlist,
@@ -31,6 +52,8 @@ struct DesktopReposReachabilityTraceTests {
         samples[0] = DesktopReposReachabilitySample(
             elapsedMilliseconds: 0,
             viewport: .init(x: 0, y: 0, width: .infinity, height: 680),
+            outerClip: samples[0].outerClip,
+            boundaryScrollAncestorCount: samples[0].boundaryScrollAncestorCount,
             regions: samples[0].regions + [samples[0].regions[0]]
         )
         let trace = makeTrace(preSamples: samples)
@@ -86,6 +109,8 @@ struct DesktopReposReachabilityTraceTests {
         wrongCadence[2] = DesktopReposReachabilitySample(
             elapsedMilliseconds: 301,
             viewport: wrongCadence[2].viewport,
+            outerClip: wrongCadence[2].outerClip,
+            boundaryScrollAncestorCount: wrongCadence[2].boundaryScrollAncestorCount,
             regions: wrongCadence[2].regions
         )
         #expect(throws: DesktopReposReachabilityValidationError.self) {
@@ -96,6 +121,8 @@ struct DesktopReposReachabilityTraceTests {
             DesktopReposReachabilitySample(
                 elapsedMilliseconds: 4_900 + index * 100,
                 viewport: sample.viewport,
+                outerClip: sample.outerClip,
+                boundaryScrollAncestorCount: sample.boundaryScrollAncestorCount,
                 regions: sample.regions
             )
         }
@@ -167,6 +194,68 @@ struct DesktopReposReachabilityTraceTests {
                 scrollInteraction: makeInteraction(attemptCount: 2)
             ))
         }
+    }
+
+    @Test func successfulPressLedgerSurvivesPostActionAcquisitionFailures() throws {
+        for reason in [
+            DesktopReposReachabilityAcquisitionFailureReason.cannotComplete,
+            .invalidElement,
+            .permissionDenied,
+            .invalidType,
+            .ancestryUnavailable,
+            .semanticChanged
+        ] {
+            let trace = makeTrace(
+                quiescent: false,
+                acquisition: .init(status: .failed, failureReason: reason),
+                scrollInteraction: makeInteraction(clipAfter: nil),
+                postSamples: []
+            )
+            let data = try JSONEncoder().encode(trace)
+            let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let interaction = try #require(object["scrollInteraction"] as? [String: Any])
+            let press = try #require(interaction["incrementPagePress"] as? [String: Any])
+
+            #expect(press["attemptCount"] as? Int == 1)
+            #expect(press["performResult"] as? String == "success")
+            #expect(press["outerClipAfter"] is NSNull)
+            #expect(throws: DesktopReposReachabilityValidationError.acquisitionFailed(reason)) {
+                try DesktopReposReachabilityValidator.validate(trace)
+            }
+        }
+    }
+
+    @Test func checkerResultsClassifyActionGeometryAcquisitionAndContractFailures() throws {
+        let cases: [(DesktopReposReachabilityValidationError, DesktopReposReachabilityCheckCategory, String)] = [
+            (.actionNotAdvertised, .action, "action-not-advertised"),
+            (.actionPerformFailed(.cannotComplete), .action, "action-perform-cannot-complete"),
+            (.noUpwardMovement, .geometry, "no-upward-movement"),
+            (.nonRigidMovement, .geometry, "non-rigid-movement"),
+            (.pressInsufficient(.applyAllowlist), .geometry, "press-insufficient-apply-allowlist"),
+            (.unstableOuterClip, .geometry, "unstable-outer-clip"),
+            (.unstableScrollAncestry, .geometry, "unstable-scroll-ancestry"),
+            (.acquisitionFailed(.semanticChanged), .acquisition, "acquisition-semantic-changed"),
+            (.invalidContract, .contract, "invalid-contract")
+        ]
+
+        for (error, category, reasonCode) in cases {
+            let result = DesktopReposReachabilityCheckResult.failure(error)
+            #expect(result.schemaVersion == 1)
+            #expect(!result.ok)
+            #expect(result.status == .failed)
+            #expect(result.category == category)
+            #expect(result.reasonCode == reasonCode)
+            let object = try #require(
+                JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any]
+            )
+            #expect(Set(object.keys) == ["schemaVersion", "ok", "status", "category", "reasonCode"])
+        }
+
+        let success = DesktopReposReachabilityCheckResult.reachable
+        #expect(success.ok)
+        #expect(success.status == .reachable)
+        #expect(success.category == .none)
+        #expect(success.reasonCode == "none")
     }
 
     @Test func rejectsNoWrongOrNonrigidMovement() {
@@ -251,6 +340,28 @@ struct DesktopReposReachabilityTraceTests {
                 scrollInteraction: makeInteraction(clipAfter: .init(x: 22, y: 50, width: 1000, height: 580))
             ))
         }
+        let cumulativeClipDrift = zip(stableSamples(), [21.0, 22.0, 22.0]).map { sample, x in
+            sample.replacingOuterClip(.init(x: x, y: 50, width: 1000, height: 580))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.unstableOuterClip) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(
+                    clipAfter: .init(x: 22, y: 50, width: 1000, height: 580)
+                ),
+                postSamples: cumulativeClipDrift
+            ))
+        }
+        let staleImmediateClip = stableSamples().map {
+            $0.replacingOuterClip(.init(x: 20, y: 50, width: 1000, height: 500))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.unstableOuterClip) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(postSamples: staleImmediateClip))
+        }
+        var changedAncestry = stableSamples()
+        changedAncestry[2] = changedAncestry[2].replacingBoundaryScrollAncestorCount(2)
+        #expect(throws: DesktopReposReachabilityValidationError.unstableScrollAncestry) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(postSamples: changedAncestry))
+        }
         let onePointWindow = stableSamples().map {
             $0.replacingViewport(.init(x: 1, y: 0, width: 1040, height: 680))
         }
@@ -261,11 +372,14 @@ struct DesktopReposReachabilityTraceTests {
             postSamples: onePointWindow
         )) == .reachable)
         #expect(throws: DesktopReposReachabilityValidationError.outerClipOutsideWindow) {
-            try DesktopReposReachabilityValidator.validate(makeTrace(
+            let outsideWindowClip = DesktopReposReachabilityFrame(x: -1, y: 50, width: 1000, height: 580)
+            _ = try DesktopReposReachabilityValidator.validate(makeTrace(
+                preSamples: preScrollSamples().map { $0.replacingOuterClip(outsideWindowClip) },
                 scrollInteraction: makeInteraction(
-                    clipBefore: .init(x: -1, y: 50, width: 1000, height: 580),
-                    clipAfter: .init(x: -1, y: 50, width: 1000, height: 580)
-                )
+                    clipBefore: outsideWindowClip,
+                    clipAfter: outsideWindowClip
+                ),
+                postSamples: stableSamples().map { $0.replacingOuterClip(outsideWindowClip) }
             ))
         }
         let outsideClip = stableSamples().map {
@@ -570,6 +684,8 @@ struct DesktopReposReachabilityTraceTests {
             DesktopReposReachabilitySample(
                 elapsedMilliseconds: elapsed,
                 viewport: sample.viewport,
+                outerClip: sample.outerClip,
+                boundaryScrollAncestorCount: sample.boundaryScrollAncestorCount,
                 regions: sample.regions
             )
         }
@@ -718,6 +834,8 @@ private func preScrollSamples() -> [DesktopReposReachabilitySample] {
         DesktopReposReachabilitySample(
             elapsedMilliseconds: index * 100,
             viewport: .init(x: 0, y: 0, width: 1040, height: 680),
+            outerClip: .init(x: 20, y: 50, width: 1000, height: 580),
+            boundaryScrollAncestorCount: 1,
             regions: [
                 .init(id: .table, frame: .init(x: 24, y: 100, width: 900, height: 360)),
                 .init(id: .applyAllowlist, frame: .init(x: 24, y: 600, width: 180, height: 30)),
@@ -732,6 +850,8 @@ private func stableSamples() -> [DesktopReposReachabilitySample] {
         DesktopReposReachabilitySample(
             elapsedMilliseconds: index * 100,
             viewport: .init(x: 0, y: 0, width: 1040, height: 680),
+            outerClip: .init(x: 20, y: 50, width: 1000, height: 580),
+            boundaryScrollAncestorCount: 1,
             regions: [
                 .init(id: .table, frame: .init(x: 24, y: 0, width: 900, height: 360)),
                 .init(id: .applyAllowlist, frame: .init(x: 24, y: 500, width: 180, height: 30)),
@@ -746,6 +866,8 @@ private extension DesktopReposReachabilitySample {
         .init(
             elapsedMilliseconds: elapsedMilliseconds,
             viewport: viewport,
+            outerClip: outerClip,
+            boundaryScrollAncestorCount: boundaryScrollAncestorCount,
             regions: regions.map { region in
                 .init(id: region.id, frame: .init(
                     x: region.frame.x,
@@ -758,13 +880,41 @@ private extension DesktopReposReachabilitySample {
     }
 
     func replacingViewport(_ frame: DesktopReposReachabilityFrame) -> Self {
-        .init(elapsedMilliseconds: elapsedMilliseconds, viewport: frame, regions: regions)
+        .init(
+            elapsedMilliseconds: elapsedMilliseconds,
+            viewport: frame,
+            outerClip: outerClip,
+            boundaryScrollAncestorCount: boundaryScrollAncestorCount,
+            regions: regions
+        )
+    }
+
+    func replacingOuterClip(_ frame: DesktopReposReachabilityFrame) -> Self {
+        .init(
+            elapsedMilliseconds: elapsedMilliseconds,
+            viewport: viewport,
+            outerClip: frame,
+            boundaryScrollAncestorCount: boundaryScrollAncestorCount,
+            regions: regions
+        )
+    }
+
+    func replacingBoundaryScrollAncestorCount(_ count: Int) -> Self {
+        .init(
+            elapsedMilliseconds: elapsedMilliseconds,
+            viewport: viewport,
+            outerClip: outerClip,
+            boundaryScrollAncestorCount: count,
+            regions: regions
+        )
     }
 
     func removing(_ id: DesktopReposReachabilityRegion) -> Self {
         .init(
             elapsedMilliseconds: elapsedMilliseconds,
             viewport: viewport,
+            outerClip: outerClip,
+            boundaryScrollAncestorCount: boundaryScrollAncestorCount,
             regions: regions.filter { $0.id != id }
         )
     }
@@ -773,6 +923,8 @@ private extension DesktopReposReachabilitySample {
         .init(
             elapsedMilliseconds: elapsedMilliseconds,
             viewport: viewport,
+            outerClip: outerClip,
+            boundaryScrollAncestorCount: boundaryScrollAncestorCount,
             regions: regions.map { region in
                 region.id == id ? .init(id: id, frame: frame) : region
             }

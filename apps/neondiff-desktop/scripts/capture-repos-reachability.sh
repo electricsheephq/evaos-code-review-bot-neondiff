@@ -251,7 +251,7 @@ done
     and (.osMajorVersion | type == "number" and . >= 1 and . <= 100 and floor == .)
     and .scrollToVisibleActionAvailable == (.osMajorVersion >= 26)
     and (.acquisition | type == "object" and keys == ["failureReason", "status"])
-    and (
+    and (.reasonCode as $reason |
       if .acquisition.status == "complete" then
         .acquisition.failureReason == null
         and (.boundaryAdvertisesScrollToVisible | type == "boolean")
@@ -338,18 +338,59 @@ else
   checker_status=$?
   checker_result="failed"
 fi
-checker_failed=false
-checker_reason_code="none"
-if [ "$checker_status" -ne 0 ]; then
-  checker_failed=true
-  checker_reason_code="checker_nonzero"
+checker_output_valid=false
+if jq -e '
+    type == "object"
+    and keys == ["category", "ok", "reasonCode", "schemaVersion", "status"]
+    and .schemaVersion == 1
+    and (.reasonCode as $reason |
+      if .ok == true then
+        .status == "reachable" and .category == "none" and .reasonCode == "none"
+      elif .ok == false and .status == "failed" then
+        (
+          (.category == "input" and (["usage", "unsafe-input", "input-read-failed"] | index($reason)) != null)
+          or (.category == "contract" and ([
+            "invalid-contract", "nonfinite-frame", "duplicate-region", "missing-region",
+            "missing-scroll-interaction", "checker-encoding-failed"
+          ] | index($reason)) != null)
+          or (.category == "acquisition" and (.reasonCode | test("^acquisition-(cannot-complete|invalid-element|permission-denied|invalid-type|attribute-unavailable|pid-mismatch|window-mismatch|semantic-missing|semantic-duplicate|semantic-changed|timeout|ancestry-unavailable|ancestry-cycle|ancestry-limit|messaging-timeout-unavailable)$")))
+          or (.category == "action" and (.reasonCode | test("^action-(not-advertised|perform-(cannot-complete|action-unsupported|invalid-element|permission-denied|other-error))$")))
+          or (.category == "geometry" and ([
+            "insufficient-pre-scroll-samples", "insufficient-post-scroll-samples", "excessive-drift",
+            "unstable-window", "unstable-outer-clip", "unstable-scroll-ancestry",
+            "outer-clip-outside-window", "boundary-initially-inside-outer-clip",
+            "no-upward-movement", "non-rigid-movement", "press-insufficient-apply-allowlist",
+            "press-insufficient-boundary-body", "region-outside-viewport"
+          ] | index($reason)) != null)
+        )
+      else false end
+    )' "$output/validation/reachability-check.json" >/dev/null 2>&1; then
+  if { [ "$checker_status" -eq 0 ] && jq -e '.ok == true' "$output/validation/reachability-check.json" >/dev/null; } \
+    || { [ "$checker_status" -ne 0 ] && jq -e '.ok == false' "$output/validation/reachability-check.json" >/dev/null; }; then
+    checker_output_valid=true
+  fi
+fi
+checker_failed=true
+checker_category="checker"
+checker_reason_code="checker-result-invalid"
+if [ "$checker_output_valid" = true ]; then
+  checker_category=$(jq -r '.category' "$output/validation/reachability-check.json")
+  checker_reason_code=$(jq -r '.reasonCode' "$output/validation/reachability-check.json")
+  if [ "$checker_status" -eq 0 ]; then
+    checker_failed=false
+    checker_result="passed"
+  fi
+elif [ "$checker_status" -eq 0 ]; then
+  checker_status=65
+  checker_result="failed"
 fi
 jq -n \
   --arg status "$checker_result" \
+  --arg category "$checker_category" \
   --arg reasonCode "$checker_reason_code" \
   --argjson checkerFailed "$checker_failed" \
   --argjson exitCode "$checker_status" \
-  '{schemaVersion:1,status:$status,checkerFailed:$checkerFailed,exitCode:$exitCode,reasonCode:$reasonCode}' \
+  '{schemaVersion:2,status:$status,checkerFailed:$checkerFailed,exitCode:$exitCode,category:$category,reasonCode:$reasonCode}' \
   >"$output/validation/reachability-check-status.json"
 
 reachability_sha=$(shasum -a 256 "$reachability" | awk '{print $1}')
