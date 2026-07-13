@@ -248,6 +248,9 @@ export interface ProviderErrorClassification {
 export type ReviewPullResult =
   | "reviewed"
   | "reviewed_command"
+  | "posted_stale_head"
+  | "posted_head_unverified"
+  | "skipped_consumed_authorization"
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_policy"
@@ -281,6 +284,9 @@ export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"])
     case "skipped_context_budget":
     case "skipped_provider_cooldown":
     case "skipped_stale_head":
+    case "posted_stale_head":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
       return false;
     default:
       return assertNever(status);
@@ -857,10 +863,13 @@ function retryStatusCommentState(
     case "skipped_context_budget":
       return "skipped";
     case "skipped_stale_head":
+    case "posted_stale_head":
       return "stale_head";
     case "skipped_closed":
       return "closed_or_merged_before_review";
     case "failed":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
       return "failed";
     case "skipped_capacity":
       return "provider_deferred";
@@ -1061,7 +1070,17 @@ function retryQueuePatchForStatus(input: {
         lastError: input.processedError ?? "license_entitlement_required",
         sessionJobState: "assigned"
       };
+    case "posted_stale_head":
+      return {
+        state: "stale_retired",
+        ...(input.processedReviewUrl ? { reviewUrl: input.processedReviewUrl } : {}),
+        lastError: "retry_did_not_review=posted_stale_head",
+        sessionJobState: "skipped",
+        sessionProcessedStatus: "skipped"
+      };
     case "failed":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_policy":
@@ -1410,9 +1429,29 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const livePull = await github.getPull(repo, pull.number);
     const stale = detectStalePullHead({ expected: pull, live: livePull, phase: "before_review" });
     if (stale) {
-      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
       recordStaleHeadSkip({ state, repo, pull, stale, evidenceDir });
       return "skipped_stale_head";
+    }
+  }
+  if (input.commandCommentId) {
+    const consumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
+    if (consumption?.commentId === input.commandCommentId) {
+      if (processed?.status === "posted") {
+        await reconcileProcessedHeadAfterDirectReviewSafely({ config, github, state, repo, pull, dryRun: input.dryRun });
+        return "skipped_processed";
+      }
+      const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
+      mkdirSync(evidenceDir, { recursive: true });
+      writeRedactedJson(join(evidenceDir, "consumed-authorization-incident.json"), {
+        reason: "exact_authorization_already_consumed",
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: input.commandCommentId,
+        consumedAt: consumption.consumedAt
+      });
+      return "skipped_consumed_authorization";
     }
   }
   if (
@@ -1451,7 +1490,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (current?.status !== "failed" && !isProviderCooldownProcessedReview(current ?? { status: "" })) {
       return "skipped_processed";
     }
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
     const liveBeforeReview = await github.getPull(repo, pull.number);
     const staleBeforeReview = detectStalePullHead({ expected: pull, live: liveBeforeReview, phase: "before_review" });
     if (staleBeforeReview) {
@@ -1494,7 +1533,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   try {
     if (!acquireReviewCapacity()) return "skipped_capacity";
 
-    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision);
+    const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
     if (commandReviewRequested) {
       await recordAndAcknowledgeCommandDecision({ config, github, state, repo, pull, commandDecision });
     }
@@ -1906,14 +1945,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
-    state.recordProcessed({
-      repo,
-      pullNumber: pull.number,
-      headSha: pull.head.sha,
-      status: "posted",
-      event: plan.event,
-      reviewUrl: review.html_url
-    });
+    const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
+    if (!(priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT")) {
+      state.recordProcessed({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        status: "posted",
+        event: plan.event,
+        reviewUrl: review.html_url
+      });
+    }
     // Public-safe findings ledger (#357): record the coordinates we just posted publicly so the
     // daemon calibration-observe pass can re-derive outcome labels later. BEST-EFFORT / FAIL-OPEN —
     // the review is already durable; observation bookkeeping must never block or fail the review.
@@ -1945,6 +1987,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
     }
     releaseReviewCapacity();
+    if (headChangedDuringPost) return "posted_stale_head";
+    if (postReviewHeadLookupFailed) return "posted_head_unverified";
     if (!headChangedDuringPost && !postReviewHeadLookupFailed && input.processedHeadPolicy !== "retry_failed_head") {
       await reconcileProcessedHeadAfterDirectReviewSafely({
         config,
@@ -2387,10 +2431,12 @@ function buildEvidenceDir(
   config: BotConfig,
   repo: string,
   pull: PullRequestSummary,
-  commandDecision: CommandDecision
+  commandDecision: CommandDecision,
+  commandCommentId?: number
 ): string {
   const evidenceBaseDir = join(config.evidenceDir, localDateFolder(), repo.replace("/", "__"), `pr-${pull.number}`, pull.head.sha);
-  return commandDecision.action !== "none" ? join(evidenceBaseDir, `command-${commandDecision.commandId}`) : evidenceBaseDir;
+  const scopedCommentId = commandDecision.action !== "none" ? commandDecision.commandId : commandCommentId;
+  return scopedCommentId ? join(evidenceBaseDir, `command-${scopedCommentId}`) : evidenceBaseDir;
 }
 
 function recordLicenseAdmissionBlock(input: {

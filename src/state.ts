@@ -346,6 +346,15 @@ export interface ReviewEventAuthorizationConsumptionInput {
   now?: Date;
 }
 
+export interface ReviewEventAuthorizationConsumptionRecord {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  commentId: number;
+  author: string;
+  consumedAt: string;
+}
+
 export interface RepoMemoryNoteRecord {
   noteId: string;
   repo: string;
@@ -1533,6 +1542,39 @@ export class ReviewStateStore {
         (input.now ?? new Date()).toISOString()
       );
     return Number(result.changes) === 1;
+  }
+
+  /** Reads the one-shot authorization ledger without mutating or renewing it. */
+  getReviewEventAuthorizationConsumption(
+    repo: string,
+    pullNumber: number,
+    headSha: string
+  ): ReviewEventAuthorizationConsumptionRecord | undefined {
+    validateReviewEventAuthorizationCoordinates(repo, pullNumber, headSha);
+    const row = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, comment_id, author, consumed_at
+         from review_event_authorization_consumptions
+         where repo = ? and pull_number = ? and head_sha = ?`
+      )
+      .get(repo, pullNumber, headSha.toLowerCase()) as {
+        repo: string;
+        pull_number: number;
+        head_sha: string;
+        comment_id: number;
+        author: string;
+        consumed_at: string;
+      } | undefined;
+    return row
+      ? {
+          repo: row.repo,
+          pullNumber: row.pull_number,
+          headSha: row.head_sha,
+          commentId: row.comment_id,
+          author: row.author,
+          consumedAt: row.consumed_at
+        }
+      : undefined;
   }
 
   tryAcquireIssueEnrichmentRunLease(
@@ -3059,17 +3101,21 @@ function validatePullAndCommand(pullNumber: number, commandCommentId: number): v
 }
 
 function validateReviewEventAuthorizationConsumption(input: ReviewEventAuthorizationConsumptionInput): void {
-  validateRepoName(input.repo, "repo");
-  if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(input.repo)) {
-    throw new Error("repo must be an owner/repo name");
-  }
-  if (!Number.isInteger(input.pullNumber) || input.pullNumber < 1) throw new Error("pullNumber must be a positive integer");
+  validateReviewEventAuthorizationCoordinates(input.repo, input.pullNumber, input.headSha);
   if (!Number.isInteger(input.commentId) || input.commentId < 1) throw new Error("commentId must be a positive integer");
-  if (!/^[0-9a-f]{40}$/i.test(input.headSha)) {
-    throw new Error("headSha must be a 40-character hexadecimal SHA");
-  }
   if (!/^[A-Za-z0-9-]{1,39}$/.test(input.author)) {
     throw new Error("author must be a non-empty string");
+  }
+}
+
+function validateReviewEventAuthorizationCoordinates(repo: string, pullNumber: number, headSha: string): void {
+  validateRepoName(repo, "repo");
+  if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repo)) {
+    throw new Error("repo must be an owner/repo name");
+  }
+  if (!Number.isInteger(pullNumber) || pullNumber < 1) throw new Error("pullNumber must be a positive integer");
+  if (!/^[0-9a-f]{40}$/i.test(headSha)) {
+    throw new Error("headSha must be a 40-character hexadecimal SHA");
   }
 }
 

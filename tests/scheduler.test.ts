@@ -297,6 +297,48 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it.each([
+    ["posted_stale_head", "stale_retired", "stale", "stale_head"],
+    ["posted_head_unverified", "failed", "failed", "failed"],
+    ["skipped_consumed_authorization", "failed", "failed", "failed"]
+  ] as const)("does not advertise %s as a completed review", async (workerStatus, queueState, readinessState, publicState) => {
+    const root = mkdtempSync(join(tmpdir(), `evaos-scheduler-${workerStatus}-`));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        if (workerStatus !== "skipped_consumed_authorization") {
+          reviewState.recordProcessed({
+            repo,
+            pullNumber: reviewPull.number,
+            headSha: reviewPull.head.sha,
+            status: "posted",
+            event: "REQUEST_CHANGES",
+            reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-incident"
+          });
+        }
+        return workerStatus;
+      },
+      now: new Date("2026-07-13T00:00:00.000Z")
+    });
+
+    expect(result.reviewed).toBe(0);
+    expect(result.queue.completed).toBe(0);
+    expect(state.listReviewQueueJobs({ state: queueState })).toHaveLength(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({ state: readinessState });
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", publicState]);
+    expect(statusCalls.map(statusFromBody)).not.toContain("completed");
+    state.close();
+  });
+
   it("maps context-budget skips into skipped readiness and failed durable queue state", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-context-budget-skip-"));
     roots.push(root);

@@ -1647,7 +1647,16 @@ describe("review state store", () => {
       author: "100yenadmin"
     };
 
-    expect(store.tryConsumeReviewEventAuthorization(authorization)).toBe(true);
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "A".repeat(40))).toBeUndefined();
+    expect(store.tryConsumeReviewEventAuthorization({ ...authorization, now: new Date("2026-07-13T00:00:00.000Z") })).toBe(true);
+    expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "A".repeat(40))).toEqual({
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: "a".repeat(40),
+      commentId: 41,
+      author: "100yenadmin",
+      consumedAt: "2026-07-13T00:00:00.000Z"
+    });
     expect(store.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 42 })).toBe(false);
     expect(store.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 42, headSha: "b".repeat(40) })).toBe(true);
     expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, repo: "invalid" })).toThrow("repo must be an owner/repo name");

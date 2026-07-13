@@ -145,9 +145,11 @@ still cannot select `REQUEST_CHANGES` again.
 
 Command-triggered reviews and finishing-touch drafts write evidence under the
 normal PR/head evidence path with a `command-<comment-id>` subfolder. The
-evidence includes the command source JSON for reviews or the finishing-touch
-draft JSON/Markdown for draft-only commands. Polling reviews keep the existing
-evidence path shape.
+evidence includes command source JSON for ordinary reviews or the
+finishing-touch draft JSON/Markdown for draft-only commands. Exact
+`request-changes` jobs write bounded authorization-decision metadata and do not
+persist the raw comment body. Polling reviews keep the existing evidence path
+shape.
 
 The live daemon result includes command counters such as `skippedCommandStop`,
 `skippedCommandExplain`, `skippedFinishingTouchDraft`,

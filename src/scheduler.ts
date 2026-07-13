@@ -1651,6 +1651,11 @@ function reviewResultStatusCommentState(
     case "reviewed":
     case "reviewed_command":
       return "completed";
+    case "posted_stale_head":
+      return "stale_head";
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      return "failed";
     case "skipped_processed":
       return reviewStatusCommentStateForProcessedStatus(processed);
     case "skipped_provider_cooldown":
@@ -1806,6 +1811,11 @@ function readinessStateForReviewResult(
     case "reviewed":
     case "reviewed_command":
       return processed?.event === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
+    case "posted_stale_head":
+      return "stale";
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      return "failed";
     case "skipped_processed":
       return readinessStateForProcessedStatus(processed?.status, processed?.event, processed?.error);
     case "skipped_provider_cooldown":
@@ -1839,6 +1849,12 @@ function readinessReasonForReviewResult(
     case "reviewed":
     case "reviewed_command":
       return processed?.event === "REQUEST_CHANGES" ? "request_changes_review_posted" : "comment_review_posted";
+    case "posted_stale_head":
+      return "head_changed_during_review_post";
+    case "posted_head_unverified":
+      return "post_review_head_unverified";
+    case "skipped_consumed_authorization":
+      return "exact_authorization_already_consumed";
     case "skipped_processed":
       return processed ? readinessReasonForProcessedHead(processed) : "processed_head_already_unknown";
     case "skipped_provider_cooldown":
@@ -2027,6 +2043,11 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "reviewed_command":
       updateReviewerSessionJobFromQueueStatus(input, "completed", input.dryRun ? "dry_run" : "posted");
       return;
+    case "posted_stale_head":
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      updateReviewerSessionJobFromQueueStatus(input, "failed", "failed");
+      return;
     case "skipped_processed": {
       const processed = input.state.getProcessedReview(input.job.repo, input.job.pullNumber, input.job.headSha);
       if (parseProviderCooldownError(processed?.error)) {
@@ -2088,6 +2109,27 @@ function updateQueueJobAfterReviewStatus(input: {
         state: input.dryRun ? "queued" : "posted",
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
         lastError: input.dryRun ? "dry_run_completed_not_posted" : input.status
+      });
+      return;
+    }
+    case "posted_stale_head": {
+      const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "stale_retired",
+        ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+        lastError: "review_posted_head_changed"
+      });
+      return;
+    }
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization": {
+      const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "failed",
+        ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
+        lastError: input.status
       });
       return;
     }
@@ -2392,6 +2434,15 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       result.reviewed += 1;
       result.queue.completed += 1;
       if (status === "reviewed_command") result.commandReviewRequested += 1;
+      break;
+    case "posted_stale_head":
+      result.skippedStaleHead += 1;
+      result.queue.staleRetired += 1;
+      break;
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      result.failed += 1;
+      result.queue.failedQueueJobs += 1;
       break;
     case "skipped_draft":
       result.skippedDraft += 1;

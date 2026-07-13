@@ -667,13 +667,15 @@ describe("worker context budget preflight", () => {
       }
     });
 
-    expect(scenario.result).toBe("reviewed_command");
-    expect(createdReviews[0]?.event).toBe("COMMENT");
-    expect(readDecision(scenario.evidenceDir)).toMatchObject({
-      selectedEvent: "COMMENT",
-      reason: "authorization_consumed",
-      commentId: 42,
-      consumed: false
+    expect(scenario.result).toBe("skipped_consumed_authorization");
+    expect(createdReviews).toEqual([]);
+    expect(zcodePrompts).toEqual([]);
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "consumed-authorization-incident.json"), "utf8"))).toMatchObject({
+      reason: "exact_authorization_already_consumed",
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 503,
+      headSha,
+      commentId: 42
     });
     scenario.state.close();
   });
@@ -836,7 +838,7 @@ describe("worker context budget preflight", () => {
       moveHeadDuringPost: "4".repeat(40)
     });
 
-    expect(scenario.result).toBe("reviewed_command");
+    expect(scenario.result).toBe("posted_stale_head");
     expect(createdReviews[0]).toMatchObject({ headSha, event: "REQUEST_CHANGES" });
     expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "head-changed-during-post.json"), "utf8"))).toEqual({
       reason: "head_changed_during_post",
@@ -1030,7 +1032,7 @@ describe("worker context budget preflight", () => {
     });
 
     expect(scenario.error).toBeUndefined();
-    expect(scenario.result).toBe("reviewed_command");
+    expect(scenario.result).toBe("posted_head_unverified");
     expect(createdReviews).toHaveLength(1);
     expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 517, headSha)).toMatchObject({
       status: "posted",
@@ -1049,10 +1051,52 @@ describe("worker context budget preflight", () => {
     expect(scenario.state.getReviewReadiness("electricsheephq/WorldOS", 517, headSha)).toBeUndefined();
     scenario.state.close();
   });
+
+  it("keeps the first blocking review durable when a second exact command posts an advisory in a separate evidence directory", async () => {
+    const headSha = "f".repeat(40);
+    const first = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 519,
+      headSha,
+      commandComment: requestChangesComment(59, 519, headSha),
+      commandCommentId: 59
+    });
+    const blocking = first.state.getProcessedReview("electricsheephq/WorldOS", 519, headSha);
+    expect(blocking).toMatchObject({ status: "posted", event: "REQUEST_CHANGES" });
+
+    const second = await runOwnerPolicyReview({
+      roots,
+      existing: first,
+      pullNumber: 519,
+      headSha,
+      commandComment: requestChangesComment(60, 519, headSha),
+      commandCommentId: 60
+    });
+
+    expect(second.result).toBe("reviewed_command");
+    expect(createdReviews.map((review) => review.event)).toEqual(["REQUEST_CHANGES", "COMMENT"]);
+    expect(second.state.getProcessedReview("electricsheephq/WorldOS", 519, headSha)).toEqual(blocking);
+    expect(second.state.getReviewReadiness("electricsheephq/WorldOS", 519, headSha)).toMatchObject({
+      state: "needs_fix",
+      event: "REQUEST_CHANGES",
+      reviewUrl: blocking?.reviewUrl
+    });
+    expect(first.evidenceDir).not.toBe(second.evidenceDir);
+    expect(first.evidenceDir).toContain("command-59");
+    expect(second.evidenceDir).toContain("command-60");
+    expect(existsSync(join(first.evidenceDir, "review-event-decision.json"))).toBe(true);
+    expect(existsSync(join(second.evidenceDir, "review-event-decision.json"))).toBe(true);
+    expect(existsSync(join(first.evidenceDir, "command.json"))).toBe(false);
+    expect(existsSync(join(second.evidenceDir, "command.json"))).toBe(false);
+    expect(JSON.stringify(readDecision(first.evidenceDir))).not.toContain("request-changes");
+    expect(JSON.stringify(readDecision(second.evidenceDir))).not.toContain("request-changes");
+    second.state.close();
+  });
 });
 
 async function runOwnerPolicyReview(input: {
   roots: string[];
+  existing?: { root: string; config: BotConfig; state: ReviewStateStore };
   pullNumber: number;
   headSha?: string;
   commandComment?: { id: number; body: string; user: { login: string; type: string } };
@@ -1070,9 +1114,9 @@ async function runOwnerPolicyReview(input: {
   candidateSeverity?: "P1" | "P2";
   configureState?: (state: ReviewStateStore) => void;
 }) {
-  const root = mkdtempSync(join(tmpdir(), "neondiff-owner-policy-"));
-  input.roots.push(root);
-  const config = minimalConfig(root);
+  const root = input.existing?.root ?? mkdtempSync(join(tmpdir(), "neondiff-owner-policy-"));
+  if (!input.existing) input.roots.push(root);
+  const config = input.existing?.config ?? minimalConfig(root);
   config.commands = {
     enabled: true,
     botMentions: ["@evaos-code-review-bot"],
@@ -1085,7 +1129,7 @@ async function runOwnerPolicyReview(input: {
   };
   config.walkthrough.enabled = input.enableWalkthrough === true || input.enableWalkthroughPost === true;
   config.walkthrough.postIssueComment = input.enableWalkthroughPost ?? false;
-  const state = new ReviewStateStore(config.statePath);
+  const state = input.existing?.state ?? new ReviewStateStore(config.statePath);
   const headSha = input.headSha ?? "b".repeat(40);
   const pull = pullSummary(input.pullNumber, headSha);
   let livePull = pull;
@@ -1163,7 +1207,7 @@ async function runOwnerPolicyReview(input: {
     error = caught;
   }
 
-  const commandSubdir = input.commandComment?.body.endsWith("re-review") ? `command-${input.commandComment.id}` : undefined;
+  const commandSubdir = input.commandCommentId ? `command-${input.commandCommentId}` : undefined;
   const evidenceDir = join(
     root,
     "evidence",
