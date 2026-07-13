@@ -413,6 +413,31 @@ describe("Phase 1 screening runner", () => {
     expect(resumed.status).toBe("failed");
   });
 
+  it("rejects an all-layers request for a partial-GPU policy before resident startup", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-partial-all-"));
+    const runSpec = spec(outputDir);
+    const placementModulePath = realpathSync(llamaCppPlacementAttestationModulePath());
+    runSpec.cells[0].placement = {
+      mode: "offload_comparison",
+      profile: "partial_gpu",
+      requestedGpuLayers: "all",
+      parserVersion: "llama.cpp-b9977-placement/v1",
+      parserSourcePath: placementModulePath,
+      parserSourceSha256: digest(readFileSync(placementModulePath)),
+      maxStartupBytes: 16_384,
+      maxStartupLines: 128
+    };
+    let starts = 0;
+
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() {
+        starts += 1;
+        return { id: "resident", argv: ["/opt/llama-server"] };
+      }
+    }))).rejects.toThrow(/partial-GPU.*finite.*layer request/i);
+    expect(starts).toBe(0);
+  });
+
   it("persists explicit CPU-MoE expert placement from the pinned b9977 debug grammar", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-phase1-placement-cpu-moe-"));
     const port = 24000 + Math.floor(Math.random() * 10000);

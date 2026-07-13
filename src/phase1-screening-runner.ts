@@ -1365,6 +1365,9 @@ function validateSpec(spec: Phase1RunSpec): void {
     if (policy.maxStartupBytes > LLAMA_CPP_STARTUP_MAX_BYTES || policy.maxStartupLines > LLAMA_CPP_STARTUP_MAX_LINES) {
       throw new Error(`cell ${cell.id} placement limits exceed the implementation maximum`);
     }
+    if (policy.profile === "partial_gpu" && policy.requestedGpuLayers === "all") {
+      throw new Error(`cell ${cell.id} partial-GPU placement requires a finite numeric layer request`);
+    }
     if (policy.profile === "all_plus_cpu_moe") {
       const expected = policy.expectedCpuMoe;
       if (!expected
@@ -1372,6 +1375,7 @@ function validateSpec(spec: Phase1RunSpec): void {
         || !Number.isSafeInteger(expected.firstLayer) || expected.firstLayer < 0
         || !Number.isSafeInteger(expected.lastLayer) || expected.lastLayer < expected.firstLayer
         || !Number.isSafeInteger(expected.layerCount) || expected.layerCount !== expected.lastLayer - expected.firstLayer + 1
+        || (expected.requestKind === "first_n" && expected.firstLayer !== 0)
         || !Number.isSafeInteger(expected.minimumMatchedTensors) || expected.minimumMatchedTensors < expected.layerCount) {
         throw new Error(`cell ${cell.id} CPU-MoE placement contract is invalid`);
       }

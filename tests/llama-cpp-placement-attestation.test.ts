@@ -275,6 +275,22 @@ describe("llama.cpp b9977 placement attestation", () => {
     })).toThrow(/all-experts.*repeating layers/i);
   });
 
+  it("rejects a first-N CPU-MoE contract that does not begin at layer zero", () => {
+    const expertLines = ["gate", "up", "down"].map((kind) =>
+      `tensor blk.1.ffn_${kind}_exps.weight (512 MiB q4_K) buffer type overridden to CPU`
+    );
+    const source = captureLlamaCppStartup([
+      { stream: "stderr", chunk: Buffer.from(`${fullGpuLog()}${expertLines.join("\n")}\n`) }
+    ], { maxBytes: 32_768, maxLines: 256 });
+
+    expect(() => parseLlamaCppPlacementAttestation(source, {
+      backendCommit: BACKEND_COMMIT,
+      profile: "all_plus_cpu_moe",
+      requestedGpuLayers: 999,
+      expectedCpuMoe: { requestKind: "first_n", firstLayer: 1, lastLayer: 1, layerCount: 1, minimumMatchedTensors: 3 }
+    })).toThrow(/first-N.*layer zero/i);
+  });
+
   it("rejects source event sequence and fingerprint drift", () => {
     const source = captureLlamaCppStartup([
       { stream: "stderr", chunk: Buffer.from(fullGpuLog()) }

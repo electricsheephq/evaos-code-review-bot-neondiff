@@ -403,6 +403,9 @@ export function parseLlamaCppPlacementAttestation(
         || expected.layerCount !== repeatingGpuLayers)) {
       throw new Error("all-experts CPU-MoE placement contract must cover all repeating layers");
     }
+    if (expected.requestKind === "first_n" && expected.firstLayer !== 0) {
+      throw new Error("first-N CPU-MoE placement contract must begin at layer zero");
+    }
     if (cpuExpertTensors.some((tensor) => !tensor.device.startsWith("CPU"))) throw new Error("CPU-MoE expert override is not assigned to CPU");
     const layers = [...new Set(cpuExpertTensors.map((tensor) => tensor.layer))].sort((left, right) => left - right);
     const ranges = contiguousRanges(layers);
