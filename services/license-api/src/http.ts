@@ -24,6 +24,18 @@ import {
   parseLifecycleIssuanceRequest,
   type LifecycleOidcVerifier
 } from "./oidc-lifecycle.js";
+import {
+  parseSubscriptionLifecycleRequest,
+  LifecycleRequestError as SubscriptionLifecycleRequestError
+} from "./subscription-lifecycle.js";
+import {
+  SubscriptionLifecycleConflictError,
+  SubscriptionLifecycleNotFoundError,
+  SubscriptionLifecyclePolicyError,
+  SubscriptionLifecycleTerminalError,
+  SubscriptionLifecycleTransientError,
+  SubscriptionLifecycleUnsupportedCommandError
+} from "./store.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -33,6 +45,7 @@ export interface LicenseHttpOptions {
   store: LicenseStore;
   rateLimiter?: RateLimiter;
   lifecycleRateLimiter?: RateLimiter;
+  subscriptionLifecycleRateLimiter?: RateLimiter;
   issuanceSecret?: string;
   lifecycleOidcVerifier?: LifecycleOidcVerifier;
   /** Injectable clock for deterministic tests. */
@@ -58,6 +71,9 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
     options.rateLimiter ?? new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
   const lifecycleRateLimiter =
     options.lifecycleRateLimiter ?? new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
+  const subscriptionLifecycleRateLimiter =
+    options.subscriptionLifecycleRateLimiter ??
+    new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method === "GET" && req.url === "/healthz") {
@@ -76,6 +92,14 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
         return writeJson(res, 429, { status: "rate_limited", detail: "too many lifecycle issuance requests" });
       }
       return handleLifecycleIssuanceRequest(options, req, res);
+    }
+    if (req.method === "POST" && path === "/v1/admin/licenses/lifecycle") {
+      return handleSubscriptionLifecycleRequest(
+        options,
+        subscriptionLifecycleRateLimiter,
+        req,
+        res
+      );
     }
 
     const route = path ? ROUTES[path] : undefined;
@@ -103,6 +127,71 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       return writeJson(res, 500, { status: "server", detail: "internal error" });
     }
   };
+}
+
+async function handleSubscriptionLifecycleRequest(
+  options: LicenseHttpOptions,
+  rateLimiter: RateLimiter,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!options.issuanceSecret) {
+    return writeJson(res, 503, { status: "unavailable" });
+  }
+  if (!validateBearerSecret(req.headers.authorization, options.issuanceSecret)) {
+    return writeJson(res, 401, { status: "unauthorized" });
+  }
+
+  const forwardedAddress = req.headers["fly-client-ip"];
+  const candidateAddress = Array.isArray(forwardedAddress) ? forwardedAddress[0] : forwardedAddress;
+  const sourceAddress = candidateAddress && isIP(candidateAddress)
+    ? candidateAddress
+    : (req.socket.remoteAddress ?? "unknown");
+  const rateLimitKey = createHash("sha256")
+    .update(`subscription-lifecycle:${sourceAddress}`)
+    .digest("hex");
+  const requestTime = (options.now ?? (() => new Date()))();
+  if (!rateLimiter.allow(rateLimitKey, requestTime.getTime())) {
+    return writeJson(
+      res,
+      429,
+      { status: "rate_limited" },
+      { "Retry-After": "60" }
+    );
+  }
+
+  try {
+    const request = parseSubscriptionLifecycleRequest(await readBody(req), requestTime);
+    return writeJson(
+      res,
+      200,
+      options.store.applyCheckoutSubscriptionLifecycle(request)
+    );
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return writeJson(res, 413, { status: "invalid" });
+    }
+    if (
+      error instanceof SubscriptionLifecycleRequestError ||
+      error instanceof SubscriptionLifecyclePolicyError ||
+      error instanceof SubscriptionLifecycleUnsupportedCommandError
+    ) {
+      return writeJson(res, 400, { status: "invalid" });
+    }
+    if (error instanceof SubscriptionLifecycleNotFoundError) {
+      return writeJson(res, 404, { status: "not_found" });
+    }
+    if (error instanceof SubscriptionLifecycleConflictError) {
+      return writeJson(res, 409, { status: "conflict" });
+    }
+    if (error instanceof SubscriptionLifecycleTerminalError) {
+      return writeJson(res, 409, { status: "terminally_revoked" });
+    }
+    if (error instanceof SubscriptionLifecycleTransientError) {
+      return writeJson(res, 503, { status: "unavailable" });
+    }
+    return writeJson(res, 500, { status: "server" });
+  }
 }
 
 async function handleLifecycleIssuanceRequest(
@@ -226,8 +315,13 @@ function writeResult(res: ServerResponse, result: ServiceResult, overrideStatus?
   writeJson(res, overrideStatus ?? result.httpStatus, result.body);
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
+function writeJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {}
+): void {
   const payload = JSON.stringify(body);
-  res.writeHead(status, { "Content-Type": "application/json" });
+  res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(payload);
 }

@@ -1,6 +1,7 @@
 import { LicenseStore } from "./store.js";
 import { startLicenseServer } from "./http.js";
 import { createGitHubActionsOidcVerifier } from "./oidc-lifecycle.js";
+import { RateLimiter } from "./service.js";
 
 /**
  * Production entrypoint. SQLite lives on a mounted volume in deploy
@@ -17,6 +18,10 @@ async function main(): Promise<void> {
     port,
     host,
     issuanceSecret: process.env.LICENSE_ISSUANCE_SECRET,
+    subscriptionLifecycleRateLimiter: new RateLimiter({
+      maxPerWindow: 60,
+      windowMs: 60_000
+    }),
     lifecycleOidcVerifier: createGitHubActionsOidcVerifier()
   });
   // eslint-disable-next-line no-console
