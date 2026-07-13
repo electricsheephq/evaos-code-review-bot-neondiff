@@ -195,9 +195,24 @@ async function applyLifecycle(
 
 function expectLifecycleResponseRedacted(
   response: { text: string },
-  rawKey: string
+  rawKey: string,
+  request: Record<string, unknown>
 ): void {
-  for (const forbidden of [rawKey, "acct_contract", "sub_contract_", "cs_contract_"]) {
+  const requestIdentifiers = [
+    request.issuanceIdempotencyKey,
+    request.eventId,
+    request.provider,
+    request.providerAccountId,
+    request.providerMode,
+    request.externalSubscriptionId,
+    request.paymentReference
+  ].filter((value): value is string => typeof value === "string");
+  for (const forbidden of [
+    rawKey,
+    LIFECYCLE_ISSUANCE_SECRET,
+    "cs_contract_",
+    ...requestIdentifiers
+  ]) {
     expect(response.text).not.toContain(forbidden);
   }
 }
@@ -332,14 +347,12 @@ describe("client ↔ service contract (real src/license.ts against real service)
     expect(activated.status).toBe("active");
     expect(JSON.stringify(activated)).not.toContain(key);
 
-    const renewed = await applyLifecycle(
-      service,
-      lifecycleRequest("renew-cancel", "renew_paid", LIFECYCLE_START)
-    );
+    const renewalRequest = lifecycleRequest("renew-cancel", "renew_paid", LIFECYCLE_START);
+    const renewed = await applyLifecycle(service, renewalRequest);
     lifecycleEvidence.push(renewed.text);
     expect(renewed.status).toBe(200);
     expect(renewed.json.status).toBe("updated");
-    expectLifecycleResponseRedacted(renewed, key);
+    expectLifecycleResponseRedacted(renewed, key, renewalRequest);
 
     const activeAfterRenewal = await getLicenseStatus({
       config,
@@ -351,14 +364,16 @@ describe("client ↔ service contract (real src/license.ts against real service)
 
     const cancellationTime = new Date("2026-07-14T00:00:00.000Z");
     service.setNow(cancellationTime);
-    const cancelled = await applyLifecycle(
-      service,
-      lifecycleRequest("renew-cancel", "cancel_at_period_end", cancellationTime)
+    const cancellationRequest = lifecycleRequest(
+      "renew-cancel",
+      "cancel_at_period_end",
+      cancellationTime
     );
+    const cancelled = await applyLifecycle(service, cancellationRequest);
     lifecycleEvidence.push(cancelled.text);
     expect(cancelled.status).toBe(200);
     expect(cancelled.json.status).toBe("updated");
-    expectLifecycleResponseRedacted(cancelled, key);
+    expectLifecycleResponseRedacted(cancelled, key, cancellationRequest);
 
     const activeAfterCancellation = await getLicenseStatus({
       config,
@@ -404,13 +419,11 @@ describe("client ↔ service contract (real src/license.ts against real service)
     });
     expect(activated.status).toBe("active");
 
-    const revokedResponse = await applyLifecycle(
-      service,
-      lifecycleRequest("revoke", "revoke", LIFECYCLE_START)
-    );
+    const revocationRequest = lifecycleRequest("revoke", "revoke", LIFECYCLE_START);
+    const revokedResponse = await applyLifecycle(service, revocationRequest);
     expect(revokedResponse.status).toBe(200);
     expect(revokedResponse.json.status).toBe("terminally_revoked");
-    expectLifecycleResponseRedacted(revokedResponse, key);
+    expectLifecycleResponseRedacted(revokedResponse, key, revocationRequest);
 
     const revoked = await getLicenseStatus({
       config,
@@ -420,20 +433,18 @@ describe("client ↔ service contract (real src/license.ts against real service)
     expect(revoked.status).toBe("revoked");
     expect(JSON.stringify(revoked)).not.toContain(key);
 
-    const laterRenewal = await applyLifecycle(
-      service,
-      lifecycleRequest(
-        "revoke",
-        "renew_paid",
-        new Date(LIFECYCLE_START.getTime() + 60_000),
-        {
-          eventId: "evt_contract_revoke_later_renew_paid"
-        }
-      )
+    const laterRenewalRequest = lifecycleRequest(
+      "revoke",
+      "renew_paid",
+      new Date(LIFECYCLE_START.getTime() + 60_000),
+      {
+        eventId: "evt_contract_revoke_later_renew_paid"
+      }
     );
+    const laterRenewal = await applyLifecycle(service, laterRenewalRequest);
     expect(laterRenewal.status, laterRenewal.text).toBe(409);
     expect(laterRenewal.json).toEqual({ status: "terminally_revoked" });
-    expectLifecycleResponseRedacted(laterRenewal, key);
+    expectLifecycleResponseRedacted(laterRenewal, key, laterRenewalRequest);
 
     const stillRevoked = await getLicenseStatus({
       config,
