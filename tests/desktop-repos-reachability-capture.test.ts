@@ -143,7 +143,7 @@ if [ "$1" = run ]; then
   if [ "\${FAKE_CHECKER_STATUS:-0}" -eq 0 ]; then
     printf '%s\\n' '{"ok":true}'
   else
-    printf '%s\\n' '{"ok":false,"failure":"missing outer AXScrollArea ancestor"}'
+    printf '%s\\n' '{"ok":false,"failure":"behavior trace rejected"}'
   fi
   if [ -n "\${FAKE_CHECKER_MESSAGE:-}" ]; then printf '%s\\n' "$FAKE_CHECKER_MESSAGE" >&2; fi
   exit "\${FAKE_CHECKER_STATUS:-0}"
@@ -170,12 +170,20 @@ fi
 printf 'png' >"$output_dir/screenshot.png"
 printf '%s\\n' '{"role":"AXWindow","children":[]}' >"$output_dir/accessibility.json"
 printf '%s\\n' '{"schemaVersion":1,"fixtureId":"tab-repos"}' >"$output_dir/geometry.json"
-printf '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"acquisition":{"status":"%s","failureReason":%s},"outerScroll":null}\\n' \\
-  "\${FAKE_ACQUISITION_STATUS:-complete}" "\${FAKE_ACQUISITION_FAILURE_REASON:-null}" \\
-  >"$output_dir/reachability.json"
+printf '%s\\n' '{"schemaVersion":2,"fixture":"tab-repos","ready":true,"quiescent":true,"requestedContentSize":{"width":1040,"height":680},"sampleIntervalMilliseconds":100,"preScrollAcquisitionMilliseconds":200,"postScrollAcquisitionMilliseconds":200,"tolerancePoints":1,"acquisition":{"status":"complete","failureReason":null},"preScrollSamples":[{"elapsedMilliseconds":0,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":100,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":600,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":650,"width":760,"height":40}}]},{"elapsedMilliseconds":100,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":100,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":600,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":650,"width":760,"height":40}}]},{"elapsedMilliseconds":200,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":100,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":600,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":650,"width":760,"height":40}}]}],"scrollInteraction":{"mechanism":"increment-page-press","incrementPagePress":{"actionAdvertised":true,"attemptCount":1,"performResult":"success","outerClipBefore":{"x":20,"y":50,"width":1000,"height":580},"outerClipAfter":{"x":20,"y":50,"width":1000,"height":580}},"valueMutation":null},"postScrollSamples":[{"elapsedMilliseconds":0,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":0,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":500,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":550,"width":760,"height":40}}]},{"elapsedMilliseconds":100,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":0,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":500,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":550,"width":760,"height":40}}]},{"elapsedMilliseconds":200,"viewport":{"x":0,"y":0,"width":1040,"height":680},"regions":[{"id":"table","frame":{"x":24,"y":0,"width":900,"height":360}},{"id":"apply-allowlist","frame":{"x":24,"y":500,"width":180,"height":30}},{"id":"boundary-body","frame":{"x":24,"y":550,"width":760,"height":40}}]}]}' >"$output_dir/reachability.json"
+if [ "\${FAKE_ACQUISITION_STATUS:-complete}" != complete ]; then
+  jq --arg status "$FAKE_ACQUISITION_STATUS" --argjson reason "$FAKE_ACQUISITION_FAILURE_REASON" \
+    '.acquisition = {status:$status,failureReason:$reason}
+      | .ready = false
+      | .quiescent = false
+      | .scrollInteraction = null
+      | .postScrollSamples = []' "$output_dir/reachability.json" \
+    >"$output_dir/reachability.tmp"
+  mv "$output_dir/reachability.tmp" "$output_dir/reachability.json"
+fi
 case "\${FAKE_CAPABILITIES_MODE:-valid}" in
   valid)
-    printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false,"outerVerticalIncrementPageResolved":true,"outerVerticalIncrementPageAdvertisesPress":false}' \\
+    printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false,"outerVerticalIncrementPageResolved":true,"outerVerticalIncrementPageAdvertisesPress":true}' \\
       >"$output_dir/scroll-capabilities.json"
     ;;
   failed)
@@ -214,7 +222,7 @@ fi
       FAKE_COMMAND_LOG: commandLog,
       FAKE_SWIFT_BIN: swiftBin,
       FAKE_CHECKER_STATUS: "7",
-      FAKE_CHECKER_MESSAGE: "Reachability trace has no outer scroll area.",
+      FAKE_CHECKER_MESSAGE: "Reachability behavior trace was rejected.",
       FAKE_CAPTURE_STATUS: "0",
       FAKE_CAPTURE_MESSAGE: "",
       FAKE_CAPTURE_HANG: "false",
@@ -318,7 +326,7 @@ describe("focused Repos reachability capture", () => {
       "utf8"
     );
     const incrementPageProbe = captureSource.match(
-      /private func incrementPageButton[\s\S]*?private func unsupportedScroll/
+      /private func incrementPageButton[\s\S]*?private func verifiedWindow/
     )?.[0];
     expect(incrementPageProbe).toBeDefined();
     expect(incrementPageProbe).toContain("kAXChildrenAttribute");
@@ -328,11 +336,20 @@ describe("focused Repos reachability capture", () => {
     expect(incrementPageProbe).not.toContain("visit(");
     expect(captureSource).toContain("NSAccessibility.Action.press.rawValue");
     expect(captureSource).toContain("AXUIElementCopyActionNames");
-    expect(captureSource).not.toContain("AXUIElementPerformAction");
+    const capabilityProbe = captureSource.match(
+      /func captureScrollCapabilities[\s\S]*?private func acquireStableSamples/
+    )?.[0];
+    expect(capabilityProbe).not.toContain("AXUIElementPerformAction");
+    const behaviorPress = captureSource.match(
+      /private func performIncrementPagePress[\s\S]*?private func scrollActionResult/
+    )?.[0];
+    expect(behaviorPress?.match(/AXUIElementPerformAction/g)).toHaveLength(1);
+    expect(behaviorPress).toContain("NSAccessibility.Action.press.rawValue");
+    expect(behaviorPress).not.toMatch(/for |while |repeat /);
   });
 
   it.runIf(process.platform === "darwin")(
-    "preserves reachability and public-safe status evidence when the checker reports the expected pre-fix failure",
+    "preserves reachability and public-safe status evidence when the checker rejects the behavior trace",
     { timeout: 30_000 },
     () => {
       const harness = createFakeHarnessRepository();
@@ -345,7 +362,7 @@ describe("focused Repos reachability capture", () => {
       expect(JSON.parse(readFileSync(join(caseRoot, "reachability.json"), "utf8"))).toMatchObject({
         fixture: "tab-repos",
         requestedContentSize: { width: 1040, height: 680 },
-        outerScroll: null
+        scrollInteraction: { mechanism: "increment-page-press", valueMutation: null }
       });
       expect(JSON.parse(readFileSync(join(caseRoot, "scroll-capabilities.json"), "utf8"))).toEqual({
         schemaVersion: 1,
@@ -358,17 +375,17 @@ describe("focused Repos reachability capture", () => {
         outerVerticalScrollBarResolved: true,
         outerVerticalScrollBarAdvertisesIncrement: false,
         outerVerticalIncrementPageResolved: true,
-        outerVerticalIncrementPageAdvertisesPress: false
+        outerVerticalIncrementPageAdvertisesPress: true
       });
       expect(JSON.parse(readFileSync(join(caseRoot, "capture.json"), "utf8")))
         .toMatchObject({ scrollCapabilities: { path: "scroll-capabilities.json", sha256: expect.any(String) } });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/reachability-check-status.json"), "utf8")))
-        .toMatchObject({
+        .toEqual({
+          schemaVersion: 1,
           status: "failed",
           checkerFailed: true,
           exitCode: 7,
-          expectedPreFixFailure: true,
-          reasonCode: "missing_outer_scroll"
+          reasonCode: "checker_nonzero"
         });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/packet-safety-scan.json"), "utf8")))
         .toMatchObject({ ok: true, findings: [], sensitiveFiles: [] });
@@ -480,7 +497,7 @@ describe("focused Repos reachability capture", () => {
   );
 
   it.runIf(process.platform === "darwin")(
-    "does not classify an unrelated checker failure as the expected pre-fix result",
+    "classifies every checker rejection as an ordinary checker failure",
     { timeout: 30_000 },
     () => {
       const harness = createFakeHarnessRepository();
@@ -492,14 +509,13 @@ describe("focused Repos reachability capture", () => {
           status: "failed",
           checkerFailed: true,
           exitCode: 7,
-          expectedPreFixFailure: false,
           reasonCode: "checker_nonzero"
         });
     }
   );
 
   it.runIf(process.platform === "darwin")(
-    "does not classify failed acquisition as the expected missing-scroll result",
+    "preserves a typed failed acquisition without a behavior interaction",
     { timeout: 30_000 },
     () => {
       const harness = createFakeHarnessRepository();
@@ -512,12 +528,17 @@ describe("focused Repos reachability capture", () => {
       expect(JSON.parse(readFileSync(
         join(harness.output, "cases/tab-repos/1040x680/reachability.json"),
         "utf8"
-      ))).toMatchObject({ acquisition: { status: "failed", failureReason: "semantic-missing" }, outerScroll: null });
+      ))).toMatchObject({
+        ready: false,
+        quiescent: false,
+        acquisition: { status: "failed", failureReason: "semantic-missing" },
+        scrollInteraction: null,
+        postScrollSamples: []
+      });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/reachability-check-status.json"), "utf8")))
         .toMatchObject({
           checkerFailed: true,
           exitCode: 7,
-          expectedPreFixFailure: false,
           reasonCode: "checker_nonzero"
         });
     }
@@ -724,7 +745,7 @@ describe("focused Repos reachability capture", () => {
         focusedProof: "emitted"
       });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/reachability-check-status.json"), "utf8")))
-        .toMatchObject({ checkerFailed: false, exitCode: 0, expectedPreFixFailure: false, reasonCode: "none" });
+        .toMatchObject({ checkerFailed: false, exitCode: 0, reasonCode: "none" });
       expect(existsSync(join(harness.output, "focused-proof.json"))).toBe(true);
       expect(existsSync(join(harness.output, "validation/packet-safety-scan.ok"))).toBe(true);
       expect(() => process.kill(launchedPID(harness), 0)).toThrow();
@@ -739,8 +760,9 @@ describe("focused Repos reachability capture", () => {
     const docs = readFileSync("apps/neondiff-desktop/docs/ui-evaluation.md", "utf8");
     expect(docs).toMatch(/focused partial #517 proof/i);
     expect(docs).toMatch(/outside the canonical #515 packet/i);
-    expect(docs).toMatch(/missing outer `AXScrollArea` ancestor/i);
-    expect(docs).toMatch(/Table scroll/i);
+    expect(docs).toMatch(/performs that public\s+action exactly once/i);
+    expect(docs).toMatch(/rigid upward translation/i);
+    expect(docs).toMatch(/nested Table/i);
     expect(docs).toMatch(/checker failure preserves `reachability\.json`/i);
     expect(docs).toMatch(/`scroll-capabilities\.json`/i);
     expect(docs).toMatch(/does not perform accessibility actions/i);

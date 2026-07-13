@@ -175,6 +175,16 @@ a typed acquisition failure rather than a false capability result. It never
 reads live configuration, Keychain, GitHub, provider, daemon, network, or
 customer state.
 
+The separate schema-v2 reachability behavior is enabled only by this focused
+DEBUG runner. After binding the freshly launched fixture PID, unique Table,
+Apply, Boundary, Boundary's outermost scroll ancestor, and the exact direct
+Increment Page child, it rechecks advertised `AXPress` and performs that public
+action exactly once. It does not retry, substitute arrows, use a private action,
+or target an installed/live app. API acceptance is recorded but is not treated
+as reachability: the checker requires stable window and outer-clip geometry,
+one rigid upward translation of Table, Apply, and Boundary, and post-action
+Apply/Boundary containment in the outer clip.
+
 Capture output remains in the private workspace until the helper exits
 successfully and every required file is present. A fixture exit before
 readiness, bounded readiness timeout, capture timeout, TCC denial, partial
@@ -184,15 +194,11 @@ not expose raw launch or capture logs. The final proof, safety result, and `ok`
 marker are published only after the packet scan passes and a final clean
 exact-HEAD check succeeds.
 
-The current pre-fix result is the missing outer `AXScrollArea` ancestor. It is
-classified as that expected RED only when the typed reachability acquisition is
-`complete`, its failure reason is explicitly null, `outerScroll` is explicitly
-null, and the checker reports the exact missing-scroll error. Acquisition
-failures and unrelated checker failures remain ordinary checker failures.
-Boundary is a sibling of Table, so a Table scroll does not satisfy the checker.
-The DEBUG fixture may
-mutate only its deterministic test UI to exercise scroll reachability; it does
-not authorize live product or runtime mutation. A checker failure preserves `reachability.json`
+All checker failures are ordinary typed failures; there is no legacy
+"expected pre-fix" exception. Boundary is a sibling of Table, so nested Table
+scrolling cannot satisfy the rigid page-translation contract. The DEBUG fixture
+may mutate only its deterministic test UI to exercise scroll reachability; it
+does not authorize live product or runtime mutation. A checker failure preserves `reachability.json`
 and `scroll-capabilities.json`.
 The normalized checker status and public-safety result are written before the
 runner returns the nonzero checker exit.

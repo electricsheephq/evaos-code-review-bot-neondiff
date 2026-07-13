@@ -332,6 +332,102 @@ public struct DesktopReposOuterScrollObservation: Codable, Equatable, Sendable {
     }
 }
 
+public enum DesktopReposScrollMechanism: String, Codable, Equatable, Sendable {
+    case incrementPagePress = "increment-page-press"
+}
+
+public enum DesktopReposScrollActionResult: String, Codable, Equatable, Sendable {
+    case success
+    case cannotComplete = "cannot-complete"
+    case actionUnsupported = "action-unsupported"
+    case invalidElement = "invalid-element"
+    case permissionDenied = "permission-denied"
+    case otherError = "other-error"
+}
+
+public struct DesktopReposIncrementPagePressObservation: Codable, Equatable, Sendable {
+    public let actionAdvertised: Bool
+    public let attemptCount: Int
+    public let performResult: DesktopReposScrollActionResult?
+    public let outerClipBefore: DesktopReposReachabilityFrame
+    public let outerClipAfter: DesktopReposReachabilityFrame?
+
+    public init(
+        actionAdvertised: Bool,
+        attemptCount: Int,
+        performResult: DesktopReposScrollActionResult?,
+        outerClipBefore: DesktopReposReachabilityFrame,
+        outerClipAfter: DesktopReposReachabilityFrame?
+    ) {
+        self.actionAdvertised = actionAdvertised
+        self.attemptCount = attemptCount
+        self.performResult = performResult
+        self.outerClipBefore = outerClipBefore
+        self.outerClipAfter = outerClipAfter
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case actionAdvertised, attemptCount, performResult, outerClipBefore, outerClipAfter
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        actionAdvertised = try container.decode(Bool.self, forKey: .actionAdvertised)
+        attemptCount = try container.decode(Int.self, forKey: .attemptCount)
+        performResult = try container.decodeIfPresent(DesktopReposScrollActionResult.self, forKey: .performResult)
+        outerClipBefore = try container.decode(DesktopReposReachabilityFrame.self, forKey: .outerClipBefore)
+        outerClipAfter = try container.decodeIfPresent(DesktopReposReachabilityFrame.self, forKey: .outerClipAfter)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(actionAdvertised, forKey: .actionAdvertised)
+        try container.encode(attemptCount, forKey: .attemptCount)
+        if let performResult { try container.encode(performResult, forKey: .performResult) }
+        else { try container.encodeNil(forKey: .performResult) }
+        try container.encode(outerClipBefore, forKey: .outerClipBefore)
+        if let outerClipAfter { try container.encode(outerClipAfter, forKey: .outerClipAfter) }
+        else { try container.encodeNil(forKey: .outerClipAfter) }
+    }
+}
+
+public struct DesktopReposScrollInteraction: Codable, Equatable, Sendable {
+    public let mechanism: DesktopReposScrollMechanism
+    public let incrementPagePress: DesktopReposIncrementPagePressObservation?
+    public let valueMutation: DesktopReposOuterScrollObservation?
+
+    public init(
+        mechanism: DesktopReposScrollMechanism,
+        incrementPagePress: DesktopReposIncrementPagePressObservation?,
+        valueMutation: DesktopReposOuterScrollObservation?
+    ) {
+        self.mechanism = mechanism
+        self.incrementPagePress = incrementPagePress
+        self.valueMutation = valueMutation
+    }
+
+    private enum CodingKeys: String, CodingKey { case mechanism, incrementPagePress, valueMutation }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mechanism = try container.decode(DesktopReposScrollMechanism.self, forKey: .mechanism)
+        incrementPagePress = try container.decodeIfPresent(
+            DesktopReposIncrementPagePressObservation.self,
+            forKey: .incrementPagePress
+        )
+        valueMutation = try container.decodeIfPresent(DesktopReposOuterScrollObservation.self, forKey: .valueMutation)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mechanism, forKey: .mechanism)
+        if let incrementPagePress { try container.encode(incrementPagePress, forKey: .incrementPagePress) }
+        else { try container.encodeNil(forKey: .incrementPagePress) }
+        if let valueMutation { try container.encode(valueMutation, forKey: .valueMutation) }
+        else { try container.encodeNil(forKey: .valueMutation) }
+    }
+}
+
 public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
     public let schemaVersion: Int
     public let fixture: DesktopReposReachabilityFixture
@@ -344,7 +440,7 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
     public let tolerancePoints: Double
     public let acquisition: DesktopReposReachabilityAcquisition
     public let preScrollSamples: [DesktopReposReachabilitySample]
-    public let outerScroll: DesktopReposOuterScrollObservation?
+    public let scrollInteraction: DesktopReposScrollInteraction?
     public let postScrollSamples: [DesktopReposReachabilitySample]
 
     public init(
@@ -359,7 +455,7 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
         tolerancePoints: Double,
         acquisition: DesktopReposReachabilityAcquisition,
         preScrollSamples: [DesktopReposReachabilitySample],
-        outerScroll: DesktopReposOuterScrollObservation?,
+        scrollInteraction: DesktopReposScrollInteraction?,
         postScrollSamples: [DesktopReposReachabilitySample]
     ) {
         self.schemaVersion = schemaVersion
@@ -373,7 +469,7 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
         self.tolerancePoints = tolerancePoints
         self.acquisition = acquisition
         self.preScrollSamples = preScrollSamples
-        self.outerScroll = outerScroll
+        self.scrollInteraction = scrollInteraction
         self.postScrollSamples = postScrollSamples
     }
 
@@ -389,7 +485,7 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
         case tolerancePoints
         case acquisition
         case preScrollSamples
-        case outerScroll
+        case scrollInteraction
         case postScrollSamples
     }
 
@@ -406,7 +502,7 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
         tolerancePoints = try container.decode(Double.self, forKey: .tolerancePoints)
         acquisition = try container.decode(DesktopReposReachabilityAcquisition.self, forKey: .acquisition)
         preScrollSamples = try container.decode([DesktopReposReachabilitySample].self, forKey: .preScrollSamples)
-        outerScroll = try container.decodeIfPresent(DesktopReposOuterScrollObservation.self, forKey: .outerScroll)
+        scrollInteraction = try container.decodeIfPresent(DesktopReposScrollInteraction.self, forKey: .scrollInteraction)
         postScrollSamples = try container.decode([DesktopReposReachabilitySample].self, forKey: .postScrollSamples)
     }
 
@@ -423,10 +519,10 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
         try container.encode(tolerancePoints, forKey: .tolerancePoints)
         try container.encode(acquisition, forKey: .acquisition)
         try container.encode(preScrollSamples, forKey: .preScrollSamples)
-        if let outerScroll {
-            try container.encode(outerScroll, forKey: .outerScroll)
+        if let scrollInteraction {
+            try container.encode(scrollInteraction, forKey: .scrollInteraction)
         } else {
-            try container.encodeNil(forKey: .outerScroll)
+            try container.encodeNil(forKey: .scrollInteraction)
         }
         try container.encode(postScrollSamples, forKey: .postScrollSamples)
     }
@@ -459,12 +555,12 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
               hasAllowedAndRequired(root, allowed: [
                   "schemaVersion", "fixture", "ready", "quiescent", "requestedContentSize",
                   "sampleIntervalMilliseconds", "preScrollAcquisitionMilliseconds", "tolerancePoints",
-                  "postScrollAcquisitionMilliseconds", "acquisition", "preScrollSamples", "outerScroll",
+                  "postScrollAcquisitionMilliseconds", "acquisition", "preScrollSamples", "scrollInteraction",
                   "postScrollSamples"
               ], required: [
                   "schemaVersion", "fixture", "ready", "quiescent", "requestedContentSize",
                   "sampleIntervalMilliseconds", "preScrollAcquisitionMilliseconds", "tolerancePoints",
-                  "postScrollAcquisitionMilliseconds", "acquisition", "preScrollSamples", "outerScroll",
+                  "postScrollAcquisitionMilliseconds", "acquisition", "preScrollSamples", "scrollInteraction",
                   "postScrollSamples"
               ]),
               let acquisition = root["acquisition"] as? [String: Any],
@@ -481,12 +577,16 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
               post.allSatisfy(validateSample) else {
             return false
         }
-        if let scroll = root["outerScroll"], !(scroll is NSNull) {
-            guard let dictionary = scroll as? [String: Any],
-                  hasAllowedAndRequired(dictionary, allowed: [
-                      "verticalScrollBarSupported", "minimumValue", "maximumValue", "valueBeforeScroll",
-                      "valueAfterScroll", "setToMaximumSucceeded"
-                  ], required: ["verticalScrollBarSupported", "setToMaximumSucceeded"]) else {
+        if let interaction = root["scrollInteraction"], !(interaction is NSNull) {
+            guard let dictionary = interaction as? [String: Any],
+                  hasOnly(dictionary, ["mechanism", "incrementPagePress", "valueMutation"]),
+                  dictionary["valueMutation"] is NSNull,
+                  let press = dictionary["incrementPagePress"] as? [String: Any],
+                  hasOnly(press, [
+                      "actionAdvertised", "attemptCount", "performResult", "outerClipBefore", "outerClipAfter"
+                  ]),
+                  validateFrame(press["outerClipBefore"]),
+                  (press["outerClipAfter"] is NSNull || validateFrame(press["outerClipAfter"])) else {
                 return false
             }
         }
@@ -546,8 +646,16 @@ public enum DesktopReposReachabilityValidationError: LocalizedError, Equatable, 
     case duplicateRegion(DesktopReposReachabilityValidationPhase, Int, DesktopReposReachabilityRegion)
     case missingRegion(DesktopReposReachabilityValidationPhase, Int, DesktopReposReachabilityRegion)
     case excessiveDrift(DesktopReposReachabilityValidationPhase, Int, DesktopReposReachabilityRegion?)
-    case missingOuterScroll
-    case unsupportedOuterScroll
+    case missingScrollInteraction
+    case actionNotAdvertised
+    case actionPerformFailed(DesktopReposScrollActionResult)
+    case unstableWindow
+    case unstableOuterClip
+    case outerClipOutsideWindow
+    case boundaryInitiallyInsideOuterClip
+    case noUpwardMovement
+    case nonRigidMovement
+    case pressInsufficient(DesktopReposReachabilityRegion)
     case regionOutsideViewport(DesktopReposReachabilityValidationPhase, Int, DesktopReposReachabilityRegion)
 
     public var errorDescription: String? {
@@ -567,10 +675,26 @@ public enum DesktopReposReachabilityValidationError: LocalizedError, Equatable, 
         case .excessiveDrift(let phase, let index, let region):
             let name = region?.rawValue ?? "viewport"
             return "Reachability trace \(name) drift exceeds tolerance in \(phase.rawValue) sample \(index)."
-        case .missingOuterScroll:
-            return "Reachability trace has no outer scroll area."
-        case .unsupportedOuterScroll:
-            return "Reachability trace outer scroll area cannot be set to its maximum."
+        case .missingScrollInteraction:
+            return "Reachability trace has no scroll interaction."
+        case .actionNotAdvertised:
+            return "Reachability trace increment-page press was not advertised."
+        case .actionPerformFailed(let result):
+            return "Reachability trace increment-page press failed: \(result.rawValue)."
+        case .unstableWindow:
+            return "Reachability trace window changed across the scroll interaction."
+        case .unstableOuterClip:
+            return "Reachability trace outer clip changed across the scroll interaction."
+        case .outerClipOutsideWindow:
+            return "Reachability trace outer clip is outside the verified window."
+        case .boundaryInitiallyInsideOuterClip:
+            return "Reachability trace Boundary did not begin below the outer clip."
+        case .noUpwardMovement:
+            return "Reachability trace increment-page press produced no upward movement."
+        case .nonRigidMovement:
+            return "Reachability trace regions did not move as one rigid page."
+        case .pressInsufficient(let region):
+            return "Reachability trace press-insufficient: \(region.rawValue) remains outside the outer clip."
         case .regionOutsideViewport(let phase, let index, let region):
             return "Reachability trace \(region.rawValue) is outside the viewport in \(phase.rawValue) sample \(index)."
         }
@@ -581,7 +705,7 @@ public enum DesktopReposReachabilityValidator {
     public static func validate(
         _ trace: DesktopReposReachabilityTrace
     ) throws -> DesktopReposReachabilityValidationStatus {
-        guard trace.schemaVersion == 1,
+        guard trace.schemaVersion == 2,
               trace.fixture == .tabRepos,
               trace.requestedContentSize == DesktopEvaluationContentSize(width: 1040, height: 680),
               trace.sampleIntervalMilliseconds == 100,
@@ -600,6 +724,7 @@ public enum DesktopReposReachabilityValidator {
         case (.complete, .some), (.failed, nil):
             throw DesktopReposReachabilityValidationError.invalidContract
         }
+        let press = try validateInteraction(trace.scrollInteraction)
         guard trace.ready,
               trace.quiescent,
               trace.preScrollAcquisitionMilliseconds <= 5_000,
@@ -616,7 +741,6 @@ public enum DesktopReposReachabilityValidator {
               trace.preScrollAcquisitionMilliseconds >= lastPreScrollSample.elapsedMilliseconds else {
             throw DesktopReposReachabilityValidationError.invalidContract
         }
-        try validateScroll(trace.outerScroll)
         try validateSamples(
             trace.postScrollSamples,
             phase: .postScroll,
@@ -626,8 +750,12 @@ public enum DesktopReposReachabilityValidator {
               trace.postScrollAcquisitionMilliseconds >= lastPostScrollSample.elapsedMilliseconds else {
             throw DesktopReposReachabilityValidationError.invalidContract
         }
-        try requireVisible(.applyAllowlist, in: trace.postScrollSamples, phase: .postScroll)
-        try requireVisible(.boundaryBody, in: trace.postScrollSamples, phase: .postScroll)
+        try validateBehaviorGeometry(
+            pre: trace.preScrollSamples,
+            post: trace.postScrollSamples,
+            press: press,
+            tolerance: trace.tolerancePoints
+        )
         return .reachable
     }
 
@@ -680,25 +808,112 @@ public enum DesktopReposReachabilityValidator {
         }
     }
 
-    private static func validateScroll(_ scroll: DesktopReposOuterScrollObservation?) throws {
-        let scalarEpsilon = 0.001
-        guard let scroll else {
-            throw DesktopReposReachabilityValidationError.missingOuterScroll
+    private static func validateInteraction(
+        _ interaction: DesktopReposScrollInteraction?
+    ) throws -> DesktopReposIncrementPagePressObservation {
+        guard let interaction else {
+            throw DesktopReposReachabilityValidationError.missingScrollInteraction
         }
-        guard scroll.verticalScrollBarSupported,
-              scroll.setToMaximumSucceeded,
-              let minimum = scroll.minimumValue,
-              let maximum = scroll.maximumValue,
-              let before = scroll.valueBeforeScroll,
-              let after = scroll.valueAfterScroll,
-              minimum.isFinite,
-              maximum.isFinite,
-              before.isFinite,
-              after.isFinite,
-              maximum > minimum,
-              abs(before - minimum) <= scalarEpsilon,
-              abs(maximum - after) <= scalarEpsilon else {
-            throw DesktopReposReachabilityValidationError.unsupportedOuterScroll
+        guard interaction.mechanism == .incrementPagePress,
+              interaction.valueMutation == nil,
+              let press = interaction.incrementPagePress,
+              press.outerClipBefore.isFiniteAndNonempty else {
+            throw DesktopReposReachabilityValidationError.invalidContract
+        }
+        if !press.actionAdvertised {
+            guard press.attemptCount == 0,
+                  press.performResult == nil,
+                  press.outerClipAfter == nil else {
+                throw DesktopReposReachabilityValidationError.invalidContract
+            }
+            throw DesktopReposReachabilityValidationError.actionNotAdvertised
+        }
+        guard press.attemptCount == 1 else {
+            throw DesktopReposReachabilityValidationError.invalidContract
+        }
+        guard let result = press.performResult else {
+            throw DesktopReposReachabilityValidationError.invalidContract
+        }
+        guard result == .success else {
+            throw DesktopReposReachabilityValidationError.actionPerformFailed(result)
+        }
+        guard let after = press.outerClipAfter, after.isFiniteAndNonempty else {
+            throw DesktopReposReachabilityValidationError.invalidContract
+        }
+        return press
+    }
+
+    private static func validateBehaviorGeometry(
+        pre: [DesktopReposReachabilitySample],
+        post: [DesktopReposReachabilitySample],
+        press: DesktopReposIncrementPagePressObservation,
+        tolerance: Double
+    ) throws {
+        guard let beforeSample = pre.last, let afterSample = post.first,
+              let clipAfter = press.outerClipAfter else {
+            throw DesktopReposReachabilityValidationError.invalidContract
+        }
+        if exceedsEnvelopeTolerance((pre + post).map(\.viewport), tolerance: tolerance) {
+            throw DesktopReposReachabilityValidationError.unstableWindow
+        }
+        if press.outerClipBefore.differs(from: clipAfter, byMoreThan: tolerance) {
+            throw DesktopReposReachabilityValidationError.unstableOuterClip
+        }
+        guard beforeSample.viewport.contains(press.outerClipBefore),
+              afterSample.viewport.contains(clipAfter) else {
+            throw DesktopReposReachabilityValidationError.outerClipOutsideWindow
+        }
+        guard let beforeBoundary = frame(.boundaryBody, in: beforeSample),
+              !press.outerClipBefore.contains(beforeBoundary) else {
+            throw DesktopReposReachabilityValidationError.boundaryInitiallyInsideOuterClip
+        }
+        let beforeByID = Dictionary(uniqueKeysWithValues: beforeSample.regions.map { ($0.id, $0.frame) })
+        let afterByID = Dictionary(uniqueKeysWithValues: afterSample.regions.map { ($0.id, $0.frame) })
+        guard let referenceBefore = beforeByID[.table], let referenceAfter = afterByID[.table] else {
+            throw DesktopReposReachabilityValidationError.invalidContract
+        }
+        let delta = referenceAfter.y - referenceBefore.y
+        guard delta < -1 else {
+            throw DesktopReposReachabilityValidationError.noUpwardMovement
+        }
+        for id in DesktopReposReachabilityRegion.allCases {
+            guard let lhs = beforeByID[id], let rhs = afterByID[id],
+                  abs(rhs.x - lhs.x) <= tolerance,
+                  abs(rhs.width - lhs.width) <= tolerance,
+                  abs(rhs.height - lhs.height) <= tolerance,
+                  abs((rhs.y - lhs.y) - delta) <= tolerance else {
+                throw DesktopReposReachabilityValidationError.nonRigidMovement
+            }
+        }
+        for id in [DesktopReposReachabilityRegion.applyAllowlist, .boundaryBody] {
+            for sample in post {
+                guard let region = frame(id, in: sample), clipAfter.contains(region) else {
+                    throw DesktopReposReachabilityValidationError.pressInsufficient(id)
+                }
+            }
+        }
+    }
+
+    private static func frame(
+        _ id: DesktopReposReachabilityRegion,
+        in sample: DesktopReposReachabilitySample
+    ) -> DesktopReposReachabilityFrame? {
+        sample.regions.first(where: { $0.id == id })?.frame
+    }
+
+    private static func exceedsEnvelopeTolerance(
+        _ frames: [DesktopReposReachabilityFrame],
+        tolerance: Double
+    ) -> Bool {
+        let components = [
+            frames.map(\.x),
+            frames.map(\.y),
+            frames.map(\.width),
+            frames.map(\.height)
+        ]
+        return components.contains { values in
+            guard let minimum = values.min(), let maximum = values.max() else { return true }
+            return maximum - minimum > tolerance
         }
     }
 

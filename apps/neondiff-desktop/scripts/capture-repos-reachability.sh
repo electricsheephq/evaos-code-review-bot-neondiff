@@ -326,8 +326,8 @@ fi
 reachability="$case_dir/reachability.json"
 scroll_capabilities="$case_dir/scroll-capabilities.json"
 
-# The pre-fix Repos tree is expected to fail this checker. Keep the capture and
-# finish the public-safety scan before returning the checker's nonzero status.
+# Preserve the behavior trace for diagnosis and finish the public-safety scan
+# before returning any ordinary checker failure.
 checker_status=0
 if swift run --skip-build --package-path "$package_dir" \
   NeonDiffDesktopReachabilityChecks "$reachability" \
@@ -339,26 +339,17 @@ else
   checker_result="failed"
 fi
 checker_failed=false
-expected_pre_fix_failure=false
 checker_reason_code="none"
 if [ "$checker_status" -ne 0 ]; then
   checker_failed=true
   checker_reason_code="checker_nonzero"
-  if jq -e \
-      '.schemaVersion == 1 and .fixture == "tab-repos" and .requestedContentSize.width == 1040 and .requestedContentSize.height == 680 and (.acquisition | type == "object" and .status == "complete" and has("failureReason") and .failureReason == null) and has("outerScroll") and .outerScroll == null' \
-      "$reachability" >/dev/null \
-    && [ "$(cat "$tmp_root/reachability-check.stderr")" = "Reachability trace has no outer scroll area." ]; then
-    expected_pre_fix_failure=true
-    checker_reason_code="missing_outer_scroll"
-  fi
 fi
 jq -n \
   --arg status "$checker_result" \
   --arg reasonCode "$checker_reason_code" \
   --argjson checkerFailed "$checker_failed" \
   --argjson exitCode "$checker_status" \
-  --argjson expectedPreFixFailure "$expected_pre_fix_failure" \
-  '{schemaVersion:1,status:$status,checkerFailed:$checkerFailed,exitCode:$exitCode,expectedPreFixFailure:$expectedPreFixFailure,reasonCode:$reasonCode}' \
+  '{schemaVersion:1,status:$status,checkerFailed:$checkerFailed,exitCode:$exitCode,reasonCode:$reasonCode}' \
   >"$output/validation/reachability-check-status.json"
 
 reachability_sha=$(shasum -a 256 "$reachability" | awk '{print $1}')

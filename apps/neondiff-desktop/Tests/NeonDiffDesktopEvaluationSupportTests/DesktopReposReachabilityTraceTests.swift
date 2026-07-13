@@ -17,7 +17,7 @@ struct DesktopReposReachabilityTraceTests {
         .boundaryBody
     ])
     func rejectsMissingSemanticRegion(region: DesktopReposReachabilityRegion) {
-        let trace = makeTrace(preSamples: stableSamples().map { sample in
+        let trace = makeTrace(preSamples: preScrollSamples().map { sample in
             sample.removing(region)
         })
 
@@ -27,7 +27,7 @@ struct DesktopReposReachabilityTraceTests {
     }
 
     @Test func rejectsNonfiniteAndDuplicateRegions() {
-        var samples = stableSamples()
+        var samples = preScrollSamples()
         samples[0] = DesktopReposReachabilitySample(
             elapsedMilliseconds: 0,
             viewport: .init(x: 0, y: 0, width: .infinity, height: 680),
@@ -41,12 +41,12 @@ struct DesktopReposReachabilityTraceTests {
     }
 
     @Test func rejectsFewerThanThreeSamplesAndDriftAboveOnePoint() {
-        let tooFew = makeTrace(preSamples: Array(stableSamples().prefix(2)))
+        let tooFew = makeTrace(preSamples: Array(preScrollSamples().prefix(2)))
         #expect(throws: DesktopReposReachabilityValidationError.self) {
             try DesktopReposReachabilityValidator.validate(tooFew)
         }
 
-        var drifting = stableSamples()
+        var drifting = preScrollSamples()
         drifting[2] = drifting[2].replacing(
             .table,
             frame: .init(x: 24, y: 24, width: 901.01, height: 360)
@@ -82,7 +82,7 @@ struct DesktopReposReachabilityTraceTests {
             try DesktopReposReachabilityValidator.validate(makeTrace(tolerancePoints: 1.01))
         }
 
-        var wrongCadence = stableSamples()
+        var wrongCadence = preScrollSamples()
         wrongCadence[2] = DesktopReposReachabilitySample(
             elapsedMilliseconds: 301,
             viewport: wrongCadence[2].viewport,
@@ -104,21 +104,14 @@ struct DesktopReposReachabilityTraceTests {
         }
     }
 
-    @Test func rejectsMissingOrUnsupportedOuterScroll() {
-        #expect(throws: DesktopReposReachabilityValidationError.self) {
-            try DesktopReposReachabilityValidator.validate(makeTrace(outerScroll: nil))
-        }
-        #expect(throws: DesktopReposReachabilityValidationError.missingOuterScroll) {
-            try DesktopReposReachabilityTrace.decode(data: JSONEncoder().encode(makeTrace(outerScroll: nil)))
-        }
-
+    @Test func rejectsFailedAcquisitionOrInvalidPressContract() {
         let incomplete = makeTrace(
             quiescent: false,
             preScrollAcquisitionMilliseconds: 5_001,
             postScrollAcquisitionMilliseconds: 5_001,
             acquisition: .init(status: .failed, failureReason: .cannotComplete),
             preSamples: [],
-            outerScroll: nil,
+            scrollInteraction: nil,
             postSamples: []
         )
         #expect(throws: DesktopReposReachabilityValidationError.acquisitionFailed(.cannotComplete)) {
@@ -130,40 +123,174 @@ struct DesktopReposReachabilityTraceTests {
             ))
         }
 
-        let unsupported = DesktopReposOuterScrollObservation(
-            verticalScrollBarSupported: false,
-            minimumValue: nil,
-            maximumValue: nil,
-            valueBeforeScroll: nil,
-            valueAfterScroll: nil,
-            setToMaximumSucceeded: false
-        )
-        #expect(throws: DesktopReposReachabilityValidationError.self) {
-            try DesktopReposReachabilityValidator.validate(makeTrace(outerScroll: unsupported))
+        #expect(throws: DesktopReposReachabilityValidationError.actionNotAdvertised) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(
+                    actionAdvertised: false,
+                    attemptCount: 0,
+                    performResult: nil,
+                    clipAfter: nil
+                )
+            ))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(
+                    actionAdvertised: false,
+                    attemptCount: 2,
+                    performResult: .success
+                )
+            ))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.actionPerformFailed(.cannotComplete)) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(performResult: .cannotComplete)
+            ))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.actionPerformFailed(.actionUnsupported)) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(performResult: .actionUnsupported)
+            ))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(attemptCount: 0)
+            ))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(attemptCount: -1)
+            ))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(attemptCount: 2)
+            ))
+        }
+    }
+
+    @Test func rejectsNoWrongOrNonrigidMovement() {
+        #expect(throws: DesktopReposReachabilityValidationError.noUpwardMovement) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(postSamples: preScrollSamples()))
+        }
+        let downward = preScrollSamples().map { $0.translated(y: 20) }
+        #expect(throws: DesktopReposReachabilityValidationError.noUpwardMovement) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(postSamples: downward))
+        }
+        let onlyTable = preScrollSamples().map {
+            $0.replacing(.table, frame: .init(x: 24, y: 0, width: 900, height: 360))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.nonRigidMovement) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(postSamples: onlyTable))
+        }
+        for frame in [
+            DesktopReposReachabilityFrame(x: 26, y: 500, width: 180, height: 30),
+            .init(x: 24, y: 500, width: 182, height: 30),
+            .init(x: 24, y: 500, width: 180, height: 32)
+        ] {
+            let nonRigid = stableSamples().map { $0.replacing(.applyAllowlist, frame: frame) }
+            #expect(throws: DesktopReposReachabilityValidationError.nonRigidMovement) {
+                try DesktopReposReachabilityValidator.validate(makeTrace(postSamples: nonRigid))
+            }
+        }
+    }
+
+    @Test func requiresRigidUpwardMovementStrictlyGreaterThanOnePoint() throws {
+        let clip = DesktopReposReachabilityFrame(x: 20, y: 50, width: 1000, height: 580)
+        let pre = preScrollSamples().map {
+            $0
+                .replacing(.applyAllowlist, frame: .init(x: 24, y: 600, width: 180, height: 30))
+                .replacing(.boundaryBody, frame: .init(x: 24, y: 590.5, width: 760, height: 40))
         }
 
-        let noMovement = DesktopReposOuterScrollObservation(
-            verticalScrollBarSupported: true,
-            minimumValue: 0,
-            maximumValue: 1,
-            valueBeforeScroll: 0,
-            valueAfterScroll: 0,
-            setToMaximumSucceeded: true
-        )
-        #expect(throws: DesktopReposReachabilityValidationError.self) {
-            try DesktopReposReachabilityValidator.validate(makeTrace(outerScroll: noMovement))
+        #expect(throws: DesktopReposReachabilityValidationError.noUpwardMovement) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                tolerancePoints: 0.1,
+                preSamples: pre,
+                scrollInteraction: makeInteraction(clipBefore: clip, clipAfter: clip),
+                postSamples: pre.map { $0.translated(y: -0.5) }
+            ))
         }
 
-        let noRange = DesktopReposOuterScrollObservation(
-            verticalScrollBarSupported: true,
-            minimumValue: 1,
-            maximumValue: 1,
-            valueBeforeScroll: 1,
-            valueAfterScroll: 1,
-            setToMaximumSucceeded: true
-        )
-        #expect(throws: DesktopReposReachabilityValidationError.self) {
-            try DesktopReposReachabilityValidator.validate(makeTrace(outerScroll: noRange))
+        let exactlyOne = pre.map {
+            $0.replacing(.boundaryBody, frame: .init(x: 24, y: 591, width: 760, height: 40))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.noUpwardMovement) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                tolerancePoints: 0.1,
+                preSamples: exactlyOne,
+                scrollInteraction: makeInteraction(clipBefore: clip, clipAfter: clip),
+                postSamples: exactlyOne.map { $0.translated(y: -1) }
+            ))
+        }
+
+        let beyondOne = pre.map {
+            $0.replacing(.boundaryBody, frame: .init(x: 24, y: 591.1, width: 760, height: 40))
+        }
+        #expect(try DesktopReposReachabilityValidator.validate(makeTrace(
+            tolerancePoints: 0.1,
+            preSamples: beyondOne,
+            scrollInteraction: makeInteraction(clipBefore: clip, clipAfter: clip),
+            postSamples: beyondOne.map { $0.translated(y: -1.1) }
+        )) == .reachable)
+    }
+
+    @Test func rejectsUnstableWindowClipAndWindowOnlyContainment() throws {
+        let movedWindow = stableSamples().map { $0.replacingViewport(.init(x: 2, y: 0, width: 1040, height: 680)) }
+        #expect(throws: DesktopReposReachabilityValidationError.unstableWindow) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(postSamples: movedWindow))
+        }
+        let cumulativeWindowDrift = zip(stableSamples(), [1.0, 2.0, 2.0]).map { sample, x in
+            sample.replacingViewport(.init(x: x, y: 0, width: 1040, height: 680))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.unstableWindow) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(postSamples: cumulativeWindowDrift))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.unstableOuterClip) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(clipAfter: .init(x: 22, y: 50, width: 1000, height: 580))
+            ))
+        }
+        let onePointWindow = stableSamples().map {
+            $0.replacingViewport(.init(x: 1, y: 0, width: 1040, height: 680))
+        }
+        #expect(try DesktopReposReachabilityValidator.validate(makeTrace(
+            scrollInteraction: makeInteraction(
+                clipAfter: .init(x: 21, y: 50, width: 1000, height: 580)
+            ),
+            postSamples: onePointWindow
+        )) == .reachable)
+        #expect(throws: DesktopReposReachabilityValidationError.outerClipOutsideWindow) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                scrollInteraction: makeInteraction(
+                    clipBefore: .init(x: -1, y: 50, width: 1000, height: 580),
+                    clipAfter: .init(x: -1, y: 50, width: 1000, height: 580)
+                )
+            ))
+        }
+        let outsideClip = stableSamples().map {
+            $0.replacing(.applyAllowlist, frame: .init(x: 24, y: 640, width: 180, height: 30))
+        }
+        let beforeOutsideClip = preScrollSamples().map {
+            $0.replacing(.applyAllowlist, frame: .init(x: 24, y: 740, width: 180, height: 30))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.pressInsufficient(.applyAllowlist)) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                preSamples: beforeOutsideClip,
+                postSamples: outsideClip
+            ))
+        }
+        let boundaryStillOutside = stableSamples().map {
+            $0.replacing(.boundaryBody, frame: .init(x: 24, y: 610, width: 760, height: 40))
+        }
+        let boundaryBefore = preScrollSamples().map {
+            $0.replacing(.boundaryBody, frame: .init(x: 24, y: 710, width: 760, height: 40))
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.pressInsufficient(.boundaryBody)) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                preSamples: boundaryBefore,
+                postSamples: boundaryStillOutside
+            ))
         }
     }
 
@@ -184,11 +311,17 @@ struct DesktopReposReachabilityTraceTests {
     }
 
     @Test func allowsApplyOutsideTheInitialViewportWhenPostScrollSampleIsReachable() throws {
-        let preScroll = stableSamples().map {
-            $0.replacing(.applyAllowlist, frame: .init(x: 24, y: 700, width: 180, height: 30))
+        let preScroll = preScrollSamples().map {
+            $0.replacing(.applyAllowlist, frame: .init(x: 24, y: 640, width: 180, height: 30))
+        }
+        let postScroll = stableSamples().map {
+            $0.replacing(.applyAllowlist, frame: .init(x: 24, y: 540, width: 180, height: 30))
         }
 
-        #expect(try DesktopReposReachabilityValidator.validate(makeTrace(preSamples: preScroll)) == .reachable)
+        #expect(try DesktopReposReachabilityValidator.validate(makeTrace(
+            preSamples: preScroll,
+            postSamples: postScroll
+        )) == .reachable)
     }
 
     @Test func encodedTraceContainsNoSemanticTextOrPaths() throws {
@@ -212,19 +345,96 @@ struct DesktopReposReachabilityTraceTests {
         }
     }
 
-    @Test func nilOuterScrollHasAnExplicitUnambiguousWireKey() throws {
-        let data = try JSONEncoder().encode(makeTrace(outerScroll: nil))
+    @Test func decodingFailsClosedOnNestedUnknownsAndMissingInactiveNull() throws {
+        let encoded = try JSONEncoder().encode(makeTrace())
+        let base = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        var unknownAcquisition = base
+        var acquisition = try #require(unknownAcquisition["acquisition"] as? [String: Any])
+        acquisition["unexpected"] = true
+        unknownAcquisition["acquisition"] = acquisition
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(
+                data: JSONSerialization.data(withJSONObject: unknownAcquisition)
+            )
+        }
+
+        var unknownInteraction = base
+        var interaction = try #require(unknownInteraction["scrollInteraction"] as? [String: Any])
+        interaction["unexpected"] = true
+        unknownInteraction["scrollInteraction"] = interaction
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(
+                data: JSONSerialization.data(withJSONObject: unknownInteraction)
+            )
+        }
+
+        var unknownPress = base
+        interaction = try #require(unknownPress["scrollInteraction"] as? [String: Any])
+        var press = try #require(interaction["incrementPagePress"] as? [String: Any])
+        press["unexpected"] = true
+        interaction["incrementPagePress"] = press
+        unknownPress["scrollInteraction"] = interaction
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(data: JSONSerialization.data(withJSONObject: unknownPress))
+        }
+
+        var missingInactiveNull = base
+        interaction = try #require(missingInactiveNull["scrollInteraction"] as? [String: Any])
+        interaction.removeValue(forKey: "valueMutation")
+        missingInactiveNull["scrollInteraction"] = interaction
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(
+                data: JSONSerialization.data(withJSONObject: missingInactiveNull)
+            )
+        }
+
+        var unknownSample = base
+        var samples = try #require(unknownSample["preScrollSamples"] as? [[String: Any]])
+        samples[0]["unexpected"] = true
+        unknownSample["preScrollSamples"] = samples
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(data: JSONSerialization.data(withJSONObject: unknownSample))
+        }
+
+        var unknownRegion = base
+        samples = try #require(unknownRegion["preScrollSamples"] as? [[String: Any]])
+        var regions = try #require(samples[0]["regions"] as? [[String: Any]])
+        regions[0]["unexpected"] = true
+        samples[0]["regions"] = regions
+        unknownRegion["preScrollSamples"] = samples
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(data: JSONSerialization.data(withJSONObject: unknownRegion))
+        }
+
+        var unknownFrame = base
+        samples = try #require(unknownFrame["preScrollSamples"] as? [[String: Any]])
+        regions = try #require(samples[0]["regions"] as? [[String: Any]])
+        var frame = try #require(regions[0]["frame"] as? [String: Any])
+        frame["unexpected"] = true
+        regions[0]["frame"] = frame
+        samples[0]["regions"] = regions
+        unknownFrame["preScrollSamples"] = samples
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(data: JSONSerialization.data(withJSONObject: unknownFrame))
+        }
+    }
+
+    @Test func interactionHasExplicitInactiveValueMutationAndUnambiguousPressBranch() throws {
+        let data = try JSONEncoder().encode(makeTrace())
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let acquisition = try #require(object["acquisition"] as? [String: Any])
+        let interaction = try #require(object["scrollInteraction"] as? [String: Any])
 
-        #expect(object.keys.contains("outerScroll"))
-        #expect(object["outerScroll"] is NSNull)
+        #expect(interaction["mechanism"] as? String == "increment-page-press")
+        #expect(interaction["valueMutation"] is NSNull)
+        #expect(interaction["incrementPagePress"] is [String: Any])
         #expect(acquisition.keys.contains("failureReason"))
         #expect(acquisition["failureReason"] is NSNull)
 
         let failedData = try JSONEncoder().encode(makeTrace(
             acquisition: .init(status: .failed, failureReason: .cannotComplete),
-            outerScroll: nil
+            scrollInteraction: nil
         ))
         let failedObject = try #require(JSONSerialization.jsonObject(with: failedData) as? [String: Any])
         let failedAcquisition = try #require(failedObject["acquisition"] as? [String: Any])
@@ -237,6 +447,16 @@ struct DesktopReposReachabilityTraceTests {
         let ambiguousData = try JSONSerialization.data(withJSONObject: ambiguous)
         #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
             try DesktopReposReachabilityTrace.decode(data: ambiguousData)
+        }
+
+        var inactiveBranch = object
+        var invalidInteraction = interaction
+        invalidInteraction["valueMutation"] = ["forbidden": true]
+        inactiveBranch["scrollInteraction"] = invalidInteraction
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(
+                data: JSONSerialization.data(withJSONObject: inactiveBranch)
+            )
         }
     }
 
@@ -267,7 +487,7 @@ struct DesktopReposReachabilityTraceTests {
             schemaVersion: 999,
             acquisition: .init(status: .failed, failureReason: .cannotComplete),
             preSamples: [],
-            outerScroll: nil,
+            scrollInteraction: nil,
             postSamples: []
         )
 
@@ -444,7 +664,7 @@ struct DesktopReposReachabilityTraceTests {
 }
 
 private func makeTrace(
-    schemaVersion: Int = 1,
+    schemaVersion: Int = 2,
     ready: Bool = true,
     quiescent: Bool = true,
     requestedContentSize: DesktopEvaluationContentSize = .init(width: 1040, height: 680),
@@ -452,15 +672,8 @@ private func makeTrace(
     postScrollAcquisitionMilliseconds: Int = 200,
     tolerancePoints: Double = 1,
     acquisition: DesktopReposReachabilityAcquisition = .init(status: .complete, failureReason: nil),
-    preSamples: [DesktopReposReachabilitySample] = stableSamples(),
-    outerScroll: DesktopReposOuterScrollObservation? = .init(
-        verticalScrollBarSupported: true,
-        minimumValue: 0,
-        maximumValue: 1,
-        valueBeforeScroll: 0,
-        valueAfterScroll: 1,
-        setToMaximumSucceeded: true
-    ),
+    preSamples: [DesktopReposReachabilitySample] = preScrollSamples(),
+    scrollInteraction: DesktopReposScrollInteraction? = makeInteraction(),
     postSamples: [DesktopReposReachabilitySample] = stableSamples()
 ) -> DesktopReposReachabilityTrace {
     DesktopReposReachabilityTrace(
@@ -475,9 +688,43 @@ private func makeTrace(
         tolerancePoints: tolerancePoints,
         acquisition: acquisition,
         preScrollSamples: preSamples,
-        outerScroll: outerScroll,
+        scrollInteraction: scrollInteraction,
         postScrollSamples: postSamples
     )
+}
+
+private func makeInteraction(
+    actionAdvertised: Bool = true,
+    attemptCount: Int = 1,
+    performResult: DesktopReposScrollActionResult? = .success,
+    clipBefore: DesktopReposReachabilityFrame = .init(x: 20, y: 50, width: 1000, height: 580),
+    clipAfter: DesktopReposReachabilityFrame? = .init(x: 20, y: 50, width: 1000, height: 580)
+) -> DesktopReposScrollInteraction {
+    .init(
+        mechanism: .incrementPagePress,
+        incrementPagePress: .init(
+            actionAdvertised: actionAdvertised,
+            attemptCount: attemptCount,
+            performResult: performResult,
+            outerClipBefore: clipBefore,
+            outerClipAfter: clipAfter
+        ),
+        valueMutation: nil
+    )
+}
+
+private func preScrollSamples() -> [DesktopReposReachabilitySample] {
+    (0..<3).map { index in
+        DesktopReposReachabilitySample(
+            elapsedMilliseconds: index * 100,
+            viewport: .init(x: 0, y: 0, width: 1040, height: 680),
+            regions: [
+                .init(id: .table, frame: .init(x: 24, y: 100, width: 900, height: 360)),
+                .init(id: .applyAllowlist, frame: .init(x: 24, y: 600, width: 180, height: 30)),
+                .init(id: .boundaryBody, frame: .init(x: 24, y: 650, width: 760, height: 40))
+            ]
+        )
+    }
 }
 
 private func stableSamples() -> [DesktopReposReachabilitySample] {
@@ -486,15 +733,34 @@ private func stableSamples() -> [DesktopReposReachabilitySample] {
             elapsedMilliseconds: index * 100,
             viewport: .init(x: 0, y: 0, width: 1040, height: 680),
             regions: [
-                .init(id: .table, frame: .init(x: 24, y: 100, width: 900, height: 360)),
+                .init(id: .table, frame: .init(x: 24, y: 0, width: 900, height: 360)),
                 .init(id: .applyAllowlist, frame: .init(x: 24, y: 500, width: 180, height: 30)),
-                .init(id: .boundaryBody, frame: .init(x: 24, y: 600, width: 760, height: 40))
+                .init(id: .boundaryBody, frame: .init(x: 24, y: 550, width: 760, height: 40))
             ]
         )
     }
 }
 
 private extension DesktopReposReachabilitySample {
+    func translated(y delta: Double) -> Self {
+        .init(
+            elapsedMilliseconds: elapsedMilliseconds,
+            viewport: viewport,
+            regions: regions.map { region in
+                .init(id: region.id, frame: .init(
+                    x: region.frame.x,
+                    y: region.frame.y + delta,
+                    width: region.frame.width,
+                    height: region.frame.height
+                ))
+            }
+        )
+    }
+
+    func replacingViewport(_ frame: DesktopReposReachabilityFrame) -> Self {
+        .init(elapsedMilliseconds: elapsedMilliseconds, viewport: frame, regions: regions)
+    }
+
     func removing(_ id: DesktopReposReachabilityRegion) -> Self {
         .init(
             elapsedMilliseconds: elapsedMilliseconds,
