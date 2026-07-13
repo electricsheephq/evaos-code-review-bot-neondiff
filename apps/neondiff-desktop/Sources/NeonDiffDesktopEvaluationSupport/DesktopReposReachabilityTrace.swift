@@ -123,6 +123,69 @@ public enum DesktopReposReachabilitySamplingContract {
     }
 }
 
+public struct DesktopReposVerticalScrollBarCandidate: Equatable, Sendable {
+    public let role: String?
+    public let orientation: String?
+
+    public init(role: String?, orientation: String?) {
+        self.role = role
+        self.orientation = orientation
+    }
+}
+
+public enum DesktopReposVerticalScrollBarSelection: Equatable, Sendable {
+    case convenienceAttribute
+    case directChild(index: Int)
+    case unsupported
+}
+
+public enum DesktopReposVerticalScrollBarSelectionError: Error, Equatable, Sendable {
+    case missingRole
+    case missingOrientation
+    case invalidOrientation
+    case ambiguousVerticalChildren
+}
+
+public enum DesktopReposVerticalScrollBarSelectionContract {
+    public static let scrollBarRole = "AXScrollBar"
+    public static let verticalOrientation = "AXVerticalOrientation"
+    public static let horizontalOrientation = "AXHorizontalOrientation"
+
+    public static func select(
+        convenienceAvailable: Bool,
+        directChildren: [DesktopReposVerticalScrollBarCandidate]
+    ) throws -> DesktopReposVerticalScrollBarSelection {
+        if convenienceAvailable {
+            return .convenienceAttribute
+        }
+
+        var verticalIndices: [Int] = []
+        for (index, child) in directChildren.enumerated() {
+            guard let role = child.role else {
+                throw DesktopReposVerticalScrollBarSelectionError.missingRole
+            }
+            guard role == scrollBarRole else { continue }
+            guard let orientation = child.orientation else {
+                throw DesktopReposVerticalScrollBarSelectionError.missingOrientation
+            }
+            switch orientation {
+            case verticalOrientation:
+                verticalIndices.append(index)
+            case horizontalOrientation:
+                continue
+            default:
+                throw DesktopReposVerticalScrollBarSelectionError.invalidOrientation
+            }
+        }
+
+        guard verticalIndices.count <= 1 else {
+            throw DesktopReposVerticalScrollBarSelectionError.ambiguousVerticalChildren
+        }
+        guard let index = verticalIndices.first else { return .unsupported }
+        return .directChild(index: index)
+    }
+}
+
 public enum DesktopReposReachabilitySemanticContract {
     public static let tableRole = "AXOutline"
     public static let boundaryIdentifier = "neondiff-repos-boundary"

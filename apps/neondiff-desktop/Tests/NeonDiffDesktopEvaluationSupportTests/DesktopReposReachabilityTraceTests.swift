@@ -357,6 +357,78 @@ struct DesktopReposReachabilityTraceTests {
             try DesktopReposReachabilityValidator.validate(makeTrace(preSamples: delayed))
         }
     }
+
+    @Test func verticalScrollBarSelectionPrefersTheConvenienceAttribute() throws {
+        let selection = try DesktopReposVerticalScrollBarSelectionContract.select(
+            convenienceAvailable: true,
+            directChildren: [
+                .init(role: nil, orientation: nil),
+                .init(role: "AXScrollBar", orientation: "AXVerticalOrientation")
+            ]
+        )
+
+        #expect(selection == .convenienceAttribute)
+    }
+
+    @Test func verticalScrollBarSelectionAcceptsOneExactDirectChild() throws {
+        let selection = try DesktopReposVerticalScrollBarSelectionContract.select(
+            convenienceAvailable: false,
+            directChildren: [
+                .init(role: "AXGroup", orientation: nil),
+                .init(role: "AXScrollBar", orientation: "AXHorizontalOrientation"),
+                .init(role: "AXScrollBar", orientation: "AXVerticalOrientation")
+            ]
+        )
+
+        #expect(selection == .directChild(index: 2))
+    }
+
+    @Test func verticalScrollBarSelectionRejectsHorizontalAndCannotSeeNestedDescendants() throws {
+        #expect(try DesktopReposVerticalScrollBarSelectionContract.select(
+            convenienceAvailable: false,
+            directChildren: [.init(role: "AXScrollBar", orientation: "AXHorizontalOrientation")]
+        ) == .unsupported)
+
+        // A group may contain a nested scrollbar in the real AX tree, but the
+        // strict contract deliberately receives direct children only.
+        #expect(try DesktopReposVerticalScrollBarSelectionContract.select(
+            convenienceAvailable: false,
+            directChildren: [.init(role: "AXGroup", orientation: nil)]
+        ) == .unsupported)
+    }
+
+    @Test func verticalScrollBarSelectionFailsClosedOnAmbiguousDirectChildren() {
+        #expect(throws: DesktopReposVerticalScrollBarSelectionError.ambiguousVerticalChildren) {
+            try DesktopReposVerticalScrollBarSelectionContract.select(
+                convenienceAvailable: false,
+                directChildren: [
+                    .init(role: "AXScrollBar", orientation: "AXVerticalOrientation"),
+                    .init(role: "AXScrollBar", orientation: "AXVerticalOrientation")
+                ]
+            )
+        }
+    }
+
+    @Test func verticalScrollBarSelectionFailsClosedOnMalformedRoleOrOrientation() {
+        #expect(throws: DesktopReposVerticalScrollBarSelectionError.missingRole) {
+            try DesktopReposVerticalScrollBarSelectionContract.select(
+                convenienceAvailable: false,
+                directChildren: [.init(role: nil, orientation: nil)]
+            )
+        }
+        #expect(throws: DesktopReposVerticalScrollBarSelectionError.missingOrientation) {
+            try DesktopReposVerticalScrollBarSelectionContract.select(
+                convenienceAvailable: false,
+                directChildren: [.init(role: "AXScrollBar", orientation: nil)]
+            )
+        }
+        #expect(throws: DesktopReposVerticalScrollBarSelectionError.invalidOrientation) {
+            try DesktopReposVerticalScrollBarSelectionContract.select(
+                convenienceAvailable: false,
+                directChildren: [.init(role: "AXScrollBar", orientation: "AXDiagonalOrientation")]
+            )
+        }
+    }
 }
 
 private func makeTrace(

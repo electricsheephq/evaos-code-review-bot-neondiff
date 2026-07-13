@@ -574,15 +574,9 @@ private struct DesktopReposReachabilityAXTracer {
             guard let scrollArea = try outermostScrollArea(from: boundary, to: window) else {
                 return .success(nil)
             }
-            guard let rawScrollBar = try optionalAttribute(
-                scrollArea,
-                kAXVerticalScrollBarAttribute as CFString
-            ) else {
+            guard let scrollBar = try verticalScrollBar(in: scrollArea) else {
                 return .success(unsupportedScroll())
             }
-            guard CFGetTypeID(rawScrollBar) == AXUIElementGetTypeID() else { throw Failure.invalidType }
-            let scrollBar = rawScrollBar as! AXUIElement
-            try requireTargetPID(scrollBar)
 
             var settable = DarwinBoolean(false)
             let settableResult = AXUIElementIsAttributeSettable(
@@ -628,6 +622,69 @@ private struct DesktopReposReachabilityAXTracer {
             return .failure(reason)
         } catch {
             return .failure(.invalidType)
+        }
+    }
+
+    private func verticalScrollBar(in scrollArea: AXUIElement) throws -> AXUIElement? {
+        if let rawScrollBar = try optionalAttribute(
+            scrollArea,
+            kAXVerticalScrollBarAttribute as CFString
+        ) {
+            guard CFGetTypeID(rawScrollBar) == AXUIElementGetTypeID() else {
+                throw Failure.invalidType
+            }
+            let scrollBar = rawScrollBar as! AXUIElement
+            try requireTargetPID(scrollBar)
+            return scrollBar
+        }
+
+        guard let rawChildren = try optionalAttribute(
+            scrollArea,
+            kAXChildrenAttribute as CFString
+        ) else {
+            return nil
+        }
+        guard CFGetTypeID(rawChildren) == CFArrayGetTypeID(),
+              let children = rawChildren as? [AXUIElement] else {
+            throw Failure.invalidType
+        }
+
+        var candidates: [DesktopReposVerticalScrollBarCandidate] = []
+        candidates.reserveCapacity(children.count)
+        for child in children {
+            try requireTargetPID(child)
+            let role = try optionalString(child, kAXRoleAttribute as CFString)
+            let orientation = role == (kAXScrollBarRole as String)
+                ? try optionalString(child, kAXOrientationAttribute as CFString)
+                : nil
+            candidates.append(.init(role: role, orientation: orientation))
+        }
+
+        let selection: DesktopReposVerticalScrollBarSelection
+        do {
+            selection = try DesktopReposVerticalScrollBarSelectionContract.select(
+                convenienceAvailable: false,
+                directChildren: candidates
+            )
+        } catch let error as DesktopReposVerticalScrollBarSelectionError {
+            switch error {
+            case .missingRole, .missingOrientation:
+                throw Failure.attributeUnavailable
+            case .invalidOrientation:
+                throw Failure.invalidType
+            case .ambiguousVerticalChildren:
+                throw Failure.semanticDuplicate
+            }
+        }
+
+        switch selection {
+        case .convenienceAttribute:
+            throw Failure.invalidType
+        case .directChild(let index):
+            guard children.indices.contains(index) else { throw Failure.invalidType }
+            return children[index]
+        case .unsupported:
+            return nil
         }
     }
 
