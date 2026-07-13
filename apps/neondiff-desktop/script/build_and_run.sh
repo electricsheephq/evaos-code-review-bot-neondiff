@@ -32,6 +32,7 @@ APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_FRAMEWORKS="$APP_CONTENTS/Frameworks"
+APP_HELPERS="$APP_CONTENTS/Helpers"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 SHORT_VERSION="${NEONDIFF_DESKTOP_VERSION:-0.1.0}"
@@ -51,6 +52,9 @@ fi
 
 cd "$ROOT_DIR"
 swift build -c "$BUILD_CONFIGURATION" --product "$APP_NAME"
+if [ "$BUILD_CONFIGURATION" = "debug" ]; then
+  swift build -c debug --product NeonDiffDesktopFixtureResolve
+fi
 BUILD_DIR="$(swift build -c "$BUILD_CONFIGURATION" --show-bin-path)"
 BUILD_BINARY="$BUILD_DIR/$APP_NAME"
 
@@ -58,6 +62,11 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
+if [ "$BUILD_CONFIGURATION" = "debug" ]; then
+  mkdir -p "$APP_HELPERS"
+  cp "$BUILD_DIR/NeonDiffDesktopFixtureResolve" "$APP_HELPERS/NeonDiffDesktopFixtureResolve"
+  chmod +x "$APP_HELPERS/NeonDiffDesktopFixtureResolve"
+fi
 
 RESOURCE_DIR="$(find "$BUILD_DIR" "$ROOT_DIR/.build" \( -name "${APP_NAME}_${APP_NAME}.bundle" -o -name "${APP_NAME}_${APP_NAME}.resources" \) -type d -print -quit 2>/dev/null || true)"
 if [ -n "$RESOURCE_DIR" ]; then

@@ -66,9 +66,8 @@ public enum DesktopEvaluationProviderVerification: String, Codable, Sendable {
 
 public enum DesktopEvaluationLicenseEntitlement: String, Codable, Sendable {
     case notActivated = "not activated"
-    case publicRepositories = "public repositories"
-    case activePrivate = "active private"
-    case privateBlocked = "private blocked"
+    case active
+    case activationBlocked = "activation blocked"
 }
 
 public enum DesktopEvaluationUpdateChannel: String, Codable, Sendable {
@@ -92,12 +91,10 @@ public enum DesktopEvaluationAction: String, Codable, Sendable {
     case copyRedactedLog = "copy-redacted-log"
     case previewPolicy = "preview-policy"
     case inspectSettings = "inspect-settings"
-    case choosePublicSetup = "choose-public-setup"
-    case choosePrivateSetup = "choose-private-setup"
+    case beginSetup = "begin-setup"
     case chooseProvider = "choose-provider"
     case checkDaemon = "check-daemon"
-    case continuePublicSetup = "continue-public-setup"
-    case activatePrivateLicense = "activate-private-license"
+    case activateLicense = "activate-license"
     case finishOnboarding = "finish-onboarding"
 }
 
@@ -227,7 +224,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
         guard id.range(of: #"^[a-z0-9][a-z0-9-]{0,63}$"#, options: .regularExpression) != nil else {
             throw DesktopEvaluationFixtureError.invalidValue("id")
         }
-        guard ISO8601DateFormatter().date(from: environment.clock) != nil else {
+        guard Self.isCanonicalTimestamp(environment.clock) else {
             throw DesktopEvaluationFixtureError.invalidValue("clock")
         }
         guard environment.locale.range(of: #"^[A-Za-z0-9_@.-]{2,48}$"#, options: .regularExpression) != nil else {
@@ -240,7 +237,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
            !DesktopEvaluationContentSize.canonical.contains(contentSize) {
             throw DesktopEvaluationFixtureError.invalidValue("contentSize")
         }
-        guard state.github.repositoryCount >= 0 else {
+        guard (0...10_000).contains(state.github.repositoryCount) else {
             throw DesktopEvaluationFixtureError.invalidValue("github.repositoryCount")
         }
         guard state.repositories.count <= 100,
@@ -250,9 +247,11 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
             throw DesktopEvaluationFixtureError.invalidValue("collection limit")
         }
         for repository in state.repositories {
-            guard repository.name.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil,
-                  ISO8601DateFormatter().date(from: repository.lastReview) != nil else {
+            guard repository.name.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil else {
                 throw DesktopEvaluationFixtureError.invalidValue("repository.name")
+            }
+            guard Self.isCanonicalTimestamp(repository.lastReview) else {
+                throw DesktopEvaluationFixtureError.invalidValue("repository.lastReview")
             }
         }
         if let provider = state.provider {
@@ -261,10 +260,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
                   provider.displayName.utf8.count <= 128,
                   !provider.model.isEmpty,
                   provider.model.utf8.count <= 256,
-                  let url = URL(string: provider.baseURL),
-                  ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-                  url.user == nil,
-                  url.password == nil else {
+                  Self.isCanonicalProviderURL(provider.baseURL) else {
                 throw DesktopEvaluationFixtureError.invalidValue("provider")
             }
         }
@@ -273,9 +269,96 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
                 throw DesktopEvaluationFixtureError.invalidValue("github.login")
             }
         }
+        switch surface.onboardingStep {
+        case .daemon, .license, .done:
+            guard state.provider?.credentialPresent == true else {
+                throw DesktopEvaluationFixtureError.invalidValue("onboarding state has not completed provider setup")
+            }
+        case .welcome, .provider, nil:
+            break
+        }
+        switch surface.onboardingStep {
+        case .license, .done:
+            guard state.runtimeReady != nil else {
+                throw DesktopEvaluationFixtureError.invalidValue("onboarding state has not completed daemon readiness")
+            }
+        case .welcome, .provider, .daemon, nil:
+            break
+        }
+        switch surface.onboardingStep {
+        case .license:
+            guard state.license.entitlement == .notActivated,
+                  !state.license.credentialPresent,
+                  expectedActions == [.activateLicense] else {
+                throw DesktopEvaluationFixtureError.invalidValue("license onboarding must be blocked on API-backed activation")
+            }
+        case .done:
+            guard state.license.entitlement == .active,
+                  state.license.credentialPresent else {
+                throw DesktopEvaluationFixtureError.invalidValue("done onboarding requires API-backed activation")
+            }
+        case nil:
+            guard state.license.entitlement == .active,
+                  state.license.credentialPresent else {
+                throw DesktopEvaluationFixtureError.invalidValue("post-onboarding state requires API-backed activation")
+            }
+        case .welcome, .provider, .daemon:
+            break
+        }
         for outcome in scriptedOutcomes {
             guard (0...30_000).contains(outcome.delayMilliseconds) else {
                 throw DesktopEvaluationFixtureError.invalidValue("scriptedOutcomes.delayMilliseconds")
+            }
+        }
+    }
+
+    private static func isCanonicalTimestamp(_ value: String) -> Bool {
+        guard value.range(
+            of: #"^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"#,
+            options: .regularExpression
+        ) != nil else { return false }
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: value) else { return false }
+        return formatter.string(from: date) == value
+    }
+
+    private static func isCanonicalProviderURL(_ value: String) -> Bool {
+        let grammar = #"^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$"#
+        guard value.range(of: grammar, options: [.regularExpression, .caseInsensitive]) != nil,
+              let schemeSeparator = value.range(of: "://"),
+              let url = URL(string: value),
+              let host = url.host,
+              !host.isEmpty,
+              url.user == nil,
+              url.password == nil else { return false }
+        let authorityEnd = value[schemeSeparator.upperBound...].firstIndex(where: { "/?#".contains($0) }) ?? value.endIndex
+        let rawAuthority = String(value[schemeSeparator.upperBound..<authorityEnd])
+        let authorityParts = rawAuthority.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let rawHost = authorityParts.first.map(String.init),
+              isCanonicalProviderHost(rawHost) else { return false }
+        if authorityParts.count == 2 {
+            guard let port = Int(authorityParts[1]), (1...65_535).contains(port) else { return false }
+        }
+        return true
+    }
+
+    private static func isCanonicalProviderHost(_ host: String) -> Bool {
+        guard host.utf8.count <= 253 else { return false }
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) {
+            let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+            return octets.count == 4 && octets.allSatisfy { octet in
+                guard (1...3).contains(octet.count),
+                      let value = Int(octet),
+                      (0...255).contains(value) else { return false }
+                return String(value) == octet
+            }
+        }
+        return host.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+            guard (1...63).contains(label.count),
+                  label.first != "-",
+                  label.last != "-" else { return false }
+            return label.allSatisfy { character in
+                character.isASCII && (character.isLetter || character.isNumber || character == "-")
             }
         }
     }

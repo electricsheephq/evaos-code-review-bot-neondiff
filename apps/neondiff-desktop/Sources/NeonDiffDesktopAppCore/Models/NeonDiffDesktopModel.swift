@@ -2,6 +2,63 @@ import Combine
 import Foundation
 import NeonDiffDesktopCore
 
+#if DEBUG
+package struct DesktopModelInitialState {
+    package let selectedSection: DesktopSection
+    package let configPath: String
+    package let cliPath: String
+    package let status: DaemonStatus
+    package let repos: [RepoMonitor]
+    package let providers: ProviderSettings
+    package let license: LicenseStatus
+    package let github: GitHubConnectionStatus
+    package let githubAuthorizationStatus: String
+    package let logText: String
+    package let onboardingFlow: OnboardingFlow
+    package let isOnboardingPresented: Bool
+    package let providerVerification: ProviderVerificationSnapshot?
+    package let providerVerificationStatus: String
+    package let providerConfigurationIsDirty: Bool
+    package let providerVerificationInProgress: Bool
+
+    package init(
+        selectedSection: DesktopSection,
+        configPath: String,
+        cliPath: String,
+        status: DaemonStatus,
+        repos: [RepoMonitor],
+        providers: ProviderSettings,
+        license: LicenseStatus,
+        github: GitHubConnectionStatus,
+        githubAuthorizationStatus: String,
+        logText: String,
+        onboardingFlow: OnboardingFlow,
+        isOnboardingPresented: Bool,
+        providerVerification: ProviderVerificationSnapshot?,
+        providerVerificationStatus: String,
+        providerConfigurationIsDirty: Bool = false,
+        providerVerificationInProgress: Bool = false
+    ) {
+        self.selectedSection = selectedSection
+        self.configPath = configPath
+        self.cliPath = cliPath
+        self.status = status
+        self.repos = repos
+        self.providers = providers
+        self.license = license
+        self.github = github
+        self.githubAuthorizationStatus = githubAuthorizationStatus
+        self.logText = logText
+        self.onboardingFlow = onboardingFlow
+        self.isOnboardingPresented = isOnboardingPresented
+        self.providerVerification = providerVerification
+        self.providerVerificationStatus = providerVerificationStatus
+        self.providerConfigurationIsDirty = providerConfigurationIsDirty
+        self.providerVerificationInProgress = providerVerificationInProgress
+    }
+}
+#endif
+
 @MainActor
 package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var selectedSection: DesktopSection = .overview
@@ -118,6 +175,46 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     #if DEBUG
+    package func applyInitialState(_ state: DesktopModelInitialState) {
+        selectedSection = state.selectedSection
+        configPath = state.configPath
+        cliPath = state.cliPath
+        status = state.status
+        repos = state.repos
+        providers = state.providers
+        providers.providerKeyStored = state.providers.providerKeyStored
+        license = state.license
+        github = state.github
+        githubAuthorizationStatus = state.githubAuthorizationStatus
+        logText = state.logText
+        onboardingFlow = state.onboardingFlow
+        isOnboardingPresented = state.isOnboardingPresented
+        providerVerification = state.providerVerification
+        providerVerificationStatus = state.providerVerificationStatus
+        isProviderVerificationInProgress = state.providerVerificationInProgress
+        isProviderVerificationCancelling = false
+        providerVerificationSafetyLatchMessage = nil
+        previewedProviderSnapshot = nil
+        previewedProviderExpectedRevision = nil
+        if state.providers.registryTargets.isEmpty {
+            providerLoadedSnapshot = nil
+            providerLoadedRevision = nil
+        } else {
+            var loadedProviders = state.providers
+            if state.providerConfigurationIsDirty {
+                loadedProviders.selectedProviderModel += "-saved"
+            }
+            providerLoadedSnapshot = ProviderConfigurationSnapshot(
+                providers: loadedProviders,
+                configPath: configPath
+            )
+            providerLoadedRevision = state.providerVerification?.configRevision
+                ?? String(repeating: "a", count: 64)
+        }
+        lastError = nil
+        lastCommandLine = state.status.lastCommand
+    }
+
     package func applyProviderVerificationVisualProofFixture() {
         selectedSection = .providers
         configPath = "/tmp/neondiff-visual-proof/config.local.json"

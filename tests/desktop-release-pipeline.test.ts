@@ -45,6 +45,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     for (const command of [
       "scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests",
       "scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests",
+      "scripts/run-required-swift-test-suite.sh NeonDiffDesktopEvaluationSupportTests",
       "swift build --target NeonDiffDesktopKeychainChecks",
       "swift run NeonDiffDesktopAppcastChecks",
       "script/build_and_run.sh build",
