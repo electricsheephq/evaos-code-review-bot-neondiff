@@ -215,6 +215,193 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("runs only one durable job per exact PR head while other heads fill the bounded batch", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-exact-head-exclusion-"));
+    roots.push(root);
+    const config = schedulerConfig(root, []);
+    config.reviewConcurrency.maxActiveRuns = 3;
+    config.reviewScheduler!.maxProviderActive = 3;
+    config.reviewScheduler!.maxOrgActive = 3;
+    config.reviewScheduler!.maxRepoActive = 3;
+    const state = new ReviewStateStore(config.statePath);
+
+    const backgroundSameHead = state.enqueueReviewQueueJob({
+      repo: "org-a/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base-a",
+      source: "automatic",
+      lane: "background"
+    }).job;
+    state.enqueueReviewQueueJob({
+      repo: "org-b/repo-b",
+      pullNumber: 2,
+      headSha: HEAD_B,
+      baseSha: "base-b",
+      source: "automatic",
+      lane: "background"
+    });
+    state.enqueueReviewQueueJob({
+      repo: "org-c/repo-c",
+      pullNumber: 3,
+      headSha: HEAD_C,
+      baseSha: "base-c",
+      source: "automatic",
+      lane: "background"
+    });
+    const manualSameHead = state.enqueueReviewQueueJob({
+      repo: "org-a/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base-a",
+      source: "manual_command",
+      lane: "manual",
+      commentId: 557,
+      priority: 10
+    }).job;
+
+    const started: string[] = [];
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const cycle = runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org-a/repo-a", [pull("org-a/repo-a", 1, HEAD_A, "base-a")]],
+        ["org-b/repo-b", [pull("org-b/repo-b", 2, HEAD_B, "base-b")]],
+        ["org-c/repo-c", [pull("org-c/repo-c", 3, HEAD_C, "base-c")]]
+      ])),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, commandCommentId }) => {
+        started.push(`${repo}#${reviewPull.number}@${reviewPull.head.sha}:${commandCommentId ?? "automatic"}`);
+        await barrier;
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    let exclusionError: unknown;
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(3), { timeout: 250 });
+      expect(started).toEqual(expect.arrayContaining([
+        `org-a/repo-a#1@${HEAD_A}:557`,
+        `org-b/repo-b#2@${HEAD_B}:automatic`,
+        `org-c/repo-c#3@${HEAD_C}:automatic`
+      ]));
+      expect(started.filter((entry) => entry.startsWith(`org-a/repo-a#1@${HEAD_A}:`))).toHaveLength(1);
+    } catch (error) {
+      exclusionError = error;
+    } finally {
+      release();
+    }
+    const result = await cycle;
+    if (exclusionError) throw exclusionError;
+
+    expect(result.queue.leased).toBe(3);
+    expect(state.getReviewQueueJob(manualSameHead.jobId)).toMatchObject({
+      state: "queued",
+      lastError: "dry_run_completed_not_posted"
+    });
+    expect(state.getReviewQueueJob(backgroundSameHead.jobId)).toMatchObject({ state: "queued" });
+    expect(state.getReviewQueueJob(backgroundSameHead.jobId)?.lastError).toBeUndefined();
+    state.close();
+  });
+
+  it("backfills a manual reserve when its queued command shares a selected background head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-exact-head-manual-reserve-"));
+    roots.push(root);
+    const config = schedulerConfig(root, []);
+    config.reviewConcurrency.maxActiveRuns = 2;
+    config.reviewScheduler!.maxProviderActive = 2;
+    config.reviewScheduler!.maxOrgActive = 2;
+    config.reviewScheduler!.maxRepoActive = 2;
+    config.reviewScheduler!.manualCommandReserve = 1;
+    const state = new ReviewStateStore(config.statePath);
+
+    const first = state.enqueueReviewQueueJob({
+      repo: "org-a/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base-a",
+      source: "automatic",
+      lane: "background",
+      priority: 1
+    }).job;
+    const second = state.enqueueReviewQueueJob({
+      repo: "org-b/repo-b",
+      pullNumber: 2,
+      headSha: HEAD_B,
+      baseSha: "base-b",
+      source: "automatic",
+      lane: "background",
+      priority: 2
+    }).job;
+    const duplicateManual = state.enqueueReviewQueueJob({
+      repo: "org-a/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      baseSha: "base-a",
+      source: "manual_command",
+      lane: "manual",
+      commentId: 558,
+      priority: 10
+    }).job;
+
+    const started: string[] = [];
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const cycle = runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org-a/repo-a", [pull("org-a/repo-a", 1, HEAD_A, "base-a")]],
+        ["org-b/repo-b", [pull("org-b/repo-b", 2, HEAD_B, "base-b")]]
+      ])),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, commandCommentId }) => {
+        started.push(`${repo}#${reviewPull.number}:${commandCommentId ?? "automatic"}`);
+        await barrier;
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-13T00:00:00.000Z")
+    });
+
+    let assertionError: unknown;
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 250 });
+      expect(started).toEqual(expect.arrayContaining([
+        "org-a/repo-a#1:automatic",
+        "org-b/repo-b#2:automatic"
+      ]));
+    } catch (error) {
+      assertionError = error;
+    } finally {
+      release();
+    }
+    const result = await cycle;
+    if (assertionError) throw assertionError;
+
+    expect(result.queue.leased).toBe(2);
+    expect(state.getReviewQueueJob(first.jobId)).toMatchObject({ state: "queued" });
+    expect(state.getReviewQueueJob(second.jobId)).toMatchObject({ state: "queued" });
+    expect(state.getReviewQueueJob(duplicateManual.jobId)).toMatchObject({ state: "queued" });
+    state.close();
+  });
+
   it("counts durable active leases against the global effective slot cap", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-global-active-cap-"));
     roots.push(root);
@@ -4402,6 +4589,93 @@ describe("provider-aware review scheduler", () => {
       event: "REQUEST_CHANGES",
       commandAction: "request-changes",
       commandCommentId: 901
+    });
+    state.close();
+  });
+
+  it("terminally no-ops a non-upgrade owner command through the scheduler lifecycle", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-request-changes-noop-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@neondiff"],
+      trustedAuthors: ["maintainer"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const priorReviewUrl = "https://github.com/org/repo-a/pull/1#pullrequestreview-prior";
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: priorReviewUrl
+    });
+    state.recordReviewReadiness({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: priorReviewUrl
+    });
+    const comments = new Map([["org/repo-a#1", [
+      comment(903, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`)
+    ]]]);
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), comments),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, commandCommentId }) => {
+        expect(reviewState.getReviewReadiness(repo, reviewPull.number, reviewPull.head.sha)).toMatchObject({
+          state: "reviewing",
+          event: "COMMENT",
+          reviewUrl: priorReviewUrl,
+          commandAction: "request-changes",
+          commandCommentId: 903
+        });
+        expect(reviewState.tryConsumeReviewEventAuthorization({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          commentId: commandCommentId!,
+          author: "maintainer"
+        })).toBe(true);
+        expect(reviewState.recordAuthorizedReviewNoop({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          commentId: commandCommentId!,
+          author: "maintainer",
+          reason: "candidate_comment_already_posted"
+        })).toBe(true);
+        return "skipped_processed";
+      }
+    });
+
+    expect(result.skippedProcessed).toBe(1);
+    expect(state.getProcessedReview("org/repo-a", 1, HEAD_A)).toMatchObject({
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: priorReviewUrl
+    });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: priorReviewUrl,
+      commandAction: "request-changes",
+      commandCommentId: 903
+    });
+    expect(state.getReviewEventAuthorizationConsumption("org/repo-a", 1, HEAD_A)).toMatchObject({
+      commentId: 903,
+      terminalOutcome: "no_op",
+      terminalReason: "candidate_comment_already_posted"
     });
     state.close();
   });

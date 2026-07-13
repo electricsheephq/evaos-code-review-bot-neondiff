@@ -145,6 +145,20 @@ export interface ReviewHeadClaim {
   ownerPid: number;
 }
 
+export interface ReviewHeadClaimInput {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  claimTtlMs: number;
+  now?: Date;
+  ownerPid?: number;
+  allowProcessedOwnerSupersession?: boolean;
+}
+
+export type ReviewHeadClaimAttempt =
+  | { status: "acquired"; claim: ReviewHeadClaim }
+  | { status: "blocked"; reason: "active_claim" | "processed" };
+
 export interface IssueEnrichmentRunLease {
   leaseId: string;
   expiresAt: string;
@@ -359,6 +373,9 @@ export interface ReviewEventAuthorizationConsumptionRecord {
   postedEvent?: ReviewEvent;
   reviewUrl?: string;
   postedAt?: string;
+  terminalOutcome?: "no_op";
+  terminalReason?: string;
+  terminalAt?: string;
   incidentError?: string;
   incidentCommentId?: number;
   incidentAt?: string;
@@ -374,6 +391,10 @@ export interface RecordAuthorizedReviewPostedInput {
   reviewUrl: string;
   preserveExistingBlocking?: boolean;
   now?: Date;
+}
+
+export interface RecordAuthorizedReviewNoopInput extends ReviewEventAuthorizationConsumptionInput {
+  reason: "candidate_comment_already_posted";
 }
 
 export interface RepoMemoryNoteRecord {
@@ -814,6 +835,9 @@ export class ReviewStateStore {
         posted_event text,
         review_url text,
         posted_at text,
+        terminal_outcome text,
+        terminal_reason text,
+        terminal_at text,
         incident_error text,
         incident_comment_id integer,
         incident_at text,
@@ -871,26 +895,33 @@ export class ReviewStateStore {
   }
 
   recordProcessed(record: ProcessedReviewRecord): void {
-    this.db
-      .prepare(
-        `insert or replace into processed_reviews
-          (repo, pull_number, head_sha, status, event, review_url, error, created_at)
-         values (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
-      )
-      .run(
-        record.repo,
-        record.pullNumber,
-        record.headSha,
-        record.status,
-        record.event ?? null,
-        record.reviewUrl ?? null,
-        record.error ?? null
-      );
-    // A recorded outcome for this head supersedes any in-flight per-head claim (#295): retire it so
-    // no stale claim row lingers to its TTL after the review is durable.
-    this.db
-      .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
-      .run(record.repo, record.pullNumber, record.headSha);
+    this.db.exec("begin immediate");
+    try {
+      this.db
+        .prepare(
+          `insert or replace into processed_reviews
+            (repo, pull_number, head_sha, status, event, review_url, error, created_at)
+           values (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+        )
+        .run(
+          record.repo,
+          record.pullNumber,
+          record.headSha,
+          record.status,
+          record.event ?? null,
+          record.reviewUrl ?? null,
+          record.error ?? null
+        );
+      // Completion and claim retirement are one transaction. A later ordinary claimant must see
+      // either the live claim or the durable processed row, never a gap between the two.
+      this.db
+        .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
+        .run(record.repo, record.pullNumber, record.headSha);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   recordFindingOutcomeLabel(record: FindingOutcomeLabelRecord): void {
@@ -1454,14 +1485,12 @@ export class ReviewStateStore {
    * success), reviewPull releases it in a finally (release-on-failure), and a TTL backstop sweeps
    * claims whose holder died mid-review — mirroring the review_run_leases TTL idiom.
    */
-  tryClaimReviewHead(input: {
-    repo: string;
-    pullNumber: number;
-    headSha: string;
-    claimTtlMs: number;
-    now?: Date;
-    ownerPid?: number;
-  }): ReviewHeadClaim | undefined {
+  tryClaimReviewHead(input: ReviewHeadClaimInput): ReviewHeadClaim | undefined {
+    const result = this.tryClaimReviewHeadWithOutcome(input);
+    return result.status === "acquired" ? result.claim : undefined;
+  }
+
+  tryClaimReviewHeadWithOutcome(input: ReviewHeadClaimInput): ReviewHeadClaimAttempt {
     if (!Number.isInteger(input.claimTtlMs)) throw new Error("claimTtlMs must be an integer");
     if (input.claimTtlMs < 1) throw new Error("claimTtlMs must be at least 1");
     const ownerPid = input.ownerPid ?? process.pid;
@@ -1482,7 +1511,16 @@ export class ReviewStateStore {
         .get(input.repo, input.pullNumber, input.headSha) as { claim_id: string } | undefined;
       if (existing) {
         this.db.exec("commit");
-        return undefined;
+        return { status: "blocked", reason: "active_claim" };
+      }
+      if (!input.allowProcessedOwnerSupersession) {
+        const processed = this.db
+          .prepare("select 1 from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1")
+          .get(input.repo, input.pullNumber, input.headSha);
+        if (processed) {
+          this.db.exec("commit");
+          return { status: "blocked", reason: "processed" };
+        }
       }
       this.db
         .prepare(
@@ -1490,7 +1528,7 @@ export class ReviewStateStore {
         )
         .run(input.repo, input.pullNumber, input.headSha, claimId, ownerPid, claimedAt, expiresAt);
       this.db.exec("commit");
-      return { claimId, expiresAt, ownerPid };
+      return { status: "acquired", claim: { claimId, expiresAt, ownerPid } };
     } catch (error) {
       this.db.exec("rollback");
       throw error;
@@ -1582,7 +1620,8 @@ export class ReviewStateStore {
     const row = this.db
       .prepare(
         `select repo, pull_number, head_sha, comment_id, author, consumed_at,
-                posted_event, review_url, posted_at, incident_error, incident_comment_id, incident_at
+                posted_event, review_url, posted_at, terminal_outcome, terminal_reason, terminal_at,
+                incident_error, incident_comment_id, incident_at
          from review_event_authorization_consumptions
          where repo = ? and pull_number = ? and head_sha = ?`
       )
@@ -1596,6 +1635,9 @@ export class ReviewStateStore {
         posted_event: ReviewEvent | null;
         review_url: string | null;
         posted_at: string | null;
+        terminal_outcome: "no_op" | null;
+        terminal_reason: string | null;
+        terminal_at: string | null;
         incident_error: string | null;
         incident_comment_id: number | null;
         incident_at: string | null;
@@ -1611,6 +1653,9 @@ export class ReviewStateStore {
           ...(row.posted_event ? { postedEvent: row.posted_event } : {}),
           ...(row.review_url ? { reviewUrl: row.review_url } : {}),
           ...(row.posted_at ? { postedAt: row.posted_at } : {}),
+          ...(row.terminal_outcome ? { terminalOutcome: row.terminal_outcome } : {}),
+          ...(row.terminal_reason ? { terminalReason: row.terminal_reason } : {}),
+          ...(row.terminal_at ? { terminalAt: row.terminal_at } : {}),
           ...(row.incident_error ? { incidentError: row.incident_error } : {}),
           ...(row.incident_comment_id ? { incidentCommentId: row.incident_comment_id } : {}),
           ...(row.incident_at ? { incidentAt: row.incident_at } : {})
@@ -1642,6 +1687,7 @@ export class ReviewStateStore {
         .prepare(
           `update review_event_authorization_consumptions
            set posted_event = ?, review_url = ?, posted_at = ?,
+               terminal_outcome = null, terminal_reason = null, terminal_at = null,
                incident_error = null, incident_comment_id = null, incident_at = null
            where repo = ? and pull_number = ? and head_sha = ? and comment_id = ? and author = ?`
         )
@@ -1709,6 +1755,162 @@ export class ReviewStateStore {
     }
   }
 
+  /**
+   * Terminally resolves an owner authorization when a prior advisory COMMENT already represents
+   * the exact head and the rerun still selects COMMENT. No second GitHub review is created; the
+   * original processed/readiness truth is preserved and restart/replay can trust this outcome.
+   */
+  recordAuthorizedReviewNoop(input: RecordAuthorizedReviewNoopInput): boolean {
+    validateReviewEventAuthorizationConsumption(input);
+    const terminalAt = (input.now ?? new Date()).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      const consumption = this.db
+        .prepare(
+          `select comment_id, author, posted_at, terminal_at,
+                  incident_error, incident_comment_id, incident_at
+           from review_event_authorization_consumptions
+           where repo = ? and pull_number = ? and head_sha = ?`
+        )
+        .get(input.repo, input.pullNumber, input.headSha.toLowerCase()) as {
+          comment_id: number;
+          author: string;
+          posted_at: string | null;
+          terminal_at: string | null;
+          incident_error: string | null;
+          incident_comment_id: number | null;
+          incident_at: string | null;
+        } | undefined;
+      if (!consumption) {
+        throw new Error("refusing to record an authorized review no-op without its exact consumption row");
+      }
+      if (consumption.posted_at || consumption.terminal_at) {
+        this.db.exec("commit");
+        return false;
+      }
+      if (consumption.comment_id !== input.commentId || consumption.author !== input.author) {
+        throw new Error("refusing to record an authorized review no-op for a different authorization");
+      }
+      const processed = this.getProcessedReview(input.repo, input.pullNumber, input.headSha);
+      const readiness = this.getReviewReadiness(input.repo, input.pullNumber, input.headSha);
+      const matchingAdvisoryReadiness = Boolean(
+        readiness?.state === "ready_for_human" &&
+        readiness.event === "COMMENT" &&
+        readiness.reviewUrl === processed?.reviewUrl
+      );
+      const matchingSchedulerReadiness = Boolean(
+        (readiness?.state === "queued" || readiness?.state === "reviewing") &&
+        readiness.event === "COMMENT" &&
+        readiness.reviewUrl === processed?.reviewUrl &&
+        readiness.commandAction === "request-changes" &&
+        readiness.commandCommentId === input.commentId
+      );
+      const recoverableIncidentReadiness = Boolean(
+        consumption.incident_at &&
+        consumption.incident_error &&
+        consumption.incident_comment_id &&
+        readiness?.state === "failed" &&
+        readiness.reason === consumption.incident_error &&
+        readiness.commandAction === "request-changes" &&
+        readiness.commandCommentId === consumption.incident_comment_id
+      );
+      if (
+        processed?.status !== "posted" ||
+        processed.event !== "COMMENT" ||
+        !processed.reviewUrl ||
+        (!matchingAdvisoryReadiness && !matchingSchedulerReadiness && !recoverableIncidentReadiness)
+      ) {
+        throw new Error("authorized review no-op requires an existing posted COMMENT and matching readiness");
+      }
+      const result = this.db
+        .prepare(
+          `update review_event_authorization_consumptions
+           set terminal_outcome = 'no_op', terminal_reason = ?, terminal_at = ?,
+               incident_error = null, incident_comment_id = null, incident_at = null
+           where repo = ? and pull_number = ? and head_sha = ? and comment_id = ? and author = ?
+             and posted_at is null and terminal_at is null`
+        )
+        .run(
+          input.reason,
+          terminalAt,
+          input.repo,
+          input.pullNumber,
+          input.headSha.toLowerCase(),
+          input.commentId,
+          input.author
+        );
+      if (Number(result.changes) !== 1) {
+        const existing = this.db
+          .prepare(
+            `select posted_at, terminal_at from review_event_authorization_consumptions
+             where repo = ? and pull_number = ? and head_sha = ?`
+          )
+          .get(input.repo, input.pullNumber, input.headSha.toLowerCase()) as
+            { posted_at: string | null; terminal_at: string | null } | undefined;
+        if (existing?.posted_at || existing?.terminal_at) {
+          this.db.exec("commit");
+          return false;
+        }
+        throw new Error("refusing to record an authorized review no-op without its exact consumption row");
+      }
+      if (recoverableIncidentReadiness) {
+        const restoredReadiness = this.db
+          .prepare(
+            `update review_readiness
+             set state = 'ready_for_human', reason = 'comment_review_posted', event = 'COMMENT',
+                 review_url = ?, command_action = 'request-changes', command_comment_id = ?, updated_at = ?
+             where repo = ? and pull_number = ? and head_sha = ?
+               and state = 'failed' and reason = ?
+               and command_action = 'request-changes' and command_comment_id = ?`
+          )
+          .run(
+            processed.reviewUrl,
+            input.commentId,
+            terminalAt,
+            input.repo,
+            input.pullNumber,
+            input.headSha,
+            consumption.incident_error,
+            consumption.incident_comment_id
+          );
+        if (Number(restoredReadiness.changes) !== 1) {
+          throw new Error("authorized review no-op lost ownership of its incident readiness");
+        }
+      } else if (matchingSchedulerReadiness) {
+        const restoredReadiness = this.db
+          .prepare(
+            `update review_readiness
+             set state = 'ready_for_human', reason = 'comment_review_posted', event = 'COMMENT',
+                 review_url = ?, command_action = 'request-changes', command_comment_id = ?, updated_at = ?
+             where repo = ? and pull_number = ? and head_sha = ?
+               and state in ('queued', 'reviewing') and event = 'COMMENT' and review_url = ?
+               and command_action = 'request-changes' and command_comment_id = ?`
+          )
+          .run(
+            processed.reviewUrl,
+            input.commentId,
+            terminalAt,
+            input.repo,
+            input.pullNumber,
+            input.headSha,
+            processed.reviewUrl,
+            input.commentId
+          );
+        if (Number(restoredReadiness.changes) !== 1) {
+          throw new Error("authorized review no-op lost ownership of its scheduler readiness");
+        }
+      }
+      this.db
+        .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
+        .run(input.repo, input.pullNumber, input.headSha);
+      this.db.exec("commit");
+      return true;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
   recordReviewEventAuthorizationIncident(input: {
     repo: string;
     pullNumber: number;
@@ -1730,7 +1932,7 @@ export class ReviewStateStore {
         .prepare(
           `update review_event_authorization_consumptions
            set incident_error = ?, incident_comment_id = ?, incident_at = ?
-           where repo = ? and pull_number = ? and head_sha = ? and posted_at is null`
+           where repo = ? and pull_number = ? and head_sha = ? and posted_at is null and terminal_at is null`
         )
         .run(
           error,
@@ -1743,11 +1945,12 @@ export class ReviewStateStore {
       if (Number(result.changes) !== 1) {
         const existing = this.db
           .prepare(
-            `select posted_at from review_event_authorization_consumptions
+            `select posted_at, terminal_at from review_event_authorization_consumptions
              where repo = ? and pull_number = ? and head_sha = ?`
           )
-          .get(input.repo, input.pullNumber, input.headSha.toLowerCase()) as { posted_at: string | null } | undefined;
-        if (existing?.posted_at) {
+          .get(input.repo, input.pullNumber, input.headSha.toLowerCase()) as
+            { posted_at: string | null; terminal_at: string | null } | undefined;
+        if (existing?.posted_at || existing?.terminal_at) {
           this.db.exec("commit");
           return false;
         }
@@ -2235,7 +2438,7 @@ export class ReviewStateStore {
     maxRepoActiveByRepo?: Record<string, number>;
     manualCommandReserve?: number;
     excludeJobIds?: Iterable<string>;
-    reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "jobId" | "providerId" | "org" | "repo">>;
+    reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "jobId" | "providerId" | "org" | "repo" | "pullNumber" | "headSha">>;
     limit?: number;
     leaseTtlMs?: number;
     aging?: { enabled: boolean; maxWaitMinutes: number };
@@ -2298,12 +2501,14 @@ export class ReviewStateStore {
       const providerActive = countBy(active, (job) => job.providerId ?? "default");
       const orgActive = countBy(active, (job) => job.org);
       const repoActive = countBy(active, (job) => job.repo);
-      const hasManualAfter = buildManualEligibilitySuffix(eligible);
+      const activeHeads = new Set(active.map(reviewQueueHeadKey));
 
       for (const [index, job] of eligible.entries()) {
         if (leased.length >= limit) break;
         if (active.length + leased.length >= maxGlobalActive) break;
         const provider = job.providerId ?? "default";
+        const headKey = reviewQueueHeadKey(job);
+        if (activeHeads.has(headKey)) continue;
         const providerCount = (providerActive.get(provider) ?? 0);
         if (providerCount >= input.maxProviderActive) continue;
         if ((orgActive.get(job.org) ?? 0) >= input.maxOrgActive) continue;
@@ -2311,7 +2516,7 @@ export class ReviewStateStore {
         if ((repoActive.get(job.repo) ?? 0) >= repoActiveLimit) continue;
         if (
           job.lane === "background" &&
-          hasManualAfter[index] &&
+          hasUncoveredManualAfter(eligible, index, activeHeads, headKey) &&
           manualCommandReserve > 0 &&
           providerCount >= effectiveProviderActive - manualCommandReserve
         ) {
@@ -2337,6 +2542,7 @@ export class ReviewStateStore {
         providerActive.set(provider, providerCount + 1);
         orgActive.set(job.org, (orgActive.get(job.org) ?? 0) + 1);
         repoActive.set(job.repo, (repoActive.get(job.repo) ?? 0) + 1);
+        activeHeads.add(headKey);
         leased.push(this.getReviewQueueJob(job.jobId)!);
       }
       this.db.exec("commit");
@@ -3255,6 +3461,15 @@ export class ReviewStateStore {
     if (!names.has("posted_at")) {
       this.db.exec("alter table review_event_authorization_consumptions add column posted_at text");
     }
+    if (!names.has("terminal_outcome")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column terminal_outcome text");
+    }
+    if (!names.has("terminal_reason")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column terminal_reason text");
+    }
+    if (!names.has("terminal_at")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column terminal_at text");
+    }
     if (!names.has("incident_error")) {
       this.db.exec("alter table review_event_authorization_consumptions add column incident_error text");
     }
@@ -3544,6 +3759,10 @@ function repoOrg(repo: string): string {
   return repo.split("/")[0] ?? "";
 }
 
+function reviewQueueHeadKey(job: Pick<ReviewQueueJobRecord, "repo" | "pullNumber" | "headSha">): string {
+  return `${job.repo.toLowerCase()}#${job.pullNumber}@${job.headSha.toLowerCase()}`;
+}
+
 function isQueueJobEligible(job: ReviewQueueJobRecord, nowIso: string): boolean {
   if (job.state === "queued") return true;
   if (job.state !== "provider_deferred" && job.state !== "blocked_on_proof") return false;
@@ -3591,14 +3810,19 @@ function buildLeaseComparator(
   };
 }
 
-function buildManualEligibilitySuffix(jobs: ReviewQueueJobRecord[]): boolean[] {
-  const hasManualAfter = new Array<boolean>(jobs.length).fill(false);
-  let seenManual = false;
-  for (let index = jobs.length - 1; index >= 0; index -= 1) {
-    hasManualAfter[index] = seenManual;
-    if (jobs[index]?.lane === "manual") seenManual = true;
+function hasUncoveredManualAfter(
+  jobs: ReviewQueueJobRecord[],
+  currentIndex: number,
+  activeHeads: ReadonlySet<string>,
+  candidateHeadKey: string
+): boolean {
+  for (let index = currentIndex + 1; index < jobs.length; index += 1) {
+    const job = jobs[index];
+    if (!job || job.lane !== "manual") continue;
+    const manualHeadKey = reviewQueueHeadKey(job);
+    if (manualHeadKey !== candidateHeadKey && !activeHeads.has(manualHeadKey)) return true;
   }
-  return hasManualAfter;
+  return false;
 }
 
 function countBy<T>(items: T[], key: (item: T) => string): Map<string, number> {
