@@ -233,6 +233,7 @@ git commit -m "feat(review): enforce exact-head owner authorization"
 ### Task 4: Scheduler, public schema, settings preview, and operator documentation
 
 **Files:**
+- Modify: `src/scheduler.ts`
 - Modify: `tests/scheduler.test.ts`
 - Modify: `src/repo-policy.ts`
 - Modify: `tests/worker-settings-preview.test.ts`
@@ -282,7 +283,7 @@ Expected: PASS with no policy overclaim or secret-bearing evidence.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/scheduler.test.ts src/repo-policy.ts tests/worker-settings-preview.test.ts docs/schema/neondiff-config.schema.json tests/neondiff-config-schema.test.ts config.example.json config.active-profiles.example.json docs/neondiff-config.md docs/maintainer-commands.md
+git add src/scheduler.ts tests/scheduler.test.ts src/repo-policy.ts tests/worker-settings-preview.test.ts docs/schema/neondiff-config.schema.json tests/neondiff-config-schema.test.ts config.example.json config.active-profiles.example.json docs/neondiff-config.md docs/maintainer-commands.md
 git commit -m "docs(review): publish owner-gated event contract"
 ```
 
