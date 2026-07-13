@@ -753,6 +753,9 @@ function validateOutputBoundary(outputDir: string, safeOutputRoot: string): void
 }
 
 function readBoundedFile(path: string, maximumBytes: number, label: string): Buffer {
+  const pathEntry = lstatSync(path);
+  if (pathEntry.isSymbolicLink()) throw new Error(`${label} must be a regular file, not a symlink`);
+  if (!pathEntry.isFile()) throw new Error(`${label} must be a regular file`);
   const descriptor = openSync(path, "r");
   try {
     const input = fstatSync(descriptor);

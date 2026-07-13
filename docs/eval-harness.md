@@ -61,6 +61,40 @@ checkout, the output root must be fresh or empty, artifacts are redacted,
 thresholds are explicit, and the decision is advisory-only until a separate
 live activation promotion gate passes.
 
+### Phase 1 advisory cohort seal
+
+The Phase 1 cohort selector has a dedicated offline package command. Supply
+independently computed SHA-256 trust pins for the metadata-only candidate pool
+and frozen policy, and keep the output beneath the independently allowed root:
+
+```bash
+npm run eval:phase1-cohort -- select \
+  --candidate-pool /absolute/path/to/candidates.json \
+  --candidate-pool-sha256 <candidate-pool-sha256> \
+  --policy /absolute/path/to/policy.json \
+  --policy-sha256 <policy-sha256> \
+  --output-dir /absolute/allowed-root/run-1 \
+  --allowed-output-root /absolute/allowed-root
+```
+
+Recompute the expected artifacts from the same pinned inputs and verify the
+existing sealed directory with the same arguments:
+
+```bash
+npm run eval:phase1-cohort -- verify \
+  --candidate-pool /absolute/path/to/candidates.json \
+  --candidate-pool-sha256 <candidate-pool-sha256> \
+  --policy /absolute/path/to/policy.json \
+  --policy-sha256 <policy-sha256> \
+  --output-dir /absolute/allowed-root/run-1 \
+  --allowed-output-root /absolute/allowed-root
+```
+
+Use `npm run eval:phase1-cohort -- --help` for the compact option contract.
+This command is an offline, advisory-only invocation path. It does not wire the
+seal into production review, posting, runtime defaults, or CI enforcement, and
+successful selection or verification does not make the cohort quality-ready.
+
 The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.

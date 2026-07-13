@@ -7,8 +7,15 @@ import {
   type Phase1CohortSelectionOptions
 } from "./phase1-cohort-selection.js";
 
-export function runPhase1CohortSelectionCli(args: string[]): { ok: true; command: "select" | "verify"; manifestSha256: string } {
+export type Phase1CohortSelectionCliResult =
+  | { ok: true; command: "select" | "verify"; manifestSha256: string }
+  | { ok: true; command: "help"; usage: string };
+
+export function runPhase1CohortSelectionCli(args: string[]): Phase1CohortSelectionCliResult {
   const command = args[0];
+  if ((command === "--help" || command === "-h") && args.length === 1) {
+    return { ok: true, command: "help", usage: usage() };
+  }
   if (command !== "select" && command !== "verify") throw new Error(usage());
   const options = parseOptions(args.slice(1));
   const result = command === "select"

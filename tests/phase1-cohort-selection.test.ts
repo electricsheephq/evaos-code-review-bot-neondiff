@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -163,6 +164,54 @@ describe("phase 1 cohort selection", () => {
     expect(() => runPhase1CohortSelectionCli(["select", ...args, "--policy", f.policyPath])).toThrow(/duplicate option/i);
   });
 
+  it("runs the documented advisory-only select and verify package command", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { scripts?: Record<string, string> };
+    expect(packageJson.scripts?.["eval:phase1-cohort"]).toBe("tsx src/phase1-cohort-selection-cli.ts");
+    const docs = readFileSync("docs/eval-harness.md", "utf8");
+    expect(docs).toContain("npm run eval:phase1-cohort -- select");
+    expect(docs).toContain("npm run eval:phase1-cohort -- verify");
+    expect(docs).toMatch(/does not wire the\s+seal into production review, posting, runtime defaults, or CI enforcement/);
+
+    const f = fixture();
+    try {
+      const trusted = selectionOptions(f);
+      const args = [
+        "--candidate-pool", f.candidatePoolPath,
+        "--candidate-pool-sha256", trusted.candidatePoolSha256,
+        "--policy", f.policyPath,
+        "--policy-sha256", trusted.policySha256,
+        "--output-dir", f.outputDir,
+        "--allowed-output-root", trusted.allowedOutputRoot
+      ];
+      const selected = JSON.parse(execFileSync("npm", [
+        "run", "--silent", "eval:phase1-cohort", "--", "select", ...args
+      ], { cwd: process.cwd(), encoding: "utf8" }));
+      expect(selected).toEqual({
+        ok: true,
+        command: "select",
+        manifestSha256: expect.stringMatching(/^[a-f0-9]{64}$/)
+      });
+      const verified = JSON.parse(execFileSync("npm", [
+        "run", "--silent", "eval:phase1-cohort", "--", "verify", ...args
+      ], { cwd: process.cwd(), encoding: "utf8" }));
+      expect(verified).toEqual({
+        ok: true,
+        command: "verify",
+        manifestSha256: selected.manifestSha256
+      });
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("exposes help through the advisory package command", () => {
+    const help = JSON.parse(execFileSync("npm", [
+      "run", "--silent", "eval:phase1-cohort", "--", "--help"
+    ], { cwd: process.cwd(), encoding: "utf8" }));
+    expect(help).toMatchObject({ ok: true, command: "help" });
+    expect(help.usage).toContain("phase1-cohort-selection <select|verify>");
+  });
+
   it("rejects non-regular candidate and policy input descriptors", () => {
     const candidate = fixture();
     expect(() => selectAndSealPhase1Cohort({
@@ -177,6 +226,26 @@ describe("phase 1 cohort selection", () => {
       policyPath: "/dev/null",
       policySha256: digest("")
     })).toThrow(/regular file/i);
+  });
+
+  it("rejects symlinked candidate and policy inputs before opening them", () => {
+    const candidate = fixture();
+    const candidateLink = join(candidate.root, "candidate-link.json");
+    symlinkSync(candidate.candidatePoolPath, candidateLink);
+    expect(() => selectAndSealPhase1Cohort({
+      ...selectionOptions(candidate),
+      candidatePoolPath: candidateLink
+    })).toThrow(/candidate pool.*symlink/i);
+    expect(existsSync(candidate.outputDir)).toBe(false);
+
+    const policyInput = fixture();
+    const policyLink = join(policyInput.root, "policy-link.json");
+    symlinkSync(policyInput.policyPath, policyLink);
+    expect(() => selectAndSealPhase1Cohort({
+      ...selectionOptions(policyInput),
+      policyPath: policyLink
+    })).toThrow(/policy.*symlink/i);
+    expect(existsSync(policyInput.outputDir)).toBe(false);
   });
 
   it("selects deterministically under input reordering with exact cohort and first-five strata", () => {
