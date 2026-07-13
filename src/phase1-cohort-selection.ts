@@ -10,10 +10,10 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   rmSync,
-  statSync,
   writeFileSync
 } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -188,7 +188,7 @@ export function selectAndSealPhase1Cohort(options: Phase1CohortSelectionOptions)
   const inputs = loadAndValidate(options);
   const sealed = buildSealedArtifacts(inputs);
   if (existsSync(options.outputDir)) {
-    verifyArtifactBytes(options.outputDir, sealed.artifacts);
+    waitForConcurrentArtifactBytes(options.outputDir, sealed.artifacts);
     return { ...sealed.manifest, manifestSha256: sealed.manifestSha256 };
   }
   finalizeNewArtifacts(options.outputDir, sealed.artifacts);
@@ -776,12 +776,7 @@ function isCompleteMatchingArtifactSet(outputDir: string, artifacts: Map<string,
   for (const name of entries) {
     const expected = artifacts.get(name);
     if (expected === undefined) throw new Error(`undeclared entry in sealed artifact set: ${name}`);
-    const path = join(outputDir, name);
-    const entry = lstatSync(path);
-    if (entry.isSymbolicLink()) throw new Error(`symlinked sealed artifact is forbidden: ${name}`);
-    if (!entry.isFile()) throw new Error(`sealed artifact entry must be a regular file: ${name}`);
-    if (readFileMode(path) !== 0o600) throw new Error(`sealed artifact permissions must be exactly 0600: ${name}`);
-    if (readFileSync(path, "utf8") !== expected) throw new Error(`sealed artifact tamper or fingerprint mismatch: ${name}`);
+    verifyArtifactDescriptor(join(outputDir, name), expected, name);
   }
   return entries.length === artifacts.size && [...artifacts.keys()].every((name) => entries.includes(name));
 }
@@ -790,13 +785,44 @@ function verifyArtifactBytes(outputDir: string, artifacts: Map<string, string>):
   const output = lstatSync(outputDir);
   if (output.isSymbolicLink() || !output.isDirectory()) throw new Error("sealed output path must be a regular directory, not a symlink");
   if ((output.mode & 0o777) !== 0o700) throw new Error("sealed output directory mode must be exactly 0700");
-  assertArtifactSet(outputDir, artifacts, true);
+  assertArtifactNames(outputDir, artifacts);
   for (const [name, expected] of artifacts) {
-    const path = join(outputDir, name);
-    if (!existsSync(path)) throw new Error(`sealed artifact is missing: ${name}`);
-    if (readFileSync(path, "utf8") !== expected) throw new Error(`sealed artifact tamper or fingerprint mismatch: ${name}`);
-    if (readFileMode(path) !== 0o600) throw new Error(`sealed artifact permissions must be exactly 0600: ${name}`);
+    verifyArtifactDescriptor(join(outputDir, name), expected, name);
   }
+}
+
+function verifyArtifactDescriptor(path: string, expected: string, name: string): void {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") throw new Error(`symlinked sealed artifact is forbidden: ${name}`);
+    if (code === "ENOENT") throw new Error(`sealed artifact is missing: ${name}`);
+    throw error;
+  }
+  try {
+    const entry = fstatSync(descriptor);
+    if (!entry.isFile()) throw new Error(`sealed artifact entry must be a regular file: ${name}`);
+    if ((entry.mode & 0o777) !== 0o600) throw new Error(`sealed artifact permissions must be exactly 0600: ${name}`);
+    const expectedBytes = Buffer.from(expected, "utf8");
+    if (entry.size !== expectedBytes.byteLength) throw new Error(`sealed artifact tamper or fingerprint mismatch: ${name}`);
+    const actualBytes = readBoundedDescriptor(descriptor, expectedBytes.byteLength);
+    if (!actualBytes.equals(expectedBytes)) throw new Error(`sealed artifact tamper or fingerprint mismatch: ${name}`);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readBoundedDescriptor(descriptor: number, maximumBytes: number): Buffer {
+  const bytes = Buffer.alloc(maximumBytes + 1);
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const count = readSync(descriptor, bytes, offset, bytes.byteLength - offset, null);
+    if (count === 0) break;
+    offset += count;
+  }
+  return bytes.subarray(0, offset);
 }
 
 function atomicCreatePrivateFile(path: string, value: string): void {
@@ -819,25 +845,14 @@ function atomicCreatePrivateFile(path: string, value: string): void {
   }
 }
 
-function assertArtifactSet(outputDir: string, artifacts: Map<string, string>, requireComplete: boolean): void {
-  if (!existsSync(outputDir)) {
-    if (requireComplete) throw new Error("sealed artifact set is missing");
-    return;
-  }
+function assertArtifactNames(outputDir: string, artifacts: Map<string, string>): void {
   const entries = readdirSync(outputDir);
   for (const name of entries) {
     if (!artifacts.has(name)) throw new Error(`undeclared entry in sealed artifact set: ${name}`);
-    const entry = lstatSync(join(outputDir, name));
-    if (entry.isSymbolicLink()) throw new Error(`symlinked sealed artifact is forbidden: ${name}`);
-    if (!entry.isFile()) throw new Error(`sealed artifact entry must be a regular file: ${name}`);
   }
-  if (requireComplete && (entries.length !== artifacts.size || [...artifacts.keys()].some((name) => !entries.includes(name)))) {
+  if (entries.length !== artifacts.size || [...artifacts.keys()].some((name) => !entries.includes(name))) {
     throw new Error("sealed artifact set is incomplete");
   }
-}
-
-function readFileMode(path: string): number {
-  return statSync(path).mode & 0o777;
 }
 
 function validateAllowedOutputRoot(allowedOutputRoot: string, policyOutputRoot: string): string {

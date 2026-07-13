@@ -78,6 +78,19 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       return entries;
     },
+    openSync(
+      path: Parameters<typeof actual.openSync>[0],
+      flags: Parameters<typeof actual.openSync>[1],
+      mode?: Parameters<typeof actual.openSync>[2]
+    ) {
+      if (inputPathRace.armed && path === inputPathRace.path) {
+        inputPathRace.armed = false;
+        inputPathRace.swapped = true;
+        actual.rmSync(path);
+        actual.symlinkSync(inputPathRace.target, path);
+      }
+      return actual.openSync(path, flags, mode);
+    },
     lstatSync(path: Parameters<typeof actual.lstatSync>[0]) {
       const metadata = actual.lstatSync(path);
       if (inputPathRace.armed && path === inputPathRace.path) {
@@ -414,6 +427,27 @@ describe("phase 1 cohort selection", () => {
       expect(outputDirectoryRace.observations).toBe(1);
     } finally {
       outputDirectoryRace.armed = false;
+      outputDirectoryRace.pendingCompletion = false;
+    }
+  });
+
+  it("waits for a preexisting incomplete clean seal to finish deterministically", () => {
+    const f = fixture();
+    const sourceManifest = seal(f);
+    const preexistingOutputDir = join(f.root, "sealed", "preexisting-partial");
+    mkdirSync(preexistingOutputDir, { mode: 0o700 });
+    outputDirectoryRace.path = preexistingOutputDir;
+    outputDirectoryRace.sourceDir = f.outputDir;
+    outputDirectoryRace.raced = false;
+    outputDirectoryRace.observations = 0;
+    outputDirectoryRace.completion = "complete";
+    outputDirectoryRace.pendingCompletion = true;
+
+    try {
+      expect(selectAndSealPhase1Cohort({ ...selectionOptions(f), outputDir: preexistingOutputDir }).manifestSha256)
+        .toBe(sourceManifest.manifestSha256);
+      expect(outputDirectoryRace.observations).toBe(1);
+    } finally {
       outputDirectoryRace.pendingCompletion = false;
     }
   });
@@ -867,6 +901,25 @@ describe("phase 1 cohort selection", () => {
     expect(() => seal(linked)).toThrow(/symlink|artifact/i);
   });
 
+  it("does not follow a sealed artifact swapped to a symlink after directory enumeration", () => {
+    const f = fixture();
+    seal(f);
+    const manifestPath = join(f.outputDir, "selection-manifest.json");
+    const swappedTarget = join(f.root, "swapped-selection-manifest.json");
+    writeFileSync(swappedTarget, readFileSync(manifestPath), { mode: 0o600 });
+    inputPathRace.path = manifestPath;
+    inputPathRace.target = swappedTarget;
+    inputPathRace.swapped = false;
+    inputPathRace.armed = true;
+
+    try {
+      expect(() => seal(f)).toThrow(/symlink|symbolic link|nofollow|regular file/i);
+      expect(inputPathRace.swapped).toBe(true);
+    } finally {
+      inputPathRace.armed = false;
+    }
+  });
+
   it("does not mutate an existing drifted directory or clobber a partial final path", () => {
     const driftedDirectory = fixture();
     mkdirSync(driftedDirectory.outputDir, { mode: 0o755 });
@@ -882,7 +935,7 @@ describe("phase 1 cohort selection", () => {
     mkdirSync(partial.outputDir, { mode: 0o700 });
     const finalPath = join(partial.outputDir, "selection-manifest.json");
     writeFileSync(finalPath, "do-not-clobber\n", { mode: 0o600 });
-    expect(() => seal(partial)).toThrow(/incomplete|drift|artifact set/i);
+    expect(() => seal(partial)).toThrow(/incomplete|drift|artifact set|tamper|fingerprint/i);
     expect(readFileSync(finalPath, "utf8")).toBe("do-not-clobber\n");
     expect(readdirNames(partial.outputDir)).toEqual(["selection-manifest.json"]);
   });
