@@ -667,6 +667,7 @@ describe("worker context budget preflight", () => {
       }
     });
 
+    expect(scenario.result).toBe("reviewed_command");
     expect(createdReviews[0]?.event).toBe("COMMENT");
     expect(readDecision(scenario.evidenceDir)).toMatchObject({
       selectedEvent: "COMMENT",
@@ -737,6 +738,7 @@ describe("worker context budget preflight", () => {
       }
     });
 
+    expect(scenario.result).toBe("reviewed_command");
     expect(createdReviews[0]?.event).toBe("COMMENT");
     expect(readDecision(scenario.evidenceDir)).toMatchObject({
       selectedEvent: "COMMENT",

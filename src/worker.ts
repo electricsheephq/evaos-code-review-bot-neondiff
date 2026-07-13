@@ -1810,6 +1810,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       commandCommentId: input.commandCommentId,
       commandConfig: config.commands
     });
+    exactOwnerReviewRequested = exactOwnerReviewRequested || authorization.status === "eligible";
+    manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     if (reviewEventPolicyMode === "trusted_command_only") {
       const liveBeforeConsume = await github.getPull(repo, pull.number);
       const staleBeforeConsume = detectStalePullHead({ expected: pull, live: liveBeforeConsume, phase: "before_post" });
@@ -1827,8 +1829,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pull,
       dryRun: false
     });
-    exactOwnerReviewRequested = exactOwnerReviewRequested || reviewEventResolution.authorization.status === "eligible";
-    manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
     if (
       reviewEventResolution.consumed &&
