@@ -48,6 +48,8 @@ export interface LicenseHttpOptions {
   subscriptionLifecycleRateLimiter?: RateLimiter;
   issuanceSecret?: string;
   lifecycleOidcVerifier?: LifecycleOidcVerifier;
+  /** Honor Fly's client-address header only when the listener runs behind Fly's trusted proxy. */
+  trustFlyProxyHeaders?: boolean;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;
 }
@@ -84,9 +86,7 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       return handleIssuanceRequest(options, req, res);
     }
     if (req.method === "POST" && path === "/v1/admin/licenses/issue-lifecycle") {
-      const forwardedAddress = req.headers["fly-client-ip"];
-      const candidateAddress = Array.isArray(forwardedAddress) ? forwardedAddress[0] : forwardedAddress;
-      const sourceAddress = candidateAddress && isIP(candidateAddress) ? candidateAddress : (req.socket.remoteAddress ?? "unknown");
+      const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
       const lifecycleRateLimitKey = createHash("sha256").update(`lifecycle:${sourceAddress}`).digest("hex");
       if (!lifecycleRateLimiter.allow(lifecycleRateLimitKey, now().getTime())) {
         return writeJson(res, 429, { status: "rate_limited", detail: "too many lifecycle issuance requests" });
@@ -142,11 +142,7 @@ async function handleSubscriptionLifecycleRequest(
     return writeJson(res, 401, { status: "unauthorized" });
   }
 
-  const forwardedAddress = req.headers["fly-client-ip"];
-  const candidateAddress = Array.isArray(forwardedAddress) ? forwardedAddress[0] : forwardedAddress;
-  const sourceAddress = candidateAddress && isIP(candidateAddress)
-    ? candidateAddress
-    : (req.socket.remoteAddress ?? "unknown");
+  const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
   const rateLimitKey = createHash("sha256")
     .update(`subscription-lifecycle:${sourceAddress}`)
     .digest("hex");
@@ -192,6 +188,18 @@ async function handleSubscriptionLifecycleRequest(
     }
     return writeJson(res, 500, { status: "server" });
   }
+}
+
+function resolveClientAddress(req: IncomingMessage, trustFlyProxyHeaders: boolean): string {
+  const forwardedAddress = req.headers["fly-client-ip"];
+  if (
+    trustFlyProxyHeaders &&
+    typeof forwardedAddress === "string" &&
+    isIP(forwardedAddress)
+  ) {
+    return forwardedAddress;
+  }
+  return req.socket.remoteAddress ?? "unknown";
 }
 
 async function handleLifecycleIssuanceRequest(

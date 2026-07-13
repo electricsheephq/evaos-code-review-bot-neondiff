@@ -111,6 +111,7 @@ async function withLifecycleServer(
     subscriptionLifecycleRateLimiter?: RateLimiter;
     lifecycleRateLimiter?: RateLimiter;
     lifecycleOidcVerifier?: { verify(token: string): Promise<any> };
+    trustFlyProxyHeaders?: boolean;
   } = {}
 ): Promise<void> {
   const store = options.store ?? new LicenseStore(":memory:", { now: () => NOW });
@@ -124,7 +125,8 @@ async function withLifecycleServer(
     rateLimiter: new RateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
     subscriptionLifecycleRateLimiter: options.subscriptionLifecycleRateLimiter,
     lifecycleRateLimiter: options.lifecycleRateLimiter,
-    lifecycleOidcVerifier: options.lifecycleOidcVerifier
+    lifecycleOidcVerifier: options.lifecycleOidcVerifier,
+    trustFlyProxyHeaders: options.trustFlyProxyHeaders
   });
   try {
     await run({ store, server: started.server, url: started.url, issuance });
@@ -432,6 +434,80 @@ describe("guarded subscription lifecycle HTTP endpoint", () => {
           throw new Error("invalid oidc fixture");
         }
       }
+    });
+  });
+
+  it("ignores forged Fly client addresses unless the Fly proxy trust boundary is enabled", async () => {
+    await withLifecycleServer(async ({ url, issuance }) => {
+      const first = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("reconcile", issuance, { eventId: "evt_untrusted_proxy_one" }),
+        { ...AUTH, "Fly-Client-IP": "203.0.113.31" }
+      );
+      const forgedRotation = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("reconcile", issuance, { eventId: "evt_untrusted_proxy_two" }),
+        { ...AUTH, "Fly-Client-IP": "203.0.113.32" }
+      );
+      assert.equal(first.status, 200);
+      assert.equal(forgedRotation.status, 429);
+    }, {
+      subscriptionLifecycleRateLimiter: new RateLimiter({
+        maxPerWindow: 1,
+        windowMs: 60_000
+      })
+    });
+  });
+
+  it("uses valid Fly client addresses only in explicitly trusted proxy mode", async () => {
+    await withLifecycleServer(async ({ url, issuance }) => {
+      const first = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("reconcile", issuance, { eventId: "evt_trusted_proxy_one" }),
+        { ...AUTH, "Fly-Client-IP": "203.0.113.41" }
+      );
+      const independent = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("reconcile", issuance, { eventId: "evt_trusted_proxy_two" }),
+        { ...AUTH, "Fly-Client-IP": "203.0.113.42" }
+      );
+      assert.equal(first.status, 200);
+      assert.equal(independent.status, 200);
+    }, {
+      trustFlyProxyHeaders: true,
+      subscriptionLifecycleRateLimiter: new RateLimiter({
+        maxPerWindow: 1,
+        windowMs: 60_000
+      })
+    });
+  });
+
+  it("fails malformed and multi-value Fly client headers safe to the socket budget", async () => {
+    await withLifecycleServer(async ({ url, issuance }) => {
+      const malformed = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("reconcile", issuance, { eventId: "evt_malformed_proxy" }),
+        { ...AUTH, "Fly-Client-IP": "not-an-ip" }
+      );
+      const multiValue = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("reconcile", issuance, { eventId: "evt_multi_proxy" }),
+        { ...AUTH, "Fly-Client-IP": "203.0.113.51, 203.0.113.52" }
+      );
+      assert.equal(malformed.status, 200);
+      assert.equal(multiValue.status, 429);
+    }, {
+      trustFlyProxyHeaders: true,
+      subscriptionLifecycleRateLimiter: new RateLimiter({
+        maxPerWindow: 1,
+        windowMs: 60_000
+      })
     });
   });
 });

@@ -325,6 +325,7 @@ describe("lifecycle issuance transport", () => {
     const started = await startLicenseServer({
       store: isolatedStore,
       issuanceSecret: "lifecycle-issuance-secret",
+      trustFlyProxyHeaders: true,
       lifecycleRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
       lifecycleOidcVerifier: {
         verify: async () => {
@@ -364,6 +365,7 @@ describe("lifecycle issuance transport", () => {
     const started = await startLicenseServer({
       store: isolatedStore,
       issuanceSecret: "lifecycle-issuance-secret",
+      trustFlyProxyHeaders: true,
       lifecycleRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
       lifecycleOidcVerifier: {
         verify: async () => {
@@ -412,6 +414,44 @@ describe("lifecycle issuance transport", () => {
       );
       assert.equal(response.status, 413);
       assert.equal(response.json.status, "invalid");
+    } finally {
+      started.server.close();
+      isolatedStore.close();
+    }
+  });
+
+  it("ignores forged Fly client addresses for direct OIDC lifecycle requests", async () => {
+    const isolatedStore = new LicenseStore(":memory:");
+    let verifierCalls = 0;
+    const started = await startLicenseServer({
+      store: isolatedStore,
+      issuanceSecret: "lifecycle-issuance-secret",
+      lifecycleRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
+      lifecycleOidcVerifier: {
+        verify: async () => {
+          verifierCalls += 1;
+          throw new Error("invalid fixture token");
+        }
+      }
+    });
+    const body = {
+      releaseVersion: "v1.0.4",
+      candidateHead: "a".repeat(40),
+      packShasum: "b".repeat(40),
+      packIntegrity: `sha512-${"Y".repeat(86)}==`
+    };
+    try {
+      const first = await post(started.url, "/v1/admin/licenses/issue-lifecycle", body, {
+        Authorization: "Bearer first.invalid.token",
+        "Fly-Client-IP": "203.0.113.21"
+      });
+      const forgedRotation = await post(started.url, "/v1/admin/licenses/issue-lifecycle", body, {
+        Authorization: "Bearer second.invalid.token",
+        "Fly-Client-IP": "203.0.113.22"
+      });
+      assert.equal(first.status, 401);
+      assert.equal(forgedRotation.status, 429);
+      assert.equal(verifierCalls, 1);
     } finally {
       started.server.close();
       isolatedStore.close();
