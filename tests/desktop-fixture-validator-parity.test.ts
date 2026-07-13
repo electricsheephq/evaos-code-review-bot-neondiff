@@ -100,6 +100,10 @@ describe("desktop fixture validator parity", () => {
       "https://example.com\t/path",
       "https://example.com\\evil",
       "https://example.com:99999",
+      "https://example.com:0",
+      "https://example.com:00000",
+      "https://256.256.256.256",
+      "https://9999999999",
       "https://@example.com",
       "https://example.com "
     ]) {
@@ -107,6 +111,12 @@ describe("desktop fixture validator parity", () => {
       source.state.provider.baseURL = baseURL;
       expect(() => validateDesktopEvaluationFixture(source)).toThrow(/baseURL is invalid/);
     }
+  });
+
+  it("accepts the same canonical dotted-quad provider URL as the Swift fixture decoder", () => {
+    const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-providers.json", "utf8"));
+    source.state.provider.baseURL = "http://127.0.0.1:11434/v1";
+    expect(validateDesktopEvaluationFixture(source).state.provider?.baseURL).toBe("http://127.0.0.1:11434/v1");
   });
 
   it("rejects unactivated post-onboarding surfaces", () => {

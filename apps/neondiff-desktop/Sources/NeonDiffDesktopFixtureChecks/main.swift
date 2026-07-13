@@ -213,6 +213,9 @@ for (label, baseURL) in [
     ("control-character provider base URL", "https://\nexample.com"),
     ("backslash provider base URL", #"https://example.com\evil"#),
     ("out-of-range provider port", "https://example.com:99999"),
+    ("zero provider port", "https://example.com:0"),
+    ("out-of-range IPv4 provider host", "https://256.256.256.256"),
+    ("ambiguous numeric provider host", "https://9999999999"),
     ("provider URL userinfo", "https://@example.com"),
     ("provider URL trailing whitespace", "https://example.com ")
 ] {
@@ -225,6 +228,15 @@ for (label, baseURL) in [
     }
     expectFixtureFailure(label, data: fixture)
 }
+
+let canonicalIPv4ProviderURL = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var provider = state["provider"] as! [String: Any]
+    provider["baseURL"] = "http://127.0.0.1:11434/v1"
+    state["provider"] = provider
+    object["state"] = state
+}
+_ = try DesktopEvaluationFixture.decode(data: canonicalIPv4ProviderURL)
 
 let offsetRepositoryTimestamp = try mutatedManifest(validFixture) { object in
     var state = object["state"] as! [String: Any]

@@ -325,13 +325,42 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
     private static func isCanonicalProviderURL(_ value: String) -> Bool {
         let grammar = #"^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$"#
         guard value.range(of: grammar, options: [.regularExpression, .caseInsensitive]) != nil,
+              let schemeSeparator = value.range(of: "://"),
               let url = URL(string: value),
               let host = url.host,
               !host.isEmpty,
               url.user == nil,
               url.password == nil else { return false }
-        if let port = url.port, !(1...65_535).contains(port) { return false }
+        let authorityEnd = value[schemeSeparator.upperBound...].firstIndex(where: { "/?#".contains($0) }) ?? value.endIndex
+        let rawAuthority = String(value[schemeSeparator.upperBound..<authorityEnd])
+        let authorityParts = rawAuthority.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let rawHost = authorityParts.first.map(String.init),
+              isCanonicalProviderHost(rawHost) else { return false }
+        if authorityParts.count == 2 {
+            guard let port = Int(authorityParts[1]), (1...65_535).contains(port) else { return false }
+        }
         return true
+    }
+
+    private static func isCanonicalProviderHost(_ host: String) -> Bool {
+        guard host.utf8.count <= 253 else { return false }
+        if host.allSatisfy({ $0.isNumber || $0 == "." }) {
+            let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+            return octets.count == 4 && octets.allSatisfy { octet in
+                guard (1...3).contains(octet.count),
+                      let value = Int(octet),
+                      (0...255).contains(value) else { return false }
+                return String(value) == octet
+            }
+        }
+        return host.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+            guard (1...63).contains(label.count),
+                  label.first != "-",
+                  label.last != "-" else { return false }
+            return label.allSatisfy { character in
+                character.isASCII && (character.isLetter || character.isNumber || character == "-")
+            }
+        }
     }
 
     private static func validateShape(_ root: [String: Any]) throws {

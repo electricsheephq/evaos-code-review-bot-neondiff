@@ -18,7 +18,7 @@ const actions = new Set([
 ]);
 const outcomes = new Set(["success", "failure", "cancelled"]);
 const canonicalSizes = new Set(["1040x680", "1280x800", "1440x900", "760x560", "560x700"]);
-const canonicalProviderURL = /^https?:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/i;
+const canonicalProviderURL = /^https?:\/\/([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?(?:\?[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?(?:#[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*)?$/i;
 const maximumFixtureBytes = 256 * 1024;
 
 function fail(message) { throw new Error(`fixture schema: ${message}`); }
@@ -62,6 +62,19 @@ function isoDate(value, label) {
   }
   return value;
 }
+function canonicalProviderHost(host) {
+  if (host.length > 253) return false;
+  if (/^[0-9.]+$/.test(host)) {
+    const octets = host.split(".");
+    return octets.length === 4 && octets.every((octet) => {
+      const value = Number(octet);
+      return /^\d{1,3}$/.test(octet) && Number.isInteger(value)
+        && value >= 0 && value <= 255 && String(value) === octet;
+    });
+  }
+  return host.split(".").every((label) => label.length >= 1 && label.length <= 63
+    && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
+}
 
 export function validateDesktopEvaluationFixture(input) {
   publicSafe(input);
@@ -104,7 +117,13 @@ export function validateDesktopEvaluationFixture(input) {
     enumValue(provider.authMode, authModes, "provider.authMode");
     enumValue(provider.verification, verificationStates, "provider.verification");
     boolean(provider.credentialPresent, "provider.credentialPresent");
-    if (typeof provider.baseURL !== "string" || !canonicalProviderURL.test(provider.baseURL)) fail("provider.baseURL is invalid");
+    if (typeof provider.baseURL !== "string") fail("provider.baseURL is invalid");
+    const providerURLMatch = canonicalProviderURL.exec(provider.baseURL);
+    if (!providerURLMatch || !canonicalProviderHost(providerURLMatch[1])) fail("provider.baseURL is invalid");
+    if (providerURLMatch[2] !== undefined) {
+      const port = Number(providerURLMatch[2]);
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) fail("provider.baseURL is invalid");
+    }
     let url;
     try { url = new URL(provider.baseURL); } catch { fail("provider.baseURL is invalid"); }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) fail("provider.baseURL is invalid");
