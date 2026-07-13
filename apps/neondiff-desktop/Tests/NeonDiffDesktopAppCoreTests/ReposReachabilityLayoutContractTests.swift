@@ -14,6 +14,12 @@ import Testing
                 range: outerScroll.upperBound..<source.endIndex
             )
         )
+        let outerIndicators = try #require(
+            source.range(
+                of: ".scrollIndicators(.visible, axes: .vertical)",
+                range: outerBackground.upperBound..<source.endIndex
+            )
+        )
         let pageContent = try #require(source.range(of: "private var pageContent: some View"))
         let pageStack = try #require(
             source.range(
@@ -24,7 +30,8 @@ import Testing
         let readOnlyBoundary = try #require(source.range(of: ".disabled(!model.canEditProviderConfiguration)"))
 
         #expect(outerScroll.lowerBound < outerBackground.lowerBound)
-        #expect(outerBackground.lowerBound < pageContent.lowerBound)
+        #expect(outerBackground.lowerBound < outerIndicators.lowerBound)
+        #expect(outerIndicators.lowerBound < pageContent.lowerBound)
         #expect(pageContent.lowerBound < pageStack.lowerBound)
         #expect(pageStack.lowerBound < readOnlyBoundary.lowerBound)
         #expect(source.contains(".frame(height: 360)"))

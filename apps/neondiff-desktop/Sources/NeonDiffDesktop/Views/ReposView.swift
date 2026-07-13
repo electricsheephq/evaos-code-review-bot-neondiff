@@ -10,6 +10,7 @@ struct ReposView: View {
             pageContent
         }
         .scrollContentBackground(.hidden)
+        .scrollIndicators(.visible, axes: .vertical)
     }
 
     private var pageContent: some View {
