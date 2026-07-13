@@ -412,6 +412,11 @@ describe("repo profile registry", () => {
 
     expect(buildReviewSettingsPreview(config, profile)).toEqual({
       profile: "assertive",
+      reviewGate: {
+        reviewEventPolicy: {
+          mode: "trusted_command_only"
+        }
+      },
       sampleProfile: {
         id: "assertive",
         label: "Assertive",
