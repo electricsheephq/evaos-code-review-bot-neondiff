@@ -23,6 +23,7 @@ import { containsSecretLikeText } from "./secrets.js";
 const BUCKETS = ["16k", "32k", "64k", "128k"] as const;
 type Phase1Bucket = typeof BUCKETS[number];
 type BucketCounts = Record<Phase1Bucket, number>;
+export type Phase1SelectionProfile = "stratified_transport" | "natural_quality";
 const MAX_CANDIDATE_POOL_BYTES = 16 * 1024 * 1024;
 const MAX_POLICY_BYTES = 256 * 1024;
 const MAX_CANDIDATE_POOL_SIZE = 64;
@@ -45,7 +46,7 @@ export interface Phase1Candidate {
   candidateId: string;
   sourceIdentitySha256: string;
   inputArtifactSha256: string;
-  promptTokens: number;
+  admissionEstimatedPromptTokens: number;
   bucket: Phase1Bucket;
   repositoryGroup: string;
   lineageGroup: string;
@@ -61,10 +62,9 @@ export interface Phase1Candidate {
   };
 }
 
-export interface Phase1CohortPolicy {
+interface Phase1CohortPolicyBase {
+  selectionProfile: Phase1SelectionProfile;
   cohortSize: number;
-  bucketQuotas: BucketCounts;
-  firstFiveBucketQuotas: BucketCounts;
   outputTokens: number;
   maximumFindings: number;
   minimumCleanControls: number;
@@ -75,7 +75,7 @@ export interface Phase1CohortPolicy {
   maximumCandidatePoolSize: number;
   maximumCanonicalSearchStates: number;
   selectionSeed: string;
-  tokenizerFingerprint: string;
+  admissionEstimatorFingerprint: string;
   promptBuilderFingerprint: string;
   parserFingerprint: string;
   gateFingerprint: string;
@@ -85,6 +85,18 @@ export interface Phase1CohortPolicy {
   safeOutputRoot: string;
   proofBoundary: string;
 }
+
+export interface Phase1StratifiedTransportPolicy extends Phase1CohortPolicyBase {
+  selectionProfile: "stratified_transport";
+  bucketQuotas: BucketCounts;
+  firstFiveBucketQuotas: BucketCounts;
+}
+
+export interface Phase1NaturalQualityPolicy extends Phase1CohortPolicyBase {
+  selectionProfile: "natural_quality";
+}
+
+export type Phase1CohortPolicy = Phase1StratifiedTransportPolicy | Phase1NaturalQualityPolicy;
 
 export interface Phase1CohortSelectionOptions {
   candidatePoolPath: string;
@@ -96,12 +108,13 @@ export interface Phase1CohortSelectionOptions {
 }
 
 export interface Phase1SelectionManifest {
-  schemaVersion: "neondiff-phase1-selection-manifest/v1";
+  schemaVersion: "neondiff-phase1-selection-manifest/v2";
+  selectionProfile: Phase1SelectionProfile;
   candidatePoolSha256: string;
   policySha256: string;
   selectionSeed: string;
   fingerprints: {
-    tokenizer: string;
+    admissionEstimator: string;
     promptBuilder: string;
     parser: string;
     gate: string;
@@ -111,8 +124,8 @@ export interface Phase1SelectionManifest {
   };
   contract: {
     cohortSize: 14;
-    bucketQuotas: BucketCounts;
-    firstFiveBucketQuotas: BucketCounts;
+    bucketQuotas?: BucketCounts;
+    firstFiveBucketQuotas?: BucketCounts;
     outputTokens: 2048;
     maximumFindings: 5;
     maximumCandidatePoolSize: 64;
@@ -120,7 +133,7 @@ export interface Phase1SelectionManifest {
   };
   selectedCandidateIds: string[];
   strata: {
-    bucketCounts: BucketCounts;
+    admissionEstimatedPromptBucketCounts: BucketCounts;
     caseKindCounts: Record<Phase1Candidate["caseKind"], number>;
   };
   diversity: {
@@ -132,7 +145,7 @@ export interface Phase1SelectionManifest {
     repositoryGroupCounts: Record<string, number>;
     languageCounts: Record<string, number>;
   };
-  firstFive: {
+  firstFive?: {
     candidateIds: string[];
     bucketCounts: BucketCounts;
     cleanControlCount: number;
@@ -145,20 +158,21 @@ export interface Phase1SelectionManifest {
 export type Phase1SelectionResult = Phase1SelectionManifest & { manifestSha256: string };
 
 const CANDIDATE_KEYS = [
-  "candidateId", "sourceIdentitySha256", "inputArtifactSha256", "promptTokens", "bucket",
+  "candidateId", "sourceIdentitySha256", "inputArtifactSha256", "admissionEstimatedPromptTokens", "bucket",
   "repositoryGroup", "lineageGroup", "language", "riskTags", "caseKind", "eligibility"
 ] as const;
 const ELIGIBILITY_KEYS = [
   "currentHead", "redactionPassed", "secretScanPassed", "immutableInput", "sourcePolicyPassed"
 ] as const;
-const POLICY_KEYS = [
-  "cohortSize", "bucketQuotas", "firstFiveBucketQuotas", "outputTokens", "maximumFindings",
+const COMMON_POLICY_KEYS = [
+  "selectionProfile", "cohortSize", "outputTokens", "maximumFindings",
   "minimumCleanControls", "minimumRepositoryGroups", "minimumLanguages", "minimumHighRisk",
   "maximumPerRepositoryGroup", "maximumCandidatePoolSize", "maximumCanonicalSearchStates",
-  "selectionSeed", "tokenizerFingerprint", "promptBuilderFingerprint",
+  "selectionSeed", "admissionEstimatorFingerprint", "promptBuilderFingerprint",
   "parserFingerprint", "gateFingerprint", "redactorFingerprint", "secretScannerFingerprint",
   "sourcePolicyFingerprint", "safeOutputRoot", "proofBoundary"
 ] as const;
+const TRANSPORT_POLICY_KEYS = [...COMMON_POLICY_KEYS, "bucketQuotas", "firstFiveBucketQuotas"] as const;
 const FORBIDDEN_INPUT_KEYS = new Set([
   "reponame", "repositoryname", "pr", "prnumber", "pullrequest", "pullrequestnumber",
   "headsha", "headsha256", "prompt", "prompttext", "code", "codecontent", "content", "path",
@@ -197,7 +211,8 @@ function buildSealedArtifacts(inputs: {
   const manifestSha256 = sha256(manifestBytes);
   const runtimeBytes = jsonBytes(buildRuntimeInputManifest(inputs.candidates, manifest, manifestSha256));
   const receiptBytes = jsonBytes({
-    schemaVersion: "neondiff-phase1-selection-receipt/v1",
+    schemaVersion: "neondiff-phase1-selection-receipt/v2",
+    selectionProfile: inputs.policy.selectionProfile,
     selectionManifestSha256: manifestSha256,
     runtimeInputManifestSha256: sha256(runtimeBytes),
     candidatePoolSha256: inputs.candidatePoolSha256,
@@ -235,8 +250,8 @@ function loadAndValidate(options: Phase1CohortSelectionOptions): {
   assertNoForbiddenKeys(policyValue);
   assertSecretSafe(candidateValue, "candidate pool");
   assertSecretSafe(policyValue, "cohort policy");
-  const candidates = validateCandidates(candidateValue);
   const policy = validatePolicy(policyValue);
+  const candidates = validateCandidates(candidateValue, policy.selectionProfile);
   if (candidates.length > policy.maximumCandidatePoolSize) {
     throw new Error(`candidate pool exceeds the frozen maximum of ${policy.maximumCandidatePoolSize} rows`);
   }
@@ -250,7 +265,7 @@ function loadAndValidate(options: Phase1CohortSelectionOptions): {
   };
 }
 
-function validateCandidates(value: unknown): Phase1Candidate[] {
+function validateCandidates(value: unknown, profile: Phase1SelectionProfile): Phase1Candidate[] {
   if (!Array.isArray(value) || value.length === 0) throw new Error("candidate pool must be a non-empty JSON array");
   const candidates = value.map((item, index) => {
     assertRecord(item, `candidate ${index}`);
@@ -260,9 +275,13 @@ function validateCandidates(value: unknown): Phase1Candidate[] {
     assertOpaqueIdentifier(item.candidateId, "candidate", `candidate ${index} ID`);
     assertSha256(item.sourceIdentitySha256, `candidate ${index} source identity SHA-256`);
     assertSha256(item.inputArtifactSha256, `candidate ${index} input artifact SHA-256`);
-    if (!Number.isInteger(item.promptTokens)) throw new Error(`candidate ${index} prompt token count must be an integer`);
-    const expectedBucket = bucketForTokens(item.promptTokens as number);
-    if (item.bucket !== expectedBucket) throw new Error(`candidate ${index} bucket does not match strict prompt token range`);
+    const estimatedTokens = item.admissionEstimatedPromptTokens;
+    if (!Number.isInteger(estimatedTokens)) throw new Error(`candidate ${index} admission estimated prompt token count must be an integer`);
+    const expectedBucket = admissionEstimatedBucket(estimatedTokens as number);
+    if (profile === "stratified_transport" && (estimatedTokens as number) < 8_193) {
+      throw new Error(`candidate ${index} admission estimated prompt token count is below the stratified transport floor`);
+    }
+    if (item.bucket !== expectedBucket) throw new Error(`candidate ${index} bucket does not match the admission estimated prompt token range`);
     assertOpaqueIdentifier(item.repositoryGroup, "repo", `candidate ${index} repository group`);
     assertOpaqueIdentifier(item.lineageGroup, "lineage", `candidate ${index} lineage group`);
     if (typeof item.language !== "string" || !PHASE1_COHORT_LANGUAGE_SET.has(item.language)) {
@@ -289,10 +308,16 @@ function validateCandidates(value: unknown): Phase1Candidate[] {
 
 function validatePolicy(value: unknown): Phase1CohortPolicy {
   assertRecord(value, "cohort policy");
-  assertExactKeys(value, POLICY_KEYS, "cohort policy");
+  if (value.selectionProfile !== "stratified_transport" && value.selectionProfile !== "natural_quality") {
+    throw new Error("cohort policy selectionProfile must be stratified_transport or natural_quality");
+  }
+  const profile = value.selectionProfile;
+  assertExactKeys(value, profile === "stratified_transport" ? TRANSPORT_POLICY_KEYS : COMMON_POLICY_KEYS, "cohort policy");
   if (value.cohortSize !== 14) throw new Error("cohort policy must pin exact advisory cohort size 14");
-  validateBucketCounts(value.bucketQuotas, { "16k": 2, "32k": 5, "64k": 5, "128k": 2 }, "bucket quotas");
-  validateBucketCounts(value.firstFiveBucketQuotas, { "16k": 1, "32k": 2, "64k": 1, "128k": 1 }, "first-five bucket quotas");
+  if (profile === "stratified_transport") {
+    validateBucketCounts(value.bucketQuotas, { "16k": 2, "32k": 5, "64k": 5, "128k": 2 }, "bucket quotas");
+    validateBucketCounts(value.firstFiveBucketQuotas, { "16k": 1, "32k": 2, "64k": 1, "128k": 1 }, "first-five bucket quotas");
+  }
   if (value.outputTokens !== 2_048) throw new Error("cohort policy must pin 2,048 output tokens");
   if (value.maximumFindings !== 5) throw new Error("cohort policy must pin maximum five findings");
   for (const [name, expected] of [
@@ -306,7 +331,7 @@ function validatePolicy(value: unknown): Phase1CohortPolicy {
     throw new Error(`cohort policy maximumCanonicalSearchStates must be an integer from ${MIN_CANONICAL_SEARCH_STATES} through ${MAX_CANONICAL_SEARCH_STATES}`);
   }
   for (const name of [
-    "selectionSeed", "tokenizerFingerprint", "promptBuilderFingerprint", "parserFingerprint", "gateFingerprint",
+    "selectionSeed", "admissionEstimatorFingerprint", "promptBuilderFingerprint", "parserFingerprint", "gateFingerprint",
     "redactorFingerprint", "secretScannerFingerprint", "sourcePolicyFingerprint"
   ] as const) assertSha256(value[name], `policy ${name}`);
   assertNonEmptyString(value.proofBoundary, "policy proof boundary");
@@ -323,27 +348,34 @@ function buildSelectionManifest(
   candidatePoolSha256: string,
   policySha256: string
 ): Phase1SelectionManifest {
-  const selected = selectCandidates(candidates, policy);
-  const firstFive = selectFirstFive(selected, policy);
+  const selected = policy.selectionProfile === "stratified_transport"
+    ? selectCandidates(candidates, policy)
+    : selectNaturalQualityCandidates(candidates, policy);
   const repositoryGroupCounts = countBy(selected, (row) => row.repositoryGroup);
   const languageCounts = countBy(selected, (row) => row.language);
   const bucketCounts = countBuckets(selected);
   const cleanControlCount = selected.filter(isCleanControl).length;
   const highRiskCount = selected.filter(isHighRisk).length;
-  if (!sameBucketCounts(bucketCounts, policy.bucketQuotas)) throw new Error("selected cohort bucket quotas are not exact");
+  if (policy.selectionProfile === "stratified_transport" && !sameBucketCounts(bucketCounts, policy.bucketQuotas)) {
+    throw new Error("selected cohort bucket quotas are not exact");
+  }
+  if (policy.selectionProfile === "natural_quality" && cleanControlCount !== 4) {
+    throw new Error("natural-quality cohort must contain exactly four clean controls");
+  }
   if (cleanControlCount < policy.minimumCleanControls) throw new Error("selected cohort misses the clean-control floor");
   if (Object.keys(repositoryGroupCounts).length < policy.minimumRepositoryGroups) throw new Error("selected cohort misses the repository diversity floor");
   if (Object.keys(languageCounts).length < policy.minimumLanguages) throw new Error("selected cohort misses the language diversity floor");
   if (highRiskCount < policy.minimumHighRisk) throw new Error("selected cohort misses the high-risk floor");
   const maximumRepositoryGroupCount = Math.max(0, ...Object.values(repositoryGroupCounts));
   if (maximumRepositoryGroupCount > policy.maximumPerRepositoryGroup) throw new Error("selected cohort exceeds the repository group cap");
-  return {
-    schemaVersion: "neondiff-phase1-selection-manifest/v1",
+  const base: Phase1SelectionManifest = {
+    schemaVersion: "neondiff-phase1-selection-manifest/v2",
+    selectionProfile: policy.selectionProfile,
     candidatePoolSha256,
     policySha256,
     selectionSeed: policy.selectionSeed,
     fingerprints: {
-      tokenizer: policy.tokenizerFingerprint,
+      admissionEstimator: policy.admissionEstimatorFingerprint,
       promptBuilder: policy.promptBuilderFingerprint,
       parser: policy.parserFingerprint,
       gate: policy.gateFingerprint,
@@ -353,8 +385,6 @@ function buildSelectionManifest(
     },
     contract: {
       cohortSize: 14,
-      bucketQuotas: { ...policy.bucketQuotas },
-      firstFiveBucketQuotas: { ...policy.firstFiveBucketQuotas },
       outputTokens: 2_048,
       maximumFindings: 5,
       maximumCandidatePoolSize: 64,
@@ -362,7 +392,7 @@ function buildSelectionManifest(
     },
     selectedCandidateIds: selected.map((row) => row.candidateId),
     strata: {
-      bucketCounts,
+      admissionEstimatedPromptBucketCounts: bucketCounts,
       caseKindCounts: {
         defect_candidate: selected.length - cleanControlCount,
         clean_control_candidate: cleanControlCount
@@ -377,18 +407,44 @@ function buildSelectionManifest(
       repositoryGroupCounts,
       languageCounts
     },
-    firstFive: {
-      candidateIds: firstFive.map((row) => row.candidateId),
-      bucketCounts: countBuckets(firstFive),
-      cleanControlCount: firstFive.filter(isCleanControl).length
-    },
     proofBoundary: policy.proofBoundary,
     outcomeVisibility: "not_present",
     qualityReady: false
   };
+  if (policy.selectionProfile === "natural_quality") return base;
+  const firstFive = selectFirstFive(selected, policy);
+  return {
+    ...base,
+    contract: {
+      ...base.contract,
+      bucketQuotas: { ...policy.bucketQuotas },
+      firstFiveBucketQuotas: { ...policy.firstFiveBucketQuotas }
+    },
+    firstFive: {
+      candidateIds: firstFive.map((row) => row.candidateId),
+      bucketCounts: countBuckets(firstFive),
+      cleanControlCount: firstFive.filter(isCleanControl).length
+    }
+  };
 }
 
-function selectCandidates(candidates: Phase1Candidate[], policy: Phase1CohortPolicy): Phase1Candidate[] {
+function selectNaturalQualityCandidates(
+  candidates: Phase1Candidate[],
+  policy: Phase1NaturalQualityPolicy
+): Phase1Candidate[] {
+  if (candidates.length !== policy.cohortSize) {
+    throw new Error("natural-quality candidate pool must contain exactly 14 rows");
+  }
+  const cleanControlCount = candidates.filter(isCleanControl).length;
+  if (cleanControlCount !== 4) {
+    throw new Error("natural-quality candidate pool must contain exactly four clean controls");
+  }
+  return [...candidates].sort((left, right) =>
+    compareCodeUnits(seededRank(left, policy.selectionSeed), seededRank(right, policy.selectionSeed))
+      || compareCodeUnits(left.candidateId, right.candidateId));
+}
+
+function selectCandidates(candidates: Phase1Candidate[], policy: Phase1StratifiedTransportPolicy): Phase1Candidate[] {
   assertPoolCanMeetFloors(candidates, policy);
   const repositoryFrequencies = countBy(candidates, (row) => row.repositoryGroup);
   const languageFrequencies = countBy(candidates, (row) => row.language);
@@ -468,7 +524,7 @@ function canStillSatisfyCanonicalSelection(
   languageCounts: Record<string, number>,
   cleanCount: number,
   riskCount: number,
-  policy: Phase1CohortPolicy
+  policy: Phase1StratifiedTransportPolicy
 ): boolean {
   const eligible = available.filter((row) => remaining[row.bucket] > 0 && (repoCounts[row.repositoryGroup] ?? 0) < policy.maximumPerRepositoryGroup);
   const remainingSlots = Object.values(remaining).reduce((sum, count) => sum + count, 0);
@@ -518,7 +574,7 @@ function maxSelectableWithQuotas(
   candidates: Phase1Candidate[],
   remaining: BucketCounts,
   repoCounts: Record<string, number>,
-  policy: Phase1CohortPolicy,
+  policy: Phase1StratifiedTransportPolicy,
   predicate: (candidate: Phase1Candidate) => boolean,
   requiredFlow: number
 ): number {
@@ -601,7 +657,7 @@ function maximumFlow(graph: FlowEdge[][], source: number, sink: number, required
   return total;
 }
 
-function assertPoolCanMeetFloors(candidates: Phase1Candidate[], policy: Phase1CohortPolicy): void {
+function assertPoolCanMeetFloors(candidates: Phase1Candidate[], policy: Phase1StratifiedTransportPolicy): void {
   const bucketCounts = countBuckets(candidates);
   for (const bucket of BUCKETS) {
     if (bucketCounts[bucket] < policy.bucketQuotas[bucket]) throw new Error(`candidate pool cannot satisfy the ${bucket} bucket quota`);
@@ -626,7 +682,7 @@ function assertPoolCanMeetFloors(candidates: Phase1Candidate[], policy: Phase1Co
   if (capacity < policy.cohortSize) throw new Error("candidate pool cannot satisfy the repository cap");
 }
 
-function selectFirstFive(selected: Phase1Candidate[], policy: Phase1CohortPolicy): Phase1Candidate[] {
+function selectFirstFive(selected: Phase1Candidate[], policy: Phase1StratifiedTransportPolicy): Phase1Candidate[] {
   const first: Phase1Candidate[] = [];
   for (const bucket of BUCKETS) {
     const quota = policy.firstFiveBucketQuotas[bucket];
@@ -659,7 +715,8 @@ function buildRuntimeInputManifest(
 ): Record<string, unknown> {
   const byId = new Map(candidates.map((row) => [row.candidateId, row]));
   return {
-    schemaVersion: "neondiff-phase1-runtime-input-manifest/v1",
+    schemaVersion: "neondiff-phase1-runtime-input-manifest/v2",
+    selectionProfile: manifest.selectionProfile,
     selectionManifestSha256: manifestSha256,
     candidates: manifest.selectedCandidateIds.map((candidateId) => {
       const row = byId.get(candidateId);
@@ -667,7 +724,7 @@ function buildRuntimeInputManifest(
       return {
         candidateId: row.candidateId,
         inputArtifactSha256: row.inputArtifactSha256,
-        promptTokens: row.promptTokens,
+        admissionEstimatedPromptTokens: row.admissionEstimatedPromptTokens,
         bucket: row.bucket
       };
     })
@@ -783,12 +840,14 @@ function canonicalProspectivePath(path: string): string {
   return resolve(realpathSync(cursor), ...suffix);
 }
 
-function bucketForTokens(tokens: number): Phase1Bucket {
-  if (tokens >= 8_193 && tokens <= 16_384) return "16k";
-  if (tokens >= 16_385 && tokens <= 32_768) return "32k";
-  if (tokens >= 32_769 && tokens <= 65_536) return "64k";
-  if (tokens >= 65_537 && tokens <= 131_072) return "128k";
-  throw new Error("prompt token count is outside strict 16k..128k bucket ranges");
+function admissionEstimatedBucket(tokens: number): Phase1Bucket {
+  if (tokens < 1 || tokens > 131_072) {
+    throw new Error("admission estimated prompt token count is outside the 1..128k admission range");
+  }
+  if (tokens <= 16_384) return "16k";
+  if (tokens <= 32_768) return "32k";
+  if (tokens <= 65_536) return "64k";
+  return "128k";
 }
 
 function validateBucketCounts(value: unknown, expected: BucketCounts, label: string): void {

@@ -55,16 +55,16 @@ function opaque(prefix: "candidate" | "repo" | "lineage", value: string | number
   return `${prefix}_${digest(`${prefix}:${value}`).slice(0, 32)}`;
 }
 
-function candidate(index: number, promptTokens: number): Phase1Candidate {
-  const bucket = promptTokens <= 16_384 ? "16k"
-    : promptTokens <= 32_768 ? "32k"
-      : promptTokens <= 65_536 ? "64k"
+function candidate(index: number, admissionEstimatedPromptTokens: number): Phase1Candidate {
+  const bucket = admissionEstimatedPromptTokens <= 16_384 ? "16k"
+    : admissionEstimatedPromptTokens <= 32_768 ? "32k"
+      : admissionEstimatedPromptTokens <= 65_536 ? "64k"
         : "128k";
   return {
     candidateId: opaque("candidate", index),
     sourceIdentitySha256: digest(`source-${index}`),
     inputArtifactSha256: digest(`artifact-${index}`),
-    promptTokens,
+    admissionEstimatedPromptTokens,
     bucket,
     repositoryGroup: opaque("repo", index % 10),
     lineageGroup: opaque("lineage", index),
@@ -93,8 +93,18 @@ function candidatePool(): Phase1Candidate[] {
     candidate(index++, start + offset)));
 }
 
+function naturalCandidatePool(): Phase1Candidate[] {
+  return [
+    1_024, 2_048, 4_096, 8_192, 12_000, 16_384,
+    20_000, 25_000, 32_768,
+    40_000, 50_000, 65_536,
+    70_000, 100_000
+  ].map((tokens, index) => candidate(index, tokens));
+}
+
 function policy(safeOutputRoot: string): Phase1CohortPolicy {
   return {
+    selectionProfile: "stratified_transport",
     cohortSize: 14,
     bucketQuotas: { "16k": 2, "32k": 5, "64k": 5, "128k": 2 },
     firstFiveBucketQuotas: { "16k": 1, "32k": 2, "64k": 1, "128k": 1 },
@@ -108,7 +118,7 @@ function policy(safeOutputRoot: string): Phase1CohortPolicy {
     maximumCandidatePoolSize: 64,
     maximumCanonicalSearchStates: 2_000_000,
     selectionSeed: digest("frozen-575-aggregate"),
-    tokenizerFingerprint: digest("tokenizer"),
+    admissionEstimatorFingerprint: digest("admission-estimator"),
     promptBuilderFingerprint: digest("prompt-builder"),
     parserFingerprint: digest("parser"),
     gateFingerprint: digest("gate"),
@@ -120,6 +130,12 @@ function policy(safeOutputRoot: string): Phase1CohortPolicy {
   };
 }
 
+function naturalPolicy(safeOutputRoot: string): Phase1CohortPolicy {
+  const transport = policy(safeOutputRoot);
+  const { bucketQuotas: _bucketQuotas, firstFiveBucketQuotas: _firstFiveBucketQuotas, ...shared } = transport;
+  return { ...shared, selectionProfile: "natural_quality" } as Phase1CohortPolicy;
+}
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "neondiff-phase1-cohort-"));
   const candidatePoolPath = join(root, "candidates.json");
@@ -127,6 +143,19 @@ function fixture() {
   const outputDir = join(root, "sealed", "run-1");
   const candidates = candidatePool();
   const cohortPolicy = policy(join(root, "sealed"));
+  mkdirSync(cohortPolicy.safeOutputRoot, { mode: 0o700 });
+  writeFileSync(candidatePoolPath, `${JSON.stringify(candidates, null, 2)}\n`);
+  writeFileSync(policyPath, `${JSON.stringify(cohortPolicy, null, 2)}\n`);
+  return { root, candidatePoolPath, policyPath, outputDir, candidates, cohortPolicy };
+}
+
+function naturalFixture() {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-phase1-natural-cohort-"));
+  const candidatePoolPath = join(root, "candidates.json");
+  const policyPath = join(root, "policy.json");
+  const outputDir = join(root, "sealed", "run-1");
+  const candidates = naturalCandidatePool();
+  const cohortPolicy = naturalPolicy(join(root, "sealed"));
   mkdirSync(cohortPolicy.safeOutputRoot, { mode: 0o700 });
   writeFileSync(candidatePoolPath, `${JSON.stringify(candidates, null, 2)}\n`);
   writeFileSync(policyPath, `${JSON.stringify(cohortPolicy, null, 2)}\n`);
@@ -299,7 +328,8 @@ describe("phase 1 cohort selection", () => {
       maximumCandidatePoolSize: 64,
       maximumCanonicalSearchStates: 2_000_000
     });
-    expect(firstManifest.strata.bucketCounts).toEqual({ "16k": 2, "32k": 5, "64k": 5, "128k": 2 });
+    expect(firstManifest.selectionProfile).toBe("stratified_transport");
+    expect(firstManifest.strata.admissionEstimatedPromptBucketCounts).toEqual({ "16k": 2, "32k": 5, "64k": 5, "128k": 2 });
     expect(firstManifest.firstFive.bucketCounts).toEqual({ "16k": 1, "32k": 2, "64k": 1, "128k": 1 });
     expect(firstManifest.firstFive.cleanControlCount).toBeGreaterThanOrEqual(1);
     expect(firstManifest.diversity.cleanControlCount).toBeGreaterThanOrEqual(4);
@@ -307,6 +337,99 @@ describe("phase 1 cohort selection", () => {
     expect(firstManifest.diversity.languageCount).toBeGreaterThanOrEqual(5);
     expect(firstManifest.diversity.highRiskCount).toBeGreaterThanOrEqual(5);
     expect(firstManifest.diversity.maximumRepositoryGroupCount).toBeLessThanOrEqual(3);
+  });
+
+  it("seals an exact natural-quality cohort without transport quotas or first-five semantics", () => {
+    const first = naturalFixture();
+    const firstManifest = seal(first);
+    const second = naturalFixture();
+    second.candidates.reverse();
+    writeFixture(second);
+    const secondManifest = seal(second);
+
+    expect(secondManifest.selectedCandidateIds).toEqual(firstManifest.selectedCandidateIds);
+    expect(firstManifest.selectionProfile).toBe("natural_quality");
+    expect(firstManifest.selectedCandidateIds).toHaveLength(14);
+    expect(firstManifest.strata.admissionEstimatedPromptBucketCounts).toEqual({
+      "16k": 6,
+      "32k": 3,
+      "64k": 3,
+      "128k": 2
+    });
+    expect(firstManifest.diversity.cleanControlCount).toBe(4);
+    expect(firstManifest).not.toHaveProperty("firstFive");
+    expect(firstManifest.contract).not.toHaveProperty("bucketQuotas");
+    expect(firstManifest.contract).not.toHaveProperty("firstFiveBucketQuotas");
+    expect(firstManifest.fingerprints).toHaveProperty("admissionEstimator", digest("admission-estimator"));
+    expect(firstManifest.fingerprints).not.toHaveProperty("tokenizer");
+  });
+
+  it.each([
+    ["13 rows", (f: ReturnType<typeof naturalFixture>) => { f.candidates.pop(); }, /exactly 14/i],
+    ["15 rows", (f: ReturnType<typeof naturalFixture>) => { f.candidates.push(candidate(99, 7_000)); }, /exactly 14/i],
+    ["three controls", (f: ReturnType<typeof naturalFixture>) => { f.candidates[12].caseKind = "defect_candidate"; }, /exactly four/i],
+    ["five controls", (f: ReturnType<typeof naturalFixture>) => { f.candidates[1].caseKind = "clean_control_candidate"; }, /exactly four/i]
+  ])("rejects natural-quality input with %s", (_label, mutate, error) => {
+    const f = naturalFixture();
+    mutate(f);
+    writeFixture(f);
+    expect(() => seal(f)).toThrow(error);
+  });
+
+  it("keeps natural-quality eligibility, diversity, lineage, repository-cap, and estimate bounds fail-closed", () => {
+    const duplicateLineage = naturalFixture();
+    duplicateLineage.candidates[1].lineageGroup = duplicateLineage.candidates[0].lineageGroup;
+    writeFixture(duplicateLineage);
+    expect(() => seal(duplicateLineage)).toThrow(/duplicate.*lineage/i);
+
+    const ineligible = naturalFixture();
+    ineligible.candidates[0].eligibility.secretScanPassed = false;
+    writeFixture(ineligible);
+    expect(() => seal(ineligible)).toThrow(/ineligible/i);
+
+    const repositories = naturalFixture();
+    repositories.candidates.forEach((row, index) => { row.repositoryGroup = opaque("repo", `natural-${index % 4}`); });
+    writeFixture(repositories);
+    expect(() => seal(repositories)).toThrow(/repository|cap/i);
+
+    const languages = naturalFixture();
+    languages.candidates.forEach((row, index) => { row.language = CANONICAL_LANGUAGES[index % 4]; });
+    writeFixture(languages);
+    expect(() => seal(languages)).toThrow(/language/i);
+
+    const risk = naturalFixture();
+    risk.candidates.forEach((row) => { row.riskTags = []; });
+    writeFixture(risk);
+    expect(() => seal(risk)).toThrow(/high-risk/i);
+
+    for (const invalid of [-1, 0, 131_073]) {
+      const estimate = naturalFixture();
+      estimate.candidates[0].admissionEstimatedPromptTokens = invalid;
+      estimate.candidates[0].bucket = "32k";
+      writeFixture(estimate);
+      expect(() => seal(estimate)).toThrow(/estimated prompt token|bucket/i);
+    }
+  });
+
+  it("rejects transport quotas on natural policy and legacy exact-token estimator field names", () => {
+    const quota = naturalFixture();
+    (quota.cohortPolicy as unknown as Record<string, unknown>).bucketQuotas = { "16k": 2, "32k": 5, "64k": 5, "128k": 2 };
+    writeFixture(quota);
+    expect(() => seal(quota)).toThrow(/exact schema keys|unexpected|bucketQuotas/i);
+
+    const candidateField = naturalFixture();
+    const candidateRecord = candidateField.candidates[0] as unknown as Record<string, unknown>;
+    candidateRecord.promptTokens = candidateRecord.admissionEstimatedPromptTokens;
+    delete candidateRecord.admissionEstimatedPromptTokens;
+    writeFixture(candidateField);
+    expect(() => seal(candidateField)).toThrow(/exact schema keys|promptTokens/i);
+
+    const policyField = naturalFixture();
+    const policyRecord = policyField.cohortPolicy as unknown as Record<string, unknown>;
+    policyRecord.tokenizerFingerprint = policyRecord.admissionEstimatorFingerprint;
+    delete policyRecord.admissionEstimatorFingerprint;
+    writeFixture(policyField);
+    expect(() => seal(policyField)).toThrow(/exact schema keys|tokenizerFingerprint/i);
   });
 
   it("keeps canonical seal bytes stable when host locale collation changes", () => {
@@ -369,16 +492,16 @@ describe("phase 1 cohort selection", () => {
 
   it("accepts strict bucket boundaries and rejects 8k and over-128k rows", () => {
     const f = fixture();
-    f.candidates[0].promptTokens = 16_384;
-    f.candidates[4].promptTokens = 32_768;
-    f.candidates[12].promptTokens = 65_536;
-    f.candidates[20].promptTokens = 131_072;
+    f.candidates[0].admissionEstimatedPromptTokens = 16_384;
+    f.candidates[4].admissionEstimatedPromptTokens = 32_768;
+    f.candidates[12].admissionEstimatedPromptTokens = 65_536;
+    f.candidates[20].admissionEstimatedPromptTokens = 131_072;
     writeFixture(f);
     expect(() => seal(f)).not.toThrow();
 
     for (const invalid of [8_192, 131_073]) {
       const bad = fixture();
-      bad.candidates[0].promptTokens = invalid;
+      bad.candidates[0].admissionEstimatedPromptTokens = invalid;
       writeFixture(bad);
       expect(() => seal(bad)).toThrow(/bucket|token/i);
     }
