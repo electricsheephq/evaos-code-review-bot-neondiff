@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -107,6 +107,7 @@ vi.mock("node:fs", async (importOriginal) => {
 const PHASE1_COHORT_PROOF_BOUNDARY = "This may prove only that a metadata-only 14-case advisory cohort is selected and immutably sealed under the named workload and privacy contracts. It does not admit Corpus v1 scenarios, prove labels, review quality, noninferiority, production routing, runtime safety, customer readiness, or public claims. No model run may begin until separate hidden outcomes, blinded adjudication, and restricted identity sidecars pass their own gates.";
 const CANONICAL_LANGUAGES = ["typescript", "javascript", "swift", "python", "go", "rust", "java", "kotlin", "csharp", "cpp", "ruby", "php", "shell", "sql"] as const;
 const CANONICAL_RISK_TAGS = ["security", "auth", "release", "state-machine", "concurrency", "migration", "architecture", "simplification", "correctness", "config", "debugging", "ci", "state", "privacy", "licensing", "performance", "reliability"] as const;
+const MKFIFO_AVAILABLE = spawnSync("mkfifo", ["--help"], { stdio: "ignore" }).error === undefined;
 
 function digest(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -918,6 +919,29 @@ describe("phase 1 cohort selection", () => {
     } finally {
       inputPathRace.armed = false;
     }
+  });
+
+  it.skipIf(!MKFIFO_AVAILABLE)("rejects a sealed FIFO promptly without blocking on open", () => {
+    const f = fixture();
+    seal(f);
+    const manifestPath = join(f.outputDir, "selection-manifest.json");
+    rmSync(manifestPath);
+    execFileSync("mkfifo", ["-m", "600", manifestPath]);
+    const trusted = selectionOptions(f);
+    const args = [
+      "run", "--silent", "eval:phase1-cohort", "--", "verify",
+      "--candidate-pool", f.candidatePoolPath,
+      "--candidate-pool-sha256", trusted.candidatePoolSha256,
+      "--policy", f.policyPath,
+      "--policy-sha256", trusted.policySha256,
+      "--output-dir", f.outputDir,
+      "--allowed-output-root", trusted.allowedOutputRoot
+    ];
+    const result = spawnSync("npm", args, { cwd: process.cwd(), encoding: "utf8", timeout: 1_500 });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/regular file/i);
   });
 
   it("does not mutate an existing drifted directory or clobber a partial final path", () => {

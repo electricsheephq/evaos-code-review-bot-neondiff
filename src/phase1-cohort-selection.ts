@@ -794,7 +794,7 @@ function verifyArtifactBytes(outputDir: string, artifacts: Map<string, string>):
 function verifyArtifactDescriptor(path: string, expected: string, name: string): void {
   let descriptor: number;
   try {
-    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ELOOP") throw new Error(`symlinked sealed artifact is forbidden: ${name}`);
