@@ -298,6 +298,27 @@ describe("desktop evaluation packet integrity", { timeout: 30_000 }, () => {
     expect(result.stderr).toMatch(/schema|proof boundary|unresolved/i);
   });
 
+  it("rejects impossible manifest and finding calendar timestamps", () => {
+    for (const timestamp of [
+      "2026-02-30T00:00:00Z",
+      "2026-02-29T00:00:00Z",
+      "2026-07-11T24:00:00Z",
+      "2026-07-11T00:00:00+00:00",
+      "2026-07-11T00:00:00.000Z",
+      "1999-12-31T23:59:59Z",
+      "2100-01-01T00:00:00Z"
+    ]) {
+      const value = packetFixture();
+      rewriteManifest(value.packet, (manifest) => {
+        manifest.generatedAt = timestamp;
+        manifest.unresolvedFindings[0].recordedAt = timestamp;
+      });
+      const result = verify(value.packet);
+      expect(result.status, timestamp).not.toBe(0);
+      expect(result.stderr, timestamp).toMatch(/manifest.*source identity|timestamp/i);
+    }
+  });
+
   it("rejects manifest strings beyond Swift public-safety limits", () => {
     const value = packetFixture();
     rewriteManifest(value.packet, (manifest) => {

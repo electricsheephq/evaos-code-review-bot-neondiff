@@ -279,7 +279,9 @@ Each run records:
 - test count, duration, runner, and test-result artifact hash (`swift-testing`
   log under CLT or `.xcresult` under hosted XCTest);
 - PNG, accessibility-tree, and geometry hashes;
-- golden metrics and mask version;
+- visual-baseline status for each capture (`captured-no-reference` in schema 2;
+  comparison metrics and mask version only after a separately reviewed golden
+  baseline is introduced);
 - secret and release-artifact fixture scans;
 - explicit proof boundary and unresolved findings.
 

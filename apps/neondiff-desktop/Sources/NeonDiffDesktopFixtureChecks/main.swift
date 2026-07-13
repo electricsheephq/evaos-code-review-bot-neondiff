@@ -541,6 +541,33 @@ let failingManifest = try DesktopEvaluationEvidenceManifest.decode(data: failing
 check(failingManifest.unresolvedFindings.first?.severity == .p0, "manifest truthfully records blocking findings")
 check(failingManifest.cases.first?.visualBaseline.status == .capturedNoReference, "manifest does not fabricate a comparison for a fresh baseline")
 
+for timestamp in [
+    "2026-02-30T00:00:00Z",
+    "2026-02-29T00:00:00Z",
+    "2026-07-11T24:00:00Z",
+    "2026-07-11T00:00:00+00:00",
+    "2026-07-11T00:00:00.000Z",
+    "1999-12-31T23:59:59Z",
+    "2100-01-01T00:00:00Z"
+] {
+    let invalidManifestTimestamp = try mutatedManifest(validManifest) { object in
+        object["generatedAt"] = timestamp
+    }
+    expectManifestFailure("manifest non-canonical timestamp \(timestamp)", data: invalidManifestTimestamp)
+}
+
+let leapDayManifestTimestamp = try mutatedManifest(validManifest) { object in
+    object["generatedAt"] = "2024-02-29T23:59:59Z"
+}
+_ = try DesktopEvaluationEvidenceManifest.decode(data: leapDayManifestTimestamp)
+
+let invalidCalendarFindingTimestamp = try mutatedManifest(failingRunManifest) { object in
+    var findings = object["unresolvedFindings"] as! [[String: Any]]
+    findings[0]["recordedAt"] = "2026-02-30T00:00:00Z"
+    object["unresolvedFindings"] = findings
+}
+expectManifestFailure("manifest finding invalid calendar timestamp", data: invalidCalendarFindingTimestamp)
+
 let emptyCasesManifest = try mutatedManifest(validManifest) { object in
     object["cases"] = []
 }

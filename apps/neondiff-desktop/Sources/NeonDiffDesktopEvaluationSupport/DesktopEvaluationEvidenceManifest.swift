@@ -136,7 +136,7 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
         guard schemaVersion == 2 else {
             throw DesktopEvaluationFixtureError.unsupportedSchemaVersion(schemaVersion)
         }
-        guard ISO8601DateFormatter().date(from: generatedAt) != nil,
+        guard Self.isCanonicalTimestamp(generatedAt),
               repository.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil,
               Self.isHash(headSHA, length: 40),
               Self.isSafeArtifactPath(artifact.path),
@@ -217,7 +217,7 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
             guard finding.id.range(of: #"^[A-Za-z0-9_.-]{1,64}$"#, options: .regularExpression) != nil,
                   !finding.owner.isEmpty,
                   !finding.reason.isEmpty,
-                  ISO8601DateFormatter().date(from: finding.recordedAt) != nil else {
+                  Self.isCanonicalTimestamp(finding.recordedAt) else {
                 throw DesktopEvaluationFixtureError.invalidValue("manifest unresolved finding")
             }
         }
@@ -225,6 +225,16 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
               proofBoundary.utf8.count <= 1024 else {
             throw DesktopEvaluationFixtureError.invalidValue("manifest proofBoundary")
         }
+    }
+
+    private static func isCanonicalTimestamp(_ value: String) -> Bool {
+        guard value.range(
+            of: #"^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"#,
+            options: .regularExpression
+        ) != nil else { return false }
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: value) else { return false }
+        return formatter.string(from: date) == value
     }
 
     private static func isHash(_ value: String, length: Int = 64) -> Bool {

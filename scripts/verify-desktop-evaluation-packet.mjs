@@ -42,6 +42,13 @@ function isHash(value, length = 64) {
   return typeof value === "string" && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
 }
 
+function isCanonicalTimestamp(value) {
+  return typeof value === "string"
+    && /^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
+    && !Number.isNaN(Date.parse(value))
+    && new Date(value).toISOString().replace(".000Z", "Z") === value;
+}
+
 function requireHash(reference, label) {
   if (!reference || !isHash(reference.sha256)) fail(`${label} reference is invalid`);
   const path = regular(reference.path, label);
@@ -75,9 +82,7 @@ const manifest = decodeDesktopEvaluationPublicSafeJSON(readFileSync(manifestPath
 exactKeys(manifest, ["schemaVersion", "generatedAt", "repository", "headSHA", "artifact", "catalogSHA256", "fixturesSHA256", "platform", "testSummary", "cases", "scans", "proofBoundary", "unresolvedFindings"], "manifest");
 if (manifest.schemaVersion !== 2 || !isHash(manifest.headSHA, 40)) fail("manifest identity is invalid");
 if (manifest.repository !== "electricsheephq/evaos-code-review-bot-neondiff"
-  || typeof manifest.generatedAt !== "string"
-  || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(manifest.generatedAt)
-  || Number.isNaN(Date.parse(manifest.generatedAt))
+  || !isCanonicalTimestamp(manifest.generatedAt)
   || manifest.proofBoundary !== proofBoundary) {
   fail("manifest proof boundary or source identity is invalid");
 }
@@ -100,6 +105,7 @@ const unresolved = manifest.unresolvedFindings[0];
 exactKeys(unresolved, ["id", "severity", "owner", "recordedAt", "reason"], "unresolved finding");
 if (unresolved.id !== "ND-EVAL-STATE-MATRIX" || unresolved.severity !== "P0"
   || unresolved.owner !== "issue-515" || unresolved.recordedAt !== manifest.generatedAt
+  || !isCanonicalTimestamp(unresolved.recordedAt)
   || unresolved.reason !== unresolvedReason) {
   fail("manifest unresolved finding semantics are invalid");
 }
