@@ -7,7 +7,7 @@ import type { FinishingTouchAction } from "./finishing-touches.js";
 import type { ReviewEvent } from "./types.js";
 
 export type ProcessedStatus = "dry_run" | "posted" | "skipped" | "failed";
-export type ProcessedCommandAction = "review" | "re-review" | "explain" | "stop" | FinishingTouchAction;
+export type ProcessedCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
 export type ProcessedCommandStatus = "triggered" | "explained" | "stopped" | "ignored";
 export type FinishingTouchDraftStatus = "drafted" | "rejected";
 export type ReviewerSessionState = "warming" | "active" | "draining" | "expired" | "failed";

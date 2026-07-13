@@ -2,12 +2,14 @@ import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import { loadConfig, type BotConfig, type RepoReviewSchedulerConfig } from "./config.js";
 import {
+  collectReviewEventAuthorizationAttempts,
   collectTrustedReviewCommands,
   decideCommandAction,
   isBotCommandComment,
   isFinishingTouchCommandAction,
   isReviewCommandAction,
   type CommandDecision,
+  type ReviewEventAuthorizationReviewRequest,
   type ReviewCommand
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
@@ -534,6 +536,17 @@ async function enqueuePullIfEligible(input: {
       await retireSupersededQueueJobsForPull(input);
     }
     const queued = enqueueReviewJob(input, commandDecision);
+    if (commandDecision.action === "request-changes") {
+      input.state.recordProcessedCommand({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        commentId: commandDecision.commandId,
+        action: "request-changes",
+        status: "triggered",
+        author: commandDecision.command.author
+      });
+    }
     recordReadinessForEnqueue({
       state: input.state,
       repo: input.repo,
@@ -1078,6 +1091,11 @@ async function resolveSchedulerCommandDecision(input: {
     return { action: "none", shouldReview: false };
   }
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
+  const authorizationRequests = collectReviewEventAuthorizationAttempts(comments, input.config.commands, {
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha
+  }).reviewRequests;
   const repoProfile = resolveRepoProfile(input.config, input.repo);
   // Public review/re-review policy (#345): the stateful bot + per-head cooldown gate runs HERE, where
   // the store and head SHA are in scope (mirrors the #295 per-head-claim placement). Admitted public
@@ -1092,6 +1110,39 @@ async function resolveSchedulerCommandDecision(input: {
     comments
   });
   const authorizedCommands = [...collected.commands, ...admittedPublic].sort((left, right) => left.commentId - right.commentId);
+  const requestChanges = latestPendingRequestChanges({
+    requests: authorizationRequests,
+    state: input.state,
+    repo: input.repo,
+    pull: input.pull
+  });
+  const newerStop = requestChanges
+    ? collected.commands.filter((command) => command.action === "stop" && command.commentId > requestChanges.commentId).at(-1)
+    : undefined;
+  if (requestChanges && !newerStop) {
+    return {
+      action: "request-changes",
+      shouldReview: true,
+      commandId: requestChanges.commentId,
+      command: {
+        action: "request-changes",
+        commentId: requestChanges.commentId,
+        author: requestChanges.author,
+        body: ""
+      }
+    };
+  }
+  if (requestChanges && newerStop) {
+    input.state.recordProcessedCommand({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      commentId: requestChanges.commentId,
+      action: "request-changes",
+      status: "ignored",
+      author: requestChanges.author
+    });
+  }
   return decideCommandAction({
     commands: authorizedCommands.filter((command) =>
       !isFinishingTouchCommandAction(command.action) ||
@@ -1103,6 +1154,17 @@ async function resolveSchedulerCommandDecision(input: {
     hasProcessedCommand: (repo, pullNumber, headSha, commentId) =>
       input.state.hasProcessedCommand(repo, pullNumber, headSha, commentId)
   });
+}
+
+function latestPendingRequestChanges(input: {
+  requests: ReviewEventAuthorizationReviewRequest[];
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+}): ReviewEventAuthorizationReviewRequest | undefined {
+  return input.requests.filter((request) =>
+    !input.state.hasProcessedCommand(input.repo, input.pull.number, input.pull.head.sha, request.commentId)
+  ).at(-1);
 }
 
 export function admitPublicCommands(input: {

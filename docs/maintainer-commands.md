@@ -27,6 +27,7 @@ Each command must appear as its own trimmed line in a PR comment:
 
 - `@neondiff review`
 - `@neondiff re-review`
+- `@neondiff request-changes --repo owner/name --pr 123 --head <40-character-current-head-sha>`
 - `@neondiff explain`
 - `@neondiff stop`
 - `@neondiff generate tests`
@@ -47,6 +48,28 @@ actual GitHub App slug chosen during installation.
 `review` and `re-review` route into the same ZCode review pipeline used by
 polling. They still use the current PR head SHA, current RIGHT-side diff-line
 validation, secret redaction, ZCode read-only policy, and Git clean checks.
+They do not authorize a `REQUEST_CHANGES` GitHub event.
+
+`request-changes` must be the exact one-line command shown above, using the
+configured bot mention, exact repository, positive PR number, and exact
+40-character current-head SHA. Only an explicit login in
+`commands.trustedAuthors` can authorize it; wildcard `"*"` trust never does.
+It queues one manual review attempt, and the queued job carries the exact GitHub
+comment id. A newer `stop` wins over an older request. Later ordinary `review`
+or `re-review` comments do not inherit or erase the exact authorization.
+
+The authorization is one-shot for the exact `{repo, PR, head SHA}`. A second
+new command on the same head may queue another analysis attempt, but the
+one-shot ledger downgrades its selected event to advisory `COMMENT`; a new head
+needs a new exact command. The first eligible authorization is consumed before
+the GitHub review POST, even if the candidate has already become `COMMENT`, and
+is never restored after timeout, 5xx, or another post failure.
+
+Missing, malformed, untrusted, wildcard-only, wrong-repo, wrong-PR, stale-head,
+duplicate, consumed, comment-read-failed, and local-state-failed authorization
+all remain advisory: findings still post, but the selected event is `COMMENT`.
+The review POST carries the expected SHA as `commit_id`; NeonDiff also performs
+its own live-head checks because `commit_id` alone is not current-head proof.
 
 `explain` records the command and can post a marker-backed status comment when
 `commands.acknowledge` is enabled. It does not start a review.
@@ -55,7 +78,8 @@ validation, secret redaction, ZCode read-only policy, and Git clean checks.
 the command is the latest unprocessed command.
 
 Command precedence is intentionally conservative: a latest `stop` command wins,
-`review` / `re-review` requests are not superseded by later draft-only
+an exact `request-changes` authorization is not erased by ordinary `review` or
+`re-review`, `review` / `re-review` requests are not superseded by later draft-only
 finishing-touch commands, and finishing-touch commands are processed only when no
 review command is pending for that PR/head.
 
@@ -111,6 +135,11 @@ Reprocessing the same command comment does nothing, including after a new push.
 A new head SHA needs a new trusted command comment. This keeps old `stop`
 comments from suppressing future pushes and keeps old `review` commands from
 silently re-triggering on new code.
+
+For `request-changes`, scheduler dedupe is also durable after its queue job
+becomes terminal. This queue dedupe is separate from the one-shot event ledger:
+a genuinely new exact command may queue, while a previously consumed exact head
+still cannot select `REQUEST_CHANGES` again.
 
 ## Evidence
 

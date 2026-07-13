@@ -9,7 +9,7 @@ import {
   type FinishingTouchAction
 } from "./finishing-touches.js";
 
-export type ReviewCommandAction = "review" | "re-review" | "explain" | "stop" | FinishingTouchAction;
+export type ReviewCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
 
 export interface IssueCommentCommandSource {
   id: number;
@@ -254,7 +254,7 @@ export function isBotCommandComment(user: { login: string; type?: string } | nul
 }
 
 export function isReviewCommandAction(action: ReviewCommandAction): boolean {
-  return action === "review" || action === "re-review";
+  return action === "review" || action === "re-review" || action === "request-changes";
 }
 
 export function isFinishingTouchCommandAction(action: ReviewCommandAction): action is FinishingTouchAction {

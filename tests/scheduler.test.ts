@@ -3942,6 +3942,319 @@ describe("provider-aware review scheduler", () => {
     });
     state.close();
   });
+
+  it("queues an exact trusted request-changes command over an already-posted advisory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-request-changes-advisory-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@neondiff"],
+      trustedAuthors: ["maintainer"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      status: "posted",
+      event: "COMMENT"
+    });
+    const comments = new Map([["org/repo-a#1", [
+      comment(901, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`)
+    ]]]);
+    const seenCommentIds: Array<number | undefined> = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), comments),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, commandCommentId }) => {
+        seenCommentIds.push(commandCommentId);
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "REQUEST_CHANGES"
+        });
+        return "reviewed_command";
+      }
+    });
+
+    expect(result.commandReviewRequested).toBe(1);
+    expect(seenCommentIds).toEqual([901]);
+    expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
+      expect.objectContaining({ source: "manual_command", lane: "manual", commentId: 901 })
+    ]);
+    expect(state.hasProcessedCommand("org/repo-a", 1, HEAD_A, 901)).toBe(true);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "needs_fix",
+      reason: "request_changes_review_posted",
+      event: "REQUEST_CHANGES",
+      commandAction: "request-changes",
+      commandCommentId: 901
+    });
+    state.close();
+  });
+
+  it("does not re-enqueue the same request-changes comment after its job becomes terminal", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-request-changes-dedupe-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@neondiff"],
+      trustedAuthors: ["maintainer"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const comments = new Map([["org/repo-a#1", [
+      comment(902, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`)
+    ]]]);
+    const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), comments);
+    let reviewCalls = 0;
+    const reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult> = async ({ state: reviewState, repo, pull: reviewPull }) => {
+      reviewCalls += 1;
+      reviewState.recordProcessed({
+        repo,
+        pullNumber: reviewPull.number,
+        headSha: reviewPull.head.sha,
+        status: "posted",
+        event: "COMMENT"
+      });
+      return "reviewed_command";
+    };
+
+    const first = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl
+    });
+    const second = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl
+    });
+
+    expect(first.commandReviewRequested).toBe(1);
+    expect(second.commandReviewRequested).toBe(0);
+    expect(reviewCalls).toBe(1);
+    expect(state.listReviewQueueJobs()).toHaveLength(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "ready_for_human",
+      event: "COMMENT",
+      commandAction: "request-changes",
+      commandCommentId: 902
+    });
+    state.close();
+  });
+
+  it("queues a second new same-head command while the one-shot ledger keeps it advisory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-request-changes-second-command-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@neondiff"],
+      trustedAuthors: ["maintainer"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const commentsForPull = [
+      comment(940, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`)
+    ];
+    const comments = new Map([["org/repo-a#1", commentsForPull]]);
+    const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), comments);
+    const selectedEvents: string[] = [];
+    const reviewPullImpl: (input: ReviewPullInput) => Promise<ReviewPullResult> = async ({
+      state: reviewState,
+      repo,
+      pull: reviewPull,
+      commandCommentId
+    }) => {
+      const consumed = reviewState.tryConsumeReviewEventAuthorization({
+        repo,
+        pullNumber: reviewPull.number,
+        headSha: reviewPull.head.sha,
+        commentId: commandCommentId!,
+        author: "maintainer"
+      });
+      const event = consumed ? "REQUEST_CHANGES" as const : "COMMENT" as const;
+      selectedEvents.push(event);
+      reviewState.recordProcessed({
+        repo,
+        pullNumber: reviewPull.number,
+        headSha: reviewPull.head.sha,
+        status: "posted",
+        event
+      });
+      return "reviewed_command";
+    };
+
+    const first = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl
+    });
+    commentsForPull.push(
+      comment(941, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`)
+    );
+    const second = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl
+    });
+
+    expect(first.commandReviewRequested).toBe(1);
+    expect(second.commandReviewRequested).toBe(1);
+    expect(selectedEvents).toEqual(["REQUEST_CHANGES", "COMMENT"]);
+    expect(state.listReviewQueueJobs().map((job) => job.commentId)).toEqual([940, 941]);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "ready_for_human",
+      event: "COMMENT",
+      commandAction: "request-changes",
+      commandCommentId: 941
+    });
+    state.close();
+  });
+
+  for (const newerAction of ["review", "re-review"] as const) {
+    it(`does not let a newer ${newerAction} command erase exact request-changes authority`, async () => {
+      const root = mkdtempSync(join(tmpdir(), `neondiff-scheduler-request-changes-${newerAction}-`));
+      roots.push(root);
+      const config = schedulerConfig(root, ["org/repo-a"]);
+      config.commands = {
+        enabled: true,
+        botMentions: ["@neondiff"],
+        trustedAuthors: ["maintainer"],
+        acknowledge: false
+      };
+      const state = new ReviewStateStore(config.statePath);
+      const comments = new Map([["org/repo-a#1", [
+        comment(910, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`),
+        comment(911, "maintainer", `@neondiff ${newerAction}`)
+      ]]]);
+      const seenCommentIds: Array<number | undefined> = [];
+
+      const result = await runScheduledCycleWithDeps({
+        config,
+        github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), comments),
+        state,
+        options: { dryRun: false, useZCode: false },
+        reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull, commandCommentId }) => {
+          seenCommentIds.push(commandCommentId);
+          reviewState.recordProcessed({
+            repo,
+            pullNumber: reviewPull.number,
+            headSha: reviewPull.head.sha,
+            status: "posted",
+            event: "REQUEST_CHANGES"
+          });
+          return "reviewed_command";
+        }
+      });
+
+      expect(result.commandReviewRequested).toBe(1);
+      expect(seenCommentIds).toEqual([910]);
+      expect(state.hasProcessedCommand("org/repo-a", 1, HEAD_A, 910)).toBe(true);
+      expect(state.hasProcessedCommand("org/repo-a", 1, HEAD_A, 911)).toBe(false);
+      state.close();
+    });
+  }
+
+  it("keeps a newer stop ahead of an older request-changes authorization across scans", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-request-changes-stop-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@neondiff"],
+      trustedAuthors: ["maintainer"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const comments = new Map([["org/repo-a#1", [
+      comment(920, "maintainer", `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`),
+      comment(921, "maintainer", "@neondiff stop")
+    ]]]);
+    const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), comments);
+
+    const first = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: reviewPull
+    });
+    const second = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: reviewPull
+    });
+
+    expect(first.skippedCommandStop).toBe(1);
+    expect(first.commandReviewRequested).toBe(0);
+    expect(second.commandReviewRequested).toBe(0);
+    expect(state.listReviewQueueJobs().some((job) => job.commentId === 920)).toBe(false);
+    state.close();
+  });
+
+  it("does not queue untrusted, wildcard-only, malformed, or stale request-changes attempts", async () => {
+    const cases = [
+      { name: "untrusted", trustedAuthors: ["maintainer"], author: "outside", body: `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}` },
+      { name: "wildcard-only", trustedAuthors: ["*"], author: "outside", body: `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}` },
+      { name: "malformed", trustedAuthors: ["maintainer"], author: "maintainer", body: `@neondiff request-changes --pr 1 --repo org/repo-a --head ${HEAD_A}` },
+      { name: "stale", trustedAuthors: ["maintainer"], author: "maintainer", body: `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_B}` }
+    ];
+
+    for (const testCase of cases) {
+      const root = mkdtempSync(join(tmpdir(), `neondiff-scheduler-request-changes-denied-${testCase.name}-`));
+      roots.push(root);
+      const config = schedulerConfig(root, ["org/repo-a"]);
+      config.commands = {
+        enabled: true,
+        botMentions: ["@neondiff"],
+        trustedAuthors: testCase.trustedAuthors,
+        acknowledge: false
+      };
+      const state = new ReviewStateStore(config.statePath);
+      const comments = new Map([["org/repo-a#1", [comment(930, testCase.author, testCase.body)]]]);
+
+      const result = await runScheduledCycleWithDeps({
+        config,
+        github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), comments),
+        state,
+        options: { dryRun: false, useZCode: false },
+        reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+          reviewState.recordProcessed({
+            repo,
+            pullNumber: reviewPull.number,
+            headSha: reviewPull.head.sha,
+            status: "posted",
+            event: "COMMENT"
+          });
+          return "reviewed";
+        }
+      });
+
+      expect(result.commandReviewRequested, testCase.name).toBe(0);
+      expect(state.listReviewQueueJobs().filter((job) => job.source === "manual_command"), testCase.name).toEqual([]);
+      state.close();
+    }
+  });
 });
 
 function schedulerConfig(root: string, repos: string[]): BotConfig {

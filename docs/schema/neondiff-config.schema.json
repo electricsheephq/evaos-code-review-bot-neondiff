@@ -76,6 +76,25 @@
         }
       }
     },
+    "reviewGate": {
+      "description": "Public review-event selection policy. Omission uses the safe trusted-command-only runtime default.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reviewEventPolicy": {
+          "description": "Selects whether REQUEST_CHANGES requires a one-shot exact-head trusted command. automatic is explicit legacy compatibility only.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["trusted_command_only", "automatic"],
+              "default": "trusted_command_only"
+            }
+          }
+        }
+      }
+    },
     "paths": {
       "description": "Review path filters. Exclusions win over inclusions.",
       "type": "object",
