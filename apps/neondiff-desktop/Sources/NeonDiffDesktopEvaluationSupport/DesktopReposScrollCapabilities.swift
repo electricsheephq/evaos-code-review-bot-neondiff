@@ -1,0 +1,239 @@
+import Foundation
+
+public enum DesktopReposScrollCapabilityContractError: Error, Equatable, Sendable {
+    case invalidOperatingSystemVersion
+    case missingBoundaryActionNames
+    case unexpectedBoundaryActionNames
+    case missingScrollBarActionNames
+    case unexpectedScrollBarActionNames
+    case missingActionName
+}
+
+public enum DesktopReposScrollCapabilitiesValidationError: Error, Equatable, Sendable {
+    case invalidContract
+}
+
+public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let fixture: DesktopReposReachabilityFixture
+    public let requestedContentSize: DesktopEvaluationContentSize
+    public let osMajorVersion: Int
+    public let acquisition: DesktopReposReachabilityAcquisition
+    public let scrollToVisibleActionAvailable: Bool
+    public let boundaryAdvertisesScrollToVisible: Bool?
+    public let outerVerticalScrollBarResolved: Bool?
+    public let outerVerticalScrollBarAdvertisesIncrement: Bool?
+
+    public init(
+        schemaVersion: Int = 1,
+        fixture: DesktopReposReachabilityFixture = .tabRepos,
+        requestedContentSize: DesktopEvaluationContentSize = .init(width: 1040, height: 680),
+        osMajorVersion: Int,
+        acquisition: DesktopReposReachabilityAcquisition,
+        scrollToVisibleActionAvailable: Bool,
+        boundaryAdvertisesScrollToVisible: Bool?,
+        outerVerticalScrollBarResolved: Bool?,
+        outerVerticalScrollBarAdvertisesIncrement: Bool?
+    ) {
+        self.schemaVersion = schemaVersion
+        self.fixture = fixture
+        self.requestedContentSize = requestedContentSize
+        self.osMajorVersion = osMajorVersion
+        self.acquisition = acquisition
+        self.scrollToVisibleActionAvailable = scrollToVisibleActionAvailable
+        self.boundaryAdvertisesScrollToVisible = boundaryAdvertisesScrollToVisible
+        self.outerVerticalScrollBarResolved = outerVerticalScrollBarResolved
+        self.outerVerticalScrollBarAdvertisesIncrement = outerVerticalScrollBarAdvertisesIncrement
+    }
+
+    public static func failed(
+        osMajorVersion: Int,
+        reason: DesktopReposReachabilityAcquisitionFailureReason
+    ) -> Self {
+        Self(
+            fixture: .tabRepos,
+            requestedContentSize: .init(width: 1040, height: 680),
+            osMajorVersion: osMajorVersion,
+            acquisition: .init(status: .failed, failureReason: reason),
+            scrollToVisibleActionAvailable: osMajorVersion >= 26,
+            boundaryAdvertisesScrollToVisible: nil,
+            outerVerticalScrollBarResolved: nil,
+            outerVerticalScrollBarAdvertisesIncrement: nil
+        )
+    }
+
+    public func validated() throws -> Self {
+        guard schemaVersion == 1,
+              fixture == .tabRepos,
+              requestedContentSize == .init(width: 1040, height: 680),
+              (1...100).contains(osMajorVersion),
+              scrollToVisibleActionAvailable == (osMajorVersion >= 26) else {
+            throw DesktopReposScrollCapabilitiesValidationError.invalidContract
+        }
+
+        switch acquisition.status {
+        case .complete:
+            guard acquisition.failureReason == nil,
+                  let boundaryAdvertisesScrollToVisible,
+                  let outerVerticalScrollBarResolved,
+                  let outerVerticalScrollBarAdvertisesIncrement,
+                  scrollToVisibleActionAvailable || !boundaryAdvertisesScrollToVisible,
+                  outerVerticalScrollBarResolved || !outerVerticalScrollBarAdvertisesIncrement else {
+                throw DesktopReposScrollCapabilitiesValidationError.invalidContract
+            }
+        case .failed:
+            guard acquisition.failureReason != nil,
+                  boundaryAdvertisesScrollToVisible == nil,
+                  outerVerticalScrollBarResolved == nil,
+                  outerVerticalScrollBarAdvertisesIncrement == nil else {
+                throw DesktopReposScrollCapabilitiesValidationError.invalidContract
+            }
+        }
+        return self
+    }
+
+    public static func decode(data: Data) throws -> Self {
+        do {
+            guard data.count <= 4_096,
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  Set(object.keys) == Set(CodingKeys.allCases.map(\.rawValue)),
+                  let acquisition = object[CodingKeys.acquisition.rawValue] as? [String: Any],
+                  Set(acquisition.keys) == Set(["status", "failureReason"]) else {
+                throw DesktopReposScrollCapabilitiesValidationError.invalidContract
+            }
+            return try JSONDecoder().decode(Self.self, from: data).validated()
+        } catch let error as DesktopReposScrollCapabilitiesValidationError {
+            throw error
+        } catch {
+            throw DesktopReposScrollCapabilitiesValidationError.invalidContract
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion
+        case fixture
+        case requestedContentSize
+        case osMajorVersion
+        case acquisition
+        case scrollToVisibleActionAvailable
+        case boundaryAdvertisesScrollToVisible
+        case outerVerticalScrollBarResolved
+        case outerVerticalScrollBarAdvertisesIncrement
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.allKeys.count == CodingKeys.allCases.count,
+              CodingKeys.allCases.allSatisfy(container.contains) else {
+            throw DesktopReposScrollCapabilitiesValidationError.invalidContract
+        }
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        fixture = try container.decode(DesktopReposReachabilityFixture.self, forKey: .fixture)
+        requestedContentSize = try container.decode(
+            DesktopEvaluationContentSize.self,
+            forKey: .requestedContentSize
+        )
+        osMajorVersion = try container.decode(Int.self, forKey: .osMajorVersion)
+        acquisition = try container.decode(DesktopReposReachabilityAcquisition.self, forKey: .acquisition)
+        scrollToVisibleActionAvailable = try container.decode(Bool.self, forKey: .scrollToVisibleActionAvailable)
+        boundaryAdvertisesScrollToVisible = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .boundaryAdvertisesScrollToVisible
+        )
+        outerVerticalScrollBarResolved = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .outerVerticalScrollBarResolved
+        )
+        outerVerticalScrollBarAdvertisesIncrement = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .outerVerticalScrollBarAdvertisesIncrement
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(fixture, forKey: .fixture)
+        try container.encode(requestedContentSize, forKey: .requestedContentSize)
+        try container.encode(osMajorVersion, forKey: .osMajorVersion)
+        try container.encode(acquisition, forKey: .acquisition)
+        try container.encode(scrollToVisibleActionAvailable, forKey: .scrollToVisibleActionAvailable)
+        if let boundaryAdvertisesScrollToVisible {
+            try container.encode(boundaryAdvertisesScrollToVisible, forKey: .boundaryAdvertisesScrollToVisible)
+        } else {
+            try container.encodeNil(forKey: .boundaryAdvertisesScrollToVisible)
+        }
+        if let outerVerticalScrollBarResolved {
+            try container.encode(outerVerticalScrollBarResolved, forKey: .outerVerticalScrollBarResolved)
+        } else {
+            try container.encodeNil(forKey: .outerVerticalScrollBarResolved)
+        }
+        if let outerVerticalScrollBarAdvertisesIncrement {
+            try container.encode(
+                outerVerticalScrollBarAdvertisesIncrement,
+                forKey: .outerVerticalScrollBarAdvertisesIncrement
+            )
+        } else {
+            try container.encodeNil(forKey: .outerVerticalScrollBarAdvertisesIncrement)
+        }
+    }
+}
+
+public enum DesktopReposScrollCapabilityContract {
+    public static func evaluate(
+        osMajorVersion: Int,
+        boundaryActionNames: [String]?,
+        verticalScrollBarResolved: Bool,
+        scrollBarActionNames: [String]?,
+        scrollToVisibleActionName: String?,
+        incrementActionName: String
+    ) throws -> DesktopReposScrollCapabilities {
+        guard (1...100).contains(osMajorVersion) else {
+            throw DesktopReposScrollCapabilityContractError.invalidOperatingSystemVersion
+        }
+        guard !incrementActionName.isEmpty else {
+            throw DesktopReposScrollCapabilityContractError.missingActionName
+        }
+
+        let scrollToVisibleAvailable = osMajorVersion >= 26
+        let boundaryAdvertisesScrollToVisible: Bool
+        if scrollToVisibleAvailable {
+            guard let boundaryActionNames else {
+                throw DesktopReposScrollCapabilityContractError.missingBoundaryActionNames
+            }
+            guard let scrollToVisibleActionName, !scrollToVisibleActionName.isEmpty else {
+                throw DesktopReposScrollCapabilityContractError.missingActionName
+            }
+            boundaryAdvertisesScrollToVisible = boundaryActionNames.contains(scrollToVisibleActionName)
+        } else {
+            guard boundaryActionNames == nil else {
+                throw DesktopReposScrollCapabilityContractError.unexpectedBoundaryActionNames
+            }
+            boundaryAdvertisesScrollToVisible = false
+        }
+
+        let advertisesIncrement: Bool
+        if verticalScrollBarResolved {
+            guard let scrollBarActionNames else {
+                throw DesktopReposScrollCapabilityContractError.missingScrollBarActionNames
+            }
+            advertisesIncrement = scrollBarActionNames.contains(incrementActionName)
+        } else {
+            guard scrollBarActionNames == nil else {
+                throw DesktopReposScrollCapabilityContractError.unexpectedScrollBarActionNames
+            }
+            advertisesIncrement = false
+        }
+
+        return try DesktopReposScrollCapabilities(
+            fixture: .tabRepos,
+            requestedContentSize: .init(width: 1040, height: 680),
+            osMajorVersion: osMajorVersion,
+            acquisition: .init(status: .complete, failureReason: nil),
+            scrollToVisibleActionAvailable: scrollToVisibleAvailable,
+            boundaryAdvertisesScrollToVisible: boundaryAdvertisesScrollToVisible,
+            outerVerticalScrollBarResolved: verticalScrollBarResolved,
+            outerVerticalScrollBarAdvertisesIncrement: advertisesIncrement
+        ).validated()
+    }
+}

@@ -173,7 +173,15 @@ printf '%s\\n' '{"schemaVersion":1,"fixtureId":"tab-repos"}' >"$output_dir/geome
 printf '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"acquisition":{"status":"%s","failureReason":%s},"outerScroll":null}\\n' \\
   "\${FAKE_ACQUISITION_STATUS:-complete}" "\${FAKE_ACQUISITION_FAILURE_REASON:-null}" \\
   >"$output_dir/reachability.json"
-printf '%s\\n' '{"ok":true,"fixtureId":"tab-repos"}'
+case "\${FAKE_CAPABILITIES_MODE:-valid}" in
+  valid)
+    printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false}' \\
+      >"$output_dir/scroll-capabilities.json"
+    ;;
+  invalid) printf '%s\\n' '{}' >"$output_dir/scroll-capabilities.json" ;;
+  missing) ;;
+esac
+printf '%s\\n' '{"ok":true,"fixtureId":"tab-repos","scrollCapabilities":{"path":"scroll-capabilities.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
 if [ "\${FAKE_CAPTURE_STATUS:-0}" -ne 0 ]; then
   if [ -n "\${FAKE_CAPTURE_MESSAGE:-}" ]; then printf '%s\\n' "$FAKE_CAPTURE_MESSAGE" >&2; fi
   exit "$FAKE_CAPTURE_STATUS"
@@ -198,6 +206,7 @@ fi
       FAKE_CAPTURE_HANG: "false",
       FAKE_ACQUISITION_STATUS: "complete",
       FAKE_ACQUISITION_FAILURE_REASON: "null",
+      FAKE_CAPABILITIES_MODE: "valid",
       FAKE_SAFETY_SCAN_OK: "true",
       FAKE_GIT_STATE: gitState,
       FAKE_GIT_DIRTY_STATUS_CALL: "0",
@@ -304,6 +313,19 @@ describe("focused Repos reachability capture", () => {
         requestedContentSize: { width: 1040, height: 680 },
         outerScroll: null
       });
+      expect(JSON.parse(readFileSync(join(caseRoot, "scroll-capabilities.json"), "utf8"))).toEqual({
+        schemaVersion: 1,
+        fixture: "tab-repos",
+        requestedContentSize: { width: 1040, height: 680 },
+        osMajorVersion: 26,
+        acquisition: { status: "complete", failureReason: null },
+        scrollToVisibleActionAvailable: true,
+        boundaryAdvertisesScrollToVisible: false,
+        outerVerticalScrollBarResolved: true,
+        outerVerticalScrollBarAdvertisesIncrement: false
+      });
+      expect(JSON.parse(readFileSync(join(caseRoot, "capture.json"), "utf8")))
+        .toMatchObject({ scrollCapabilities: { path: "scroll-capabilities.json", sha256: expect.any(String) } });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/reachability-check-status.json"), "utf8")))
         .toMatchObject({
           status: "failed",
@@ -314,6 +336,8 @@ describe("focused Repos reachability capture", () => {
         });
       expect(JSON.parse(readFileSync(join(harness.output, "validation/packet-safety-scan.json"), "utf8")))
         .toMatchObject({ ok: true, findings: [], sensitiveFiles: [] });
+      expect(JSON.parse(readFileSync(join(harness.output, "focused-proof.json"), "utf8"))
+        .scrollCapabilitiesSHA256).toMatch(/^[a-f0-9]{64}$/);
       expect(existsSync(join(harness.output, "validation/reachability-check.stderr"))).toBe(false);
 
       const ready = JSON.parse(readFileSync(join(caseRoot, "readiness.json"), "utf8"));
@@ -327,6 +351,44 @@ describe("focused Repos reachability capture", () => {
       expect(commands).not.toMatch(/app .*--repos-reachability/);
       expect(commands).toMatch(/capture .*--output-dir .* --repos-reachability/);
       expect(commands).toMatch(/swift run --skip-build --package-path .* NeonDiffDesktopReachabilityChecks .*reachability\.json/);
+    }
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "rejects a capture that omits the sanitized scroll capability artifact",
+    { timeout: 30_000 },
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, { FAKE_CAPABILITIES_MODE: "missing" });
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+      expect(focusedStatus(harness)).toMatchObject({
+        status: "incomplete",
+        phase: "capture",
+        reasonCode: "capture_output_incomplete",
+        focusedProof: "not_emitted"
+      });
+      expect(existsSync(join(harness.output, "cases/tab-repos/1040x680"))).toBe(false);
+      expectNoFinalProof(harness);
+    }
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "rejects a malformed sanitized scroll capability artifact",
+    { timeout: 30_000 },
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, { FAKE_CAPABILITIES_MODE: "invalid" });
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+      expect(focusedStatus(harness)).toMatchObject({
+        status: "incomplete",
+        phase: "capture",
+        reasonCode: "capture_output_incomplete",
+        focusedProof: "not_emitted"
+      });
+      expect(existsSync(join(harness.output, "cases/tab-repos/1040x680"))).toBe(false);
+      expectNoFinalProof(harness);
     }
   );
 
@@ -593,6 +655,8 @@ describe("focused Repos reachability capture", () => {
     expect(docs).toMatch(/missing outer `AXScrollArea` ancestor/i);
     expect(docs).toMatch(/Table scroll/i);
     expect(docs).toMatch(/checker failure preserves `reachability\.json`/i);
+    expect(docs).toMatch(/`scroll-capabilities\.json`/i);
+    expect(docs).toMatch(/does not perform accessibility actions/i);
     expect(docs).toMatch(/TCC/i);
     expect(docs).toMatch(/does not prove/i);
   });

@@ -81,6 +81,11 @@ private struct Options {
     }
 }
 
+private struct ReposFocusedEvidence {
+    let reachability: [String: String]
+    let scrollCapabilities: [String: String]
+}
+
 private struct CaptureRunner {
     let options: Options
 
@@ -129,7 +134,7 @@ private struct CaptureRunner {
         ]
         let geometryData = try JSONSerialization.data(withJSONObject: geometry, options: [.prettyPrinted, .sortedKeys])
         try geometryData.write(to: geometryURL, options: [.atomic])
-        let reachability = try writeReachabilityIfRequired(ready: ready)
+        let reposFocusedEvidence = try writeReposFocusedEvidenceIfRequired(ready: ready)
 
         var result: [String: Any] = [
             "ok": true,
@@ -139,8 +144,9 @@ private struct CaptureRunner {
             "accessibility": try evidence(accessibilityURL),
             "geometry": try evidence(geometryURL)
         ]
-        if let reachability {
-            result["reachability"] = reachability
+        if let reposFocusedEvidence {
+            result["reachability"] = reposFocusedEvidence.reachability
+            result["scrollCapabilities"] = reposFocusedEvidence.scrollCapabilities
         }
         return result
     }
@@ -162,14 +168,19 @@ private struct CaptureRunner {
         return ready
     }
 
-    private func writeReachabilityIfRequired(ready: ReadyDocument) throws -> [String: String]? {
+    private func writeReposFocusedEvidenceIfRequired(ready: ReadyDocument) throws -> ReposFocusedEvidence? {
         guard options.capturesReposReachability else { return nil }
-        let trace = DesktopReposReachabilityAXTracer(pid: options.pid, ready: ready).capture()
+        let tracer = DesktopReposReachabilityAXTracer(pid: options.pid, ready: ready)
+        let trace = tracer.capture()
+        let scrollCapabilities = tracer.captureScrollCapabilities()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(trace)
-        let url = options.outputDirectory.appendingPathComponent("reachability.json")
-        try data.write(to: url, options: [.atomic])
+        let reachabilityData = try encoder.encode(trace)
+        let reachabilityURL = options.outputDirectory.appendingPathComponent("reachability.json")
+        try reachabilityData.write(to: reachabilityURL, options: [.atomic])
+        let capabilitiesData = try encoder.encode(scrollCapabilities.validated())
+        let capabilitiesURL = options.outputDirectory.appendingPathComponent("scroll-capabilities.json")
+        try capabilitiesData.write(to: capabilitiesURL, options: [.atomic])
         let status: String
         do {
             _ = try DesktopReposReachabilityValidator.validate(trace)
@@ -179,7 +190,17 @@ private struct CaptureRunner {
         } catch {
             status = "unreachable"
         }
-        return ["path": url.lastPathComponent, "sha256": try sha256(url), "status": status]
+        return ReposFocusedEvidence(
+            reachability: [
+                "path": reachabilityURL.lastPathComponent,
+                "sha256": try sha256(reachabilityURL),
+                "status": status
+            ],
+            scrollCapabilities: [
+                "path": capabilitiesURL.lastPathComponent,
+                "sha256": try sha256(capabilitiesURL)
+            ]
+        )
     }
 
     private func requireRegularFile(_ url: URL, label: String) throws {
@@ -426,6 +447,56 @@ private struct DesktopReposReachabilityAXTracer {
         )
     }
 
+    func captureScrollCapabilities() -> DesktopReposScrollCapabilities {
+        let osMajorVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        let systemWide = AXUIElementCreateSystemWide()
+        let timeoutInstalled = AXUIElementSetMessagingTimeout(systemWide, 1.0) == .success
+        guard timeoutInstalled else {
+            return .failed(osMajorVersion: osMajorVersion, reason: .messagingTimeoutUnavailable)
+        }
+        defer { _ = AXUIElementSetMessagingTimeout(systemWide, 0) }
+
+        do {
+            let window = try verifiedWindow()
+            let elements = try semanticElements(in: window)
+            guard let outerScrollArea = try outermostScrollArea(
+                from: elements.boundaryBody,
+                to: window
+            ) else {
+                throw Failure.ancestryUnavailable
+            }
+
+            let boundaryActionNames: [String]?
+            let scrollToVisibleActionName: String?
+            if osMajorVersion >= 26 {
+                if #available(macOS 26.0, *) {
+                    boundaryActionNames = try actionNames(elements.boundaryBody)
+                    scrollToVisibleActionName = NSAccessibility.Action.scrollToVisibleAction.rawValue
+                } else {
+                    throw Failure.invalidType
+                }
+            } else {
+                boundaryActionNames = nil
+                scrollToVisibleActionName = nil
+            }
+
+            let verticalScrollBar = try verticalScrollBar(in: outerScrollArea)
+            let scrollBarActionNames = try verticalScrollBar.map(actionNames)
+            return try DesktopReposScrollCapabilityContract.evaluate(
+                osMajorVersion: osMajorVersion,
+                boundaryActionNames: boundaryActionNames,
+                verticalScrollBarResolved: verticalScrollBar != nil,
+                scrollBarActionNames: scrollBarActionNames,
+                scrollToVisibleActionName: scrollToVisibleActionName,
+                incrementActionName: NSAccessibility.Action.increment.rawValue
+            )
+        } catch let reason as Failure {
+            return .failed(osMajorVersion: osMajorVersion, reason: reason)
+        } catch {
+            return .failed(osMajorVersion: osMajorVersion, reason: .invalidType)
+        }
+    }
+
     private func acquireStableSamples() -> PhaseAcquisition {
         let phaseStarted = DispatchTime.now().uptimeNanoseconds
         let binding: SemanticBinding
@@ -635,6 +706,20 @@ private struct DesktopReposReachabilityAXTracer {
             }
             let scrollBar = rawScrollBar as! AXUIElement
             try requireTargetPID(scrollBar)
+            let candidate = DesktopReposVerticalScrollBarCandidate(
+                role: try optionalString(scrollBar, kAXRoleAttribute as CFString),
+                orientation: try optionalString(scrollBar, kAXOrientationAttribute as CFString)
+            )
+            do {
+                guard try DesktopReposVerticalScrollBarSelectionContract.select(
+                    convenienceCandidate: candidate,
+                    directChildren: []
+                ) == .convenienceAttribute else {
+                    throw Failure.invalidType
+                }
+            } catch let error as DesktopReposVerticalScrollBarSelectionError {
+                throw selectionFailure(error)
+            }
             return scrollBar
         }
 
@@ -663,18 +748,11 @@ private struct DesktopReposReachabilityAXTracer {
         let selection: DesktopReposVerticalScrollBarSelection
         do {
             selection = try DesktopReposVerticalScrollBarSelectionContract.select(
-                convenienceAvailable: false,
+                convenienceCandidate: nil,
                 directChildren: candidates
             )
         } catch let error as DesktopReposVerticalScrollBarSelectionError {
-            switch error {
-            case .missingRole, .missingOrientation:
-                throw Failure.attributeUnavailable
-            case .invalidOrientation:
-                throw Failure.invalidType
-            case .ambiguousVerticalChildren:
-                throw Failure.semanticDuplicate
-            }
+            throw selectionFailure(error)
         }
 
         switch selection {
@@ -685,6 +763,19 @@ private struct DesktopReposReachabilityAXTracer {
             return children[index]
         case .unsupported:
             return nil
+        }
+    }
+
+    private func selectionFailure(
+        _ error: DesktopReposVerticalScrollBarSelectionError
+    ) -> Failure {
+        switch error {
+        case .missingRole, .missingOrientation:
+            return .attributeUnavailable
+        case .invalidRole, .invalidOrientation:
+            return .invalidType
+        case .ambiguousVerticalChildren:
+            return .semanticDuplicate
         }
     }
 
@@ -856,6 +947,20 @@ private struct DesktopReposReachabilityAXTracer {
         guard let raw = try optionalAttribute(element, attribute) else { return nil }
         guard CFGetTypeID(raw) == CFStringGetTypeID() else { throw Failure.invalidType }
         return raw as? String
+    }
+
+    private func actionNames(_ element: AXUIElement) throws -> [String] {
+        try requireTargetPID(element)
+        var rawActionNames: CFArray?
+        let result = AXUIElementCopyActionNames(element, &rawActionNames)
+        guard result == .success else { throw mapAXError(result) }
+        guard let rawActionNames else { throw Failure.attributeUnavailable }
+        guard CFGetTypeID(rawActionNames) == CFArrayGetTypeID(),
+              let names = rawActionNames as? [String],
+              names.allSatisfy({ !$0.isEmpty }) else {
+            throw Failure.invalidType
+        }
+        return names
     }
 
     private func optionalTextValue(_ element: AXUIElement, _ attribute: CFString) throws -> String? {

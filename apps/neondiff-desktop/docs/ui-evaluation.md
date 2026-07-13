@@ -155,10 +155,17 @@ checker products, and launches only the public-safe `tab-repos` fixture at
 `--repos-reachability` opt-in to the capture helper, so canonical #515 captures
 keep their existing byte and artifact shape. The runner waits boundedly for
 app-authored readiness, captures the window, AX tree, geometry, and
-`reachability.json`, terminates its children, runs the checker against the
-absolute reachability path, and scans the focused evidence for secret-shaped
-text. It never reads live configuration, Keychain, GitHub, provider, daemon,
-network, or customer state.
+`reachability.json`, plus a separate `scroll-capabilities.json`, terminates its
+children, runs the checker against the absolute reachability path, and scans
+the focused evidence for secret-shaped text. The capability packet is bound to
+the `tab-repos` fixture and requested `1040x680` content size, is capped at 4096
+bytes, and contains only schema/OS metadata, typed acquisition state, and
+sanitized capability booleans. It uses `AXUIElementCopyActionNames` only to
+check the verified Boundary and outer vertical scrollbar; it does not perform
+accessibility actions. Missing, malformed, or failed action-name acquisition is
+a typed acquisition failure rather than a false capability result. It never
+reads live configuration, Keychain, GitHub, provider, daemon, network, or
+customer state.
 
 Capture output remains in the private workspace until the helper exits
 successfully and every required file is present. A fixture exit before
@@ -177,7 +184,8 @@ failures and unrelated checker failures remain ordinary checker failures.
 Boundary is a sibling of Table, so a Table scroll does not satisfy the checker.
 The DEBUG fixture may
 mutate only its deterministic test UI to exercise scroll reachability; it does
-not authorize live product or runtime mutation. A checker failure preserves `reachability.json`.
+not authorize live product or runtime mutation. A checker failure preserves
+both `reachability.json` and `scroll-capabilities.json`.
 The normalized checker status and public-safety result are written before the
 runner returns the nonzero checker exit.
 

@@ -360,7 +360,7 @@ struct DesktopReposReachabilityTraceTests {
 
     @Test func verticalScrollBarSelectionPrefersTheConvenienceAttribute() throws {
         let selection = try DesktopReposVerticalScrollBarSelectionContract.select(
-            convenienceAvailable: true,
+            convenienceCandidate: .init(role: "AXScrollBar", orientation: "AXVerticalOrientation"),
             directChildren: [
                 .init(role: nil, orientation: nil),
                 .init(role: "AXScrollBar", orientation: "AXVerticalOrientation")
@@ -372,7 +372,7 @@ struct DesktopReposReachabilityTraceTests {
 
     @Test func verticalScrollBarSelectionAcceptsOneExactDirectChild() throws {
         let selection = try DesktopReposVerticalScrollBarSelectionContract.select(
-            convenienceAvailable: false,
+            convenienceCandidate: nil,
             directChildren: [
                 .init(role: "AXGroup", orientation: nil),
                 .init(role: "AXScrollBar", orientation: "AXHorizontalOrientation"),
@@ -385,14 +385,14 @@ struct DesktopReposReachabilityTraceTests {
 
     @Test func verticalScrollBarSelectionRejectsHorizontalAndCannotSeeNestedDescendants() throws {
         #expect(try DesktopReposVerticalScrollBarSelectionContract.select(
-            convenienceAvailable: false,
+            convenienceCandidate: nil,
             directChildren: [.init(role: "AXScrollBar", orientation: "AXHorizontalOrientation")]
         ) == .unsupported)
 
         // A group may contain a nested scrollbar in the real AX tree, but the
         // strict contract deliberately receives direct children only.
         #expect(try DesktopReposVerticalScrollBarSelectionContract.select(
-            convenienceAvailable: false,
+            convenienceCandidate: nil,
             directChildren: [.init(role: "AXGroup", orientation: nil)]
         ) == .unsupported)
     }
@@ -400,7 +400,7 @@ struct DesktopReposReachabilityTraceTests {
     @Test func verticalScrollBarSelectionFailsClosedOnAmbiguousDirectChildren() {
         #expect(throws: DesktopReposVerticalScrollBarSelectionError.ambiguousVerticalChildren) {
             try DesktopReposVerticalScrollBarSelectionContract.select(
-                convenienceAvailable: false,
+                convenienceCandidate: nil,
                 directChildren: [
                     .init(role: "AXScrollBar", orientation: "AXVerticalOrientation"),
                     .init(role: "AXScrollBar", orientation: "AXVerticalOrientation")
@@ -412,20 +412,32 @@ struct DesktopReposReachabilityTraceTests {
     @Test func verticalScrollBarSelectionFailsClosedOnMalformedRoleOrOrientation() {
         #expect(throws: DesktopReposVerticalScrollBarSelectionError.missingRole) {
             try DesktopReposVerticalScrollBarSelectionContract.select(
-                convenienceAvailable: false,
+                convenienceCandidate: nil,
                 directChildren: [.init(role: nil, orientation: nil)]
             )
         }
         #expect(throws: DesktopReposVerticalScrollBarSelectionError.missingOrientation) {
             try DesktopReposVerticalScrollBarSelectionContract.select(
-                convenienceAvailable: false,
+                convenienceCandidate: nil,
                 directChildren: [.init(role: "AXScrollBar", orientation: nil)]
             )
         }
         #expect(throws: DesktopReposVerticalScrollBarSelectionError.invalidOrientation) {
             try DesktopReposVerticalScrollBarSelectionContract.select(
-                convenienceAvailable: false,
+                convenienceCandidate: nil,
                 directChildren: [.init(role: "AXScrollBar", orientation: "AXDiagonalOrientation")]
+            )
+        }
+        #expect(throws: DesktopReposVerticalScrollBarSelectionError.invalidRole) {
+            try DesktopReposVerticalScrollBarSelectionContract.select(
+                convenienceCandidate: .init(role: "AXGroup", orientation: "AXVerticalOrientation"),
+                directChildren: []
+            )
+        }
+        #expect(throws: DesktopReposVerticalScrollBarSelectionError.invalidOrientation) {
+            try DesktopReposVerticalScrollBarSelectionContract.select(
+                convenienceCandidate: .init(role: "AXScrollBar", orientation: "AXHorizontalOrientation"),
+                directChildren: []
             )
         }
     }

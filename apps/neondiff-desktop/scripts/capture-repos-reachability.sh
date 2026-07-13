@@ -222,7 +222,7 @@ if [ "$capture_status" -ne 0 ]; then
   exit "$capture_status"
 fi
 
-for capture_file in screenshot.png accessibility.json geometry.json reachability.json readiness.json; do
+for capture_file in screenshot.png accessibility.json geometry.json reachability.json scroll-capabilities.json readiness.json; do
   [ -f "$capture_stage/$capture_file" ] && [ ! -L "$capture_stage/$capture_file" ] \
     || {
       write_focused_status incomplete capture capture_output_incomplete incomplete not_emitted 1
@@ -230,6 +230,46 @@ for capture_file in screenshot.png accessibility.json geometry.json reachability
       exit 1
     }
 done
+[ "$(wc -c <"$capture_stage/scroll-capabilities.json")" -le 4096 ] \
+  && jq -e '
+    keys == [
+      "acquisition",
+      "boundaryAdvertisesScrollToVisible",
+      "fixture",
+      "osMajorVersion",
+      "outerVerticalScrollBarAdvertisesIncrement",
+      "outerVerticalScrollBarResolved",
+      "requestedContentSize",
+      "schemaVersion",
+      "scrollToVisibleActionAvailable"
+    ]
+    and .schemaVersion == 1
+    and .fixture == "tab-repos"
+    and .requestedContentSize == {"width":1040,"height":680}
+    and (.osMajorVersion | type == "number" and . >= 1 and . <= 100 and floor == .)
+    and .scrollToVisibleActionAvailable == (.osMajorVersion >= 26)
+    and (.acquisition | type == "object" and keys == ["failureReason", "status"])
+    and (
+      if .acquisition.status == "complete" then
+        .acquisition.failureReason == null
+        and (.boundaryAdvertisesScrollToVisible | type == "boolean")
+        and (.outerVerticalScrollBarResolved | type == "boolean")
+        and (.outerVerticalScrollBarAdvertisesIncrement | type == "boolean")
+        and (.scrollToVisibleActionAvailable or (.boundaryAdvertisesScrollToVisible | not))
+        and (.outerVerticalScrollBarResolved or (.outerVerticalScrollBarAdvertisesIncrement | not))
+      elif .acquisition.status == "failed" then
+        (.acquisition.failureReason | type == "string" and length > 0)
+        and .boundaryAdvertisesScrollToVisible == null
+        and .outerVerticalScrollBarResolved == null
+        and .outerVerticalScrollBarAdvertisesIncrement == null
+      else false end
+    )
+  ' "$capture_stage/scroll-capabilities.json" >/dev/null \
+  || {
+    write_focused_status incomplete capture capture_output_incomplete incomplete not_emitted 1
+    echo "capture helper wrote invalid sanitized scroll capabilities" >&2
+    exit 1
+  }
 [ -s "$tmp_root/capture.json" ] \
   || {
     write_focused_status incomplete capture capture_output_incomplete incomplete not_emitted 1
@@ -251,6 +291,7 @@ if cp "$tmp_root/launch.log" "$pending_case/launch.log" \
   && cp "$capture_stage/accessibility.json" "$pending_case/accessibility.json" \
   && cp "$capture_stage/geometry.json" "$pending_case/geometry.json" \
   && cp "$capture_stage/reachability.json" "$pending_case/reachability.json" \
+  && cp "$capture_stage/scroll-capabilities.json" "$pending_case/scroll-capabilities.json" \
   && mv "$pending_case" "$case_dir"; then
   :
 else
@@ -260,6 +301,7 @@ else
   exit 1
 fi
 reachability="$case_dir/reachability.json"
+scroll_capabilities="$case_dir/scroll-capabilities.json"
 
 # The pre-fix Repos tree is expected to fail this checker. Keep the capture and
 # finish the public-safety scan before returning the checker's nonzero status.
@@ -297,11 +339,13 @@ jq -n \
   >"$output/validation/reachability-check-status.json"
 
 reachability_sha=$(shasum -a 256 "$reachability" | awk '{print $1}')
+scroll_capabilities_sha=$(shasum -a 256 "$scroll_capabilities" | awk '{print $1}')
 jq -n \
   --arg headSHA "$head_sha" \
   --arg fixtureId "$fixture_id" \
   --arg contentSize "$content_size" \
   --arg reachabilitySHA256 "$reachability_sha" \
+  --arg scrollCapabilitiesSHA256 "$scroll_capabilities_sha" \
   --arg checkerStatus "$checker_result" \
   '{
     schemaVersion: 1,
@@ -311,6 +355,7 @@ jq -n \
     contentSize: $contentSize,
     buildConfiguration: "debug",
     reachabilitySHA256: $reachabilitySHA256,
+    scrollCapabilitiesSHA256: $scrollCapabilitiesSHA256,
     checkerStatus: $checkerStatus,
     proofBoundary: "Focused deterministic Repos reachability dev proof outside the canonical issue 515 packet.",
     exclusions: [

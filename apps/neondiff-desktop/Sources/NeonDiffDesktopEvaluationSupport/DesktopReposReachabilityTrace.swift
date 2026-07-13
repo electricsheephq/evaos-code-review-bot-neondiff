@@ -141,6 +141,7 @@ public enum DesktopReposVerticalScrollBarSelection: Equatable, Sendable {
 
 public enum DesktopReposVerticalScrollBarSelectionError: Error, Equatable, Sendable {
     case missingRole
+    case invalidRole
     case missingOrientation
     case invalidOrientation
     case ambiguousVerticalChildren
@@ -152,10 +153,22 @@ public enum DesktopReposVerticalScrollBarSelectionContract {
     public static let horizontalOrientation = "AXHorizontalOrientation"
 
     public static func select(
-        convenienceAvailable: Bool,
+        convenienceCandidate: DesktopReposVerticalScrollBarCandidate?,
         directChildren: [DesktopReposVerticalScrollBarCandidate]
     ) throws -> DesktopReposVerticalScrollBarSelection {
-        if convenienceAvailable {
+        if let convenienceCandidate {
+            guard let role = convenienceCandidate.role else {
+                throw DesktopReposVerticalScrollBarSelectionError.missingRole
+            }
+            guard role == scrollBarRole else {
+                throw DesktopReposVerticalScrollBarSelectionError.invalidRole
+            }
+            guard let orientation = convenienceCandidate.orientation else {
+                throw DesktopReposVerticalScrollBarSelectionError.missingOrientation
+            }
+            guard orientation == verticalOrientation else {
+                throw DesktopReposVerticalScrollBarSelectionError.invalidOrientation
+            }
             return .convenienceAttribute
         }
 
