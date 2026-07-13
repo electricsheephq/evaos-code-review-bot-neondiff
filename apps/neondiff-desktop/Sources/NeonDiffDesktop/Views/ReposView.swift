@@ -6,6 +6,14 @@ struct ReposView: View {
     @ObservedObject var model: NeonDiffDesktopModel
 
     var body: some View {
+        ScrollView(.vertical) {
+            pageContent
+        }
+        .scrollContentBackground(.hidden)
+        .scrollIndicators(.visible, axes: .vertical)
+    }
+
+    private var pageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             OperatorSection("GitHub Connection") {
                 VStack(alignment: .leading, spacing: 10) {
@@ -196,7 +204,7 @@ struct ReposView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .frame(minHeight: 360)
+                .frame(height: 360)
 
                 HStack(spacing: 10) {
                     TextField("owner/repo", text: $model.pendingRepoName)
@@ -259,6 +267,7 @@ struct ReposView: View {
             OperatorSection("Boundary") {
                 Text("Repo changes are written through `config patch` only; the desktop does not post reviews or bypass daemon gates.")
                     .operatorBodyText()
+                    .accessibilityIdentifier("neondiff-repos-boundary")
             }
         }
         .padding(24)
