@@ -23,7 +23,7 @@ import {
 import * as cohortSelectionModule from "../src/phase1-cohort-selection.js";
 import { runPhase1CohortSelectionCli } from "../src/phase1-cohort-selection-cli.js";
 
-const PHASE1_COHORT_PROOF_BOUNDARY = "This may prove only that a metadata-only 30-case candidate cohort is selected and immutably sealed under the named workload and privacy contracts. It does not admit scenarios, prove labels, review quality, noninferiority, production routing, runtime safety, customer readiness, or public claims. No model run may begin until separate hidden outcomes, blinded adjudication, and restricted identity sidecars pass their own gates.";
+const PHASE1_COHORT_PROOF_BOUNDARY = "This may prove only that a metadata-only 14-case advisory cohort is selected and immutably sealed under the named workload and privacy contracts. It does not admit Corpus v1 scenarios, prove labels, review quality, noninferiority, production routing, runtime safety, customer readiness, or public claims. No model run may begin until separate hidden outcomes, blinded adjudication, and restricted identity sidecars pass their own gates.";
 const CANONICAL_LANGUAGES = ["typescript", "javascript", "swift", "python", "go", "rust", "java", "kotlin", "csharp", "cpp", "ruby", "php", "shell", "sql"] as const;
 const CANONICAL_RISK_TAGS = ["security", "auth", "release", "state-machine", "concurrency", "migration", "architecture", "simplification", "correctness", "config", "debugging", "ci", "state", "privacy", "licensing", "performance", "reliability"] as const;
 
@@ -63,10 +63,10 @@ function candidate(index: number, promptTokens: number): Phase1Candidate {
 
 function candidatePool(): Phase1Candidate[] {
   const ranges = [
-    [8_193, 6],
-    [16_385, 15],
-    [32_769, 15],
-    [65_537, 6]
+    [8_193, 4],
+    [16_385, 8],
+    [32_769, 8],
+    [65_537, 4]
   ] as const;
   let index = 0;
   return ranges.flatMap(([start, count]) => Array.from({ length: count }, (_, offset) =>
@@ -75,16 +75,18 @@ function candidatePool(): Phase1Candidate[] {
 
 function policy(safeOutputRoot: string): Phase1CohortPolicy {
   return {
-    cohortSize: 30,
-    bucketQuotas: { "16k": 3, "32k": 12, "64k": 12, "128k": 3 },
+    cohortSize: 14,
+    bucketQuotas: { "16k": 2, "32k": 5, "64k": 5, "128k": 2 },
     firstFiveBucketQuotas: { "16k": 1, "32k": 2, "64k": 1, "128k": 1 },
     outputTokens: 2_048,
     maximumFindings: 5,
-    minimumCleanControls: 5,
+    minimumCleanControls: 4,
     minimumRepositoryGroups: 6,
     minimumLanguages: 5,
-    minimumHighRisk: 8,
-    maximumPerRepositoryGroup: 5,
+    minimumHighRisk: 5,
+    maximumPerRepositoryGroup: 3,
+    maximumCandidatePoolSize: 64,
+    maximumCanonicalSearchStates: 2_000_000,
     selectionSeed: digest("frozen-575-aggregate"),
     tokenizerFingerprint: digest("tokenizer"),
     promptBuilderFingerprint: digest("prompt-builder"),
@@ -186,14 +188,19 @@ describe("phase 1 cohort selection", () => {
     const secondManifest = seal(second);
 
     expect(secondManifest.selectedCandidateIds).toEqual(firstManifest.selectedCandidateIds);
-    expect(firstManifest.strata.bucketCounts).toEqual({ "16k": 3, "32k": 12, "64k": 12, "128k": 3 });
+    expect(firstManifest.contract).toMatchObject({
+      cohortSize: 14,
+      maximumCandidatePoolSize: 64,
+      maximumCanonicalSearchStates: 2_000_000
+    });
+    expect(firstManifest.strata.bucketCounts).toEqual({ "16k": 2, "32k": 5, "64k": 5, "128k": 2 });
     expect(firstManifest.firstFive.bucketCounts).toEqual({ "16k": 1, "32k": 2, "64k": 1, "128k": 1 });
     expect(firstManifest.firstFive.cleanControlCount).toBeGreaterThanOrEqual(1);
-    expect(firstManifest.diversity.cleanControlCount).toBeGreaterThanOrEqual(5);
+    expect(firstManifest.diversity.cleanControlCount).toBeGreaterThanOrEqual(4);
     expect(firstManifest.diversity.repositoryGroupCount).toBeGreaterThanOrEqual(6);
     expect(firstManifest.diversity.languageCount).toBeGreaterThanOrEqual(5);
-    expect(firstManifest.diversity.highRiskCount).toBeGreaterThanOrEqual(8);
-    expect(firstManifest.diversity.maximumRepositoryGroupCount).toBeLessThanOrEqual(5);
+    expect(firstManifest.diversity.highRiskCount).toBeGreaterThanOrEqual(5);
+    expect(firstManifest.diversity.maximumRepositoryGroupCount).toBeLessThanOrEqual(3);
   });
 
   it("keeps canonical seal bytes stable when host locale collation changes", () => {
@@ -226,18 +233,18 @@ describe("phase 1 cohort selection", () => {
   it("prefers lower-frequency repository and language groups across equally feasible cohorts", () => {
     const f = fixture();
     const tokens = [
-      ...Array.from({ length: 3 }, (_, index) => 8_193 + index),
-      ...Array.from({ length: 12 }, (_, index) => 16_385 + index),
-      ...Array.from({ length: 12 }, (_, index) => 32_769 + index),
-      ...Array.from({ length: 3 }, (_, index) => 65_537 + index)
+      ...Array.from({ length: 2 }, (_, index) => 8_193 + index),
+      ...Array.from({ length: 5 }, (_, index) => 16_385 + index),
+      ...Array.from({ length: 5 }, (_, index) => 32_769 + index),
+      ...Array.from({ length: 2 }, (_, index) => 65_537 + index)
     ];
     f.candidates = [];
     for (let index = 0; index < tokens.length; index += 1) {
       const baseline = candidate(index, tokens[index]);
       baseline.repositoryGroup = opaque("repo", `baseline-${index % 6}`);
       baseline.language = CANONICAL_LANGUAGES[index % 5];
-      baseline.riskTags = index < 8 ? ["security"] : [];
-      baseline.caseKind = index < 5 ? "clean_control_candidate" : "defect_candidate";
+      baseline.riskTags = index < 5 ? ["security"] : [];
+      baseline.caseKind = index < 4 ? "clean_control_candidate" : "defect_candidate";
       f.candidates.push(baseline);
 
       const diverse = candidate(index + 100, tokens[index]);
@@ -250,16 +257,16 @@ describe("phase 1 cohort selection", () => {
     writeFixture(f);
 
     const manifest = seal(f);
-    expect(manifest.diversity.repositoryGroupCount).toBe(30);
+    expect(manifest.diversity.repositoryGroupCount).toBe(14);
     expect(manifest.diversity.languageCount).toBe(6);
   });
 
   it("accepts strict bucket boundaries and rejects 8k and over-128k rows", () => {
     const f = fixture();
     f.candidates[0].promptTokens = 16_384;
-    f.candidates[6].promptTokens = 32_768;
-    f.candidates[21].promptTokens = 65_536;
-    f.candidates[36].promptTokens = 131_072;
+    f.candidates[4].promptTokens = 32_768;
+    f.candidates[12].promptTokens = 65_536;
+    f.candidates[20].promptTokens = 131_072;
     writeFixture(f);
     expect(() => seal(f)).not.toThrow();
 
@@ -331,45 +338,40 @@ describe("phase 1 cohort selection", () => {
     expect(() => seal(cap)).toThrow(/cap|quota/i);
   });
 
-  it("finds a feasible cohort through 100 novelty decoys without exploring selection permutations", () => {
-    const f = fixture();
-    let index = 0;
-    f.candidates = [];
-    const reservedCleanRepository = opaque("repo", "reserved-clean");
-    for (const [start, count] of [[8_193, 3], [32_769, 12], [65_537, 3]] as const) {
-      for (let offset = 0; offset < count; offset += 1) {
-        const row = candidate(index++, start + offset);
-        row.repositoryGroup = index <= 5 ? reservedCleanRepository : opaque("repo", `support-${index}`);
-        row.language = CANONICAL_LANGUAGES[index % 6];
-        row.riskTags = [];
-        row.caseKind = index <= 5 ? "clean_control_candidate" : "defect_candidate";
-        f.candidates.push(row);
-      }
-    }
-    for (let offset = 0; offset < 100; offset += 1) {
-      const row = candidate(index++, 16_385 + offset);
-      row.repositoryGroup = reservedCleanRepository;
-      row.language = CANONICAL_LANGUAGES[offset % 6];
-      row.riskTags = ["security"];
-      f.candidates.push(row);
-    }
-    for (let offset = 0; offset < 8; offset += 1) {
-      const row = candidate(index++, 20_000 + offset);
-      row.repositoryGroup = opaque("repo", `risk-${offset}`);
-      row.language = CANONICAL_LANGUAGES[offset % 2];
-      row.riskTags = ["security"];
-      f.candidates.push(row);
-    }
-    for (let offset = 0; offset < 4; offset += 1) {
-      const row = candidate(index++, 24_000 + offset);
-      row.repositoryGroup = opaque("repo", `neutral-${offset}`);
-      row.language = CANONICAL_LANGUAGES[offset % 6];
-      row.riskTags = [];
-      f.candidates.push(row);
-    }
-    writeFixture(f);
+  it("seals the largest admitted candidate pool and rejects larger pools before search", () => {
+    const maximum = fixture();
+    maximum.candidates = [
+      ...Array.from({ length: 16 }, (_, index) => candidate(index, 8_193 + index)),
+      ...Array.from({ length: 16 }, (_, index) => candidate(index + 16, 16_385 + index)),
+      ...Array.from({ length: 16 }, (_, index) => candidate(index + 32, 32_769 + index)),
+      ...Array.from({ length: 16 }, (_, index) => candidate(index + 48, 65_537 + index))
+    ];
+    writeFixture(maximum);
+    expect(seal(maximum).selectedCandidateIds).toHaveLength(14);
 
-    expect(seal(f).diversity.highRiskCount).toBeGreaterThanOrEqual(8);
+    const oversized = fixture();
+    oversized.candidates = [
+      ...maximum.candidates,
+      candidate(64, 16_500)
+    ];
+    writeFixture(oversized);
+    expect(() => seal(oversized)).toThrow(/candidate pool.*64/i);
+    expect(existsSync(oversized.outputDir)).toBe(false);
+  });
+
+  it("binds a configurable canonical-search budget within frozen resource limits", () => {
+    const adjusted = fixture();
+    adjusted.cohortPolicy.maximumCanonicalSearchStates = 3_000_000;
+    writeFixture(adjusted);
+    expect(seal(adjusted).contract.maximumCanonicalSearchStates).toBe(3_000_000);
+
+    for (const invalid of [99_999, 5_000_001]) {
+      const rejected = fixture();
+      rejected.cohortPolicy.maximumCanonicalSearchStates = invalid;
+      writeFixture(rejected);
+      expect(() => seal(rejected)).toThrow(/maximumCanonicalSearchStates/i);
+      expect(existsSync(rejected.outputDir)).toBe(false);
+    }
   });
 
   it("confines output, writes private atomic artifacts, verifies the seal, and fails on tampering or input drift", () => {

@@ -24,8 +24,10 @@ type Phase1Bucket = typeof BUCKETS[number];
 type BucketCounts = Record<Phase1Bucket, number>;
 const MAX_CANDIDATE_POOL_BYTES = 16 * 1024 * 1024;
 const MAX_POLICY_BYTES = 256 * 1024;
-const MAX_CANONICAL_SEARCH_STATES = 500_000;
-export const PHASE1_COHORT_PROOF_BOUNDARY = "This may prove only that a metadata-only 30-case candidate cohort is selected and immutably sealed under the named workload and privacy contracts. It does not admit scenarios, prove labels, review quality, noninferiority, production routing, runtime safety, customer readiness, or public claims. No model run may begin until separate hidden outcomes, blinded adjudication, and restricted identity sidecars pass their own gates.";
+const MAX_CANDIDATE_POOL_SIZE = 64;
+const MIN_CANONICAL_SEARCH_STATES = 100_000;
+const MAX_CANONICAL_SEARCH_STATES = 5_000_000;
+export const PHASE1_COHORT_PROOF_BOUNDARY = "This may prove only that a metadata-only 14-case advisory cohort is selected and immutably sealed under the named workload and privacy contracts. It does not admit Corpus v1 scenarios, prove labels, review quality, noninferiority, production routing, runtime safety, customer readiness, or public claims. No model run may begin until separate hidden outcomes, blinded adjudication, and restricted identity sidecars pass their own gates.";
 export const PHASE1_COHORT_LANGUAGES = Object.freeze([
   "typescript", "javascript", "swift", "python", "go", "rust", "java", "kotlin",
   "csharp", "cpp", "ruby", "php", "shell", "sql"
@@ -69,6 +71,8 @@ export interface Phase1CohortPolicy {
   minimumLanguages: number;
   minimumHighRisk: number;
   maximumPerRepositoryGroup: number;
+  maximumCandidatePoolSize: number;
+  maximumCanonicalSearchStates: number;
   selectionSeed: string;
   tokenizerFingerprint: string;
   promptBuilderFingerprint: string;
@@ -105,11 +109,13 @@ export interface Phase1SelectionManifest {
     sourcePolicy: string;
   };
   contract: {
-    cohortSize: 30;
+    cohortSize: 14;
     bucketQuotas: BucketCounts;
     firstFiveBucketQuotas: BucketCounts;
     outputTokens: 2048;
     maximumFindings: 5;
+    maximumCandidatePoolSize: 64;
+    maximumCanonicalSearchStates: number;
   };
   selectedCandidateIds: string[];
   strata: {
@@ -147,7 +153,8 @@ const ELIGIBILITY_KEYS = [
 const POLICY_KEYS = [
   "cohortSize", "bucketQuotas", "firstFiveBucketQuotas", "outputTokens", "maximumFindings",
   "minimumCleanControls", "minimumRepositoryGroups", "minimumLanguages", "minimumHighRisk",
-  "maximumPerRepositoryGroup", "selectionSeed", "tokenizerFingerprint", "promptBuilderFingerprint",
+  "maximumPerRepositoryGroup", "maximumCandidatePoolSize", "maximumCanonicalSearchStates",
+  "selectionSeed", "tokenizerFingerprint", "promptBuilderFingerprint",
   "parserFingerprint", "gateFingerprint", "redactorFingerprint", "secretScannerFingerprint",
   "sourcePolicyFingerprint", "safeOutputRoot", "proofBoundary"
 ] as const;
@@ -229,6 +236,9 @@ function loadAndValidate(options: Phase1CohortSelectionOptions): {
   assertSecretSafe(policyValue, "cohort policy");
   const candidates = validateCandidates(candidateValue);
   const policy = validatePolicy(policyValue);
+  if (candidates.length > policy.maximumCandidatePoolSize) {
+    throw new Error(`candidate pool exceeds the frozen maximum of ${policy.maximumCandidatePoolSize} rows`);
+  }
   const allowedOutputRoot = validateAllowedOutputRoot(options.allowedOutputRoot, policy.safeOutputRoot);
   validateOutputBoundary(options.outputDir, allowedOutputRoot);
   return {
@@ -279,15 +289,21 @@ function validateCandidates(value: unknown): Phase1Candidate[] {
 function validatePolicy(value: unknown): Phase1CohortPolicy {
   assertRecord(value, "cohort policy");
   assertExactKeys(value, POLICY_KEYS, "cohort policy");
-  if (value.cohortSize !== 30) throw new Error("cohort policy must pin exact cohort size 30");
-  validateBucketCounts(value.bucketQuotas, { "16k": 3, "32k": 12, "64k": 12, "128k": 3 }, "bucket quotas");
+  if (value.cohortSize !== 14) throw new Error("cohort policy must pin exact advisory cohort size 14");
+  validateBucketCounts(value.bucketQuotas, { "16k": 2, "32k": 5, "64k": 5, "128k": 2 }, "bucket quotas");
   validateBucketCounts(value.firstFiveBucketQuotas, { "16k": 1, "32k": 2, "64k": 1, "128k": 1 }, "first-five bucket quotas");
   if (value.outputTokens !== 2_048) throw new Error("cohort policy must pin 2,048 output tokens");
   if (value.maximumFindings !== 5) throw new Error("cohort policy must pin maximum five findings");
   for (const [name, expected] of [
-    ["minimumCleanControls", 5], ["minimumRepositoryGroups", 6], ["minimumLanguages", 5],
-    ["minimumHighRisk", 8], ["maximumPerRepositoryGroup", 5]
+    ["minimumCleanControls", 4], ["minimumRepositoryGroups", 6], ["minimumLanguages", 5],
+    ["minimumHighRisk", 5], ["maximumPerRepositoryGroup", 3],
+    ["maximumCandidatePoolSize", MAX_CANDIDATE_POOL_SIZE]
   ] as const) if (value[name] !== expected) throw new Error(`cohort policy must pin ${name}=${expected}`);
+  if (!Number.isInteger(value.maximumCanonicalSearchStates)
+    || (value.maximumCanonicalSearchStates as number) < MIN_CANONICAL_SEARCH_STATES
+    || (value.maximumCanonicalSearchStates as number) > MAX_CANONICAL_SEARCH_STATES) {
+    throw new Error(`cohort policy maximumCanonicalSearchStates must be an integer from ${MIN_CANONICAL_SEARCH_STATES} through ${MAX_CANONICAL_SEARCH_STATES}`);
+  }
   for (const name of [
     "selectionSeed", "tokenizerFingerprint", "promptBuilderFingerprint", "parserFingerprint", "gateFingerprint",
     "redactorFingerprint", "secretScannerFingerprint", "sourcePolicyFingerprint"
@@ -335,11 +351,13 @@ function buildSelectionManifest(
       sourcePolicy: policy.sourcePolicyFingerprint
     },
     contract: {
-      cohortSize: 30,
+      cohortSize: 14,
       bucketQuotas: { ...policy.bucketQuotas },
       firstFiveBucketQuotas: { ...policy.firstFiveBucketQuotas },
       outputTokens: 2_048,
-      maximumFindings: 5
+      maximumFindings: 5,
+      maximumCandidatePoolSize: 64,
+      maximumCanonicalSearchStates: policy.maximumCanonicalSearchStates
     },
     selectedCandidateIds: selected.map((row) => row.candidateId),
     strata: {
@@ -398,7 +416,7 @@ function selectCandidates(candidates: Phase1Candidate[], policy: Phase1CohortPol
     const key = canonicalSelectionState(index, remaining, repoCounts, languageCounts, cleanCount, riskCount);
     if (impossibleStates.has(key)) return undefined;
     canonicalStates += 1;
-    if (canonicalStates > MAX_CANONICAL_SEARCH_STATES) {
+    if (canonicalStates > policy.maximumCanonicalSearchStates) {
       throw new Error("bounded deterministic cohort search exhausted its canonical combination-state budget");
     }
     const available = ordered.slice(index);
@@ -458,13 +476,17 @@ function canStillSatisfyCanonicalSelection(
   for (const bucket of BUCKETS) {
     if (eligible.filter((row) => row.bucket === bucket).length < remaining[bucket]) return false;
   }
-  if (maxSelectableWithQuotas(eligible, remaining, repoCounts, policy, () => true) < remainingSlots) return false;
+  if (maxSelectableWithQuotas(eligible, remaining, repoCounts, policy, () => true, remainingSlots) < remainingSlots) return false;
   const possibleRepositories = new Set([...Object.keys(repoCounts), ...eligible.map((row) => row.repositoryGroup)]);
   if (possibleRepositories.size < policy.minimumRepositoryGroups) return false;
   const possibleLanguages = new Set([...Object.keys(languageCounts), ...eligible.map((row) => row.language)]);
   if (possibleLanguages.size < policy.minimumLanguages) return false;
-  if (cleanCount + maxSelectableWithQuotas(eligible, remaining, repoCounts, policy, isCleanControl) < policy.minimumCleanControls) return false;
-  if (riskCount + maxSelectableWithQuotas(eligible, remaining, repoCounts, policy, isHighRisk) < policy.minimumHighRisk) return false;
+  const requiredClean = Math.max(0, policy.minimumCleanControls - cleanCount);
+  if (requiredClean > 0
+    && maxSelectableWithQuotas(eligible, remaining, repoCounts, policy, isCleanControl, requiredClean) < requiredClean) return false;
+  const requiredRisk = Math.max(0, policy.minimumHighRisk - riskCount);
+  if (requiredRisk > 0
+    && maxSelectableWithQuotas(eligible, remaining, repoCounts, policy, isHighRisk, requiredRisk) < requiredRisk) return false;
   if (selected.length === policy.cohortSize) {
     return cleanCount >= policy.minimumCleanControls
       && riskCount >= policy.minimumHighRisk
@@ -496,62 +518,86 @@ function maxSelectableWithQuotas(
   remaining: BucketCounts,
   repoCounts: Record<string, number>,
   policy: Phase1CohortPolicy,
-  predicate: (candidate: Phase1Candidate) => boolean
+  predicate: (candidate: Phase1Candidate) => boolean,
+  requiredFlow: number
 ): number {
+  if (requiredFlow <= 0) return 0;
   const rows = candidates.filter(predicate);
   const repositories = [...new Set(rows.map((row) => row.repositoryGroup))].sort();
   const source = 0;
   const bucketOffset = 1;
   const repositoryOffset = bucketOffset + BUCKETS.length;
   const sink = repositoryOffset + repositories.length;
-  const capacity = Array.from({ length: sink + 1 }, () => Array<number>(sink + 1).fill(0));
+  const graph = Array.from({ length: sink + 1 }, () => [] as FlowEdge[]);
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const key = `${row.bucket}:${row.repositoryGroup}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
   for (let bucketIndex = 0; bucketIndex < BUCKETS.length; bucketIndex += 1) {
     const bucket = BUCKETS[bucketIndex];
-    capacity[source][bucketOffset + bucketIndex] = remaining[bucket];
+    addFlowEdge(graph, source, bucketOffset + bucketIndex, remaining[bucket]);
     for (let repositoryIndex = 0; repositoryIndex < repositories.length; repositoryIndex += 1) {
       const repository = repositories[repositoryIndex];
-      capacity[bucketOffset + bucketIndex][repositoryOffset + repositoryIndex] = rows.filter(
-        (row) => row.bucket === bucket && row.repositoryGroup === repository
-      ).length;
+      const capacity = counts.get(`${bucket}:${repository}`) ?? 0;
+      if (capacity > 0) addFlowEdge(graph, bucketOffset + bucketIndex, repositoryOffset + repositoryIndex, capacity);
     }
   }
   for (let repositoryIndex = 0; repositoryIndex < repositories.length; repositoryIndex += 1) {
     const repository = repositories[repositoryIndex];
-    capacity[repositoryOffset + repositoryIndex][sink] = Math.max(
+    const capacity = Math.max(
       0,
       policy.maximumPerRepositoryGroup - (repoCounts[repository] ?? 0)
     );
+    if (capacity > 0) addFlowEdge(graph, repositoryOffset + repositoryIndex, sink, capacity);
   }
-  return maximumFlow(capacity, source, sink);
+  return maximumFlow(graph, source, sink, requiredFlow);
 }
 
-function maximumFlow(capacity: number[][], source: number, sink: number): number {
-  const flow = capacity.map((row) => row.map(() => 0));
+interface FlowEdge {
+  to: number;
+  reverse: number;
+  capacity: number;
+}
+
+function addFlowEdge(graph: FlowEdge[][], from: number, to: number, capacity: number): void {
+  const forward: FlowEdge = { to, reverse: graph[to].length, capacity };
+  const reverse: FlowEdge = { to: from, reverse: graph[from].length, capacity: 0 };
+  graph[from].push(forward);
+  graph[to].push(reverse);
+}
+
+function maximumFlow(graph: FlowEdge[][], source: number, sink: number, requiredFlow: number): number {
   let total = 0;
-  while (true) {
-    const parent = Array<number>(capacity.length).fill(-1);
-    parent[source] = source;
+  while (total < requiredFlow) {
+    const parentNode = Array<number>(graph.length).fill(-1);
+    const parentEdge = Array<number>(graph.length).fill(-1);
+    parentNode[source] = source;
     const queue = [source];
-    for (let cursor = 0; cursor < queue.length && parent[sink] === -1; cursor += 1) {
+    for (let cursor = 0; cursor < queue.length && parentNode[sink] === -1; cursor += 1) {
       const node = queue[cursor];
-      for (let next = 0; next < capacity.length; next += 1) {
-        if (parent[next] === -1 && capacity[node][next] - flow[node][next] > 0) {
-          parent[next] = node;
-          queue.push(next);
+      for (let edgeIndex = 0; edgeIndex < graph[node].length; edgeIndex += 1) {
+        const edge = graph[node][edgeIndex];
+        if (parentNode[edge.to] === -1 && edge.capacity > 0) {
+          parentNode[edge.to] = node;
+          parentEdge[edge.to] = edgeIndex;
+          queue.push(edge.to);
         }
       }
     }
-    if (parent[sink] === -1) return total;
-    let increment = Number.POSITIVE_INFINITY;
-    for (let node = sink; node !== source; node = parent[node]) {
-      increment = Math.min(increment, capacity[parent[node]][node] - flow[parent[node]][node]);
+    if (parentNode[sink] === -1) return total;
+    let increment = requiredFlow - total;
+    for (let node = sink; node !== source; node = parentNode[node]) {
+      increment = Math.min(increment, graph[parentNode[node]][parentEdge[node]].capacity);
     }
-    for (let node = sink; node !== source; node = parent[node]) {
-      flow[parent[node]][node] += increment;
-      flow[node][parent[node]] -= increment;
+    for (let node = sink; node !== source; node = parentNode[node]) {
+      const edge = graph[parentNode[node]][parentEdge[node]];
+      edge.capacity -= increment;
+      graph[node][edge.reverse].capacity += increment;
     }
     total += increment;
   }
+  return total;
 }
 
 function assertPoolCanMeetFloors(candidates: Phase1Candidate[], policy: Phase1CohortPolicy): void {
