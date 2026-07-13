@@ -175,12 +175,13 @@ struct DesktopReposScrollCapabilitiesTests {
     @Test func selectsOnlyOneExactDirectIncrementPageChild() throws {
         let selection = try DesktopReposIncrementPageSelectionContract.select(
             directChildren: [
+                .init(role: "AXValueIndicator", subrole: nil),
                 .init(role: "AXButton", subrole: "AXDecrementPage"),
                 .init(role: "AXButton", subrole: "AXIncrementPage"),
                 .init(role: "AXButton", subrole: "AXIncrementArrow")
             ]
         )
-        #expect(selection == .directChild(index: 1))
+        #expect(selection == .directChild(index: 2))
     }
 
     @Test func arrowsSubstitutionsAndUnknownSubrolesDoNotResolveIncrementPage() throws {

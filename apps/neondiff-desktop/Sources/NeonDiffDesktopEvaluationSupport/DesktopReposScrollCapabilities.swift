@@ -49,14 +49,17 @@ public enum DesktopReposIncrementPageSelectionContract {
             guard let role = child.role else {
                 throw DesktopReposIncrementPageSelectionError.missingRole
             }
-            guard let subrole = child.subrole else {
-                throw DesktopReposIncrementPageSelectionError.missingSubrole
+            if role == buttonRole {
+                guard let subrole = child.subrole else {
+                    throw DesktopReposIncrementPageSelectionError.missingSubrole
+                }
+                guard subrole == incrementPageSubrole else { continue }
+                incrementPageIndices.append(index)
+                continue
             }
-            guard subrole == incrementPageSubrole else { continue }
-            guard role == buttonRole else {
+            if child.subrole == incrementPageSubrole {
                 throw DesktopReposIncrementPageSelectionError.invalidIncrementPageRole
             }
-            incrementPageIndices.append(index)
         }
         switch incrementPageIndices.count {
         case 0:

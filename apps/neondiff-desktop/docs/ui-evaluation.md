@@ -164,8 +164,10 @@ sanitized capability booleans. It uses `AXUIElementCopyActionNames` only to
 check the verified Boundary, outer vertical scrollbar, and one exact direct
 child with role `AXButton` and subrole `AXIncrementPage`; it does not perform accessibility actions.
 The probe requires every direct scrollbar child to retain the fixture PID and
-well-typed role/subrole attributes, never recurses into descendants, and never
-substitutes increment/decrement arrows or geometry. It records only whether the
+a well-typed role, and every button child to provide a well-typed subrole. A
+non-button such as `AXValueIndicator` may omit its subrole, but cannot claim
+`AXIncrementPage`. The probe never recurses into descendants or substitutes
+increment/decrement arrows or geometry. It records only whether the
 Increment Page child resolved and whether that child advertises the exact public
 `AXPress` action.
 Missing, malformed, or failed action-name acquisition is
