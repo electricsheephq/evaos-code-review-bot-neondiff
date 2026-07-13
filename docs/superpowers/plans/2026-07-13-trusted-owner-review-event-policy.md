@@ -17,6 +17,7 @@
 - A valid authorization command queues one review attempt. Existing `review` / `re-review` commands continue to queue analysis but never authorize `REQUEST_CHANGES`.
 - Authorization is one-shot for `{repo, pull_number, head_sha}`. A second command for the same head is denied; a new head requires a new exact command. Dry-run never consumes authority.
 - The final comment reread and atomic consume occur after the existing `before_post` live-head check. The authority is consumed before GitHub review POST even when the candidate event is `COMMENT`, and it is never restored after timeout, 5xx, or another post failure. A GitHub comment-read failure fails closed to `COMMENT` without failing the advisory review.
+- Every review POST supplies the expected head as GitHub's `commit_id`. GitHub documents that this binds the review to the named commit but does not promise stale-head rejection, so the worker also rereads the PR immediately after POST and records `head_changed_during_post` when the live head moved; that review is never claimed as current-head proof.
 - Evidence stores candidate event, selected event, mode, decision reason, exact head, bounded redacted author, and comment id only. It never stores comment bodies, tokens, keys, or credentials.
 - NeonDiff still never submits `APPROVE`, merges, pushes, repairs branches, changes settings, or expands permissions.
 - Local validation remains focused; GitHub Actions owns the broad suite.
@@ -169,6 +170,7 @@ git commit -m "feat(review): persist one-shot owner authorization"
 
 **Files:**
 - Modify: `src/worker.ts`
+- Modify: `src/github.ts`
 - Modify: `tests/worker-context-budget.test.ts`
 - Modify: `tests/stale-head.test.ts`
 
@@ -186,7 +188,7 @@ expect(authorizedPostedReview.event).toBe("REQUEST_CHANGES");
 expect(store.getProcessedReview(REPO, PR, HEAD)?.event).toBe("REQUEST_CHANGES");
 ```
 
-Add real worker-path cases for no authorization, exact trusted authorization, consumed authorization, review/re-review only, comment lookup failure, dry-run non-consumption, and a head change between authorization lookup and post.
+Add real worker-path cases for no authorization, exact trusted authorization, consumed authorization, review/re-review only, comment lookup failure, dry-run non-consumption, a head change between authorization lookup and post, expected `commit_id` propagation, and a head change during POST.
 
 - [ ] **Step 2: Verify RED**
 
@@ -210,7 +212,7 @@ const finalDecision = decideReviewEventPolicy({
 plan.event = finalDecision.selectedEvent;
 ```
 
-Consume an eligible command after the final live-head check even when the candidate is already `COMMENT`, then decide the selected event. Never roll consumption back after a post failure. Rebuild the walkthrough from the final selected event before posting it. Write the redacted decision packet and final review plan before `createReview`. Never throw away findings when the selected event is `COMMENT`.
+Consume an eligible command after the final live-head check even when the candidate is already `COMMENT`, then decide the selected event. Never roll consumption back after a post failure. Require `headSha` in `GitHubApi.createReview` and send it as `commit_id`. Rebuild the walkthrough from the final selected event before posting it. Write the redacted decision packet and final review plan before `createReview`. Immediately reread the pull after posting; if the head moved, write a bounded `head_changed_during_post` incident and withhold current-head success evidence. Never throw away findings when the selected event is `COMMENT`.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -221,7 +223,7 @@ Expected: PASS; live and dry-run evidence distinguish candidate and selected eve
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/worker.ts tests/worker-context-budget.test.ts tests/stale-head.test.ts
+git add src/worker.ts src/github.ts tests/worker-context-budget.test.ts tests/stale-head.test.ts
 git commit -m "feat(review): enforce exact-head owner authorization"
 ```
 
