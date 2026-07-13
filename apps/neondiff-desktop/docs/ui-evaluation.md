@@ -185,7 +185,7 @@ Boundary is a sibling of Table, so a Table scroll does not satisfy the checker.
 The DEBUG fixture may
 mutate only its deterministic test UI to exercise scroll reachability; it does
 not authorize live product or runtime mutation. A checker failure preserves
-both `reachability.json` and `scroll-capabilities.json`.
+`reachability.json` and `scroll-capabilities.json`.
 The normalized checker status and public-safety result are written before the
 runner returns the nonzero checker exit.
 

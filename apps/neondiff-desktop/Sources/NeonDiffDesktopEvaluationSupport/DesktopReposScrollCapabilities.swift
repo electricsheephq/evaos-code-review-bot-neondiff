@@ -98,7 +98,9 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   Set(object.keys) == Set(CodingKeys.allCases.map(\.rawValue)),
                   let acquisition = object[CodingKeys.acquisition.rawValue] as? [String: Any],
-                  Set(acquisition.keys) == Set(["status", "failureReason"]) else {
+                  Set(acquisition.keys) == Set(["status", "failureReason"]),
+                  let requestedContentSize = object[CodingKeys.requestedContentSize.rawValue] as? [String: Any],
+                  Set(requestedContentSize.keys) == Set(["width", "height"]) else {
                 throw DesktopReposScrollCapabilitiesValidationError.invalidContract
             }
             return try JSONDecoder().decode(Self.self, from: data).validated()

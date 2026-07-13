@@ -120,6 +120,15 @@ struct DesktopReposScrollCapabilitiesTests {
             try DesktopReposScrollCapabilities.decode(data: wrongTargetData)
         }
 
+        var unknownSize = object
+        var size = try #require(unknownSize["requestedContentSize"] as? [String: Any])
+        size["scale"] = 2
+        unknownSize["requestedContentSize"] = size
+        let unknownSizeData = try JSONSerialization.data(withJSONObject: unknownSize)
+        #expect(throws: DesktopReposScrollCapabilitiesValidationError.invalidContract) {
+            try DesktopReposScrollCapabilities.decode(data: unknownSizeData)
+        }
+
         let oversized = Data(repeating: 0x20, count: 4_097)
         #expect(throws: DesktopReposScrollCapabilitiesValidationError.invalidContract) {
             try DesktopReposScrollCapabilities.decode(data: oversized)

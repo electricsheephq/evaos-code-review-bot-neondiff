@@ -258,7 +258,22 @@ done
         and (.scrollToVisibleActionAvailable or (.boundaryAdvertisesScrollToVisible | not))
         and (.outerVerticalScrollBarResolved or (.outerVerticalScrollBarAdvertisesIncrement | not))
       elif .acquisition.status == "failed" then
-        (.acquisition.failureReason | type == "string" and length > 0)
+        (.acquisition.failureReason as $reason | [
+          "cannot-complete",
+          "invalid-element",
+          "permission-denied",
+          "invalid-type",
+          "attribute-unavailable",
+          "pid-mismatch",
+          "window-mismatch",
+          "semantic-missing",
+          "semantic-duplicate",
+          "timeout",
+          "ancestry-unavailable",
+          "ancestry-cycle",
+          "ancestry-limit",
+          "messaging-timeout-unavailable"
+        ] | index($reason) != null)
         and .boundaryAdvertisesScrollToVisible == null
         and .outerVerticalScrollBarResolved == null
         and .outerVerticalScrollBarAdvertisesIncrement == null

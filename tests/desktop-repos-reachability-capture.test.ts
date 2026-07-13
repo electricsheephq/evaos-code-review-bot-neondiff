@@ -178,6 +178,11 @@ case "\${FAKE_CAPABILITIES_MODE:-valid}" in
     printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false}' \\
       >"$output_dir/scroll-capabilities.json"
     ;;
+  failed)
+    printf '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"failed","failureReason":"%s"},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":null,"outerVerticalScrollBarResolved":null,"outerVerticalScrollBarAdvertisesIncrement":null}\n' \
+      "\${FAKE_CAPABILITY_FAILURE_REASON:-semantic-missing}" \
+      >"$output_dir/scroll-capabilities.json"
+    ;;
   invalid) printf '%s\\n' '{}' >"$output_dir/scroll-capabilities.json" ;;
   missing) ;;
 esac
@@ -207,6 +212,7 @@ fi
       FAKE_ACQUISITION_STATUS: "complete",
       FAKE_ACQUISITION_FAILURE_REASON: "null",
       FAKE_CAPABILITIES_MODE: "valid",
+      FAKE_CAPABILITY_FAILURE_REASON: "semantic-missing",
       FAKE_SAFETY_SCAN_OK: "true",
       FAKE_GIT_STATE: gitState,
       FAKE_GIT_DIRTY_STATUS_CALL: "0",
@@ -379,6 +385,48 @@ describe("focused Repos reachability capture", () => {
     () => {
       const harness = createFakeHarnessRepository();
       const result = runHarness(harness, { FAKE_CAPABILITIES_MODE: "invalid" });
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+      expect(focusedStatus(harness)).toMatchObject({
+        status: "incomplete",
+        phase: "capture",
+        reasonCode: "capture_output_incomplete",
+        focusedProof: "not_emitted"
+      });
+      expect(existsSync(join(harness.output, "cases/tab-repos/1040x680"))).toBe(false);
+      expectNoFinalProof(harness);
+    }
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "accepts an exact typed capability acquisition failure",
+    { timeout: 30_000 },
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, { FAKE_CAPABILITIES_MODE: "failed" });
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(7);
+      expect(JSON.parse(readFileSync(
+        join(harness.output, "cases/tab-repos/1040x680/scroll-capabilities.json"),
+        "utf8"
+      ))).toMatchObject({
+        acquisition: { status: "failed", failureReason: "semantic-missing" },
+        boundaryAdvertisesScrollToVisible: null,
+        outerVerticalScrollBarResolved: null,
+        outerVerticalScrollBarAdvertisesIncrement: null
+      });
+    }
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "rejects an unknown capability acquisition failure reason",
+    { timeout: 30_000 },
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, {
+        FAKE_CAPABILITIES_MODE: "failed",
+        FAKE_CAPABILITY_FAILURE_REASON: "unknown-reason"
+      });
 
       expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
       expect(focusedStatus(harness)).toMatchObject({
