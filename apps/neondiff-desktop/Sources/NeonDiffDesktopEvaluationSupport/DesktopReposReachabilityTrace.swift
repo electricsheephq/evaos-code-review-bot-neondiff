@@ -103,6 +103,26 @@ public enum DesktopReposReachabilityRegion: String, Codable, CaseIterable, Equat
     case boundaryBody = "boundary-body"
 }
 
+public enum DesktopReposReachabilitySamplingContract {
+    public static let minimumStableSampleCount = 3
+    public static let minimumCadenceMilliseconds = 50
+    public static let maximumCadenceMilliseconds = 150
+
+    public static func hasStableCadence(_ elapsedMilliseconds: [Int]) -> Bool {
+        guard elapsedMilliseconds.count >= minimumStableSampleCount,
+              let first = elapsedMilliseconds.first,
+              first >= 0 else {
+            return false
+        }
+        return zip(elapsedMilliseconds, elapsedMilliseconds.dropFirst()).allSatisfy { prior, current in
+            guard current > prior else { return false }
+            let cadence = current - prior
+            return cadence >= minimumCadenceMilliseconds
+                && cadence <= maximumCadenceMilliseconds
+        }
+    }
+}
+
 public enum DesktopReposReachabilitySemanticContract {
     public static let tableRole = "AXOutline"
     public static let boundaryIdentifier = "neondiff-repos-boundary"
@@ -540,25 +560,19 @@ public enum DesktopReposReachabilityValidator {
         phase: DesktopReposReachabilityValidationPhase,
         tolerance: Double
     ) throws {
-        guard samples.count >= 3 else {
+        guard samples.count >= DesktopReposReachabilitySamplingContract.minimumStableSampleCount else {
             throw DesktopReposReachabilityValidationError.insufficientSamples(phase)
+        }
+        guard DesktopReposReachabilitySamplingContract.hasStableCadence(
+            samples.map(\.elapsedMilliseconds)
+        ) else {
+            throw DesktopReposReachabilityValidationError.invalidContract
         }
         guard let finalSample = samples.last, finalSample.elapsedMilliseconds <= 5_000 else {
             throw DesktopReposReachabilityValidationError.invalidContract
         }
         let baseline = samples[0]
-        var priorElapsed = -1
         for (index, sample) in samples.enumerated() {
-            guard sample.elapsedMilliseconds >= 0, sample.elapsedMilliseconds > priorElapsed else {
-                throw DesktopReposReachabilityValidationError.invalidContract
-            }
-            if index > 0 {
-                let cadence = sample.elapsedMilliseconds - priorElapsed
-                guard cadence >= 50, cadence <= 150 else {
-                    throw DesktopReposReachabilityValidationError.invalidContract
-                }
-            }
-            priorElapsed = sample.elapsedMilliseconds
             guard sample.viewport.isFiniteAndNonempty else {
                 throw DesktopReposReachabilityValidationError.nonfiniteFrame(phase, index)
             }

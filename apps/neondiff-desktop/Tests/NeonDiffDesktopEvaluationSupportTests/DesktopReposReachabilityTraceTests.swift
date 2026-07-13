@@ -340,6 +340,23 @@ struct DesktopReposReachabilityTraceTests {
             boundaryBodyCount: 1
         ) == .semanticMissing)
     }
+
+    @Test func stableCadenceRequiresThreeScheduledSamplesWithinBounds() {
+        #expect(DesktopReposReachabilitySamplingContract.hasStableCadence([0, 100, 200]))
+        #expect(!DesktopReposReachabilitySamplingContract.hasStableCadence([0, 100, 423]))
+        #expect(!DesktopReposReachabilitySamplingContract.hasStableCadence([0, 100]))
+
+        let delayed = zip(stableSamples(), [0, 100, 423]).map { sample, elapsed in
+            DesktopReposReachabilitySample(
+                elapsedMilliseconds: elapsed,
+                viewport: sample.viewport,
+                regions: sample.regions
+            )
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(preSamples: delayed))
+        }
+    }
 }
 
 private func makeTrace(

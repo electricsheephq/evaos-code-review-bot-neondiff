@@ -427,29 +427,77 @@ private struct DesktopReposReachabilityAXTracer {
     }
 
     private func acquireStableSamples() -> PhaseAcquisition {
-        let started = DispatchTime.now().uptimeNanoseconds
-        var nextDeadline = started
+        let phaseStarted = DispatchTime.now().uptimeNanoseconds
+        let binding: SemanticBinding
+        do {
+            let window = try verifiedWindow()
+            binding = SemanticBinding(window: window, elements: try semanticElements(in: window))
+        } catch let reason as DesktopReposReachabilityAcquisitionFailureReason {
+            return PhaseAcquisition(
+                samples: [],
+                durationMilliseconds: milliseconds(
+                    from: phaseStarted,
+                    to: DispatchTime.now().uptimeNanoseconds
+                ),
+                stable: false,
+                failure: reason
+            )
+        } catch {
+            return PhaseAcquisition(
+                samples: [],
+                durationMilliseconds: milliseconds(
+                    from: phaseStarted,
+                    to: DispatchTime.now().uptimeNanoseconds
+                ),
+                stable: false,
+                failure: .invalidType
+            )
+        }
+
+        let samplingStarted = DispatchTime.now().uptimeNanoseconds
+        guard milliseconds(from: phaseStarted, to: samplingStarted) <= Self.maximumAcquisitionMilliseconds else {
+            return PhaseAcquisition(
+                samples: [],
+                durationMilliseconds: milliseconds(from: phaseStarted, to: samplingStarted),
+                stable: false,
+                failure: .timeout
+            )
+        }
         var rolling: [DesktopReposReachabilitySample] = []
         while true {
             let beforeSample = DispatchTime.now().uptimeNanoseconds
-            let elapsed = milliseconds(from: started, to: beforeSample)
-            guard elapsed <= Self.maximumAcquisitionMilliseconds else {
-                return PhaseAcquisition(samples: rolling, durationMilliseconds: elapsed, stable: false, failure: .timeout)
+            let elapsedBeforeSample = milliseconds(from: phaseStarted, to: beforeSample)
+            guard elapsedBeforeSample <= Self.maximumAcquisitionMilliseconds else {
+                return PhaseAcquisition(
+                    samples: rolling,
+                    durationMilliseconds: elapsedBeforeSample,
+                    stable: false,
+                    failure: .timeout
+                )
             }
-            switch sample(elapsedMilliseconds: elapsed) {
+            let elapsed = milliseconds(from: samplingStarted, to: beforeSample)
+            switch sample(binding: binding, elapsedMilliseconds: elapsed) {
             case .success(let value):
                 rolling.append(value)
             case .failure(let reason):
                 return PhaseAcquisition(
                     samples: rolling,
-                    durationMilliseconds: milliseconds(from: started, to: DispatchTime.now().uptimeNanoseconds),
+                    durationMilliseconds: milliseconds(
+                        from: phaseStarted,
+                        to: DispatchTime.now().uptimeNanoseconds
+                    ),
                     stable: false,
                     failure: reason
                 )
             }
-            if rolling.count > 3 { rolling.removeFirst() }
-            let duration = milliseconds(from: started, to: DispatchTime.now().uptimeNanoseconds)
-            if rolling.count == 3,
+            if rolling.count > DesktopReposReachabilitySamplingContract.minimumStableSampleCount {
+                rolling.removeFirst()
+            }
+            let duration = milliseconds(from: phaseStarted, to: DispatchTime.now().uptimeNanoseconds)
+            if rolling.count == DesktopReposReachabilitySamplingContract.minimumStableSampleCount,
+               DesktopReposReachabilitySamplingContract.hasStableCadence(
+                   rolling.map(\.elapsedMilliseconds)
+               ),
                samplesMatch(rolling[0], rolling[1]),
                samplesMatch(rolling[0], rolling[2]),
                duration <= Self.maximumAcquisitionMilliseconds {
@@ -458,8 +506,8 @@ private struct DesktopReposReachabilityAXTracer {
             guard duration <= Self.maximumAcquisitionMilliseconds else {
                 return PhaseAcquisition(samples: rolling, durationMilliseconds: duration, stable: false, failure: .timeout)
             }
-            nextDeadline += Self.intervalNanoseconds
             let now = DispatchTime.now().uptimeNanoseconds
+            let nextDeadline = max(beforeSample + Self.intervalNanoseconds, now)
             if nextDeadline > now {
                 usleep(useconds_t((nextDeadline - now) / 1_000))
             }
@@ -471,16 +519,15 @@ private struct DesktopReposReachabilityAXTracer {
     }
 
     private func sample(
+        binding: SemanticBinding,
         elapsedMilliseconds: Int
     ) -> Result<DesktopReposReachabilitySample, DesktopReposReachabilityAcquisitionFailureReason> {
         do {
-            let window = try verifiedWindow()
-            let viewport = try elementFrame(window)
-            let elements = try semanticElements(in: window)
+            let viewport = try elementFrame(binding.window)
             let pairs: [(DesktopReposReachabilityRegion, AXUIElement)] = [
-                (.table, elements.table),
-                (.applyAllowlist, elements.applyAllowlist),
-                (.boundaryBody, elements.boundaryBody)
+                (.table, binding.elements.table),
+                (.applyAllowlist, binding.elements.applyAllowlist),
+                (.boundaryBody, binding.elements.boundaryBody)
             ]
             let regions = try pairs.map { id, element in
                 DesktopReposReachabilityRegionFrame(id: id, frame: try elementFrame(element))
@@ -835,6 +882,11 @@ private struct DesktopReposReachabilityAXTracer {
         let failure: Failure?
 
         static let empty = PhaseAcquisition(samples: [], durationMilliseconds: 0, stable: false, failure: nil)
+    }
+
+    private struct SemanticBinding {
+        let window: AXUIElement
+        let elements: SemanticElements
     }
 
     private struct SemanticElements {
