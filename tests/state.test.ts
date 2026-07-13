@@ -1635,6 +1635,70 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("atomically consumes a trusted owner authorization once per exact review head", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-event-authorization-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const authorization = {
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: "A".repeat(40),
+      commentId: 41,
+      author: "100yenadmin"
+    };
+
+    expect(store.tryConsumeReviewEventAuthorization(authorization)).toBe(true);
+    expect(store.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 42 })).toBe(false);
+    expect(store.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 42, headSha: "b".repeat(40) })).toBe(true);
+    expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, repo: "invalid" })).toThrow("repo must be an owner/repo name");
+    expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, pullNumber: 0 })).toThrow("pullNumber must be a positive integer");
+    expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, headSha: "short" })).toThrow("headSha must be a 40-character hexadecimal SHA");
+    expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, commentId: 0 })).toThrow("commentId must be a positive integer");
+    expect(() => store.tryConsumeReviewEventAuthorization({ ...authorization, author: "" })).toThrow("author must be a non-empty string");
+    store.close();
+  });
+
+  it("adds authorization state to a legacy database without losing prior rows", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-event-authorization-legacy-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      create table processed_reviews (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        status text not null,
+        event text,
+        review_url text,
+        error text,
+        created_at text not null default (datetime('now')),
+        primary key (repo, pull_number, head_sha)
+      );
+      insert into processed_reviews (repo, pull_number, head_sha, status) values ('owner/repo', 7, '${"c".repeat(40)}', 'posted');
+    `);
+    legacyDb.close();
+
+    const store = new ReviewStateStore(dbPath);
+    expect(store.hasProcessed("owner/repo", 7, "c".repeat(40))).toBe(true);
+    expect(store.tryConsumeReviewEventAuthorization({
+      repo: "owner/repo",
+      pullNumber: 7,
+      headSha: "d".repeat(40),
+      commentId: 42,
+      author: "100yenadmin"
+    })).toBe(true);
+    store.close();
+
+    const migratedDb = new DatabaseSync(dbPath);
+    try {
+      expect(migratedDb.prepare("select count(*) as count from processed_reviews").get()).toEqual({ count: 1 });
+      expect(migratedDb.prepare("select count(*) as count from review_event_authorization_consumptions").get()).toEqual({ count: 1 });
+    } finally {
+      migratedDb.close();
+    }
+  });
+
   it("records finishing-touch draft outputs per command and head", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-finishing-touch-state-"));
     roots.push(root);
