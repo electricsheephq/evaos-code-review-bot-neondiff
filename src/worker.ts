@@ -1458,9 +1458,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
+  // The scheduler pre-records request-changes before the worker re-resolves it, so only a
+  // non-command decision needs this early exact-comment lookup to bypass a processed advisory head.
   let exactOwnerReviewRequested = Boolean(
     processed &&
     input.commandCommentId &&
+    !commandReviewRequested &&
     (await lookupQueuedReviewEventAuthorization({
       mode: "trusted_command_only",
       github,
@@ -1795,7 +1798,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dryRun: input.dryRun,
       commandDecision
     });
-    const walkthrough = config.walkthrough.enabled
+    const walkthrough = config.walkthrough.enabled && input.dryRun
       ? buildWalkthroughComment({
           repo,
           pull,

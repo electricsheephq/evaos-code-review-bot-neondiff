@@ -25,6 +25,7 @@ const reviewPostControl = vi.hoisted((): {
   afterAuxiliaryPost?: () => void;
 } => ({}));
 const evidenceWriteControl = vi.hoisted((): { failPostedReview?: boolean } => ({}));
+const walkthroughBuildEvents = vi.hoisted((): string[] => []);
 
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
@@ -108,6 +109,17 @@ vi.mock("../src/temp-files.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/walkthrough.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/walkthrough.js")>();
+  return {
+    ...actual,
+    buildWalkthroughComment: vi.fn((input: Parameters<typeof actual.buildWalkthroughComment>[0]) => {
+      walkthroughBuildEvents.push(input.event);
+      return actual.buildWalkthroughComment(input);
+    })
+  };
+});
+
 const { localDateFolder, prepareFailedHeadRetry, reviewPull: reviewPullImpl } = await import("../src/worker.js");
 const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
   ...input,
@@ -127,6 +139,7 @@ describe("worker context budget preflight", () => {
     zcodeFindingsByPath.clear();
     zcodeFailuresByPath.clear();
     createdReviews.length = 0;
+    walkthroughBuildEvents.length = 0;
     delete reviewPostControl.error;
     delete reviewPostControl.afterCreate;
     delete reviewPostControl.afterAuxiliaryPost;
@@ -632,6 +645,34 @@ describe("worker context budget preflight", () => {
     expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "review-plan.json"), "utf8")).walkthrough.body).toContain(
       "Review event: `COMMENT`."
     );
+    expect(walkthroughBuildEvents).toEqual(["COMMENT"]);
+    scenario.state.close();
+  });
+
+  it("does not preflight exact authorization for an ordinary command on a processed head", async () => {
+    const headSha = "a".repeat(40);
+    const commandComment = {
+      id: 40,
+      body: "@evaos-code-review-bot re-review",
+      user: { login: "100yenadmin", type: "User" }
+    };
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 500,
+      headSha,
+      commandComment,
+      commandCommentId: commandComment.id,
+      configureState: (state) => state.recordProcessed({
+        repo: "electricsheephq/WorldOS",
+        pullNumber: 500,
+        headSha,
+        status: "posted",
+        event: "COMMENT"
+      })
+    });
+
+    expect(scenario.result).toBe("reviewed_command");
+    expect(scenario.exactCommentLookups).toEqual([commandComment.id]);
     scenario.state.close();
   });
 
