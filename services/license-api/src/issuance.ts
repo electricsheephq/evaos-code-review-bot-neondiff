@@ -103,8 +103,7 @@ export function parseIssuanceRequest(raw: string): LicenseIssuanceRequest {
 export function issueCheckoutLicense(
   store: LicenseStore,
   req: LicenseIssuanceRequest,
-  issuanceSecret: string,
-  now: Date
+  issuanceSecret: string
 ): ServiceResult {
   const issueInput = {
     idempotencyKey: req.idempotencyKey,
@@ -120,7 +119,7 @@ export function issueCheckoutLicense(
   const rawKey = deriveCheckoutLicenseKey(issuanceSecret, req.idempotencyKey);
 
   try {
-    const issued = store.issueBoundCheckoutLicense(rawKey, issueInput, now);
+    const issued = store.issueBoundCheckoutLicense(rawKey, issueInput);
     return {
       httpStatus: 200,
       body: {

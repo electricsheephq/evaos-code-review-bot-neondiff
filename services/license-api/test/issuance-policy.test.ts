@@ -87,6 +87,30 @@ describe("server-owned checkout policy", () => {
       updateEntitlement: true
     });
   });
+
+  it("cannot be mutated by an importer to change future issuance authority", () => {
+    const policy = checkoutPolicyFor("neondiff_monthly") as { plan: string };
+    const originalPlan = policy.plan;
+    try {
+      try {
+        policy.plan = "caller_controlled_plan";
+      } catch (error) {
+        assert.ok(error instanceof TypeError);
+      }
+
+      const store = new LicenseStore(":memory:", { now: () => NOW });
+      try {
+        const result = issueCheckoutLicense(store, request(), ISSUANCE_SECRET);
+        assert.equal(result.httpStatus, 200);
+        assert.equal(result.body.entitlement.plan, "monthly_support");
+        assert.equal(checkoutPolicyFor("neondiff_monthly").plan, "monthly_support");
+      } finally {
+        store.close();
+      }
+    } finally {
+      if (policy.plan !== originalPlan) policy.plan = originalPlan;
+    }
+  });
 });
 
 describe("checkout issuance request authority", () => {
@@ -178,6 +202,58 @@ describe("atomic bound checkout issuance", () => {
     });
   }
 
+  it("uses only the injected store clock when a direct caller passes a far-future date", () => {
+    const store = new LicenseStore(":memory:", { now: () => NOW });
+    const req = request({ idempotencyKey: "checkout-session:clock-bypass" });
+    try {
+      const issueWithBypass = store.issueBoundCheckoutLicense.bind(store) as (
+        rawKey: string,
+        input: Record<string, unknown>,
+        issuedAt: Date
+      ) => ReturnType<LicenseStore["issueBoundCheckoutLicense"]>;
+      const issued = issueWithBypass(
+        derivedKey(req.idempotencyKey),
+        directBoundInput(req),
+        new Date("2099-01-01T00:00:00.000Z")
+      );
+
+      assert.equal(issued.record.expiresAt, "2026-07-20T00:00:00.000Z");
+    } finally {
+      store.close();
+    }
+  });
+
+  for (const [name, bindingOverride, expected] of [
+    ["provider bypass", { provider: "paypal" }, /provider must be stripe/],
+    ["mode bypass", { providerMode: "production" }, /providerMode must be test or live/],
+    ["empty provider account", { providerAccountId: "   " }, /providerAccountId is required/],
+    ["empty subscription id", { externalSubscriptionId: "" }, /externalSubscriptionId is required/],
+    ["empty checkout id", { externalCheckoutId: "\t" }, /externalCheckoutId is required/],
+    ["oversized provider account", { providerAccountId: "a".repeat(161) }, /providerAccountId is too long/],
+    ["oversized subscription id", { externalSubscriptionId: "s".repeat(161) }, /externalSubscriptionId is too long/],
+    ["oversized checkout id", { externalCheckoutId: "c".repeat(161) }, /externalCheckoutId is too long/]
+  ] as const) {
+    it(`rejects direct-store ${name}`, () => {
+      const store = new LicenseStore(":memory:", { now: () => NOW });
+      const req = request({ idempotencyKey: `checkout-session:binding-${name.replaceAll(" ", "-")}` });
+      const input = directBoundInput(req);
+      input.binding = { ...(input.binding as Record<string, unknown>), ...bindingOverride };
+      try {
+        assert.throws(
+          () =>
+            store.issueBoundCheckoutLicense(
+              derivedKey(req.idempotencyKey),
+              input as any
+            ),
+          expected
+        );
+        assert.equal(store.listLicenses().length, 0);
+      } finally {
+        store.close();
+      }
+    });
+  }
+
   it("derives plan, one seat, and initial expiry from policy and the injected clock", () => {
     const cases = [
       ["neondiff_monthly", "monthly_support", "2026-07-20T00:00:00.000Z"],
@@ -196,8 +272,7 @@ describe("atomic bound checkout issuance", () => {
             externalSubscriptionId: `sub_${checkoutLookupKey}`,
             externalCheckoutId: `cs_${checkoutLookupKey}`
           }),
-          ISSUANCE_SECRET,
-          NOW
+          ISSUANCE_SECRET
         );
         assert.equal(result.httpStatus, 200);
         const body = result.body as { licenseKey: string; entitlement: Record<string, unknown> };
@@ -218,8 +293,8 @@ describe("atomic bound checkout issuance", () => {
   it("replays only an exact bound request without minting a second license", () => {
     const store = new LicenseStore(":memory:", { now: () => NOW });
     try {
-      const first = issueCheckoutLicense(store, request(), ISSUANCE_SECRET, NOW);
-      const second = issueCheckoutLicense(store, request(), ISSUANCE_SECRET, NOW);
+      const first = issueCheckoutLicense(store, request(), ISSUANCE_SECRET);
+      const second = issueCheckoutLicense(store, request(), ISSUANCE_SECRET);
       assert.equal(first.httpStatus, 200);
       assert.equal(second.httpStatus, 200);
       assert.equal(second.body.replayed, true);
@@ -229,8 +304,7 @@ describe("atomic bound checkout issuance", () => {
       const conflict = issueCheckoutLicense(
         store,
         request({ externalCheckoutId: "cs_changed" }),
-        ISSUANCE_SECRET,
-        NOW
+        ISSUANCE_SECRET
       );
       assert.equal(conflict.httpStatus, 409);
       assert.equal(conflict.body.status, "conflict");
@@ -257,8 +331,7 @@ describe("atomic bound checkout issuance", () => {
       const result = issueCheckoutLicense(
         store,
         request({ idempotencyKey, externalCheckoutId: "cs_legacy" }),
-        ISSUANCE_SECRET,
-        NOW
+        ISSUANCE_SECRET
       );
       assert.equal(result.httpStatus, 409);
       assert.equal(result.body.status, "conflict");
@@ -305,7 +378,7 @@ describe("atomic bound checkout issuance", () => {
         );
       database.close();
       store = new LicenseStore(databasePath);
-      const result = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      const result = issueCheckoutLicense(store, req, ISSUANCE_SECRET);
       assert.equal(result.httpStatus, 409);
       assert.equal(result.body.status, "conflict");
     } finally {
@@ -320,8 +393,7 @@ describe("atomic bound checkout issuance", () => {
       const first = issueCheckoutLicense(
         store,
         request({ idempotencyKey: "checkout-session:tuple-owner" }),
-        ISSUANCE_SECRET,
-        NOW
+        ISSUANCE_SECRET
       );
       assert.equal(first.httpStatus, 200);
 
@@ -331,8 +403,7 @@ describe("atomic bound checkout issuance", () => {
           idempotencyKey: "checkout-session:tuple-conflict",
           externalCheckoutId: "cs_tuple_conflict"
         }),
-        ISSUANCE_SECRET,
-        NOW
+        ISSUANCE_SECRET
       );
       assert.equal(conflicted.httpStatus, 409);
       assert.equal(store.listLicenses().length, 1);
@@ -344,8 +415,7 @@ describe("atomic bound checkout issuance", () => {
           externalSubscriptionId: "sub_unique_after_rollback",
           externalCheckoutId: "cs_tuple_conflict"
         }),
-        ISSUANCE_SECRET,
-        NOW
+        ISSUANCE_SECRET
       );
       assert.equal(recovered.httpStatus, 200);
       assert.equal(store.listLicenses().length, 2);
@@ -365,7 +435,7 @@ describe("bound checkout issuance lock contention", () => {
     try {
       blocker.exec("begin immediate");
       const startedAt = Date.now();
-      const unavailable = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      const unavailable = issueCheckoutLicense(store, req, ISSUANCE_SECRET);
       const elapsedMs = Date.now() - startedAt;
       assert.equal(unavailable.httpStatus, 503);
       assert.deepEqual(unavailable.body, {
@@ -376,8 +446,8 @@ describe("bound checkout issuance lock contention", () => {
       assert.equal(store.listLicenses().length, 0);
 
       blocker.exec("rollback");
-      const issued = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
-      const replayed = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      const issued = issueCheckoutLicense(store, req, ISSUANCE_SECRET);
+      const replayed = issueCheckoutLicense(store, req, ISSUANCE_SECRET);
       assert.equal(issued.httpStatus, 200);
       assert.equal(replayed.httpStatus, 200);
       assert.equal(replayed.body.replayed, true);
@@ -400,7 +470,7 @@ describe("bound checkout issuance lock contention", () => {
     const blocker = new DatabaseSync(databasePath);
     const req = request({ idempotencyKey: "checkout-session:locked-conflict" });
     try {
-      const issued = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      const issued = issueCheckoutLicense(store, req, ISSUANCE_SECRET);
       assert.equal(issued.httpStatus, 200);
 
       blocker.exec("begin immediate");
@@ -409,14 +479,14 @@ describe("bound checkout issuance lock contention", () => {
         externalCheckoutId: "cs_changed_after_lock"
       });
       const startedAt = Date.now();
-      const unavailable = issueCheckoutLicense(store, changed, ISSUANCE_SECRET, NOW);
+      const unavailable = issueCheckoutLicense(store, changed, ISSUANCE_SECRET);
       const elapsedMs = Date.now() - startedAt;
       assert.equal(unavailable.httpStatus, 503);
       assert.ok(elapsedMs >= 10 && elapsedMs < 1_000, `bounded wait was ${elapsedMs}ms`);
 
       blocker.exec("rollback");
-      const conflict = issueCheckoutLicense(store, changed, ISSUANCE_SECRET, NOW);
-      const replayed = issueCheckoutLicense(store, req, ISSUANCE_SECRET, NOW);
+      const conflict = issueCheckoutLicense(store, changed, ISSUANCE_SECRET);
+      const replayed = issueCheckoutLicense(store, req, ISSUANCE_SECRET);
       assert.equal(conflict.httpStatus, 409);
       assert.equal(replayed.httpStatus, 200);
       assert.equal(replayed.body.replayed, true);

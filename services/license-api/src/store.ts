@@ -33,6 +33,7 @@ export type SchemaMigrationStep =
 
 export interface LicenseStoreOptions {
   migrationHook?: (step: SchemaMigrationStep) => void;
+  /** Server-owned clock. Checkout callers cannot override it per issuance. */
   now?: () => Date;
   busyTimeoutMs?: number;
 }
@@ -223,11 +224,11 @@ export interface IssueIdempotentLicenseInput extends IssueLicenseInput {
 }
 
 export interface CheckoutSubscriptionBindingInput {
-  provider: string;
-  providerAccountId: string;
-  providerMode: string;
-  externalSubscriptionId: string;
-  externalCheckoutId: string;
+  readonly provider: "stripe";
+  readonly providerAccountId: string;
+  readonly providerMode: "test" | "live";
+  readonly externalSubscriptionId: string;
+  readonly externalCheckoutId: string;
 }
 
 export interface CheckoutSubscriptionBindingRecord extends CheckoutSubscriptionBindingInput {
@@ -377,27 +378,26 @@ export class LicenseStore {
    */
   issueBoundCheckoutLicense(
     rawKey: string,
-    input: IssueBoundCheckoutLicenseInput,
-    issuedAt: Date = this.now()
+    input: IssueBoundCheckoutLicenseInput
   ): {
     rawKey: string;
     record: LicenseRecord;
     binding: CheckoutSubscriptionBindingRecord;
     replayed: boolean;
   } {
-    validateBoundCheckoutInput(input);
-    const policy = checkoutPolicyFor(input.checkoutLookupKey);
-    const requestHash = boundCheckoutRequestHash(input);
+    const validatedInput = validateBoundCheckoutInput(input);
+    const policy = checkoutPolicyFor(validatedInput.checkoutLookupKey);
+    const requestHash = boundCheckoutRequestHash(validatedInput);
     let transactionStarted = false;
     try {
       this.db.exec("begin immediate");
       transactionStarted = true;
-      const existing = this.getIssuanceEvent(input.idempotencyKey);
+      const existing = this.getIssuanceEvent(validatedInput.idempotencyKey);
       if (existing) {
         if (existing.source !== "checkout") {
           throw new CheckoutIssuanceConflictError("issuance reference is not checkout-owned");
         }
-        const binding = this.getCheckoutSubscriptionBinding(input.idempotencyKey);
+        const binding = this.getCheckoutSubscriptionBinding(validatedInput.idempotencyKey);
         if (!binding) {
           throw new CheckoutIssuanceConflictError("legacy checkout issuance is not bound");
         }
@@ -416,7 +416,7 @@ export class LicenseStore {
             "issuance reference was already used with different request data"
           );
         }
-        if (!sameCheckoutBinding(binding, input.binding)) {
+        if (!sameCheckoutBinding(binding, validatedInput.binding)) {
           throw new CheckoutIssuanceConflictError(
             "issuance reference was already used with different checkout correlation"
           );
@@ -425,6 +425,7 @@ export class LicenseStore {
         return { rawKey, record, binding, replayed: true };
       }
 
+      const issuedAt = this.now();
       if (!Number.isFinite(issuedAt.getTime())) {
         throw new Error("license store clock returned an invalid date");
       }
@@ -446,10 +447,10 @@ export class LicenseStore {
           ) values (?, ?, ?, 'checkout', ?)`
         )
         .run(
-          input.idempotencyKey,
+          validatedInput.idempotencyKey,
           record.licenseKeyHash,
           requestHash,
-          input.binding.externalCheckoutId
+          validatedInput.binding.externalCheckoutId
         );
       this.db
         .prepare(
@@ -459,15 +460,15 @@ export class LicenseStore {
           ) values (?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
-          input.idempotencyKey,
+          validatedInput.idempotencyKey,
           record.licenseKeyHash,
-          input.binding.provider,
-          input.binding.providerAccountId,
-          input.binding.providerMode,
-          input.binding.externalSubscriptionId,
-          input.binding.externalCheckoutId
+          validatedInput.binding.provider,
+          validatedInput.binding.providerAccountId,
+          validatedInput.binding.providerMode,
+          validatedInput.binding.externalSubscriptionId,
+          validatedInput.binding.externalCheckoutId
         );
-      const binding = this.getCheckoutSubscriptionBinding(input.idempotencyKey);
+      const binding = this.getCheckoutSubscriptionBinding(validatedInput.idempotencyKey);
       if (!binding) throw new Error("checkout binding insert did not persist");
       this.db.exec("commit");
       return { rawKey, record, binding, replayed: false };
@@ -632,6 +633,12 @@ function mapActivation(row: ActivationRow): ActivationRecord {
 function mapCheckoutSubscriptionBinding(
   row: CheckoutSubscriptionBindingRow
 ): CheckoutSubscriptionBindingRecord {
+  if (row.provider !== "stripe") {
+    throw new CheckoutIssuanceConflictError("checkout binding provider is unsupported");
+  }
+  if (row.provider_mode !== "test" && row.provider_mode !== "live") {
+    throw new CheckoutIssuanceConflictError("checkout binding mode is unsupported");
+  }
   return {
     issuanceIdempotencyKey: row.issuance_idempotency_key,
     licenseKeyHash: row.license_key_hash,
@@ -665,7 +672,9 @@ function resolveBusyTimeout(value: number | undefined): number {
   return timeout;
 }
 
-function validateBoundCheckoutInput(input: IssueBoundCheckoutLicenseInput): void {
+function validateBoundCheckoutInput(
+  input: IssueBoundCheckoutLicenseInput
+): IssueBoundCheckoutLicenseInput {
   for (const key of Object.keys(input)) {
     if (!BOUND_CHECKOUT_INPUT_FIELDS.has(key)) {
       throw new CheckoutIssuancePolicyError(`unsupported bound checkout field: ${key}`);
@@ -676,6 +685,43 @@ function validateBoundCheckoutInput(input: IssueBoundCheckoutLicenseInput): void
       throw new CheckoutIssuancePolicyError(`unsupported checkout binding field: ${key}`);
     }
   }
+  if (input.binding.provider !== "stripe") {
+    throw new CheckoutIssuancePolicyError("provider must be stripe");
+  }
+  if (input.binding.providerMode !== "test" && input.binding.providerMode !== "live") {
+    throw new CheckoutIssuancePolicyError("providerMode must be test or live");
+  }
+  return {
+    idempotencyKey: input.idempotencyKey,
+    checkoutLookupKey: input.checkoutLookupKey,
+    binding: {
+      provider: input.binding.provider,
+      providerAccountId: readBoundedCheckoutBindingString(
+        input.binding.providerAccountId,
+        "providerAccountId"
+      ),
+      providerMode: input.binding.providerMode,
+      externalSubscriptionId: readBoundedCheckoutBindingString(
+        input.binding.externalSubscriptionId,
+        "externalSubscriptionId"
+      ),
+      externalCheckoutId: readBoundedCheckoutBindingString(
+        input.binding.externalCheckoutId,
+        "externalCheckoutId"
+      )
+    }
+  };
+}
+
+function readBoundedCheckoutBindingString(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new CheckoutIssuancePolicyError(`${field} is required`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > 160) {
+    throw new CheckoutIssuancePolicyError(`${field} is too long`);
+  }
+  return trimmed;
 }
 
 function boundCheckoutRequestHash(input: IssueBoundCheckoutLicenseInput): string {

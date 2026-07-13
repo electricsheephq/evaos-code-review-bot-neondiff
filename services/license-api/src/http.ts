@@ -162,8 +162,7 @@ async function handleIssuanceRequest(
       issueCheckoutLicense(
         options.store,
         parsed,
-        options.issuanceSecret,
-        (options.now ?? (() => new Date()))()
+        options.issuanceSecret
       )
     );
   } catch (error) {
