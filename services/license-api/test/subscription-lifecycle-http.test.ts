@@ -66,7 +66,7 @@ function lifecycleBody(
       providerEventType: "customer.subscription.deleted",
       subscriptionStatus: "canceled",
       cancelAtPeriodEnd: false,
-      reason: "provider subscription terminated"
+      reason: "subscription_canceled"
     }
   } as const;
   return {
@@ -105,7 +105,13 @@ async function post(
 }
 
 async function withLifecycleServer(
-  run: (context: { store: LicenseStore; server: Server; url: string; issuance: LicenseIssuanceRequest }) => Promise<void>,
+  run: (context: {
+    store: LicenseStore;
+    server: Server;
+    url: string;
+    issuance: LicenseIssuanceRequest;
+    rawKey: string;
+  }) => Promise<void>,
   options: {
     store?: LicenseStore;
     subscriptionLifecycleRateLimiter?: RateLimiter;
@@ -118,6 +124,7 @@ async function withLifecycleServer(
   const issuance = issuanceRequest();
   const issued = issueCheckoutLicense(store, issuance, ISSUANCE_SECRET);
   assert.equal(issued.httpStatus, 200);
+  const rawKey = String(issued.body.licenseKey);
   const started = await startLicenseServer({
     store,
     issuanceSecret: ISSUANCE_SECRET,
@@ -129,7 +136,7 @@ async function withLifecycleServer(
     trustFlyProxyHeaders: options.trustFlyProxyHeaders
   });
   try {
-    await run({ store, server: started.server, url: started.url, issuance });
+    await run({ store, server: started.server, url: started.url, issuance, rawKey });
   } finally {
     started.server.close();
     store.close();
@@ -342,6 +349,47 @@ describe("guarded subscription lifecycle HTTP endpoint", () => {
       assert.deepEqual(policy.json, { status: "invalid" });
       assert.ok(!policy.text.includes(policyReference));
       assert.ok(!policy.text.includes("evt_policy_private"));
+    });
+  });
+
+  it("rejects caller-supplied revoke text and returns only the derived safe reason to license clients", async () => {
+    await withLifecycleServer(async ({ url, issuance, rawKey }) => {
+      for (const reason of [
+        "buyer@example.com",
+        "cus_private_customer_reference",
+        "canceled\r\nforged-admin-line",
+        "canceled\u001b[2J"
+      ]) {
+        const rejected = await post(
+          url,
+          "/v1/admin/licenses/lifecycle",
+          lifecycleBody("revoke", issuance, { eventId: `evt_reject_${reason.length}`, reason }),
+          AUTH
+        );
+        assert.equal(rejected.status, 400);
+        assert.deepEqual(rejected.json, { status: "invalid" });
+        assert.ok(!rejected.text.includes(reason));
+      }
+
+      const applied = await post(
+        url,
+        "/v1/admin/licenses/lifecycle",
+        lifecycleBody("revoke", issuance, {
+          eventId: "evt_safe_revoke_reason",
+          reason: "subscription_canceled"
+        }),
+        AUTH
+      );
+      assert.equal(applied.status, 200);
+
+      const revoked = await post(url, "/v1/license/activate", {
+        licenseKey: rawKey,
+        machineId: "machine-safe-reason"
+      });
+      assert.equal(revoked.status, 403);
+      assert.equal(revoked.json.status, "revoked");
+      assert.equal(revoked.json.revocationReason, "subscription_canceled");
+      assert.doesNotMatch(revoked.text, /@|cus_|\r|\n|\u001b|forged-admin-line/);
     });
   });
 

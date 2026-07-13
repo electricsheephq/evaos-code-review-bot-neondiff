@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { after, beforeEach, describe, it } from "node:test";
 import { LicenseStore } from "../src/store.ts";
 import { runAdmin } from "../src/admin.ts";
+import { issueCheckoutLicense, type LicenseIssuanceRequest } from "../src/issuance.ts";
+import { parseSubscriptionLifecycleRequest } from "../src/subscription-lifecycle.ts";
 
 describe("admin issuance CLI", () => {
   let store: LicenseStore;
@@ -91,6 +93,46 @@ describe("admin issuance CLI", () => {
   it("revoke and show fail cleanly on an unknown key", () => {
     assert.equal(runAdmin(["revoke", "--key", "nd_live_unknownxxxxxxxxxxxxxxxxxxx"], store, out), 2);
     assert.equal(runAdmin(["show", "--key", "nd_live_unknownxxxxxxxxxxxxxxxxxxx"], store, out), 2);
+  });
+
+  it("renders only the server-derived lifecycle revoke reason code", () => {
+    store.close();
+    const now = new Date("2026-07-13T00:00:00.000Z");
+    store = new LicenseStore(":memory:", { now: () => now });
+    const issuance: LicenseIssuanceRequest = {
+      idempotencyKey: "checkout-session:admin-safe-reason",
+      checkoutLookupKey: "neondiff_monthly",
+      provider: "stripe",
+      providerAccountId: "acct_admin_safe_reason",
+      providerMode: "live",
+      externalSubscriptionId: "sub_admin_safe_reason",
+      externalCheckoutId: "cs_admin_safe_reason"
+    };
+    const issued = issueCheckoutLicense(store, issuance, "test-only-admin-safe-reason-secret");
+    assert.equal(issued.httpStatus, 200);
+    const rawKey = (issued.body as { licenseKey: string }).licenseKey;
+    const request = parseSubscriptionLifecycleRequest(JSON.stringify({
+      schemaVersion: 1,
+      issuanceIdempotencyKey: issuance.idempotencyKey,
+      eventId: "evt_admin_safe_reason",
+      eventCreatedAt: Math.floor(now.getTime() / 1_000),
+      provider: issuance.provider,
+      providerAccountId: issuance.providerAccountId,
+      providerMode: issuance.providerMode,
+      externalSubscriptionId: issuance.externalSubscriptionId,
+      providerEventType: "customer.subscription.deleted",
+      command: "revoke",
+      subscriptionStatus: "canceled",
+      cancelAtPeriodEnd: false
+    }), now);
+    store.applyCheckoutSubscriptionLifecycle(request);
+
+    lines = [];
+    assert.equal(runAdmin(["show", "--key", rawKey], store, out), 0);
+    const output = lines.join("\n");
+    assert.ok(output.includes("revocationReason=subscription_canceled"));
+    assert.ok(!output.includes("@"));
+    assert.doesNotMatch(output, /\u001b|forged-admin-line|cus_/);
   });
 
   it("bind-checkout-subscription dry-run writes nothing and emits only result plus fingerprint", () => {

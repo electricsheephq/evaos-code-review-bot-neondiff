@@ -378,14 +378,45 @@ test("enforces command-specific payment, period-end, cancellation, and reason fi
     ...reconcile,
     providerEventType: "customer.subscription.deleted",
     command: "revoke",
-    subscriptionStatus: "unpaid"
+    subscriptionStatus: "unpaid",
+    reason: "subscription_unpaid"
   };
   delete revoke.currentPeriodEnd;
   parse(revoke);
   invalid({ ...revoke, currentPeriodEnd: "2026-08-13T12:00:00.000Z" }, /currentPeriodEnd is forbidden/);
   invalid({ ...revoke, currency: "usd" }, /payment fields are forbidden/);
-  invalid({ ...revoke, reason: "x".repeat(201) }, /reason is too long/);
+  invalid({ ...revoke, reason: "x".repeat(201) }, /reason/);
   invalid({ ...reconcile, reason: "not revoked" }, /reason is only allowed for revoke/);
+});
+
+test("derives a non-secret revoke reason code and rejects arbitrary caller text", () => {
+  for (const [subscriptionStatus, expectedReason] of [
+    ["canceled", "subscription_canceled"],
+    ["unpaid", "subscription_unpaid"],
+    ["incomplete_expired", "subscription_incomplete_expired"]
+  ] as const) {
+    const withoutReason = parse(lifecycleBody("revoke", undefined, subscriptionStatus));
+    assert.equal(withoutReason.command, "revoke");
+    assert.equal(withoutReason.reason, expectedReason);
+
+    const exactReason = parse({
+      ...lifecycleBody("revoke", undefined, subscriptionStatus),
+      reason: expectedReason
+    });
+    assert.equal(exactReason.reason, expectedReason);
+
+    for (const unsafeReason of [
+      "buyer@example.com",
+      "cus_customer_reference",
+      "subscription canceled\r\nforged-admin-line",
+      "subscription canceled\u001b[2J"
+    ]) {
+      invalid(
+        { ...lifecycleBody("revoke", undefined, subscriptionStatus), reason: unsafeReason },
+        /reason must match the server-derived code/
+      );
+    }
+  }
 });
 
 test("validates optional or required period ends as strict future instants", () => {

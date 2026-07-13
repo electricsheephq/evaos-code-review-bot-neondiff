@@ -62,6 +62,30 @@ to a fresh path or volume, verify it separately, and only then attach it to the
 reviewed pre-v2 service. Preserve the failed volume for investigation; never
 overwrite it in place.
 
+The recorded rollback timestamp must be an RFC3339 instant that Litestream
+0.5.14 can select. A normal missing-file startup uses the latest replica state;
+that is not the schema-v2 rollback procedure. From a quiesced recovery shell,
+restore the selected point to a path that does not exist:
+
+```sh
+PRE_V2_RECOVERY_TIMESTAMP="<recorded-rfc3339-timestamp>"
+FRESH_RESTORE_PATH="<fresh-nonexistent-license-db-path>"
+test ! -e "$FRESH_RESTORE_PATH"
+litestream restore -timestamp "$PRE_V2_RECOVERY_TIMESTAMP" -config "$LITESTREAM_CONFIG" -o "$FRESH_RESTORE_PATH" "$LICENSE_DB_PATH"
+test "$(sqlite3 "$FRESH_RESTORE_PATH" 'pragma quick_check')" = "ok"
+test "$(sqlite3 "$FRESH_RESTORE_PATH" 'pragma user_version')" = "0"
+sqlite3 "$FRESH_RESTORE_PATH" \
+  "select type,name,tbl_name,sql from sqlite_schema where name not like 'sqlite_%' order by type,name"
+```
+
+Compare the final query with the exact legacy schema signature from the reviewed
+pre-v2 source. Any extra/missing object or constraint is a stop condition. Keep
+the restored file detached while checking it; do not let a v2 process open it,
+and do not attach the pre-v2 image until quick-check, version, and exact legacy
+schema verification all pass. The command shape follows Litestream's
+[restore reference](https://litestream.io/reference/restore/): `-timestamp`
+selects the recovery point and `-o` keeps the source database path untouched.
+
 ## Owner-only secret setup
 
 Run these commands from a secure shell after choosing the object-store bucket,
@@ -109,10 +133,13 @@ volume; never destroy the production volume as a drill.
    prefix in the evidence packet.
 2. Create or reset a staging Fly app with a fresh `license_data` volume and no
    `/data/license.sqlite` file.
-3. Set the same shape of secrets as production, but point
-   `LICENSE_REPLICA_URL` at the staging restore replica/prefix.
-4. Deploy the image. The entrypoint must attempt:
-   `litestream restore -if-replica-exists -config "$LITESTREAM_CONFIG" "$LICENSE_DB_PATH"`.
+3. Give the drill read-only credentials to the source replica and a dedicated,
+   non-writing replica destination/prefix. Never run `litestream replicate`
+   against the production replica from the drill.
+4. For a current-state drill, restore to a fresh path and verify it before
+   starting the service. For the v2 rollback drill, use the point-in-time command
+   above with the recorded pre-v2 RFC3339 timestamp; do not use the entrypoint's
+   latest-state `-if-replica-exists` startup behavior as rollback proof.
 5. Wait for `/healthz` to pass and run admin `list` against the restored DB.
 6. Record end time and calculate restore duration. The drill passes only if
    duration is <= 30 minutes and the restored DB contains the expected license
@@ -124,10 +151,11 @@ If no backups are found, the entrypoint may initialize a new empty DB. That is
 acceptable for a brand-new staging replica, but it is not acceptable proof for
 production DR. Production restore proof must show expected existing rows.
 
-For the v2 rollout drill, also prove that the selected pre-v2 recovery point
-opens with the reviewed pre-v2 image on a fresh path or volume. Do not use the
-production replica destination for the drill, and do not let staging write back
-into the production replica prefix.
+For the v2 rollout drill, also prove that the timestamp-selected pre-v2 recovery
+point passes `pragma quick_check`, reports `pragma user_version=0`, matches the
+exact legacy schema signature, and opens with the reviewed pre-v2 image on a
+fresh path or volume. Do not use the production replica destination for writes,
+and do not let staging write back into the production replica prefix.
 
 ## Verification cadence
 

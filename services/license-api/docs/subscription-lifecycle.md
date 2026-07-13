@@ -66,11 +66,17 @@ binding cannot accept a `test` event.
 | `reconcile` | `customer.subscription.updated` | `active`, `trialing` | `cancelAtPeriodEnd=false`; optional future `currentPeriodEnd` is diagnostic only | Records a non-terminal audit event without granting time. Older non-mutating events are `ignored_stale`. |
 | `cancel_at_period_end` | `customer.subscription.updated` | `active`, `trialing` | `cancelAtPeriodEnd=true`; strict future UTC `currentPeriodEnd` | Records the cancellation state without shortening already-paid time. |
 | `payment_attention` | `invoice.payment_failed`, `customer.subscription.updated` | `active`, `past_due`, `incomplete`, `paused` | Payment fields are forbidden; optional future `currentPeriodEnd` is diagnostic only | Records payment attention without revoking or extending the entitlement. |
-| `revoke` | `customer.subscription.deleted`, `customer.subscription.updated` | `canceled`, `unpaid`, `incomplete_expired` | `currentPeriodEnd` and payment fields are forbidden; optional redacted `reason` up to 200 characters | Sets terminal `revoked` state. Later lifecycle commands fail with `terminally_revoked`. |
+| `revoke` | `customer.subscription.deleted`, `customer.subscription.updated` | `canceled`, `unpaid`, `incomplete_expired` | `currentPeriodEnd` and payment fields are forbidden; optional `reason` must exactly equal the status-derived code | Sets terminal `revoked` state with `subscription_canceled`, `subscription_unpaid`, or `subscription_incomplete_expired`. Later lifecycle commands fail with `terminally_revoked`. |
 
 Only `renew_paid` accepts payment fields. The service hashes
 `paymentReference` into a domain-separated fingerprint before storage. It does
 not store the raw payment reference.
+
+Revocation never accepts provider/customer prose. The service derives a fixed
+non-secret reason code from `subscriptionStatus`; omitting `reason` uses that
+code, while supplying any other value fails with `400 invalid`. This prevents
+emails, payment/customer identifiers, CR/LF, and terminal controls from reaching
+SQLite, license responses, admin output, logs, or evidence.
 
 ## Reference: server-owned checkout policy
 
@@ -193,10 +199,11 @@ evidence; do not disguise it as lifecycle repair.
 
 Image rollback does not reverse the SQLite schema migration. If the v2 service
 cannot proceed, stop writes and follow
-[`disaster-recovery.md`](disaster-recovery.md): select the reviewed pre-v2
-Litestream recovery point and restore it to a fresh path or volume. Do not
-overwrite the existing database, do not force-restore into an open path, and do
-not combine data restoration with replacement-key minting.
+[`disaster-recovery.md`](disaster-recovery.md): use its Litestream 0.5.14
+point-in-time restore command to select the recorded pre-v2 RFC3339 timestamp and
+write to a fresh path. Verify quick-check, `user_version=0`, and the exact legacy
+schema signature before attaching the pre-v2 image. Do not overwrite the
+existing database or combine restoration with replacement-key minting.
 
 Source tests and docs prove the contract only. They do not prove a production
 database migration, backfill, Stripe webhook, checkout reopening, Fly deploy,

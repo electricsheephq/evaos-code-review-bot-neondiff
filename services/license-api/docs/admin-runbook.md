@@ -29,6 +29,10 @@ database may have authoritative WAL state that a file copy omits.
 - No raw-key recovery or replacement-key minting is allowed during checkout
   reconciliation, lifecycle handling, schema migration, or binding backfill.
   Replacement issuance is a separate owner-authorized support/security action.
+- Subscription lifecycle revocation stores only the status-derived reason codes
+  `subscription_canceled`, `subscription_unpaid`, or
+  `subscription_incomplete_expired`. Never pass provider/customer prose, email,
+  payment identifiers, or control characters as a reason.
 
 ## Issue a key
 

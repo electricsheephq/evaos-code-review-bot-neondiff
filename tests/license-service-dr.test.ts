@@ -146,6 +146,18 @@ describe("license service disaster recovery wiring", () => {
     expect(drRunbook).toContain("Image rollback does not reverse the SQLite schema migration");
     expect(drRunbook).toContain("Migration failure prevents the service from starting");
     expect(drRunbook).toContain("Never copy an open SQLite database");
+    expect(drRunbook).toContain('PRE_V2_RECOVERY_TIMESTAMP="<recorded-rfc3339-timestamp>"');
+    expect(drRunbook).toContain('FRESH_RESTORE_PATH="<fresh-nonexistent-license-db-path>"');
+    expect(drRunbook).toContain(
+      'litestream restore -timestamp "$PRE_V2_RECOVERY_TIMESTAMP" -config "$LITESTREAM_CONFIG" -o "$FRESH_RESTORE_PATH" "$LICENSE_DB_PATH"'
+    );
+    expect(drRunbook).toContain('pragma quick_check');
+    expect(drRunbook).toContain('pragma user_version');
+    expect(drRunbook).toContain("exact legacy schema signature");
+    expect(drRunbook).toContain("non-writing replica destination");
+    expect(deployRunbook).toContain("point-in-time restore command");
+    expect(lifecycleRunbook).toContain("point-in-time restore command");
+    expect(drRunbook).not.toMatch(/rollback[\s\S]{0,500}restore -if-replica-exists/i);
     expect(adminRunbook).toContain("bind-checkout-subscription");
     expect(adminRunbook).toContain("--dry-run");
     expect(adminRunbook).toContain("No raw-key recovery or replacement-key minting");

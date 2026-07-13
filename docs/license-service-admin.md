@@ -38,6 +38,9 @@ Current local proof includes:
   `source="none"` and the review gate fails closed;
 - checkout lifecycle authorization, correlation failures, results, and errors
   are redacted and never echo a raw key or request identifiers;
+- lifecycle revocation persists only a status-derived non-secret reason code;
+  arbitrary provider/customer text and control characters fail closed before
+  storage or admin/client output;
 - secret-bearing values remain outside tracked config, GitHub evidence, and
   operator docs.
 

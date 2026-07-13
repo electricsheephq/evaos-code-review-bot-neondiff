@@ -297,7 +297,8 @@ describe("license issuance transport", () => {
         auth
       );
       assert.equal(response.status, 400);
-      assert.equal(response.json.detail, `unknown field: ${field}`);
+      assert.equal(response.json.detail, "request contains an unknown field");
+      assert.ok(!JSON.stringify(response.json).includes(field));
     }
   });
 

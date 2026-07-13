@@ -7,7 +7,6 @@ const MAX_EVENT_ID_LENGTH = 200;
 const MAX_PROVIDER_ACCOUNT_ID_LENGTH = 160;
 const MAX_SUBSCRIPTION_ID_LENGTH = 160;
 const MAX_PAYMENT_REFERENCE_LENGTH = 200;
-const MAX_REASON_LENGTH = 200;
 const MAX_FUTURE_SKEW_SECONDS = 5 * 60;
 
 const REQUEST_FIELDS = new Set([
@@ -107,7 +106,10 @@ export interface RevokeSubscriptionLifecycleRequest
     | "customer.subscription.deleted"
     | "customer.subscription.updated";
   readonly subscriptionStatus: "canceled" | "unpaid" | "incomplete_expired";
-  readonly reason?: string;
+  readonly reason:
+    | "subscription_canceled"
+    | "subscription_unpaid"
+    | "subscription_incomplete_expired";
 }
 
 export type SubscriptionLifecycleRequestWithoutHash =
@@ -244,12 +246,18 @@ export function parseSubscriptionLifecycleRequest(
     throw new LifecycleRequestError("cancelAtPeriodEnd must be true for cancel_at_period_end");
   }
 
-  let reason: string | undefined;
-  if (body.reason !== undefined) {
-    if (command !== "revoke") {
-      throw new LifecycleRequestError("reason is only allowed for revoke");
+  let reason: RevokeSubscriptionLifecycleRequest["reason"] | undefined;
+  if (command !== "revoke" && body.reason !== undefined) {
+    throw new LifecycleRequestError("reason is only allowed for revoke");
+  }
+  if (command === "revoke") {
+    reason = revokeReasonForStatus(subscriptionStatus);
+    if (body.reason !== undefined) {
+      const suppliedReason = readRequiredString(body, "reason", 40);
+      if (suppliedReason !== reason) {
+        throw new LifecycleRequestError("reason must match the server-derived code");
+      }
     }
-    reason = readRequiredString(body, "reason", MAX_REASON_LENGTH);
   }
 
   const common: CommonSubscriptionLifecycleRequest = {
@@ -319,7 +327,7 @@ export function parseSubscriptionLifecycleRequest(
         command,
         providerEventType: providerEventType as RevokeSubscriptionLifecycleRequest["providerEventType"],
         subscriptionStatus: subscriptionStatus as RevokeSubscriptionLifecycleRequest["subscriptionStatus"],
-        ...(reason !== undefined ? { reason } : {})
+        reason: reason!
       };
       break;
   }
@@ -328,6 +336,21 @@ export function parseSubscriptionLifecycleRequest(
     ...requestWithoutHash,
     requestHash: canonicalSubscriptionLifecycleRequestHash(requestWithoutHash)
   };
+}
+
+function revokeReasonForStatus(
+  status: string
+): RevokeSubscriptionLifecycleRequest["reason"] {
+  switch (status) {
+    case "canceled":
+      return "subscription_canceled";
+    case "unpaid":
+      return "subscription_unpaid";
+    case "incomplete_expired":
+      return "subscription_incomplete_expired";
+    default:
+      throw new LifecycleRequestError("subscriptionStatus is invalid for revoke");
+  }
 }
 
 export function canonicalSubscriptionLifecycleRequestHash(

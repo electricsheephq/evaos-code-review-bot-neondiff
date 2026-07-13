@@ -43,6 +43,12 @@ The HTTP-code → client-classification map is fixed by the client
 403/410→revoked · 401/404→invalid · 5xx→server`); the service returns codes that
 match it.
 
+Lifecycle revocation derives a non-secret reason code from subscription status:
+`subscription_canceled`, `subscription_unpaid`, or
+`subscription_incomplete_expired`. Optional caller `reason` must exactly match
+that derived value; arbitrary provider/customer text and control characters are
+rejected before storage.
+
 ### Checkout issuance
 
 `POST /v1/admin/licenses/issue` is for the website/payment webhook only. It is

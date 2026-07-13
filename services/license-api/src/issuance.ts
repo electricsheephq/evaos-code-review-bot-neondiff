@@ -51,7 +51,7 @@ export function parseIssuanceRequest(raw: string): LicenseIssuanceRequest {
   }
   const body = parsed as Record<string, unknown>;
   for (const key of Object.keys(body)) {
-    if (!ISSUANCE_FIELDS.has(key)) throw new Error(`unknown field: ${key}`);
+    if (!ISSUANCE_FIELDS.has(key)) throw new Error("request contains an unknown field");
   }
 
   const idempotencyKey = readBoundedString(body, "idempotencyKey", { required: true, max: 200 });

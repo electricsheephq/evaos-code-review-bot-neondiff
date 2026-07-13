@@ -174,8 +174,10 @@ image against a v2 database is not the rollback procedure.
 
 For a v2 migration or data failure, stop writes, preserve the affected volume,
 select the reviewed pre-v2 Litestream recovery point, and restore it to a fresh
-path or volume. Never overwrite the existing database and never copy or
-force-restore into an open SQLite path. Follow
+path or volume using the timestamp-selected point-in-time restore command in the
+DR runbook. Verify quick-check, `user_version=0`, and the exact legacy schema
+signature before attaching a pre-v2 image. Never overwrite the existing database
+and never copy or force-restore into an open SQLite path. Follow
 [`disaster-recovery.md`](disaster-recovery.md) for verification and evidence.
 
 An emergency service stop makes all supported review work fail closed; it is
