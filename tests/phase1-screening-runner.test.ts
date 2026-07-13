@@ -499,7 +499,8 @@ describe("Phase 1 screening runner", () => {
     expect(summary.status).toBe("completed");
     const placement = JSON.parse(readFileSync(join(runSpec.outputDir, "placements", "warm-8k", "placement.json"), "utf8"));
     expect(placement.observed.cpuExpertOverrides).toMatchObject({
-      device: "CPU",
+      residency: "host",
+      observedDevices: ["CPU"],
       affectedLayerCount: 2,
       matchedTensorCount: 6
     });

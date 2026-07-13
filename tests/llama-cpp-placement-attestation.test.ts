@@ -385,10 +385,95 @@ describe("llama.cpp b9977 placement attestation", () => {
     });
 
     expect(receipt.cpuExpertOverrides).toMatchObject({
-      device: "CPU",
+      residency: "host",
+      observedDevices: ["CPU"],
       affectedLayerRanges: [{ firstLayer: 0, lastLayer: 1 }],
       affectedLayerCount: 2,
       matchedTensorCount: 6
+    });
+  });
+
+  it("records b9977 CUDA_Host expert overrides as exact host-residency evidence", () => {
+    const source = captureLlamaCppStartup([
+      { stream: "stderr", chunk: Buffer.from(`${fullGpuLog()}${cpuMoeExpertLines().replaceAll("overridden to CPU", "overridden to CUDA_Host")}`) }
+    ], { maxBytes: 32_768, maxLines: 256 });
+
+    const receipt = parseLlamaCppPlacementAttestation(source, {
+      backendCommit: BACKEND_COMMIT,
+      profile: "all_plus_cpu_moe",
+      requestedGpuLayers: "all",
+      expectedCpuMoe: { requestKind: "all", firstLayer: 0, lastLayer: 1, layerCount: 2, minimumMatchedTensors: 6 }
+    });
+
+    expect(receipt.cpuExpertOverrides).toMatchObject({
+      residency: "host",
+      observedDevices: ["CUDA_Host"],
+      affectedLayerCount: 2,
+      matchedTensorCount: 6
+    });
+  });
+
+  it("rejects CPU-MoE when the final epoch has no positive host model allocation", () => {
+    const probeOnly = fullGpuLog()
+      .replace("CPU_Mapped model buffer size = 128.00", "CPU_Mapped model buffer size = 0.00");
+    const source = captureLlamaCppStartup([
+      { stream: "stderr", chunk: Buffer.from(`${probeOnly}${cpuMoeExpertLines().replaceAll("overridden to CPU", "overridden to CUDA_Host")}`) }
+    ], { maxBytes: 32_768, maxLines: 256 });
+
+    expect(() => parseLlamaCppPlacementAttestation(source, {
+      backendCommit: BACKEND_COMMIT,
+      profile: "all_plus_cpu_moe",
+      requestedGpuLayers: "all",
+      expectedCpuMoe: { requestKind: "all", firstLayer: 0, lastLayer: 1, layerCount: 2, minimumMatchedTensors: 6 }
+    })).toThrow(/positive host and GPU model buffers/i);
+  });
+
+  it("rejects a zero-buffer probe as the final epoch for every placement profile", () => {
+    const probeOnly = fullGpuLog()
+      .replace("CPU_Mapped model buffer size = 128.00", "CPU_Mapped model buffer size = 0.00")
+      .replace("CUDA0 model buffer size = 2048.00", "CUDA0 model buffer size = 0.00");
+    const source = captureLlamaCppStartup([
+      { stream: "stderr", chunk: Buffer.from(probeOnly) }
+    ], { maxBytes: 32_768, maxLines: 256 });
+
+    expect(() => parseLlamaCppPlacementAttestation(source, {
+      backendCommit: BACKEND_COMMIT,
+      profile: "full_gpu",
+      requestedGpuLayers: "all"
+    })).toThrow(/positive model buffer evidence/i);
+  });
+
+  it("accepts a full offload summary that includes a non-repeating input layer", () => {
+    const log = fullGpuLog()
+      .replace(
+        "load_tensors: layer 2 assigned to device CUDA0, is_swa = 0\n",
+        "load_tensors: layer 2 assigned to device CUDA0, is_swa = 0\nload_tensors: layer 3 assigned to device CUDA0, is_swa = 0\n"
+      )
+      .replace("offloaded 3/3 layers", "offloaded 4/4 layers");
+    const expertLines = [0, 1, 2].flatMap((layer) => ["gate", "up", "down"].map((kind) =>
+      `tensor blk.${layer}.ffn_${kind}_exps.weight (176 MiB q5_K) buffer type overridden to CUDA_Host`
+    )).join("\n") + "\n";
+    const source = captureLlamaCppStartup([
+      { stream: "stderr", chunk: Buffer.from(`${log}${expertLines}`) }
+    ], { maxBytes: 32_768, maxLines: 256 });
+
+    const receipt = parseLlamaCppPlacementAttestation(source, {
+      backendCommit: BACKEND_COMMIT,
+      profile: "all_plus_cpu_moe",
+      requestedGpuLayers: "all",
+      expectedCpuMoe: { requestKind: "all", firstLayer: 0, lastLayer: 2, layerCount: 3, minimumMatchedTensors: 9 }
+    });
+
+    expect(receipt).toMatchObject({
+      observedGpuLayers: 4,
+      totalModelLayers: 4,
+      repeatingGpuLayers: 2,
+      cpuExpertOverrides: {
+        residency: "host",
+        observedDevices: ["CUDA_Host"],
+        affectedLayerCount: 3,
+        matchedTensorCount: 9
+      }
     });
   });
 
@@ -448,7 +533,7 @@ describe("llama.cpp b9977 placement attestation", () => {
     });
   });
 
-  it("rejects an all-experts CPU-MoE contract that declares only part of the model's repeating layers", () => {
+  it("rejects an all-experts CPU-MoE contract that declares only part of the expert-bearing model layers", () => {
     const expertLines = ["gate", "up", "down"].map((kind) =>
       `tensor blk.0.ffn_${kind}_exps.weight (512 MiB q4_K) buffer type overridden to CPU`
     );
@@ -461,7 +546,7 @@ describe("llama.cpp b9977 placement attestation", () => {
       profile: "all_plus_cpu_moe",
       requestedGpuLayers: 999,
       expectedCpuMoe: { requestKind: "all", firstLayer: 0, lastLayer: 0, layerCount: 1, minimumMatchedTensors: 3 }
-    })).toThrow(/all-experts.*repeating layers/i);
+    })).toThrow(/all-experts.*expert-bearing model layers/i);
   });
 
   it("rejects a first-N CPU-MoE contract that does not begin at layer zero", () => {

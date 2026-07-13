@@ -73,7 +73,8 @@ export interface LlamaCppPlacementReceipt {
   };
   computeBuffers: Array<{ device: string; mib: number }>;
   cpuExpertOverrides?: {
-    device: "CPU";
+    residency: "host";
+    observedDevices: string[];
     requestKind: "all" | "first_n";
     affectedLayerRanges: Array<{ firstLayer: number; lastLayer: number }>;
     affectedLayerCount: number;
@@ -106,7 +107,7 @@ const OUTPUT_BUFFER = new RegExp(`^llama_context:\\s+${DEVICE}\\s+output buffer 
 const RECURRENT_LAYER = new RegExp(`^llama_memory_recurrent,\\s+layer\\s+(\\d+):\\s+dev\\s*=\\s*${DEVICE}\\s*$`);
 const RECURRENT_BUFFER = new RegExp(`^llama_memory_recurrent:\\s+${DEVICE}\\s+RS buffer size\\s*=\\s*${NUMBER}\\s+MiB\\s*$`);
 const COMPUTE_BUFFER = new RegExp(`^(?:sched_reserve|~llama_context):\\s+${DEVICE}\\s+compute buffer size\\s+(?:=|is)\\s+${NUMBER}\\s+MiB(?:,\\s+matches expectation of\\s+[0-9]+(?:\\.[0-9]+)?\\s+MiB)?\\s*$`);
-const CPU_EXPERT_OVERRIDE = /^tensor\s+(blk\.(\d+)\.ffn_(?:up|down|gate|gate_up)_(?:ch)?exps(?:\.[A-Za-z0-9_.-]+)?)\s+\((\d+)\s+MiB\s+[A-Za-z0-9_.:-]+\)\s+buffer type overridden to\s+(CPU[A-Za-z0-9_.:-]*)\s*$/;
+const HOST_EXPERT_OVERRIDE = /^tensor\s+(blk\.(\d+)\.ffn_(?:up|down|gate|gate_up)_(?:ch)?exps(?:\.[A-Za-z0-9_.-]+)?)\s+\((\d+)\s+MiB\s+[A-Za-z0-9_.:-]+\)\s+buffer type overridden to\s+(CPU[A-Za-z0-9_.:-]*|CUDA_Host)\s*$/;
 const B9977_LOG_PREFIX = /^\d+\.\d{2}\.\d{3}\.\d{3}\s+[A-Z]\s+/;
 
 export function llamaCppPlacementAttestationModulePath(): string {
@@ -143,7 +144,7 @@ function placementRelevantLine(line: string): boolean {
     RECURRENT_LAYER,
     RECURRENT_BUFFER,
     COMPUTE_BUFFER,
-    CPU_EXPERT_OVERRIDE
+    HOST_EXPERT_OVERRIDE
   ].some((pattern) => pattern.test(line));
 }
 
@@ -279,6 +280,10 @@ function parseMib(value: string): number {
   return parsed;
 }
 
+function isHostDevice(device: string): boolean {
+  return device.startsWith("CPU") || device === "CUDA_Host";
+}
+
 function rejectDuplicateLayers(items: Array<{ layer: number }>, label: string): void {
   const seen = new Set<number>();
   for (const item of items) {
@@ -355,8 +360,8 @@ function placementEpochCore(epoch: PlacementEpoch, index: number, profile: Llama
     throw new Error(`llama.cpp placement epoch ${index + 1} is missing model buffer evidence`);
   }
   const repeatingGpuLayers = uniqueNumber("repeating-layer", epoch.repeating);
-  const gpuAssignments = epoch.layerAssignments.filter((item) => !item.device.startsWith("CPU")).length;
-  if (repeatingGpuLayers + (epoch.outputLayerOffloaded ? 1 : 0) !== total.observed
+  const gpuAssignments = epoch.layerAssignments.filter((item) => !isHostDevice(item.device)).length;
+  if (repeatingGpuLayers + (epoch.outputLayerOffloaded ? 1 : 0) > total.observed
     || epoch.layerAssignments.length !== total.total
     || (profile !== "all_plus_cpu_moe" && gpuAssignments !== total.observed)) {
     throw new Error(`contradictory llama.cpp placement evidence in load epoch ${index + 1}`);
@@ -435,7 +440,7 @@ export function parseLlamaCppPlacementAttestation(
       epoch.recurrentBuffers.push({ device: match[1], mib: parseMib(match[2]) });
     } else if ((match = COMPUTE_BUFFER.exec(line))) {
       epoch.computeBuffers.push({ device: match[1], mib: parseMib(match[2]) });
-    } else if ((match = CPU_EXPERT_OVERRIDE.exec(line))) {
+    } else if ((match = HOST_EXPERT_OVERRIDE.exec(line))) {
       epoch.cpuExpertTensors.push({ name: match[1], layer: Number(match[2]), device: match[4] });
     }
   }
@@ -463,8 +468,8 @@ export function parseLlamaCppPlacementAttestation(
   } = finalEpoch;
   const { repeatingGpuLayers, total } = finalCore;
   const contradictions: string[] = [];
-  if (repeatingGpuLayers + (outputLayerOffloaded ? 1 : 0) !== total.observed) contradictions.push("GPU offload totals disagree");
-  const gpuAssignments = layerAssignments.filter((item) => !item.device.startsWith("CPU")).length;
+  if (repeatingGpuLayers + (outputLayerOffloaded ? 1 : 0) > total.observed) contradictions.push("GPU offload totals disagree");
+  const gpuAssignments = layerAssignments.filter((item) => !isHostDevice(item.device)).length;
   const cpuAssignments = layerAssignments.length - gpuAssignments;
   if (layerAssignments.length !== total.total
     || (requirement.profile !== "all_plus_cpu_moe" && gpuAssignments !== total.observed)) {
@@ -481,8 +486,11 @@ export function parseLlamaCppPlacementAttestation(
     if (typeof requirement.requestedGpuLayers === "number" && requirement.requestedGpuLayers < total.total) contradictions.push("CPU-MoE literal GPU-layer request is smaller than the model layer count");
   }
   if (contradictions.length > 0) throw new Error(`contradictory llama.cpp placement evidence: ${contradictions.join("; ")}`);
-  if (modelBuffers.length === 0 || kvBuffers.length === 0 || computeBuffers.length === 0) {
-    throw new Error("llama.cpp placement is missing required buffer evidence");
+  if (!modelBuffers.some((buffer) => buffer.mib > 0)) {
+    throw new Error("llama.cpp placement is missing positive model buffer evidence");
+  }
+  if (kvBuffers.length === 0 || computeBuffers.length === 0) {
+    throw new Error("llama.cpp placement is missing required runtime buffer evidence");
   }
   if (kvTypes.length !== 1) throw new Error("llama.cpp placement requires exactly one KV cache type record");
   let cpuExpertOverrides: LlamaCppPlacementReceipt["cpuExpertOverrides"];
@@ -491,14 +499,14 @@ export function parseLlamaCppPlacementAttestation(
     if (!expected || cpuExpertTensors.length === 0) throw new Error("CPU-MoE placement requires explicit observed expert tensor override evidence");
     if (expected.requestKind === "all"
       && (expected.firstLayer !== 0
-        || expected.lastLayer !== repeatingGpuLayers - 1
-        || expected.layerCount !== repeatingGpuLayers)) {
-      throw new Error("all-experts CPU-MoE placement contract must cover all repeating layers");
+        || expected.lastLayer !== total.total - 2
+        || expected.layerCount !== total.total - 1)) {
+      throw new Error("all-experts CPU-MoE placement contract must cover all expert-bearing model layers");
     }
     if (expected.requestKind === "first_n" && expected.firstLayer !== 0) {
       throw new Error("first-N CPU-MoE placement contract must begin at layer zero");
     }
-    if (cpuExpertTensors.some((tensor) => !tensor.device.startsWith("CPU"))) throw new Error("CPU-MoE expert override is not assigned to CPU");
+    if (cpuExpertTensors.some((tensor) => !isHostDevice(tensor.device))) throw new Error("CPU-MoE expert override is not assigned to host memory");
     const layers = [...new Set(cpuExpertTensors.map((tensor) => tensor.layer))].sort((left, right) => left - right);
     const ranges = contiguousRanges(layers);
     if (layers.length !== expected.layerCount
@@ -507,12 +515,13 @@ export function parseLlamaCppPlacementAttestation(
       || cpuExpertTensors.length < expected.minimumMatchedTensors) {
       throw new Error("CPU-MoE expert override does not match the expected layer contract");
     }
-    if (!modelBuffers.some((buffer) => buffer.device.startsWith("CPU"))
-      || !modelBuffers.some((buffer) => !buffer.device.startsWith("CPU"))) {
-      throw new Error("CPU-MoE placement requires CPU and GPU model buffers");
+    if (!modelBuffers.some((buffer) => isHostDevice(buffer.device) && buffer.mib > 0)
+      || !modelBuffers.some((buffer) => !isHostDevice(buffer.device) && buffer.mib > 0)) {
+      throw new Error("CPU-MoE placement requires positive host and GPU model buffers");
     }
     cpuExpertOverrides = {
-      device: "CPU",
+      residency: "host",
+      observedDevices: [...new Set(cpuExpertTensors.map((tensor) => tensor.device))].sort(),
       requestKind: expected.requestKind,
       affectedLayerRanges: ranges,
       affectedLayerCount: layers.length,
