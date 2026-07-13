@@ -144,7 +144,7 @@ describe("checkout issuance request authority", () => {
     ]) {
       assert.throws(
         () => parseIssuanceRequest(JSON.stringify({ ...request(), [field]: "caller-value" })),
-        new RegExp(`unknown field: ${field}`)
+        /request contains an unknown field/
       );
     }
   });
