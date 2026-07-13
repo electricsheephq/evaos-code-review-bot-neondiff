@@ -144,7 +144,15 @@ async function main(argv: string[]): Promise<void> {
   process.stdout.write(`${JSON.stringify({ runFingerprint: summary.runFingerprint, status: summary.status, claimClass: summary.claimClass })}\n`);
 }
 
-const invokedPath = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : "";
+export function invokedModuleUrl(path: string | undefined): string {
+  try {
+    return path ? pathToFileURL(realpathSync(path)).href : "";
+  } catch {
+    return "";
+  }
+}
+
+const invokedPath = invokedModuleUrl(process.argv[1]);
 if (import.meta.url === invokedPath) {
   main(process.argv.slice(2)).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : "unknown characterization failure";

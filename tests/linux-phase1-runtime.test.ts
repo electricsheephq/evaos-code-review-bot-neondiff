@@ -122,10 +122,11 @@ describe("GEX44 Linux Phase 1 runtime", () => {
     const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "0".repeat(64) });
     const base = { capturedAt: "terminal", sequence: 1, phase: "cleanup", rssBytes: 0, vramBytes: 0, vramObserved: 0, swapBytes: 0, processSwapBytes: 0, processAlive: 0, pid: 42 };
     expect(monitor.classify([{ ...base, periodicFailure: 1 }])).toEqual({ status: "stopped", errorCode: "periodic_resource_sampling_failed" });
+    expect(monitor.classify([{ ...base, nvidiaSmiVerificationFailure: 1 }])).toEqual({ status: "stopped", errorCode: "nvidia_smi_descriptor_verification_failed" });
     expect(monitor.classify([{ ...base, nvidiaSmiDrift: 1 }])).toEqual({ status: "stopped", errorCode: "nvidia_smi_descriptor_drift" });
-    expect(monitor.classify([{ ...base, periodicFailure: 1, cleanupFailure: 1, nvidiaSmiDrift: 1 }])).toEqual({
+    expect(monitor.classify([{ ...base, periodicFailure: 1, cleanupFailure: 1, nvidiaSmiVerificationFailure: 1, nvidiaSmiDrift: 1 }])).toEqual({
       status: "stopped",
-      errorCode: "periodic_resource_sampling_failed+resource_cleanup_sampling_failed+nvidia_smi_descriptor_drift"
+      errorCode: "periodic_resource_sampling_failed+resource_cleanup_sampling_failed+nvidia_smi_descriptor_verification_failed+nvidia_smi_descriptor_drift"
     });
   });
 

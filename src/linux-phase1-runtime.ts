@@ -17,6 +17,7 @@ export type LinuxResourceSample = {
   periodicFailure?: number;
   cleanupFailure?: number;
   nvidiaSmiDrift?: number;
+  nvidiaSmiVerificationFailure?: number;
 };
 
 type Session = {
@@ -297,6 +298,7 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
       const integrityFailures = [
         samples.some((sample) => sample.periodicFailure === 1) ? "periodic_resource_sampling_failed" : undefined,
         samples.some((sample) => sample.cleanupFailure === 1) ? "resource_cleanup_sampling_failed" : undefined,
+        samples.some((sample) => sample.nvidiaSmiVerificationFailure === 1) ? "nvidia_smi_descriptor_verification_failed" : undefined,
         samples.some((sample) => sample.nvidiaSmiDrift === 1) ? "nvidia_smi_descriptor_drift" : undefined
       ].filter((value): value is string => value !== undefined);
       if (integrityFailures.length > 0) return { status: "stopped" as const, errorCode: integrityFailures.join("+") };
@@ -338,12 +340,14 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
           };
           appendBoundedLinuxTrace(session.samples, final);
         }
-        try {
-          if (session.nvidiaSmiFd !== undefined && sha256Descriptor(session.nvidiaSmiFd) !== expectedNvidiaSmiSha256) final.nvidiaSmiDrift = 1;
-        } catch {
-          final.nvidiaSmiDrift = 1;
+        if (session.nvidiaSmiFd !== undefined) {
+          try {
+            if (sha256Descriptor(session.nvidiaSmiFd) !== expectedNvidiaSmiSha256) final.nvidiaSmiDrift = 1;
+          } catch {
+            final.nvidiaSmiVerificationFailure = 1;
+          }
         }
-        return [...session.samples.slice(0, -1), final];
+        return [...session.samples];
       } finally {
         if (session.nvidiaSmiFd !== undefined) {
           closeSync(session.nvidiaSmiFd);

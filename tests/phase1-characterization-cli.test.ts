@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fr
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { assertCharacterizationLoadedArtifacts, assertMonitorNvidiaBinding, assertPinnedLoadedJavaScript, importVerifiedModule } from "../src/phase1-characterization-cli.js";
+import { assertCharacterizationLoadedArtifacts, assertMonitorNvidiaBinding, assertPinnedLoadedJavaScript, importVerifiedModule, invokedModuleUrl } from "../src/phase1-characterization-cli.js";
 
 const cli = join(process.cwd(), "src", "phase1-characterization-cli.ts");
 const tsx = join(process.cwd(), "node_modules", ".bin", "tsx");
@@ -20,6 +20,12 @@ function run(args: string[]): { status: number | null; stderr: string; stdout: s
 }
 
 describe("private Phase 1 characterization entrypoint", () => {
+  it("treats a missing or broken invoked path as not directly invoked", () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "phase1-missing-invoked-path-")));
+    expect(invokedModuleUrl(join(directory, "missing-entrypoint.js"))).toBe("");
+    expect(invokedModuleUrl(undefined)).toBe("");
+  });
+
   it("rejects unverified module bytes before their top-level code can execute", async () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), "phase1-verified-module-")));
     const marker = join(directory, "executed");
