@@ -1393,7 +1393,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
-  const exactOwnerReviewRequested = Boolean(
+  let exactOwnerReviewRequested = Boolean(
     processed &&
     input.commandCommentId &&
     (await lookupQueuedReviewEventAuthorization({
@@ -1405,7 +1405,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       commandConfig: config.commands
     })).status === "eligible"
   );
-  if (commandReviewRequested || exactOwnerReviewRequested) {
+  let manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
+  if (manualReviewRequested) {
     const livePull = await github.getPull(repo, pull.number);
     const stale = detectStalePullHead({ expected: pull, live: livePull, phase: "before_review" });
     if (stale) {
@@ -1416,8 +1417,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
-    !commandReviewRequested &&
-    !exactOwnerReviewRequested &&
+    !manualReviewRequested &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1691,6 +1691,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           dryRun: true
         })
       : undefined;
+    exactOwnerReviewRequested = exactOwnerReviewRequested || dryRunReviewEventResolution?.authorization.status === "eligible";
+    manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     const selectedEvent = dryRunReviewEventResolution?.decision.selectedEvent ?? candidateEvent;
     writeRedactedJson(join(evidenceDir, "deterministic-gate.json"), { ...gate, dropped });
     const summary = buildSummary({
@@ -1776,7 +1778,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
       // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
       state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event: plan.event });
-      return commandReviewRequested ? "reviewed_command" : "reviewed";
+      return manualReviewRequested ? "reviewed_command" : "reviewed";
     }
 
     // Atomic per-head claim (#295): acquired here — after every eligibility/stale check and after the
@@ -1825,6 +1827,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pull,
       dryRun: false
     });
+    exactOwnerReviewRequested = exactOwnerReviewRequested || reviewEventResolution.authorization.status === "eligible";
+    manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
     if (
       reviewEventResolution.consumed &&
@@ -1951,7 +1955,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         dryRun: input.dryRun
       });
     }
-    return commandReviewRequested ? "reviewed_command" : "reviewed";
+    return manualReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
     releaseReviewCapacity();
   }
@@ -2757,6 +2761,7 @@ function recordStaleHeadSkip(input: {
 }): void {
   mkdirSync(input.evidenceDir, { recursive: true });
   writeRedactedJson(join(input.evidenceDir, "stale-head.json"), input.stale);
+  if (input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha)?.status === "posted") return;
   input.state.recordProcessed({
     repo: input.repo,
     pullNumber: input.pull.number,

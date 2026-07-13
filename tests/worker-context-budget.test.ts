@@ -628,7 +628,7 @@ describe("worker context budget preflight", () => {
       commandCommentId: 41
     });
 
-    expect(scenario.result).toBe("reviewed");
+    expect(scenario.result).toBe("reviewed_command");
     expect(createdReviews[0]).toMatchObject({ headSha: scenario.pull.head.sha, event: "REQUEST_CHANGES" });
     expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 502, scenario.pull.head.sha)).toMatchObject({
       status: "posted",
@@ -758,6 +758,7 @@ describe("worker context budget preflight", () => {
       dryRun: true
     });
 
+    expect(scenario.result).toBe("reviewed_command");
     expect(createdReviews).toEqual([]);
     expect(readDecision(scenario.evidenceDir)).toMatchObject({
       candidateEvent: "REQUEST_CHANGES",
@@ -833,7 +834,7 @@ describe("worker context budget preflight", () => {
       moveHeadDuringPost: "4".repeat(40)
     });
 
-    expect(scenario.result).toBe("reviewed");
+    expect(scenario.result).toBe("reviewed_command");
     expect(createdReviews[0]).toMatchObject({ headSha, event: "REQUEST_CHANGES" });
     expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "head-changed-during-post.json"), "utf8"))).toEqual({
       reason: "head_changed_during_post",
@@ -844,6 +845,41 @@ describe("worker context budget preflight", () => {
       reviewId: 1
     });
     expect(scenario.state.getReviewReadiness("electricsheephq/WorldOS", 510, headSha)).toBeUndefined();
+    scenario.state.close();
+  });
+
+  it("preserves a prior posted review row when an exact owner supersession becomes stale", async () => {
+    const headSha = "d".repeat(40);
+    const reviewUrl = "https://github.com/electricsheephq/WorldOS/pull/518#pullrequestreview-518";
+    let postedBeforeSupersession: ReturnType<ReviewStateStore["getProcessedReview"]>;
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 518,
+      headSha,
+      commandComment: requestChangesComment(58, 518, headSha),
+      commandCommentId: 58,
+      moveHeadAfterCommentLookup: "e".repeat(40),
+      configureState: (state) => {
+        state.recordProcessed({
+          repo: "electricsheephq/WorldOS",
+          pullNumber: 518,
+          headSha,
+          status: "posted",
+          event: "COMMENT",
+          reviewUrl
+        });
+        postedBeforeSupersession = state.getProcessedReview("electricsheephq/WorldOS", 518, headSha);
+      }
+    });
+
+    expect(scenario.result).toBe("skipped_stale_head");
+    expect(createdReviews).toEqual([]);
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 518, headSha)).toEqual(postedBeforeSupersession);
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "stale-head.json"), "utf8"))).toMatchObject({
+      reason: "stale_head_before_review",
+      expectedHeadSha: headSha,
+      liveHeadSha: "e".repeat(40)
+    });
     scenario.state.close();
   });
 
@@ -893,7 +929,7 @@ describe("worker context budget preflight", () => {
       })
     });
 
-    expect(scenario.result).toBe("reviewed");
+    expect(scenario.result).toBe("reviewed_command");
     expect(scenario.exactCommentLookups).toEqual([52, 52]);
     expect(createdReviews).toHaveLength(1);
     expect(createdReviews[0]?.event).toBe("REQUEST_CHANGES");
@@ -992,7 +1028,7 @@ describe("worker context budget preflight", () => {
     });
 
     expect(scenario.error).toBeUndefined();
-    expect(scenario.result).toBe("reviewed");
+    expect(scenario.result).toBe("reviewed_command");
     expect(createdReviews).toHaveLength(1);
     expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 517, headSha)).toMatchObject({
       status: "posted",
