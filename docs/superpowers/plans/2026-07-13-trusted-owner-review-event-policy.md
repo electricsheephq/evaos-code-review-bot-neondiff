@@ -171,9 +171,11 @@ git commit -m "feat(review): persist one-shot owner authorization"
 **Files:**
 - Modify: `src/worker.ts`
 - Modify: `src/github.ts`
+- Modify: `src/review-event-policy.ts`
 - Modify: `tests/worker-context-budget.test.ts`
 - Modify: `tests/stale-head.test.ts`
 - Modify: `tests/github-app-read.test.ts`
+- Modify: `tests/review-event-policy.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1 policy decision and Task 2 authorization collector/atomic consume.
@@ -224,7 +226,7 @@ Expected: PASS; live and dry-run evidence distinguish candidate and selected eve
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/worker.ts src/github.ts tests/worker-context-budget.test.ts tests/stale-head.test.ts tests/github-app-read.test.ts
+git add src/worker.ts src/github.ts src/review-event-policy.ts tests/worker-context-budget.test.ts tests/stale-head.test.ts tests/github-app-read.test.ts tests/review-event-policy.test.ts
 git commit -m "feat(review): enforce exact-head owner authorization"
 ```
 
