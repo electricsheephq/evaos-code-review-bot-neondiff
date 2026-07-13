@@ -33,8 +33,8 @@ function licenseConfig(root: string, apiBaseUrl: string): LicenseConfig {
     keychainService: "neondiff-dr-test",
     keychainAccount: "neondiff-dr-test",
     requestTimeoutMs: 5_000,
-    offlineGraceMs: 10_000,
-    publicReposFree: true,
+    offlineGraceMs: 0,
+    publicReposFree: false,
     privateReposRequireEntitlement: true,
     updateEntitlementRequiresLicense: false
   };
@@ -128,6 +128,7 @@ describe("license service disaster recovery wiring", () => {
     const deployRunbook = readServiceFile("docs/deploy.md");
     const adminRunbook = readServiceFile("docs/admin-runbook.md");
     const drRunbook = readServiceFile("docs/disaster-recovery.md");
+    const lifecycleRunbook = readServiceFile("docs/subscription-lifecycle.md");
 
     expect(deployRunbook).toContain("disaster-recovery.md");
     expect(adminRunbook).toContain("disaster-recovery.md");
@@ -137,12 +138,37 @@ describe("license service disaster recovery wiring", () => {
     expect(drRunbook).toContain("flyctl secrets set");
     expect(drRunbook).toContain("timed staging restore drill");
     expect(drRunbook).toContain("This source-only PR does not prove live replication");
+    expect(drRunbook).toContain("offlineGraceMs=0");
+    expect(drRunbook).toContain("diagnostic only");
+    expect(drRunbook).toContain("pre-v2");
+    expect(drRunbook).toContain("fresh path or volume");
+    expect(drRunbook).toContain("Image rollback does not reverse the SQLite schema migration");
+    expect(drRunbook).toContain("Migration failure prevents the service from starting");
+    expect(drRunbook).toContain("Never copy an open SQLite database");
+    expect(adminRunbook).toContain("bind-checkout-subscription");
+    expect(adminRunbook).toContain("--dry-run");
+    expect(adminRunbook).toContain("No raw-key recovery or replacement-key minting");
+    expect(deployRunbook).toContain("Checkout remains held");
+    expect(deployRunbook).toContain("#559");
+    expect(lifecycleRunbook).toContain("POST /v1/admin/licenses/lifecycle");
+    expect(lifecycleRunbook).toContain("renew_paid");
+    expect(lifecycleRunbook).toContain("reconcile");
+    expect(lifecycleRunbook).toContain("cancel_at_period_end");
+    expect(lifecycleRunbook).toContain("payment_attention");
+    expect(lifecycleRunbook).toContain("revoke");
+    expect(lifecycleRunbook).toContain("Checkout remains held");
+    expect(lifecycleRunbook).toContain("#559");
+    expect(adminRunbook).not.toContain("copy of the volume");
+    expect(adminRunbook).not.toContain("revoke and re-issue");
+    expect(deployRunbook).not.toContain("flip license.enabled");
+    expect(deployRunbook).not.toContain("There is no in-app migration system");
+    expect(drRunbook).not.toContain("inside the configured offline grace window");
     expect(drRunbook).not.toContain("/Volumes/LEXAR/Codex");
     expect(drRunbook).not.toMatch(/AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|secret-access-key:\s+\S|account-key:\s+\S/i);
   });
 });
 
-describe("license service outage grace", () => {
+describe("license service mandatory-online outage behavior", () => {
   const roots: string[] = [];
   const stores: LicenseStore[] = [];
 
@@ -151,7 +177,7 @@ describe("license service outage grace", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("uses a real local license API activation, then fails closed after offline grace expires", async () => {
+  it("creates a diagnostic cache from real activation but never authorizes review during an outage", async () => {
     const root = mkdtempSync(join(tmpdir(), "nd-license-dr-"));
     roots.push(root);
     const store = new LicenseStore(join(root, "license.sqlite"));
@@ -170,55 +196,30 @@ describe("license service outage grace", () => {
     expect(activated).toMatchObject({ ok: true, status: "active", source: "api" });
     expect(existsSync(join(root, "entitlement.json"))).toBe(true);
 
-    const withinGraceStatus = await getLicenseStatus({
+    const outageStatus = await getLicenseStatus({
       config,
       repo: "owner/private",
       refresh: true,
-      now: new Date(base.getTime() + 5_000),
+      now: new Date(base.getTime() + 1),
       fetchImpl: outageFetch
     });
-    expect(withinGraceStatus).toMatchObject({
-      ok: true,
-      status: "active",
-      source: "cache",
-      stale: true,
-      classification: "network"
-    });
-
-    const withinGraceGate = await evaluateLicenseReviewGate({
-      config,
-      repo: "owner/private",
-      visibility: "private",
-      refresh: true,
-      now: new Date(base.getTime() + 5_000),
-      fetchImpl: outageFetch
-    });
-    expect(withinGraceGate).toMatchObject({ ok: true, status: "active" });
-
-    const afterGraceStatus = await getLicenseStatus({
-      config,
-      repo: "owner/private",
-      refresh: true,
-      now: new Date(base.getTime() + 11_000),
-      fetchImpl: outageFetch
-    });
-    expect(afterGraceStatus).toMatchObject({
+    expect(outageStatus).toMatchObject({
       ok: false,
       status: "network",
       source: "none",
       classification: "network"
     });
 
-    const afterGraceGate = await evaluateLicenseReviewGate({
+    const outageGate = await evaluateLicenseReviewGate({
       config,
       repo: "owner/private",
       visibility: "private",
       refresh: true,
-      now: new Date(base.getTime() + 11_000),
+      now: new Date(base.getTime() + 1),
       fetchImpl: outageFetch
     });
-    expect(afterGraceGate).toMatchObject({ ok: false, status: "network" });
-    expect(afterGraceGate.reason).toContain("license API network failure");
-    expect(afterGraceGate.reason).toContain("requires active entitlement");
+    expect(outageGate).toMatchObject({ ok: false, status: "network" });
+    expect(outageGate.reason).toContain("license API network failure");
+    expect(outageGate.reason).toContain("requires active entitlement");
   });
 });
