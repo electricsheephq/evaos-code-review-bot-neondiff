@@ -49,6 +49,11 @@ describe("Swift CI velocity policy", () => {
         ".github/workflows/swift-desktop-gate.yml"
       ]
     });
+
+    expect(swiftAffected(["tests/desktop-evaluation-boundary.test.ts"])).toMatchObject({
+      affected: true,
+      matched: ["tests/desktop-evaluation-boundary.test.ts"]
+    });
   });
 
   it("ships an always-reporting Swift desktop gate and a scheduled/manual Swift CodeQL workflow", () => {
