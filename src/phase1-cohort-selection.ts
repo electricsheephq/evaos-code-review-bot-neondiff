@@ -3,6 +3,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fstatSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -699,11 +700,16 @@ function validateOutputBoundary(outputDir: string, safeOutputRoot: string): void
 }
 
 function readBoundedFile(path: string, maximumBytes: number, label: string): Buffer {
-  const declaredSize = statSync(path).size;
-  if (declaredSize > maximumBytes) throw new Error(`${label} exceeds its bounded input byte limit`);
-  const bytes = readFileSync(path);
-  if (bytes.byteLength > maximumBytes) throw new Error(`${label} exceeds its bounded input byte limit`);
-  return bytes;
+  const descriptor = openSync(path, "r");
+  try {
+    const declaredSize = fstatSync(descriptor).size;
+    if (declaredSize > maximumBytes) throw new Error(`${label} exceeds its bounded input byte limit`);
+    const bytes = readFileSync(descriptor);
+    if (bytes.byteLength > maximumBytes) throw new Error(`${label} exceeds its bounded input byte limit`);
+    return bytes;
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function canonicalProspectivePath(path: string): string {
