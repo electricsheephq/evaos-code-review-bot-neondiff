@@ -173,6 +173,7 @@ git commit -m "feat(review): persist one-shot owner authorization"
 - Modify: `src/github.ts`
 - Modify: `tests/worker-context-budget.test.ts`
 - Modify: `tests/stale-head.test.ts`
+- Modify: `tests/github-app-read.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1 policy decision and Task 2 authorization collector/atomic consume.
@@ -192,7 +193,7 @@ Add real worker-path cases for no authorization, exact trusted authorization, co
 
 - [ ] **Step 2: Verify RED**
 
-Run: `npm test -- tests/worker-context-budget.test.ts tests/stale-head.test.ts`
+Run: `npm test -- tests/worker-context-budget.test.ts tests/stale-head.test.ts tests/github-app-read.test.ts`
 
 Expected: FAIL because the worker still posts the deterministic candidate directly.
 
@@ -216,14 +217,14 @@ Consume an eligible command after the final live-head check even when the candid
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `npm test -- tests/review-event-policy.test.ts tests/commands.test.ts tests/state.test.ts tests/worker-context-budget.test.ts tests/stale-head.test.ts && npm run build`
+Run: `npm test -- tests/review-event-policy.test.ts tests/commands.test.ts tests/state.test.ts tests/worker-context-budget.test.ts tests/stale-head.test.ts tests/github-app-read.test.ts && npm run build`
 
 Expected: PASS; live and dry-run evidence distinguish candidate and selected events.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/worker.ts src/github.ts tests/worker-context-budget.test.ts tests/stale-head.test.ts
+git add src/worker.ts src/github.ts tests/worker-context-budget.test.ts tests/stale-head.test.ts tests/github-app-read.test.ts
 git commit -m "feat(review): enforce exact-head owner authorization"
 ```
 
