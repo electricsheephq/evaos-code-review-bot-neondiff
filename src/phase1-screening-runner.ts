@@ -1068,32 +1068,41 @@ async function acquireRunLease(path: string): Promise<number> {
 
 async function startLeaseCoordinator(path: string): Promise<ReturnType<typeof createServer>> {
   const token = sha256(resolve(path));
+  portLoop:
   for (const port of phase1LeaseCoordinationPorts(path)) {
-    const coordinator = createServer((socket) => socket.end(`${token}\n`));
-    try {
-      await new Promise<void>((resolvePromise, rejectPromise) => {
-        const fail = (error: Error & { code?: string }) => {
-          coordinator.removeListener("listening", ready);
-          rejectPromise(error);
-        };
-        const ready = () => {
-          coordinator.removeListener("error", fail);
-          resolvePromise();
-        };
-        coordinator.once("error", fail);
-        coordinator.once("listening", ready);
-        coordinator.listen({ host: "127.0.0.1", port, exclusive: true });
+    for (let bindAttempt = 0; bindAttempt < 3; bindAttempt += 1) {
+      const coordinator = createServer((socket) => {
+        socket.once("error", () => {});
+        socket.end(leaseCoordinatorFrame(token));
       });
-      return coordinator;
-    } catch (error) {
-      coordinator.removeAllListeners();
-      if (!(typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EADDRINUSE")) {
-        throw new Error(`Phase 1 lease coordination failed: ${errorMessage(error)}`);
-      }
-      if (await readLeaseCoordinatorToken(port) === token) {
+      try {
+        await new Promise<void>((resolvePromise, rejectPromise) => {
+          const fail = (error: Error & { code?: string }) => {
+            coordinator.removeListener("listening", ready);
+            rejectPromise(error);
+          };
+          const ready = () => {
+            coordinator.removeListener("error", fail);
+            resolvePromise();
+          };
+          coordinator.once("error", fail);
+          coordinator.once("listening", ready);
+          coordinator.listen({ host: "127.0.0.1", port, exclusive: true });
+        });
+        return coordinator;
+      } catch (error) {
+        coordinator.removeAllListeners();
+        if (!(typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EADDRINUSE")) {
+          throw new Error(`Phase 1 lease coordination failed: ${errorMessage(error)}`);
+        }
+        const probe = await probeLeaseCoordinatorToken(port);
+        if (probe.status === "vacant") continue;
+        if (probe.status === "foreign" || (probe.status === "complete" && probe.token !== token)) continue portLoop;
+        if (probe.status === "inconclusive") throw new Error("Phase 1 lease coordination probe was inconclusive");
         throw new Error("Phase 1 lease acquisition is already coordinated by another writer");
       }
     }
+    throw new Error("Phase 1 lease coordination probe remained vacant after bounded rebind attempts");
   }
   throw new Error("Phase 1 lease coordination exhausted collision-safe loopback ports");
 }
@@ -1108,27 +1117,57 @@ function phase1LeaseCoordinationPorts(path: string): number[] {
   return ports;
 }
 
-async function readLeaseCoordinatorToken(port: number): Promise<string> {
+const LEASE_COORDINATOR_FRAME_PREFIX = "neondiff-phase1-lease-v1:";
+
+function leaseCoordinatorFrame(token: string): string {
+  return `${LEASE_COORDINATOR_FRAME_PREFIX}${token}\n`;
+}
+
+type LeaseCoordinatorProbe =
+  | { status: "complete"; token: string }
+  | { status: "foreign" | "inconclusive" | "vacant" };
+
+async function probeLeaseCoordinatorToken(port: number): Promise<LeaseCoordinatorProbe> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const probe = await readLeaseCoordinatorToken(port);
+    if (probe.status !== "inconclusive") return probe;
+  }
+  return { status: "inconclusive" };
+}
+
+async function readLeaseCoordinatorToken(port: number): Promise<LeaseCoordinatorProbe> {
   return new Promise((resolvePromise) => {
     let value = "";
     let settled = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     const socket = connect({ host: "127.0.0.1", port });
-    const finish = () => {
+    const finish = (result: LeaseCoordinatorProbe) => {
       if (settled) return;
       settled = true;
+      if (deadline) clearTimeout(deadline);
       socket.destroy();
-      resolvePromise(value.trim());
+      resolvePromise(result);
     };
+    deadline = setTimeout(() => finish({ status: "inconclusive" }), 1000);
+    deadline.unref();
     socket.setEncoding("utf8");
     socket.setTimeout(1000);
     socket.on("data", (chunk: string) => {
       value = `${value}${chunk}`.slice(0, 256);
-      if (value.includes("\n")) finish();
+      const match = value.match(new RegExp(`^${LEASE_COORDINATOR_FRAME_PREFIX}([a-f0-9]{64})\\n`));
+      const legacyMatch = value.match(/^([a-f0-9]{64})\n/);
+      if (match || legacyMatch) finish({ status: "complete", token: (match ?? legacyMatch)![1] });
+      else if (
+        !LEASE_COORDINATOR_FRAME_PREFIX.startsWith(value)
+        && !value.startsWith(LEASE_COORDINATOR_FRAME_PREFIX)
+        && !/^[a-f0-9]{0,64}$/.test(value)
+      ) finish({ status: "foreign" });
+      else if (value.includes("\n")) finish({ status: "inconclusive" });
     });
-    socket.once("end", finish);
-    socket.once("close", finish);
-    socket.once("timeout", finish);
-    socket.once("error", finish);
+    socket.once("end", () => finish({ status: "inconclusive" }));
+    socket.once("close", () => finish({ status: "inconclusive" }));
+    socket.once("timeout", () => finish({ status: "inconclusive" }));
+    socket.once("error", (error: NodeJS.ErrnoException) => finish({ status: error.code === "ECONNREFUSED" ? "vacant" : "inconclusive" }));
   });
 }
 

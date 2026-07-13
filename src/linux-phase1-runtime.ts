@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { closeSync, fstatSync, openSync, readFileSync, readlinkSync, readSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -26,7 +26,9 @@ type Session = {
   nvidiaSmiFd?: number;
   sequence: number;
   samples: LinuxResourceSample[];
-  timer?: ReturnType<typeof setInterval>;
+  captureQueue: Promise<void>;
+  timer?: ReturnType<typeof setTimeout>;
+  stopping?: boolean;
   periodicFailure?: string;
 };
 
@@ -179,18 +181,22 @@ function openPinnedNvidiaSmi(expectedNvidiaSmiSha256: string): number {
   }
 }
 
-function queryVramBytes(pid: number, nvidiaSmiFd: number): { bytes: number; observed: number } {
+async function queryVramBytes(pid: number, nvidiaSmiFd: number): Promise<{ bytes: number; observed: number }> {
   // The descriptor is pinned and hashed at attach, then re-hashed before the
   // run can terminate successfully. This prevents pathname replacement and
   // fails terminal evidence on ordinary in-session inode mutation without
   // adding full-binary hashing overhead to every one-second sample. A
   // privileged mutate-and-restore attack is outside this evidence boundary.
-  const output = execFileSync(`/proc/${process.pid}/fd/${nvidiaSmiFd}`, ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"], {
-    encoding: "utf8",
-    timeout: 5000,
-    maxBuffer: 1024 * 1024,
-    env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
-    stdio: ["ignore", "pipe", "ignore"]
+  const output = await new Promise<string>((resolvePromise, rejectPromise) => {
+    execFile(`/proc/${process.pid}/fd/${nvidiaSmiFd}`, ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"], {
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+      env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" }
+    }, (error, stdout) => {
+      if (error) rejectPromise(error);
+      else resolvePromise(stdout);
+    });
   });
   let mib = 0;
   let observed = 0;
@@ -204,11 +210,11 @@ function queryVramBytes(pid: number, nvidiaSmiFd: number): { bytes: number; obse
   return { bytes: Math.round(mib * 1024 * 1024), observed };
 }
 
-function capture(session: Session, phase: string): LinuxResourceSample {
+async function capture(session: Session, phase: string): Promise<LinuxResourceSample> {
   if (!session.pid) throw new Error("resource monitor is not attached to a resident PID");
   const alive = processAlive(session.pid, session.processStartToken);
   if (alive && session.nvidiaSmiFd === undefined) throw new Error("resource monitor has no pinned nvidia-smi descriptor");
-  const vram = alive ? queryVramBytes(session.pid, session.nvidiaSmiFd as number) : { bytes: 0, observed: 0 };
+  const vram = alive ? await queryVramBytes(session.pid, session.nvidiaSmiFd as number) : { bytes: 0, observed: 0 };
   const sample: LinuxResourceSample = {
     capturedAt: new Date().toISOString(),
     sequence: ++session.sequence,
@@ -226,6 +232,20 @@ function capture(session: Session, phase: string): LinuxResourceSample {
   return sample;
 }
 
+function enqueueCapture(session: Session, phase: string, rejectOnPeriodicFailure = false): Promise<LinuxResourceSample> {
+  const operation = session.captureQueue.then(async () => {
+    if (rejectOnPeriodicFailure && session.periodicFailure) throw new Error(`periodic resource sampling failed: ${session.periodicFailure}`);
+    return capture(session, phase);
+  });
+  session.captureQueue = operation.then(
+    () => undefined,
+    (error) => {
+      if (phase === "periodic") session.periodicFailure = error instanceof Error ? error.name : "periodic_sample_failed";
+    }
+  );
+  return operation;
+}
+
 /** Pinned, self-contained module factory loaded from exact verified bytes. */
 export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string }) {
   const expectedNvidiaSmiSha256 = parameters?.nvidiaSmiSha256;
@@ -234,7 +254,7 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
   return {
     async start() {
       const id = randomUUID();
-      sessions.set(id, { id, samples: [], sequence: 0 });
+      sessions.set(id, { id, samples: [], sequence: 0, captureQueue: Promise.resolve() });
       return { id };
     },
     async attach(sessionRef: { id: string }, resident: { metadata?: Record<string, unknown> }) {
@@ -247,7 +267,7 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
       const nvidiaSmiFd = openPinnedNvidiaSmi(expectedNvidiaSmiSha256);
       const attached: Session = { ...session, samples: [...session.samples], pid, processStartToken: startToken, nvidiaSmiFd };
       try {
-        capture(attached, "attached");
+        await enqueueCapture(attached, "attached");
       } catch (error) {
         closeSync(nvidiaSmiFd);
         throw error;
@@ -257,17 +277,20 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
       session.nvidiaSmiFd = nvidiaSmiFd;
       session.samples = attached.samples;
       session.sequence = attached.sequence;
-      session.timer = setInterval(() => {
-        try { capture(session, "periodic"); }
-        catch (error) { session.periodicFailure = error instanceof Error ? error.name : "periodic_sample_failed"; }
-      }, SAMPLE_INTERVAL_MS);
-      session.timer.unref();
+      session.captureQueue = attached.captureQueue;
+      const schedulePeriodic = () => {
+        if (session.stopping || session.periodicFailure) return;
+        session.timer = setTimeout(() => {
+          void enqueueCapture(session, "periodic").then(schedulePeriodic, schedulePeriodic);
+        }, SAMPLE_INTERVAL_MS);
+        session.timer.unref();
+      };
+      schedulePeriodic();
     },
     async sample(sessionRef: { id: string }, context: { phase: string }) {
       const session = sessions.get(sessionRef.id);
       if (!session) throw new Error("resource monitor session is unknown");
-      if (session.periodicFailure) throw new Error(`periodic resource sampling failed: ${session.periodicFailure}`);
-      return capture(session, context.phase);
+      return enqueueCapture(session, context.phase, true);
     },
     classify(samples: LinuxResourceSample[]) {
       if (samples.length === 0) return { status: "stopped" as const, errorCode: "resource_trace_empty" };
@@ -290,10 +313,11 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
       const session = sessions.get(sessionRef.id);
       if (!session) throw new Error("resource monitor session is unknown");
       try {
-        if (session.timer) clearInterval(session.timer);
+        session.stopping = true;
+        if (session.timer) clearTimeout(session.timer);
         let final: LinuxResourceSample;
         try {
-          final = capture(session, "cleanup");
+          final = await enqueueCapture(session, "cleanup");
         } catch (error) {
           if (!session.pid || !session.processStartToken || session.nvidiaSmiFd === undefined) throw error;
           const previous = session.samples.at(-1);

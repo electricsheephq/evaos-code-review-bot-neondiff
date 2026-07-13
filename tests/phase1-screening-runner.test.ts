@@ -1032,7 +1032,11 @@ describe("Phase 1 screening runner", () => {
 
     const blockedDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-coordinated-lease-"));
     const blockedLeasePath = join(blockedDir, ".phase1-run.lock");
-    const coordinator = createNetServer((socket) => socket.end(`${digest(resolve(blockedLeasePath))}\n`));
+    const coordinator = createNetServer((socket) => {
+      socket.once("error", () => {});
+      socket.write("neondiff-phase1-lease-v1:");
+      setImmediate(() => socket.end(`${digest(resolve(blockedLeasePath))}\n`));
+    });
     await new Promise<void>((resolvePromise) => coordinator.listen({
       host: "127.0.0.1",
       port: phase1LeaseCoordinationPort(blockedLeasePath),
@@ -1057,7 +1061,10 @@ describe("Phase 1 screening runner", () => {
       else seen.set(port, candidate);
     }
     expect(collision).toBeDefined();
-    const coordinator = createNetServer((socket) => socket.end(`${digest(resolve(join(collision!.first, ".phase1-run.lock")))}\n`));
+    const coordinator = createNetServer((socket) => {
+      socket.once("error", () => {});
+      socket.end(`neondiff-phase1-lease-v1:${digest(resolve(join(collision!.first, ".phase1-run.lock")))}\n`);
+    });
     await new Promise<void>((resolvePromise) => coordinator.listen({ host: "127.0.0.1", port: collision!.port, exclusive: true }, resolvePromise));
     try {
       await expect(runPhase1Screen(spec(collision!.second), adapter())).resolves.toMatchObject({ status: "completed" });
@@ -1065,6 +1072,99 @@ describe("Phase 1 screening runner", () => {
       await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
     }
   });
+
+  it("blocks a same-path legacy raw-token coordinator during mixed-version acquisition", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-legacy-coordinator-"));
+    const leasePath = join(outputDir, ".phase1-run.lock");
+    const coordinator = createNetServer((socket) => {
+      socket.once("error", () => {});
+      const token = digest(resolve(leasePath));
+      socket.write(token.slice(0, 17));
+      setImmediate(() => socket.end(`${token.slice(17)}\n`));
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(leasePath),
+      exclusive: true
+    }, resolvePromise));
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).rejects.toThrow(/lease acquisition is already coordinated/i);
+      expect(existsSync(leasePath)).toBe(false);
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("fails closed when an occupied lease coordination port returns an incomplete token", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-inconclusive-coordinator-"));
+    const leasePath = join(outputDir, ".phase1-run.lock");
+    let connections = 0;
+    const coordinator = createNetServer((socket) => {
+      connections += 1;
+      socket.once("error", () => {});
+      socket.end("neondiff-phase1-lease-v1:partial-token");
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(leasePath),
+      exclusive: true
+    }, resolvePromise));
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).rejects.toThrow(/coordination probe.*inconclusive/i);
+      expect(existsSync(leasePath)).toBe(false);
+      expect(connections).toBe(3);
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("falls through an occupied coordination port owned by a foreign protocol", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-foreign-coordinator-"));
+    const leasePath = join(outputDir, ".phase1-run.lock");
+    const coordinator = createNetServer((socket) => {
+      socket.once("error", () => {});
+      socket.end("HTTP/1.1 204 No Content\r\n\r\n");
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(leasePath),
+      exclusive: true
+    }, resolvePromise));
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("bounds a slow-drip partial lease frame with an absolute probe deadline", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-drip-coordinator-"));
+    const leasePath = join(outputDir, ".phase1-run.lock");
+    let connections = 0;
+    const coordinator = createNetServer((socket) => {
+      connections += 1;
+      socket.once("error", () => {});
+      let offset = 0;
+      const prefix = "neondiff-phase1-lease-v1:";
+      const interval = setInterval(() => {
+        if (offset < prefix.length) socket.write(prefix[offset++]);
+      }, 100);
+      socket.once("close", () => clearInterval(interval));
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(leasePath),
+      exclusive: true
+    }, resolvePromise));
+    const startedAt = Date.now();
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).rejects.toThrow(/coordination probe.*inconclusive/i);
+      expect(Date.now() - startedAt).toBeLessThan(4500);
+      expect(connections).toBe(3);
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  }, 6000);
 
   it("treats EPERM from process liveness probing as a live lease owner", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-eperm-lease-"));
