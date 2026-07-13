@@ -25,15 +25,53 @@ printf '%s\n' "$head_sha" | grep -Eq '^[0-9a-f]{40}$' \
   || { echo "could not bind focused capture to an exact HEAD" >&2; exit 65; }
 
 assert_clean_head() {
-  [ "$(git rev-parse HEAD)" = "$head_sha" ] \
-    && [ -z "$(git status --porcelain --untracked-files=all)" ] \
-    || { echo "source changed during focused capture" >&2; exit 65; }
+  current_head=$(git rev-parse HEAD 2>/dev/null || true)
+  current_status=$(git status --porcelain --untracked-files=all 2>/dev/null || printf 'git-status-failed\n')
+  if [ "$current_head" != "$head_sha" ] || [ -n "$current_status" ]; then
+    write_focused_status incomplete source source_changed incomplete not_emitted ""
+    echo "source changed during focused capture" >&2
+    exit 65
+  fi
 }
 
 mkdir -m 700 "$output" \
   || { echo "could not create fresh focused capture output" >&2; exit 65; }
-mkdir -p "$output/cases/tab-repos/1040x680" "$output/validation"
+mkdir -p "$output/cases" "$output/validation"
 case_dir="$output/cases/tab-repos/1040x680"
+status_path="$output/validation/focused-capture-status.json"
+
+render_focused_status() {
+  status_target=$1
+  status_value=$2
+  phase_value=$3
+  reason_value=$4
+  public_safety_value=$5
+  focused_proof_value=$6
+  capture_exit_value=$7
+  jq -n \
+    --arg status "$status_value" \
+    --arg phase "$phase_value" \
+    --arg reasonCode "$reason_value" \
+    --arg publicSafety "$public_safety_value" \
+    --arg focusedProof "$focused_proof_value" \
+    --arg captureExitCode "$capture_exit_value" \
+    '{
+      schemaVersion: 1,
+      status: $status,
+      phase: $phase,
+      reasonCode: $reasonCode,
+      publicSafety: $publicSafety,
+      focusedProof: $focusedProof
+    } + (if $captureExitCode == "" then {} else {captureExitCode: ($captureExitCode | tonumber)} end)' \
+    >"$status_target.tmp"
+  mv "$status_target.tmp" "$status_target"
+}
+
+write_focused_status() {
+  render_focused_status "$status_path" "$@"
+}
+
+write_focused_status incomplete setup capture_in_progress incomplete not_emitted ""
 
 tmp_root=$(/usr/bin/mktemp -d "/tmp/neondiff-desktop-repos-reachability.XXXXXXXX") \
   || { echo "could not create private focused capture workspace" >&2; exit 65; }
@@ -64,6 +102,11 @@ terminate_process() {
 cleanup() {
   if [ -n "$capture_pid" ]; then terminate_process "$capture_pid"; fi
   if [ -n "$app_pid" ]; then terminate_process "$app_pid"; fi
+  rm -f \
+    "$output/.focused-proof.json.pending" \
+    "$output/validation/.focused-capture-status.json.pending" \
+    "$output/validation/.packet-safety-scan.json.pending" \
+    "$output/validation/.packet-safety-scan.ok.pending"
   rm -rf "$tmp_root"
 }
 trap cleanup EXIT HUP INT TERM
@@ -98,13 +141,15 @@ npm run check:secrets >"$output/validation/repository-secret-scan.log" 2>&1
 ready_dir="$tmp_root/ready"
 mkdir -m 700 "$ready_dir"
 ready="$ready_dir/ready.json"
+capture_stage="$tmp_root/capture-output"
+mkdir -m 700 "$capture_stage"
 NEONDIFF_DESKTOP_EVALUATION_READY_PATH="$ready" \
   "$app_bin" \
   --ui-testing \
   --ui-fixture "$fixture" \
   --content-size "$content_size" \
   --disable-animations \
-  >"$case_dir/launch.log" 2>&1 &
+  >"$tmp_root/launch.log" 2>&1 &
 app_pid=$!
 
 ready_attempts=0
@@ -118,14 +163,14 @@ jq -e --arg fixture "$fixture_id" --argjson pid "$app_pid" \
   '.schemaVersion == 1 and .ready == true and .fixtureId == $fixture and .pid == $pid' \
   "$ready" >/dev/null \
   || { echo "tab-repos readiness did not match the launched process" >&2; exit 1; }
-cp "$ready" "$case_dir/readiness.json"
+cp "$ready" "$capture_stage/readiness.json"
 
 "$capture_bin" \
   --pid "$app_pid" \
   --ready "$ready" \
-  --output-dir "$case_dir" \
+  --output-dir "$capture_stage" \
   --repos-reachability \
-  >"$case_dir/capture.json.tmp" \
+  >"$tmp_root/capture.json" \
   2>"$tmp_root/capture.stderr" &
 capture_pid=$!
 capture_attempts=0
@@ -136,24 +181,63 @@ done
 if kill -0 "$capture_pid" 2>/dev/null; then
   terminate_process "$capture_pid"
   capture_pid=
+  write_focused_status incomplete capture capture_timeout incomplete not_emitted 124
   echo "capture helper timed out: tab-repos 1040x680" >&2
-  exit 1
+  exit 124
 fi
 capture_status=0
 wait "$capture_pid" || capture_status=$?
 capture_pid=
-mv "$case_dir/capture.json.tmp" "$case_dir/capture.json"
 if [ "$capture_status" -ne 0 ]; then
+  capture_reason="capture_failed"
+  capture_error=$(cat "$tmp_root/capture.stderr")
+  case "$capture_error" in
+    "Capture permission is unavailable: Screen Recording") capture_reason="screen_recording_unavailable" ;;
+    "Capture permission is unavailable: Accessibility") capture_reason="accessibility_unavailable" ;;
+  esac
+  write_focused_status incomplete capture "$capture_reason" incomplete not_emitted "$capture_status"
   echo "capture helper failed: tab-repos 1040x680" >&2
   exit "$capture_status"
 fi
 
-reachability="$case_dir/reachability.json"
-[ -f "$reachability" ] && [ ! -L "$reachability" ] \
-  || { echo "capture helper did not write reachability.json" >&2; exit 1; }
+for capture_file in screenshot.png accessibility.json geometry.json reachability.json readiness.json; do
+  [ -f "$capture_stage/$capture_file" ] && [ ! -L "$capture_stage/$capture_file" ] \
+    || {
+      write_focused_status incomplete capture capture_output_incomplete incomplete not_emitted 1
+      echo "capture helper did not write complete focused evidence" >&2
+      exit 1
+    }
+done
+[ -s "$tmp_root/capture.json" ] \
+  || {
+    write_focused_status incomplete capture capture_output_incomplete incomplete not_emitted 1
+    echo "capture helper did not write complete focused evidence" >&2
+    exit 1
+  }
 terminate_process "$app_pid"
 app_pid=
 assert_clean_head
+
+case_parent="$output/cases/tab-repos"
+pending_case="$case_parent/.1040x680.pending"
+mkdir -p "$case_parent"
+mkdir -m 700 "$pending_case"
+if cp "$tmp_root/launch.log" "$pending_case/launch.log" \
+  && cp "$tmp_root/capture.json" "$pending_case/capture.json" \
+  && cp "$capture_stage/readiness.json" "$pending_case/readiness.json" \
+  && cp "$capture_stage/screenshot.png" "$pending_case/screenshot.png" \
+  && cp "$capture_stage/accessibility.json" "$pending_case/accessibility.json" \
+  && cp "$capture_stage/geometry.json" "$pending_case/geometry.json" \
+  && cp "$capture_stage/reachability.json" "$pending_case/reachability.json" \
+  && mv "$pending_case" "$case_dir"; then
+  :
+else
+  rm -rf "$pending_case"
+  write_focused_status incomplete evidence evidence_publish_failed incomplete not_emitted ""
+  echo "could not publish complete focused evidence" >&2
+  exit 1
+fi
+reachability="$case_dir/reachability.json"
 
 # The pre-fix Repos tree is expected to fail this checker. Keep the capture and
 # finish the public-safety scan before returning the checker's nonzero status.
@@ -174,7 +258,7 @@ if [ "$checker_status" -ne 0 ]; then
   checker_failed=true
   checker_reason_code="checker_nonzero"
   if jq -e \
-      '.schemaVersion == 1 and .fixture == "tab-repos" and .requestedContentSize.width == 1040 and .requestedContentSize.height == 680 and has("outerScroll") and .outerScroll == null' \
+      '.schemaVersion == 1 and .fixture == "tab-repos" and .requestedContentSize.width == 1040 and .requestedContentSize.height == 680 and (.acquisition | type == "object" and .status == "complete" and has("failureReason") and .failureReason == null) and has("outerScroll") and .outerScroll == null' \
       "$reachability" >/dev/null \
     && [ "$(cat "$tmp_root/reachability-check.stderr")" = "Reachability trace has no outer scroll area." ]; then
     expected_pre_fix_failure=true
@@ -212,16 +296,56 @@ jq -n \
       "Not full issue 517 interaction, layout-stability, or accessibility-conformance proof.",
       "Not signed, notarized, installed-app, release, runtime, or customer proof."
     ]
-  }' >"$output/focused-proof.json"
+  }' >"$tmp_root/focused-proof.json"
+render_focused_status \
+  "$tmp_root/final-focused-capture-status.json" \
+  complete complete none passed emitted ""
 
-node scripts/check-desktop-evaluation-packet-secrets.mjs --packet "$output" \
-  >"$tmp_root/packet-safety-scan.json"
-jq -e \
-  '.ok == true and (.findings | length) == 0 and (.sensitiveFiles | length) == 0 and (.skippedImages | index("cases/tab-repos/1040x680/screenshot.png") != null)' \
-  "$tmp_root/packet-safety-scan.json" >/dev/null
-cp "$tmp_root/packet-safety-scan.json" "$output/validation/packet-safety-scan.json"
-printf 'ok\n' >"$output/validation/packet-safety-scan.ok"
+safety_packet="$tmp_root/safety-packet"
+mkdir -m 700 "$safety_packet"
+cp -R "$output/." "$safety_packet/"
+cp "$tmp_root/focused-proof.json" "$safety_packet/focused-proof.json"
+cp "$tmp_root/final-focused-capture-status.json" \
+  "$safety_packet/validation/focused-capture-status.json"
+safety_status=0
+if node scripts/check-desktop-evaluation-packet-secrets.mjs --packet "$safety_packet" \
+  >"$tmp_root/packet-safety-scan.json"; then
+  :
+else
+  safety_status=$?
+fi
+if [ "$safety_status" -ne 0 ] \
+  || ! jq -e \
+    '.ok == true and (.findings | length) == 0 and (.sensitiveFiles | length) == 0 and (.skippedImages | index("cases/tab-repos/1040x680/screenshot.png") != null)' \
+    "$tmp_root/packet-safety-scan.json" >/dev/null; then
+  write_focused_status incomplete public_safety public_safety_failed failed not_emitted ""
+  echo "focused evidence failed the public-safety scan" >&2
+  if [ "$safety_status" -ne 0 ]; then exit "$safety_status"; else exit 1; fi
+fi
+
 assert_clean_head
+if cp "$tmp_root/focused-proof.json" "$output/.focused-proof.json.pending" \
+  && cp "$tmp_root/final-focused-capture-status.json" \
+    "$output/validation/.focused-capture-status.json.pending" \
+  && cp "$tmp_root/packet-safety-scan.json" \
+    "$output/validation/.packet-safety-scan.json.pending" \
+  && printf 'ok\n' >"$output/validation/.packet-safety-scan.ok.pending" \
+  && mv "$output/.focused-proof.json.pending" "$output/focused-proof.json" \
+  && mv "$output/validation/.packet-safety-scan.json.pending" \
+    "$output/validation/packet-safety-scan.json" \
+  && mv "$output/validation/.packet-safety-scan.ok.pending" \
+    "$output/validation/packet-safety-scan.ok" \
+  && mv "$output/validation/.focused-capture-status.json.pending" "$status_path"; then
+  :
+else
+  rm -f \
+    "$output/focused-proof.json" \
+    "$output/validation/packet-safety-scan.json" \
+    "$output/validation/packet-safety-scan.ok"
+  write_focused_status incomplete evidence evidence_publish_failed passed not_emitted ""
+  echo "could not publish focused proof atomically" >&2
+  exit 1
+fi
 
 if [ "$checker_status" -ne 0 ]; then
   echo "reachability checker failed with exit $checker_status; reachability.json was preserved" >&2
