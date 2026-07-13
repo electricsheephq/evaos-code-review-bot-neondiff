@@ -338,7 +338,7 @@ function emptyPlacementEpoch(): PlacementEpoch {
   };
 }
 
-function placementEpochCore(epoch: PlacementEpoch, index: number): {
+function placementEpochCore(epoch: PlacementEpoch, index: number, profile: LlamaCppPlacementProfile): {
   repeatingGpuLayers: number;
   total: { observed: number; total: number };
   fingerprint: string;
@@ -358,7 +358,7 @@ function placementEpochCore(epoch: PlacementEpoch, index: number): {
   const gpuAssignments = epoch.layerAssignments.filter((item) => !item.device.startsWith("CPU")).length;
   if (repeatingGpuLayers + (epoch.outputLayerOffloaded ? 1 : 0) !== total.observed
     || epoch.layerAssignments.length !== total.total
-    || gpuAssignments !== total.observed) {
+    || (profile !== "all_plus_cpu_moe" && gpuAssignments !== total.observed)) {
     throw new Error(`contradictory llama.cpp placement evidence in load epoch ${index + 1}`);
   }
   return {
@@ -441,7 +441,7 @@ export function parseLlamaCppPlacementAttestation(
   }
   epochs.push(epoch);
 
-  const epochCores = epochs.map(placementEpochCore);
+  const epochCores = epochs.map((item, index) => placementEpochCore(item, index, requirement.profile));
   const finalCore = epochCores.at(-1);
   if (!finalCore) throw new Error("llama.cpp placement has no load epoch");
   if (epochCores.some((core) => core.fingerprint !== finalCore.fingerprint)) {
@@ -466,13 +466,19 @@ export function parseLlamaCppPlacementAttestation(
   if (repeatingGpuLayers + (outputLayerOffloaded ? 1 : 0) !== total.observed) contradictions.push("GPU offload totals disagree");
   const gpuAssignments = layerAssignments.filter((item) => !item.device.startsWith("CPU")).length;
   const cpuAssignments = layerAssignments.length - gpuAssignments;
-  if (layerAssignments.length !== total.total || gpuAssignments !== total.observed) contradictions.push("layer assignments disagree with GPU offload totals");
+  if (layerAssignments.length !== total.total
+    || (requirement.profile !== "all_plus_cpu_moe" && gpuAssignments !== total.observed)) {
+    contradictions.push("layer assignments disagree with GPU offload totals");
+  }
   if (requirement.profile === "partial_gpu") {
     if (typeof requirement.requestedGpuLayers !== "number" || total.observed !== requirement.requestedGpuLayers) contradictions.push("partial-GPU observed layers differ from the literal request");
     if (total.observed >= total.total || cpuAssignments === 0 || gpuAssignments === 0) contradictions.push("partial-GPU profile is not partially offloaded");
-  } else {
+  } else if (requirement.profile === "full_gpu") {
     if (total.observed !== total.total || cpuAssignments !== 0 || !outputLayerOffloaded) contradictions.push("full-GPU profile is not fully offloaded");
     if (typeof requirement.requestedGpuLayers === "number" && requirement.requestedGpuLayers < total.total) contradictions.push("full-GPU literal request is smaller than the model layer count");
+  } else {
+    if (total.observed !== total.total || !outputLayerOffloaded) contradictions.push("CPU-MoE profile does not have a full GPU offload summary");
+    if (typeof requirement.requestedGpuLayers === "number" && requirement.requestedGpuLayers < total.total) contradictions.push("CPU-MoE literal GPU-layer request is smaller than the model layer count");
   }
   if (contradictions.length > 0) throw new Error(`contradictory llama.cpp placement evidence: ${contradictions.join("; ")}`);
   if (modelBuffers.length === 0 || kvBuffers.length === 0 || computeBuffers.length === 0) {

@@ -392,6 +392,40 @@ describe("llama.cpp b9977 placement attestation", () => {
     });
   });
 
+  it("accepts CPU layer assignment hints when CPU-MoE has a full offload summary and explicit expert overrides", () => {
+    const cpuAssignedLayers = fullGpuLog().replaceAll(
+      "assigned to device CUDA0",
+      "assigned to device CPU"
+    );
+    const source = captureLlamaCppStartup([
+      { stream: "stderr", chunk: Buffer.from(`${cpuAssignedLayers}${cpuMoeExpertLines()}`) }
+    ], { maxBytes: 32_768, maxLines: 256 });
+
+    const receipt = parseLlamaCppPlacementAttestation(source, {
+      backendCommit: BACKEND_COMMIT,
+      profile: "all_plus_cpu_moe",
+      requestedGpuLayers: "all",
+      expectedCpuMoe: { requestKind: "all", firstLayer: 0, lastLayer: 1, layerCount: 2, minimumMatchedTensors: 6 }
+    });
+
+    expect(receipt.observedGpuLayers).toBe(3);
+    expect(receipt.layerAssignments.every((assignment) => assignment.device === "CPU")).toBe(true);
+    expect(receipt.cpuExpertOverrides?.matchedTensorCount).toBe(6);
+  });
+
+  it("rejects CPU-MoE when expert overrides exist but the GPU offload summary is partial", () => {
+    const source = captureLlamaCppStartup([
+      { stream: "stderr", chunk: Buffer.from(`${partialGpuLog()}${cpuMoeExpertLines()}`) }
+    ], { maxBytes: 32_768, maxLines: 256 });
+
+    expect(() => parseLlamaCppPlacementAttestation(source, {
+      backendCommit: BACKEND_COMMIT,
+      profile: "all_plus_cpu_moe",
+      requestedGpuLayers: "all",
+      expectedCpuMoe: { requestKind: "all", firstLayer: 0, lastLayer: 1, layerCount: 2, minimumMatchedTensors: 6 }
+    })).toThrow(/CPU-MoE profile.*full GPU offload summary/i);
+  });
+
   it("attests CPU-MoE overrides from the final one of two complete b9977 load epochs", () => {
     const probeEpoch = fullGpuLog()
       .replace("CPU_Mapped model buffer size = 128.00", "CPU_Mapped model buffer size = 0.00")
