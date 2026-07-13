@@ -92,6 +92,7 @@ import {
   type ProcessedStatus,
   type ReviewQueueJobState,
   type ReviewHeadClaim,
+  type ReviewEventAuthorizationConsumptionRecord,
   type ReviewFindingRecord,
   type ReviewReadinessRecord,
   type ReviewReadinessState,
@@ -113,6 +114,34 @@ const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_MAX_ENTRIES = 256;
 const LICENSE_GATE_RETRY_DELAY_MS = 15 * 60_000;
 const licenseGateRepoVisibilityCache = new Map<string, { visibility: "public" | "private" | "unknown"; expiresAtMs: number }>();
+
+function hasDurableAuthorizedReviewReceipt(
+  consumption: ReviewEventAuthorizationConsumptionRecord | undefined
+): consumption is ReviewEventAuthorizationConsumptionRecord & {
+  postedEvent: ReviewEvent;
+  reviewUrl: string;
+  postedAt: string;
+} {
+  if (!consumption) return false;
+  return Boolean(consumption.postedEvent) &&
+    Boolean(consumption.reviewUrl) &&
+    Boolean(consumption.postedAt);
+}
+
+function recordConsumedAuthorizationIncident(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  triggerCommentId: number;
+}): boolean {
+  return input.state.recordReviewEventAuthorizationIncident({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    triggerCommentId: input.triggerCommentId,
+    error: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR
+  });
+}
 
 export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
   const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
@@ -1458,21 +1487,26 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
-  // The scheduler pre-records request-changes before the worker re-resolves it, so only a
-  // non-command decision needs this early exact-comment lookup to bypass a processed advisory head.
-  let exactOwnerReviewRequested = Boolean(
-    processed &&
-    input.commandCommentId &&
-    !commandReviewRequested &&
-    (await lookupQueuedReviewEventAuthorization({
-      mode: "trusted_command_only",
+  // The scheduler pre-records request-changes before the worker re-resolves it. Re-read the exact
+  // queued comment even when no processed row exists so a consumed crash-recovery command cannot
+  // fall through as an ordinary advisory review.
+  const queuedAuthorization = input.commandCommentId && !commandReviewRequested
+    ? await lookupQueuedReviewEventAuthorization({
+      mode: reviewEventPolicyMode,
       github,
       repo,
       pull,
       commandCommentId: input.commandCommentId,
       commandConfig: config.commands
-    })).status === "eligible"
-  );
+    })
+    : undefined;
+  let exactOwnerReviewRequested = queuedAuthorization?.status === "eligible";
+  const queuedProcessedCommand = input.commandCommentId
+    ? state.getProcessedCommand(repo, pull.number, pull.head.sha, input.commandCommentId)
+    : undefined;
+  const queuedOwnerRequestChanges = commandDecision.action === "request-changes" ||
+    queuedProcessedCommand?.action === "request-changes" ||
+    exactOwnerReviewRequested;
   let manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
   if (manualReviewRequested) {
     const livePull = await github.getPull(repo, pull.number);
@@ -1485,16 +1519,25 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
   if (input.commandCommentId) {
     const consumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
-    const queuedRequestChanges = commandDecision.action === "request-changes" ||
-      exactOwnerReviewRequested ||
+    const queuedRequestChanges = queuedOwnerRequestChanges ||
       consumption?.commentId === input.commandCommentId;
     if (consumption && queuedRequestChanges) {
-      if (processed?.status === "posted") {
+      if (hasDurableAuthorizedReviewReceipt(consumption)) {
         await reconcileProcessedHeadAfterDirectReviewSafely({ config, github, state, repo, pull, dryRun: input.dryRun });
         return "skipped_processed";
       }
       const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
       mkdirSync(evidenceDir, { recursive: true });
+      const incidentRecorded = recordConsumedAuthorizationIncident({
+        state,
+        repo,
+        pull,
+        triggerCommentId: input.commandCommentId
+      });
+      if (!incidentRecorded) {
+        await reconcileProcessedHeadAfterDirectReviewSafely({ config, github, state, repo, pull, dryRun: input.dryRun });
+        return "skipped_processed";
+      }
       writeRedactedJson(join(evidenceDir, "consumed-authorization-incident.json"), {
         reason: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
         repo,
@@ -1502,13 +1545,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         headSha: pull.head.sha,
         commentId: input.commandCommentId,
         consumedAt: consumption.consumedAt
-      });
-      state.recordProcessed({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        status: "skipped",
-        error: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR
       });
       return "skipped_consumed_authorization";
     }
@@ -1908,6 +1944,50 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       commandCommentId: input.commandCommentId,
       commandConfig: config.commands
     });
+    if (reviewEventPolicyMode === "trusted_command_only" && queuedOwnerRequestChanges) {
+      const concurrentConsumption = state.getReviewEventAuthorizationConsumption(repo, pull.number, pull.head.sha);
+      if (concurrentConsumption) {
+        const triggerCommentId = input.commandCommentId ??
+          (commandDecision.action === "request-changes" ? commandDecision.commandId : concurrentConsumption.commentId);
+        if (hasDurableAuthorizedReviewReceipt(concurrentConsumption)) {
+          await reconcileProcessedHeadAfterDirectReviewSafely({
+            config,
+            github,
+            state,
+            repo,
+            pull,
+            dryRun: input.dryRun
+          });
+          return "skipped_processed";
+        }
+        const incidentRecorded = recordConsumedAuthorizationIncident({
+          state,
+          repo,
+          pull,
+          triggerCommentId
+        });
+        if (!incidentRecorded) {
+          await reconcileProcessedHeadAfterDirectReviewSafely({
+            config,
+            github,
+            state,
+            repo,
+            pull,
+            dryRun: input.dryRun
+          });
+          return "skipped_processed";
+        }
+        writeRedactedJson(join(evidenceDir, "consumed-authorization-incident.json"), {
+          reason: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          commentId: triggerCommentId,
+          consumedAt: concurrentConsumption.consumedAt
+        });
+        return "skipped_consumed_authorization";
+      }
+    }
     exactOwnerReviewRequested = exactOwnerReviewRequested || authorization.status === "eligible";
     manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     if (reviewEventPolicyMode === "trusted_command_only") {
@@ -2009,7 +2089,24 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
-    if (!preservedPriorBlockingRow) {
+    if (reviewEventResolution.consumed) {
+      if (
+        reviewEventResolution.authorization.status !== "eligible" ||
+        !review.html_url
+      ) {
+        throw new Error("consumed owner authorization did not produce a durable review receipt");
+      }
+      state.recordAuthorizedReviewPosted({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        commentId: reviewEventResolution.authorization.commentId,
+        author: reviewEventResolution.authorization.author,
+        event: plan.event,
+        reviewUrl: review.html_url,
+        preserveExistingBlocking: preservedPriorBlockingRow
+      });
+    } else if (!preservedPriorBlockingRow) {
       state.recordProcessed({
         repo,
         pullNumber: pull.number,
@@ -2057,6 +2154,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if ((headChangedDuringPost || postReviewHeadLookupFailed) && !preservedPriorVerifiedBlockingRow) {
       const durablePosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
       if (durablePosted?.status === "posted") {
+        const uncertaintyReason = headChangedDuringPost
+          ? REVIEW_POSTED_HEAD_CHANGED_ERROR
+          : POST_REVIEW_HEAD_UNVERIFIED_ERROR;
         state.recordProcessed({
           repo,
           pullNumber: pull.number,
@@ -2064,7 +2164,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           status: "posted",
           ...(durablePosted.event ? { event: durablePosted.event } : {}),
           ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
-          error: headChangedDuringPost ? REVIEW_POSTED_HEAD_CHANGED_ERROR : POST_REVIEW_HEAD_UNVERIFIED_ERROR
+          error: uncertaintyReason
+        });
+        state.recordReviewReadiness({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          state: headChangedDuringPost ? "stale" : "failed",
+          reason: uncertaintyReason,
+          ...(durablePosted.event ? { event: durablePosted.event } : {}),
+          ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
+          ...(input.commandCommentId
+            ? { commandAction: "request-changes" as const, commandCommentId: input.commandCommentId }
+            : {})
         });
       }
     }

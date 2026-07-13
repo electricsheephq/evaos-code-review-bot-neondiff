@@ -356,6 +356,24 @@ export interface ReviewEventAuthorizationConsumptionRecord {
   commentId: number;
   author: string;
   consumedAt: string;
+  postedEvent?: ReviewEvent;
+  reviewUrl?: string;
+  postedAt?: string;
+  incidentError?: string;
+  incidentCommentId?: number;
+  incidentAt?: string;
+}
+
+export interface RecordAuthorizedReviewPostedInput {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  commentId: number;
+  author: string;
+  event: ReviewEvent;
+  reviewUrl: string;
+  preserveExistingBlocking?: boolean;
+  now?: Date;
 }
 
 export interface RepoMemoryNoteRecord {
@@ -793,6 +811,12 @@ export class ReviewStateStore {
         comment_id integer not null,
         author text not null,
         consumed_at text not null,
+        posted_event text,
+        review_url text,
+        posted_at text,
+        incident_error text,
+        incident_comment_id integer,
+        incident_at text,
         primary key (repo, pull_number, head_sha)
       );
 
@@ -812,6 +836,7 @@ export class ReviewStateStore {
         primary key (repo, pull_number, head_sha, command_comment_id)
       );
     `);
+    this.ensureReviewEventAuthorizationOutcomeColumns();
   }
 
   hasProcessed(repo: string, pullNumber: number, headSha: string): boolean {
@@ -1556,7 +1581,8 @@ export class ReviewStateStore {
     validateReviewEventAuthorizationCoordinates(repo, pullNumber, headSha);
     const row = this.db
       .prepare(
-        `select repo, pull_number, head_sha, comment_id, author, consumed_at
+        `select repo, pull_number, head_sha, comment_id, author, consumed_at,
+                posted_event, review_url, posted_at, incident_error, incident_comment_id, incident_at
          from review_event_authorization_consumptions
          where repo = ? and pull_number = ? and head_sha = ?`
       )
@@ -1567,6 +1593,12 @@ export class ReviewStateStore {
         comment_id: number;
         author: string;
         consumed_at: string;
+        posted_event: ReviewEvent | null;
+        review_url: string | null;
+        posted_at: string | null;
+        incident_error: string | null;
+        incident_comment_id: number | null;
+        incident_at: string | null;
       } | undefined;
     return row
       ? {
@@ -1575,9 +1607,183 @@ export class ReviewStateStore {
           headSha: row.head_sha,
           commentId: row.comment_id,
           author: row.author,
-          consumedAt: row.consumed_at
+          consumedAt: row.consumed_at,
+          ...(row.posted_event ? { postedEvent: row.posted_event } : {}),
+          ...(row.review_url ? { reviewUrl: row.review_url } : {}),
+          ...(row.posted_at ? { postedAt: row.posted_at } : {}),
+          ...(row.incident_error ? { incidentError: row.incident_error } : {}),
+          ...(row.incident_comment_id ? { incidentCommentId: row.incident_comment_id } : {}),
+          ...(row.incident_at ? { incidentAt: row.incident_at } : {})
         }
       : undefined;
+  }
+
+  /**
+   * Atomically links a consumed owner authorization to the durable GitHub review it created and
+   * records the processed-head outcome. A generic prior advisory row is intentionally insufficient:
+   * replay suppression may trust only this comment-linked receipt.
+   */
+  recordAuthorizedReviewPosted(input: RecordAuthorizedReviewPostedInput): void {
+    validateReviewEventAuthorizationConsumption(input);
+    if (!/^https:\/\/github\.com\//.test(input.reviewUrl)) {
+      throw new Error("reviewUrl must be a GitHub URL");
+    }
+    const postedAt = (input.now ?? new Date()).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      const existingProcessed = this.getProcessedReview(input.repo, input.pullNumber, input.headSha);
+      const preserveExistingBlocking = Boolean(
+        input.preserveExistingBlocking &&
+        existingProcessed?.status === "posted" &&
+        existingProcessed.event === "REQUEST_CHANGES" &&
+        !existingProcessed.error
+      );
+      const receipt = this.db
+        .prepare(
+          `update review_event_authorization_consumptions
+           set posted_event = ?, review_url = ?, posted_at = ?,
+               incident_error = null, incident_comment_id = null, incident_at = null
+           where repo = ? and pull_number = ? and head_sha = ? and comment_id = ? and author = ?`
+        )
+        .run(
+          input.event,
+          input.reviewUrl,
+          postedAt,
+          input.repo,
+          input.pullNumber,
+          input.headSha.toLowerCase(),
+          input.commentId,
+          input.author
+        );
+      if (Number(receipt.changes) !== 1) {
+        throw new Error("refusing to record an authorized review without its exact consumption row");
+      }
+      if (!preserveExistingBlocking) {
+        this.db
+          .prepare(
+            `insert or replace into processed_reviews
+              (repo, pull_number, head_sha, status, event, review_url, error, created_at)
+             values (?, ?, ?, 'posted', ?, ?, null, datetime('now'))`
+          )
+          .run(input.repo, input.pullNumber, input.headSha, input.event, input.reviewUrl);
+      }
+      const readinessEvent = preserveExistingBlocking ? "REQUEST_CHANGES" : input.event;
+      const readinessUrl = preserveExistingBlocking ? existingProcessed?.reviewUrl : input.reviewUrl;
+      const readinessState: ReviewReadinessState = readinessEvent === "REQUEST_CHANGES" ? "needs_fix" : "ready_for_human";
+      const readinessReason = readinessEvent === "REQUEST_CHANGES" ? "request_changes_review_posted" : "comment_review_posted";
+      const existingReadiness = this.getReviewReadiness(input.repo, input.pullNumber, input.headSha);
+      this.db
+        .prepare(
+          `insert into review_readiness
+            (repo, pull_number, head_sha, state, reason, event, review_url,
+             command_action, command_comment_id, created_at, updated_at)
+           values (?, ?, ?, ?, ?, ?, ?, 'request-changes', ?, ?, ?)
+           on conflict(repo, pull_number, head_sha) do update set
+             state = excluded.state,
+             reason = excluded.reason,
+             event = excluded.event,
+             review_url = excluded.review_url,
+             command_action = excluded.command_action,
+             command_comment_id = excluded.command_comment_id,
+             updated_at = excluded.updated_at`
+        )
+        .run(
+          input.repo,
+          input.pullNumber,
+          input.headSha,
+          readinessState,
+          readinessReason,
+          readinessEvent,
+          readinessUrl ?? null,
+          input.commentId,
+          existingReadiness?.createdAt ?? postedAt,
+          postedAt
+        );
+      this.db
+        .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
+        .run(input.repo, input.pullNumber, input.headSha);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  recordReviewEventAuthorizationIncident(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    triggerCommentId: number;
+    error: string;
+    now?: Date;
+  }): boolean {
+    validateReviewEventAuthorizationCoordinates(input.repo, input.pullNumber, input.headSha);
+    if (!Number.isInteger(input.triggerCommentId) || input.triggerCommentId < 1) {
+      throw new Error("triggerCommentId must be a positive integer");
+    }
+    const error = redactSecrets(input.error).trim().slice(0, 500);
+    if (!error) throw new Error("error must be a non-empty string");
+    const incidentAt = (input.now ?? new Date()).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      const result = this.db
+        .prepare(
+          `update review_event_authorization_consumptions
+           set incident_error = ?, incident_comment_id = ?, incident_at = ?
+           where repo = ? and pull_number = ? and head_sha = ? and posted_at is null`
+        )
+        .run(
+          error,
+          input.triggerCommentId,
+          incidentAt,
+          input.repo,
+          input.pullNumber,
+          input.headSha.toLowerCase()
+        );
+      if (Number(result.changes) !== 1) {
+        const existing = this.db
+          .prepare(
+            `select posted_at from review_event_authorization_consumptions
+             where repo = ? and pull_number = ? and head_sha = ?`
+          )
+          .get(input.repo, input.pullNumber, input.headSha.toLowerCase()) as { posted_at: string | null } | undefined;
+        if (existing?.posted_at) {
+          this.db.exec("commit");
+          return false;
+        }
+        throw new Error("refusing to record an authorization incident without a consumption row");
+      }
+      const existingReadiness = this.getReviewReadiness(input.repo, input.pullNumber, input.headSha);
+      this.db
+        .prepare(
+          `insert into review_readiness
+            (repo, pull_number, head_sha, state, reason, event, review_url,
+             command_action, command_comment_id, created_at, updated_at)
+           values (?, ?, ?, 'failed', ?, null, null, 'request-changes', ?, ?, ?)
+           on conflict(repo, pull_number, head_sha) do update set
+             state = excluded.state,
+             reason = excluded.reason,
+             event = excluded.event,
+             review_url = excluded.review_url,
+             command_action = excluded.command_action,
+             command_comment_id = excluded.command_comment_id,
+             updated_at = excluded.updated_at`
+        )
+        .run(
+          input.repo,
+          input.pullNumber,
+          input.headSha,
+          error,
+          input.triggerCommentId,
+          existingReadiness?.createdAt ?? incidentAt,
+          incidentAt
+        );
+      this.db.exec("commit");
+      return true;
+    } catch (caught) {
+      this.db.exec("rollback");
+      throw caught;
+    }
   }
 
   tryAcquireIssueEnrichmentRunLease(
@@ -2729,6 +2935,43 @@ export class ReviewStateStore {
     return Boolean(row);
   }
 
+  getProcessedCommand(
+    repo: string,
+    pullNumber: number,
+    headSha: string,
+    commentId: number
+  ): ProcessedCommandRecord | undefined {
+    const row = this.db
+      .prepare(
+        `select repo, pull_number, head_sha, comment_id, action, status, author, url
+         from processed_commands
+         where repo = ? and pull_number = ? and head_sha = ? and comment_id = ?
+         limit 1`
+      )
+      .get(repo, pullNumber, headSha, commentId) as {
+        repo: string;
+        pull_number: number;
+        head_sha: string;
+        comment_id: number;
+        action: ProcessedCommandAction;
+        status: ProcessedCommandStatus;
+        author: string | null;
+        url: string | null;
+      } | undefined;
+    return row
+      ? {
+          repo: row.repo,
+          pullNumber: row.pull_number,
+          headSha: row.head_sha,
+          commentId: row.comment_id,
+          action: row.action,
+          status: row.status,
+          ...(row.author ? { author: row.author } : {}),
+          ...(row.url ? { url: row.url } : {})
+        }
+      : undefined;
+  }
+
   recordProcessedCommand(record: ProcessedCommandRecord): void {
     this.db
       .prepare(
@@ -2996,6 +3239,31 @@ export class ReviewStateStore {
     if (!names.has("coarse_line")) this.db.exec("alter table repo_memory_notes add column coarse_line integer");
     if (!names.has("coarse_title")) this.db.exec("alter table repo_memory_notes add column coarse_title text");
     if (!names.has("confirmed_by_human")) this.db.exec("alter table repo_memory_notes add column confirmed_by_human integer");
+  }
+
+  private ensureReviewEventAuthorizationOutcomeColumns(): void {
+    const columns = this.db
+      .prepare("pragma table_info(review_event_authorization_consumptions)")
+      .all() as unknown as Array<{ name: string }>;
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("posted_event")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column posted_event text");
+    }
+    if (!names.has("review_url")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column review_url text");
+    }
+    if (!names.has("posted_at")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column posted_at text");
+    }
+    if (!names.has("incident_error")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column incident_error text");
+    }
+    if (!names.has("incident_comment_id")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column incident_comment_id integer");
+    }
+    if (!names.has("incident_at")) {
+      this.db.exec("alter table review_event_authorization_consumptions add column incident_at text");
+    }
   }
 }
 
