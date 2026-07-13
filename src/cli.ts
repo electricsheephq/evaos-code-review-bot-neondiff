@@ -62,7 +62,7 @@ import {
   writeOutcomeLedgerPacket
 } from "./outcome-ledger.js";
 import {
-  buildCheckoutIssuanceSmokeRequestPreview,
+  buildCheckoutIssuanceSmokeRequestResult,
   runCheckoutIssuanceSmoke,
   validateCheckoutIssuanceUrl
 } from "./checkout-issuance-smoke.js";
@@ -222,21 +222,33 @@ async function main(): Promise<void> {
     }
     const dryRun = args["dry-run"] === undefined ? true : parseBooleanArg(args["dry-run"], "--dry-run");
     if (dryRun) {
+      const requestResult = buildCheckoutIssuanceSmokeRequestResult({
+        releaseVersion,
+        checkoutLookupKey,
+        providerAccountId,
+        providerMode,
+        externalSubscriptionId,
+        externalCheckoutId,
+        ...(idempotencyKey ? { idempotencyKey } : {})
+      });
+      if (!requestResult.ok) {
+        console.log(stringifyRedactedJson({
+          ok: false,
+          command: "checkout-issuance-smoke",
+          errorCode: requestResult.errorCode,
+          detail: requestResult.detail,
+          proofBoundary: "No authenticated checkout issuance proof was produced."
+        }));
+        process.exitCode = 1;
+        return;
+      }
       console.log(stringifyRedactedJson({
         ok: true,
         command: "checkout-issuance-smoke",
         mode: "dry_run",
         url,
         releaseVersion,
-        requestPreview: buildCheckoutIssuanceSmokeRequestPreview({
-          releaseVersion,
-          checkoutLookupKey,
-          providerAccountId,
-          providerMode,
-          externalSubscriptionId,
-          externalCheckoutId,
-          ...(idempotencyKey ? { idempotencyKey } : {})
-        }),
+        requestPreview: requestResult.requestPreview,
         proofBoundary: "Dry-run request preview only; no owner-held secret was read and no network request was sent."
       }));
       return;

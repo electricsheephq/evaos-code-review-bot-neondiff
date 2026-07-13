@@ -62,6 +62,14 @@ export interface CheckoutIssuanceSmokeRequestSummary {
   providerMode: CheckoutProviderMode;
 }
 
+export type CheckoutIssuanceSmokeRequestResult =
+  | { ok: true; requestPreview: CheckoutIssuanceSmokeRequestPreview }
+  | {
+      ok: false;
+      errorCode: "invalid_provider_tuple" | "invalid_checkout_lookup_key";
+      detail: string;
+    };
+
 export interface AuthenticatedCheckoutIssuanceProof {
   evidenceKind: "license_api_checkout_issuance_authenticated";
   releaseVersion: string;
@@ -126,6 +134,24 @@ export function buildCheckoutIssuanceSmokeRequestPreview(input: {
   };
 }
 
+export function buildCheckoutIssuanceSmokeRequestResult(input: {
+  releaseVersion: string;
+  checkoutLookupKey: string;
+  idempotencyKey?: string;
+} & CheckoutProviderTupleInput): CheckoutIssuanceSmokeRequestResult {
+  try {
+    return { ok: true, requestPreview: buildCheckoutIssuanceSmokeRequestPreview(input) };
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: error instanceof InvalidProviderTupleError
+        ? "invalid_provider_tuple"
+        : "invalid_checkout_lookup_key",
+      detail: error instanceof Error ? error.message : "invalid checkout issuance input"
+    };
+  }
+}
+
 export function normalizeCheckoutProviderTuple(
   input: CheckoutProviderTupleInput
 ): CheckoutProviderTuple {
@@ -174,17 +200,9 @@ export function validateCheckoutIssuanceUrl(url: string): { ok: true } | { ok: f
 }
 
 export async function runCheckoutIssuanceSmoke(input: CheckoutIssuanceSmokeInput): Promise<CheckoutIssuanceSmokeResult> {
-  let requestPreview: CheckoutIssuanceSmokeRequestPreview;
-  try {
-    requestPreview = buildCheckoutIssuanceSmokeRequestPreview(input);
-  } catch (error) {
-    return failure(
-      error instanceof InvalidProviderTupleError
-        ? "invalid_provider_tuple"
-        : "invalid_checkout_lookup_key",
-      error instanceof Error ? error.message : "invalid checkout issuance input"
-    );
-  }
+  const requestResult = buildCheckoutIssuanceSmokeRequestResult(input);
+  if (!requestResult.ok) return failure(requestResult.errorCode, requestResult.detail);
+  const { requestPreview } = requestResult;
 
   const urlCheck = validateCheckoutIssuanceUrl(input.url);
   if (!urlCheck.ok) return failure("invalid_url", urlCheck.detail, { requestPreview });

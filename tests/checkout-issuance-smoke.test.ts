@@ -579,6 +579,92 @@ describe("checkout issuance smoke", () => {
     expect(JSON.stringify(output)).not.toContain("LICENSE_ISSUANCE_SECRET");
   });
 
+  it("returns structured redacted JSON when CLI dry-run provider tuple fields are missing", async () => {
+    const failure = await runCliFailure([
+      "checkout-issuance-smoke",
+      "--url",
+      "https://license.example/v1/admin/licenses/issue",
+      "--release-version",
+      "v1.0.5",
+      "--checkout-lookup-key",
+      "neondiff_monthly",
+      "--dry-run",
+      "true"
+    ]);
+
+    expect(failure.output).toMatchObject({
+      ok: false,
+      command: "checkout-issuance-smoke",
+      errorCode: "invalid_provider_tuple",
+      detail: "providerMode must be test or live",
+      proofBoundary: "No authenticated checkout issuance proof was produced."
+    });
+    expect(failure.stderr).toBe("");
+  });
+
+  it("keeps invalid checkout lookup keys distinct from provider tuple failures in CLI dry-run", async () => {
+    const failure = await runCliFailure([
+      "checkout-issuance-smoke",
+      "--url",
+      "https://license.example/v1/admin/licenses/issue",
+      "--release-version",
+      "v1.0.5",
+      "--checkout-lookup-key",
+      "unsupported_plan",
+      "--provider-account-id",
+      TEST_PROVIDER_TUPLE.providerAccountId,
+      "--provider-mode",
+      TEST_PROVIDER_TUPLE.providerMode,
+      "--external-subscription-id",
+      TEST_PROVIDER_TUPLE.externalSubscriptionId,
+      "--external-checkout-id",
+      TEST_PROVIDER_TUPLE.externalCheckoutId,
+      "--dry-run",
+      "true"
+    ]);
+
+    expect(failure.output).toMatchObject({
+      ok: false,
+      command: "checkout-issuance-smoke",
+      errorCode: "invalid_checkout_lookup_key"
+    });
+    expect(failure.stderr).toBe("");
+  });
+
+  it("rejects and redacts a 161-character provider identifier in CLI dry-run", async () => {
+    const oversizedProviderAccountId = `acct_${"x".repeat(156)}`;
+    expect(oversizedProviderAccountId).toHaveLength(161);
+
+    const failure = await runCliFailure([
+      "checkout-issuance-smoke",
+      "--url",
+      "https://license.example/v1/admin/licenses/issue",
+      "--release-version",
+      "v1.0.5",
+      "--checkout-lookup-key",
+      "neondiff_monthly",
+      "--provider-account-id",
+      oversizedProviderAccountId,
+      "--provider-mode",
+      TEST_PROVIDER_TUPLE.providerMode,
+      "--external-subscription-id",
+      TEST_PROVIDER_TUPLE.externalSubscriptionId,
+      "--external-checkout-id",
+      TEST_PROVIDER_TUPLE.externalCheckoutId,
+      "--dry-run",
+      "true"
+    ]);
+
+    expect(failure.output).toMatchObject({
+      ok: false,
+      command: "checkout-issuance-smoke",
+      errorCode: "invalid_provider_tuple",
+      detail: "providerAccountId is too long"
+    });
+    expect(failure.stdout).not.toContain(oversizedProviderAccountId);
+    expect(failure.stderr).toBe("");
+  });
+
   it("rejects plaintext URLs in CLI dry-run before presenting a request preview", async () => {
     await expect(runCli([
       "checkout-issuance-smoke",
@@ -643,4 +729,23 @@ async function runCli(args: string[]): Promise<Record<string, unknown>> {
     maxBuffer: 1024 * 1024
   });
   return JSON.parse(stdout) as Record<string, unknown>;
+}
+
+async function runCliFailure(args: string[]): Promise<{
+  output: Record<string, unknown>;
+  stdout: string;
+  stderr: string;
+}> {
+  try {
+    await runCli(args);
+  } catch (error) {
+    const failure = error as { stdout?: unknown; stderr?: unknown };
+    if (typeof failure.stdout !== "string") throw error;
+    return {
+      output: JSON.parse(failure.stdout) as Record<string, unknown>,
+      stdout: failure.stdout,
+      stderr: typeof failure.stderr === "string" ? failure.stderr : ""
+    };
+  }
+  throw new Error("expected CLI command to fail");
 }
