@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -154,15 +154,20 @@ interface MigrationOpener {
   completion: Promise<{ status: "opened" | "error"; detail?: string }>;
 }
 
-function startMigrationOpener(path: string, releasePath: string): MigrationOpener {
+function startMigrationOpener(path: string, acknowledgmentPath: string): MigrationOpener {
   const source = `
-    import { existsSync } from "node:fs";
+    import { writeFileSync } from "node:fs";
     const { LicenseStore } = await import(process.env.LICENSE_STORE_MODULE_URL);
     process.stdout.write("READY\\n");
-    const wait = new Int32Array(new SharedArrayBuffer(4));
-    while (!existsSync(process.env.MIGRATION_RELEASE_PATH)) Atomics.wait(wait, 0, 0, 5);
     try {
-      new LicenseStore(process.env.MIGRATION_DB_PATH, { busyTimeoutMs: 1000 }).close();
+      new LicenseStore(process.env.MIGRATION_DB_PATH, {
+        busyTimeoutMs: 1000,
+        migrationHook(step) {
+          if (step === "version-zero-classified") {
+            writeFileSync(process.env.MIGRATION_ACKNOWLEDGMENT_PATH, String(process.pid), { flag: "wx" });
+          }
+        }
+      }).close();
       process.stdout.write("OPENED\\n");
     } catch (error) {
       process.stdout.write(
@@ -179,7 +184,7 @@ function startMigrationOpener(path: string, releasePath: string): MigrationOpene
         ...process.env,
         LICENSE_STORE_MODULE_URL: new URL("../src/store.ts", import.meta.url).href,
         MIGRATION_DB_PATH: path,
-        MIGRATION_RELEASE_PATH: releasePath
+        MIGRATION_ACKNOWLEDGMENT_PATH: acknowledgmentPath
       }
     }
   );
@@ -231,6 +236,15 @@ function startMigrationOpener(path: string, releasePath: string): MigrationOpene
   return { child, ready, completion };
 }
 
+async function waitForAcknowledgments(paths: readonly string[]): Promise<void> {
+  const deadline = Date.now() + 500;
+  while (!paths.every(existsSync) && Date.now() < deadline) await delay(5);
+  assert.ok(
+    paths.every(existsSync),
+    "both migration openers must classify version zero before the writer lock is released"
+  );
+}
+
 describe("license store schema v2 migration", () => {
   for (const [label, setup] of [
     ["empty bootstrap", (_path: string) => {}],
@@ -239,17 +253,19 @@ describe("license store schema v2 migration", () => {
     it(`lets concurrent ${label} openers converge after inspecting the same v0 state`, async () => {
       const path = databasePath();
       setup(path);
-      const releasePath = join(tempDirectories.at(-1)!, "release-openers");
+      const acknowledgmentPaths = [
+        join(tempDirectories.at(-1)!, "opener-one-classified"),
+        join(tempDirectories.at(-1)!, "opener-two-classified")
+      ];
       const blocker = open(path);
       blocker.exec("begin immediate");
       const openers = [
-        startMigrationOpener(path, releasePath),
-        startMigrationOpener(path, releasePath)
+        startMigrationOpener(path, acknowledgmentPaths[0]),
+        startMigrationOpener(path, acknowledgmentPaths[1])
       ];
       try {
         await Promise.all(openers.map(({ ready }) => ready));
-        writeFileSync(releasePath, "go");
-        await delay(100);
+        await waitForAcknowledgments(acknowledgmentPaths);
         blocker.exec("rollback");
 
         assert.deepEqual(

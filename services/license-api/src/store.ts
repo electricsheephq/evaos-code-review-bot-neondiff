@@ -40,6 +40,7 @@ const CHECKOUT_BINDING_BACKFILL_FIELDS = new Set([
 ]);
 
 export type SchemaMigrationStep =
+  | "version-zero-classified"
   | "transaction-started"
   | "core-schema-created"
   | "lifecycle-schema-created"
@@ -356,6 +357,7 @@ export class LicenseStore {
       throw new Error(`unsupported license database schema version ${version}`);
     }
 
+    options.migrationHook?.("version-zero-classified");
     this.db.exec("begin immediate");
     try {
       // Another process may have completed the migration while this connection
