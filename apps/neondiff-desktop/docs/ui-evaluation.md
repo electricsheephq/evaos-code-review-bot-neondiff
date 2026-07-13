@@ -161,12 +161,13 @@ text. It never reads live configuration, Keychain, GitHub, provider, daemon,
 network, or customer state.
 
 Capture output remains in the private workspace until the helper exits
-successfully and every required file is present. A timeout, TCC denial, partial
+successfully and every required file is present. A fixture exit before
+readiness, bounded readiness timeout, capture timeout, TCC denial, partial
 capture, or source-HEAD drift leaves `focused-capture-status.json` marked
 `incomplete`, does not publish a focused proof or safety `ok` marker, and does
-not expose raw capture stderr. The final proof, safety result, and `ok` marker
-are published only after the packet scan passes and a final clean exact-HEAD
-check succeeds.
+not expose raw launch or capture logs. The final proof, safety result, and `ok`
+marker are published only after the packet scan passes and a final clean
+exact-HEAD check succeeds.
 
 The current pre-fix result is the missing outer `AXScrollArea` ancestor. It is
 classified as that expected RED only when the typed reachability acquisition is

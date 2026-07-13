@@ -63,6 +63,16 @@ set -eu
 printf 'app %s\\n' "$*" >>"$FAKE_COMMAND_LOG"
 printf 'app-pid %s\\n' "$$" >>"$FAKE_COMMAND_LOG"
 ready=\${NEONDIFF_DESKTOP_EVALUATION_READY_PATH:?}
+case "\${FAKE_APP_READINESS_MODE:-ready}" in
+  exit)
+    printf 'private launch failure detail\\n'
+    exit 73
+    ;;
+  timeout)
+    trap 'exit 0' HUP INT TERM
+    while :; do /bin/sleep 0.1; done
+    ;;
+esac
 printf '{"schemaVersion":1,"fixtureId":"tab-repos","pid":%s,"windowNumber":41,"windowFrame":{"x":0,"y":0,"width":1040,"height":702},"contentFrame":{"x":0,"y":22,"width":1040,"height":680},"backingScale":2,"ready":true}\\n' "$$" >"$ready"
 trap 'exit 0' HUP INT TERM
 while :; do /bin/sleep 0.1; done
@@ -178,6 +188,7 @@ fi
       ...process.env,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       FAKE_APP_TEMPLATE: appTemplate,
+      FAKE_APP_READINESS_MODE: "ready",
       FAKE_COMMAND_LOG: commandLog,
       FAKE_SWIFT_BIN: swiftBin,
       FAKE_CHECKER_STATUS: "7",
@@ -246,7 +257,8 @@ describe("focused Repos reachability capture", () => {
 
     const script = readFileSync(scriptPath, "utf8");
     expect(script).toContain("umask 077");
-    expect(script).toMatch(/mktemp -d [^\n]*\/tmp\/neondiff-desktop-repos-reachability/);
+    expect(script).toContain('"/tmp/neondiff-desktop-evaluation.XXXXXXXX"');
+    expect(script).not.toContain("neondiff-desktop-repos-reachability.XXXXXXXX");
     expect(script).toContain("canonical focused capture requires a clean worktree");
     expect(script).toContain("assert_clean_head");
     expect(script).toContain('fixture_id="tab-repos"');
@@ -359,6 +371,52 @@ describe("focused Repos reachability capture", () => {
           expectedPreFixFailure: false,
           reasonCode: "checker_nonzero"
         });
+    }
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "normalizes an app exit before readiness without exposing the private launch log",
+    { timeout: 30_000 },
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, { FAKE_APP_READINESS_MODE: "exit" });
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+      expect(focusedStatus(harness)).toMatchObject({
+        status: "incomplete",
+        phase: "launch",
+        reasonCode: "fixture_launch_failed",
+        publicSafety: "incomplete",
+        focusedProof: "not_emitted"
+      });
+      expectNoFinalProof(harness);
+      expect(existsSync(join(harness.output, "cases/tab-repos/1040x680"))).toBe(false);
+      expect(existsSync(join(harness.output, "validation/launch.log"))).toBe(false);
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("private launch failure detail");
+      expect(() => process.kill(launchedPID(harness), 0)).toThrow();
+    }
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "terminates an app that times out before readiness and records a public-safe status",
+    { timeout: 30_000 },
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, { FAKE_APP_READINESS_MODE: "timeout" });
+
+      expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+      expect(focusedStatus(harness)).toMatchObject({
+        status: "incomplete",
+        phase: "readiness",
+        reasonCode: "readiness_timeout",
+        publicSafety: "incomplete",
+        focusedProof: "not_emitted"
+      });
+      expectNoFinalProof(harness);
+      expect(existsSync(join(harness.output, "cases/tab-repos/1040x680"))).toBe(false);
+      expect(existsSync(join(harness.output, "validation/launch.log"))).toBe(false);
+      expect(() => process.kill(launchedPID(harness), 0)).toThrow();
     }
   );
 

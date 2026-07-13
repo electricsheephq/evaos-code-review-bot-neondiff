@@ -73,7 +73,7 @@ write_focused_status() {
 
 write_focused_status incomplete setup capture_in_progress incomplete not_emitted ""
 
-tmp_root=$(/usr/bin/mktemp -d "/tmp/neondiff-desktop-repos-reachability.XXXXXXXX") \
+tmp_root=$(/usr/bin/mktemp -d "/tmp/neondiff-desktop-evaluation.XXXXXXXX") \
   || { echo "could not create private focused capture workspace" >&2; exit 65; }
 [ -d "$tmp_root" ] && [ ! -L "$tmp_root" ] \
   || { echo "focused capture workspace is not a private directory" >&2; exit 65; }
@@ -157,12 +157,34 @@ while [ ! -f "$ready" ] && kill -0 "$app_pid" 2>/dev/null && [ "$ready_attempts"
   /bin/sleep 0.1
   ready_attempts=$((ready_attempts + 1))
 done
-[ -f "$ready" ] && [ ! -L "$ready" ] \
-  || { echo "tab-repos fixture did not become ready at 1040x680" >&2; exit 1; }
+if [ ! -f "$ready" ]; then
+  if kill -0 "$app_pid" 2>/dev/null; then
+    terminate_process "$app_pid"
+    app_pid=
+    write_focused_status incomplete readiness readiness_timeout incomplete not_emitted ""
+    echo "tab-repos readiness timed out at 1040x680" >&2
+  else
+    wait "$app_pid" >/dev/null 2>&1 || true
+    app_pid=
+    write_focused_status incomplete launch fixture_launch_failed incomplete not_emitted ""
+    echo "tab-repos fixture exited before readiness at 1040x680" >&2
+  fi
+  exit 1
+fi
+[ ! -L "$ready" ] \
+  || {
+    write_focused_status incomplete readiness readiness_invalid incomplete not_emitted ""
+    echo "tab-repos readiness was not a regular private file" >&2
+    exit 1
+  }
 jq -e --arg fixture "$fixture_id" --argjson pid "$app_pid" \
   '.schemaVersion == 1 and .ready == true and .fixtureId == $fixture and .pid == $pid' \
   "$ready" >/dev/null \
-  || { echo "tab-repos readiness did not match the launched process" >&2; exit 1; }
+  || {
+    write_focused_status incomplete readiness readiness_invalid incomplete not_emitted ""
+    echo "tab-repos readiness did not match the launched process" >&2
+    exit 1
+  }
 cp "$ready" "$capture_stage/readiness.json"
 
 "$capture_bin" \
