@@ -137,8 +137,7 @@ function lifecycleRequest(
     revoke: {
       providerEventType: "customer.subscription.deleted",
       subscriptionStatus: "canceled",
-      cancelAtPeriodEnd: false,
-      reason: "provider subscription terminated"
+      cancelAtPeriodEnd: false
     }
   } as const;
   return parseSubscriptionLifecycleRequest(
@@ -245,6 +244,103 @@ describe("checkout subscription lifecycle binding", () => {
 });
 
 describe("checkout subscription lifecycle replay", () => {
+  it("rejects incompatible stored entitlements before the first lifecycle write", () => {
+    for (const [label, mutation] of [
+      ["missing expiry", "update licenses set expires_at = null where license_key_hash = ?"],
+      ["invalid expiry", "update licenses set expires_at = 'not-a-timestamp' where license_key_hash = ?"],
+      ["unsupported plan", "update licenses set plan = 'legacy_lifetime' where license_key_hash = ?"]
+    ] as const) {
+      const path = databasePath();
+      const store = new LicenseStore(path, { now: () => NOW });
+      try {
+        const issued = issueBound(store, {
+          idempotencyKey: `checkout-session:invalid-first-${label.replaceAll(" ", "-")}`,
+          externalSubscriptionId: `sub_invalid_first_${label.replaceAll(" ", "_")}`,
+          externalCheckoutId: `cs_invalid_first_${label.replaceAll(" ", "_")}`
+        });
+        const db = new DatabaseSync(path);
+        db.prepare(mutation).run(issued.licenseKeyHash);
+        db.close();
+
+        assert.throws(
+          () => applyLifecycle(store, lifecycleRequest("reconcile", issued.request)),
+          (error: unknown) => errorName(error) === "SubscriptionLifecyclePolicyError",
+          label
+        );
+        assert.equal(
+          inspectDatabase<{ count: number }>(
+            path,
+            "select count(*) as count from license_subscription_lifecycle_events"
+          )[0]?.count,
+          0,
+          label
+        );
+        assert.equal(
+          inspectDatabase<{ last_non_mutating_event_created_at: number | null }>(
+            path,
+            `select last_non_mutating_event_created_at
+             from checkout_subscription_bindings
+             where issuance_idempotency_key = ?`,
+            issued.request.idempotencyKey
+          )[0]?.last_non_mutating_event_created_at,
+          null,
+          label
+        );
+      } finally {
+        store.close();
+      }
+    }
+  });
+
+  it("returns the policy error without writing when an exact replay finds an incompatible entitlement", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path, { now: () => NOW });
+    try {
+      const issued = issueBound(store, {
+        idempotencyKey: "checkout-session:invalid-replay",
+        externalSubscriptionId: "sub_invalid_replay",
+        externalCheckoutId: "cs_invalid_replay"
+      });
+      const request = lifecycleRequest("reconcile", issued.request);
+      applyLifecycle(store, request);
+      const before = inspectDatabase<{
+        event_count: number;
+        watermark: number | null;
+      }>(
+        path,
+        `select
+           (select count(*) from license_subscription_lifecycle_events) as event_count,
+           last_non_mutating_event_created_at as watermark
+         from checkout_subscription_bindings
+         where issuance_idempotency_key = ?`,
+        issued.request.idempotencyKey
+      )[0]!;
+      const db = new DatabaseSync(path);
+      db.prepare("update licenses set expires_at = null where license_key_hash = ?")
+        .run(issued.licenseKeyHash);
+      db.close();
+
+      assert.throws(
+        () => applyLifecycle(store, request),
+        (error: unknown) => errorName(error) === "SubscriptionLifecyclePolicyError"
+      );
+      assert.deepEqual(
+        inspectDatabase<{ event_count: number; watermark: number | null }>(
+          path,
+          `select
+             (select count(*) from license_subscription_lifecycle_events) as event_count,
+             last_non_mutating_event_created_at as watermark
+           from checkout_subscription_bindings
+           where issuance_idempotency_key = ?`,
+          issued.request.idempotencyKey
+        )[0],
+        before
+      );
+    } finally {
+      store.close();
+    }
+  });
+
   it("replays the exact event and hash once across two database connections", () => {
     const path = databasePath();
     const firstStore = new LicenseStore(path, { now: () => NOW });
@@ -283,6 +379,34 @@ describe("checkout subscription lifecycle replay", () => {
     }
   });
 
+  it("projects an exact replay as expired after the paid period elapses", () => {
+    const path = databasePath();
+    let storeNow = NOW;
+    const store = new LicenseStore(path, { now: () => storeNow });
+    try {
+      const issued = issueBound(store, {
+        idempotencyKey: "checkout-session:expired-replay-projection",
+        externalSubscriptionId: "sub_expired_replay_projection",
+        externalCheckoutId: "cs_expired_replay_projection"
+      });
+      const request = lifecycleRequest("reconcile", issued.request);
+      assert.equal(applyLifecycle(store, request).entitlement.status, "active");
+
+      storeNow = new Date("2026-07-21T00:00:00.000Z");
+      const replay = applyLifecycle(store, request);
+
+      assert.equal(replay.status, "replayed");
+      assert.equal(replay.entitlement.status, "expired");
+      assert.equal(
+        activate(store, { licenseKey: issued.rawKey, machineId: "expired-replay-machine" }, storeNow)
+          .body.status,
+        "expired"
+      );
+    } finally {
+      store.close();
+    }
+  });
+
   it("conflicts when an event ID is reused with different canonical content", () => {
     const path = databasePath();
     const store = new LicenseStore(path, { now: () => NOW });
@@ -310,6 +434,85 @@ describe("checkout subscription lifecycle replay", () => {
       );
     } finally {
       store.close();
+    }
+  });
+
+  it("conflicts on reused event IDs before rejecting each changed correlation field", () => {
+    for (const [label, override] of [
+      ["provider", { provider: "other-provider" }],
+      ["provider account", { providerAccountId: "acct_other" }],
+      ["provider mode", { providerMode: "test" }],
+      ["subscription", { externalSubscriptionId: "sub_other" }]
+    ] as const) {
+      const path = databasePath();
+      const store = new LicenseStore(path, { now: () => NOW });
+      try {
+        const issued = issueBound(store, {
+          idempotencyKey: `checkout-session:reused-correlation-${label.replaceAll(" ", "-")}`,
+          externalSubscriptionId: `sub_reused_correlation_${label.replaceAll(" ", "_")}`,
+          externalCheckoutId: `cs_reused_correlation_${label.replaceAll(" ", "_")}`
+        });
+        const original = renewal(issued.request, {
+          eventId: `evt_reused_correlation_${label.replaceAll(" ", "_")}`
+        });
+        applyLifecycle(store, original);
+
+        assert.throws(
+          () => applyLifecycle(store, { ...original, ...override } as ParsedSubscriptionLifecycleRequest),
+          (error: unknown) => errorName(error) === "SubscriptionLifecycleConflictError",
+          label
+        );
+        assert.equal(
+          inspectDatabase<{ count: number }>(
+            path,
+            "select count(*) as count from license_subscription_lifecycle_events"
+          )[0]?.count,
+          1,
+          label
+        );
+      } finally {
+        store.close();
+      }
+    }
+  });
+
+  it("exact-replays before consulting each subsequently changed binding field", () => {
+    for (const [label, mutation] of [
+      ["provider", "update checkout_subscription_bindings set provider = 'other-provider' where issuance_idempotency_key = ?"],
+      ["provider account", "update checkout_subscription_bindings set provider_account_id = 'acct_other' where issuance_idempotency_key = ?"],
+      ["provider mode", "update checkout_subscription_bindings set provider_mode = 'test' where issuance_idempotency_key = ?"],
+      ["subscription", "update checkout_subscription_bindings set external_subscription_id = 'sub_other' where issuance_idempotency_key = ?"]
+    ] as const) {
+      const path = databasePath();
+      const store = new LicenseStore(path, { now: () => NOW });
+      try {
+        const issued = issueBound(store, {
+          idempotencyKey: `checkout-session:replay-binding-${label.replaceAll(" ", "-")}`,
+          externalSubscriptionId: `sub_replay_binding_${label.replaceAll(" ", "_")}`,
+          externalCheckoutId: `cs_replay_binding_${label.replaceAll(" ", "_")}`
+        });
+        const request = renewal(issued.request, {
+          eventId: `evt_replay_binding_${label.replaceAll(" ", "_")}`
+        });
+        applyLifecycle(store, request);
+        const db = new DatabaseSync(path);
+        db.prepare(mutation).run(issued.request.idempotencyKey);
+        db.close();
+
+        const replay = applyLifecycle(store, request);
+        assert.equal(replay.status, "replayed", label);
+        assert.equal(replay.replayed, true, label);
+        assert.equal(
+          inspectDatabase<{ count: number }>(
+            path,
+            "select count(*) as count from license_subscription_lifecycle_events"
+          )[0]?.count,
+          1,
+          label
+        );
+      } finally {
+        store.close();
+      }
     }
   });
 });
@@ -720,7 +923,7 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
     }
   });
 
-  it("revokes without a period end, persists a bounded reason, and exact-replays terminal state", () => {
+  it("revokes without a period end, persists the safe reason code, and exact-replays terminal state", () => {
     const path = databasePath();
     const store = new LicenseStore(path, { now: () => NOW });
     try {
@@ -729,9 +932,7 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
         externalSubscriptionId: "sub_terminal_revoke",
         externalCheckoutId: "cs_terminal_revoke"
       });
-      const request = lifecycleRequest("revoke", issued.request, {
-        reason: "bounded provider termination reason"
-      });
+      const request = lifecycleRequest("revoke", issued.request);
 
       assert.deepEqual(applyLifecycle(store, request), {
         status: "terminally_revoked",
@@ -744,7 +945,7 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
         }
       });
       assert.equal(store.getLicenseByKey(issued.rawKey)?.revocationReason,
-        "bounded provider termination reason");
+        "subscription_canceled");
       assert.deepEqual(applyLifecycle(store, request), {
         status: "replayed",
         replayed: true,
@@ -1000,7 +1201,7 @@ describe("checkout subscription lifecycle ordering and terminal dominance", () =
       plan: "monthly_support",
       seats: 1,
       expiresAt: NOW.toISOString(),
-      revocationReason: "provider subscription terminated",
+      revocationReason: "subscription_canceled",
       licenseKeyHash: (entitlements[0] as { licenseKeyHash: string }).licenseKeyHash,
       activations: (entitlements[0] as { activations: unknown[] }).activations
     });

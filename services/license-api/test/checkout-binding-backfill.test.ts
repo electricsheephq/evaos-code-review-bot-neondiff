@@ -237,6 +237,40 @@ describe("checkout subscription binding backfill store", () => {
     }
   });
 
+  it("rejects legacy entitlements that the subscription lifecycle cannot project", () => {
+    for (const [label, plan, expiresAt] of [
+      ["missing expiry", "monthly_support", undefined],
+      ["invalid expiry", "monthly_support", "not-a-timestamp"],
+      ["unsupported plan", "legacy_lifetime", "2026-08-13T00:00:00.000Z"]
+    ] as const) {
+      const path = databasePath();
+      const store = new LicenseStore(path);
+      try {
+        store.issueIdempotentLicense(`nd_live_${label.replaceAll(" ", "")}`, {
+          idempotencyKey: "checkout-session:legacy-backfill",
+          requestHash: `legacy-request-hash:${label}`,
+          source: "checkout",
+          externalRef: "legacy-checkout-reference",
+          plan,
+          repoVisibilityScope: "private",
+          privateRepoAllowed: true,
+          updateEntitlement: true,
+          seats: 1,
+          ...(expiresAt !== undefined ? { expiresAt } : {})
+        });
+
+        assert.throws(
+          () => bind(store),
+          (error: unknown) => errorName(error) === "CheckoutBindingConflictError",
+          label
+        );
+        assert.equal(bindingCount(path), 0, label);
+      } finally {
+        store.close();
+      }
+    }
+  });
+
   it("binds once and makes identical replay idempotent across store connections", () => {
     const path = databasePath();
     const first = new LicenseStore(path);

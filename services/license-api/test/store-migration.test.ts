@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, it } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { LicenseStore, type SchemaMigrationStep } from "../src/store.ts";
 
 const LEGACY_SCHEMA = `
@@ -146,7 +148,131 @@ function assertLegacyRowsPreserved(db: DatabaseSync): void {
   });
 }
 
+interface MigrationOpener {
+  child: ChildProcessWithoutNullStreams;
+  ready: Promise<void>;
+  completion: Promise<{ status: "opened" | "error"; detail?: string }>;
+}
+
+function startMigrationOpener(path: string, releasePath: string): MigrationOpener {
+  const source = `
+    import { existsSync } from "node:fs";
+    const { LicenseStore } = await import(process.env.LICENSE_STORE_MODULE_URL);
+    process.stdout.write("READY\\n");
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    while (!existsSync(process.env.MIGRATION_RELEASE_PATH)) Atomics.wait(wait, 0, 0, 5);
+    try {
+      new LicenseStore(process.env.MIGRATION_DB_PATH, { busyTimeoutMs: 1000 }).close();
+      process.stdout.write("OPENED\\n");
+    } catch (error) {
+      process.stdout.write(
+        "ERROR " + (error instanceof Error ? error.constructor.name + ":" + error.message : "unknown") + "\\n"
+      );
+    }
+  `;
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", source],
+    {
+      cwd: new URL("..", import.meta.url),
+      env: {
+        ...process.env,
+        LICENSE_STORE_MODULE_URL: new URL("../src/store.ts", import.meta.url).href,
+        MIGRATION_DB_PATH: path,
+        MIGRATION_RELEASE_PATH: releasePath
+      }
+    }
+  );
+  const timeout = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }, 5_000);
+  let output = "";
+  let stderr = "";
+  let readyResolve!: () => void;
+  let readyReject!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    output += chunk;
+    if (output.includes("READY\n")) readyResolve();
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const completion = new Promise<{ status: "opened" | "error"; detail?: string }>(
+    (resolve, reject) => {
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        readyReject(error);
+        reject(error);
+      });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timeout);
+        if (!output.includes("READY\n")) {
+          readyReject(new Error(`migration opener exited before ready: ${stderr}`));
+        }
+        if (code !== 0 || signal !== null || stderr.length > 0) {
+          reject(new Error(`migration opener exited ${code ?? signal}: ${stderr}`));
+          return;
+        }
+        const errorLine = output.split("\n").find((line) => line.startsWith("ERROR "));
+        resolve(
+          errorLine
+            ? { status: "error", detail: errorLine.slice("ERROR ".length) }
+            : { status: "opened" }
+        );
+      });
+    }
+  );
+  return { child, ready, completion };
+}
+
 describe("license store schema v2 migration", () => {
+  for (const [label, setup] of [
+    ["empty bootstrap", (_path: string) => {}],
+    ["legacy migration", createLegacyDatabase]
+  ] as const) {
+    it(`lets concurrent ${label} openers converge after inspecting the same v0 state`, async () => {
+      const path = databasePath();
+      setup(path);
+      const releasePath = join(tempDirectories.at(-1)!, "release-openers");
+      const blocker = open(path);
+      blocker.exec("begin immediate");
+      const openers = [
+        startMigrationOpener(path, releasePath),
+        startMigrationOpener(path, releasePath)
+      ];
+      try {
+        await Promise.all(openers.map(({ ready }) => ready));
+        writeFileSync(releasePath, "go");
+        await delay(100);
+        blocker.exec("rollback");
+
+        assert.deepEqual(
+          await Promise.all(openers.map(({ completion }) => completion)),
+          [{ status: "opened" }, { status: "opened" }]
+        );
+        const inspected = open(path);
+        assert.equal(userVersion(inspected), 2);
+        if (label === "legacy migration") assertLegacyRowsPreserved(inspected);
+        inspected.close();
+      } finally {
+        try {
+          blocker.exec("rollback");
+        } catch {}
+        blocker.close();
+        for (const { child } of openers) {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        }
+        await Promise.allSettled(openers.map(({ completion }) => completion));
+      }
+    });
+  }
+
   it("bootstraps an empty version-zero database directly to the complete v2 schema", () => {
     const path = databasePath();
     const store = new LicenseStore(path);

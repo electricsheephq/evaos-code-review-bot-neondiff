@@ -356,15 +356,26 @@ export class LicenseStore {
       throw new Error(`unsupported license database schema version ${version}`);
     }
 
-    const currentSignature = readSchemaSignature(this.db);
-    const isEmpty = currentSignature.length === 0;
-    const isLegacy = signaturesEqual(currentSignature, LEGACY_SCHEMA_SIGNATURE);
-    if (!isEmpty && !isLegacy) {
-      throw new Error("unknown non-empty schema at user_version 0");
-    }
-
     this.db.exec("begin immediate");
     try {
+      // Another process may have completed the migration while this connection
+      // waited for the writer lock. Classify only the state protected by it.
+      const lockedVersion = this.readUserVersion();
+      if (lockedVersion === SCHEMA_VERSION) {
+        this.verifySchemaV2();
+        this.db.exec("commit");
+        return;
+      }
+      if (lockedVersion !== 0) {
+        throw new Error(`unsupported license database schema version ${lockedVersion}`);
+      }
+      const currentSignature = readSchemaSignature(this.db);
+      const isEmpty = currentSignature.length === 0;
+      const isLegacy = signaturesEqual(currentSignature, LEGACY_SCHEMA_SIGNATURE);
+      if (!isEmpty && !isLegacy) {
+        throw new Error("unknown non-empty schema at user_version 0");
+      }
+
       options.migrationHook?.("transaction-started");
       if (isEmpty) this.db.exec(CORE_SCHEMA);
       options.migrationHook?.("core-schema-created");
@@ -603,6 +614,11 @@ export class LicenseStore {
       if (!record) {
         throw new CheckoutBindingNotFoundError("checkout issuance license was not found");
       }
+      if (!isLifecycleCompatibleEntitlement(record)) {
+        throw new CheckoutBindingConflictError(
+          "checkout issuance entitlement is incompatible with subscription lifecycle"
+        );
+      }
 
       const requestedBinding: CheckoutSubscriptionBindingInput = {
         provider: validated.provider,
@@ -684,18 +700,6 @@ export class LicenseStore {
       if (!issuance || issuance.source !== "checkout") {
         throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
       }
-      const binding = this.getCheckoutSubscriptionBinding(input.issuanceIdempotencyKey);
-      if (
-        !binding ||
-        binding.licenseKeyHash !== issuance.license_key_hash ||
-        !sameLifecycleBinding(binding, input)
-      ) {
-        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
-      }
-      const record = this.getLicenseByHash(issuance.license_key_hash);
-      if (!record) {
-        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
-      }
 
       const existingEvent = this.getSubscriptionLifecycleEvent(input.eventId);
       if (existingEvent) {
@@ -708,8 +712,33 @@ export class LicenseStore {
         if (!replayedRecord) {
           throw new Error("subscription lifecycle event points to a missing license");
         }
+        if (!isLifecycleCompatibleEntitlement(replayedRecord)) {
+          throw new SubscriptionLifecyclePolicyError(
+            "subscription entitlement is incompatible with lifecycle management"
+          );
+        }
+        const response = lifecycleResult("replayed", true, replayedRecord, appliedAt);
         this.db.exec("commit");
-        return lifecycleResult("replayed", true, replayedRecord);
+        transactionStarted = false;
+        return response;
+      }
+
+      const binding = this.getCheckoutSubscriptionBinding(input.issuanceIdempotencyKey);
+      if (
+        !binding ||
+        binding.licenseKeyHash !== issuance.license_key_hash ||
+        !sameLifecycleBinding(binding, input)
+      ) {
+        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
+      }
+      const record = this.getLicenseByHash(issuance.license_key_hash);
+      if (!record) {
+        throw new SubscriptionLifecycleNotFoundError("checkout subscription binding was not found");
+      }
+      if (!isLifecycleCompatibleEntitlement(record)) {
+        throw new SubscriptionLifecyclePolicyError(
+          "subscription entitlement is incompatible with lifecycle management"
+        );
       }
 
       if (record.status === "revoked") {
@@ -816,8 +845,10 @@ export class LicenseStore {
       if (!updated) {
         throw new Error("subscription entitlement update did not persist");
       }
+      const response = lifecycleResult(result, false, updated, appliedAt);
       this.db.exec("commit");
-      return lifecycleResult(result, false, updated);
+      transactionStarted = false;
+      return response;
     } catch (error) {
       if (transactionStarted) this.db.exec("rollback");
       if (isSqliteBusy(error)) {
@@ -1071,22 +1102,40 @@ function maximumPeriodDaysForPlan(plan: string): number {
   throw new SubscriptionLifecyclePolicyError("subscription entitlement plan is invalid");
 }
 
+function isLifecycleCompatibleEntitlement(record: LicenseRecord): boolean {
+  return (
+    record.expiresAt !== undefined &&
+    Number.isFinite(Date.parse(record.expiresAt)) &&
+    CHECKOUT_LOOKUP_KEYS.some((lookupKey) => checkoutPolicyFor(lookupKey).plan === record.plan)
+  );
+}
+
 function lifecycleResult(
   status: SubscriptionLifecycleApplyResult["status"],
   replayed: boolean,
-  record: LicenseRecord
+  record: LicenseRecord,
+  appliedAt: Date
 ): SubscriptionLifecycleApplyResult {
-  if (!record.expiresAt) {
+  const expiresAt = record.expiresAt;
+  if (!expiresAt) {
     throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
   }
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+  }
+  const effectiveStatus =
+    record.status === "active" && expiresAtMs <= appliedAt.getTime()
+      ? "expired"
+      : record.status;
   return {
     status,
     replayed,
     entitlement: {
-      status: record.status,
+      status: effectiveStatus,
       plan: record.plan,
       seats: record.seats,
-      expiresAt: record.expiresAt
+      expiresAt
     }
   };
 }
