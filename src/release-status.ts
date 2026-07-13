@@ -2766,6 +2766,7 @@ function describeProviderDeferredQueueStatus(
       describeReviewQueueCounts(database)
     );
   }
+  const waitingHeadActive = budget.providerDeferred.waitingHeadActive ?? 0;
   const waitingCapacity =
     budget.providerDeferred.waitingProviderCapacity +
     budget.providerDeferred.waitingOrgCapacity +
@@ -2777,6 +2778,7 @@ function describeProviderDeferredQueueStatus(
     `; provider_deferred total=${budget.providerDeferred.total}` +
     ` retryable=${budget.providerDeferred.retryable}` +
     ` waiting_cooldown=${budget.providerDeferred.waitingCooldown}` +
+    (waitingHeadActive > 0 ? ` waiting_head_active=${waitingHeadActive}` : "") +
     ` waiting_capacity=${waitingCapacity}` +
     describeReviewQueueCounts(database)
   );

@@ -18,11 +18,11 @@ const files: PullFilePatch[] = [
 ];
 
 describe("self-consistency re-check (#303)", () => {
-  it("is a no-op with zero second-draw calls when disabled (byte-identical)", () => {
+  it("is a no-op with zero second-draw calls when disabled (byte-identical)", async () => {
     const secondDraw = vi.fn();
     const comments = [comment({ severity: "P0", line: 2, title: "Rollback clobbers state", confidence: 0.9 })];
 
-    const result = runSelfConsistencyRecheck({
+    const result = await runSelfConsistencyRecheck({
       comments,
       files,
       config: { enabled: false },
@@ -35,9 +35,9 @@ describe("self-consistency re-check (#303)", () => {
     expect(result.verdicts).toEqual([]);
   });
 
-  it("keeps confidence and eligibility on agreement, recording the verdict", () => {
+  it("keeps confidence and eligibility on agreement, recording the verdict", async () => {
     const comments = [comment({ severity: "P0", line: 2, title: "Rollback clobbers state", confidence: 0.9 })];
-    const result = runSelfConsistencyRecheck({
+    const result = await runSelfConsistencyRecheck({
       comments,
       files,
       config: { enabled: true, severities: ["P0", "P1"], maxFindingsPerReview: 5 },
@@ -49,9 +49,9 @@ describe("self-consistency re-check (#303)", () => {
     expect(result.verdicts).toEqual([expect.objectContaining({ agreed: true, originalConfidence: 0.9, secondConfidence: 0.7 })]);
   });
 
-  it("downgrades confidence and removes REQUEST_CHANGES eligibility on refutation", () => {
+  it("downgrades confidence and removes REQUEST_CHANGES eligibility on refutation", async () => {
     const comments = [comment({ severity: "P0", line: 2, title: "Rollback clobbers state", confidence: 0.9 })];
-    const result = runSelfConsistencyRecheck({
+    const result = await runSelfConsistencyRecheck({
       comments,
       files,
       config: { enabled: true, severities: ["P0", "P1"], maxFindingsPerReview: 5 },
@@ -64,8 +64,8 @@ describe("self-consistency re-check (#303)", () => {
     expect(result.verdicts).toEqual([expect.objectContaining({ agreed: false, refuted: true })]);
   });
 
-  it("never raises confidence even when the second draw is more confident (agreement)", () => {
-    const result = runSelfConsistencyRecheck({
+  it("never raises confidence even when the second draw is more confident (agreement)", async () => {
+    const result = await runSelfConsistencyRecheck({
       comments: [comment({ severity: "P1", line: 2, title: "Concern", confidence: 0.4 })],
       files,
       config: { enabled: true, maxFindingsPerReview: 5 },
@@ -74,12 +74,12 @@ describe("self-consistency re-check (#303)", () => {
     expect(result.comments[0]?.confidence).toBe(0.4);
   });
 
-  it("respects the cost bound: 6 eligible findings with max 5 ⇒ 5 calls in ranked order", () => {
+  it("respects the cost bound: 6 eligible findings with max 5 ⇒ 5 calls in ranked order", async () => {
     const comments = Array.from({ length: 6 }, (_, i) =>
       comment({ severity: "P0", line: 2 + i, title: `Finding ${i}`, confidence: 0.9 - i * 0.01 })
     );
     const seen: string[] = [];
-    const result = runSelfConsistencyRecheck({
+    const result = await runSelfConsistencyRecheck({
       comments,
       files,
       config: { enabled: true, severities: ["P0"], maxFindingsPerReview: 5 },
@@ -95,9 +95,9 @@ describe("self-consistency re-check (#303)", () => {
     expect(result.verdicts).toHaveLength(5);
   });
 
-  it("only re-checks findings at configured severities (default P0/P1)", () => {
+  it("only re-checks findings at configured severities (default P0/P1)", async () => {
     const secondDraw = vi.fn(() => ({ verified: true, confidence: 0.8 }));
-    runSelfConsistencyRecheck({
+    await runSelfConsistencyRecheck({
       comments: [
         comment({ severity: "P0", line: 2, title: "high", confidence: 0.9 }),
         comment({ severity: "P2", line: 3, title: "low", category: "runtime_correctness", confidence: 0.9 })
@@ -109,9 +109,9 @@ describe("self-consistency re-check (#303)", () => {
     expect(secondDraw).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a finding untouched when the second draw fails (quieter-only, never blocks)", () => {
+  it("leaves a finding untouched when the second draw fails (quieter-only, never blocks)", async () => {
     const comments = [comment({ severity: "P0", line: 2, title: "Rollback clobbers state", confidence: 0.9 })];
-    const result = runSelfConsistencyRecheck({
+    const result = await runSelfConsistencyRecheck({
       comments,
       files,
       config: { enabled: true, maxFindingsPerReview: 5 },
@@ -123,5 +123,29 @@ describe("self-consistency re-check (#303)", () => {
     expect(result.comments[0]?.confidence).toBe(0.9);
     expect(result.event).toBe("REQUEST_CHANGES");
     expect(result.verdicts).toEqual([expect.objectContaining({ error: expect.stringContaining("provider exploded") })]);
+  });
+
+  it("awaits asynchronous second draws sequentially in ranked order", async () => {
+    const comments = [
+      comment({ severity: "P0", line: 2, title: "first", confidence: 0.9 }),
+      comment({ severity: "P1", line: 3, title: "second", confidence: 0.8 })
+    ];
+    const events: string[] = [];
+
+    const result = await runSelfConsistencyRecheck({
+      comments,
+      files,
+      config: { enabled: true, maxFindingsPerReview: 5 },
+      secondDraw: async ({ comment: finding }) => {
+        events.push(`start:${finding.title}`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        events.push(`finish:${finding.title}`);
+        return { verified: true, confidence: 0.7 };
+      }
+    });
+
+    expect(events).toEqual(["start:first", "finish:first", "start:second", "finish:second"]);
+    expect(result.verdicts).toHaveLength(2);
+    expect(result.event).toBe("REQUEST_CHANGES");
   });
 });

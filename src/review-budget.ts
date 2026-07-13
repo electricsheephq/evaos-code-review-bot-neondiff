@@ -7,6 +7,7 @@ export type ReviewQueueDelayReason =
   | "provider_capacity"
   | "org_capacity"
   | "repo_capacity"
+  | "head_active"
   | "manual_reserve"
   | "proof_cooldown"
   | "lease_limit";
@@ -90,6 +91,7 @@ export interface ReviewBudgetStatus {
     waitingProviderCapacity: number;
     waitingOrgCapacity: number;
     waitingRepoCapacity: number;
+    waitingHeadActive: number;
     waitingManualReserve: number;
     waitingLeaseLimit: number;
   };
@@ -163,6 +165,15 @@ export function buildReviewBudgetStatus(input: {
     manualCommandReserve: 0,
     backgroundPriority: 50
   };
+  const effectiveGlobalLimit = Math.min(
+    input.config.reviewConcurrency.maxActiveRuns,
+    scheduler.maxProviderActive
+  );
+  const effectiveScheduler = {
+    ...scheduler,
+    maxProviderActive: effectiveGlobalLimit,
+    manualCommandReserve: Math.min(scheduler.manualCommandReserve, effectiveGlobalLimit)
+  };
   const jobs = input.jobs.map((job) =>
     normalizeExpiredLeaseJob(job, now, input.config.reviewConcurrency.leaseTtlMs)
   );
@@ -196,39 +207,44 @@ export function buildReviewBudgetStatus(input: {
   const eligible = queued
     .filter((job) => job.state === "queued" || isRetryEligibleByNextEligibleAt(job, now))
     .sort(compareQueueJobsForBudget);
-  const hasManualAfter = buildManualEligibilitySuffix(eligible);
   const wouldLease: ReviewBudgetCandidate[] = [];
   const simulatedProviderActive = new Map(activeProvider);
   const simulatedOrgActive = new Map(activeOrg);
   const simulatedRepoActive = new Map(activeRepo);
+  const activeHeads = new Set(active.map(reviewQueueHeadKey));
 
   for (const [index, job] of eligible.entries()) {
+    const headKey = reviewQueueHeadKey(job);
+    if (activeHeads.has(headKey)) {
+      delayed.push(delay(job, "head_active"));
+      continue;
+    }
     const provider = providerKey(job);
     const providerCount = simulatedProviderActive.get(provider) ?? 0;
     const orgCount = simulatedOrgActive.get(job.org) ?? 0;
     const repoCount = simulatedRepoActive.get(job.repo) ?? 0;
     const repoActiveLimit = cachedRepoActiveLimit(job.repo);
     const capacityReason = capacityDelayReason(job, {
-      scheduler,
+      scheduler: effectiveScheduler,
       providerCount,
       orgCount,
       repoCount,
       repoActiveLimit,
-      hasManualAfter: hasManualAfter[index] ?? false
+      hasManualAfter: hasRunnableManualAfter(eligible, index, activeHeads, headKey)
     });
     if (capacityReason) {
       delayed.push(delay(job, capacityReason));
       continue;
     }
-    if (wouldLease.length >= scheduler.maxProviderActive) {
+    if (active.length + wouldLease.length >= effectiveGlobalLimit) {
       delayed.push(delay(job, "lease_limit"));
       continue;
     }
-
     wouldLease.push(candidate(job));
     simulatedProviderActive.set(provider, providerCount + 1);
     simulatedOrgActive.set(job.org, orgCount + 1);
     simulatedRepoActive.set(job.repo, repoCount + 1);
+    activeHeads.add(headKey);
   }
 
   const delayedByReason: Partial<Record<ReviewQueueDelayReason, number>> = {};
@@ -288,6 +304,7 @@ export function buildReviewBudgetStatus(input: {
       waitingProviderCapacity: providerDeferredByReason.get("provider_capacity") ?? 0,
       waitingOrgCapacity: providerDeferredByReason.get("org_capacity") ?? 0,
       waitingRepoCapacity: providerDeferredByReason.get("repo_capacity") ?? 0,
+      waitingHeadActive: providerDeferredByReason.get("head_active") ?? 0,
       waitingManualReserve: providerDeferredByReason.get("manual_reserve") ?? 0,
       waitingLeaseLimit: providerDeferredByReason.get("lease_limit") ?? 0
     },
@@ -295,10 +312,10 @@ export function buildReviewBudgetStatus(input: {
       configured: scheduler.manualCommandReserve,
       activeManual,
       queuedManual: manualQueued,
-      reservedSlotsOpen: Math.max(0, scheduler.manualCommandReserve - activeManual),
+      reservedSlotsOpen: Math.max(0, effectiveScheduler.manualCommandReserve - activeManual),
       backgroundSlotsAvailableBeforeReserve: Math.max(
         0,
-        scheduler.maxProviderActive - scheduler.manualCommandReserve - active.length
+        effectiveGlobalLimit - effectiveScheduler.manualCommandReserve - active.length
       )
     },
     wouldLeaseCount: wouldLease.length,
@@ -350,6 +367,10 @@ function providerKey(job: ReviewQueueJobRecord): string {
   return job.providerId ?? "default";
 }
 
+function reviewQueueHeadKey(job: Pick<ReviewQueueJobRecord, "repo" | "pullNumber" | "headSha">): string {
+  return `${job.repo.toLowerCase()}#${job.pullNumber}@${job.headSha.toLowerCase()}`;
+}
+
 function isProviderDeferredEligible(job: ReviewQueueJobRecord, now: Date): boolean {
   if (job.state !== "provider_deferred") return true;
   return isRetryEligibleByNextEligibleAt(job, now);
@@ -393,14 +414,19 @@ function capacityDelayReason(
   return undefined;
 }
 
-function buildManualEligibilitySuffix(jobs: ReviewQueueJobRecord[]): boolean[] {
-  const result = new Array<boolean>(jobs.length).fill(false);
-  let seenManual = false;
-  for (let index = jobs.length - 1; index >= 0; index -= 1) {
-    result[index] = seenManual;
-    if (jobs[index]?.lane === "manual") seenManual = true;
+function hasRunnableManualAfter(
+  jobs: ReviewQueueJobRecord[],
+  index: number,
+  activeHeads: Set<string>,
+  candidateHeadKey: string
+): boolean {
+  for (let cursor = index + 1; cursor < jobs.length; cursor += 1) {
+    const job = jobs[cursor];
+    if (!job || job.lane !== "manual") continue;
+    const headKey = reviewQueueHeadKey(job);
+    if (headKey !== candidateHeadKey && !activeHeads.has(headKey)) return true;
   }
-  return result;
+  return false;
 }
 
 function candidate(job: ReviewQueueJobRecord): ReviewBudgetCandidate {

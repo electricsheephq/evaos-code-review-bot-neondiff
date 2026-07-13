@@ -65,4 +65,21 @@ describe("temporary ZCode review policy", () => {
     expect(result).toBe("reviewed");
     expect(readFileSync(configPath, "utf8")).toBe("{\"features\":{\"subagent\":true}}\n");
   });
+
+  it("restores an existing repo ZCode config after an asynchronous failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "zcode-policy-async-failure-"));
+    roots.push(root);
+    const configDir = join(root, ".zcode");
+    const configPath = join(configDir, "config.json");
+    mkdirSync(configDir);
+    writeFileSync(configPath, "{\"features\":{\"subagent\":true}}\n");
+
+    await expect(withTemporaryZCodeReviewPolicy(root, undefined, async () => {
+      expect(readFileSync(configPath, "utf8")).toContain("\"Bash\"");
+      await Promise.resolve();
+      throw new Error("async provider failure");
+    })).rejects.toThrow("async provider failure");
+
+    expect(readFileSync(configPath, "utf8")).toBe("{\"features\":{\"subagent\":true}}\n");
+  });
 });

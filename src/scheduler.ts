@@ -94,6 +94,14 @@ export interface ScheduledRunResult extends RunOnceResult {
     remainingQueued: number;
     delayedByReason: Partial<Record<ReviewQueueDelayReason, number>>;
     budget?: ReviewBudgetStatus;
+    execution: {
+      mode: "bounded_parallel_batch";
+      configuredRunSlots: number;
+      configuredProviderSlots: number;
+      effectiveSlots: number;
+      started: number;
+      peakJobsInFlight: number;
+    };
   };
 }
 
@@ -243,60 +251,83 @@ export async function runScheduledCycleWithDeps(input: {
   });
   result.queue.delayedByReason = result.queue.budget.delayedByReason;
 
-  const budget = new ReviewRunBudget(Math.max(1, scheduler.maxProviderActive));
-  const attemptedJobIds = new Set<string>();
-  const attemptedJobs: ReviewQueueJobRecord[] = [];
+  const effectiveSlots = Math.max(1, Math.min(config.reviewConcurrency.maxActiveRuns, scheduler.maxProviderActive));
+  const budget = new ReviewRunBudget(effectiveSlots);
+  result.queue.execution = {
+    mode: "bounded_parallel_batch",
+    configuredRunSlots: config.reviewConcurrency.maxActiveRuns,
+    configuredProviderSlots: scheduler.maxProviderActive,
+    effectiveSlots,
+    started: 0,
+    peakJobsInFlight: 0
+  };
   const repoActiveLimitOverrides = buildRepoActiveLimitOverrides(config, input.state.listReviewQueueJobs());
-  // Lease just before execution to avoid idle active rows. This intentionally
-  // performs a bounded scan per provider slot, not one bulk pre-lease.
-  for (let leaseAttempt = 0; leaseAttempt < scheduler.maxProviderActive; leaseAttempt += 1) {
-    const leased = input.state.leaseNextReviewQueueJobs({
-      maxProviderActive: scheduler.maxProviderActive,
-      maxOrgActive: scheduler.maxOrgActive,
-      maxRepoActive: scheduler.maxRepoActive,
-      maxRepoActiveByRepo: repoActiveLimitOverrides,
-      manualCommandReserve: scheduler.manualCommandReserve,
-      excludeJobIds: attemptedJobIds,
-      reservedActiveJobs: attemptedJobs,
-      limit: 1,
-      leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
-      // Lease-time rescue aging (#346): pass through only when configured — the comparator no-ops
-      // when aging is unset/disabled, keeping the default lease order byte-identical to today.
-      ...(config.riskWeightedQueue?.aging ? { aging: config.riskWeightedQueue.aging } : {}),
-      now: eventClock()
-    });
-    const job = leased[0];
-    if (!job) break;
-    attemptedJobIds.add(job.jobId);
-    attemptedJobs.push(job);
-    result.queue.leased += 1;
-    const status = await runLeasedQueueJob({
-      config,
-      github: input.github,
-      state: input.state,
-      job,
-      dryRun: input.options.dryRun,
-      useZCode: input.options.useZCode ?? true,
-      reviewPullImpl: input.reviewPullImpl,
-      licenseAdmission: input.licenseAdmission,
-      budget,
-      onStatusCommentFailure: () => {
-        result.statusCommentFailures += 1;
-      },
-      now,
-      clock: eventClock
-    });
-    applyReviewStatus(result, status);
-    if (status === "skipped_provider_cooldown") {
-      result.queue.providerDeferred += deferQueuedProviderJobsForProviderThrottle({
+  // Lease exactly one bounded batch. The durable transaction applies provider/org/repo/manual
+  // constraints atomically; this cycle never continuously drains behind the admitted batch.
+  const leased = input.state.leaseNextReviewQueueJobs({
+    maxGlobalActive: effectiveSlots,
+    maxProviderActive: scheduler.maxProviderActive,
+    maxOrgActive: scheduler.maxOrgActive,
+    maxRepoActive: scheduler.maxRepoActive,
+    maxRepoActiveByRepo: repoActiveLimitOverrides,
+    manualCommandReserve: Math.min(scheduler.manualCommandReserve, effectiveSlots),
+    limit: effectiveSlots,
+    leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
+    ...(config.riskWeightedQueue?.aging ? { aging: config.riskWeightedQueue.aging } : {}),
+    now: eventClock()
+  });
+  result.queue.leased = leased.length;
+  result.queue.execution.started = leased.length;
+  let jobsInFlight = 0;
+  const settled = await Promise.allSettled(leased.map(async (job) => {
+    jobsInFlight += 1;
+    result.queue.execution.peakJobsInFlight = Math.max(result.queue.execution.peakJobsInFlight, jobsInFlight);
+    try {
+      return await runLeasedQueueJob({
         config,
+        github: input.github,
         state: input.state,
-        triggerJob: job,
-        now: eventClock()
+        job,
+        dryRun: input.options.dryRun,
+        useZCode: input.options.useZCode ?? true,
+        reviewPullImpl: input.reviewPullImpl,
+        licenseAdmission: input.licenseAdmission!,
+        budget,
+        onStatusCommentFailure: () => {
+          result.statusCommentFailures += 1;
+        },
+        clock: eventClock
       });
-      break;
+    } finally {
+      jobsInFlight -= 1;
+    }
+  }));
+
+  let unexpectedFailure: unknown;
+  const providerThrottleTriggers = new Map<string, ReviewQueueJobRecord[]>();
+  for (const [index, outcome] of settled.entries()) {
+    const job = leased[index]!;
+    if (outcome.status === "rejected") {
+      unexpectedFailure ??= outcome.reason;
+      continue;
+    }
+    applyReviewStatus(result, outcome.value);
+    if (outcome.value === "skipped_provider_cooldown") {
+      const providerId = job.providerId ?? "default";
+      const triggers = providerThrottleTriggers.get(providerId) ?? [];
+      triggers.push(job);
+      providerThrottleTriggers.set(providerId, triggers);
     }
   }
+  for (const triggerJobs of providerThrottleTriggers.values()) {
+    result.queue.providerDeferred += deferEligibleProviderJobsForProviderThrottle({
+      config,
+      state: input.state,
+      triggerJobs,
+      now: eventClock()
+    });
+  }
+  if (unexpectedFailure) throw unexpectedFailure;
 
   result.queue.remainingQueued = input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "blocked_on_proof"] }).length;
 
@@ -598,6 +629,32 @@ async function enqueuePullIfEligible(input: {
   }
 
   await retireSupersededQueueJobsForPull(input);
+  const unresolvedAuthorization = /^[0-9a-f]{40}$/i.test(input.pull.head.sha)
+    ? input.state.getReviewEventAuthorizationConsumption(
+        input.repo,
+        input.pull.number,
+        input.pull.head.sha
+      )
+    : undefined;
+  if (
+    unresolvedAuthorization?.incidentError &&
+    !unresolvedAuthorization.postedAt &&
+    !unresolvedAuthorization.terminalAt
+  ) {
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      readinessState: "failed",
+      reason: unresolvedAuthorization.incidentError,
+      commandAction: "request-changes",
+      ...(unresolvedAuthorization.incidentCommentId
+        ? { commandCommentId: unresolvedAuthorization.incidentCommentId }
+        : {}),
+      now: input.now
+    });
+    return "skipped_processed";
+  }
   if (processed || input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) {
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     await repairProcessedHeadStatusCommentIfNeeded({ ...input, processed });
@@ -1165,9 +1222,33 @@ function latestPendingRequestChanges(input: {
   repo: string;
   pull: PullRequestSummary;
 }): ReviewEventAuthorizationReviewRequest | undefined {
-  return input.requests.filter((request) =>
+  const pending = input.requests.filter((request) =>
     !input.state.hasProcessedCommand(input.repo, input.pull.number, input.pull.head.sha, request.commentId)
-  ).at(-1);
+  );
+  if (pending.length === 0) return undefined;
+  const consumed = input.state.getReviewEventAuthorizationConsumption(
+    input.repo,
+    input.pull.number,
+    input.pull.head.sha
+  );
+  if (
+    (consumed?.postedEvent && consumed.reviewUrl && consumed.postedAt) ||
+    (consumed?.terminalOutcome === "no_op" && consumed.terminalReason && consumed.terminalAt)
+  ) {
+    for (const request of pending) {
+      input.state.recordProcessedCommand({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        commentId: request.commentId,
+        action: "request-changes",
+        status: "ignored",
+        author: request.author
+      });
+    }
+    return undefined;
+  }
+  return pending.at(-1);
 }
 
 export function admitPublicCommands(input: {
@@ -1251,7 +1332,7 @@ async function runLeasedQueueJob(input: {
   now?: Date;
   clock?: () => Date;
 }): Promise<ReviewPullResult | "failed" | "closed_retired" | "stale_retired"> {
-  const now = input.now ?? new Date();
+  const now = input.clock?.() ?? input.now ?? new Date();
   input.state.updateReviewQueueJobState({
     jobId: input.job.jobId,
     state: "running",
@@ -1287,7 +1368,7 @@ async function runLeasedQueueJob(input: {
       reason: `github_refetch_failed: ${errorMessage}`,
       now
     });
-    updateReviewerSessionJobFromQueueStatus(input, "failed", "failed");
+    updateReviewerSessionJobFromQueueStatus({ ...input, now }, "failed", "failed");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -1317,7 +1398,7 @@ async function runLeasedQueueJob(input: {
       reason: `closed_or_merged_before_review state=${pull.state ?? "unknown"}`,
       now
     });
-    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
+    updateReviewerSessionJobFromQueueStatus({ ...input, now }, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -1347,7 +1428,7 @@ async function runLeasedQueueJob(input: {
       reason: `stale_head_before_review live=${pull.head.sha}`,
       now
     });
-    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
+    updateReviewerSessionJobFromQueueStatus({ ...input, now }, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -1377,7 +1458,7 @@ async function runLeasedQueueJob(input: {
       reason: `base_changed_before_review live=${pull.base.sha}`,
       now
     });
-    updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
+    updateReviewerSessionJobFromQueueStatus({ ...input, now }, "skipped", "skipped");
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
@@ -1393,7 +1474,7 @@ async function runLeasedQueueJob(input: {
   }
 
   const sessionId = ensureReviewerSessionForLeasedJob(input, now);
-  updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "running");
+  updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) }, now }, "running");
   if (input.job.source !== "manual_command" && shouldPostInProgressStatusForLeasedJob(input.job)) {
     await syncReviewStatusComment({
       config: input.config,
@@ -1422,13 +1503,14 @@ async function runLeasedQueueJob(input: {
       allowActivationBaselineCommandLookup: input.job.source === "manual_command",
       ...(input.job.source === "manual_command" && input.job.commentId ? { commandCommentId: input.job.commentId } : {})
     });
-    updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun, now });
+    const completionNow = input.clock?.() ?? new Date();
+    updateQueueJobAfterReviewStatus({ state: input.state, job: input.job, pull, status, dryRun: input.dryRun, now: completionNow });
     syncReadinessForReviewResult({
       state: input.state,
       job: input.job,
       pull,
       status,
-      now
+      now: completionNow
     });
     await syncReviewStatusCommentForReviewResult({
       config: input.config,
@@ -1439,13 +1521,14 @@ async function runLeasedQueueJob(input: {
       status,
       state: input.state,
       onStatusCommentFailure: input.onStatusCommentFailure,
-      now
+      now: completionNow
     });
     updateReviewerSessionJobAfterReviewStatus({
       state: input.state,
       job: { ...input.job, ...(sessionId ? { sessionId } : {}) },
       status,
-      dryRun: input.dryRun
+      dryRun: input.dryRun,
+      now: completionNow
     });
     return status;
   } catch (error) {
@@ -1478,7 +1561,7 @@ async function runLeasedQueueJob(input: {
         onStatusCommentFailure: input.onStatusCommentFailure,
         now: failureNow
       });
-      updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "assigned");
+      updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) }, now: failureNow }, "assigned");
       return "skipped_provider_cooldown";
     }
     const errorMessage = recordFailedReview({
@@ -1491,7 +1574,8 @@ async function runLeasedQueueJob(input: {
     input.state.updateReviewQueueJobState({
       jobId: input.job.jobId,
       state: "failed",
-      lastError: errorMessage
+      lastError: errorMessage,
+      now: failureNow
     });
     recordReadinessTransition({
       state: input.state,
@@ -1499,7 +1583,7 @@ async function runLeasedQueueJob(input: {
       pull,
       readinessState: "failed",
       reason: `review_failed: ${errorMessage}`,
-      now
+      now: failureNow
     });
     await syncReviewStatusComment({
       config: input.config,
@@ -1510,9 +1594,9 @@ async function runLeasedQueueJob(input: {
       state: "failed",
       details: "Review failed; see bot evidence for operator-only details.",
       onStatusCommentFailure: input.onStatusCommentFailure,
-      now
+      now: failureNow
     });
-    updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) } }, "failed", "failed");
+    updateReviewerSessionJobFromQueueStatus({ ...input, job: { ...input.job, ...(sessionId ? { sessionId } : {}) }, now: failureNow }, "failed", "failed");
     return "failed";
   }
 }
@@ -1690,6 +1774,22 @@ function syncReadinessForReviewResult(input: {
   status: ReviewPullResult;
   now: Date;
 }): void {
+  if (input.status === "skipped_processed") {
+    const authorization = input.state.getReviewEventAuthorizationConsumption(
+      input.job.repo,
+      input.pull.number,
+      input.pull.head.sha
+    );
+    if (
+      authorization?.terminalOutcome === "no_op" &&
+      authorization.terminalReason &&
+      authorization.terminalAt
+    ) {
+      // recordAuthorizedReviewNoop already restored the prior advisory readiness atomically.
+      // Preserve that exact terminal outcome instead of relabeling it as a generic processed skip.
+      return;
+    }
+  }
   const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
   const readinessState = readinessStateForReviewResult(input.status, processed);
   if (!readinessState) return;
@@ -1765,29 +1865,47 @@ function shouldMarkJobReviewing(state: ReviewStateStore, job: ReviewQueueJobReco
   return existing?.commandAction ? isReviewCommandAction(existing.commandAction) : true;
 }
 
-function deferQueuedProviderJobsForProviderThrottle(input: {
+function deferEligibleProviderJobsForProviderThrottle(input: {
   config: BotConfig;
   state: ReviewStateStore;
-  triggerJob: ReviewQueueJobRecord;
+  triggerJobs: ReviewQueueJobRecord[];
   now: Date;
 }): number {
-  const cooldown = providerThrottleCooldownFromTriggerJob(input);
-  const providerId = input.triggerJob.providerId ?? "default";
-  const backgroundPriority = input.config.reviewScheduler?.backgroundPriority ?? 50;
+  const [firstTrigger, ...remainingTriggers] = input.triggerJobs;
+  if (!firstTrigger) return 0;
+  let triggerJob = firstTrigger;
+  let cooldown = providerThrottleCooldownFromTriggerJob({ ...input, triggerJob });
+  for (const candidate of remainingTriggers) {
+    const candidateCooldown = providerThrottleCooldownFromTriggerJob({ ...input, triggerJob: candidate });
+    if (Date.parse(candidateCooldown.cooldownUntil) > Date.parse(cooldown.cooldownUntil)) {
+      triggerJob = candidate;
+      cooldown = candidateCooldown;
+    }
+  }
+  const providerId = triggerJob.providerId ?? "default";
   let deferred = 0;
-  for (const job of input.state.listReviewQueueJobs({ state: "queued" })) {
+  for (const job of input.state.listReviewQueueJobs({ states: ["queued", "provider_deferred", "blocked_on_proof"] })) {
     if ((job.providerId ?? "default") !== providerId) continue;
-    if (job.source === "manual_command" || job.lane === "manual" || job.priority < backgroundPriority) continue;
+    if (job.source === "manual_command" || job.lane === "manual") continue;
+    if (!isEligibleQueueJobAt(job, input.now)) continue;
     input.state.updateReviewQueueJobState({
       jobId: job.jobId,
       state: "provider_deferred",
       nextEligibleAt: cooldown.cooldownUntil,
-      lastError: `provider_throttle_cycle_deferred_until=${cooldown.cooldownUntil}; reason=${cooldown.reason}; trigger_repo=${input.triggerJob.repo}`,
+      lastError: `provider_throttle_cycle_deferred_until=${cooldown.cooldownUntil}; reason=${cooldown.reason}; trigger_repo=${triggerJob.repo}`,
       now: input.now
     });
     deferred += 1;
   }
   return deferred;
+}
+
+function isEligibleQueueJobAt(job: ReviewQueueJobRecord, now: Date): boolean {
+  if (job.state === "queued") return true;
+  if (job.state !== "provider_deferred" && job.state !== "blocked_on_proof") return false;
+  if (!job.nextEligibleAt) return true;
+  const nextEligibleAtMs = Date.parse(job.nextEligibleAt);
+  return !Number.isFinite(nextEligibleAtMs) || nextEligibleAtMs <= now.getTime();
 }
 
 function providerThrottleCooldownFromTriggerJob(input: {
@@ -2056,6 +2174,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
   job: ReviewQueueJobRecord;
   status: ReviewPullResult;
   dryRun: boolean;
+  now?: Date;
 }): void {
   switch (input.status) {
     case "reviewed":
@@ -2100,6 +2219,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
 function updateReviewerSessionJobFromQueueStatus(input: {
   state: ReviewStateStore;
   job: ReviewQueueJobRecord;
+  now?: Date;
 }, jobState: ReviewerSessionJobState, processedReviewStatus?: ProcessedStatus): void {
   if (!input.job.sessionId) return;
   input.state.updateReviewerSessionJobState({
@@ -2107,7 +2227,8 @@ function updateReviewerSessionJobFromQueueStatus(input: {
     pullNumber: input.job.pullNumber,
     headSha: input.job.headSha,
     jobState,
-    ...(processedReviewStatus ? { processedReviewStatus } : {})
+    ...(processedReviewStatus ? { processedReviewStatus } : {}),
+    ...(input.now ? { now: input.now } : {})
   });
 }
 
@@ -2127,7 +2248,8 @@ function updateQueueJobAfterReviewStatus(input: {
         jobId: input.job.jobId,
         state: input.dryRun ? "queued" : "posted",
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-        lastError: input.dryRun ? "dry_run_completed_not_posted" : input.status
+        lastError: input.dryRun ? "dry_run_completed_not_posted" : input.status,
+        now: input.now
       });
       return;
     }
@@ -2137,49 +2259,61 @@ function updateQueueJobAfterReviewStatus(input: {
         jobId: input.job.jobId,
         state: "stale_retired",
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-        lastError: "review_posted_head_changed"
+        lastError: "review_posted_head_changed",
+        now: input.now
       });
       return;
     }
-    case "posted_head_unverified":
-    case "skipped_consumed_authorization": {
+    case "posted_head_unverified": {
       const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "failed",
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-        lastError: input.status
+        lastError: input.status,
+        now: input.now
       });
       return;
     }
+    case "skipped_consumed_authorization":
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "failed",
+        lastError: input.status,
+        now: input.now
+      });
+      return;
     case "skipped_provider_cooldown":
-      markQueueJobProviderDeferredFromProcessed(input);
+      markQueueJobProviderDeferredFromProcessed({ ...input, now: input.now });
       return;
     case "skipped_stale_head":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "stale_retired",
-        lastError: "review_pull_returned_stale_head"
+        lastError: "review_pull_returned_stale_head",
+        now: input.now
       });
       return;
     case "skipped_processed":
       const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
       if (parseProviderCooldownError(processed?.error)) {
-        markQueueJobProviderDeferredFromProcessed(input);
+        markQueueJobProviderDeferredFromProcessed({ ...input, now: input.now });
         return;
       }
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun, processed?.error),
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
-        lastError: `processed_head_already_${processed?.status ?? "unknown"}`
+        lastError: `processed_head_already_${processed?.status ?? "unknown"}`,
+        now: input.now
       });
       return;
     case "skipped_capacity":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "queued",
-        lastError: "legacy_review_capacity_busy"
+        lastError: "legacy_review_capacity_busy",
+        now: input.now
       });
       return;
     case "skipped_context_budget": {
@@ -2187,7 +2321,8 @@ function updateQueueJobAfterReviewStatus(input: {
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "failed",
-        lastError: contextBudgetProcessed?.error ?? "context_budget_overflow"
+        lastError: contextBudgetProcessed?.error ?? "context_budget_overflow",
+        now: input.now
       });
       return;
     }
@@ -2200,35 +2335,40 @@ function updateQueueJobAfterReviewStatus(input: {
         ...(input.status === "skipped_license_gate" ? { nextEligibleAt: nextLicenseGateRetryAt(input.now) } : {}),
         lastError: input.status === "skipped_license_gate"
           ? input.state.getReviewReadiness(input.job.repo, input.pull.number, input.pull.head.sha)?.reason ?? "license_entitlement_required"
-          : `unexpected_scheduler_review_status=${input.status}`
+          : `unexpected_scheduler_review_status=${input.status}`,
+        now: input.now
       });
       return;
     case "skipped_draft":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "stale_retired",
-        lastError: "draft_pr"
+        lastError: "draft_pr",
+        now: input.now
       });
       return;
     case "skipped_command_stop":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "command_recorded",
-        lastError: "manual_command_stop_recorded"
+        lastError: "manual_command_stop_recorded",
+        now: input.now
       });
       return;
     case "skipped_command_explain":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "command_recorded",
-        lastError: "manual_command_explain_recorded"
+        lastError: "manual_command_explain_recorded",
+        now: input.now
       });
       return;
     case "skipped_finishing_touch_draft":
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
         state: "command_recorded",
-        lastError: "manual_command_finishing_touch_draft_recorded"
+        lastError: "manual_command_finishing_touch_draft_recorded",
+        now: input.now
       });
       return;
     default:
@@ -2352,7 +2492,8 @@ function markQueueJobProviderDeferredFromProcessed(input: {
     state: "provider_deferred",
     ...(cooldownUntil ? { nextEligibleAt: cooldownUntil } : {}),
     lastError: processed?.error ??
-      (cooldownUntil ? `repo_provider_cooldown_until=${cooldownUntil}; reason=${reason ?? "provider_cooldown"}` : "provider_deferred_without_cooldown")
+      (cooldownUntil ? `repo_provider_cooldown_until=${cooldownUntil}; reason=${reason ?? "provider_cooldown"}` : "provider_deferred_without_cooldown"),
+    ...(input.now ? { now: input.now } : {})
   });
 }
 
@@ -2558,7 +2699,15 @@ function emptyScheduledRunResult(): ScheduledRunResult {
       closedRetired: 0,
       failedQueueJobs: 0,
       remainingQueued: 0,
-      delayedByReason: {}
+      delayedByReason: {},
+      execution: {
+        mode: "bounded_parallel_batch",
+        configuredRunSlots: 0,
+        configuredProviderSlots: 0,
+        effectiveSlots: 0,
+        started: 0,
+        peakJobsInFlight: 0
+      }
     }
   };
 }
