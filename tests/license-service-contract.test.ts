@@ -357,6 +357,15 @@ describe("client ↔ service contract (real src/license.ts against real service)
     });
     expect(activeAfterCancellation.status).toBe("active");
 
+    service.setNow(new Date("2026-07-21T00:00:00.000Z"));
+    const activeAfterOriginalTrial = await getLicenseStatus({
+      config,
+      repo: "owner/private",
+      refresh: true,
+      fetchImpl: service.fetchFor("machine-a")
+    });
+    expect(activeAfterOriginalTrial.status).toBe("active");
+
     service.setNow(new Date("2026-08-13T00:00:01.000Z"));
     const expired = await getLicenseStatus({
       config,
