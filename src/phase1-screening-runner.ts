@@ -76,6 +76,7 @@ export interface Phase1InvocationResult {
   logs?: string;
   resourceSamples?: Phase1ResourceSample[];
   residentTerminal?: boolean;
+  invocationDisposition?: "invoked" | "not_invoked_resident_terminal" | "not_invoked_infrastructure";
   retryCount?: number;
 }
 
@@ -459,7 +460,7 @@ async function runPhase1ScreenWithLease(
   assertSecretSafe("target argv", [spec.target.executable, ...spec.target.args].join("\n"));
   assertJsonValuesSecretSafe("target manifest", spec.target);
   const manifest = buildManifest(spec, resolvedOptions.monitorIdentity);
-  assertManifestMetadataSecretSafe(spec);
+  assertManifestPayloadSecretSafe(spec);
   const manifestPath = join(spec.outputDir, "manifest.json");
   if (existsSync(manifestPath)) {
     const existing = parseJson<Manifest>(manifestPath);
@@ -506,7 +507,9 @@ async function runPhase1ScreenWithLease(
     const cellHasWork = spec.inputs.some((input) => !existsSync(resultFile(spec.outputDir, cell.id, input.id)));
     if (!cellHasWork) continue;
     let monitorSession: { id: string } | undefined;
-    const resourceSamples: Phase1ResourceSample[] = [];
+    const resourceSamples: Phase1ResourceSample[] = resolvedOptions.monitorIdentity
+      ? reconstructResourceSamples(spec.outputDir, manifest, cell)
+      : [];
     if (resolvedOptions.monitor) {
       try { monitorSession = await resolvedOptions.monitor.start({ target: spec.target, cell, outputDir: spec.outputDir }); }
       catch (error) { infrastructureFailure = errorMessage(error); }
@@ -539,7 +542,7 @@ async function runPhase1ScreenWithLease(
         const startedAt = new Date().toISOString();
         let result: Phase1InvocationResult;
         try {
-          if (cellTerminal) result = cellTerminal;
+          if (cellTerminal) result = { ...cellTerminal, residentTerminal: true, invocationDisposition: "not_invoked_resident_terminal" };
           else {
             if (resolvedOptions.monitor && monitorSession) resourceSamples.push(await monitorSample(resolvedOptions.monitor, monitorSession, { phase: "before", input }));
             const renderedPrompt = renderPrompt(spec.prompt.template, input.prompt);
@@ -552,21 +555,37 @@ async function runPhase1ScreenWithLease(
               parserFingerprint: manifest.parserFingerprint,
               gateFingerprint: manifest.gateFingerprint
             });
+            result.invocationDisposition = "invoked";
             if (resolvedOptions.monitor && monitorSession) {
               resourceSamples.push(await monitorSample(resolvedOptions.monitor, monitorSession, { phase: "after", input }));
               const classification = monitorClassify(resolvedOptions.monitor, resourceSamples);
               if (classification) result = { ...result, ...classification, residentTerminal: true };
             }
           }
+          const invalidMetric = findInvalidMetric(result.metrics);
+          if (invalidMetric) {
+            result = {
+              status: "schema_failed",
+              errorCode: `invalid_metric_${sanitizeIdentifier(invalidMetric)}`,
+              residentTerminal: result.residentTerminal,
+              invocationDisposition: result.invocationDisposition,
+              retryCount: result.retryCount
+            };
+          }
           result = applyReviewContract(result, spec);
           result.retryCount ??= 0;
           result.metrics = { ...(result.metrics ?? {}), residentLoadDurationMs: numericMetadata(resident.metadata?.loadDurationMs) };
           if (result.status === "completed") {
-            const missingMetric = spec.request.requiredMetrics.find((name) => typeof result.metrics?.[name] !== "number");
+            const missingMetric = spec.request.requiredMetrics.find((name) => !Number.isFinite(result.metrics?.[name]));
             if (missingMetric) result = { ...result, status: "schema_failed", errorCode: `missing_metric_${sanitizeIdentifier(missingMetric)}` };
           }
           if (result.residentTerminal && (result.status === "failed" || result.status === "stopped" || result.status === "oom")) {
             cellTerminal = { status: result.status, errorCode: result.errorCode ?? `cell_${result.status}` };
+          }
+          try {
+            for (const sample of resourceSamples) validateResourceSample(sample, "result resource sample");
+          } catch (error) {
+            throw new MonitorInfrastructureError(`monitor resource sample invalid before result persistence: ${errorMessage(error)}`);
           }
           result.resourceSamples = resourceSamples.slice(-2);
           assertTerminalStatus(result.status);
@@ -575,9 +594,9 @@ async function runPhase1ScreenWithLease(
         } catch (error) {
           if (error instanceof MonitorInfrastructureError) {
             infrastructureFailure = error.message;
-            result = { status: "stopped", errorCode: "monitor_infrastructure_failure", residentTerminal: true, retryCount: 0 };
+            result = { status: "stopped", errorCode: "monitor_infrastructure_failure", residentTerminal: true, retryCount: 0, invocationDisposition: "invoked" };
             cellTerminal = { status: "stopped", errorCode: "monitor_infrastructure_failure" };
-          } else result = { status: "failed", errorCode: safeErrorCode(error), retryCount: 0 };
+          } else result = { status: "failed", errorCode: safeErrorCode(error), retryCount: 0, invocationDisposition: "invoked" };
         }
         const record = resultRecord(manifest, cell, input, result, startedAt);
         assertResultPayloadSecretSafe(record);
@@ -622,7 +641,7 @@ function writeUnavailableMonitorEvidence(
     samples: [] as Phase1ResourceSample[],
     terminalInfrastructureErrorCode: sanitizeIdentifier(error)
   };
-  assertJsonValuesSecretSafe("resource evidence", resourceRecord);
+  assertJsonValuesSecretSafe("resource samples", resourceRecord.samples);
   atomicWriteJson(join(outputDir, "resources", `${cell.id}.json`), {
     ...resourceRecord,
     evidenceSha256: fingerprint(resourceRecord)
@@ -717,6 +736,7 @@ function resultRecord(
     errorCode: result.errorCode,
     retryCount: result.retryCount ?? 0,
     residentTerminal: result.residentTerminal ?? false,
+    invocationDisposition: result.invocationDisposition ?? "invoked",
     resourceSamples: result.resourceSamples
   };
   return { ...record, evidenceSha256: fingerprint(record) };
@@ -734,7 +754,8 @@ function writeMissingTerminalResult(
   const now = new Date().toISOString();
   const record = resultRecord(manifest, cell, input, {
     status: "failed",
-    errorCode: sanitizeIdentifier(errorCode)
+    errorCode: sanitizeIdentifier(errorCode),
+    invocationDisposition: "not_invoked_infrastructure"
   }, now);
   assertResultPayloadSecretSafe(record);
   atomicWriteJson(path, record);
@@ -768,6 +789,40 @@ function validateExistingResult(
   ) {
     throw new Error(`terminal result fingerprint mismatch at ${path}`);
   }
+  if (record.resourceSamples !== undefined) {
+    if (!Array.isArray(record.resourceSamples)) throw new Error(`terminal result resource samples are invalid at ${path}`);
+    for (const sample of record.resourceSamples) validateResourceSample(sample, `terminal result resource sample at ${path}`);
+  }
+  assertResultPayloadSecretSafe(record);
+}
+
+function reconstructResourceSamples(
+  outputDir: string,
+  manifest: Manifest,
+  cell: Manifest["cells"][number]
+): Phase1ResourceSample[] {
+  const reconstructed: Phase1ResourceSample[] = [];
+  for (const input of manifest.inputs) {
+    const path = resultFile(outputDir, cell.id, input.id);
+    if (!existsSync(path)) continue;
+    const record = parseJson<Record<string, unknown>>(path);
+    const disposition = record.invocationDisposition;
+    if (disposition === "invoked" && (!Array.isArray(record.resourceSamples) || record.resourceSamples.length === 0)) {
+      throw new Error(`monitored result ${cell.id}/${input.id} has no reconstructable resource samples`);
+    }
+    if (record.resourceSamples !== undefined && !Array.isArray(record.resourceSamples)) {
+      throw new Error(`monitored result ${cell.id}/${input.id} has invalid reconstructable resource samples`);
+    }
+    // Only invoked records own a durable before/after pair. Synthesized
+    // resident-terminal records may repeat the preceding pair and must not
+    // duplicate it during reconstruction.
+    if (disposition === "invoked") {
+      for (const sample of record.resourceSamples as Phase1ResourceSample[]) {
+        reconstructed.push(validateResourceSample(sample, `reconstructed resource sample ${cell.id}/${input.id}`));
+      }
+    }
+  }
+  return reconstructed;
 }
 
 function buildSummary(outputDir: string, manifest: Manifest, infrastructureFailure?: string): Phase1RunSummary {
@@ -824,6 +879,8 @@ function validateResourceEvidence(path: string, manifest: Manifest, cellFingerpr
     || record.monitorFingerprint !== manifest.monitorFingerprint
     || evidenceSha256 !== fingerprint(body)
   ) throw new Error(`resource evidence fingerprint mismatch at ${path}`);
+  if (!Array.isArray(record.samples)) throw new Error(`resource evidence samples are invalid at ${path}`);
+  for (const sample of record.samples) validateResourceSample(sample, `resource evidence sample at ${path}`);
 }
 
 function validateSpec(spec: Phase1RunSpec): void {
@@ -831,6 +888,12 @@ function validateSpec(spec: Phase1RunSpec): void {
   if (spec.cells.length === 0 || spec.inputs.length === 0) throw new Error("at least one cell and input are required");
   assertUniqueSafeIds("cell", spec.cells.map((cell) => cell.id));
   assertUniqueSafeIds("input", spec.inputs.map((input) => input.id));
+  for (const [label, version] of [
+    ["prompt", spec.prompt.version],
+    ["request", spec.request.version],
+    ["parser", spec.parser.version],
+    ["gate", spec.gate.version]
+  ] as const) assertProtocolVersion(label, version);
   for (const digest of [spec.target.modelSha256, spec.target.executableSha256, ...(spec.target.ownershipVerifierSha256 ? [spec.target.ownershipVerifierSha256] : []), spec.harness.sourceSha256, spec.prompt.templateSha256, spec.parser.sha256, spec.gate.sha256, ...spec.inputs.map((input) => input.sha256)]) {
     if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("all declared SHA-256 digests must be lowercase 64-character hex");
   }
@@ -939,7 +1002,7 @@ async function monitorSample(
   session: { id: string },
   context: { phase: "before" | "after"; input: Phase1Input }
 ): Promise<Phase1ResourceSample> {
-  try { return await monitor.sample(session, context); }
+  try { return validateResourceSample(await monitor.sample(session, context), `monitor ${context.phase} resource sample`); }
   catch (error) { throw new MonitorInfrastructureError(`monitor ${context.phase} failed: ${errorMessage(error)}`); }
 }
 
@@ -947,7 +1010,12 @@ function monitorClassify(
   monitor: Phase1ResourceMonitor,
   samples: Phase1ResourceSample[]
 ): { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined {
-  try { return monitor.classify?.(samples); }
+  try {
+    for (const sample of samples) validateResourceSample(sample, "monitor classification resource sample");
+    const classification = monitor.classify?.(samples);
+    for (const sample of samples) validateResourceSample(sample, "monitor classification resource sample");
+    return classification;
+  }
   catch (error) { throw new MonitorInfrastructureError(`monitor classify failed: ${errorMessage(error)}`); }
 }
 
@@ -964,7 +1032,7 @@ async function finalizeMonitorEvidence(
 }> {
   let infrastructureFailure: string | undefined;
   let terminalClassification: { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined;
-  try { samples.push(await monitor.stop(session)); }
+  try { samples.push(validateResourceSample(await monitor.stop(session), "monitor stop resource sample")); }
   catch (error) { infrastructureFailure = `monitor stop failed: ${errorMessage(error)}`; }
   try {
     terminalClassification = monitorClassify(monitor, samples);
@@ -984,7 +1052,8 @@ async function finalizeMonitorEvidence(
     terminalInfrastructureErrorCode: infrastructureFailure ? sanitizeIdentifier(infrastructureFailure) : undefined
   };
   try {
-    assertJsonValuesSecretSafe("resource evidence", resourceRecord);
+    for (const sample of resourceRecord.samples) validateResourceSample(sample, "persisted resource sample");
+    assertJsonValuesSecretSafe("resource samples", resourceRecord.samples);
     atomicWriteJson(join(outputDir, "resources", `${cell.id}.json`), {
       ...resourceRecord,
       evidenceSha256: fingerprint(resourceRecord)
@@ -1048,6 +1117,41 @@ function numericMetadata(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+function findInvalidMetric(metrics: Record<string, number> | undefined): string | undefined {
+  if (!metrics) return undefined;
+  for (const [name, value] of Object.entries(metrics)) {
+    if (!Number.isFinite(value)) return name;
+    if (isNonnegativeMetric(name) && value < 0) return name;
+  }
+  return undefined;
+}
+
+function isNonnegativeMetric(name: string): boolean {
+  return /(?:ms|bytes|tokens?|count|duration|latency|throughput|perSecond|ttft|rss|vram|swap)$/i.test(name);
+}
+
+function validateResourceSample(value: unknown, label: string): Phase1ResourceSample {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  const sample = value as Record<string, unknown>;
+  if (typeof sample.capturedAt !== "string" || typeof sample.phase !== "string") {
+    throw new Error(`${label} requires capturedAt and phase strings`);
+  }
+  for (const required of ["rssBytes", "vramBytes", "swapBytes"] as const) {
+    if (typeof sample[required] !== "number" || !Number.isFinite(sample[required])) {
+      throw new Error(`${label} field ${required} must be finite`);
+    }
+    if (sample[required] < 0) throw new Error(`${label} field ${required} must be nonnegative`);
+  }
+  for (const [name, field] of Object.entries(sample)) {
+    if (typeof field !== "number") continue;
+    if (!Number.isFinite(field)) throw new Error(`${label} field ${name} must be finite`);
+    if (/(?:bytes|count|duration|ms|rss|vram|swap)$/i.test(name) && field < 0) {
+      throw new Error(`${label} field ${name} must be nonnegative`);
+    }
+  }
+  return value as Phase1ResourceSample;
+}
+
 function assertUniqueSafeIds(kind: string, ids: string[]): void {
   if (new Set(ids).size !== ids.length) throw new Error(`${kind} IDs must be unique`);
   for (const id of ids) if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id)) throw new Error(`${kind} ID is not path safe: ${id}`);
@@ -1064,25 +1168,40 @@ function assertJsonValuesSecretSafe(label: string, value: unknown): void {
   }
   if (Array.isArray(value)) { for (const item of value) assertJsonValuesSecretSafe(label, item); return; }
   if (value && typeof value === "object") {
-    for (const [key, item] of Object.entries(value)) {
-      // These fields are runner-generated protocol identifiers or verified
-      // lowercase digests. Feeding them to the free-text detector creates
-      // false positives (for example, schema versions ending in `/v1`).
-      // Their shape and equality are validated separately at each evidence
-      // boundary; all model-, monitor-, and adapter-provided values continue
-      // through the secret detector.
-      if (key === "schemaVersion" || key === "evidenceSha256" || key.endsWith("Fingerprint")) continue;
-      assertJsonValuesSecretSafe(label, item);
-    }
+    for (const item of Object.values(value)) assertJsonValuesSecretSafe(label, item);
   }
 }
 
-function assertManifestMetadataSecretSafe(spec: Phase1RunSpec): void {
+function assertManifestPayloadSecretSafe(spec: Phase1RunSpec): void {
+  // Protocol versions and runner-generated digests are validated by
+  // validateSpec/buildManifest. Only payload-bearing positions are passed to
+  // the recursive free-text scanner, so an identically named key inside
+  // untrusted metadata receives no exemption.
+  assertJsonValuesSecretSafe("target executable arguments", spec.target.args);
   assertJsonValuesSecretSafe("target serving metadata", spec.target.servingParameters);
+  assertJsonValuesSecretSafe("prompt template", spec.prompt.template);
   assertJsonValuesSecretSafe("prompt metadata", spec.prompt.parameters);
+  assertJsonValuesSecretSafe("request response format", spec.request.responseFormat);
   assertJsonValuesSecretSafe("request metadata", spec.request.parameters);
-  for (const cell of spec.cells) assertJsonValuesSecretSafe(`cell ${cell.id} metadata`, cell.parameters);
-  for (const input of spec.inputs) assertJsonValuesSecretSafe(`input ${input.id} metadata`, input.metadata);
+  assertJsonValuesSecretSafe("required metric names", spec.request.requiredMetrics);
+  assertJsonValuesSecretSafe("gate key names", spec.gate.requiredTopLevelKeys);
+  assertSecretSafe("harness source path", spec.harness.sourcePath);
+  for (const cell of spec.cells) {
+    assertSecretSafe("cell identifier", cell.id);
+    assertJsonValuesSecretSafe(`cell ${cell.id} executable arguments`, cell.executableArgs);
+    assertJsonValuesSecretSafe(`cell ${cell.id} metadata`, cell.parameters);
+  }
+  for (const input of spec.inputs) {
+    assertSecretSafe("input identifier", input.id);
+    assertJsonValuesSecretSafe(`input ${input.id} metadata`, input.metadata);
+  }
+}
+
+function assertProtocolVersion(label: string, version: string): void {
+  if (!/^[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)*\/v[1-9][0-9]*$/.test(version)) {
+    throw new Error(`${label} protocol version is invalid`);
+  }
+  assertSecretSafe(`${label} protocol version`, version);
 }
 
 function assertResultPayloadSecretSafe(record: Record<string, unknown>): void {
@@ -1266,6 +1385,8 @@ function gitCommitContainsBytes(checkoutRoot: string, commit: string, relativePa
 
 async function verifyResourceMonitorModuleIdentity(identity: Phase1ResourceMonitorModule): Promise<void> {
   const { modulePath, approvedRoot, moduleSha256, exportName } = identity;
+  assertProtocolVersion("resource monitor", identity.version);
+  assertJsonValuesSecretSafe("resource monitor paths", [modulePath, approvedRoot, exportName]);
   if (resolve(modulePath) !== modulePath || resolve(approvedRoot) !== approvedRoot) {
     throw new Error("resource monitor source and approved root paths must be absolute");
   }

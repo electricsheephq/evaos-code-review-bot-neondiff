@@ -20,6 +20,22 @@ function digest(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function evidenceDigest(value: unknown): string {
+  return digest(canonical(value));
+}
+
 const ownershipProof = {
   ownershipVerifierSha256: "8".repeat(64),
   verifyListenerOwnership: async () => true,
@@ -53,7 +69,11 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
         async sample(_session, context) {
           if (kind === "throw-" + context.phase) throw new Error("monitor " + context.phase + " exploded");
           sequence += 1;
-          return { capturedAt: "sample-" + sequence, phase: context.phase, rssBytes: 100 + sequence, vramBytes: 200, swapBytes: kind === "swap" && sequence > 2 ? 4096 : 0 };
+          const base = { capturedAt: "sample-" + sequence, phase: context.phase, rssBytes: 100 + sequence, vramBytes: 200, swapBytes: kind === "swap" && sequence > 2 ? 4096 : 0 };
+          if (kind === "sample-nan") return { ...base, rssBytes: Number.NaN };
+          if (kind === "sample-infinity") return { ...base, diagnosticValue: Number.POSITIVE_INFINITY };
+          if (kind === "sample-negative") return { ...base, vramBytes: -1 };
+          return base;
         },
         classify(samples) {
           if (kind === "throw-classify") throw new Error("monitor classify exploded");
@@ -63,7 +83,10 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
         },
         async stop() {
           const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0 };
-          return kind === "secret-stop" ? { ...base, diagnostic: "Authorization: Bearer sk-secret-value-1234567890" } : base;
+          if (kind === "secret-stop") return { ...base, diagnostic: "Authorization: Bearer sk-secret-value-1234567890" };
+          if (kind === "secret-fingerprint-stop") return { ...base, evidenceSha256: "sk-secret-value-1234567890" };
+          if (kind === "stop-nan") return { ...base, swapBytes: Number.NaN };
+          return base;
         }
       };
     }
@@ -361,6 +384,70 @@ describe("Phase 1 screening runner", () => {
     expect(manifest.monitorIdentity).toMatchObject({ exportName: "createMonitor", moduleSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 
+  it("reconstructs pre-crash per-invocation samples before resuming monitored work", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-resume-"));
+    const identity = monitorModule("normal");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "resources", "warm-8k.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const resource = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resource.samples.filter((sample: { phase: string }) => sample.phase === "before")).toHaveLength(2);
+    expect(resource.samples.filter((sample: { phase: string }) => sample.phase === "after")).toHaveLength(2);
+  });
+
+  it("fails closed when a monitored partial result has no reconstructable resource samples", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-resume-missing-"));
+    const identity = monitorModule("normal");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const firstPath = join(outputDir, "results", "warm-8k", "pr-1.json");
+    const first = JSON.parse(readFileSync(firstPath, "utf8"));
+    delete first.resourceSamples;
+    const { evidenceSha256: _discarded, ...body } = first;
+    writeFileSync(firstPath, JSON.stringify({ ...body, evidenceSha256: evidenceDigest(body) }));
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "resources", "warm-8k.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity })).rejects.toThrow(/reconstructable resource samples/i);
+  });
+
+  it.each(["sample-nan", "sample-infinity", "sample-negative", "stop-nan"])(
+    "fails closed without null serialization for invalid resource numeric data: %s",
+    async (kind) => {
+      const outputDir = mkdtempSync(join(tmpdir(), `neondiff-phase1-resource-invalid-${kind}-`));
+      await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule(kind) })).rejects.toThrow(/resource sample.*(?:finite|nonnegative)/i);
+      const evidenceFiles = [
+        join(outputDir, "resources", "warm-8k.json"),
+        join(outputDir, "results", "warm-8k", "pr-1.json"),
+        join(outputDir, "results", "warm-8k", "pr-2.json")
+      ].filter(existsSync);
+      for (const path of evidenceFiles) expect(readFileSync(path, "utf8")).not.toMatch(/:\s*null/);
+      expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+    }
+  );
+
+  it("rejects an invalid numeric sample while reconstructing monitored resume evidence", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-resource-invalid-resume-"));
+    const identity = monitorModule("normal");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const firstPath = join(outputDir, "results", "warm-8k", "pr-1.json");
+    const first = JSON.parse(readFileSync(firstPath, "utf8"));
+    first.resourceSamples[0].rssBytes = -1;
+    const { evidenceSha256: _discarded, ...body } = first;
+    writeFileSync(firstPath, JSON.stringify({ ...body, evidenceSha256: evidenceDigest(body) }));
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "resources", "warm-8k.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity })).rejects.toThrow(/resource sample.*nonnegative/i);
+  });
+
   it("loads a fresh monitor module namespace for every run", async () => {
     const identity = monitorModule("normal");
     const firstDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-fresh-first-"));
@@ -453,6 +540,13 @@ describe("Phase 1 screening runner", () => {
     expect(JSON.stringify(unavailable)).not.toContain("sk-secret");
     const resumed = await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModuleIdentity });
     expect(resumed.status).toBe("failed");
+  });
+
+  it("scans arbitrary fingerprint-like keys in nested resource evidence", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-secret-fingerprint-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("secret-fingerprint-stop") })).rejects.toThrow(/monitor evidence finalization/i);
+    const unavailable = readFileSync(join(outputDir, "resource-unavailable-warm-8k.json"), "utf8");
+    expect(unavailable).not.toContain("sk-secret");
   });
 
   it("uses a root-level unavailable record when the resource evidence directory cannot be written", async () => {
@@ -790,8 +884,78 @@ describe("Phase 1 screening runner", () => {
       expect(calls).toBe(1);
       expect(result.counts[status]).toBe(2);
       expect(result.counts.completed).toBe(0);
+      expect(JSON.parse(readFileSync(join(outputDir, "results", "warm-8k", "pr-1.json"), "utf8"))).toMatchObject({ residentTerminal: true, invocationDisposition: "invoked" });
+      expect(JSON.parse(readFileSync(join(outputDir, "results", "warm-8k", "pr-2.json"), "utf8"))).toMatchObject({ residentTerminal: true, invocationDisposition: "not_invoked_resident_terminal" });
     }
   );
+
+  it("rejects non-finite required metrics", async () => {
+    for (const metric of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-nonfinite-metric-"));
+      const runSpec = spec(outputDir);
+      runSpec.request.requiredMetrics = ["latencyMs"];
+      const result = await runPhase1Screen(runSpec, adapter({
+        async invoke() { return { status: "completed", rawOutput: "{}", metrics: { latencyMs: metric } }; }
+      }));
+      expect(result.counts.schema_failed).toBe(2);
+    }
+  });
+
+  it("rejects non-finite optional metrics before evidence is fingerprinted", async () => {
+    for (const metric of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-nonfinite-optional-metric-"));
+      const result = await runPhase1Screen(spec(outputDir), adapter({
+        async invoke() { return { status: "completed", rawOutput: "{}", metrics: { optionalDiagnostic: metric } }; }
+      }));
+      expect(result.counts.schema_failed).toBe(2);
+      const persisted = readFileSync(join(outputDir, "results", "warm-8k", "pr-1.json"), "utf8");
+      expect(persisted).not.toMatch(/optionalDiagnostic|null/);
+    }
+  });
+
+  it("rejects negative latency metrics before evidence is fingerprinted", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-negative-latency-"));
+    const result = await runPhase1Screen(spec(outputDir), adapter({
+      async invoke() { return { status: "completed", rawOutput: "{}", metrics: { latencyMs: -1 } }; }
+    }));
+    expect(result.counts.schema_failed).toBe(2);
+  });
+
+  it("scans arbitrary nested fingerprint-like keys while accepting runner-owned digests", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-nested-secret-"));
+    const summary = await runPhase1Screen(spec(outputDir), adapter({
+      async invoke() {
+        return { status: "completed", rawOutput: JSON.stringify({ runFingerprint: "sk-secret-value-1234567890" }) };
+      }
+    }));
+    expect(summary.counts.failed).toBe(2);
+    expect(JSON.stringify(summary)).not.toContain("sk-secret");
+    expect(readFileSync(join(outputDir, "results", "warm-8k", "pr-1.json"), "utf8")).not.toContain("sk-secret");
+    expect(existsSync(join(outputDir, "COMPLETED"))).toBe(false);
+  });
+
+  it.each([
+    ["prompt template", (runSpec: Phase1RunSpec) => {
+      runSpec.prompt.template = "Authorization: Bearer sk-secret-value-1234567890 {{input}}";
+      runSpec.prompt.templateSha256 = digest(runSpec.prompt.template);
+    }],
+    ["response format", (runSpec: Phase1RunSpec) => { runSpec.request.responseFormat = { nested: "sk-secret-value-1234567890" }; }],
+    ["cell executable args", (runSpec: Phase1RunSpec) => { runSpec.cells[0].executableArgs = ["--api-key", "sk-secret-value-1234567890"]; }]
+  ] as const)("rejects secret-like text in the full manifest %s before writing", async (_label, mutate) => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-manifest-secret-"));
+    const runSpec = spec(outputDir);
+    mutate(runSpec);
+    await expect(runPhase1Screen(runSpec, adapter())).rejects.toThrow(/secret-like text/i);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+  });
+
+  it("does not exempt exact runner-owned digest names inside untrusted manifest metadata", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-manifest-exact-key-secret-"));
+    const runSpec = spec(outputDir);
+    runSpec.inputs[0].metadata = { nested: { targetFingerprint: "sk-secret-value-1234567890" } };
+    await expect(runPhase1Screen(runSpec, adapter())).rejects.toThrow(/secret-like text/i);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+  });
 
   it("fails closed before execution when target argv or adapter logs contain secret-like text", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-secret-"));
