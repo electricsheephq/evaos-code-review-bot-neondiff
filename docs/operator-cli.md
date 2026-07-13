@@ -292,18 +292,19 @@ npx tsx src/cli.ts runtime-inventory --json --config config.local.json --launchd
 ```
 
 Recover the standard macOS LaunchAgent only after runtime inventory shows no
-active work. Inspect both plans first; these dry runs do not mutate launchd:
+active work. Inspect and approve the stop plan before mutating launchd:
 
 ```bash
 npx tsx src/cli.ts daemon stop --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
-npx tsx src/cli.ts daemon start --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
+npx tsx src/cli.ts daemon stop --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
 ```
 
-After approving the exact label, config, detected launchd state, plist path,
-and planned commands, run the confirmed stop/start sequence:
+Once stop succeeds, dry-run start against the now-unloaded service so the plan
+shows the actual detected state and plist/bootstrap commands. Approve that exact
+label, config, state, plist path, and plan before confirmed start:
 
 ```bash
-npx tsx src/cli.ts daemon stop --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
+npx tsx src/cli.ts daemon start --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
 npx tsx src/cli.ts daemon start --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
 ```
 
