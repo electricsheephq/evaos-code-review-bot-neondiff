@@ -7,6 +7,7 @@ import {
   createReadStream,
   realpathSync,
   closeSync,
+  linkSync,
   openSync,
   renameSync,
   rmSync,
@@ -16,6 +17,18 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { connect, createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
+import {
+  createLlamaCppStartupCapture,
+  LLAMA_CPP_STARTUP_MAX_BYTES,
+  LLAMA_CPP_STARTUP_MAX_LINES,
+  llamaCppPlacementAttestationModulePath,
+  parseLlamaCppPlacementAttestation,
+  type LlamaCppPlacementProfile,
+  type LlamaCppPlacementReceipt,
+  type LlamaCppStartupCapture,
+  type LlamaCppStartupSource,
+  type LlamaCppStartupStream
+} from "./llama-cpp-placement-attestation.js";
 
 export type Phase1TerminalStatus = "completed" | "failed" | "stopped" | "oom" | "schema_failed";
 
@@ -37,6 +50,33 @@ export interface Phase1Cell {
   repetition: number;
   executableArgs?: string[];
   parameters?: Record<string, unknown>;
+  placement?: Phase1PlacementPolicy;
+}
+
+export interface Phase1PlacementPolicy {
+  mode: "offload_comparison";
+  profile: LlamaCppPlacementProfile;
+  requestedGpuLayers: number | "all";
+  expectedCpuMoe?: {
+    requestKind: "all" | "first_n";
+    firstLayer: number;
+    lastLayer: number;
+    layerCount: number;
+    minimumMatchedTensors: number;
+  };
+  parserVersion: "llama.cpp-b9977-placement/v1";
+  parserSourcePath: string;
+  parserSourceSha256: string;
+  maxStartupBytes: number;
+  maxStartupLines: number;
+}
+
+export interface Phase1ResidentPlacementEvidence {
+  source: LlamaCppStartupSource;
+  receipt: LlamaCppPlacementReceipt;
+  processStartReceiptSha256: string;
+  processStartReceiptRelativePath: string;
+  processAttestationFingerprint: string;
 }
 
 export interface Phase1Input {
@@ -73,6 +113,7 @@ export interface Phase1Resident {
   argv: string[];
   logs?: string;
   metadata?: Record<string, unknown>;
+  placementEvidence?: Phase1ResidentPlacementEvidence;
 }
 
 export interface Phase1InvocationResult {
@@ -184,6 +225,8 @@ type ResidentProcess = {
   unsafeEvidence: boolean;
   exited: boolean;
   stderrTail: string;
+  placementCapture?: LlamaCppStartupCapture;
+  placementCaptureError?: Error;
 };
 
 /**
@@ -228,6 +271,26 @@ export function createLlamaServerExecutableAdapter(
       if (!hasFlagValue(effectiveArgs, "--model", target.modelPath)) {
         throw new Error("llama-server model path must match the immutable target argv");
       }
+      if (cell.placement) {
+        const argvGpuLayers = readGpuLayerRequest(effectiveArgs);
+        if (argvGpuLayers !== cell.placement.requestedGpuLayers) throw new Error("llama-server GPU-layer request does not match the immutable placement policy");
+        assertPlacementDebugVerbosity(effectiveArgs);
+        const cpuMoeRequest = readCpuMoeRequest(effectiveArgs);
+        if (cell.placement.profile === "all_plus_cpu_moe") {
+          if (!cpuMoeRequest || !cell.placement.expectedCpuMoe) throw new Error("llama-server CPU-MoE request does not match the immutable placement policy");
+          const expectedCpuMoe = cell.placement.expectedCpuMoe;
+          if ((cpuMoeRequest.kind === "all" && expectedCpuMoe.requestKind !== "all")
+            || (cpuMoeRequest.kind === "first_n"
+              && (expectedCpuMoe.requestKind !== "first_n"
+                || expectedCpuMoe.firstLayer !== 0
+                || expectedCpuMoe.lastLayer !== cpuMoeRequest.count - 1
+                || expectedCpuMoe.layerCount !== cpuMoeRequest.count))) {
+            throw new Error("llama-server ranged CPU-MoE request does not match the immutable placement policy");
+          }
+        } else if (cpuMoeRequest) {
+          throw new Error("llama-server CPU-MoE request does not match the immutable placement policy");
+        }
+      }
       const actualExecutableSha256 = await sha256File(target.executable);
       if (actualExecutableSha256 !== target.executableSha256) {
         throw new Error("llama-server executable SHA-256 does not match the immutable target");
@@ -244,21 +307,50 @@ export function createLlamaServerExecutableAdapter(
       });
       const id = randomUUID();
       const loadStartedAt = performance.now();
-      const state: ResidentProcess = { process: child, unsafeEvidence: false, exited: false, stderrTail: "" };
+      const startedAt = new Date().toISOString();
+      const processStartReceiptRelativePath = join("processes", `${cell.id}.${id}.start.json`);
+      const processStartReceiptPath = join(outputDir, processStartReceiptRelativePath);
+      const processStartBody = {
+        schemaVersion: "neondiff-phase1-resident-start/v1" as const,
+        pid: child.pid,
+        processGroupId: child.pid,
+        executableSha256: target.executableSha256,
+        argvFingerprint,
+        ownershipVerifierSha256: target.ownershipVerifierSha256,
+        targetId: target.id,
+        cellId: cell.id,
+        startedAt
+      };
+      const processStartRecord = { ...processStartBody, evidenceSha256: fingerprint(processStartBody) };
+      const state: ResidentProcess = {
+        process: child,
+        unsafeEvidence: false,
+        exited: false,
+        stderrTail: "",
+        placementCapture: cell.placement
+          ? createLlamaCppStartupCapture({ maxBytes: cell.placement.maxStartupBytes, maxLines: cell.placement.maxStartupLines })
+          : undefined
+      };
       residents.set(id, state);
-      const inspectChunk = (chunk: Buffer): void => {
+      const inspectChunk = (stream: LlamaCppStartupStream) => (chunk: Buffer): void => {
         const text = chunk.toString("utf8");
         state.unsafeEvidence ||= containsSecretLikeText(text);
         state.stderrTail = `${state.stderrTail}${redactSecrets(text)}`.slice(-4096);
+        if (state.placementCapture && !state.placementCaptureError) {
+          try { state.placementCapture.push({ stream, chunk }); }
+          catch (error) { state.placementCaptureError = error instanceof Error ? error : new Error("llama.cpp placement capture failed"); }
+        }
       };
-      child.stdout?.on("data", inspectChunk);
-      child.stderr?.on("data", inspectChunk);
+      child.stdout?.on("data", inspectChunk("stdout"));
+      child.stderr?.on("data", inspectChunk("stderr"));
       child.once("exit", () => { state.exited = true; });
       child.once("error", (error) => {
         state.exited = true;
         state.stderrTail = redactSecrets(error.message).slice(-4096);
       });
+      let placementEvidence: Phase1ResidentPlacementEvidence | undefined;
       try {
+        atomicCreateJson(processStartReceiptPath, processStartRecord);
         atomicWriteJson(journalPath, {
           schemaVersion: "neondiff-phase1-resident/v1",
           state: "running",
@@ -268,7 +360,9 @@ export function createLlamaServerExecutableAdapter(
           argvFingerprint,
           targetId: target.id,
           cellId: cell.id,
-          startedAt: new Date().toISOString()
+          startedAt,
+          processStartReceiptRelativePath,
+          processStartReceiptSha256: processStartRecord.evidenceSha256
         });
         await waitForHealthy(baseUrl, readinessTimeoutMs, state);
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -279,6 +373,25 @@ export function createLlamaServerExecutableAdapter(
         if (!child.pid || !await verifyProcessIdentity(child.pid, target.executableSha256, argvFingerprint)) {
           throw new Error("llama-server process identity could not be proven for the spawned PID");
         }
+        if (state.placementCaptureError) throw state.placementCaptureError;
+        if (state.unsafeEvidence) throw new Error("llama-server emitted secret-like text during startup");
+        if (cell.placement) {
+          if (!state.placementCapture) throw new Error("llama.cpp placement capture is unavailable");
+          const source = state.placementCapture.finalize();
+          const receipt = parseLlamaCppPlacementAttestation(source, {
+            backendCommit: target.backendCommit,
+            profile: cell.placement.profile,
+            requestedGpuLayers: cell.placement.requestedGpuLayers,
+            expectedCpuMoe: cell.placement.expectedCpuMoe
+          });
+          placementEvidence = {
+            source,
+            receipt,
+            processStartReceiptSha256: processStartRecord.evidenceSha256,
+            processStartReceiptRelativePath,
+            processAttestationFingerprint: fingerprint(processStartBody)
+          };
+        }
       } catch (error) {
         try { await stopProcess(state, stopTimeoutMs); }
         catch (cleanupError) {
@@ -288,12 +401,12 @@ export function createLlamaServerExecutableAdapter(
         residents.delete(id);
         throw error;
       }
-      if (state.unsafeEvidence) {
-        await stopProcess(state, stopTimeoutMs);
-        residents.delete(id);
-        throw new Error("llama-server emitted secret-like text during startup");
-      }
-      return { id, argv, metadata: { baseUrl, pid: child.pid, journalPath, modelId: target.id, loadDurationMs: Math.max(0, performance.now() - loadStartedAt) } };
+      return {
+        id,
+        argv,
+        metadata: { baseUrl, pid: child.pid, journalPath, modelId: target.id, loadDurationMs: Math.max(0, performance.now() - loadStartedAt) },
+        placementEvidence
+      };
     },
     async invoke(resident, request) {
       const state = residents.get(resident.id);
@@ -534,6 +647,17 @@ async function runPhase1ScreenWithLease(
         throw new Error(`terminal resource evidence is missing for cell ${cell.id}`);
       }
     }
+    if (cell.placement) {
+      const [placementPath, sourcePath] = placementEvidencePaths(spec.outputDir, cell.id);
+      const unavailablePath = placementUnavailablePath(spec.outputDir, cell.id);
+      const anyResultExists = spec.inputs.some((input) => existsSync(resultFile(spec.outputDir, cell.id, input.id)));
+      if (existsSync(placementPath) || existsSync(sourcePath)) {
+        if (existsSync(unavailablePath)) throw new Error(`placement evidence conflicts with unavailable evidence for cell ${cell.id}`);
+        validatePlacementEvidence(spec.outputDir, manifest, cell);
+      }
+      else if (existsSync(unavailablePath)) validatePlacementUnavailable(unavailablePath, manifest, cell);
+      else if (anyResultExists) throw new Error(`terminal placement evidence is missing for cell ${cell.id}`);
+    }
   }
   if (missingResults === 0) {
     const existingSummaryPath = join(spec.outputDir, "summary.json");
@@ -572,6 +696,7 @@ async function runPhase1ScreenWithLease(
     });
     if (!resident) {
       try {
+        if (cell.placement) writePlacementUnavailable(spec.outputDir, manifest, cell, infrastructureFailure ?? "resident_start_failed");
         for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, infrastructureFailure ?? "resident_start_failed");
       } catch (writeError) {
         infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `terminal result write after resident start failure failed: ${errorMessage(writeError)}`);
@@ -589,9 +714,12 @@ async function runPhase1ScreenWithLease(
     try {
       assertSecretSafe("resident argv", resident.argv.join("\n"));
       assertSecretSafe("resident logs", resident.logs ?? "");
+      if (cell.placement) persistPlacementEvidence(spec.outputDir, manifest, cell, resident);
+      else if (resident.placementEvidence) throw new Error("resident returned unrequested placement evidence");
     } catch (error) {
       infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, errorMessage(error));
       try {
+        if (cell.placement) writePlacementUnavailable(spec.outputDir, manifest, cell, errorMessage(error));
         for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, "resident_evidence_rejected");
       } catch (writeError) {
         infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `terminal result write after resident evidence rejection failed: ${errorMessage(writeError)}`);
@@ -985,6 +1113,213 @@ function validateResourceEvidence(path: string, manifest: Manifest, cellFingerpr
   for (const sample of record.samples) validateResourceSample(sample, `resource evidence sample at ${path}`);
 }
 
+function placementEvidencePaths(outputDir: string, cellId: string): [string, string] {
+  const root = join(outputDir, "placements", cellId);
+  return [join(root, "placement.json"), join(root, "startup-source.json")];
+}
+
+function placementUnavailablePath(outputDir: string, cellId: string): string {
+  return join(outputDir, `placement-unavailable-${cellId}.json`);
+}
+
+function writePlacementUnavailable(
+  outputDir: string,
+  manifest: Manifest,
+  cell: Manifest["cells"][number],
+  error: string
+): void {
+  if (!cell.placement) return;
+  const path = placementUnavailablePath(outputDir, cell.id);
+  const body = {
+    schemaVersion: "neondiff-phase1-placement-unavailable/v1" as const,
+    runFingerprint: manifest.runFingerprint,
+    targetFingerprint: manifest.targetFingerprint,
+    cellFingerprint: cell.fingerprint,
+    placementPolicyFingerprint: fingerprint(cell.placement),
+    cellId: cell.id,
+    terminalErrorCode: sanitizeIdentifier(error)
+  };
+  const record = { ...body, evidenceSha256: fingerprint(body) };
+  if (existsSync(path)) {
+    validatePlacementUnavailable(path, manifest, cell);
+    return;
+  }
+  atomicCreateJson(path, record);
+}
+
+function validatePlacementUnavailable(path: string, manifest: Manifest, cell: Manifest["cells"][number]): void {
+  if (!cell.placement) throw new Error(`placement unavailable evidence is not declared for cell ${cell.id}`);
+  const record = parseJson<Record<string, unknown>>(path);
+  const { evidenceSha256, ...body } = record;
+  if (record.schemaVersion !== "neondiff-phase1-placement-unavailable/v1"
+    || record.runFingerprint !== manifest.runFingerprint
+    || record.targetFingerprint !== manifest.targetFingerprint
+    || record.cellFingerprint !== cell.fingerprint
+    || record.placementPolicyFingerprint !== fingerprint(cell.placement)
+    || record.cellId !== cell.id
+    || typeof record.terminalErrorCode !== "string"
+    || evidenceSha256 !== fingerprint(body)) {
+    throw new Error(`placement unavailable evidence fingerprint mismatch for cell ${cell.id}`);
+  }
+  assertSecretSafe("placement unavailable error code", record.terminalErrorCode);
+}
+
+function persistPlacementEvidence(
+  outputDir: string,
+  manifest: Manifest,
+  cell: Manifest["cells"][number],
+  resident: Phase1Resident
+): void {
+  if (!cell.placement || !resident.placementEvidence) {
+    throw new Error(`required placement evidence is missing for cell ${cell.id}`);
+  }
+  const [placementPath, sourcePath] = placementEvidencePaths(outputDir, cell.id);
+  if (existsSync(placementPath) || existsSync(sourcePath)) {
+    validatePlacementEvidence(outputDir, manifest, cell);
+    return;
+  }
+  const sourceBody = {
+    schemaVersion: "neondiff-phase1-startup-source/v1" as const,
+    runFingerprint: manifest.runFingerprint,
+    targetFingerprint: manifest.targetFingerprint,
+    cellFingerprint: cell.fingerprint,
+    cellId: cell.id,
+    parserVersion: cell.placement.parserVersion,
+    parserSourceSha256: cell.placement.parserSourceSha256,
+    source: resident.placementEvidence.source
+  };
+  const sourceRecord = { ...sourceBody, evidenceSha256: fingerprint(sourceBody) };
+  const placementBody = {
+    schemaVersion: "neondiff-phase1-placement/v1" as const,
+    runFingerprint: manifest.runFingerprint,
+    targetFingerprint: manifest.targetFingerprint,
+    servingProfileFingerprint: fingerprint(manifest.target.servingParameters ?? {}),
+    placementPolicyFingerprint: fingerprint(cell.placement),
+    cellFingerprint: cell.fingerprint,
+    cohortFingerprint: cell.cohortFingerprint,
+    effectiveArgvFingerprint: cell.effectiveArgvFingerprint,
+    harnessFingerprint: manifest.harnessFingerprint,
+    monitorFingerprint: manifest.monitorFingerprint,
+    cellId: cell.id,
+    identity: {
+      backendCommit: manifest.target.backendCommit,
+      executableSha256: manifest.target.executableSha256,
+      modelSha256: manifest.target.modelSha256,
+      ownershipVerifierSha256: manifest.target.ownershipVerifierSha256,
+      parserVersion: cell.placement.parserVersion,
+      parserSourceSha256: cell.placement.parserSourceSha256,
+      processStartReceiptSha256: resident.placementEvidence.processStartReceiptSha256,
+      processStartReceiptRelativePath: resident.placementEvidence.processStartReceiptRelativePath,
+      processAttestationFingerprint: resident.placementEvidence.processAttestationFingerprint
+    },
+    requested: {
+      profile: cell.placement.profile,
+      gpuLayers: cell.placement.requestedGpuLayers,
+      contextTokens: cell.contextTokens
+    },
+    observed: resident.placementEvidence.receipt,
+    sourceEvidenceSha256: sourceRecord.evidenceSha256
+  };
+  const placementRecord = { ...placementBody, evidenceSha256: fingerprint(placementBody) };
+  assertJsonValuesSecretSafe("placement startup events", resident.placementEvidence.source.events);
+  atomicCreateJson(sourcePath, sourceRecord);
+  atomicCreateJson(placementPath, placementRecord);
+  validatePlacementEvidence(outputDir, manifest, cell);
+}
+
+function validatePlacementEvidence(
+  outputDir: string,
+  manifest: Manifest,
+  cell: Manifest["cells"][number]
+): void {
+  if (!cell.placement) throw new Error(`placement evidence is not declared for cell ${cell.id}`);
+  const [placementPath, sourcePath] = placementEvidencePaths(outputDir, cell.id);
+  if (!existsSync(placementPath) || !existsSync(sourcePath)) throw new Error(`placement evidence is incomplete for cell ${cell.id}`);
+  const sourceRecord = parseJson<Record<string, unknown>>(sourcePath);
+  const placementRecord = parseJson<Record<string, unknown>>(placementPath);
+  const { evidenceSha256: sourceEvidenceSha256, ...sourceBody } = sourceRecord;
+  const { evidenceSha256: placementEvidenceSha256, ...placementBody } = placementRecord;
+  if (sourceRecord.schemaVersion !== "neondiff-phase1-startup-source/v1"
+    || sourceRecord.runFingerprint !== manifest.runFingerprint
+    || sourceRecord.targetFingerprint !== manifest.targetFingerprint
+    || sourceRecord.cellFingerprint !== cell.fingerprint
+    || sourceRecord.cellId !== cell.id
+    || sourceRecord.parserVersion !== cell.placement.parserVersion
+    || sourceRecord.parserSourceSha256 !== cell.placement.parserSourceSha256
+    || sourceEvidenceSha256 !== fingerprint(sourceBody)) {
+    throw new Error(`placement source fingerprint mismatch for cell ${cell.id}`);
+  }
+  if (placementRecord.schemaVersion !== "neondiff-phase1-placement/v1"
+    || placementRecord.runFingerprint !== manifest.runFingerprint
+    || placementRecord.targetFingerprint !== manifest.targetFingerprint
+    || placementRecord.servingProfileFingerprint !== fingerprint(manifest.target.servingParameters ?? {})
+    || placementRecord.placementPolicyFingerprint !== fingerprint(cell.placement)
+    || placementRecord.cellFingerprint !== cell.fingerprint
+    || placementRecord.cohortFingerprint !== cell.cohortFingerprint
+    || placementRecord.effectiveArgvFingerprint !== cell.effectiveArgvFingerprint
+    || placementRecord.harnessFingerprint !== manifest.harnessFingerprint
+    || placementRecord.monitorFingerprint !== manifest.monitorFingerprint
+    || placementRecord.cellId !== cell.id
+    || placementRecord.sourceEvidenceSha256 !== sourceEvidenceSha256
+    || placementEvidenceSha256 !== fingerprint(placementBody)) {
+    throw new Error(`placement evidence fingerprint mismatch for cell ${cell.id}`);
+  }
+  const identity = placementRecord.identity as Record<string, unknown> | undefined;
+  if (!identity
+    || identity.backendCommit !== manifest.target.backendCommit
+    || identity.executableSha256 !== manifest.target.executableSha256
+    || identity.modelSha256 !== manifest.target.modelSha256
+    || identity.ownershipVerifierSha256 !== manifest.target.ownershipVerifierSha256
+    || identity.parserVersion !== cell.placement.parserVersion
+    || identity.parserSourceSha256 !== cell.placement.parserSourceSha256) {
+    throw new Error(`placement evidence identity mismatch for cell ${cell.id}`);
+  }
+  const source = sourceRecord.source as LlamaCppStartupSource;
+  const observed = parseLlamaCppPlacementAttestation(source, {
+    backendCommit: manifest.target.backendCommit,
+    profile: cell.placement.profile,
+    requestedGpuLayers: cell.placement.requestedGpuLayers,
+    expectedCpuMoe: cell.placement.expectedCpuMoe
+  });
+  if (canonicalJson(observed) !== canonicalJson(placementRecord.observed)) {
+    throw new Error(`placement evidence parsed receipt mismatch for cell ${cell.id}`);
+  }
+  const journalPath = join(outputDir, "processes", `${cell.id}.json`);
+  const journal = parseJson<Record<string, unknown>>(journalPath);
+  const startRelativePath = identity.processStartReceiptRelativePath;
+  if (typeof startRelativePath !== "string"
+    || !new RegExp(`^processes/${escapeRegExp(cell.id)}\\.[a-f0-9-]+\\.start\\.json$`).test(startRelativePath)) {
+    throw new Error(`placement process start receipt path mismatch for cell ${cell.id}`);
+  }
+  const startPath = join(outputDir, startRelativePath);
+  const startRecord = parseJson<Record<string, unknown>>(startPath);
+  const { evidenceSha256: startEvidenceSha256, ...startBody } = startRecord;
+  const processAttestationFingerprint = fingerprint(startBody);
+  if (journal.schemaVersion !== "neondiff-phase1-resident/v1"
+    || journal.executableSha256 !== manifest.target.executableSha256
+    || journal.argvFingerprint !== cell.effectiveArgvFingerprint
+    || journal.targetId !== manifest.target.id
+    || journal.cellId !== cell.id
+    || journal.processGroupId !== journal.pid
+    || journal.processStartReceiptRelativePath !== startRelativePath
+    || journal.processStartReceiptSha256 !== startEvidenceSha256
+    || startRecord.schemaVersion !== "neondiff-phase1-resident-start/v1"
+    || startRecord.pid !== journal.pid
+    || startRecord.processGroupId !== journal.processGroupId
+    || startRecord.executableSha256 !== manifest.target.executableSha256
+    || startRecord.argvFingerprint !== cell.effectiveArgvFingerprint
+    || startRecord.ownershipVerifierSha256 !== manifest.target.ownershipVerifierSha256
+    || startRecord.targetId !== manifest.target.id
+    || startRecord.cellId !== cell.id
+    || startRecord.startedAt !== journal.startedAt
+    || startEvidenceSha256 !== fingerprint(startBody)
+    || identity.processStartReceiptSha256 !== startEvidenceSha256
+    || identity.processAttestationFingerprint !== processAttestationFingerprint) {
+    throw new Error(`placement process attestation mismatch for cell ${cell.id}`);
+  }
+  assertJsonValuesSecretSafe("placement startup events", source.events);
+}
+
 function validateSpec(spec: Phase1RunSpec): void {
   if (!spec.outputDir) throw new Error("outputDir is required");
   if (spec.cells.length === 0 || spec.inputs.length === 0) throw new Error("at least one cell and input are required");
@@ -1012,6 +1347,44 @@ function validateSpec(spec: Phase1RunSpec): void {
   if (spec.parser.sha256 !== sha256(`${spec.parser.version}:${spec.parser.format}`)) throw new Error("parser contract SHA-256 mismatch");
   if (spec.gate.sha256 !== sha256(`${spec.gate.version}:${spec.gate.requiredTopLevelKeys.join(",")}`)) throw new Error("gate contract SHA-256 mismatch");
   for (const input of spec.inputs) if (input.sha256 !== sha256(input.prompt)) throw new Error(`input ${input.id} SHA-256 does not match prompt bytes`);
+  for (const cell of spec.cells) {
+    if (!cell.placement) continue;
+    const policy = cell.placement;
+    if (policy.mode !== "offload_comparison" || policy.parserVersion !== "llama.cpp-b9977-placement/v1") {
+      throw new Error(`cell ${cell.id} placement policy is unsupported`);
+    }
+    if (!(["full_gpu", "partial_gpu", "all_plus_cpu_moe"] as string[]).includes(policy.profile)) {
+      throw new Error(`cell ${cell.id} placement profile is unsupported`);
+    }
+    if (!((policy.requestedGpuLayers === "all")
+        || (Number.isSafeInteger(policy.requestedGpuLayers) && (policy.requestedGpuLayers as number) >= 0))
+      || !Number.isSafeInteger(policy.maxStartupBytes) || policy.maxStartupBytes <= 0
+      || !Number.isSafeInteger(policy.maxStartupLines) || policy.maxStartupLines <= 0) {
+      throw new Error(`cell ${cell.id} placement limits are invalid`);
+    }
+    if (policy.maxStartupBytes > LLAMA_CPP_STARTUP_MAX_BYTES || policy.maxStartupLines > LLAMA_CPP_STARTUP_MAX_LINES) {
+      throw new Error(`cell ${cell.id} placement limits exceed the implementation maximum`);
+    }
+    if (policy.profile === "all_plus_cpu_moe") {
+      const expected = policy.expectedCpuMoe;
+      if (!expected
+        || !(["all", "first_n"] as string[]).includes(expected.requestKind)
+        || !Number.isSafeInteger(expected.firstLayer) || expected.firstLayer < 0
+        || !Number.isSafeInteger(expected.lastLayer) || expected.lastLayer < expected.firstLayer
+        || !Number.isSafeInteger(expected.layerCount) || expected.layerCount !== expected.lastLayer - expected.firstLayer + 1
+        || !Number.isSafeInteger(expected.minimumMatchedTensors) || expected.minimumMatchedTensors < expected.layerCount) {
+        throw new Error(`cell ${cell.id} CPU-MoE placement contract is invalid`);
+      }
+    } else if (policy.expectedCpuMoe !== undefined) {
+      throw new Error(`cell ${cell.id} has an unexpected CPU-MoE placement contract`);
+    }
+    if (!/^[a-f0-9]{64}$/.test(policy.parserSourceSha256)) throw new Error(`cell ${cell.id} placement parser SHA-256 is invalid`);
+    if (resolve(policy.parserSourcePath) !== policy.parserSourcePath
+      || realpathSync(policy.parserSourcePath) !== realpathSync(llamaCppPlacementAttestationModulePath())
+      || sha256(readFileSync(policy.parserSourcePath)) !== policy.parserSourceSha256) {
+      throw new Error(`cell ${cell.id} placement parser identity does not match the executing implementation`);
+    }
+  }
 }
 
 function validateOutputBoundary(spec: Phase1RunSpec): void {
@@ -1461,6 +1834,7 @@ function assertManifestPayloadSecretSafe(spec: Phase1RunSpec): void {
     assertSecretSafe("cell identifier", cell.id);
     assertJsonValuesSecretSafe(`cell ${cell.id} executable arguments`, cell.executableArgs);
     assertJsonValuesSecretSafe(`cell ${cell.id} metadata`, cell.parameters);
+    assertJsonValuesSecretSafe(`cell ${cell.id} placement policy`, cell.placement);
   }
   for (const input of spec.inputs) {
     assertSecretSafe("input identifier", input.id);
@@ -1497,6 +1871,18 @@ function atomicWriteJson(path: string, value: unknown): void {
   atomicWriteText(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function atomicCreateJson(path: string, value: unknown): void {
+  const text = `${JSON.stringify(value, null, 2)}\n`;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temp, text, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    linkSync(temp, path);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
 function atomicWriteText(path: string, value: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
@@ -1528,6 +1914,10 @@ function fingerprint(value: unknown): string {
 
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function canonicalJson(value: unknown): string {
@@ -1899,6 +2289,49 @@ function readResponseMetrics(envelope: unknown, latencyMs: number): Record<strin
 function hasFlagValue(args: string[], flag: string, expected: string): boolean {
   const index = args.lastIndexOf(flag);
   return index >= 0 && args[index + 1] === expected;
+}
+
+function readGpuLayerRequest(args: string[]): number | "all" {
+  const aliases = new Set(["-ngl", "--n-gpu-layers", "--gpu-layers"]);
+  const matches = args.flatMap((arg, index) => aliases.has(arg) ? [args[index + 1]] : []);
+  if (matches.length !== 1 || matches[0] === undefined) throw new Error("llama-server placement requires exactly one GPU-layer argument");
+  if (matches[0] === "all") return "all";
+  const value = Number(matches[0]);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error("llama-server GPU-layer argument is invalid");
+  return value;
+}
+
+function readCpuMoeRequest(args: string[]): { kind: "all" } | { kind: "first_n"; count: number } | undefined {
+  const allAliases = new Set(["-cmoe", "--cpu-moe"]);
+  const rangeAliases = new Set(["-ncmoe", "--n-cpu-moe"]);
+  const requests: Array<{ kind: "all" } | { kind: "first_n"; count: number }> = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (allAliases.has(args[index])) requests.push({ kind: "all" });
+    if (rangeAliases.has(args[index])) {
+      const count = Number(args[index + 1]);
+      if (!Number.isSafeInteger(count) || count <= 0) throw new Error("llama-server ranged CPU-MoE argument is invalid");
+      requests.push({ kind: "first_n", count });
+    }
+  }
+  if (requests.length > 1) throw new Error("llama-server CPU-MoE arguments conflict or are duplicated");
+  return requests[0];
+}
+
+function assertPlacementDebugVerbosity(args: string[]): void {
+  const verboseAliases = new Set(["-v", "--verbose", "--log-verbose"]);
+  const numericAliases = new Set(["-lv", "--verbosity", "--log-verbosity"]);
+  const forms: Array<{ kind: "verbose" } | { kind: "numeric"; value: number }> = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (verboseAliases.has(args[index])) forms.push({ kind: "verbose" });
+    if (numericAliases.has(args[index])) {
+      const value = Number(args[index + 1]);
+      if (!Number.isSafeInteger(value)) throw new Error("llama-server placement log verbosity is invalid");
+      forms.push({ kind: "numeric", value });
+    }
+  }
+  if (forms.length !== 1 || (forms[0].kind === "numeric" && forms[0].value < 5)) {
+    throw new Error("llama-server placement requires exactly one debug-enabling verbosity argument");
+  }
 }
 
 async function assertEndpointUnbound(host: string, port: number): Promise<void> {
