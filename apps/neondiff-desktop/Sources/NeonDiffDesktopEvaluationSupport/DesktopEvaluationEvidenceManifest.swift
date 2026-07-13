@@ -2,9 +2,14 @@ import Foundation
 import NeonDiffDesktopCore
 
 public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
+    public enum ArtifactHashAlgorithm: String, Codable, Sendable {
+        case sha256TreeV1 = "sha256-tree-v1"
+    }
+
     public struct Artifact: Codable, Equatable, Sendable {
         public let path: String
         public let sha256: String
+        public let hashAlgorithm: ArtifactHashAlgorithm
         public let buildIdentity: String
     }
 
@@ -14,12 +19,20 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
         public let swiftVersion: String
         public let architecture: String
         public let backingScale: Double
+        public let evidence: EvidenceFile
+    }
+
+    public enum TestRunner: String, Codable, Sendable {
+        case swiftTesting = "swift-testing"
+        case xctest
     }
 
     public struct TestSummary: Codable, Equatable, Sendable {
         public let testCount: Int
         public let durationSeconds: Double
-        public let xcresultSHA256: String
+        public let runner: TestRunner
+        public let summary: EvidenceFile
+        public let result: EvidenceFile
     }
 
     public struct EvidenceFile: Codable, Equatable, Sendable {
@@ -34,11 +47,12 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
         public let height: Double
     }
 
-    public struct GoldenMetrics: Codable, Equatable, Sendable {
-        public let ssim: Double
-        public let changedPixelPercent: Double
-        public let largestChangedRegionPercent: Double
-        public let maskVersion: String
+    public enum VisualBaselineStatus: String, Codable, Sendable {
+        case capturedNoReference = "captured-no-reference"
+    }
+
+    public struct VisualBaseline: Codable, Equatable, Sendable {
+        public let status: VisualBaselineStatus
     }
 
     public struct Case: Codable, Equatable, Sendable {
@@ -52,7 +66,8 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
         public let screenshot: EvidenceFile
         public let accessibility: EvidenceFile
         public let geometry: EvidenceFile
-        public let goldenMetrics: GoldenMetrics
+        public let readiness: EvidenceFile
+        public let visualBaseline: VisualBaseline
         public let expectedState: DesktopEvaluationHealth
     }
 
@@ -74,6 +89,8 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
     public struct Scans: Codable, Equatable, Sendable {
         public let secretScanPassed: Bool
         public let releaseBoundaryPassed: Bool
+        public let secretScan: EvidenceFile
+        public let releaseBoundary: EvidenceFile
     }
 
     public let schemaVersion: Int
@@ -82,6 +99,7 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
     public let headSHA: String
     public let artifact: Artifact
     public let catalogSHA256: String
+    public let fixturesSHA256: String
     public let platform: Platform
     public let testSummary: TestSummary
     public let cases: [Case]
@@ -115,24 +133,28 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
     }
 
     private func validate() throws {
-        guard schemaVersion == 1 else {
+        guard schemaVersion == 2 else {
             throw DesktopEvaluationFixtureError.unsupportedSchemaVersion(schemaVersion)
         }
-        guard ISO8601DateFormatter().date(from: generatedAt) != nil,
+        guard Self.isCanonicalTimestamp(generatedAt),
               repository.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil,
               Self.isHash(headSHA, length: 40),
               Self.isSafeArtifactPath(artifact.path),
               Self.isHash(artifact.sha256),
+              artifact.hashAlgorithm == .sha256TreeV1,
               !artifact.buildIdentity.isEmpty,
               artifact.buildIdentity.utf8.count <= 256,
-              Self.isHash(catalogSHA256) else {
+              Self.isHash(catalogSHA256),
+              Self.isHash(fixturesSHA256) else {
             throw DesktopEvaluationFixtureError.invalidValue("manifest identity")
         }
         guard !platform.macOSVersion.isEmpty,
               !platform.xcodeVersion.isEmpty,
               !platform.swiftVersion.isEmpty,
               ["arm64", "x86_64"].contains(platform.architecture),
-              [1.0, 2.0, 3.0].contains(platform.backingScale) else {
+              [1.0, 2.0, 3.0].contains(platform.backingScale),
+              Self.isSafeRelativePath(platform.evidence.path),
+              Self.isHash(platform.evidence.sha256) else {
             throw DesktopEvaluationFixtureError.invalidValue("manifest platform")
         }
         guard testSummary.testCount > 0,
@@ -140,11 +162,32 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
               !cases.isEmpty,
               testSummary.durationSeconds >= 0,
               testSummary.durationSeconds.isFinite,
-              Self.isHash(testSummary.xcresultSHA256) else {
+              Self.isSafeRelativePath(testSummary.summary.path),
+              Self.isHash(testSummary.summary.sha256),
+              Self.isSafeRelativePath(testSummary.result.path),
+              Self.isHash(testSummary.result.sha256),
+              (testSummary.runner == .swiftTesting
+                ? testSummary.result.path.hasSuffix(".log")
+                : testSummary.result.path.hasSuffix(".xcresult.zip")) else {
             throw DesktopEvaluationFixtureError.invalidValue("manifest test summary")
         }
         var caseIdentities = Set<String>()
-        var evidencePaths = Set<String>()
+        guard Self.isSafeRelativePath(scans.secretScan.path),
+              Self.isHash(scans.secretScan.sha256),
+              Self.isSafeRelativePath(scans.releaseBoundary.path),
+              Self.isHash(scans.releaseBoundary.sha256) else {
+            throw DesktopEvaluationFixtureError.invalidValue("manifest scan evidence")
+        }
+        var evidencePaths = Set([
+            Self.canonicalPacketPath(testSummary.summary.path),
+            Self.canonicalPacketPath(testSummary.result.path),
+            Self.canonicalPacketPath(platform.evidence.path),
+            Self.canonicalPacketPath(scans.secretScan.path),
+            Self.canonicalPacketPath(scans.releaseBoundary.path)
+        ])
+        guard evidencePaths.count == 5 else {
+            throw DesktopEvaluationFixtureError.invalidValue("manifest evidence file")
+        }
         for item in cases {
             let identity = "\(item.fixtureId)|\(item.appearance.rawValue)|\(item.requestedContentSize.width)x\(item.requestedContentSize.height)|\(platform.backingScale)"
             guard caseIdentities.insert(identity).inserted,
@@ -156,21 +199,15 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
                   item.actualContentFrame.height <= item.actualWindowFrame.height else {
                 throw DesktopEvaluationFixtureError.invalidValue("manifest case")
             }
-            for evidence in [item.screenshot, item.accessibility, item.geometry] {
+            for evidence in [item.screenshot, item.accessibility, item.geometry, item.readiness] {
                 guard Self.isSafeRelativePath(evidence.path),
                       evidencePaths.insert(Self.canonicalPacketPath(evidence.path)).inserted,
                       Self.isHash(evidence.sha256) else {
                     throw DesktopEvaluationFixtureError.invalidValue("manifest evidence file")
                 }
             }
-            guard item.goldenMetrics.ssim >= 0,
-                  item.goldenMetrics.ssim <= 1,
-                  item.goldenMetrics.changedPixelPercent >= 0,
-                  item.goldenMetrics.changedPixelPercent <= 100,
-                  item.goldenMetrics.largestChangedRegionPercent >= 0,
-                  item.goldenMetrics.largestChangedRegionPercent <= 100,
-                  item.goldenMetrics.maskVersion.range(of: #"^[a-z0-9][a-z0-9.-]{0,63}$"#, options: .regularExpression) != nil else {
-                throw DesktopEvaluationFixtureError.invalidValue("manifest golden metrics")
+            guard item.visualBaseline.status == .capturedNoReference else {
+                throw DesktopEvaluationFixtureError.invalidValue("manifest visual baseline")
             }
         }
         guard scans.secretScanPassed, scans.releaseBoundaryPassed else {
@@ -180,7 +217,7 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
             guard finding.id.range(of: #"^[A-Za-z0-9_.-]{1,64}$"#, options: .regularExpression) != nil,
                   !finding.owner.isEmpty,
                   !finding.reason.isEmpty,
-                  ISO8601DateFormatter().date(from: finding.recordedAt) != nil else {
+                  Self.isCanonicalTimestamp(finding.recordedAt) else {
                 throw DesktopEvaluationFixtureError.invalidValue("manifest unresolved finding")
             }
         }
@@ -188,6 +225,16 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
               proofBoundary.utf8.count <= 1024 else {
             throw DesktopEvaluationFixtureError.invalidValue("manifest proofBoundary")
         }
+    }
+
+    private static func isCanonicalTimestamp(_ value: String) -> Bool {
+        guard value.range(
+            of: #"^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"#,
+            options: .regularExpression
+        ) != nil else { return false }
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: value) else { return false }
+        return formatter.string(from: date) == value
     }
 
     private static func isHash(_ value: String, length: Int = 64) -> Bool {
@@ -233,25 +280,36 @@ public struct DesktopEvaluationEvidenceManifest: Codable, Equatable, Sendable {
     }
 
     private static func validateShape(_ root: [String: Any]) throws {
-        try requireOnly(root, allowed: ["schemaVersion", "generatedAt", "repository", "headSHA", "artifact", "catalogSHA256", "platform", "testSummary", "cases", "scans", "proofBoundary", "unresolvedFindings"], path: "manifest")
-        try requireObject(root["artifact"], allowed: ["path", "sha256", "buildIdentity"], path: "manifest.artifact")
-        try requireObject(root["platform"], allowed: ["macOSVersion", "xcodeVersion", "swiftVersion", "architecture", "backingScale"], path: "manifest.platform")
-        try requireObject(root["testSummary"], allowed: ["testCount", "durationSeconds", "xcresultSHA256"], path: "manifest.testSummary")
-        try requireObject(root["scans"], allowed: ["secretScanPassed", "releaseBoundaryPassed"], path: "manifest.scans")
+        try requireOnly(root, allowed: ["schemaVersion", "generatedAt", "repository", "headSHA", "artifact", "catalogSHA256", "fixturesSHA256", "platform", "testSummary", "cases", "scans", "proofBoundary", "unresolvedFindings"], path: "manifest")
+        try requireObject(root["artifact"], allowed: ["path", "sha256", "hashAlgorithm", "buildIdentity"], path: "manifest.artifact")
+        try requireObject(root["platform"], allowed: ["macOSVersion", "xcodeVersion", "swiftVersion", "architecture", "backingScale", "evidence"], path: "manifest.platform")
+        if let platform = root["platform"] as? [String: Any] {
+            try requireObject(platform["evidence"], allowed: ["path", "sha256"], path: "manifest.platform.evidence")
+        }
+        try requireObject(root["testSummary"], allowed: ["testCount", "durationSeconds", "runner", "summary", "result"], path: "manifest.testSummary")
+        if let summary = root["testSummary"] as? [String: Any] {
+            try requireObject(summary["summary"], allowed: ["path", "sha256"], path: "manifest.testSummary.summary")
+            try requireObject(summary["result"], allowed: ["path", "sha256"], path: "manifest.testSummary.result")
+        }
+        try requireObject(root["scans"], allowed: ["secretScanPassed", "releaseBoundaryPassed", "secretScan", "releaseBoundary"], path: "manifest.scans")
+        if let scans = root["scans"] as? [String: Any] {
+            try requireObject(scans["secretScan"], allowed: ["path", "sha256"], path: "manifest.scans.secretScan")
+            try requireObject(scans["releaseBoundary"], allowed: ["path", "sha256"], path: "manifest.scans.releaseBoundary")
+        }
         guard let cases = root["cases"] as? [Any] else {
             throw DesktopEvaluationFixtureError.invalidValue("manifest cases")
         }
         for (index, value) in cases.enumerated() {
             let item = try object(value, path: "manifest.cases[\(index)]")
-            try requireOnly(item, allowed: ["fixtureId", "section", "onboardingStep", "appearance", "requestedContentSize", "actualWindowFrame", "actualContentFrame", "screenshot", "accessibility", "geometry", "goldenMetrics", "expectedState"], path: "manifest.cases[\(index)]")
+            try requireOnly(item, allowed: ["fixtureId", "section", "onboardingStep", "appearance", "requestedContentSize", "actualWindowFrame", "actualContentFrame", "screenshot", "accessibility", "geometry", "readiness", "visualBaseline", "expectedState"], path: "manifest.cases[\(index)]")
             try requireObject(item["requestedContentSize"], allowed: ["width", "height"], path: "manifest.cases[\(index)].requestedContentSize")
             for name in ["actualWindowFrame", "actualContentFrame"] {
                 try requireObject(item[name], allowed: ["x", "y", "width", "height"], path: "manifest.cases[\(index)].\(name)")
             }
-            for name in ["screenshot", "accessibility", "geometry"] {
+            for name in ["screenshot", "accessibility", "geometry", "readiness"] {
                 try requireObject(item[name], allowed: ["path", "sha256"], path: "manifest.cases[\(index)].\(name)")
             }
-            try requireObject(item["goldenMetrics"], allowed: ["ssim", "changedPixelPercent", "largestChangedRegionPercent", "maskVersion"], path: "manifest.cases[\(index)].goldenMetrics")
+            try requireObject(item["visualBaseline"], allowed: ["status"], path: "manifest.cases[\(index)].visualBaseline")
         }
         guard let findings = root["unresolvedFindings"] as? [Any] else {
             throw DesktopEvaluationFixtureError.invalidValue("manifest unresolvedFindings")

@@ -11,7 +11,16 @@ const fixtureMarkers = [
   "NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE",
   "VisualProofDesktopDependencies",
   "VisualProofSecretStore",
-  "DesktopEvaluationFixtureCatalog"
+  "DesktopEvaluationFixtureCatalog",
+  "DesktopEvaluationLaunchContext",
+  "DesktopEvaluationModelAdapter",
+  "DesktopEvaluationDependencies",
+  "DesktopEvaluationReadiness",
+  "DesktopResolvedEvaluationFixture",
+  "NeonDiffDesktopFixtureResolve",
+  "DesktopModelInitialState",
+  "applyInitialState",
+  "NEONDIFF_DESKTOP_EVALUATION_READY_PATH"
 ];
 
 afterEach(() => {

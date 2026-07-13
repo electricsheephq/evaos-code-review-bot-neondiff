@@ -46,10 +46,11 @@ hierarchy. They do not prove the reported click-to-click window resizing. A
 valid bug claim requires an exact artifact, click sequence, window/content
 frame trace, accessibility tree, and settled-state timing.
 
-The existing Swift package has executable check harnesses but no real test
-target. `NeonDiffDesktopModel` belongs to the executable target, so the model
-cannot be imported by a normal test target. The compile harness remains an
-acceptable temporary gate until AppCore extraction is complete.
+PR #529 moved `NeonDiffDesktopModel` into the importable
+`NeonDiffDesktopAppCore` library and landed real Core/AppCore Swift Testing
+targets. Migration ledgers preserve assertion coverage while the remaining
+full-Xcode work is the hosted UI-test target and `.xcresult` production, not
+model importability.
 
 ## Critical Invariants
 
@@ -60,8 +61,10 @@ acceptable temporary gate until AppCore extraction is complete.
 - UI-test hooks and fixture content are absent from release artifacts.
 - No test mutates live config, Keychain, GitHub, provider, daemon, or posting
   state unless a separately scoped installed-candidate scenario requires it.
-- Public setup does not require a license. Private setup cannot enter an
-  unavailable activation dead end.
+- API-backed activation is mandatory before useful work for every repository
+  visibility. Public/private selection changes repository scope, not the
+  activation requirement; activation failures remain explicit recoverable
+  blockers.
 - Screenshot approval cannot replace interaction, geometry, accessibility, or
   installed-artifact proof.
 - #503 stays open until browser/native parity is independently measured.
@@ -96,7 +99,7 @@ visual content.
 
 ### Phase 2: Make App Logic Importable
 
-Issue #516 owns the full-Xcode structure:
+PR #529 landed the reusable package structure:
 
 ```text
 NeonDiffDesktopCore
@@ -111,14 +114,15 @@ effects are injected behind clipboard, URL-opening, CLI/dashboard, preferences,
 clock, and file-writing protocols. AppKit adapters and the composition root
 stay in the executable.
 
-The package/project adds:
+The package now has:
 
 - `NeonDiffDesktopCoreTests`
 - `NeonDiffDesktopAppCoreTests`
-- hosted `NeonDiffDesktopUITests`
+- `NeonDiffDesktopEvaluationSupportTests`
 
-The compile harness is removed only after all its assertions are migrated and
-pass in the real targets.
+Issue #516 remains open for the full-Xcode project and hosted
+`NeonDiffDesktopUITests`/`.xcresult` lane. Installing full Xcode does not replace
+the importable-library structure that is now already in main.
 
 ### Phase 3: Prove Geometry And Accessibility
 
@@ -147,16 +151,17 @@ settled-state signal.
 
 Issue #519 owns the first-success path:
 
-1. Welcome and choose public or private mode.
+1. Welcome and choose the intended public or private repository scope.
 2. Run CLI/config/Keychain/GitHub readiness checks.
-3. Connect GitHub.
-4. Select repositories.
-5. Choose a provider preset.
-6. Store and verify credentials when required.
-7. Accept a recommended review policy.
-8. Run one dry-run review.
-9. Start monitoring only after dry-run success.
-10. Show readiness and the next recommended action.
+3. Activate NeonDiff through the API-backed license service.
+4. Connect GitHub.
+5. Select repositories.
+6. Choose a provider preset.
+7. Store and verify credentials when required.
+8. Accept a recommended review policy.
+9. Run one dry-run review.
+10. Start monitoring only after dry-run success.
+11. Show readiness and the next recommended action.
 
 Presets and safe defaults come first. Endpoint, model, auth, path, and CLI
 equivalent details live under Advanced disclosures. Progress persists and
@@ -192,7 +197,8 @@ Use pairwise scenarios rather than a full Cartesian product.
 
 - Home: initial, checking, ready, degraded, offline, stale.
 - Repositories: disconnected, authorizing, empty, discovered, selected,
-  rate-limited, permission-blocked, public/private/license states.
+  rate-limited, permission-blocked, activated public/private selections, and
+  activation-blocked states.
 - Providers: empty registry, key missing/stored, dirty, previewing, applying,
   verifying, cancelling, healthy, unverified, blocked, restart-required.
 - Policy: unloaded, loading, clean, dirty, invalid, preview-authorized,
@@ -200,7 +206,8 @@ Use pairwise scenarios rather than a full Cartesian product.
 - License: absent, stored, pending, active, invalid, offline.
 - Activity/Logs: empty, loading, populated, truncated, redacted failure.
 - Settings: invalid path, unsaved, saved, update checking/available/failed.
-- Onboarding: fresh public/private, resume, provider failure, GitHub failure,
+- Onboarding: fresh public/private repository selection with mandatory
+  activation, resume, activation failure, provider failure, GitHub failure,
   dry-run failure, complete.
 
 ## Cross-Tab Continuity Scenarios
@@ -269,9 +276,12 @@ Each run records:
 - fixture catalog SHA;
 - macOS, Xcode, Swift, architecture, and backing scale;
 - requested and actual window/content sizes;
-- test count, duration, and `.xcresult` hash;
+- test count, duration, runner, and test-result artifact hash (`swift-testing`
+  log under CLT or `.xcresult` under hosted XCTest);
 - PNG, accessibility-tree, and geometry hashes;
-- golden metrics and mask version;
+- visual-baseline status for each capture (`captured-no-reference` in schema 2;
+  comparison metrics and mask version only after a separately reviewed golden
+  baseline is introduced);
 - secret and release-artifact fixture scans;
 - explicit proof boundary and unresolved findings.
 

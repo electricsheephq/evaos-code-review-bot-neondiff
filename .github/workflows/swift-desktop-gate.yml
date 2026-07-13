@@ -123,6 +123,15 @@ jobs:
       - name: Node and Foundation secret-rule differential
         run: npm run check:secret-rule-differential
 
+      - name: Build Swift manifest checks target
+        working-directory: apps/neondiff-desktop
+        timeout-minutes: 10
+        run: swift build --product NeonDiffDesktopManifestChecks
+
+      - name: Desktop evaluation boundary contracts
+        timeout-minutes: 3
+        run: npm test -- --run tests/desktop-evaluation-boundary.test.ts
+
       - name: Build Swift Keychain checks target
         working-directory: apps/neondiff-desktop
         run: swift build --target NeonDiffDesktopKeychainChecks
@@ -133,12 +142,13 @@ jobs:
           swift build -c debug --product NeonDiffDesktop
           swift build -c release --product NeonDiffDesktop
 
-      - name: Swift core and AppCore tests
+      - name: Swift core, AppCore, and evaluation-support tests
         working-directory: apps/neondiff-desktop
         run: |
           scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests
           swift run NeonDiffDesktopFixtureChecks
           scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests
+          scripts/run-required-swift-test-suite.sh NeonDiffDesktopEvaluationSupportTests
 
       - name: Secret corpus production-artifact boundary
         shell: bash

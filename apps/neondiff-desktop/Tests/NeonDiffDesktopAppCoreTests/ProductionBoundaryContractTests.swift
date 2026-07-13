@@ -133,4 +133,15 @@ import Testing
         #expect(source.contains("productionBoundary: .quarantined"))
         #expect(!source.contains("productionBoundary: .testVerified"))
     }
+
+    @Test func evaluationRootIdentifierDoesNotOverrideDescendantActionIdentifiers() throws {
+        let contentView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/ContentView.swift")
+        let source = try sourceBoundaryText(at: contentView)
+
+        #expect(source.contains("EvaluationRootAccessibilityMarker(identifier: rootAccessibilityIdentifier)"))
+        #expect(source.contains("private struct EvaluationRootAccessibilityMarker: View"))
+        #expect(source.contains(".accessibilityIdentifier(identifier)"))
+        #expect(!source.contains(".accessibilityIdentifier(rootAccessibilityIdentifier)"))
+    }
 }
