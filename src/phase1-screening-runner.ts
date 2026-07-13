@@ -641,6 +641,13 @@ async function runPhase1ScreenWithLease(
       if (existsSync(path)) validateExistingResult(path, manifest, cell.fingerprint, input);
       else missingResults += 1;
     }
+  }
+  if (missingResults > 0) {
+    rmSync(join(spec.outputDir, "COMPLETED"), { force: true });
+    rmSync(join(spec.outputDir, "FAILED"), { force: true });
+    rmSync(join(spec.outputDir, "summary.json"), { force: true });
+  }
+  for (const cell of manifest.cells) {
     if (resolvedOptions.monitorIdentity) {
       const resourcePath = join(spec.outputDir, "resources", `${cell.id}.json`);
       const unavailablePath = join(spec.outputDir, `resource-unavailable-${cell.id}.json`);
@@ -678,8 +685,6 @@ async function runPhase1ScreenWithLease(
       : buildSummary(spec.outputDir, manifest);
     return finalizeRun(spec.outputDir, summary);
   }
-  rmSync(join(spec.outputDir, "COMPLETED"), { force: true });
-  rmSync(join(spec.outputDir, "FAILED"), { force: true });
   atomicWriteText(join(spec.outputDir, "RUNNING"), `${manifest.runFingerprint}\n`);
 
   let infrastructureFailure: string | undefined;

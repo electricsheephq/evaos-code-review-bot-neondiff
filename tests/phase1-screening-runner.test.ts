@@ -363,6 +363,8 @@ describe("Phase 1 screening runner", () => {
     await expect(runPhase1Screen(runSpec, adapter({
       async start() { throw new Error("partial placement resume must not start a resident"); }
     }))).rejects.toThrow(/placement evidence exists while terminal results are missing.*manual reconciliation/i);
+    expect(existsSync(join(runSpec.outputDir, "COMPLETED"))).toBe(false);
+    expect(existsSync(join(runSpec.outputDir, "summary.json"))).toBe(false);
     writeFileSync(partialResultPath, partialResult);
 
     const startPath = join(runSpec.outputDir, placement.identity.processStartReceiptRelativePath);
@@ -430,6 +432,8 @@ describe("Phase 1 screening runner", () => {
     await expect(runPhase1Screen(runSpec, adapter({
       async start() { throw new Error("partial unavailable resume must not start a resident"); }
     }))).rejects.toThrow(/placement unavailable evidence exists while terminal results are missing.*manual reconciliation/i);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(false);
+    expect(existsSync(join(outputDir, "summary.json"))).toBe(false);
     writeFileSync(partialResultPath, partialResult);
 
     const resumed = await runPhase1Screen(runSpec, adapter({
