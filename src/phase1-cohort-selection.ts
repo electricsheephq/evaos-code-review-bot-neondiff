@@ -383,7 +383,7 @@ function selectCandidates(candidates: Phase1Candidate[], policy: Phase1CohortPol
     if (languageFrequencies[left.language] !== languageFrequencies[right.language]) {
       return languageFrequencies[left.language] - languageFrequencies[right.language];
     }
-    return seededRank(left, policy.selectionSeed).localeCompare(seededRank(right, policy.selectionSeed));
+    return compareCodeUnits(seededRank(left, policy.selectionSeed), seededRank(right, policy.selectionSeed));
   });
   const selected: Phase1Candidate[] = [];
   const remaining = { ...policy.bucketQuotas };
@@ -482,7 +482,7 @@ function canonicalSelectionState(
   cleanCount: number,
   riskCount: number
 ): string {
-  const counts = (value: Record<string, number>) => Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+  const counts = (value: Record<string, number>) => Object.entries(value).sort(([left], [right]) => compareCodeUnits(left, right));
   return canonicalJson([index, BUCKETS.map((bucket) => remaining[bucket]), counts(repoCounts), counts(languageCounts), cleanCount, riskCount]);
 }
 
@@ -583,11 +583,15 @@ function selectFirstFive(selected: Phase1Candidate[], policy: Phase1CohortPolicy
   const first: Phase1Candidate[] = [];
   for (const bucket of BUCKETS) {
     const quota = policy.firstFiveBucketQuotas[bucket];
+    const preferCleanControl = first.every((row) => !isCleanControl(row));
     const ranked = selected.filter((row) => row.bucket === bucket).sort((left, right) => {
-      if (isCleanControl(left) !== isCleanControl(right) && first.every((row) => !isCleanControl(row))) {
+      if (isCleanControl(left) !== isCleanControl(right) && preferCleanControl) {
         return isCleanControl(left) ? -1 : 1;
       }
-      return seededRank(left, `${policy.selectionSeed}:first-five`).localeCompare(seededRank(right, `${policy.selectionSeed}:first-five`));
+      return compareCodeUnits(
+        seededRank(left, `${policy.selectionSeed}:first-five`),
+        seededRank(right, `${policy.selectionSeed}:first-five`)
+      );
     });
     first.push(...ranked.slice(0, quota));
   }
@@ -595,7 +599,10 @@ function selectFirstFive(selected: Phase1Candidate[], policy: Phase1CohortPolicy
     throw new Error("selected cohort cannot satisfy exact first-five bucket quotas");
   }
   if (!first.some(isCleanControl)) throw new Error("first-five cohort requires a clean-control candidate");
-  return first.sort((left, right) => seededRank(left, `${policy.selectionSeed}:first-five-order`).localeCompare(seededRank(right, `${policy.selectionSeed}:first-five-order`)));
+  return first.sort((left, right) => compareCodeUnits(
+    seededRank(left, `${policy.selectionSeed}:first-five-order`),
+    seededRank(right, `${policy.selectionSeed}:first-five-order`)
+  ));
 }
 
 function buildRuntimeInputManifest(
@@ -753,7 +760,7 @@ function sameBucketCounts(left: BucketCounts, right: BucketCounts): boolean {
 function countBy(rows: Phase1Candidate[], key: (row: Phase1Candidate) => string): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const row of rows) counts[key(row)] = (counts[key(row)] ?? 0) + 1;
-  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
+  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => compareCodeUnits(left, right)));
 }
 
 function isCleanControl(row: Phase1Candidate): boolean {
@@ -766,6 +773,10 @@ function isHighRisk(row: Phase1Candidate): boolean {
 
 function seededRank(row: Phase1Candidate, seed: string): string {
   return sha256(`${seed}:${row.candidateId}:${row.sourceIdentitySha256}:${row.lineageGroup}`);
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function assertNoForbiddenKeys(value: unknown): void {
@@ -849,7 +860,7 @@ function sortJson(value: unknown): unknown {
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value)
       .filter(([, item]) => item !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => compareCodeUnits(left, right))
       .map(([key, item]) => [key, sortJson(item)]));
   }
   return value;

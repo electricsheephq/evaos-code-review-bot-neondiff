@@ -196,6 +196,33 @@ describe("phase 1 cohort selection", () => {
     expect(firstManifest.diversity.maximumRepositoryGroupCount).toBeLessThanOrEqual(5);
   });
 
+  it("keeps canonical seal bytes stable when host locale collation changes", () => {
+    const first = fixture();
+    const firstManifest = seal(first);
+    const firstBytes = readFileSync(join(first.outputDir, "selection-manifest.json"));
+    const descriptor = Object.getOwnPropertyDescriptor(String.prototype, "localeCompare");
+    if (!descriptor) throw new Error("String.prototype.localeCompare descriptor is unavailable");
+
+    try {
+      Object.defineProperty(String.prototype, "localeCompare", {
+        ...descriptor,
+        value(this: string, other: string): number {
+          return -descriptor.value.call(this, other);
+        }
+      });
+      const secondOutputDir = join(first.root, "sealed", "run-2");
+      const secondManifest = selectAndSealPhase1Cohort({
+        ...selectionOptions(first),
+        outputDir: secondOutputDir
+      });
+
+      expect(secondManifest.manifestSha256).toBe(firstManifest.manifestSha256);
+      expect(readFileSync(join(secondOutputDir, "selection-manifest.json"))).toEqual(firstBytes);
+    } finally {
+      Object.defineProperty(String.prototype, "localeCompare", descriptor);
+    }
+  });
+
   it("prefers lower-frequency repository and language groups across equally feasible cohorts", () => {
     const f = fixture();
     const tokens = [
