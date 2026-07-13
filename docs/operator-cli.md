@@ -66,6 +66,14 @@ evaos-review-bot status --config config.local.json
   include only compact budget counts and reason histograms; use this command for
   capped row-level details. Repo profiles may lower effective active/queued
   scheduler caps for bursty repositories without changing global capacity.
+  This is admission projection, not proof that provider calls overlapped. A
+  scheduler-enabled daemon cycle reports `queue.execution` in its
+  `daemon_cycle_complete` result with `configuredRunSlots`,
+  `configuredProviderSlots`, `effectiveSlots`, `started`, and
+  `peakJobsInFlight`. `peakJobsInFlight` proves overlapping in-process review
+  jobs; use overlapping `reviewer_session_jobs.started_at` / `finished_at`
+  intervals plus provider error/cooldown evidence to prove the model calls also
+  overlapped safely.
 - `review-head-gate --repo <owner/name> --pr <number> --head-sha <sha>`:
   read-only pre-merge guard for self-repo and release-critical PRs. It checks
   the exact `{repo, pr, head_sha}` against processed reviews, durable queue

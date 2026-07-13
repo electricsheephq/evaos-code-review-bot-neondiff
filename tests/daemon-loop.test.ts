@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   runDaemonCycle as runDaemonCycleImpl,
   shouldExitDaemonAfterFailedCycle,
@@ -55,7 +55,7 @@ describe("daemon cycle resilience", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(seen).toEqual([reviewDiscovery, reviewDiscovery, issueEnrichment]);
+    expect(seen).toEqual([issueEnrichment, reviewDiscovery, reviewDiscovery]);
   });
 
   it("denies a cycle before heartbeat, review, retry, or enrichment work", async () => {
@@ -357,6 +357,7 @@ describe("daemon cycle resilience", () => {
     expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
       expect.objectContaining({
         event: "daemon_issue_enrichment",
+        phase: "complete",
         cycle: 9,
         result: expect.objectContaining({
           summary: expect.objectContaining({
@@ -366,6 +367,95 @@ describe("daemon cycle resilience", () => {
         })
       })
     ]));
+  });
+
+  it("starts issue enrichment while the review batch is still unresolved", async () => {
+    const stdout: string[] = [];
+    let releaseReview!: () => void;
+    const reviewBarrier = new Promise<void>((resolve) => { releaseReview = resolve; });
+    let issueStarted = false;
+
+    const cycle = runDaemonCycle({
+      cycle: 11,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => {
+        await reviewBarrier;
+        return successfulRunOnceResult();
+      },
+      issueEnrichmentCycleImpl: async () => {
+        issueStarted = true;
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    let overlapError: unknown;
+    try {
+      await vi.waitFor(() => expect(issueStarted).toBe(true), { timeout: 100 });
+    } catch (error) {
+      overlapError = error;
+    } finally {
+      releaseReview();
+    }
+    const result = await cycle;
+    if (overlapError) throw overlapError;
+
+    expect(result.ok).toBe(true);
+    expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "daemon_issue_enrichment_start", cycle: 11 }),
+      expect.objectContaining({ event: "daemon_issue_enrichment", phase: "complete", cycle: 11 })
+    ]));
+  });
+
+  it("waits for issue-lane cleanup before returning a review failure", async () => {
+    let releaseIssue!: () => void;
+    const issueBarrier = new Promise<void>((resolve) => { releaseIssue = resolve; });
+    let issueStarted = false;
+    let cycleSettled = false;
+
+    const cycle = runDaemonCycle({
+      cycle: 12,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => { throw new Error("review batch failed"); },
+      issueEnrichmentCycleImpl: async () => {
+        issueStarted = true;
+        await issueBarrier;
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: () => undefined,
+      stdout: () => undefined,
+      stderr: () => undefined
+    });
+    void cycle.then(() => { cycleSettled = true; });
+
+    let startError: unknown;
+    try {
+      await vi.waitFor(() => expect(issueStarted).toBe(true), { timeout: 100 });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(cycleSettled).toBe(false);
+    } catch (error) {
+      startError = error;
+    } finally {
+      releaseIssue();
+    }
+    const result = await cycle;
+    if (startError) throw startError;
+
+    expect(result).toMatchObject({ ok: false, failureKind: "runtime_failure", error: "review batch failed" });
   });
 
   it("keeps the daemon cycle healthy when issue enrichment fails", async () => {

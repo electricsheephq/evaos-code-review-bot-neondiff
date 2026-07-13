@@ -155,6 +155,50 @@ describe("review run budget", () => {
     });
   });
 
+  it("projects the effective global cap and preserves its manual reserve", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-global-cap-"));
+    roots.push(root);
+    const config = {
+      ...minimalConfig(root),
+      reviewConcurrency: {
+        maxActiveRuns: 2,
+        leaseTtlMs: 60_000
+      },
+      reviewScheduler: {
+        enabled: true,
+        maxProviderActive: 3,
+        maxOrgActive: 3,
+        maxRepoActive: 1,
+        maxQueuedPerRepo: 10,
+        manualCommandReserve: 1,
+        backgroundPriority: 50
+      }
+    };
+    const now = new Date("2026-07-01T00:00:00.000Z");
+
+    const status = buildReviewBudgetStatus({
+      config,
+      now,
+      jobs: [
+        queueJob("background-a", { repo: "org/repo-a", state: "queued", priority: 1 }),
+        queueJob("background-b", { repo: "org/repo-b", state: "queued", priority: 2 }),
+        queueJob("manual", {
+          repo: "org/repo-c",
+          state: "queued",
+          lane: "manual",
+          source: "manual_command",
+          priority: 3
+        })
+      ]
+    });
+
+    expect(status.wouldLease.map((entry) => entry.jobId)).toEqual(["background-a", "manual"]);
+    expect(status.delayed).toEqual([
+      expect.objectContaining({ jobId: "background-b", reason: "manual_reserve" })
+    ]);
+    expect(status.manualReserve.backgroundSlotsAvailableBeforeReserve).toBe(1);
+  });
+
   it("separates retryable provider-deferred jobs from actionable ready-to-retry jobs", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-budget-provider-deferred-"));
     roots.push(root);

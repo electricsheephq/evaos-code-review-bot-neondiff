@@ -2022,6 +2022,7 @@ export class ReviewStateStore {
   }
 
   leaseNextReviewQueueJobs(input: {
+    maxGlobalActive?: number;
     maxProviderActive: number;
     maxOrgActive: number;
     maxRepoActive: number;
@@ -2035,6 +2036,8 @@ export class ReviewStateStore {
     now?: Date;
   }): ReviewQueueJobRecord[] {
     validatePositiveQueueLimit(input.maxProviderActive, "maxProviderActive");
+    const maxGlobalActive = input.maxGlobalActive ?? input.maxProviderActive;
+    validatePositiveQueueLimit(maxGlobalActive, "maxGlobalActive");
     validatePositiveQueueLimit(input.maxOrgActive, "maxOrgActive");
     validatePositiveQueueLimit(input.maxRepoActive, "maxRepoActive");
     const maxRepoActiveByRepo = normalizeRepoActiveLimitOverrides(input.maxRepoActiveByRepo);
@@ -2045,6 +2048,10 @@ export class ReviewStateStore {
     if (manualCommandReserve > input.maxProviderActive) {
       throw new Error("manualCommandReserve must be <= maxProviderActive");
     }
+    if (manualCommandReserve > maxGlobalActive) {
+      throw new Error("manualCommandReserve must be <= maxGlobalActive");
+    }
+    const effectiveProviderActive = Math.min(input.maxProviderActive, maxGlobalActive);
     const limit = input.limit ?? input.maxProviderActive;
     validatePositiveQueueLimit(limit, "limit");
     const leaseTtlMs = input.leaseTtlMs ?? 15 * 60_000;
@@ -2089,6 +2096,7 @@ export class ReviewStateStore {
 
       for (const [index, job] of eligible.entries()) {
         if (leased.length >= limit) break;
+        if (active.length + leased.length >= maxGlobalActive) break;
         const provider = job.providerId ?? "default";
         const providerCount = (providerActive.get(provider) ?? 0);
         if (providerCount >= input.maxProviderActive) continue;
@@ -2099,7 +2107,7 @@ export class ReviewStateStore {
           job.lane === "background" &&
           hasManualAfter[index] &&
           manualCommandReserve > 0 &&
-          providerCount >= input.maxProviderActive - manualCommandReserve
+          providerCount >= effectiveProviderActive - manualCommandReserve
         ) {
           continue;
         }

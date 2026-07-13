@@ -44,14 +44,14 @@ const DEFAULT_MAX_FINDINGS = 5;
  * re-derived from the comments that retain eligibility. Disabled ⇒ no second draw, byte-identical
  * output. The second-draw runner is injected so callers pick the provider and tests stay hermetic.
  */
-export function runSelfConsistencyRecheck(input: {
+export async function runSelfConsistencyRecheck(input: {
   comments: ReviewComment[];
   files: PullFilePatch[];
   config: SelfConsistencyRecheckConfig;
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
   categoryPrecisionFloors?: CategoryPrecisionFloors;
-  secondDraw: (input: SelfConsistencySecondDrawInput) => SelfConsistencySecondDrawResult;
-}): { comments: ReviewComment[]; event: ReviewEvent; verdicts: SelfConsistencyVerdict[] } {
+  secondDraw: (input: SelfConsistencySecondDrawInput) => SelfConsistencySecondDrawResult | Promise<SelfConsistencySecondDrawResult>;
+}): Promise<{ comments: ReviewComment[]; event: ReviewEvent; verdicts: SelfConsistencyVerdict[] }> {
   if (!input.config.enabled) {
     return {
       comments: input.comments,
@@ -67,8 +67,12 @@ export function runSelfConsistencyRecheck(input: {
   let rechecked = 0;
 
   // input.comments is already in the gate's ranked (highest-confidence-first) order.
-  const comments = input.comments.map((comment) => {
-    if (rechecked >= maxFindings || !severities.has(comment.severity)) return comment;
+  const comments: ReviewComment[] = [];
+  for (const comment of input.comments) {
+    if (rechecked >= maxFindings || !severities.has(comment.severity)) {
+      comments.push(comment);
+      continue;
+    }
     rechecked += 1;
 
     const base: SelfConsistencyVerdict = {
@@ -81,24 +85,26 @@ export function runSelfConsistencyRecheck(input: {
 
     let draw: SelfConsistencySecondDrawResult;
     try {
-      draw = input.secondDraw({ comment, hunk: extractHunk(comment, input.files) });
+      draw = await input.secondDraw({ comment, hunk: extractHunk(comment, input.files) });
     } catch (error) {
       // Failure posture: keep the finding untouched; the re-check can only make output quieter.
       verdicts.push({ ...base, error: error instanceof Error ? error.message : String(error) });
-      return comment;
+      comments.push(comment);
+      continue;
     }
 
     if (draw.verified) {
       // Agreement: never raise confidence; keep the original.
       verdicts.push({ ...base, secondConfidence: draw.confidence, agreed: true, refuted: false });
-      return comment;
+      comments.push(comment);
+      continue;
     }
 
     // Refutation: quieter-only — lower confidence and strip REQUEST_CHANGES eligibility.
     verdicts.push({ ...base, secondConfidence: draw.confidence, agreed: false, refuted: true });
     refutedKeys.add(commentKey(comment));
-    return { ...comment, confidence: Math.min(comment.confidence, draw.confidence) };
-  });
+    comments.push({ ...comment, confidence: Math.min(comment.confidence, draw.confidence) });
+  }
 
   // Re-derive the event: a refuted comment still POSTS but no longer counts toward REQUEST_CHANGES.
   const eligibleComments = comments.filter((comment) => !refutedKeys.has(commentKey(comment)));
