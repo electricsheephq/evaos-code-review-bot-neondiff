@@ -14,6 +14,11 @@ import type { ProviderApiKeyVerificationInput } from "../src/local-dashboard.js"
 import { runProvidersVerifyCommand } from "../src/providers-verify-command.js";
 import { ReviewStateStore } from "../src/state.js";
 import { createTestLicenseAdmission } from "./helpers/license-admission.js";
+import {
+  runLaunchdControlCommand,
+  type LaunchctlResult,
+  type LaunchdControlDependencies
+} from "../src/launchd-control.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -3336,21 +3341,12 @@ exit 1
     expect(stdout).not.toContain("temporarily overloaded");
   });
 
-  it("prints launchd daemon control plans in dry-run mode by default", async () => {
-    const { stdout: startStdout } = await runCli([
-      "daemon",
-      "start",
-      "--launchd-label",
-      "com.example.neondiff"
-    ], { env: darwinDaemonEnv });
-    const { stdout: stopStdout } = await runCli([
-      "daemon",
-      "stop",
-      "--launchd-label",
-      "com.example.neondiff"
-    ], { env: darwinDaemonEnv });
+  it("builds launchd daemon control plans in dry-run mode by default", () => {
+    const launchctl = createLaunchctlHarness({ loaded: true });
+    const start = runTestLaunchdControl({ action: "start" }, launchctl.dependencies);
+    const stop = runTestLaunchdControl({ action: "stop" }, launchctl.dependencies);
 
-    expect(JSON.parse(startStdout)).toMatchObject({
+    expect(start).toMatchObject({
       ok: true,
       command: "daemon start",
       dryRun: true,
@@ -3358,7 +3354,7 @@ exit 1
       operation: "kickstart_existing",
       plannedCommands: [["launchctl", "kickstart", "-k", expect.stringMatching(/gui\/\d+\/com\.example\.neondiff/)]]
     });
-    expect(JSON.parse(stopStdout)).toMatchObject({
+    expect(stop).toMatchObject({
       ok: true,
       command: "daemon stop",
       dryRun: true,
@@ -3366,6 +3362,150 @@ exit 1
       operation: "bootout_service",
       plannedCommands: [["launchctl", "bootout", expect.stringMatching(/gui\/\d+\/com\.example\.neondiff/)]]
     });
+  });
+
+  it("does not execute a PATH-controlled launchctl during daemon start dry-run", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-path-poison-"));
+    roots.push(root);
+    const binDir = join(root, "bin");
+    const markerPath = join(root, "poisoned-launchctl-ran");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "launchctl"), `#!/bin/sh
+: > "$NEONDIFF_TEST_POISON_MARKER"
+exit 113
+`, { mode: 0o755 });
+
+    await runCli([
+      "daemon",
+      "start",
+      "--launchd-label",
+      "com.example.neondiff.path-poison"
+    ], {
+      env: {
+        ...darwinDaemonEnv,
+        HOME: root,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        NEONDIFF_TEST_POISON_MARKER: markerPath
+      }
+    }).catch(() => undefined);
+
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it("does not execute a PATH-controlled plutil during plist validation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-plutil-path-poison-"));
+    roots.push(root);
+    const launchdLabel = "com.example.neondiff.plutil-path-poison";
+    const launchAgentsDir = join(root, "Library", "LaunchAgents");
+    const plistPath = join(launchAgentsDir, `${launchdLabel}.plist`);
+    const binDir = join(root, "bin");
+    const markerPath = join(root, "poisoned-plutil-ran");
+    mkdirSync(launchAgentsDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeLaunchdPlist(plistPath, launchdLabel);
+    writeFileSync(join(binDir, "plutil"), `#!/bin/sh
+: > "$NEONDIFF_TEST_POISON_MARKER"
+printf '%s\\n' "$NEONDIFF_TEST_PLUTIL_LABEL"
+exit 0
+`, { mode: 0o755 });
+
+    const { stdout } = await runCli([
+      "daemon",
+      "stop",
+      "--launchd-label",
+      launchdLabel,
+      "--plist",
+      plistPath
+    ], {
+      env: {
+        ...darwinDaemonEnv,
+        HOME: root,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        NEONDIFF_TEST_POISON_MARKER: markerPath,
+        NEONDIFF_TEST_PLUTIL_LABEL: launchdLabel
+      }
+    });
+
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: true,
+      command: "daemon stop",
+      dryRun: true,
+      operation: "bootout_plist",
+      plistPath,
+      plannedCommands: [["launchctl", "bootout", expect.stringMatching(/^gui\/\d+$/), plistPath]]
+    });
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it("plans bootstrap from the standard plist when the launchd service is not loaded", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-stopped-"));
+    roots.push(root);
+    const launchAgentsDir = join(root, "Library", "LaunchAgents");
+    const plistPath = join(launchAgentsDir, "com.example.neondiff.plist");
+    mkdirSync(launchAgentsDir, { recursive: true });
+    writeLaunchdPlist(plistPath, "com.example.neondiff");
+    const launchctl = createLaunchctlHarness({ loaded: false });
+    const output = runTestLaunchdControl({ standardPlistPath: plistPath }, launchctl.dependencies);
+
+    expect(output).toMatchObject({
+      ok: true,
+      command: "daemon start",
+      dryRun: true,
+      operation: "bootstrap_then_kickstart",
+      plistPath,
+      plannedCommands: [
+        ["launchctl", "bootstrap", expect.stringMatching(/^gui\/\d+$/), plistPath],
+        ["launchctl", "kickstart", "-k", expect.stringMatching(/gui\/\d+\/com\.example\.neondiff/)]
+      ]
+    });
+    expect(launchctl.commands).toEqual([["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)]]);
+  });
+
+  it("fails start planning when the service is unloaded and no plist exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-missing-plist-"));
+    roots.push(root);
+    const standardPlistPath = join(root, "Library", "LaunchAgents", "com.example.neondiff.plist");
+    const launchctl = createLaunchctlHarness({ loaded: false });
+
+    const output = runTestLaunchdControl({ standardPlistPath }, launchctl.dependencies);
+
+    expect(output).toMatchObject({
+      ok: false,
+      command: "daemon start",
+      dryRun: true,
+      launchdLoaded: false,
+      error: `launchd service is not loaded and no plist was found; pass --plist or install ${standardPlistPath}`
+    });
+    expect(output.plannedCommands).toBeUndefined();
+    expect(output.operation).toBeUndefined();
+    expect(launchctl.commands).toEqual([["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)]]);
+  });
+
+  it("plans kickstart only when the launchd service is already loaded", () => {
+    const launchctl = createLaunchctlHarness({ loaded: true });
+    const output = runTestLaunchdControl({ action: "start" }, launchctl.dependencies);
+
+    expect(output).toMatchObject({
+      ok: true,
+      command: "daemon start",
+      dryRun: true,
+      operation: "kickstart_existing",
+      plannedCommands: [
+        ["launchctl", "kickstart", "-k", expect.stringMatching(/gui\/\d+\/com\.example\.neondiff/)]
+      ]
+    });
+    expect(launchctl.commands).toEqual([["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)]]);
+  });
+
+  it("fails closed when launchctl print cannot classify the service state", () => {
+    const launchctl = createLaunchctlHarness({
+      loaded: false,
+      printFailure: { exitCode: 64, stderr: "Operation not permitted" }
+    });
+
+    expect(() => runTestLaunchdControl({ action: "start" }, launchctl.dependencies))
+      .toThrow("failed to inspect launchd service");
+    expect(launchctl.commands).toEqual([["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)]]);
   });
 
   it("requires config for daemon status", async () => {
@@ -3433,17 +3573,10 @@ exit 1
     roots.push(root);
     const plistPath = join(root, "com.example.neondiff.plist");
     writeLaunchdPlist(plistPath, "com.example.neondiff");
+    const launchctl = createLaunchctlHarness({ loaded: false });
+    const output = runTestLaunchdControl({ requestedPlistPath: plistPath }, launchctl.dependencies);
 
-    const { stdout } = await runCli([
-      "daemon",
-      "start",
-      "--launchd-label",
-      "com.example.neondiff",
-      "--plist",
-      plistPath
-    ], { env: darwinDaemonEnv });
-
-    expect(JSON.parse(stdout)).toMatchObject({
+    expect(output).toMatchObject({
       ok: true,
       command: "daemon start",
       dryRun: true,
@@ -3496,6 +3629,130 @@ exit 1
     ], { env: darwinDaemonEnv })).rejects.toMatchObject({
       stdout: expect.stringContaining("requires --confirm true")
     });
+  });
+
+  it("rejects unconfirmed live start before launchctl or plist inspection", () => {
+    const calls: string[] = [];
+    const output = runTestLaunchdControl({
+      dryRun: false,
+      confirm: false,
+      requestedPlistPath: "/operator/owned/com.example.neondiff.plist"
+    }, {
+      executeLaunchctl(command) {
+        calls.push(`launchctl:${command[1]}`);
+        return { command, exitCode: 0 };
+      },
+      plistExists(path) {
+        calls.push(`plist-exists:${path}`);
+        return true;
+      },
+      assertPlistLabelMatches(path) {
+        calls.push(`plist-label:${path}`);
+      },
+      plistWarning(path) {
+        calls.push(`plist-warning:${path}`);
+        return undefined;
+      },
+      launchdSessionError() {
+        calls.push("launchd-session");
+        return undefined;
+      }
+    });
+
+    expect(output).toMatchObject({
+      ok: false,
+      command: "daemon start",
+      dryRun: false,
+      error: "daemon start requires --confirm true when --dry-run false is used"
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("continues with kickstart when bootstrap races with another loader", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-bootstrap-race-"));
+    roots.push(root);
+    const plistPath = join(root, "com.example.neondiff.plist");
+    writeLaunchdPlist(plistPath, "com.example.neondiff");
+    const launchctl = createLaunchctlHarness({ loaded: false, bootstrapRace: true });
+    const output = runTestLaunchdControl({
+      requestedPlistPath: plistPath,
+      dryRun: false,
+      confirm: true,
+      allowExternalPlist: true
+    }, launchctl.dependencies);
+
+    expect(output).toMatchObject({
+      ok: true,
+      command: "daemon start",
+      dryRun: false,
+      launchdLoaded: false,
+      operation: "bootstrap_then_kickstart",
+      results: [
+        {
+          command: ["launchctl", "bootstrap", expect.stringMatching(/^gui\/\d+$/), plistPath],
+          exitCode: 0,
+          observedExitCode: 5,
+          acceptedAs: "already_loaded"
+        },
+        {
+          command: ["launchctl", "kickstart", "-k", expect.stringMatching(/gui\/\d+\/com\.example\.neondiff/)],
+          exitCode: 0
+        }
+      ]
+    });
+    expect(launchctl.commands).toEqual([
+      ["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)],
+      ["launchctl", "bootstrap", expect.stringMatching(/^gui\/\d+$/), plistPath],
+      ["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)],
+      ["launchctl", "kickstart", "-k", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)]
+    ]);
+  });
+
+  it("bootstraps the exact standard LaunchAgent path without an external-plist override", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-standard-live-"));
+    roots.push(root);
+    const launchAgentsDir = join(root, "Library", "LaunchAgents");
+    const plistPath = join(launchAgentsDir, "com.example.neondiff.plist");
+    mkdirSync(launchAgentsDir, { recursive: true });
+    writeLaunchdPlist(plistPath, "com.example.neondiff");
+    const plistBeforeStart = readFileSync(plistPath, "utf8");
+    const launchctl = createLaunchctlHarness({ loaded: false });
+    const output = runTestLaunchdControl({
+      standardPlistPath: plistPath,
+      dryRun: false,
+      confirm: true
+    }, launchctl.dependencies);
+
+    expect(output).toMatchObject({
+      ok: true,
+      operation: "bootstrap_then_kickstart",
+      plistPath,
+      results: [
+        { command: ["launchctl", "bootstrap", expect.stringMatching(/^gui\/\d+$/), plistPath], exitCode: 0 },
+        { command: ["launchctl", "kickstart", "-k", expect.any(String)], exitCode: 0 }
+      ]
+    });
+    expect(output.warning).toBeUndefined();
+    expect(readFileSync(plistPath, "utf8")).toBe(plistBeforeStart);
+  });
+
+  it("requires an external-plist opt-in before confirmed launchctl mutation", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-external-opt-in-"));
+    roots.push(root);
+    const plistPath = join(root, "com.example.neondiff.plist");
+    writeLaunchdPlist(plistPath, "com.example.neondiff");
+    const launchctl = createLaunchctlHarness({ loaded: false });
+    const output = runTestLaunchdControl({
+      requestedPlistPath: plistPath,
+      dryRun: false,
+      confirm: true
+    }, launchctl.dependencies);
+
+    expect(output).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("requires --allow-external-plist true")
+    });
+    expect(launchctl.commands).toEqual([["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)]]);
   });
 
   it("requires activation before confirmed live daemon mutation with an external plist", async () => {
@@ -3721,4 +3978,64 @@ function writeLaunchdPlist(path: string, label: string): void {
 </dict>
 </plist>
 `);
+}
+
+function runTestLaunchdControl(
+  overrides: Partial<Parameters<typeof runLaunchdControlCommand>[0]>,
+  dependencies: LaunchdControlDependencies
+) {
+  const launchdLabel = overrides.launchdLabel ?? "com.example.neondiff";
+  const launchdDomain = overrides.launchdDomain ?? `gui/${process.getuid?.() ?? 501}`;
+  return runLaunchdControlCommand({
+    action: "start",
+    dryRun: true,
+    confirm: false,
+    allowExternalPlist: false,
+    launchdLabel,
+    launchdDomain,
+    launchdTarget: `${launchdDomain}/${launchdLabel}`,
+    standardPlistPath: join(tmpdir(), "neondiff-missing-launchagents", `${launchdLabel}.plist`),
+    ...overrides
+  }, dependencies);
+}
+
+function createLaunchctlHarness(options: {
+  loaded: boolean;
+  bootstrapRace?: boolean;
+  printFailure?: Omit<LaunchctlResult, "command">;
+}): { commands: string[][]; dependencies: LaunchdControlDependencies } {
+  const commands: string[][] = [];
+  let loaded = options.loaded;
+  const executeLaunchctl = (command: string[]): LaunchctlResult => {
+    commands.push(command);
+    if (command[1] === "print") {
+      if (options.printFailure) return { command, ...options.printFailure };
+      return loaded
+        ? { command, exitCode: 0, stdout: "service loaded" }
+        : { command, exitCode: 113, stderr: "Could not find service" };
+    }
+    if (command[1] === "bootstrap" && options.bootstrapRace) {
+      loaded = true;
+      return { command, exitCode: 5, stderr: "Bootstrap failed: 5: Input/output error" };
+    }
+    return { command, exitCode: 0 };
+  };
+  return {
+    commands,
+    dependencies: {
+      executeLaunchctl,
+      plistExists: existsSync,
+      assertPlistLabelMatches(path, launchdLabel) {
+        const xml = readFileSync(path, "utf8");
+        const match = xml.match(/<key>\s*Label\s*<\/key>\s*<string>([^<]+)<\/string>/);
+        if (match?.[1] !== launchdLabel) throw new Error("plist label mismatch");
+      },
+      plistWarning(path) {
+        return path === repoRoot || path.startsWith(`${repoRoot}/`)
+          ? undefined
+          : "--plist is outside the NeonDiff package root; use only operator-owned plist paths";
+      },
+      launchdSessionError: () => undefined
+    }
+  };
 }

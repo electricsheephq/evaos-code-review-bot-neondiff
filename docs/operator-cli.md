@@ -252,14 +252,19 @@ evaos-review-bot status --config config.local.json
   requires both `--dry-run false` and `--confirm true`.
   When `start` uses `--plist <path>`, `stop` can either pass the same `--plist`
   to boot out by domain/plist or omit `--plist` to boot out by service label.
-  `start` without `--plist` restarts an already loaded LaunchAgent; first-time
-  installation must pass `--plist`. Use only operator-owned plist paths. Live
+  `start` checks `launchctl print gui/<uid>/<label>` separately from plist
+  existence. It kickstarts a loaded service; when unloaded, it bootstraps the
+  supplied plist or the exact standard
+  `~/Library/LaunchAgents/<label>.plist`, then kickstarts it. A bootstrap race
+  is accepted only after a second launchd check proves the service became
+  loaded. Dry-run reports the detected state and plan but performs no launchd
+  mutation. Use only operator-owned plist paths. Live
   mutation with a `--plist` outside the NeonDiff package root requires
   `--allow-external-plist true`; dry-run still reports the warning and planned
   commands without mutating launchd. The external-plist warning is a lexical
   path check, not a realpath/symlink containment proof.
-  If a live `bootstrap` fails because the LaunchAgent is already loaded, rerun
-  `daemon start` without `--plist` to use the kickstart-only restart path.
+  The automatically selected exact standard LaunchAgent path does not require
+  the external-plist override; other external paths still do.
 - `daemon --config <config.json> --dry-run true --once true`: runs one
   daemon cycle and exits. This is intended for deterministic local smoke tests
   and operator diagnostics; omit `--once true` for the normal long-running

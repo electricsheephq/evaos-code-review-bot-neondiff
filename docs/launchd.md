@@ -49,3 +49,39 @@ Only switch to `--dry-run false` after:
 - ZCode worktrees stay clean after runs,
 - GLM/Z.ai rate limits are not firing,
 - `npm run doctor` reports `readMode: "app_installation"` and successful read checks for every pilot repo.
+
+## Supported Stop And Start Recovery
+
+Use the JSON-first CLI instead of choosing `bootstrap` or `kickstart` from
+plist existence alone:
+
+```bash
+neondiff daemon stop \
+  --launchd-label com.electricsheephq.evaos-code-review-bot \
+  --dry-run true
+neondiff daemon stop \
+  --launchd-label com.electricsheephq.evaos-code-review-bot \
+  --dry-run false \
+  --confirm true
+neondiff daemon start \
+  --config /absolute/path/to/config.local.json \
+  --launchd-label com.electricsheephq.evaos-code-review-bot \
+  --dry-run true
+neondiff daemon start \
+  --config /absolute/path/to/config.local.json \
+  --launchd-label com.electricsheephq.evaos-code-review-bot \
+  --dry-run false \
+  --confirm true
+```
+
+After `bootout`, the plist normally remains at
+`~/Library/LaunchAgents/<label>.plist` while the service is absent from the
+launchd domain. `daemon start` detects that state, plans `bootstrap` followed by
+`kickstart -k`, and reports `launchdLoaded: false`. When the service is already
+loaded it plans only `kickstart -k`. If the plist is elsewhere, add its exact
+operator-owned path with `--plist`; an external path still requires
+`--allow-external-plist true` for confirmed mutation.
+
+After a confirmed start, verify a new PID and a current heartbeat with `daemon
+status` or `runtime-inventory`. A plist on disk, `RunAtLoad`, or `KeepAlive`
+alone is not proof that the service is registered or healthy.
