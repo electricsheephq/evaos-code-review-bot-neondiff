@@ -16,6 +16,7 @@ import { ReviewStateStore } from "../src/state.js";
 import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 import {
   runLaunchdControlCommand,
+  runLaunchctlPlan,
   type LaunchctlResult,
   type LaunchdControlDependencies
 } from "../src/launchd-control.js";
@@ -3437,6 +3438,41 @@ exit 0
     expect(existsSync(markerPath)).toBe(false);
   });
 
+  it.runIf(process.platform === "darwin")(
+    "exercises the golden unloaded start plan through the real CLI boundary",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-cli-plan-"));
+      roots.push(root);
+      const launchdLabel = `com.example.neondiff.cli-plan.${process.pid}.${Date.now()}`;
+      const launchAgentsDir = join(root, "Library", "LaunchAgents");
+      const plistPath = join(launchAgentsDir, `${launchdLabel}.plist`);
+      mkdirSync(launchAgentsDir, { recursive: true });
+      writeLaunchdPlist(plistPath, launchdLabel);
+
+      const { stdout } = await runCli([
+        "daemon",
+        "start",
+        "--launchd-label",
+        launchdLabel,
+        "--dry-run",
+        "true"
+      ], { env: { ...darwinDaemonEnv, HOME: root } });
+
+      expect(JSON.parse(stdout)).toMatchObject({
+        ok: true,
+        command: "daemon start",
+        dryRun: true,
+        launchdLoaded: false,
+        operation: "bootstrap_then_kickstart",
+        plistPath,
+        plannedCommands: [
+          ["launchctl", "bootstrap", expect.stringMatching(/^gui\/\d+$/), plistPath],
+          ["launchctl", "kickstart", "-k", expect.stringContaining(launchdLabel)]
+        ]
+      });
+    }
+  );
+
   it("plans bootstrap from the standard plist when the launchd service is not loaded", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-launchd-stopped-"));
     roots.push(root);
@@ -3506,6 +3542,16 @@ exit 0
     expect(() => runTestLaunchdControl({ action: "start" }, launchctl.dependencies))
       .toThrow("failed to inspect launchd service");
     expect(launchctl.commands).toEqual([["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)]]);
+  });
+
+  it("does not treat exit 113 without a not-found diagnostic as unloaded", () => {
+    const launchctl = createLaunchctlHarness({
+      loaded: false,
+      printFailure: { exitCode: 113, stderr: "Operation not permitted" }
+    });
+
+    expect(() => runTestLaunchdControl({ action: "start" }, launchctl.dependencies))
+      .toThrow("failed to inspect launchd service");
   });
 
   it("requires config for daemon status", async () => {
@@ -3691,7 +3737,7 @@ exit 0
         {
           command: ["launchctl", "bootstrap", expect.stringMatching(/^gui\/\d+$/), plistPath],
           exitCode: 0,
-          observedExitCode: 5,
+          observedExitCode: 125,
           acceptedAs: "already_loaded"
         },
         {
@@ -3705,6 +3751,37 @@ exit 0
       ["launchctl", "bootstrap", expect.stringMatching(/^gui\/\d+$/), plistPath],
       ["launchctl", "print", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)],
       ["launchctl", "kickstart", "-k", expect.stringMatching(/^gui\/\d+\/com\.example\.neondiff$/)]
+    ]);
+  });
+
+  it("does not mask an unrelated bootstrap failure when a service appears", () => {
+    let serviceLoaded = false;
+    const commands = [
+      ["launchctl", "bootstrap", "gui/501", "/operator/owned/com.example.neondiff.plist"],
+      ["launchctl", "kickstart", "-k", "gui/501/com.example.neondiff"]
+    ];
+    const results = runLaunchctlPlan(commands, (command) => {
+      if (command[1] === "bootstrap") {
+        serviceLoaded = true;
+        return { command, exitCode: 5, stderr: "Bootstrap failed: 5: Input/output error" };
+      }
+      if (command[1] === "print") {
+        return serviceLoaded
+          ? { command, exitCode: 0, stdout: "service loaded" }
+          : { command, exitCode: 113, stderr: "Could not find service" };
+      }
+      return { command, exitCode: 0 };
+    }, {
+      acceptAlreadyLoadedBootstrap: true,
+      launchdTarget: "gui/501/com.example.neondiff"
+    });
+
+    expect(results).toEqual([
+      {
+        command: ["launchctl", "bootstrap", "gui/501", "/operator/owned/com.example.neondiff.plist"],
+        exitCode: 5,
+        stderr: "Bootstrap failed: 5: Input/output error"
+      }
     ]);
   });
 
@@ -4016,7 +4093,7 @@ function createLaunchctlHarness(options: {
     }
     if (command[1] === "bootstrap" && options.bootstrapRace) {
       loaded = true;
-      return { command, exitCode: 5, stderr: "Bootstrap failed: 5: Input/output error" };
+      return { command, exitCode: 125, stderr: "Bootstrap failed: 125: Service already bootstrapped" };
     }
     return { command, exitCode: 0 };
   };

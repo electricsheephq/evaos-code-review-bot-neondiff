@@ -100,6 +100,8 @@ export function runLaunchdControlCommand(
     ...(plistPath ? { plistPath } : {})
   });
   const operation = daemonControlOperation(action, plistPath);
+  // Auto-selected standard plists are trusted by this command contract. Only
+  // an operator-supplied --plist participates in the external-path warning.
   const warning = plistPath && requestedPlistPath ? dependencies.plistWarning(plistPath) : undefined;
   const resultBase = {
     command,
@@ -144,7 +146,7 @@ export function inspectLaunchdServiceLoaded(
   const result = executeLaunchctl(["launchctl", "print", launchdTarget]);
   if (result.exitCode === 0) return true;
   const detail = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.toLowerCase();
-  if (result.exitCode === 113 || detail.includes("could not find service") || detail.includes("service not found")) {
+  if (detail.includes("could not find service") || detail.includes("service not found")) {
     return false;
   }
   throw new Error(
@@ -166,6 +168,7 @@ export function runLaunchctlPlan(
       command[1] === "bootstrap" &&
       options?.acceptAlreadyLoadedBootstrap &&
       options.launchdTarget &&
+      isAlreadyLoadedBootstrapFailure(result) &&
       inspectLaunchdServiceLoaded(options.launchdTarget, executeLaunchctl)
     ) {
       results.push({
@@ -180,6 +183,11 @@ export function runLaunchctlPlan(
     if (result.exitCode !== 0) break;
   }
   return results;
+}
+
+function isAlreadyLoadedBootstrapFailure(result: LaunchctlResult): boolean {
+  const detail = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.toLowerCase();
+  return detail.includes("service already bootstrapped") || detail.includes("service already loaded");
 }
 
 function buildDaemonLaunchctlCommands(input: {

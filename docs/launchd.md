@@ -63,6 +63,9 @@ launchd domain. `daemon start` detects that state, plans `bootstrap` followed by
 loaded it plans only `kickstart -k`. Dry-run start performs only the read-only
 `launchctl print gui/<uid>/<label>` probe needed to distinguish those states;
 an ambiguous probe failure is reported fail-closed and no mutation is planned.
+Confirmed start accepts a concurrent bootstrap race only when bootstrap reports
+an explicit already-loaded signature and a follow-up print proves the service
+is loaded; unrelated bootstrap errors remain failures.
 If the plist is elsewhere, add its exact
 operator-owned path with `--plist`; an external path still requires
 `--allow-external-plist true` for confirmed mutation.
