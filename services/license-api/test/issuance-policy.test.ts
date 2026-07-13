@@ -11,7 +11,7 @@ import {
   parseIssuanceRequest,
   type LicenseIssuanceRequest
 } from "../src/issuance.ts";
-import { LicenseStore } from "../src/store.ts";
+import { CheckoutIssuancePolicyError, LicenseStore } from "../src/store.ts";
 
 const NOW = new Date("2026-07-13T00:00:00.000Z");
 const ISSUANCE_SECRET = "test-only-checkout-issuance-secret";
@@ -254,6 +254,50 @@ describe("atomic bound checkout issuance", () => {
     });
   }
 
+  for (const [name, inputOverride, expected] of [
+    ["empty issuance reference", { idempotencyKey: "   " }, /idempotencyKey is required/],
+    [
+      "oversized issuance reference",
+      { idempotencyKey: "a".repeat(201) },
+      /idempotencyKey is too long/
+    ],
+    [
+      "invalid issuance reference characters",
+      { idempotencyKey: "checkout/session" },
+      /idempotencyKey contains unsupported characters/
+    ],
+    ["empty lookup key", { checkoutLookupKey: "" }, /checkoutLookupKey is required/],
+    [
+      "oversized lookup key",
+      { checkoutLookupKey: "x".repeat(81) },
+      /checkoutLookupKey is too long/
+    ],
+    [
+      "unknown lookup key",
+      { checkoutLookupKey: "neondiff_lifetime" },
+      /checkoutLookupKey must be one of/
+    ]
+  ] as const) {
+    it(`rejects direct-store ${name} with a policy error before persistence`, () => {
+      const store = new LicenseStore(":memory:", { now: () => NOW });
+      const req = request({ idempotencyKey: `checkout-session:direct-${name.replaceAll(" ", "-")}` });
+      try {
+        assert.throws(
+          () =>
+            store.issueBoundCheckoutLicense(
+              derivedKey(req.idempotencyKey),
+              directBoundInput(req, inputOverride) as any
+            ),
+          (error: unknown) =>
+            error instanceof CheckoutIssuancePolicyError && expected.test(error.message)
+        );
+        assert.equal(store.listLicenses().length, 0);
+      } finally {
+        store.close();
+      }
+    });
+  }
+
   it("derives plan, one seat, and initial expiry from policy and the injected clock", () => {
     const cases = [
       ["neondiff_monthly", "monthly_support", "2026-07-20T00:00:00.000Z"],
@@ -308,6 +352,41 @@ describe("atomic bound checkout issuance", () => {
       );
       assert.equal(conflict.httpStatus, 409);
       assert.equal(conflict.body.status, "conflict");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("conflicts instead of presenting an admin-revoked checkout key as active", () => {
+    const store = new LicenseStore(":memory:", { now: () => NOW });
+    try {
+      const first = issueCheckoutLicense(store, request(), ISSUANCE_SECRET);
+      assert.equal(first.httpStatus, 200);
+      assert.equal(store.revokeLicense(first.body.licenseKey as string, "owner revoked"), true);
+
+      const replay = issueCheckoutLicense(store, request(), ISSUANCE_SECRET);
+      assert.equal(replay.httpStatus, 409);
+      assert.equal(replay.body.status, "conflict");
+      assert.ok(!JSON.stringify(replay.body).includes('"status":"active"'));
+      assert.equal(store.listLicenses().length, 1);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("conflicts instead of presenting an effectively expired checkout key as active", () => {
+    let currentTime = NOW;
+    const store = new LicenseStore(":memory:", { now: () => currentTime });
+    try {
+      const first = issueCheckoutLicense(store, request(), ISSUANCE_SECRET);
+      assert.equal(first.httpStatus, 200);
+      currentTime = new Date("2026-07-21T00:00:00.000Z");
+
+      const replay = issueCheckoutLicense(store, request(), ISSUANCE_SECRET);
+      assert.equal(replay.httpStatus, 409);
+      assert.equal(replay.body.status, "conflict");
+      assert.ok(!JSON.stringify(replay.body).includes('"status":"active"'));
+      assert.equal(store.listLicenses().length, 1);
     } finally {
       store.close();
     }

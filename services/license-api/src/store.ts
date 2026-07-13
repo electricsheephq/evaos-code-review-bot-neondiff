@@ -3,7 +3,9 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  CHECKOUT_LOOKUP_KEYS,
   checkoutPolicyFor,
+  isCheckoutLookupKey,
   type CheckoutLookupKey,
   type CheckoutPolicy
 } from "./checkout-policy.js";
@@ -388,6 +390,10 @@ export class LicenseStore {
     const validatedInput = validateBoundCheckoutInput(input);
     const policy = checkoutPolicyFor(validatedInput.checkoutLookupKey);
     const requestHash = boundCheckoutRequestHash(validatedInput);
+    const issuedAt = this.now();
+    if (!Number.isFinite(issuedAt.getTime())) {
+      throw new Error("license store clock returned an invalid date");
+    }
     let transactionStarted = false;
     try {
       this.db.exec("begin immediate");
@@ -405,7 +411,7 @@ export class LicenseStore {
         if (!record) {
           throw new Error("issuance reference points to a missing license record");
         }
-        validateStoredCheckoutEntitlement(record, policy);
+        validateStoredCheckoutEntitlement(record, policy, issuedAt);
         if (hashLicenseKey(rawKey) !== existing.license_key_hash) {
           throw new CheckoutIssuanceConflictError(
             "issuance reference was issued with a different key derivation secret"
@@ -425,10 +431,6 @@ export class LicenseStore {
         return { rawKey, record, binding, replayed: true };
       }
 
-      const issuedAt = this.now();
-      if (!Number.isFinite(issuedAt.getTime())) {
-        throw new Error("license store clock returned an invalid date");
-      }
       const expiresAt = new Date(
         issuedAt.getTime() + policy.trialDays * 24 * 60 * 60 * 1_000
       ).toISOString();
@@ -685,6 +687,20 @@ function validateBoundCheckoutInput(
       throw new CheckoutIssuancePolicyError(`unsupported checkout binding field: ${key}`);
     }
   }
+  const idempotencyKey = readBoundedCheckoutString(input.idempotencyKey, "idempotencyKey", 200);
+  if (!/^[A-Za-z0-9._:-]+$/.test(idempotencyKey)) {
+    throw new CheckoutIssuancePolicyError("idempotencyKey contains unsupported characters");
+  }
+  const checkoutLookupKey = readBoundedCheckoutString(
+    input.checkoutLookupKey,
+    "checkoutLookupKey",
+    80
+  );
+  if (!isCheckoutLookupKey(checkoutLookupKey)) {
+    throw new CheckoutIssuancePolicyError(
+      `checkoutLookupKey must be one of: ${CHECKOUT_LOOKUP_KEYS.join(", ")}`
+    );
+  }
   if (input.binding.provider !== "stripe") {
     throw new CheckoutIssuancePolicyError("provider must be stripe");
   }
@@ -692,33 +708,36 @@ function validateBoundCheckoutInput(
     throw new CheckoutIssuancePolicyError("providerMode must be test or live");
   }
   return {
-    idempotencyKey: input.idempotencyKey,
-    checkoutLookupKey: input.checkoutLookupKey,
+    idempotencyKey,
+    checkoutLookupKey,
     binding: {
       provider: input.binding.provider,
-      providerAccountId: readBoundedCheckoutBindingString(
+      providerAccountId: readBoundedCheckoutString(
         input.binding.providerAccountId,
-        "providerAccountId"
+        "providerAccountId",
+        160
       ),
       providerMode: input.binding.providerMode,
-      externalSubscriptionId: readBoundedCheckoutBindingString(
+      externalSubscriptionId: readBoundedCheckoutString(
         input.binding.externalSubscriptionId,
-        "externalSubscriptionId"
+        "externalSubscriptionId",
+        160
       ),
-      externalCheckoutId: readBoundedCheckoutBindingString(
+      externalCheckoutId: readBoundedCheckoutString(
         input.binding.externalCheckoutId,
-        "externalCheckoutId"
+        "externalCheckoutId",
+        160
       )
     }
   };
 }
 
-function readBoundedCheckoutBindingString(value: unknown, field: string): string {
+function readBoundedCheckoutString(value: unknown, field: string, max: number): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new CheckoutIssuancePolicyError(`${field} is required`);
   }
   const trimmed = value.trim();
-  if (trimmed.length > 160) {
+  if (trimmed.length > max) {
     throw new CheckoutIssuancePolicyError(`${field} is too long`);
   }
   return trimmed;
@@ -739,7 +758,11 @@ function boundCheckoutRequestHash(input: IssueBoundCheckoutLicenseInput): string
     .digest("hex");
 }
 
-function validateStoredCheckoutEntitlement(record: LicenseRecord, policy: CheckoutPolicy): void {
+function validateStoredCheckoutEntitlement(
+  record: LicenseRecord,
+  policy: CheckoutPolicy,
+  now: Date
+): void {
   if (
     record.plan !== policy.plan ||
     record.repoVisibilityScope !== policy.repoVisibilityScope ||
@@ -752,6 +775,9 @@ function validateStoredCheckoutEntitlement(record: LicenseRecord, policy: Checko
     throw new CheckoutIssuanceConflictError(
       "checkout issuance entitlement does not match server policy"
     );
+  }
+  if (record.status !== "active" || Date.parse(record.expiresAt) <= now.getTime()) {
+    throw new CheckoutIssuanceConflictError("checkout issuance is no longer usable");
   }
 }
 
