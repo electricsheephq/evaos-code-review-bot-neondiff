@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activateLicense,
@@ -14,13 +15,13 @@ import { createLicenseRequestListener } from "../services/license-api/src/http.j
 import { RateLimiter } from "../services/license-api/src/service.js";
 import { LicenseStore } from "../services/license-api/src/store.js";
 
-const repoRoot = process.cwd();
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const licenseApiDir = join(repoRoot, "services/license-api");
 const dbPath = "/data/license.sqlite";
 const litestreamVersion = "0.5.14";
 const litestreamLinuxX64Sha = "32083dd2af13840b273c538360b828368d7b82bbaa2c641106052dc7814ed956";
 const litestreamLinuxArm64Sha = "b49b3d01fb0a8b4d426ee613c080fba44acae0551587dc43525dcd93eee64b4f";
-const legacyRestoreVerifier = join(licenseApiDir, "src/verify-legacy-restore.ts");
+const legacyRestoreVerifier = join(licenseApiDir, "dist/verify-legacy-restore.js");
 
 const legacySchema = `
   create table licenses (
@@ -226,6 +227,8 @@ describe("license service disaster recovery wiring", () => {
   it("executes the shipped Node verifier against a real legacy restore and rejects non-legacy schema", () => {
     const root = mkdtempSync(join(tmpdir(), "nd-license-restore-verifier-"));
     try {
+      const alternateCwd = join(root, "alternate-cwd");
+      mkdirSync(alternateCwd);
       const legacyPath = join(root, "legacy.sqlite");
       const legacyDb = new DatabaseSync(legacyPath);
       legacyDb.exec(legacySchema);
@@ -233,8 +236,8 @@ describe("license service disaster recovery wiring", () => {
 
       const verified = execFileSync(
         process.execPath,
-        ["--import", "tsx", legacyRestoreVerifier, legacyPath],
-        { cwd: repoRoot, encoding: "utf8" }
+        [legacyRestoreVerifier, legacyPath],
+        { cwd: alternateCwd, encoding: "utf8" }
       );
       expect(verified.trim()).toBe("legacy restore verification ok");
 
@@ -243,8 +246,8 @@ describe("license service disaster recovery wiring", () => {
       v2Store.close();
       expect(() => execFileSync(
         process.execPath,
-        ["--import", "tsx", legacyRestoreVerifier, v2Path],
-        { cwd: repoRoot, encoding: "utf8", stdio: "pipe" }
+        [legacyRestoreVerifier, v2Path],
+        { cwd: alternateCwd, encoding: "utf8", stdio: "pipe" }
       )).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
