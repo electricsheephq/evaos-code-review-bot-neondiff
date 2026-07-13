@@ -989,6 +989,9 @@ async function acquireRunLease(path: string): Promise<number> {
       // appear between this removal and the exclusive replacement open.
       // lgtm[js/file-system-race]
       rmSync(path, { force: true });
+      // The exclusive loopback coordinator remains held through this open.
+      // codeql[js/file-system-race]
+      // lgtm[js/file-system-race]
       const fd = openSync(path, "wx", 0o600);
       writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
       return fd;
