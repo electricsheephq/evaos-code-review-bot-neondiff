@@ -11,10 +11,17 @@ import {
   runCheckoutIssuanceSmoke,
   type CheckoutIssuanceFetch
 } from "../src/checkout-issuance-smoke.js";
+import { createInProcessLicenseApi } from "./helpers/in-process-license-api.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
+const TEST_PROVIDER_TUPLE = {
+  providerAccountId: "acct_test_smoke_fixture",
+  providerMode: "test",
+  externalSubscriptionId: "sub_test_smoke_fixture",
+  externalCheckoutId: "cs_test_smoke_fixture"
+} as const;
 
 describe("checkout issuance smoke", () => {
   const tempRoots: string[] = [];
@@ -40,6 +47,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: false,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: "owner-held-proof-key" },
@@ -64,6 +72,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: {},
@@ -88,6 +97,7 @@ describe("checkout issuance smoke", () => {
       url: "http://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: "owner-held-proof-key" },
@@ -122,6 +132,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_yearly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -145,7 +156,8 @@ describe("checkout issuance smoke", () => {
     expect(JSON.parse(String(observedRequest?.init?.body))).toEqual({
       idempotencyKey: "neondiff-smoke-v1.0.0-neondiff_yearly",
       checkoutLookupKey: "neondiff_yearly",
-      externalCheckoutId: "neondiff-smoke-v1.0.0-neondiff_yearly"
+      provider: "stripe",
+      ...TEST_PROVIDER_TUPLE
     });
 
     const proofText = readFileSync(join(root, outputPath), "utf8");
@@ -153,6 +165,9 @@ describe("checkout issuance smoke", () => {
     expect(proofText).not.toContain(licenseKey);
     expect(proofText).not.toContain("licenseKey");
     expect(proofText).not.toContain("Authorization");
+    expect(proofText).not.toContain(TEST_PROVIDER_TUPLE.providerAccountId);
+    expect(proofText).not.toContain(TEST_PROVIDER_TUPLE.externalSubscriptionId);
+    expect(proofText).not.toContain(TEST_PROVIDER_TUPLE.externalCheckoutId);
     expect(JSON.parse(proofText)).toEqual({
       evidenceKind: "license_api_checkout_issuance_authenticated",
       releaseVersion: "v1.0.0",
@@ -176,6 +191,70 @@ describe("checkout issuance smoke", () => {
     });
   });
 
+  it("passes the real API listener and rejects a test/live replay conflict without leaking correlation", async () => {
+    const secretValue = "listener-fixture-issuance-secret";
+    const api = createInProcessLicenseApi(secretValue);
+    try {
+      const baseInput = {
+        url: "https://license.example/v1/admin/licenses/issue",
+        releaseVersion: "v1.0.5",
+        checkoutLookupKey: "neondiff_monthly",
+        ...TEST_PROVIDER_TUPLE,
+        idempotencyKey: "neondiff-smoke-v1.0.5-listener-fixture",
+        confirmLiveIssuance: true,
+        secretEnvName: "LICENSE_ISSUANCE_SECRET",
+        env: { LICENSE_ISSUANCE_SECRET: secretValue },
+        fetchImpl: api.fetchImpl
+      } as const;
+
+      expect((await runCheckoutIssuanceSmoke(baseInput)).ok).toBe(true);
+      const crossed = await runCheckoutIssuanceSmoke({
+        ...baseInput,
+        providerMode: "live"
+      });
+
+      expect(crossed).toMatchObject({
+        ok: false,
+        errorCode: "unexpected_status",
+        statusCode: 409
+      });
+      const serialized = JSON.stringify(crossed);
+      for (const sensitive of [
+        secretValue,
+        TEST_PROVIDER_TUPLE.providerAccountId,
+        TEST_PROVIDER_TUPLE.externalSubscriptionId,
+        TEST_PROVIDER_TUPLE.externalCheckoutId
+      ]) {
+        expect(serialized).not.toContain(sensitive);
+      }
+    } finally {
+      api.close();
+    }
+  });
+
+  it("rejects a missing provider tuple before reading the bearer or calling the listener", async () => {
+    let called = false;
+    const result = await runCheckoutIssuanceSmoke({
+      url: "https://license.example/v1/admin/licenses/issue",
+      releaseVersion: "v1.0.5",
+      checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
+      externalSubscriptionId: "",
+      confirmLiveIssuance: true,
+      secretEnvName: "LICENSE_ISSUANCE_SECRET",
+      env: { LICENSE_ISSUANCE_SECRET: "must-not-be-read" },
+      fetchImpl: async () => {
+        called = true;
+        throw new Error("listener must not be called");
+      }
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: "invalid_provider_tuple" });
+    expect(called).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("must-not-be-read");
+    expect(JSON.stringify(result)).not.toContain(TEST_PROVIDER_TUPLE.providerAccountId);
+  });
+
   it("rejects symlinked proof output targets inside docs/evidence", async () => {
     const root = tempRoot();
     mkdirSync(join(root, "docs/evidence"), { recursive: true });
@@ -194,6 +273,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -225,6 +305,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -252,6 +333,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -280,6 +362,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -312,6 +395,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -342,6 +426,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -368,6 +453,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -395,6 +481,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: "LICENSE_ISSUANCE_SECRET",
       env: { LICENSE_ISSUANCE_SECRET: secretValue },
@@ -417,6 +504,7 @@ describe("checkout issuance smoke", () => {
       url: "https://license.example/v1/admin/licenses/issue",
       releaseVersion: "v1.0.0",
       checkoutLookupKey: "neondiff_monthly",
+      ...TEST_PROVIDER_TUPLE,
       confirmLiveIssuance: true,
       secretEnvName: mistakenSecretEnvName,
       env: {},
@@ -432,13 +520,15 @@ describe("checkout issuance smoke", () => {
   it("supports dry-run request preview without a secret or network call", () => {
     const preview = buildCheckoutIssuanceSmokeRequestPreview({
       releaseVersion: "v1.0.0",
-      checkoutLookupKey: "neondiff_org_yearly"
+      checkoutLookupKey: "neondiff_org_yearly",
+      ...TEST_PROVIDER_TUPLE
     });
 
     expect(preview).toEqual({
       idempotencyKey: "neondiff-smoke-v1.0.0-neondiff_org_yearly",
       checkoutLookupKey: "neondiff_org_yearly",
-      externalCheckoutId: "neondiff-smoke-v1.0.0-neondiff_org_yearly"
+      provider: "stripe",
+      ...TEST_PROVIDER_TUPLE
     });
   });
 
@@ -451,6 +541,14 @@ describe("checkout issuance smoke", () => {
       "v1.0.0",
       "--checkout-lookup-key",
       "neondiff_org_yearly",
+      "--provider-account-id",
+      TEST_PROVIDER_TUPLE.providerAccountId,
+      "--provider-mode",
+      TEST_PROVIDER_TUPLE.providerMode,
+      "--external-subscription-id",
+      TEST_PROVIDER_TUPLE.externalSubscriptionId,
+      "--external-checkout-id",
+      TEST_PROVIDER_TUPLE.externalCheckoutId,
       "--secret-env",
       "LICENSE_ISSUANCE_SECRET",
       "--dry-run",
@@ -463,7 +561,8 @@ describe("checkout issuance smoke", () => {
     expect(output.requestPreview).toEqual({
       idempotencyKey: "neondiff-smoke-v1.0.0-neondiff_org_yearly",
       checkoutLookupKey: "neondiff_org_yearly",
-      externalCheckoutId: "neondiff-smoke-v1.0.0-neondiff_org_yearly"
+      provider: "stripe",
+      ...TEST_PROVIDER_TUPLE
     });
     expect(JSON.stringify(output)).not.toContain("LICENSE_ISSUANCE_SECRET");
   });
@@ -493,6 +592,14 @@ describe("checkout issuance smoke", () => {
       "v1.0.0",
       "--checkout-lookup-key",
       "neondiff_monthly",
+      "--provider-account-id",
+      TEST_PROVIDER_TUPLE.providerAccountId,
+      "--provider-mode",
+      TEST_PROVIDER_TUPLE.providerMode,
+      "--external-subscription-id",
+      TEST_PROVIDER_TUPLE.externalSubscriptionId,
+      "--external-checkout-id",
+      TEST_PROVIDER_TUPLE.externalCheckoutId,
       "--secret-env",
       "NEONDIFF_TEST_ISSUANCE_KEY",
       "--dry-run",
