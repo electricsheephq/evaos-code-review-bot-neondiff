@@ -22,6 +22,7 @@ const createdReviews = vi.hoisted((): Array<{
 const reviewPostControl = vi.hoisted((): {
   error?: Error;
   afterCreate?: () => void;
+  afterAuxiliaryPost?: () => void;
 } => ({}));
 
 vi.mock("../src/git.js", async (importOriginal) => {
@@ -68,6 +69,11 @@ vi.mock("../src/github.js", async (importOriginal) => {
         return true;
       }
 
+      async upsertIssueComment(): Promise<{ action: "created"; html_url: string; id: number }> {
+        reviewPostControl.afterAuxiliaryPost?.();
+        return { action: "created", html_url: "https://github.test/comment/1", id: 1 };
+      }
+
       async createReview(input: {
         repo: string;
         pullNumber: number;
@@ -109,6 +115,7 @@ describe("worker context budget preflight", () => {
     createdReviews.length = 0;
     delete reviewPostControl.error;
     delete reviewPostControl.afterCreate;
+    delete reviewPostControl.afterAuxiliaryPost;
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
@@ -868,6 +875,142 @@ describe("worker context budget preflight", () => {
     })).toBe(false);
     scenario.state.close();
   });
+
+  it("lets an exact queued owner command supersede a posted advisory COMMENT on the same head", async () => {
+    const headSha = "6".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 512,
+      headSha,
+      commandComment: requestChangesComment(52, 512, headSha),
+      commandCommentId: 52,
+      configureState: (state) => state.recordProcessed({
+        repo: "electricsheephq/WorldOS",
+        pullNumber: 512,
+        headSha,
+        status: "posted",
+        event: "COMMENT"
+      })
+    });
+
+    expect(scenario.result).toBe("reviewed");
+    expect(scenario.exactCommentLookups).toEqual([52, 52]);
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.event).toBe("REQUEST_CHANGES");
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 512, headSha)).toMatchObject({
+      status: "posted",
+      event: "REQUEST_CHANGES"
+    });
+    scenario.state.close();
+  });
+
+  it.each([
+    ["untrusted", { id: 53, body: `@evaos-code-review-bot request-changes --repo electricsheephq/WorldOS --pr 513 --head ${"7".repeat(40)}`, user: { login: "outside-contributor", type: "User" } }],
+    ["malformed", { id: 54, body: "@evaos-code-review-bot request-changes --repo electricsheephq/WorldOS --pr 514 --head short", user: { login: "100yenadmin", type: "User" } }]
+  ])("does not give a same-head processed bypass to an %s command", async (_label, commandComment) => {
+    const pullNumber = commandComment.id === 53 ? 513 : 514;
+    const headSha = commandComment.id === 53 ? "7".repeat(40) : "8".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber,
+      headSha,
+      commandComment,
+      commandCommentId: commandComment.id,
+      configureState: (state) => state.recordProcessed({
+        repo: "electricsheephq/WorldOS",
+        pullNumber,
+        headSha,
+        status: "posted",
+        event: "COMMENT"
+      })
+    });
+
+    expect(scenario.result).toBe("skipped_processed");
+    expect(scenario.exactCommentLookups).toEqual([commandComment.id]);
+    expect(createdReviews).toEqual([]);
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", pullNumber, headSha)?.event).toBe("COMMENT");
+    scenario.state.close();
+  });
+
+  it("keeps consumed authority consumed when the head moves before any auxiliary or review POST", async () => {
+    const headSha = "9".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 515,
+      headSha,
+      commandComment: requestChangesComment(55, 515, headSha),
+      commandCommentId: 55,
+      moveHeadAfterConsume: "a".repeat(40)
+    });
+
+    expect(scenario.result).toBe("skipped_stale_head");
+    expect(createdReviews).toEqual([]);
+    expect(scenario.state.tryConsumeReviewEventAuthorization({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 515,
+      headSha,
+      commentId: 55,
+      author: "100yenadmin"
+    })).toBe(false);
+    scenario.state.close();
+  });
+
+  it("stops before review when the head moves during an auxiliary walkthrough POST", async () => {
+    const headSha = "a".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 516,
+      headSha,
+      commandComment: requestChangesComment(56, 516, headSha),
+      commandCommentId: 56,
+      enableWalkthroughPost: true,
+      moveHeadAfterAuxiliaryPost: "b".repeat(40)
+    });
+
+    expect(scenario.result).toBe("skipped_stale_head");
+    expect(createdReviews).toEqual([]);
+    expect(scenario.state.tryConsumeReviewEventAuthorization({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 516,
+      headSha,
+      commentId: 56,
+      author: "100yenadmin"
+    })).toBe(false);
+    scenario.state.close();
+  });
+
+  it("keeps a successful review posted when the immediate post-review head lookup fails", async () => {
+    const headSha = "c".repeat(40);
+    const lookupSecret = "ghp_post_lookup_secret";
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 517,
+      headSha,
+      commandComment: requestChangesComment(57, 517, headSha),
+      commandCommentId: 57,
+      postReviewHeadLookupError: new Error(`post lookup failed ${lookupSecret}`)
+    });
+
+    expect(scenario.error).toBeUndefined();
+    expect(scenario.result).toBe("reviewed");
+    expect(createdReviews).toHaveLength(1);
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 517, headSha)).toMatchObject({
+      status: "posted",
+      event: "REQUEST_CHANGES"
+    });
+    const incident = JSON.parse(readFileSync(join(scenario.evidenceDir, "post-review-head-lookup-failed.json"), "utf8"));
+    expect(incident).toMatchObject({
+      reason: "post_review_head_lookup_failed",
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 517,
+      expectedHeadSha: headSha,
+      reviewId: 1,
+      error: expect.stringContaining("[redacted-secret]")
+    });
+    expect(JSON.stringify(incident)).not.toContain(lookupSecret);
+    expect(scenario.state.getReviewReadiness("electricsheephq/WorldOS", 517, headSha)).toBeUndefined();
+    scenario.state.close();
+  });
 });
 
 async function runOwnerPolicyReview(input: {
@@ -881,7 +1024,11 @@ async function runOwnerPolicyReview(input: {
   commentLookupError?: Error;
   moveHeadAfterCommentLookup?: string;
   moveHeadDuringPost?: string;
+  moveHeadAfterConsume?: string;
+  moveHeadAfterAuxiliaryPost?: string;
+  postReviewHeadLookupError?: Error;
   enableWalkthrough?: boolean;
+  enableWalkthroughPost?: boolean;
   candidateSeverity?: "P1" | "P2";
   configureState?: (state: ReviewStateStore) => void;
 }) {
@@ -898,12 +1045,21 @@ async function runOwnerPolicyReview(input: {
     maxInlineComments: 25,
     reviewEventPolicy: { mode: "trusted_command_only" }
   };
-  config.walkthrough.enabled = input.enableWalkthrough ?? false;
+  config.walkthrough.enabled = input.enableWalkthrough === true || input.enableWalkthroughPost === true;
+  config.walkthrough.postIssueComment = input.enableWalkthroughPost ?? false;
   const state = new ReviewStateStore(config.statePath);
-  input.configureState?.(state);
   const headSha = input.headSha ?? "b".repeat(40);
   const pull = pullSummary(input.pullNumber, headSha);
   let livePull = pull;
+  input.configureState?.(state);
+  if (input.moveHeadAfterConsume) {
+    const consume = state.tryConsumeReviewEventAuthorization.bind(state);
+    vi.spyOn(state, "tryConsumeReviewEventAuthorization").mockImplementation((authorization) => {
+      const consumed = consume(authorization);
+      livePull = pullSummary(input.pullNumber, input.moveHeadAfterConsume!);
+      return consumed;
+    });
+  }
   const file = pullFile(`src/policy-${input.pullNumber}.ts`, 200);
   zcodeFindingsByPath.set(file.filename, [
     input.candidateSeverity === "P2"
@@ -911,13 +1067,27 @@ async function runOwnerPolicyReview(input: {
       : p1Finding(file.filename, `P1 policy finding ${input.pullNumber}`)
   ]);
   const exactCommentLookups: number[] = [];
-  if (input.moveHeadDuringPost) {
+  if (input.moveHeadDuringPost || input.postReviewHeadLookupError) {
     reviewPostControl.afterCreate = () => {
-      livePull = pullSummary(input.pullNumber, input.moveHeadDuringPost!);
+      if (input.moveHeadDuringPost) livePull = pullSummary(input.pullNumber, input.moveHeadDuringPost);
+      if (input.postReviewHeadLookupError) postReviewHeadLookupError = input.postReviewHeadLookupError;
     };
   }
+  if (input.moveHeadAfterAuxiliaryPost) {
+    reviewPostControl.afterAuxiliaryPost = () => {
+      livePull = pullSummary(input.pullNumber, input.moveHeadAfterAuxiliaryPost!);
+    };
+  }
+  let postReviewHeadLookupError: Error | undefined;
   const github = {
-    getPull: async () => livePull,
+    getPull: async () => {
+      if (postReviewHeadLookupError) {
+        const error = postReviewHeadLookupError;
+        postReviewHeadLookupError = undefined;
+        throw error;
+      }
+      return livePull;
+    },
     listPullFiles: async () => [file],
     listIssueComments: async () => [
       ...(input.commandComment ? [input.commandComment] : []),

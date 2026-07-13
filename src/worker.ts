@@ -1244,6 +1244,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !input.allowActivationBaselineCommandLookup &&
@@ -1392,7 +1393,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const commandReviewRequested = commandDecision.shouldReview;
-  if (commandReviewRequested) {
+  const exactOwnerReviewRequested = Boolean(
+    processed &&
+    input.commandCommentId &&
+    (await lookupQueuedReviewEventAuthorization({
+      mode: "trusted_command_only",
+      github,
+      repo,
+      pull,
+      commandCommentId: input.commandCommentId,
+      commandConfig: config.commands
+    })).status === "eligible"
+  );
+  if (commandReviewRequested || exactOwnerReviewRequested) {
     const livePull = await github.getPull(repo, pull.number);
     const stale = detectStalePullHead({ expected: pull, live: livePull, phase: "before_review" });
     if (stale) {
@@ -1404,6 +1417,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !commandReviewRequested &&
+    !exactOwnerReviewRequested &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1664,7 +1678,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // and relies on sanitizePublicConfidenceText/redactSecrets idempotency tests.
     const dropped = sanitizeDroppedFindings(gate.dropped, config.confidenceCalibration?.publicDisplay);
     const candidateEvent = selfConsistency.event;
-    const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
     const dryRunReviewEventResolution = input.dryRun
       ? await resolveReviewEventDecision({
           mode: reviewEventPolicyMode,
@@ -1812,9 +1825,17 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pull,
       dryRun: false
     });
+    const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
+    if (
+      reviewEventResolution.consumed &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      writeRedactedJson(join(evidenceDir, "review-event-decision.json"), reviewEventDecisionEvidence);
+      return "skipped_stale_head";
+    }
     writeRedactedJson(
       join(evidenceDir, "review-event-decision.json"),
-      buildReviewEventDecisionEvidence(reviewEventResolution, false)
+      reviewEventDecisionEvidence
     );
     plan.event = reviewEventResolution.decision.selectedEvent;
     if (config.walkthrough.enabled) {
@@ -1837,6 +1858,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (plan.enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), plan.enrichment.body);
 
     const reviewGithub = new GitHubApi(config.github);
+    const walkthroughPostAttempted = Boolean(plan.walkthrough?.postIssueComment && reviewGithub.canPostAsApp());
     plan.walkthroughComment = await postWalkthroughComment({
       github: reviewGithub,
       repo,
@@ -1844,6 +1866,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       evidenceDir,
       walkthrough: plan.walkthrough
     });
+    if (
+      walkthroughPostAttempted &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      return "skipped_stale_head";
+    }
+    const enrichmentPostAttempted = Boolean(
+      config.enrichment?.enabled === true && plan.enrichment?.postIssueComment && reviewGithub.canPostAsApp()
+    );
     plan.enrichmentComment = await postEnrichmentComment({
       enabled: config.enrichment?.enabled === true,
       dryRun: input.dryRun,
@@ -1853,7 +1884,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       enrichment: plan.enrichment,
       evidenceDir
     });
+    if (
+      enrichmentPostAttempted &&
+      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
+    ) {
+      return "skipped_stale_head";
+    }
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
+    if (await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })) {
+      return "skipped_stale_head";
+    }
     const review = await reviewGithub.createReview({
       repo,
       pullNumber: pull.number,
@@ -1874,20 +1914,34 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // daemon calibration-observe pass can re-derive outcome labels later. BEST-EFFORT / FAIL-OPEN —
     // the review is already durable; observation bookkeeping must never block or fail the review.
     recordPostedReviewFindings({ state, repo, pull, comments });
-    const liveAfterPost = await github.getPull(repo, pull.number);
-    const headChangedDuringPost = liveAfterPost.head.sha !== pull.head.sha;
-    if (headChangedDuringPost) {
-      writeRedactedJson(join(evidenceDir, "head-changed-during-post.json"), {
-        reason: "head_changed_during_post",
+    let headChangedDuringPost = false;
+    let postReviewHeadLookupFailed = false;
+    try {
+      const liveAfterPost = await github.getPull(repo, pull.number);
+      headChangedDuringPost = liveAfterPost.head.sha !== pull.head.sha;
+      if (headChangedDuringPost) {
+        writeRedactedJson(join(evidenceDir, "head-changed-during-post.json"), {
+          reason: "head_changed_during_post",
+          repo,
+          pullNumber: pull.number,
+          expectedHeadSha: pull.head.sha,
+          liveHeadSha: liveAfterPost.head.sha,
+          reviewId: review.id
+        });
+      }
+    } catch (error) {
+      postReviewHeadLookupFailed = true;
+      writeRedactedJson(join(evidenceDir, "post-review-head-lookup-failed.json"), {
+        reason: "post_review_head_lookup_failed",
         repo,
         pullNumber: pull.number,
         expectedHeadSha: pull.head.sha,
-        liveHeadSha: liveAfterPost.head.sha,
-        reviewId: review.id
+        reviewId: review.id,
+        error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 300)
       });
     }
     releaseReviewCapacity();
-    if (!headChangedDuringPost && input.processedHeadPolicy !== "retry_failed_head") {
+    if (!headChangedDuringPost && !postReviewHeadLookupFailed && input.processedHeadPolicy !== "retry_failed_head") {
       await reconcileProcessedHeadAfterDirectReviewSafely({
         config,
         github,
@@ -2710,6 +2764,20 @@ function recordStaleHeadSkip(input: {
     status: "skipped",
     error: `${input.stale.reason}: live=${input.stale.liveHeadSha}`
   });
+}
+
+async function recordStaleHeadBeforePostIfMoved(input: {
+  state: ReviewStateStore;
+  github: GitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+  evidenceDir: string;
+}): Promise<boolean> {
+  const live = await input.github.getPull(input.repo, input.pull.number);
+  const stale = detectStalePullHead({ expected: input.pull, live, phase: "before_post" });
+  if (!stale) return false;
+  recordStaleHeadSkip({ ...input, stale });
+  return true;
 }
 
 /**
