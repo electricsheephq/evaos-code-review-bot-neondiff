@@ -191,7 +191,7 @@ describe("checkout issuance smoke", () => {
     });
   });
 
-  it("passes the real API listener and rejects a test/live replay conflict without leaking correlation", async () => {
+  it("passes separate test/live tuples through the real API listener without leaking correlation", async () => {
     const secretValue = "listener-fixture-issuance-secret";
     const api = createInProcessLicenseApi(secretValue);
     try {
