@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync, readlinkSync, readdirSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readlinkSync, readSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export type LinuxResourceSample = {
@@ -27,7 +27,6 @@ const NVIDIA_SMI = "/usr/bin/nvidia-smi";
 const MAX_SAMPLES = 4096;
 const SAMPLE_INTERVAL_MS = 1000;
 const SWAP_GROWTH_LIMIT_BYTES = 64 * 1024 * 1024;
-const sessions = new Map<string, Session>();
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -61,6 +60,19 @@ export function assertGex44LinuxPreflight(expectedNvidiaSmiSha256: string): void
 
 function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function sha256Descriptor(fd: number): string {
+  const size = fstatSync(fd).size;
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  for (let offset = 0; offset < size;) {
+    const bytesRead = readSync(fd, buffer, 0, Math.min(buffer.length, size - offset), offset);
+    if (bytesRead === 0) throw new Error("pinned executable changed while hashing");
+    hash.update(buffer.subarray(0, bytesRead));
+    offset += bytesRead;
+  }
+  return hash.digest("hex");
 }
 
 function positivePid(value: unknown): number {
@@ -147,14 +159,24 @@ function processAlive(pid: number, expectedStartToken?: string): boolean {
   } catch { return false; }
 }
 
-function queryVramBytes(pid: number): number {
-  const output = execFileSync(NVIDIA_SMI, ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"], {
-    encoding: "utf8",
-    timeout: 5000,
-    maxBuffer: 1024 * 1024,
-    env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
-    stdio: ["ignore", "pipe", "ignore"]
-  });
+function queryVramBytes(pid: number, expectedNvidiaSmiSha256: string): number {
+  const fd = openSync(NVIDIA_SMI, "r");
+  let output: string;
+  try {
+    const metadata = fstatSync(fd);
+    if (!metadata.isFile() || (metadata.mode & 0o111) === 0) throw new Error("pinned nvidia-smi image is not executable");
+    if (sha256Descriptor(fd) !== expectedNvidiaSmiSha256) throw new Error("nvidia-smi SHA-256 drifted before execution");
+    output = execFileSync(`/proc/${process.pid}/fd/${fd}`, ["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"], {
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+      env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    if (sha256Descriptor(fd) !== expectedNvidiaSmiSha256) throw new Error("nvidia-smi SHA-256 drifted during execution");
+  } finally {
+    closeSync(fd);
+  }
   let mib = 0;
   for (const line of output.trim().split("\n")) {
     const match = line.match(/^\s*(\d+)\s*,\s*(\d+(?:\.\d+)?)\s*$/);
@@ -163,14 +185,14 @@ function queryVramBytes(pid: number): number {
   return Math.round(mib * 1024 * 1024);
 }
 
-function capture(session: Session, phase: string): LinuxResourceSample {
+function capture(session: Session, phase: string, expectedNvidiaSmiSha256: string): LinuxResourceSample {
   if (!session.pid) throw new Error("resource monitor is not attached to a resident PID");
   const alive = processAlive(session.pid, session.processStartToken);
   const sample: LinuxResourceSample = {
     capturedAt: new Date().toISOString(),
     phase,
     rssBytes: alive ? statusBytes(session.pid, "VmRSS") : 0,
-    vramBytes: alive ? queryVramBytes(session.pid) : 0,
+    vramBytes: alive ? queryVramBytes(session.pid, expectedNvidiaSmiSha256) : 0,
     swapBytes: hostSwapUsedBytes(),
     processSwapBytes: alive ? statusBytes(session.pid, "VmSwap") : 0,
     processAlive: alive ? 1 : 0,
@@ -181,7 +203,10 @@ function capture(session: Session, phase: string): LinuxResourceSample {
 }
 
 /** Pinned, self-contained module factory loaded from exact verified bytes. */
-export function createGex44ResourceMonitor() {
+export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string }) {
+  const expectedNvidiaSmiSha256 = parameters?.nvidiaSmiSha256;
+  if (!/^[a-f0-9]{64}$/.test(expectedNvidiaSmiSha256 ?? "")) throw new Error("nvidia-smi SHA-256 factory parameter is invalid");
+  const sessions = new Map<string, Session>();
   return {
     async start() {
       const id = randomUUID();
@@ -194,9 +219,9 @@ export function createGex44ResourceMonitor() {
       session.pid = positivePid(resident.metadata?.pid);
       session.processStartToken = processStartToken(session.pid);
       if (!session.processStartToken) throw new Error("resident process start identity is unavailable");
-      capture(session, "attached");
+      capture(session, "attached", expectedNvidiaSmiSha256);
       session.timer = setInterval(() => {
-        try { capture(session, "periodic"); }
+        try { capture(session, "periodic", expectedNvidiaSmiSha256); }
         catch (error) { session.periodicFailure = error instanceof Error ? error.name : "periodic_sample_failed"; }
       }, SAMPLE_INTERVAL_MS);
       session.timer.unref();
@@ -205,7 +230,7 @@ export function createGex44ResourceMonitor() {
       const session = sessions.get(sessionRef.id);
       if (!session) throw new Error("resource monitor session is unknown");
       if (session.periodicFailure) throw new Error(`periodic resource sampling failed: ${session.periodicFailure}`);
-      return capture(session, context.phase);
+      return capture(session, context.phase, expectedNvidiaSmiSha256);
     },
     classify(samples: LinuxResourceSample[]) {
       if (samples.length === 0) return { status: "stopped" as const, errorCode: "resource_trace_empty" };
@@ -221,14 +246,16 @@ export function createGex44ResourceMonitor() {
     async stop(sessionRef: { id: string }) {
       const session = sessions.get(sessionRef.id);
       if (!session) throw new Error("resource monitor session is unknown");
-      if (session.timer) clearInterval(session.timer);
-      if (session.periodicFailure) {
+      try {
+        if (session.timer) clearInterval(session.timer);
+        if (session.periodicFailure) {
+          throw new Error(`periodic resource sampling failed: ${session.periodicFailure}`);
+        }
+        const final = capture(session, "cleanup", expectedNvidiaSmiSha256);
+        return [...session.samples.slice(0, -1), final];
+      } finally {
         sessions.delete(sessionRef.id);
-        throw new Error(`periodic resource sampling failed: ${session.periodicFailure}`);
       }
-      const final = capture(session, "cleanup");
-      sessions.delete(sessionRef.id);
-      return [...session.samples.slice(0, -1), final];
     }
   };
 }

@@ -165,6 +165,7 @@ export interface Phase1ResourceMonitorModule {
   moduleSha256: string;
   approvedRoot: string;
   exportName: string;
+  factoryParameters?: Readonly<Record<string, string>>;
 }
 
 export interface Phase1RunnerOptions {
@@ -542,6 +543,9 @@ async function runPhase1ScreenWithLease(
   for (const cell of manifest.cells) {
     const cellHasWork = spec.inputs.some((input) => !existsSync(resultFile(spec.outputDir, cell.id, input.id)));
     if (!cellHasWork) continue;
+    const preexistingResultPaths = new Set(spec.inputs
+      .map((input) => resultFile(spec.outputDir, cell.id, input.id))
+      .filter((path) => existsSync(path)));
     let monitorSession: { id: string } | undefined;
     const resourceSamples: Phase1ResourceSample[] = resolvedOptions.monitorIdentity
       ? reconstructResourceSamples(spec.outputDir, manifest, cell)
@@ -555,13 +559,18 @@ async function runPhase1ScreenWithLease(
       return undefined;
     });
     if (!resident) {
-      for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, infrastructureFailure ?? "resident_start_failed");
-      if (resolvedOptions.monitor && monitorSession) {
-        const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
-        if (finalized.infrastructureFailure) infrastructureFailure = finalized.infrastructureFailure;
-        if (finalized.terminalClassification) rewriteCellTerminalResults(spec.outputDir, manifest, cell, finalized.terminalClassification);
-      } else if (resolvedOptions.monitorIdentity) {
-        writeUnavailableMonitorEvidence(spec.outputDir, manifest, cell, infrastructureFailure ?? "monitor_start_failed");
+      try {
+        for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, infrastructureFailure ?? "resident_start_failed");
+      } catch (writeError) {
+        infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `terminal result write after resident start failure failed: ${errorMessage(writeError)}`);
+      } finally {
+        if (resolvedOptions.monitor && monitorSession) {
+          const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
+          if (finalized.infrastructureFailure) infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, finalized.infrastructureFailure);
+          if (finalized.terminalClassification) rewriteCellTerminalResults(spec.outputDir, manifest, cell, finalized.terminalClassification, preexistingResultPaths);
+        } else if (resolvedOptions.monitorIdentity) {
+          writeUnavailableMonitorEvidence(spec.outputDir, manifest, cell, infrastructureFailure ?? "monitor_start_failed");
+        }
       }
       continue;
     }
@@ -569,23 +578,35 @@ async function runPhase1ScreenWithLease(
       assertSecretSafe("resident argv", resident.argv.join("\n"));
       assertSecretSafe("resident logs", resident.logs ?? "");
     } catch (error) {
-      infrastructureFailure = errorMessage(error);
-      for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, "resident_evidence_rejected");
-      try { await adapter.stop(resident); } catch (stopError) { infrastructureFailure = `resident stop after evidence rejection failed: ${errorMessage(stopError)}`; }
-      if (resolvedOptions.monitor && monitorSession) {
-        const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
-        if (finalized.infrastructureFailure) infrastructureFailure = finalized.infrastructureFailure;
+      infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, errorMessage(error));
+      try {
+        for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, "resident_evidence_rejected");
+      } catch (writeError) {
+        infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `terminal result write after resident evidence rejection failed: ${errorMessage(writeError)}`);
+      } finally {
+        try { await adapter.stop(resident); }
+        catch (stopError) { infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `resident stop after evidence rejection failed: ${errorMessage(stopError)}`); }
+        if (resolvedOptions.monitor && monitorSession) {
+          const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
+          if (finalized.infrastructureFailure) infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, finalized.infrastructureFailure);
+        }
       }
       continue;
     }
     if (resolvedOptions.monitor && monitorSession && resolvedOptions.monitor.attach) {
       try { await resolvedOptions.monitor.attach(monitorSession, resident); }
       catch (error) {
-        infrastructureFailure = `monitor attach failed: ${errorMessage(error)}`;
-        for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, "monitor_attach_failed");
-        try { await adapter.stop(resident); } catch (stopError) { infrastructureFailure = `resident stop after monitor attach failure failed: ${errorMessage(stopError)}`; }
-        const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
-        if (finalized.infrastructureFailure) infrastructureFailure = finalized.infrastructureFailure;
+        infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `monitor attach failed: ${errorMessage(error)}`);
+        try {
+          for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, "monitor_attach_failed");
+        } catch (writeError) {
+          infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `terminal result write after monitor attach failure failed: ${errorMessage(writeError)}`);
+        } finally {
+          try { await adapter.stop(resident); }
+          catch (stopError) { infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `resident stop after monitor attach failure failed: ${errorMessage(stopError)}`); }
+          const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
+          if (finalized.infrastructureFailure) infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, finalized.infrastructureFailure);
+        }
         continue;
       }
     }
@@ -662,18 +683,18 @@ async function runPhase1ScreenWithLease(
         atomicWriteJson(resultPath, record);
       }
     } catch (error) {
-      infrastructureFailure = errorMessage(error);
+      infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, errorMessage(error));
       for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, "resident_evidence_rejected");
     } finally {
       try {
         await adapter.stop(resident);
       } catch (error) {
-        infrastructureFailure = errorMessage(error);
+        infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, errorMessage(error));
       }
       if (resolvedOptions.monitor && monitorSession) {
         const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
-        if (finalized.infrastructureFailure) infrastructureFailure = finalized.infrastructureFailure;
-        if (finalized.terminalClassification) rewriteCellTerminalResults(spec.outputDir, manifest, cell, finalized.terminalClassification);
+        if (finalized.infrastructureFailure) infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, finalized.infrastructureFailure);
+        if (finalized.terminalClassification) rewriteCellTerminalResults(spec.outputDir, manifest, cell, finalized.terminalClassification, preexistingResultPaths);
       }
     }
   }
@@ -1135,6 +1156,7 @@ async function finalizeMonitorEvidence(
   try {
     const stopped = await monitor.stop(session);
     if (Array.isArray(stopped)) {
+      if (stopped.length === 0) throw new Error("monitor terminal trace is empty");
       if (stopped.length > 16_384) throw new Error("monitor terminal trace exceeds the evidence sample cap");
       const validated = stopped.map((sample, index) => validateResourceSample(sample, `monitor stop resource sample ${index}`));
       const merged = mergeResourceSamples(samples, validated);
@@ -1142,11 +1164,11 @@ async function finalizeMonitorEvidence(
       samples.splice(0, samples.length, ...merged);
     } else samples.push(validateResourceSample(stopped, "monitor stop resource sample"));
   }
-  catch (error) { infrastructureFailure = `monitor stop failed: ${errorMessage(error)}`; }
+  catch (error) { infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `monitor stop failed: ${errorMessage(error)}`); }
   try {
     terminalClassification = monitorClassify(monitor, samples);
   } catch (error) {
-    infrastructureFailure = errorMessage(error);
+    infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, errorMessage(error));
   }
   const resourceRecord = {
     schemaVersion: "neondiff-phase1-resources/v1",
@@ -1168,10 +1190,10 @@ async function finalizeMonitorEvidence(
       evidenceSha256: fingerprint(resourceRecord)
     });
   } catch (error) {
-    infrastructureFailure = `monitor evidence finalization failed: ${errorMessage(error)}`;
+    infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `monitor evidence finalization failed: ${errorMessage(error)}`);
     try { writeResourceUnavailableFallback(outputDir, manifest, cell, infrastructureFailure); }
     catch (fallbackError) {
-      infrastructureFailure = `monitor evidence finalization and fallback write failed: ${errorMessage(fallbackError)}`;
+      infrastructureFailure = appendInfrastructureFailure(infrastructureFailure, `monitor evidence finalization and fallback write failed: ${errorMessage(fallbackError)}`);
     }
   }
   return { infrastructureFailure, terminalClassification };
@@ -1187,6 +1209,14 @@ function mergeResourceSamples(existing: Phase1ResourceSample[], terminal: Phase1
     merged.push(sample);
   }
   return merged;
+}
+
+function appendInfrastructureFailure(existing: string | undefined, next: string): string {
+  const redacted = errorMessage(next).replace(/[\r\n]+/g, " ").trim().slice(0, 512) || "infrastructure_failure";
+  if (!existing) return redacted;
+  const separator = "; ";
+  const prefixLength = Math.max(0, 2048 - separator.length - redacted.length);
+  return `${existing.slice(0, prefixLength)}${separator}${redacted}`;
 }
 
 function writeResourceUnavailableFallback(
@@ -1214,11 +1244,12 @@ function rewriteCellTerminalResults(
   outputDir: string,
   manifest: Manifest,
   cell: Manifest["cells"][number],
-  terminal: { status: "failed" | "stopped" | "oom"; errorCode: string }
+  terminal: { status: "failed" | "stopped" | "oom"; errorCode: string },
+  preexistingResultPaths: ReadonlySet<string>
 ): void {
   for (const input of manifest.inputs) {
     const path = resultFile(outputDir, cell.id, input.id);
-    if (!existsSync(path)) continue;
+    if (!existsSync(path) || preexistingResultPaths.has(path)) continue;
     const record = parseJson<Record<string, unknown>>(path);
     if (record.status !== "completed") continue;
     const { evidenceSha256: _discarded, ...body } = record;
@@ -1510,13 +1541,24 @@ function gitCommitContainsBytes(checkoutRoot: string, commit: string, relativePa
 }
 
 async function verifyResourceMonitorModuleIdentity(identity: Phase1ResourceMonitorModule): Promise<void> {
-  const { modulePath, approvedRoot, moduleSha256, exportName } = identity;
+  const { modulePath, approvedRoot, moduleSha256, exportName, factoryParameters } = identity;
   assertProtocolVersion("resource monitor", identity.version);
   assertJsonValuesSecretSafe("resource monitor paths", [modulePath, approvedRoot, exportName]);
   if (resolve(modulePath) !== modulePath || resolve(approvedRoot) !== approvedRoot) {
     throw new Error("resource monitor source and approved root paths must be absolute");
   }
   if (!/^[a-zA-Z_$][a-zA-Z0-9_$]{0,127}$/.test(exportName)) throw new Error("resource monitor export name is invalid");
+  if (factoryParameters !== undefined) {
+    if (!factoryParameters || typeof factoryParameters !== "object" || Array.isArray(factoryParameters) || Object.keys(factoryParameters).length > 32) {
+      throw new Error("resource monitor factory parameters are invalid");
+    }
+    for (const [key, value] of Object.entries(factoryParameters)) {
+      if (!/^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(key) || typeof value !== "string" || value.length > 512) {
+        throw new Error("resource monitor factory parameters are invalid");
+      }
+    }
+    assertJsonValuesSecretSafe("resource monitor factory parameters", factoryParameters);
+  }
   const source = realpathSync(modulePath);
   const root = realpathSync(approvedRoot);
   if (source !== root && !source.startsWith(`${root}${sep}`)) throw new Error("resource monitor source must be inside its approved boundary");
@@ -1538,7 +1580,8 @@ async function loadResourceMonitorModule(identity: Phase1ResourceMonitorModule):
   const loaded = await import(moduleUrl) as Record<string, unknown>;
   const factory = loaded[identity.exportName];
   if (typeof factory !== "function") throw new Error("resource monitor module does not export the pinned factory");
-  const monitor = await (factory as () => unknown)();
+  const factoryParameters = Object.freeze({ ...(identity.factoryParameters ?? {}) });
+  const monitor = await (factory as (parameters: Readonly<Record<string, string>>) => unknown)(factoryParameters);
   if (!monitor || typeof monitor !== "object") throw new Error("resource monitor factory did not return an object");
   const candidate = monitor as Partial<Phase1ResourceMonitor>;
   if (typeof candidate.start !== "function" || typeof candidate.sample !== "function" || typeof candidate.stop !== "function"

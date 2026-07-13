@@ -39,6 +39,12 @@ type LoadedArtifactPlan = {
   };
 };
 
+export function assertMonitorNvidiaBinding(nvidiaSmiSha256: string, monitorModule: Phase1ResourceMonitorModule): void {
+  if (!/^[a-f0-9]{64}$/.test(nvidiaSmiSha256) || monitorModule.factoryParameters?.nvidiaSmiSha256 !== nvidiaSmiSha256) {
+    throw new Error("resource monitor nvidia-smi identity is not bound to the immutable plan");
+  }
+}
+
 export function assertCharacterizationLoadedArtifacts(
   plan: LoadedArtifactPlan,
   loaded: { entrypointPath: string; runnerPath: string }
@@ -81,6 +87,7 @@ async function main(argv: string[]): Promise<void> {
   if (realpathSync(plan.monitorModule.modulePath) !== runtimePath || plan.monitorModule.moduleSha256 !== plan.runtimeSha256 || plan.monitorModule.exportName !== "createGex44ResourceMonitor") {
     throw new Error("resource monitor identity is not bound to the loaded Linux runtime");
   }
+  assertMonitorNvidiaBinding(plan.nvidiaSmiSha256, plan.monitorModule);
   assertGex44LinuxPreflight(plan.nvidiaSmiSha256);
   const adapter = createLlamaServerExecutableAdapter({
     baseUrl: plan.baseUrl,

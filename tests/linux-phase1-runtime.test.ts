@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -75,9 +75,37 @@ describe("GEX44 Linux Phase 1 runtime", () => {
   });
 
   it("fails closed until a monitor session is attached to a resident PID", async () => {
-    const monitor = createGex44ResourceMonitor();
+    const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "0".repeat(64) });
     const session = await monitor.start();
     await expect(monitor.sample(session, { phase: "before" })).rejects.toThrow(/not attached/i);
+  });
+
+  it("isolates sessions between independently created monitor instances", async () => {
+    const first = createGex44ResourceMonitor({ nvidiaSmiSha256: "0".repeat(64) });
+    const second = createGex44ResourceMonitor({ nvidiaSmiSha256: "0".repeat(64) });
+    const session = await first.start();
+    await expect(second.sample(session, { phase: "before" })).rejects.toThrow(/session is unknown/i);
+  });
+
+  it("deletes a monitor session even when terminal capture fails", async () => {
+    const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "0".repeat(64) });
+    const session = await monitor.start();
+    await expect(monitor.stop(session)).rejects.toThrow(/not attached/i);
+    await expect(monitor.stop(session)).rejects.toThrow(/session is unknown/i);
+  });
+
+  it("rejects missing or malformed immutable nvidia-smi factory parameters", () => {
+    expect(() => createGex44ResourceMonitor({} as { nvidiaSmiSha256: string })).toThrow(/nvidia-smi SHA-256/i);
+    expect(() => createGex44ResourceMonitor({ nvidiaSmiSha256: "not-a-digest" })).toThrow(/nvidia-smi SHA-256/i);
+  });
+
+  it.skipIf(process.platform !== "linux" || !existsSync("/usr/bin/nvidia-smi"))("executes the opened pinned nvidia-smi image through procfs", async () => {
+    const expectedSha256 = createHash("sha256").update(readFileSync("/usr/bin/nvidia-smi")).digest("hex");
+    const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: expectedSha256 });
+    const session = await monitor.start();
+    await monitor.attach(session, { metadata: { pid: process.pid } });
+    await expect(monitor.sample(session, { phase: "before" })).resolves.toMatchObject({ pid: process.pid, processAlive: 1 });
+    await expect(monitor.stop(session)).resolves.toEqual(expect.any(Array));
   });
 
   it("exposes the exact module path used for immutable runtime binding", () => {

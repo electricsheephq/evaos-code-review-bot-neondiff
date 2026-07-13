@@ -66,7 +66,11 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
     const kind = ${JSON.stringify(kind)};
     let sequence = 0;
     let attachObserved = false;
-    export function createMonitor() {
+    let forceStopOom = false;
+    export function createMonitor(factoryParameters) {
+      if (kind === "factory-parameters" && (!Object.isFrozen(factoryParameters) || factoryParameters?.nvidiaSmiSha256 !== ${JSON.stringify("a".repeat(64))})) {
+        throw new Error("factory parameters were not immutably bound");
+      }
       return {
         async start() {
           if (kind === "start-error") throw new Error("monitor start exploded");
@@ -77,13 +81,16 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
         },
         async attach(_session, resident) {
           if (kind === "attach-error") throw new Error("monitor attach exploded");
+          if (kind === "conditional-attach-error" && resident.metadata?.failAttach) throw new Error("monitor attach exploded");
+          if (kind === "attach-and-stop-error") throw new Error("monitor attach exploded");
           if (kind === "attach-unsafe-probe") attachObserved = true;
+          if (kind === "conditional-stop-oom") forceStopOom = resident.metadata?.forceStopOom === true;
           if (!resident.metadata || resident.metadata.pid !== 42) throw new Error("monitor did not receive resident metadata");
         },
         async sample(_session, context) {
           if (kind === "throw-" + context.phase) throw new Error("monitor " + context.phase + " exploded");
           sequence += 1;
-          const base = { capturedAt: "sample-" + sequence, phase: context.phase, rssBytes: 100 + sequence, vramBytes: 200, swapBytes: kind === "swap" && sequence > 2 ? 4096 : 0 };
+          const base = { capturedAt: "sample-" + sequence, phase: context.phase, rssBytes: 100 + sequence, vramBytes: 200, swapBytes: kind === "swap" && sequence > 2 ? 4096 : 0, factoryParametersBound: kind === "factory-parameters" ? 1 : 0 };
           if (kind === "sample-nan") return { ...base, rssBytes: Number.NaN };
           if (kind === "sample-infinity") return { ...base, diagnosticValue: Number.POSITIVE_INFINITY };
           if (kind === "sample-negative") return { ...base, vramBytes: -1 };
@@ -96,10 +103,13 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
           if (kind === "classify-scalar") return "stopped";
           if (kind === "swap" && samples.some(sample => sample.swapBytes >= 4096)) return { status: "stopped", errorCode: "sustained_swap_growth" };
           if (kind === "stop-oom" && samples.some(sample => sample.phase === "stopped")) return { status: "oom", errorCode: "stop_time_oom" };
+          if (kind === "conditional-stop-oom" && forceStopOom && samples.some(sample => sample.phase === "stopped")) return { status: "oom", errorCode: "stop_time_oom" };
           return undefined;
         },
         async stop() {
           const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0, attachObserved: attachObserved ? 1 : 0 };
+          if (kind === "attach-and-stop-error") throw new Error("monitor stop exploded");
+          if (kind === "stop-empty") return [];
           if (kind === "stop-array") return [{ ...base, capturedAt: "periodic", phase: "periodic" }, base];
           if (kind === "secret-stop") return { ...base, diagnostic: "Authorization: Bearer sk-secret-value-1234567890" };
           if (kind === "secret-fingerprint-stop") return { ...base, evidenceSha256: "sk-secret-value-1234567890" };
@@ -114,7 +124,8 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
     modulePath,
     moduleSha256: digest(readFileSync(modulePath)),
     approvedRoot: monitorModuleRoot,
-    exportName: "createMonitor"
+    exportName: "createMonitor",
+    ...(kind === "factory-parameters" ? { factoryParameters: { nvidiaSmiSha256: "a".repeat(64) } } : {})
   };
 }
 
@@ -508,6 +519,26 @@ describe("Phase 1 screening runner", () => {
     expect(second.samples[0].rssBytes).toBe(101);
   });
 
+  it("binds frozen factory parameters into monitor identity and resume fingerprints", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-parameters-"));
+    const identity = monitorModule("factory-parameters");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const manifest = JSON.parse(readFileSync(join(outputDir, "manifest.json"), "utf8"));
+    expect(manifest.monitorIdentity.factoryParameters).toEqual({ nvidiaSmiSha256: "a".repeat(64) });
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.some((sample: { factoryParametersBound?: number }) => sample.factoryParametersBound === 1)).toBe(true);
+
+    const drift = { ...identity, factoryParameters: { nvidiaSmiSha256: "b".repeat(64) } };
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: drift })).rejects.toThrow(/manifest fingerprint mismatch/i);
+  });
+
+  it("rejects secret-like monitor factory parameters before writing evidence", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-parameter-secret-"));
+    const identity = { ...monitorModule("normal"), factoryParameters: { token: "sk-secret-value-1234567890" } };
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity })).rejects.toThrow(/secret-like text/i);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+  });
+
   it("attaches the pinned monitor after resident start and persists a bounded stop trace array", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-"));
     await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("stop-array") });
@@ -518,9 +549,55 @@ describe("Phase 1 screening runner", () => {
   it("fails closed and stops the resident when monitor attachment fails", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-fail-"));
     let stopped = false;
-    await expect(runPhase1Screen(spec(outputDir), adapter({ async stop() { stopped = true; } }), { monitorModule: monitorModule("attach-error") })).rejects.toThrow(/monitor attach exploded/i);
+    let invoked = false;
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async invoke() { invoked = true; return { status: "completed", rawOutput: "{}" }; },
+      async stop() { stopped = true; }
+    }), { monitorModule: monitorModule("attach-error") })).rejects.toThrow(/monitor attach exploded/i);
     expect(stopped).toBe(true);
+    expect(invoked).toBe(false);
     expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+  });
+
+  it("preserves completed results when attachment fails during a partial resume", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-resume-"));
+    const identity = monitorModule("conditional-attach-error");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const completedPath = join(outputDir, "results", "warm-8k", "pr-1.json");
+    const completedBytes = readFileSync(completedPath);
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start() { return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42, failAttach: true } }; }
+    }), { monitorModule: identity })).rejects.toThrow(/monitor attach exploded/i);
+    expect(readFileSync(completedPath)).toEqual(completedBytes);
+  });
+
+  it("cleans up the resident and monitor when attach-failure result persistence also fails", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-write-fail-"));
+    const resultsPath = join(outputDir, "results");
+    let stopped = false;
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start() {
+        writeFileSync(resultsPath, "blocks result directory");
+        return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42 } };
+      },
+      async stop() {
+        stopped = true;
+        rmSync(resultsPath);
+      }
+    }), { monitorModule: monitorModule("attach-error") })).rejects.toThrow();
+    expect(stopped).toBe(true);
+    expect(existsSync(join(outputDir, "resources", "warm-8k.json"))).toBe(true);
+  });
+
+  it("retains ordered attachment and cleanup failures", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-multi-failure-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async stop() { throw new Error("resident stop exploded"); }
+    }), { monitorModule: monitorModule("attach-and-stop-error") })).rejects.toThrow(/monitor attach exploded.*resident stop exploded.*monitor stop exploded/i);
   });
 
   it("rejects unsafe resident evidence before it can reach monitor attachment", async () => {
@@ -547,6 +624,12 @@ describe("Phase 1 screening runner", () => {
     await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
     const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
     expect(resources.samples.map((sample: { capturedAt: string }) => sample.capturedAt)).toEqual(expect.arrayContaining(reconstructedCapturedAt));
+  });
+
+  it("rejects an empty terminal monitor trace", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-empty-stop-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("stop-empty") })).rejects.toThrow(/terminal trace.*empty/i);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
   });
 
   it("rejects relative or package imports because pinned monitors load as self-contained exact bytes", async () => {
@@ -627,6 +710,32 @@ describe("Phase 1 screening runner", () => {
     expect(existsSync(join(outputDir, "resources", "warm-8k.json"))).toBe(true);
   });
 
+  it("finalizes monitor evidence even when resident startup and terminal-result persistence both fail", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-start-write-fail-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start(context) {
+        writeFileSync(join(context.outputDir, "results"), "blocks result directory");
+        throw new Error("resident startup failed");
+      }
+    }), { monitorModule: monitorModule("normal") })).rejects.toThrow();
+    expect(existsSync(join(outputDir, "resources", "warm-8k.json"))).toBe(true);
+  });
+
+  it("stops resident and monitor when unsafe resident evidence cannot persist terminal results", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-unsafe-write-fail-"));
+    let stopped = false;
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start(context) {
+        writeFileSync(join(context.outputDir, "results"), "blocks result directory");
+        return { id: "resident", argv: ["/opt/llama-server"], logs: "Authorization: Bearer sk-secret-value-1234567890", metadata: { pid: 42 } };
+      },
+      async stop() { stopped = true; }
+    }), { monitorModule: monitorModule("attach-unsafe-probe") })).rejects.toThrow();
+    expect(stopped).toBe(true);
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.every((sample: { attachObserved?: number }) => sample.attachObserved === 0)).toBe(true);
+  });
+
   it("records valid empty resource evidence when the monitor itself cannot start", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-start-error-"));
     await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("start-error") })).rejects.toThrow(/monitor start exploded/i);
@@ -690,6 +799,24 @@ describe("Phase 1 screening runner", () => {
     expect(result.status).toBe("failed");
     expect(result.counts.oom).toBe(2);
     expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+  });
+
+  it("does not rewrite a prior completed result when a resumed attempt stops with OOM", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-resume-stop-oom-"));
+    const identity = monitorModule("conditional-stop-oom");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const existingPath = join(outputDir, "results", "warm-8k", "pr-1.json");
+    const existingBytes = readFileSync(existingPath);
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    const resumed = await runPhase1Screen(spec(outputDir), adapter({
+      async start() { return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42, forceStopOom: true } }; }
+    }), { monitorModule: identity });
+    expect(resumed.status).toBe("failed");
+    expect(readFileSync(existingPath)).toEqual(existingBytes);
+    expect(JSON.parse(readFileSync(join(outputDir, "results", "warm-8k", "pr-2.json"), "utf8"))).toMatchObject({ status: "oom" });
   });
 
   it("continues after an isolated request failure and records retry counts", async () => {
@@ -1169,5 +1296,16 @@ describe("Phase 1 screening runner", () => {
     expect(resumed.infrastructureErrorCode).toBe("shutdown_failed");
     expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
     expect(existsSync(join(outputDir, "COMPLETED"))).toBe(false);
+  });
+
+  it("fails closed when an infrastructure exception has an empty message", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-empty-stop-failure-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async stop() { throw new Error(""); }
+    }))).rejects.toThrow(/infrastructure_failure/i);
+    const summary = JSON.parse(readFileSync(join(outputDir, "summary.json"), "utf8"));
+    expect(summary.status).toBe("failed");
+    expect(summary.infrastructureErrorCode).toBe("infrastructure_failure");
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
   });
 });

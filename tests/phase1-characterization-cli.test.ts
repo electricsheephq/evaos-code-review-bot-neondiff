@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { assertCharacterizationLoadedArtifacts, assertPinnedLoadedJavaScript } from "../src/phase1-characterization-cli.js";
+import { assertCharacterizationLoadedArtifacts, assertMonitorNvidiaBinding, assertPinnedLoadedJavaScript } from "../src/phase1-characterization-cli.js";
 
 const cli = join(process.cwd(), "src", "phase1-characterization-cli.ts");
 const tsx = join(process.cwd(), "node_modules", ".bin", "tsx");
@@ -20,6 +20,14 @@ function run(args: string[]): { status: number | null; stderr: string; stdout: s
 }
 
 describe("private Phase 1 characterization entrypoint", () => {
+  it("binds the monitor factory to the plan's exact nvidia-smi digest", () => {
+    const digest = "a".repeat(64);
+    const identity = { version: "monitor/v1", modulePath: "/tmp/monitor.js", moduleSha256: "b".repeat(64), approvedRoot: "/tmp", exportName: "createMonitor", factoryParameters: { nvidiaSmiSha256: digest } };
+    expect(() => assertMonitorNvidiaBinding(digest, identity)).not.toThrow();
+    expect(() => assertMonitorNvidiaBinding("c".repeat(64), identity)).toThrow(/not bound/i);
+    expect(() => assertMonitorNvidiaBinding(digest, { ...identity, factoryParameters: undefined })).toThrow(/not bound/i);
+  });
+
   it("binds each actually loaded JavaScript artifact to its declared canonical path and bytes", () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), "phase1-characterization-loaded-js-")));
     const entrypoint = join(directory, "entrypoint.js");
