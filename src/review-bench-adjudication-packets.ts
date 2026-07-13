@@ -319,7 +319,7 @@ export function verifyReviewBenchAdjudicationResponses(input: {
 }): ReviewBenchAdjudicationVerifySummary {
   const verifiedAt = input.verifiedAt ?? new Date().toISOString();
   requireIsoTimestamp(verifiedAt, "verifiedAt");
-  const packetRead = readCanonicalJsonWithBytes<ReviewBenchAdjudicationPacketV1>(
+  const packetRead = readPrivateCanonicalJsonWithBytes<ReviewBenchAdjudicationPacketV1>(
     input.packetPath, MAX_PACKET_BYTES, "adjudication packet"
   );
   validatePacket(packetRead.value);
@@ -327,11 +327,12 @@ export function verifyReviewBenchAdjudicationResponses(input: {
   if (Date.parse(packet.preparedAt) > Date.parse(verifiedAt)) {
     throw new Error("packet preparedAt must not follow verifiedAt");
   }
-  reverifyPacketArtifacts(input.packetPath, packet);
-  const primaryRead = readCanonicalJsonWithBytes<ReviewBenchAdjudicationResponseV1>(
+  reverifyPacketArtifacts(packetRead.path, packet);
+  assertSafeParent(packetRead.parent, "adjudication packet parent");
+  const primaryRead = readPrivateCanonicalJsonWithBytes<ReviewBenchAdjudicationResponseV1>(
     input.primaryResponsePath, MAX_RESPONSE_BYTES, "primary response"
   );
-  const secondaryRead = readCanonicalJsonWithBytes<ReviewBenchAdjudicationResponseV1>(
+  const secondaryRead = readPrivateCanonicalJsonWithBytes<ReviewBenchAdjudicationResponseV1>(
     input.secondaryResponsePath, MAX_RESPONSE_BYTES, "secondary response"
   );
   validateResponse(primaryRead.value, packet, "primary response");
@@ -348,7 +349,7 @@ export function verifyReviewBenchAdjudicationResponses(input: {
   const secondaryById = decisionMap(secondary.decisions);
   const queue = buildDisagreementQueue(packet, primary, secondary, primaryById, secondaryById);
   const disagreementCount = (queue.verdictDisagreement ? 1 : 0) + queue.candidateDisagreements.length;
-  let resolverRead: ReturnType<typeof readCanonicalJsonWithBytes<ReviewBenchAdjudicationResolverResponseV1>> | undefined;
+  let resolverRead: ReturnType<typeof readPrivateCanonicalJsonWithBytes<ReviewBenchAdjudicationResolverResponseV1>> | undefined;
   let resolvedDecisionSha256: string | undefined;
   if (disagreementCount === 0) {
     if (input.resolverResponsePath !== undefined) {
@@ -356,7 +357,7 @@ export function verifyReviewBenchAdjudicationResponses(input: {
     }
     resolvedDecisionSha256 = computeResolvedDecisionSha256(primary.verdict, primary.decisions);
   } else if (input.resolverResponsePath !== undefined) {
-    resolverRead = readCanonicalJsonWithBytes<ReviewBenchAdjudicationResolverResponseV1>(
+    resolverRead = readPrivateCanonicalJsonWithBytes<ReviewBenchAdjudicationResolverResponseV1>(
       input.resolverResponsePath, MAX_RESPONSE_BYTES, "resolver response"
     );
     validateResolverResponse(resolverRead.value, packet);
@@ -919,9 +920,9 @@ function parseDiffAnchors(diff: string): {
       if (line.startsWith(" ")) oldRemaining -= 1;
       newRemaining -= 1;
       if (hasFinalSide) {
-      const set = anchors.get(path) ?? new Set<number>();
-      set.add(newLine);
-      anchors.set(path, set);
+        const set = anchors.get(path) ?? new Set<number>();
+        set.add(newLine);
+        anchors.set(path, set);
       }
       newLine += 1;
     } else {
@@ -962,6 +963,20 @@ function readCanonicalJsonWithBytes<T>(
     throw new Error(`${label} must use canonical JSON without duplicate keys`);
   }
   return { value: value as T, bytes };
+}
+
+function readPrivateCanonicalJsonWithBytes<T>(
+  path: string,
+  maximumBytes: number,
+  label: string
+): { value: T; bytes: Uint8Array; path: string; parent: SafeParent } {
+  const requested = resolve(path);
+  const parent = captureSafeParent(dirname(requested), `${label} parent`);
+  const leaf = requireSinglePathComponent(basename(requested), `${label} name`);
+  const privatePath = join(parent.path, leaf);
+  const read = readCanonicalJsonWithBytes<T>(privatePath, maximumBytes, label);
+  assertSafeParent(parent, `${label} parent`);
+  return { ...read, path: privatePath, parent };
 }
 
 function readDigestArtifact(

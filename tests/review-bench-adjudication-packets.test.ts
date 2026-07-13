@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -630,6 +631,31 @@ describe("review-bench adjudication response verification", () => {
     expect(JSON.parse(verifyResult.stdout)).toMatchObject({ status: "ready" });
   }, 20_000);
 
+  it("exits one while emitting a needs_resolution routing summary", () => {
+    const prepared = prepare();
+    const primary = response(prepared.packet, "human:one");
+    const secondary = response(prepared.packet, "human:two", {
+      verdict: "verified_clean",
+      decisions: [{
+        candidateId: prepared.packet.annotationUniverse.candidates[0]!.id,
+        actionability: "not_actionable"
+      }],
+      rationale: "The change appears clean."
+    });
+    const paths = responsePaths(prepared, primary, secondary);
+    const verifyResult = spawnSync("npx", [
+      "tsx", "src/cli.ts", "review-bench", "verify-adjudication",
+      "--packet", prepared.packetPath,
+      "--primary", paths.primaryResponsePath,
+      "--secondary", paths.secondaryResponsePath,
+      "--receipt", paths.receiptPath
+    ], { cwd: process.cwd(), encoding: "utf8" });
+
+    expect(verifyResult.status).toBe(1);
+    expect(JSON.parse(verifyResult.stdout)).toMatchObject({ status: "needs_resolution" });
+    expect(JSON.parse(readFileSync(paths.receiptPath, "utf8"))).toMatchObject({ status: "needs_resolution" });
+  }, 20_000);
+
   it("emits a ready immutable receipt for agreeing independent responses", () => {
     const prepared = prepare();
     const primary = response(prepared.packet, "human:one");
@@ -676,6 +702,69 @@ describe("review-bench adjudication response verification", () => {
       ...paths,
       verifiedAt: VERIFIED_AT
     })).toThrow(/128|length|component|bytes/i);
+  });
+
+  it("rejects packet and response inputs stored inside a Git checkout", () => {
+    for (const inputKind of ["packet", "primary", "secondary", "resolver"] as const) {
+      const prepared = prepare();
+      const primary = response(prepared.packet, "human:one");
+      const secondary = response(prepared.packet, "human:two", inputKind === "resolver" ? {
+        verdict: "verified_clean",
+        decisions: [{
+          candidateId: prepared.packet.annotationUniverse.candidates[0]!.id,
+          actionability: "not_actionable"
+        }],
+        rationale: "The change appears clean."
+      } : {});
+      const paths = responsePaths(prepared, primary, secondary);
+      const checkoutInput = mkdtempSync(join(process.cwd(), ".review-bench-inside-checkout-"));
+      roots.push(checkoutInput);
+      let packetPath = prepared.packetPath;
+      let primaryResponsePath = paths.primaryResponsePath;
+      let secondaryResponsePath = paths.secondaryResponsePath;
+      let resolverResponsePath: string | undefined;
+
+      if (inputKind === "packet") {
+        cpSync(prepared.outputDirectory, checkoutInput, { recursive: true });
+        packetPath = join(checkoutInput, "packet.json");
+      } else if (inputKind === "primary") {
+        primaryResponsePath = join(checkoutInput, "primary.json");
+        writeJson(primaryResponsePath, primary);
+      } else if (inputKind === "secondary") {
+        secondaryResponsePath = join(checkoutInput, "secondary.json");
+        writeJson(secondaryResponsePath, secondary);
+      } else {
+        resolverResponsePath = join(checkoutInput, "resolver.json");
+        writeJson(resolverResponsePath, resolver(prepared.packet));
+      }
+
+      expect(() => verifyReviewBenchAdjudicationResponses({
+        packetPath,
+        primaryResponsePath,
+        secondaryResponsePath,
+        ...(resolverResponsePath === undefined ? {} : { resolverResponsePath }),
+        receiptPath: paths.receiptPath,
+        verifiedAt: VERIFIED_AT
+      })).toThrow(/outside a Git checkout/i);
+      expect(() => statSync(paths.receiptPath)).toThrow();
+    }
+  });
+
+  it("rejects adjudication inputs from a group-writable parent", () => {
+    const prepared = prepare();
+    const paths = responsePaths(
+      prepared,
+      response(prepared.packet, "human:one"),
+      response(prepared.packet, "human:two")
+    );
+    chmodSync(prepared.root, 0o770);
+
+    expect(() => verifyReviewBenchAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      ...paths,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/primary response parent.*writable by group|writable by group or other/i);
+    expect(() => statSync(paths.receiptPath)).toThrow();
   });
 
   it("emits needs_resolution and a deterministic bounded queue without a resolver", () => {
