@@ -11,6 +11,7 @@ private enum CaptureError: LocalizedError {
     case usage
     case unsafePath(String)
     case invalidReadyFile
+    case unsupportedReachabilityTarget
     case permission(String)
     case window(String)
     case screenshot(String)
@@ -21,6 +22,8 @@ private enum CaptureError: LocalizedError {
             "usage: NeonDiffDesktopCapture --pid <pid> --ready <ready.json> --output-dir <directory> [--repos-reachability]"
         case .unsafePath(let detail): "Unsafe capture path: \(detail)"
         case .invalidReadyFile: "Evaluation readiness file is invalid or does not match the target process."
+        case .unsupportedReachabilityTarget:
+            "Repositories reachability capture requires tab-repos at 1040x680."
         case .permission(let detail): "Capture permission is unavailable: \(detail)"
         case .window(let detail): "Target window is unavailable: \(detail)"
         case .screenshot(let detail): "Window screenshot failed: \(detail)"
@@ -83,6 +86,17 @@ private struct CaptureRunner {
 
     func run() throws -> [String: Any] {
         let ready = try loadReady()
+        if options.capturesReposReachability {
+            do {
+                _ = try DesktopReposReachabilityTarget.requireSupported(
+                    fixtureId: ready.fixtureId,
+                    contentWidth: ready.contentFrame.width,
+                    contentHeight: ready.contentFrame.height
+                )
+            } catch {
+                throw CaptureError.unsupportedReachabilityTarget
+            }
+        }
         guard CGPreflightScreenCaptureAccess() else {
             throw CaptureError.permission("Screen Recording")
         }
@@ -115,9 +129,9 @@ private struct CaptureRunner {
         ]
         let geometryData = try JSONSerialization.data(withJSONObject: geometry, options: [.prettyPrinted, .sortedKeys])
         try geometryData.write(to: geometryURL, options: [.atomic])
-        try writeReachabilityIfRequired(ready: ready)
+        let reachability = try writeReachabilityIfRequired(ready: ready)
 
-        return [
+        var result: [String: Any] = [
             "ok": true,
             "fixtureId": ready.fixtureId,
             "windowNumber": ready.windowNumber,
@@ -125,6 +139,10 @@ private struct CaptureRunner {
             "accessibility": try evidence(accessibilityURL),
             "geometry": try evidence(geometryURL)
         ]
+        if let reachability {
+            result["reachability"] = reachability
+        }
+        return result
     }
 
     private func loadReady() throws -> ReadyDocument {
@@ -144,21 +162,24 @@ private struct CaptureRunner {
         return ready
     }
 
-    private func writeReachabilityIfRequired(ready: ReadyDocument) throws {
-        guard options.capturesReposReachability,
-              ready.fixtureId == DesktopReposReachabilityFixture.tabRepos.rawValue,
-              abs(ready.contentFrame.width - 1040) <= 1,
-              abs(ready.contentFrame.height - 680) <= 1 else {
-            return
-        }
+    private func writeReachabilityIfRequired(ready: ReadyDocument) throws -> [String: String]? {
+        guard options.capturesReposReachability else { return nil }
         let trace = DesktopReposReachabilityAXTracer(pid: options.pid, ready: ready).capture()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(trace)
-        try data.write(
-            to: options.outputDirectory.appendingPathComponent("reachability.json"),
-            options: [.atomic]
-        )
+        let url = options.outputDirectory.appendingPathComponent("reachability.json")
+        try data.write(to: url, options: [.atomic])
+        let status: String
+        do {
+            _ = try DesktopReposReachabilityValidator.validate(trace)
+            status = "reachable"
+        } catch DesktopReposReachabilityValidationError.acquisitionFailed {
+            status = "acquisition-failed"
+        } catch {
+            status = "unreachable"
+        }
+        return ["path": url.lastPathComponent, "sha256": try sha256(url), "status": status]
     }
 
     private func requireRegularFile(_ url: URL, label: String) throws {
@@ -358,36 +379,54 @@ private struct DesktopReposReachabilityAXTracer {
             }
         }
 
-        let pre: (samples: [DesktopReposReachabilitySample], durationMilliseconds: Int, stable: Bool) = timeoutInstalled
-            ? acquireStableSamples()
-            : (samples: [], durationMilliseconds: 0, stable: false)
-        let scroll = timeoutInstalled ? scrollBoundaryAncestorToMaximum() : nil
-        let post = timeoutInstalled ? acquireStableSamples() : (samples: [], durationMilliseconds: 0, stable: false)
+        var pre = PhaseAcquisition.empty
+        var post = PhaseAcquisition.empty
+        var outerScroll: DesktopReposOuterScrollObservation?
+        var failure: DesktopReposReachabilityAcquisitionFailureReason?
+        if timeoutInstalled {
+            pre = acquireStableSamples()
+            failure = pre.failure
+            if failure == nil {
+                switch scrollBoundaryAncestorToMaximum() {
+                case .success(let observation):
+                    outerScroll = observation
+                case .failure(let reason):
+                    failure = reason
+                }
+            }
+            if failure == nil {
+                post = acquireStableSamples()
+                failure = post.failure
+            }
+        } else {
+            failure = .messagingTimeoutUnavailable
+        }
 
         // The ready document is emitted only after the DEBUG fixture render
         // latch and three stable 100 ms readiness samples have completed.
         let readinessGatePassed = ready.ready
+        let acquisition = DesktopReposReachabilityAcquisition(
+            status: failure == nil ? .complete : .failed,
+            failureReason: failure
+        )
         return DesktopReposReachabilityTrace(
             schemaVersion: 1,
             fixture: .tabRepos,
             ready: readinessGatePassed,
-            quiescent: readinessGatePassed && pre.stable,
+            quiescent: readinessGatePassed && pre.stable && post.stable,
             requestedContentSize: DesktopEvaluationContentSize(width: 1040, height: 680),
             sampleIntervalMilliseconds: 100,
             preScrollAcquisitionMilliseconds: pre.durationMilliseconds,
             postScrollAcquisitionMilliseconds: post.durationMilliseconds,
             tolerancePoints: Self.tolerance,
+            acquisition: acquisition,
             preScrollSamples: pre.samples,
-            outerScroll: scroll,
+            outerScroll: outerScroll,
             postScrollSamples: post.samples
         )
     }
 
-    private func acquireStableSamples() -> (
-        samples: [DesktopReposReachabilitySample],
-        durationMilliseconds: Int,
-        stable: Bool
-    ) {
+    private func acquireStableSamples() -> PhaseAcquisition {
         let started = DispatchTime.now().uptimeNanoseconds
         var nextDeadline = started
         var rolling: [DesktopReposReachabilitySample] = []
@@ -395,19 +434,29 @@ private struct DesktopReposReachabilityAXTracer {
             let beforeSample = DispatchTime.now().uptimeNanoseconds
             let elapsed = milliseconds(from: started, to: beforeSample)
             guard elapsed <= Self.maximumAcquisitionMilliseconds else {
-                return (rolling, elapsed, false)
+                return PhaseAcquisition(samples: rolling, durationMilliseconds: elapsed, stable: false, failure: .timeout)
             }
-            rolling.append(sample(elapsedMilliseconds: elapsed))
+            switch sample(elapsedMilliseconds: elapsed) {
+            case .success(let value):
+                rolling.append(value)
+            case .failure(let reason):
+                return PhaseAcquisition(
+                    samples: rolling,
+                    durationMilliseconds: milliseconds(from: started, to: DispatchTime.now().uptimeNanoseconds),
+                    stable: false,
+                    failure: reason
+                )
+            }
             if rolling.count > 3 { rolling.removeFirst() }
             let duration = milliseconds(from: started, to: DispatchTime.now().uptimeNanoseconds)
             if rolling.count == 3,
                samplesMatch(rolling[0], rolling[1]),
                samplesMatch(rolling[0], rolling[2]),
                duration <= Self.maximumAcquisitionMilliseconds {
-                return (rolling, duration, true)
+                return PhaseAcquisition(samples: rolling, durationMilliseconds: duration, stable: true, failure: nil)
             }
             guard duration <= Self.maximumAcquisitionMilliseconds else {
-                return (rolling, duration, false)
+                return PhaseAcquisition(samples: rolling, durationMilliseconds: duration, stable: false, failure: .timeout)
             }
             nextDeadline += Self.intervalNanoseconds
             let now = DispatchTime.now().uptimeNanoseconds
@@ -421,30 +470,31 @@ private struct DesktopReposReachabilityAXTracer {
         Int((end - start) / 1_000_000)
     }
 
-    private func sample(elapsedMilliseconds: Int) -> DesktopReposReachabilitySample {
-        guard let window = verifiedWindow(),
-              let viewport = elementFrame(window),
-              let elements = semanticElements(in: window) else {
-            return DesktopReposReachabilitySample(
+    private func sample(
+        elapsedMilliseconds: Int
+    ) -> Result<DesktopReposReachabilitySample, DesktopReposReachabilityAcquisitionFailureReason> {
+        do {
+            let window = try verifiedWindow()
+            let viewport = try elementFrame(window)
+            let elements = try semanticElements(in: window)
+            let pairs: [(DesktopReposReachabilityRegion, AXUIElement)] = [
+                (.table, elements.table),
+                (.applyAllowlist, elements.applyAllowlist),
+                (.boundaryBody, elements.boundaryBody)
+            ]
+            let regions = try pairs.map { id, element in
+                DesktopReposReachabilityRegionFrame(id: id, frame: try elementFrame(element))
+            }
+            return .success(DesktopReposReachabilitySample(
                 elapsedMilliseconds: elapsedMilliseconds,
-                viewport: DesktopReposReachabilityFrame(x: 0, y: 0, width: 0, height: 0),
-                regions: []
-            )
+                viewport: viewport,
+                regions: regions
+            ))
+        } catch let reason as DesktopReposReachabilityAcquisitionFailureReason {
+            return .failure(reason)
+        } catch {
+            return .failure(.invalidType)
         }
-        let pairs: [(DesktopReposReachabilityRegion, AXUIElement?)] = [
-            (.table, elements.table),
-            (.applyAllowlist, elements.applyAllowlist),
-            (.boundaryBody, elements.boundaryBody)
-        ]
-        let regions = pairs.compactMap { id, element -> DesktopReposReachabilityRegionFrame? in
-            guard let element, let frame = elementFrame(element) else { return nil }
-            return DesktopReposReachabilityRegionFrame(id: id, frame: frame)
-        }
-        return DesktopReposReachabilitySample(
-            elapsedMilliseconds: elapsedMilliseconds,
-            viewport: viewport,
-            regions: regions
-        )
     }
 
     private func samplesMatch(
@@ -470,60 +520,68 @@ private struct DesktopReposReachabilityAXTracer {
             && abs(lhs.height - rhs.height) <= Self.tolerance
     }
 
-    private func scrollBoundaryAncestorToMaximum() -> DesktopReposOuterScrollObservation? {
-        guard let window = verifiedWindow(),
-              let boundary = semanticElements(in: window)?.boundaryBody,
-              let scrollArea = outermostScrollArea(from: boundary, to: window) else {
-            return nil
-        }
-        guard case .value(let rawScrollBar) = copyAttribute(scrollArea, kAXVerticalScrollBarAttribute as CFString),
-              CFGetTypeID(rawScrollBar) == AXUIElementGetTypeID() else {
-            return unsupportedScroll()
-        }
-        let scrollBar = rawScrollBar as! AXUIElement
-        guard elementBelongsToTarget(scrollBar) else { return unsupportedScroll() }
+    private func scrollBoundaryAncestorToMaximum() -> Result<DesktopReposOuterScrollObservation?, DesktopReposReachabilityAcquisitionFailureReason> {
+        do {
+            let window = try verifiedWindow()
+            let boundary = try semanticElements(in: window).boundaryBody
+            guard let scrollArea = try outermostScrollArea(from: boundary, to: window) else {
+                return .success(nil)
+            }
+            guard let rawScrollBar = try optionalAttribute(
+                scrollArea,
+                kAXVerticalScrollBarAttribute as CFString
+            ) else {
+                return .success(unsupportedScroll())
+            }
+            guard CFGetTypeID(rawScrollBar) == AXUIElementGetTypeID() else { throw Failure.invalidType }
+            let scrollBar = rawScrollBar as! AXUIElement
+            try requireTargetPID(scrollBar)
 
-        var settable = DarwinBoolean(false)
-        guard AXUIElementIsAttributeSettable(
-            scrollBar,
-            kAXValueAttribute as CFString,
-            &settable
-        ) == .success, settable.boolValue else {
-            return unsupportedScroll()
-        }
-        guard case .value(let rawMinimum) = copyAttribute(scrollBar, kAXMinValueAttribute as CFString),
-              case .value(let rawMaximum) = copyAttribute(scrollBar, kAXMaxValueAttribute as CFString),
-              case .value(let rawBefore) = copyAttribute(scrollBar, kAXValueAttribute as CFString),
-              let minimum = numericValue(rawMinimum),
-              let maximum = numericValue(rawMaximum),
-              let before = numericValue(rawBefore) else {
-            return unsupportedScroll()
-        }
-        let setResult = AXUIElementSetAttributeValue(
-            scrollBar,
-            kAXValueAttribute as CFString,
-            rawMaximum
-        )
-        guard setResult == .success,
-              case .value(let rawReadback) = copyAttribute(scrollBar, kAXValueAttribute as CFString),
-              let readback = numericValue(rawReadback) else {
-            return DesktopReposOuterScrollObservation(
+            var settable = DarwinBoolean(false)
+            let settableResult = AXUIElementIsAttributeSettable(
+                scrollBar,
+                kAXValueAttribute as CFString,
+                &settable
+            )
+            if settableResult != .success {
+                if settableResult == .attributeUnsupported { return .success(unsupportedScroll()) }
+                throw mapAXError(settableResult)
+            }
+            guard settable.boolValue else { return .success(unsupportedScroll()) }
+            let rawMinimum: CFTypeRef
+            let rawMaximum: CFTypeRef
+            let rawBefore: CFTypeRef
+            do {
+                rawMinimum = try requiredAttribute(scrollBar, kAXMinValueAttribute as CFString)
+                rawMaximum = try requiredAttribute(scrollBar, kAXMaxValueAttribute as CFString)
+                rawBefore = try requiredAttribute(scrollBar, kAXValueAttribute as CFString)
+            } catch Failure.attributeUnavailable {
+                return .success(unsupportedScroll())
+            }
+            let minimum = try numericValue(rawMinimum)
+            let maximum = try numericValue(rawMaximum)
+            let before = try numericValue(rawBefore)
+            let setResult = AXUIElementSetAttributeValue(scrollBar, kAXValueAttribute as CFString, rawMaximum)
+            if setResult != .success {
+                if setResult == .attributeUnsupported || setResult == .actionUnsupported {
+                    return .success(unsupportedScroll())
+                }
+                throw mapAXError(setResult)
+            }
+            let readback = try numericValue(try requiredAttribute(scrollBar, kAXValueAttribute as CFString))
+            return .success(DesktopReposOuterScrollObservation(
                 verticalScrollBarSupported: true,
                 minimumValue: minimum,
                 maximumValue: maximum,
                 valueBeforeScroll: before,
-                valueAfterScroll: nil,
-                setToMaximumSucceeded: false
-            )
+                valueAfterScroll: readback,
+                setToMaximumSucceeded: abs(maximum - readback) <= 0.001
+            ))
+        } catch let reason as Failure {
+            return .failure(reason)
+        } catch {
+            return .failure(.invalidType)
         }
-        return DesktopReposOuterScrollObservation(
-            verticalScrollBarSupported: true,
-            minimumValue: minimum,
-            maximumValue: maximum,
-            valueBeforeScroll: before,
-            valueAfterScroll: readback,
-            setToMaximumSucceeded: abs(maximum - readback) <= 0.001
-        )
     }
 
     private func unsupportedScroll() -> DesktopReposOuterScrollObservation {
@@ -537,37 +595,49 @@ private struct DesktopReposReachabilityAXTracer {
         )
     }
 
-    private func verifiedWindow() -> AXUIElement? {
+    private func verifiedWindow() throws -> AXUIElement {
         let application = AXUIElementCreateApplication(pid)
-        guard elementBelongsToTarget(application),
-              case .value(let rawWindows) = copyAttribute(application, kAXWindowsAttribute as CFString),
-              CFGetTypeID(rawWindows) == CFArrayGetTypeID() else {
-            return nil
-        }
+        try requireTargetPID(application)
+        let rawWindows = try requiredAttribute(application, kAXWindowsAttribute as CFString)
+        guard CFGetTypeID(rawWindows) == CFArrayGetTypeID() else { throw Failure.invalidType }
         let windows = rawWindows as! [AXUIElement]
         guard windows.count == 1, let window = windows.first,
-              elementBelongsToTarget(window),
-              stringValue(window, kAXRoleAttribute as CFString) == (kAXWindowRole as String),
-              let frame = elementFrame(window),
+              try optionalString(window, kAXRoleAttribute as CFString) == (kAXWindowRole as String) else {
+            throw Failure.windowMismatch
+        }
+        try requireTargetPID(window)
+        let frame = try elementFrame(window)
+        guard
               abs(frame.width - ready.windowFrame.width) <= Self.tolerance,
               abs(frame.height - ready.windowFrame.height) <= Self.tolerance else {
-            return nil
+            throw Failure.windowMismatch
         }
         return window
     }
 
-    private func semanticElements(in window: AXUIElement) -> SemanticElements? {
-        var result = SemanticElements()
+    private func semanticElements(in window: AXUIElement) throws -> SemanticElements {
+        var candidates = SemanticCandidates()
         var remaining = 10_000
         var visited = Set<CFHashCode>()
-        visit(
+        try visit(
             window,
             depth: 0,
             remaining: &remaining,
             visited: &visited,
-            result: &result
+            candidates: &candidates
         )
-        return result
+        if let reason = DesktopReposReachabilitySemanticContract.failureReason(
+            tableCount: candidates.table.count,
+            applyAllowlistCount: candidates.applyAllowlist.count,
+            boundaryBodyCount: candidates.boundaryBody.count
+        ) {
+            throw reason
+        }
+        return SemanticElements(
+            table: candidates.table[0],
+            applyAllowlist: candidates.applyAllowlist[0],
+            boundaryBody: candidates.boundaryBody[0]
+        )
     }
 
     private func visit(
@@ -575,42 +645,50 @@ private struct DesktopReposReachabilityAXTracer {
         depth: Int,
         remaining: inout Int,
         visited: inout Set<CFHashCode>,
-        result: inout SemanticElements
-    ) {
-        guard depth <= 32, remaining > 0, elementBelongsToTarget(element) else { return }
+        candidates: inout SemanticCandidates
+    ) throws {
+        guard depth <= 32, remaining > 0 else { throw Failure.ancestryLimit }
+        try requireTargetPID(element)
         let hash = CFHash(element)
-        guard visited.insert(hash).inserted else { return }
+        guard visited.insert(hash).inserted else { throw Failure.ancestryCycle }
         remaining -= 1
 
-        let role = stringValue(element, kAXRoleAttribute as CFString)
-        let description = stringValue(element, kAXDescriptionAttribute as CFString)
-        let value = stringValue(element, kAXValueAttribute as CFString)
-        if result.table == nil, role == (kAXTableRole as String) {
-            result.table = element
+        let role = try optionalString(element, kAXRoleAttribute as CFString)
+        let title = try optionalString(element, kAXTitleAttribute as CFString)
+        let description = try optionalString(element, kAXDescriptionAttribute as CFString)
+        let value = try optionalTextValue(element, kAXValueAttribute as CFString)
+        let identifier = try optionalString(element, kAXIdentifierAttribute as CFString)
+        if role == (kAXTableRole as String) {
+            candidates.table.append(element)
         }
-        if result.applyAllowlist == nil,
-           role == (kAXButtonRole as String),
-           [description, value].compactMap({ $0 }).contains("Apply Allowlist") {
-            result.applyAllowlist = element
+        if DesktopReposReachabilitySemanticContract.matchesApplyAllowlist(
+            isButton: role == (kAXButtonRole as String),
+            identifier: identifier,
+            title: title,
+            description: description,
+            value: value
+        ) {
+            candidates.applyAllowlist.append(element)
         }
-        if result.boundaryBody == nil,
-           role == (kAXStaticTextRole as String),
-           [description, value].compactMap({ $0 }).contains(where: {
-               $0.contains("Repo changes are written through")
-           }) {
-            result.boundaryBody = element
+        if DesktopReposReachabilitySemanticContract.matchesBoundaryBody(
+            isStaticText: role == (kAXStaticTextRole as String),
+            identifier: identifier,
+            description: description,
+            value: value
+        ) {
+            candidates.boundaryBody.append(element)
         }
 
-        guard case .value(let rawChildren) = copyAttribute(element, kAXChildrenAttribute as CFString),
-              CFGetTypeID(rawChildren) == CFArrayGetTypeID() else { return }
+        guard let rawChildren = try optionalAttribute(element, kAXChildrenAttribute as CFString) else { return }
+        guard CFGetTypeID(rawChildren) == CFArrayGetTypeID() else { throw Failure.invalidType }
         let children = rawChildren as! [AXUIElement]
         for child in children {
-            visit(
+            try visit(
                 child,
                 depth: depth + 1,
                 remaining: &remaining,
                 visited: &visited,
-                result: &result
+                candidates: &candidates
             )
         }
     }
@@ -618,46 +696,49 @@ private struct DesktopReposReachabilityAXTracer {
     private func outermostScrollArea(
         from boundary: AXUIElement,
         to window: AXUIElement
-    ) -> AXUIElement? {
+    ) throws -> AXUIElement? {
         var current = boundary
         var outermost: AXUIElement?
         var visited = Set<CFHashCode>()
         for _ in 0..<64 {
-            guard visited.insert(CFHash(current)).inserted,
-                  case .value(let rawParent) = copyAttribute(current, kAXParentAttribute as CFString),
-                  CFGetTypeID(rawParent) == AXUIElementGetTypeID() else {
-                return nil
+            guard visited.insert(CFHash(current)).inserted else { throw Failure.ancestryCycle }
+            guard let rawParent = try optionalAttribute(current, kAXParentAttribute as CFString) else {
+                throw Failure.ancestryUnavailable
             }
+            guard CFGetTypeID(rawParent) == AXUIElementGetTypeID() else { throw Failure.invalidType }
             let parent = rawParent as! AXUIElement
-            guard elementBelongsToTarget(parent) else { return nil }
+            try requireTargetPID(parent)
             if CFEqual(parent, window) {
                 return outermost
             }
-            if stringValue(parent, kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
+            if try optionalString(parent, kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
                 outermost = parent
             }
             current = parent
         }
-        return nil
+        throw Failure.ancestryLimit
     }
 
-    private func elementBelongsToTarget(_ element: AXUIElement) -> Bool {
+    private func requireTargetPID(_ element: AXUIElement) throws {
         var elementPID: pid_t = 0
-        return AXUIElementGetPid(element, &elementPID) == .success && elementPID == pid
+        let result = AXUIElementGetPid(element, &elementPID)
+        guard result == .success else { throw mapAXError(result) }
+        guard elementPID == pid else { throw Failure.pidMismatch }
     }
 
-    private func elementFrame(_ element: AXUIElement) -> DesktopReposReachabilityFrame? {
-        guard case .value(let rawPosition) = copyAttribute(element, kAXPositionAttribute as CFString),
-              case .value(let rawSize) = copyAttribute(element, kAXSizeAttribute as CFString),
-              let position = pointValue(rawPosition),
-              let size = sizeValue(rawSize),
+    private func elementFrame(_ element: AXUIElement) throws -> DesktopReposReachabilityFrame {
+        let rawPosition = try requiredAttribute(element, kAXPositionAttribute as CFString)
+        let rawSize = try requiredAttribute(element, kAXSizeAttribute as CFString)
+        let position = try pointValue(rawPosition)
+        let size = try sizeValue(rawSize)
+        guard
               position.x.isFinite,
               position.y.isFinite,
               size.width.isFinite,
               size.height.isFinite,
               size.width > 0,
               size.height > 0 else {
-            return nil
+            throw Failure.invalidType
         }
         return DesktopReposReachabilityFrame(
             x: position.x,
@@ -667,28 +748,53 @@ private struct DesktopReposReachabilityAXTracer {
         )
     }
 
-    private func stringValue(_ element: AXUIElement, _ attribute: CFString) -> String? {
-        guard case .value(let raw) = copyAttribute(element, attribute),
+    private func optionalString(_ element: AXUIElement, _ attribute: CFString) throws -> String? {
+        guard let raw = try optionalAttribute(element, attribute) else { return nil }
+        guard CFGetTypeID(raw) == CFStringGetTypeID() else { throw Failure.invalidType }
+        return raw as? String
+    }
+
+    private func optionalTextValue(_ element: AXUIElement, _ attribute: CFString) throws -> String? {
+        guard let raw = try optionalAttribute(element, attribute),
               CFGetTypeID(raw) == CFStringGetTypeID() else { return nil }
         return raw as? String
     }
 
-    private func numericValue(_ raw: CFTypeRef) -> Double? {
-        guard CFGetTypeID(raw) == CFNumberGetTypeID() else { return nil }
-        guard let value = (raw as? NSNumber)?.doubleValue, value.isFinite else { return nil }
+    private func numericValue(_ raw: CFTypeRef) throws -> Double {
+        guard CFGetTypeID(raw) == CFNumberGetTypeID(),
+              let value = (raw as? NSNumber)?.doubleValue,
+              value.isFinite else { throw Failure.invalidType }
         return value
     }
 
-    private func pointValue(_ raw: CFTypeRef) -> CGPoint? {
-        guard CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    private func pointValue(_ raw: CFTypeRef) throws -> CGPoint {
+        guard CFGetTypeID(raw) == AXValueGetTypeID() else { throw Failure.invalidType }
         var point = CGPoint.zero
-        return AXValueGetValue(raw as! AXValue, .cgPoint, &point) ? point : nil
+        guard AXValueGetValue(raw as! AXValue, .cgPoint, &point) else { throw Failure.invalidType }
+        return point
     }
 
-    private func sizeValue(_ raw: CFTypeRef) -> CGSize? {
-        guard CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    private func sizeValue(_ raw: CFTypeRef) throws -> CGSize {
+        guard CFGetTypeID(raw) == AXValueGetTypeID() else { throw Failure.invalidType }
         var size = CGSize.zero
-        return AXValueGetValue(raw as! AXValue, .cgSize, &size) ? size : nil
+        guard AXValueGetValue(raw as! AXValue, .cgSize, &size) else { throw Failure.invalidType }
+        return size
+    }
+
+    private func requiredAttribute(_ element: AXUIElement, _ attribute: CFString) throws -> CFTypeRef {
+        guard let value = try optionalAttribute(element, attribute) else { throw Failure.attributeUnavailable }
+        return value
+    }
+
+    private func optionalAttribute(_ element: AXUIElement, _ attribute: CFString) throws -> CFTypeRef? {
+        switch copyAttribute(element, attribute) {
+        case .value(let value):
+            return value
+        case .failure(let error) where error == .noValue || error == .attributeUnsupported:
+            return nil
+        case .failure(let error):
+            throw mapAXError(error)
+        }
     }
 
     private func copyAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXReadResult {
@@ -705,10 +811,42 @@ private struct DesktopReposReachabilityAXTracer {
         return .failure(.cannotComplete)
     }
 
+    private func mapAXError(_ error: AXError) -> Failure {
+        switch error {
+        case .cannotComplete:
+            return .cannotComplete
+        case .invalidUIElement, .invalidUIElementObserver:
+            return .invalidElement
+        case .apiDisabled:
+            return .permissionDenied
+        case .attributeUnsupported, .noValue:
+            return .attributeUnavailable
+        default:
+            return .invalidType
+        }
+    }
+
+    private typealias Failure = DesktopReposReachabilityAcquisitionFailureReason
+
+    private struct PhaseAcquisition {
+        let samples: [DesktopReposReachabilitySample]
+        let durationMilliseconds: Int
+        let stable: Bool
+        let failure: Failure?
+
+        static let empty = PhaseAcquisition(samples: [], durationMilliseconds: 0, stable: false, failure: nil)
+    }
+
     private struct SemanticElements {
-        var table: AXUIElement?
-        var applyAllowlist: AXUIElement?
-        var boundaryBody: AXUIElement?
+        let table: AXUIElement
+        let applyAllowlist: AXUIElement
+        let boundaryBody: AXUIElement
+    }
+
+    private struct SemanticCandidates {
+        var table: [AXUIElement] = []
+        var applyAllowlist: [AXUIElement] = []
+        var boundaryBody: [AXUIElement] = []
     }
 
     private enum AXReadResult {

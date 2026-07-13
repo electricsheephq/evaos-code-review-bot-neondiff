@@ -4,10 +4,144 @@ public enum DesktopReposReachabilityFixture: String, Codable, Equatable, Sendabl
     case tabRepos = "tab-repos"
 }
 
+public enum DesktopReposReachabilityTarget: String, Codable, Equatable, Sendable {
+    case tabRepos1040x680 = "tab-repos-1040x680"
+
+    public static func requireSupported(
+        fixtureId: String,
+        contentWidth: Double,
+        contentHeight: Double
+    ) throws -> Self {
+        guard fixtureId == DesktopReposReachabilityFixture.tabRepos.rawValue,
+              contentWidth == 1040,
+              contentHeight == 680 else {
+            throw DesktopReposReachabilityTargetError.unsupportedTarget
+        }
+        return .tabRepos1040x680
+    }
+}
+
+public enum DesktopReposReachabilityTargetError: LocalizedError, Equatable, Sendable {
+    case unsupportedTarget
+
+    public var errorDescription: String? {
+        "Repositories reachability capture requires tab-repos at 1040x680."
+    }
+}
+
+public enum DesktopReposReachabilityAcquisitionStatus: String, Codable, Equatable, Sendable {
+    case complete
+    case failed
+}
+
+public enum DesktopReposReachabilityAcquisitionFailureReason: String, Codable, Error, Equatable, Sendable {
+    case cannotComplete = "cannot-complete"
+    case invalidElement = "invalid-element"
+    case permissionDenied = "permission-denied"
+    case invalidType = "invalid-type"
+    case attributeUnavailable = "attribute-unavailable"
+    case pidMismatch = "pid-mismatch"
+    case windowMismatch = "window-mismatch"
+    case semanticMissing = "semantic-missing"
+    case semanticDuplicate = "semantic-duplicate"
+    case timeout
+    case ancestryUnavailable = "ancestry-unavailable"
+    case ancestryCycle = "ancestry-cycle"
+    case ancestryLimit = "ancestry-limit"
+    case messagingTimeoutUnavailable = "messaging-timeout-unavailable"
+}
+
+public struct DesktopReposReachabilityAcquisition: Codable, Equatable, Sendable {
+    public let status: DesktopReposReachabilityAcquisitionStatus
+    public let failureReason: DesktopReposReachabilityAcquisitionFailureReason?
+
+    public init(
+        status: DesktopReposReachabilityAcquisitionStatus,
+        failureReason: DesktopReposReachabilityAcquisitionFailureReason?
+    ) {
+        self.status = status
+        self.failureReason = failureReason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case failureReason
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.contains(.failureReason) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.failureReason,
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Acquisition failureReason must be explicit."
+                )
+            )
+        }
+        status = try container.decode(DesktopReposReachabilityAcquisitionStatus.self, forKey: .status)
+        failureReason = try container.decodeIfPresent(
+            DesktopReposReachabilityAcquisitionFailureReason.self,
+            forKey: .failureReason
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(status, forKey: .status)
+        if let failureReason {
+            try container.encode(failureReason, forKey: .failureReason)
+        } else {
+            try container.encodeNil(forKey: .failureReason)
+        }
+    }
+}
+
 public enum DesktopReposReachabilityRegion: String, Codable, CaseIterable, Equatable, Sendable {
     case table
     case applyAllowlist = "apply-allowlist"
     case boundaryBody = "boundary-body"
+}
+
+public enum DesktopReposReachabilitySemanticContract {
+    public static let boundaryIdentifier = "neondiff-repos-boundary"
+    public static let boundaryValue = "Repo changes are written through config patch only; the desktop does not post reviews or bypass daemon gates."
+    public static let applyAllowlistIdentifier = "neondiff-repo-apply-patch"
+    public static let applyAllowlistValue = "Apply Allowlist"
+
+    public static func matchesApplyAllowlist(
+        isButton: Bool,
+        identifier: String?,
+        title: String?,
+        description: String?,
+        value: String?
+    ) -> Bool {
+        isButton
+            && (identifier == applyAllowlistIdentifier
+                || [title, description, value].compactMap({ $0 }).contains(applyAllowlistValue))
+    }
+
+    public static func matchesBoundaryBody(
+        isStaticText: Bool,
+        identifier: String?,
+        description: String?,
+        value: String?
+    ) -> Bool {
+        isStaticText
+            && (identifier == boundaryIdentifier
+                || [description, value].compactMap({ $0 }).contains(boundaryValue))
+    }
+
+    public static func failureReason(
+        tableCount: Int,
+        applyAllowlistCount: Int,
+        boundaryBodyCount: Int
+    ) -> DesktopReposReachabilityAcquisitionFailureReason? {
+        let counts = [tableCount, applyAllowlistCount, boundaryBodyCount]
+        if counts.contains(where: { $0 > 1 }) { return .semanticDuplicate }
+        if counts.contains(where: { $0 != 1 }) { return .semanticMissing }
+        return nil
+    }
 }
 
 public struct DesktopReposReachabilityFrame: Codable, Equatable, Sendable {
@@ -107,6 +241,7 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
     public let preScrollAcquisitionMilliseconds: Int
     public let postScrollAcquisitionMilliseconds: Int
     public let tolerancePoints: Double
+    public let acquisition: DesktopReposReachabilityAcquisition
     public let preScrollSamples: [DesktopReposReachabilitySample]
     public let outerScroll: DesktopReposOuterScrollObservation?
     public let postScrollSamples: [DesktopReposReachabilitySample]
@@ -121,6 +256,7 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
         preScrollAcquisitionMilliseconds: Int,
         postScrollAcquisitionMilliseconds: Int,
         tolerancePoints: Double,
+        acquisition: DesktopReposReachabilityAcquisition,
         preScrollSamples: [DesktopReposReachabilitySample],
         outerScroll: DesktopReposOuterScrollObservation?,
         postScrollSamples: [DesktopReposReachabilitySample]
@@ -134,9 +270,64 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
         self.preScrollAcquisitionMilliseconds = preScrollAcquisitionMilliseconds
         self.postScrollAcquisitionMilliseconds = postScrollAcquisitionMilliseconds
         self.tolerancePoints = tolerancePoints
+        self.acquisition = acquisition
         self.preScrollSamples = preScrollSamples
         self.outerScroll = outerScroll
         self.postScrollSamples = postScrollSamples
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case fixture
+        case ready
+        case quiescent
+        case requestedContentSize
+        case sampleIntervalMilliseconds
+        case preScrollAcquisitionMilliseconds
+        case postScrollAcquisitionMilliseconds
+        case tolerancePoints
+        case acquisition
+        case preScrollSamples
+        case outerScroll
+        case postScrollSamples
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        fixture = try container.decode(DesktopReposReachabilityFixture.self, forKey: .fixture)
+        ready = try container.decode(Bool.self, forKey: .ready)
+        quiescent = try container.decode(Bool.self, forKey: .quiescent)
+        requestedContentSize = try container.decode(DesktopEvaluationContentSize.self, forKey: .requestedContentSize)
+        sampleIntervalMilliseconds = try container.decode(Int.self, forKey: .sampleIntervalMilliseconds)
+        preScrollAcquisitionMilliseconds = try container.decode(Int.self, forKey: .preScrollAcquisitionMilliseconds)
+        postScrollAcquisitionMilliseconds = try container.decode(Int.self, forKey: .postScrollAcquisitionMilliseconds)
+        tolerancePoints = try container.decode(Double.self, forKey: .tolerancePoints)
+        acquisition = try container.decode(DesktopReposReachabilityAcquisition.self, forKey: .acquisition)
+        preScrollSamples = try container.decode([DesktopReposReachabilitySample].self, forKey: .preScrollSamples)
+        outerScroll = try container.decodeIfPresent(DesktopReposOuterScrollObservation.self, forKey: .outerScroll)
+        postScrollSamples = try container.decode([DesktopReposReachabilitySample].self, forKey: .postScrollSamples)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(fixture, forKey: .fixture)
+        try container.encode(ready, forKey: .ready)
+        try container.encode(quiescent, forKey: .quiescent)
+        try container.encode(requestedContentSize, forKey: .requestedContentSize)
+        try container.encode(sampleIntervalMilliseconds, forKey: .sampleIntervalMilliseconds)
+        try container.encode(preScrollAcquisitionMilliseconds, forKey: .preScrollAcquisitionMilliseconds)
+        try container.encode(postScrollAcquisitionMilliseconds, forKey: .postScrollAcquisitionMilliseconds)
+        try container.encode(tolerancePoints, forKey: .tolerancePoints)
+        try container.encode(acquisition, forKey: .acquisition)
+        try container.encode(preScrollSamples, forKey: .preScrollSamples)
+        if let outerScroll {
+            try container.encode(outerScroll, forKey: .outerScroll)
+        } else {
+            try container.encodeNil(forKey: .outerScroll)
+        }
+        try container.encode(postScrollSamples, forKey: .postScrollSamples)
     }
 
     public static func decode(data: Data) throws -> Self {
@@ -167,12 +358,20 @@ public struct DesktopReposReachabilityTrace: Codable, Equatable, Sendable {
               hasAllowedAndRequired(root, allowed: [
                   "schemaVersion", "fixture", "ready", "quiescent", "requestedContentSize",
                   "sampleIntervalMilliseconds", "preScrollAcquisitionMilliseconds", "tolerancePoints",
-                  "postScrollAcquisitionMilliseconds", "preScrollSamples", "outerScroll", "postScrollSamples"
+                  "postScrollAcquisitionMilliseconds", "acquisition", "preScrollSamples", "outerScroll",
+                  "postScrollSamples"
               ], required: [
                   "schemaVersion", "fixture", "ready", "quiescent", "requestedContentSize",
                   "sampleIntervalMilliseconds", "preScrollAcquisitionMilliseconds", "tolerancePoints",
-                  "postScrollAcquisitionMilliseconds", "preScrollSamples", "postScrollSamples"
+                  "postScrollAcquisitionMilliseconds", "acquisition", "preScrollSamples", "outerScroll",
+                  "postScrollSamples"
               ]),
+              let acquisition = root["acquisition"] as? [String: Any],
+              hasAllowedAndRequired(
+                  acquisition,
+                  allowed: ["status", "failureReason"],
+                  required: ["status", "failureReason"]
+              ),
               let size = root["requestedContentSize"] as? [String: Any],
               hasOnly(size, ["width", "height"]),
               let pre = root["preScrollSamples"] as? [Any],
@@ -240,6 +439,7 @@ public enum DesktopReposReachabilityValidationPhase: String, Codable, Equatable,
 
 public enum DesktopReposReachabilityValidationError: LocalizedError, Equatable, Sendable {
     case invalidContract
+    case acquisitionFailed(DesktopReposReachabilityAcquisitionFailureReason)
     case insufficientSamples(DesktopReposReachabilityValidationPhase)
     case nonfiniteFrame(DesktopReposReachabilityValidationPhase, Int)
     case duplicateRegion(DesktopReposReachabilityValidationPhase, Int, DesktopReposReachabilityRegion)
@@ -253,6 +453,8 @@ public enum DesktopReposReachabilityValidationError: LocalizedError, Equatable, 
         switch self {
         case .invalidContract:
             return "Reachability trace contract is invalid."
+        case .acquisitionFailed(let reason):
+            return "Reachability trace acquisition failed: \(reason.rawValue)."
         case .insufficientSamples(let phase):
             return "Reachability trace has fewer than three \(phase.rawValue) samples."
         case .nonfiniteFrame(let phase, let index):
@@ -280,17 +482,27 @@ public enum DesktopReposReachabilityValidator {
     ) throws -> DesktopReposReachabilityValidationStatus {
         guard trace.schemaVersion == 1,
               trace.fixture == .tabRepos,
-              trace.ready,
-              trace.quiescent,
               trace.requestedContentSize == DesktopEvaluationContentSize(width: 1040, height: 680),
               trace.sampleIntervalMilliseconds == 100,
               trace.preScrollAcquisitionMilliseconds >= 0,
-              trace.preScrollAcquisitionMilliseconds <= 5_000,
               trace.postScrollAcquisitionMilliseconds >= 0,
-              trace.postScrollAcquisitionMilliseconds <= 5_000,
               trace.tolerancePoints.isFinite,
               trace.tolerancePoints > 0,
               trace.tolerancePoints <= 1 else {
+            throw DesktopReposReachabilityValidationError.invalidContract
+        }
+        switch (trace.acquisition.status, trace.acquisition.failureReason) {
+        case (.complete, nil):
+            break
+        case (.failed, .some(let reason)):
+            throw DesktopReposReachabilityValidationError.acquisitionFailed(reason)
+        case (.complete, .some), (.failed, nil):
+            throw DesktopReposReachabilityValidationError.invalidContract
+        }
+        guard trace.ready,
+              trace.quiescent,
+              trace.preScrollAcquisitionMilliseconds <= 5_000,
+              trace.postScrollAcquisitionMilliseconds <= 5_000 else {
             throw DesktopReposReachabilityValidationError.invalidContract
         }
 

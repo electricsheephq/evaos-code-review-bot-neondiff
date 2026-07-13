@@ -112,6 +112,24 @@ struct DesktopReposReachabilityTraceTests {
             try DesktopReposReachabilityTrace.decode(data: JSONEncoder().encode(makeTrace(outerScroll: nil)))
         }
 
+        let incomplete = makeTrace(
+            quiescent: false,
+            preScrollAcquisitionMilliseconds: 5_001,
+            postScrollAcquisitionMilliseconds: 5_001,
+            acquisition: .init(status: .failed, failureReason: .cannotComplete),
+            preSamples: [],
+            outerScroll: nil,
+            postSamples: []
+        )
+        #expect(throws: DesktopReposReachabilityValidationError.acquisitionFailed(.cannotComplete)) {
+            try DesktopReposReachabilityValidator.validate(incomplete)
+        }
+        #expect(throws: DesktopReposReachabilityValidationError.acquisitionFailed(.semanticDuplicate)) {
+            try DesktopReposReachabilityValidator.validate(makeTrace(
+                acquisition: .init(status: .failed, failureReason: .semanticDuplicate)
+            ))
+        }
+
         let unsupported = DesktopReposOuterScrollObservation(
             verticalScrollBarSupported: false,
             minimumValue: nil,
@@ -193,15 +211,142 @@ struct DesktopReposReachabilityTraceTests {
             try DesktopReposReachabilityTrace.decode(data: data)
         }
     }
+
+    @Test func nilOuterScrollHasAnExplicitUnambiguousWireKey() throws {
+        let data = try JSONEncoder().encode(makeTrace(outerScroll: nil))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let acquisition = try #require(object["acquisition"] as? [String: Any])
+
+        #expect(object.keys.contains("outerScroll"))
+        #expect(object["outerScroll"] is NSNull)
+        #expect(acquisition.keys.contains("failureReason"))
+        #expect(acquisition["failureReason"] is NSNull)
+
+        let failedData = try JSONEncoder().encode(makeTrace(
+            acquisition: .init(status: .failed, failureReason: .cannotComplete),
+            outerScroll: nil
+        ))
+        let failedObject = try #require(JSONSerialization.jsonObject(with: failedData) as? [String: Any])
+        let failedAcquisition = try #require(failedObject["acquisition"] as? [String: Any])
+        #expect(failedAcquisition["failureReason"] as? String == "cannot-complete")
+
+        var ambiguous = object
+        var ambiguousAcquisition = acquisition
+        ambiguousAcquisition.removeValue(forKey: "failureReason")
+        ambiguous["acquisition"] = ambiguousAcquisition
+        let ambiguousData = try JSONSerialization.data(withJSONObject: ambiguous)
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityTrace.decode(data: ambiguousData)
+        }
+    }
+
+    @Test func focusedCaptureTargetRejectsUnsupportedFixtureOrSize() throws {
+        #expect(throws: DesktopReposReachabilityTargetError.unsupportedTarget) {
+            try DesktopReposReachabilityTarget.requireSupported(
+                fixtureId: "tab-providers",
+                contentWidth: 1040,
+                contentHeight: 680
+            )
+        }
+        #expect(throws: DesktopReposReachabilityTargetError.unsupportedTarget) {
+            try DesktopReposReachabilityTarget.requireSupported(
+                fixtureId: "tab-repos",
+                contentWidth: 1280,
+                contentHeight: 800
+            )
+        }
+        #expect(try DesktopReposReachabilityTarget.requireSupported(
+            fixtureId: "tab-repos",
+            contentWidth: 1040,
+            contentHeight: 680
+        ) == .tabRepos1040x680)
+    }
+
+    @Test func malformedMetadataIsNotMaskedByAcquisitionFailure() {
+        let trace = makeTrace(
+            schemaVersion: 999,
+            acquisition: .init(status: .failed, failureReason: .cannotComplete),
+            preSamples: [],
+            outerScroll: nil,
+            postSamples: []
+        )
+
+        #expect(throws: DesktopReposReachabilityValidationError.invalidContract) {
+            try DesktopReposReachabilityValidator.validate(trace)
+        }
+    }
+
+    @Test func semanticFallbackMatchesRenderedAccessibilityValueExactly() {
+        #expect(DesktopReposReachabilitySemanticContract.boundaryIdentifier == "neondiff-repos-boundary")
+        #expect(DesktopReposReachabilitySemanticContract.applyAllowlistIdentifier == "neondiff-repo-apply-patch")
+        #expect(
+            DesktopReposReachabilitySemanticContract.boundaryValue
+                == "Repo changes are written through config patch only; the desktop does not post reviews or bypass daemon gates."
+        )
+        #expect(DesktopReposReachabilitySemanticContract.applyAllowlistValue == "Apply Allowlist")
+        #expect(DesktopReposReachabilitySemanticContract.matchesApplyAllowlist(
+            isButton: true,
+            identifier: "neondiff-repo-apply-patch",
+            title: nil,
+            description: nil,
+            value: nil
+        ))
+        #expect(DesktopReposReachabilitySemanticContract.matchesApplyAllowlist(
+            isButton: true,
+            identifier: nil,
+            title: "Apply Allowlist",
+            description: nil,
+            value: nil
+        ))
+        #expect(!DesktopReposReachabilitySemanticContract.matchesApplyAllowlist(
+            isButton: false,
+            identifier: "neondiff-repo-apply-patch",
+            title: "Apply Allowlist",
+            description: nil,
+            value: nil
+        ))
+        #expect(DesktopReposReachabilitySemanticContract.matchesBoundaryBody(
+            isStaticText: true,
+            identifier: "neondiff-repos-boundary",
+            description: nil,
+            value: nil
+        ))
+        #expect(!DesktopReposReachabilitySemanticContract.matchesBoundaryBody(
+            isStaticText: false,
+            identifier: "neondiff-repos-boundary",
+            description: nil,
+            value: nil
+        ))
+    }
+
+    @Test func semanticCandidateCardinalityFailsClosed() {
+        #expect(DesktopReposReachabilitySemanticContract.failureReason(
+            tableCount: 1,
+            applyAllowlistCount: 1,
+            boundaryBodyCount: 1
+        ) == nil)
+        #expect(DesktopReposReachabilitySemanticContract.failureReason(
+            tableCount: 2,
+            applyAllowlistCount: 1,
+            boundaryBodyCount: 1
+        ) == .semanticDuplicate)
+        #expect(DesktopReposReachabilitySemanticContract.failureReason(
+            tableCount: 1,
+            applyAllowlistCount: 0,
+            boundaryBodyCount: 1
+        ) == .semanticMissing)
+    }
 }
 
 private func makeTrace(
+    schemaVersion: Int = 1,
     ready: Bool = true,
     quiescent: Bool = true,
     requestedContentSize: DesktopEvaluationContentSize = .init(width: 1040, height: 680),
     preScrollAcquisitionMilliseconds: Int = 200,
     postScrollAcquisitionMilliseconds: Int = 200,
     tolerancePoints: Double = 1,
+    acquisition: DesktopReposReachabilityAcquisition = .init(status: .complete, failureReason: nil),
     preSamples: [DesktopReposReachabilitySample] = stableSamples(),
     outerScroll: DesktopReposOuterScrollObservation? = .init(
         verticalScrollBarSupported: true,
@@ -214,7 +359,7 @@ private func makeTrace(
     postSamples: [DesktopReposReachabilitySample] = stableSamples()
 ) -> DesktopReposReachabilityTrace {
     DesktopReposReachabilityTrace(
-        schemaVersion: 1,
+        schemaVersion: schemaVersion,
         fixture: .tabRepos,
         ready: ready,
         quiescent: quiescent,
@@ -223,6 +368,7 @@ private func makeTrace(
         preScrollAcquisitionMilliseconds: preScrollAcquisitionMilliseconds,
         postScrollAcquisitionMilliseconds: postScrollAcquisitionMilliseconds,
         tolerancePoints: tolerancePoints,
+        acquisition: acquisition,
         preScrollSamples: preSamples,
         outerScroll: outerScroll,
         postScrollSamples: postSamples
