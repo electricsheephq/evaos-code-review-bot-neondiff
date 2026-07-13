@@ -17,10 +17,15 @@ const ISSUANCE_SECRET = "test-only-lifecycle-issuance-secret";
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 type LifecycleResult = {
-  status: "updated" | "replayed";
+  status:
+    | "updated"
+    | "replayed"
+    | "ignored_stale"
+    | "payment_attention"
+    | "terminally_revoked";
   replayed: boolean;
   entitlement: {
-    status: "active";
+    status: "active" | "expired" | "revoked";
     plan: string;
     seats: number;
     expiresAt: string;
@@ -100,6 +105,54 @@ function renewal(
       subscriptionStatus: "active",
       currentPeriodEnd: "2026-08-13T00:00:00.000Z",
       cancelAtPeriodEnd: false,
+      ...overrides
+    }),
+    now
+  );
+}
+
+function lifecycleRequest(
+  command: "reconcile" | "cancel_at_period_end" | "payment_attention" | "revoke",
+  issuance: LicenseIssuanceRequest = issuanceRequest(),
+  overrides: Record<string, unknown> = {},
+  now: Date = NOW
+): ParsedSubscriptionLifecycleRequest {
+  const variants = {
+    reconcile: {
+      providerEventType: "customer.subscription.updated",
+      subscriptionStatus: "active",
+      cancelAtPeriodEnd: false
+    },
+    cancel_at_period_end: {
+      providerEventType: "customer.subscription.updated",
+      subscriptionStatus: "active",
+      currentPeriodEnd: "2026-08-20T00:00:00.000Z",
+      cancelAtPeriodEnd: true
+    },
+    payment_attention: {
+      providerEventType: "invoice.payment_failed",
+      subscriptionStatus: "past_due",
+      cancelAtPeriodEnd: false
+    },
+    revoke: {
+      providerEventType: "customer.subscription.deleted",
+      subscriptionStatus: "canceled",
+      cancelAtPeriodEnd: false,
+      reason: "provider subscription terminated"
+    }
+  } as const;
+  return parseSubscriptionLifecycleRequest(
+    JSON.stringify({
+      schemaVersion: 1,
+      issuanceIdempotencyKey: issuance.idempotencyKey,
+      eventId: `evt_${command}_lifecycle_store`,
+      eventCreatedAt: NOW_SECONDS,
+      provider: issuance.provider,
+      providerAccountId: issuance.providerAccountId,
+      providerMode: issuance.providerMode,
+      externalSubscriptionId: issuance.externalSubscriptionId,
+      command,
+      ...variants[command],
       ...overrides
     }),
     now
@@ -540,6 +593,361 @@ describe("checkout subscription lifecycle renewal", () => {
         blocker.exec("rollback");
       } catch {}
       blocker.close();
+      store.close();
+    }
+  });
+});
+
+describe("checkout subscription lifecycle ordering and terminal dominance", () => {
+  it("records reconcile without extending or reactivating the entitlement", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path, { now: () => NOW });
+    try {
+      const issued = issueBound(store, {
+        idempotencyKey: "checkout-session:reconcile-record-only",
+        externalSubscriptionId: "sub_reconcile_record_only",
+        externalCheckoutId: "cs_reconcile_record_only"
+      });
+      const db = new DatabaseSync(path);
+      db.prepare("update licenses set status = 'expired' where license_key_hash = ?")
+        .run(issued.licenseKeyHash);
+      db.close();
+
+      const result = applyLifecycle(store, lifecycleRequest("reconcile", issued.request, {
+        currentPeriodEnd: "2026-08-20T00:00:00.000Z"
+      }));
+
+      assert.deepEqual(result, {
+        status: "updated",
+        replayed: false,
+        entitlement: {
+          status: "expired",
+          plan: "monthly_support",
+          seats: 1,
+          expiresAt: issued.expiresAt
+        }
+      });
+      assert.equal(store.getLicenseByKey(issued.rawKey)?.status, "expired");
+      assert.equal(store.getLicenseByKey(issued.rawKey)?.expiresAt, issued.expiresAt);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("audits older non-mutating events as ignored_stale without moving the watermark", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path, { now: () => NOW });
+    try {
+      const issued = issueBound(store, {
+        idempotencyKey: "checkout-session:stale-audit",
+        externalSubscriptionId: "sub_stale_audit",
+        externalCheckoutId: "cs_stale_audit"
+      });
+      const newest = lifecycleRequest("cancel_at_period_end", issued.request, {
+        eventId: "evt_stale_newest",
+        eventCreatedAt: NOW_SECONDS
+      });
+      const stale = lifecycleRequest("payment_attention", issued.request, {
+        eventId: "evt_stale_older",
+        eventCreatedAt: NOW_SECONDS - 60
+      });
+
+      assert.equal(applyLifecycle(store, newest).status, "updated");
+      assert.equal(applyLifecycle(store, stale).status, "ignored_stale");
+      assert.equal(store.getLicenseByKey(issued.rawKey)?.expiresAt, issued.expiresAt);
+
+      const binding = inspectDatabase<{ last_non_mutating_event_created_at: number }>(
+        path,
+        `select last_non_mutating_event_created_at
+         from checkout_subscription_bindings
+         where issuance_idempotency_key = ?`,
+        issued.request.idempotencyKey
+      )[0];
+      assert.equal(binding?.last_non_mutating_event_created_at, NOW_SECONDS);
+      assert.deepEqual(
+        inspectDatabase<{ event_id: string; result: string; normalized_transition: string }>(
+          path,
+          `select event_id, result, normalized_transition
+           from license_subscription_lifecycle_events
+           order by event_id`
+        ).map((row) => ({ ...row })),
+        [
+          {
+            event_id: "evt_stale_newest",
+            result: "updated",
+            normalized_transition: "cancel_at_period_end"
+          },
+          {
+            event_id: "evt_stale_older",
+            result: "ignored_stale",
+            normalized_transition: "payment_attention"
+          }
+        ]
+      );
+    } finally {
+      store.close();
+    }
+  });
+
+  it("preserves expiry exactly for cancellation and grants no time or early revoke for attention", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path, { now: () => NOW });
+    try {
+      const issued = issueBound(store, {
+        idempotencyKey: "checkout-session:cancel-attention",
+        externalSubscriptionId: "sub_cancel_attention",
+        externalCheckoutId: "cs_cancel_attention"
+      });
+      const before = store.getLicenseByKey(issued.rawKey);
+
+      const cancellation = applyLifecycle(store, lifecycleRequest("cancel_at_period_end", issued.request, {
+        eventId: "evt_cancel_preserve_exact",
+        currentPeriodEnd: "2026-08-20T00:00:00.000Z"
+      }));
+      const attention = applyLifecycle(store, lifecycleRequest("payment_attention", issued.request, {
+        eventId: "evt_attention_no_time",
+        eventCreatedAt: NOW_SECONDS + 1,
+        currentPeriodEnd: "2026-08-21T00:00:00.000Z"
+      }));
+
+      assert.equal(cancellation.status, "updated");
+      assert.equal(attention.status, "payment_attention");
+      assert.deepEqual(store.getLicenseByKey(issued.rawKey), before);
+      assert.equal(attention.entitlement.status, "active");
+      assert.equal(attention.entitlement.expiresAt, issued.expiresAt);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("revokes without a period end, persists a bounded reason, and exact-replays terminal state", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path, { now: () => NOW });
+    try {
+      const issued = issueBound(store, {
+        idempotencyKey: "checkout-session:terminal-revoke",
+        externalSubscriptionId: "sub_terminal_revoke",
+        externalCheckoutId: "cs_terminal_revoke"
+      });
+      const request = lifecycleRequest("revoke", issued.request, {
+        reason: "bounded provider termination reason"
+      });
+
+      assert.deepEqual(applyLifecycle(store, request), {
+        status: "terminally_revoked",
+        replayed: false,
+        entitlement: {
+          status: "revoked",
+          plan: "monthly_support",
+          seats: 1,
+          expiresAt: issued.expiresAt
+        }
+      });
+      assert.equal(store.getLicenseByKey(issued.rawKey)?.revocationReason,
+        "bounded provider termination reason");
+      assert.deepEqual(applyLifecycle(store, request), {
+        status: "replayed",
+        replayed: true,
+        entitlement: {
+          status: "revoked",
+          plan: "monthly_support",
+          seats: 1,
+          expiresAt: issued.expiresAt
+        }
+      });
+      const ledger = inspectDatabase<{ normalized_transition: string; result: string }>(
+        path,
+        "select normalized_transition, result from license_subscription_lifecycle_events"
+      ).map((row) => ({ ...row }));
+      assert.deepEqual(ledger, [{
+        normalized_transition: "revoke",
+        result: "terminally_revoked"
+      }]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("cannot resurrect a terminal entitlement with later renew, reconcile, cancel, or attention", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path, { now: () => NOW });
+    try {
+      const issued = issueBound(store, {
+        idempotencyKey: "checkout-session:no-resurrection",
+        externalSubscriptionId: "sub_no_resurrection",
+        externalCheckoutId: "cs_no_resurrection"
+      });
+      applyLifecycle(store, lifecycleRequest("revoke", issued.request));
+      const later = NOW_SECONDS + 30;
+      const requests = [
+        renewal(issued.request, { eventId: "evt_terminal_late_renew", eventCreatedAt: later }),
+        lifecycleRequest("reconcile", issued.request, {
+          eventId: "evt_terminal_late_reconcile", eventCreatedAt: later
+        }),
+        lifecycleRequest("cancel_at_period_end", issued.request, {
+          eventId: "evt_terminal_late_cancel", eventCreatedAt: later
+        }),
+        lifecycleRequest("payment_attention", issued.request, {
+          eventId: "evt_terminal_late_attention", eventCreatedAt: later
+        })
+      ];
+      for (const request of requests) {
+        assert.throws(
+          () => applyLifecycle(store, request),
+          (error: unknown) => errorName(error) === "SubscriptionLifecycleTerminalError"
+        );
+      }
+      assert.equal(store.getLicenseByKey(issued.rawKey)?.status, "revoked");
+      assert.equal(
+        inspectDatabase<{ count: number }>(
+          path,
+          "select count(*) as count from license_subscription_lifecycle_events"
+        )[0]?.count,
+        1
+      );
+    } finally {
+      store.close();
+    }
+  });
+
+  it("converges for same-second renewal and update arrival orders with explicit equal-time precedence", () => {
+    const projections: Array<Record<string, unknown>> = [];
+    for (const updateCommand of ["reconcile", "cancel_at_period_end", "payment_attention"] as const) {
+      for (const order of ["renew-first", "update-first"] as const) {
+        const path = databasePath();
+        const firstStore = new LicenseStore(path, { now: () => NOW });
+        const secondStore = new LicenseStore(path, { now: () => NOW });
+        try {
+          const suffix = `${updateCommand}-${order}`;
+          const issued = issueBound(firstStore, {
+            idempotencyKey: `checkout-session:same-second-${suffix}`,
+            externalSubscriptionId: `sub_same_second_${suffix}`,
+            externalCheckoutId: `cs_same_second_${suffix}`
+          });
+          const paid = renewal(issued.request, {
+            eventId: `evt_paid_${suffix}`,
+            eventCreatedAt: NOW_SECONDS,
+            currentPeriodEnd: "2026-08-20T00:00:00.000Z"
+          });
+          const update = lifecycleRequest(updateCommand, issued.request, {
+            eventId: `evt_update_${suffix}`,
+            eventCreatedAt: NOW_SECONDS
+          });
+          const requests = order === "renew-first" ? [paid, update] : [update, paid];
+          const statuses = [
+            applyLifecycle(firstStore, requests[0]!).status,
+            applyLifecycle(secondStore, requests[1]!).status
+          ].sort();
+          const license = secondStore.getLicenseByKey(issued.rawKey)!;
+
+          projections.push({
+            updateCommand,
+            statuses,
+            license: {
+              status: license.status,
+              plan: license.plan,
+              seats: license.seats,
+              expiresAt: license.expiresAt
+            },
+            ledger: inspectDatabase<{ command: string; result: string }>(
+              path,
+              `select command, result
+               from license_subscription_lifecycle_events
+               order by command`
+            )
+          });
+        } finally {
+          secondStore.close();
+          firstStore.close();
+        }
+      }
+    }
+
+    for (let index = 0; index < projections.length; index += 2) {
+      const first = projections[index]!;
+      const second = projections[index + 1]!;
+      assert.deepEqual(first.statuses, second.statuses);
+      assert.deepEqual(first.license, second.license);
+      assert.deepEqual(first.ledger, second.ledger);
+      assert.equal((first.license as { expiresAt: string }).expiresAt,
+        "2026-08-20T00:00:00.000Z");
+    }
+  });
+
+  it("lets revoke dominate both arrival orders and preserves the key hash and activations", () => {
+    for (const order of ["renew-first", "revoke-first"] as const) {
+      const path = databasePath();
+      const store = new LicenseStore(path, { now: () => NOW });
+      try {
+        const issued = issueBound(store, {
+          idempotencyKey: `checkout-session:terminal-order-${order}`,
+          externalSubscriptionId: `sub_terminal_order_${order}`,
+          externalCheckoutId: `cs_terminal_order_${order}`
+        });
+        assert.equal(activate(store, {
+          licenseKey: issued.rawKey,
+          machineId: "machine-terminal-order",
+          repo: "owner/repo"
+        }, NOW).httpStatus, 200);
+        const activations = store.listActivations(issued.licenseKeyHash);
+        const paid = renewal(issued.request, { eventId: `evt_terminal_paid_${order}` });
+        const revoked = lifecycleRequest("revoke", issued.request, {
+          eventId: `evt_terminal_revoke_${order}`
+        });
+
+        if (order === "renew-first") {
+          applyLifecycle(store, paid);
+          applyLifecycle(store, revoked);
+        } else {
+          applyLifecycle(store, revoked);
+          assert.throws(
+            () => applyLifecycle(store, paid),
+            (error: unknown) => errorName(error) === "SubscriptionLifecycleTerminalError"
+          );
+        }
+
+        assert.equal(store.getLicenseByKey(issued.rawKey)?.status, "revoked");
+        assert.equal(store.getLicenseByKey(issued.rawKey)?.licenseKeyHash, issued.licenseKeyHash);
+        assert.deepEqual(store.listActivations(issued.licenseKeyHash), activations);
+      } finally {
+        store.close();
+      }
+    }
+  });
+
+  it("rolls back terminal mutation when its ledger insert fails", () => {
+    const path = databasePath();
+    const store = new LicenseStore(path, { now: () => NOW });
+    try {
+      const issued = issueBound(store, {
+        idempotencyKey: "checkout-session:terminal-rollback",
+        externalSubscriptionId: "sub_terminal_rollback",
+        externalCheckoutId: "cs_terminal_rollback"
+      });
+      const db = new DatabaseSync(path);
+      db.exec(`
+        create trigger reject_terminal_lifecycle_insert
+        before insert on license_subscription_lifecycle_events
+        begin
+          select raise(abort, 'deterministic terminal ledger fault');
+        end
+      `);
+      db.close();
+
+      assert.throws(
+        () => applyLifecycle(store, lifecycleRequest("revoke", issued.request)),
+        /deterministic terminal ledger fault/
+      );
+      assert.equal(store.getLicenseByKey(issued.rawKey)?.status, "active");
+      assert.equal(store.getLicenseByKey(issued.rawKey)?.revocationReason, undefined);
+      assert.equal(
+        inspectDatabase<{ count: number }>(
+          path,
+          "select count(*) as count from license_subscription_lifecycle_events"
+        )[0]?.count,
+        0
+      );
+    } finally {
       store.close();
     }
   });

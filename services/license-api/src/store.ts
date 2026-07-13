@@ -259,6 +259,7 @@ export interface CheckoutSubscriptionBindingInput {
 export interface CheckoutSubscriptionBindingRecord extends CheckoutSubscriptionBindingInput {
   issuanceIdempotencyKey: string;
   licenseKeyHash: string;
+  lastNonMutatingEventCreatedAt?: number;
   createdAt: string;
 }
 
@@ -280,14 +281,19 @@ export class SubscriptionLifecycleTransientError extends Error {}
 export class SubscriptionLifecycleUnsupportedCommandError extends Error {}
 
 export interface SubscriptionLifecycleEntitlement {
-  status: "active";
+  status: LicenseStatus;
   plan: string;
   seats: number;
   expiresAt: string;
 }
 
 export interface SubscriptionLifecycleApplyResult {
-  status: "updated" | "replayed";
+  status:
+    | "updated"
+    | "replayed"
+    | "ignored_stale"
+    | "payment_attention"
+    | "terminally_revoked";
   replayed: boolean;
   entitlement: SubscriptionLifecycleEntitlement;
 }
@@ -532,19 +538,10 @@ export class LicenseStore {
     }
   }
 
-  /**
-   * Apply a paid checkout renewal against its immutable issuance binding.
-   * Task 5 owns the remaining lifecycle transitions and their ordering rules.
-   */
+  /** Apply one checkout lifecycle event against its immutable issuance binding. */
   applyCheckoutSubscriptionLifecycle(
     input: ParsedSubscriptionLifecycleRequest
   ): SubscriptionLifecycleApplyResult {
-    if (input.command !== "renew_paid") {
-      throw new SubscriptionLifecycleUnsupportedCommandError(
-        "subscription lifecycle command is not implemented"
-      );
-    }
-
     const appliedAt = this.now();
     if (!Number.isFinite(appliedAt.getTime())) {
       throw new SubscriptionLifecyclePolicyError("license store clock is invalid");
@@ -580,8 +577,8 @@ export class LicenseStore {
           );
         }
         const replayedRecord = this.getLicenseByHash(existingEvent.license_key_hash);
-        if (!replayedRecord?.expiresAt || replayedRecord.status !== "active") {
-          throw new SubscriptionLifecycleTerminalError("subscription entitlement is terminal");
+        if (!replayedRecord) {
+          throw new Error("subscription lifecycle event points to a missing license");
         }
         this.db.exec("commit");
         return lifecycleResult("replayed", true, replayedRecord);
@@ -594,21 +591,69 @@ export class LicenseStore {
         throw new SubscriptionLifecyclePolicyError("subscription entitlement state is invalid");
       }
 
-      const incomingPeriodEnd = validatePaidPeriodEnd(input, record.plan, appliedAt);
-      const storedPeriodEnd = record.expiresAt ? Date.parse(record.expiresAt) : Number.NaN;
-      if (!Number.isFinite(storedPeriodEnd)) {
-        throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+      let result: Exclude<SubscriptionLifecycleApplyResult["status"], "replayed">;
+      switch (input.command) {
+        case "renew_paid": {
+          const incomingPeriodEnd = validatePaidPeriodEnd(input, record.plan, appliedAt);
+          const storedPeriodEnd = record.expiresAt ? Date.parse(record.expiresAt) : Number.NaN;
+          if (!Number.isFinite(storedPeriodEnd)) {
+            throw new SubscriptionLifecyclePolicyError("subscription entitlement expiry is invalid");
+          }
+          const effectivePeriodEnd = Math.max(storedPeriodEnd, incomingPeriodEnd);
+          this.db
+            .prepare(
+              `update licenses
+               set expires_at = ?, status = 'active'
+               where license_key_hash = ?`
+            )
+            .run(new Date(effectivePeriodEnd).toISOString(), record.licenseKeyHash);
+          result = "updated";
+          break;
+        }
+        case "reconcile":
+        case "cancel_at_period_end":
+        case "payment_attention": {
+          const stale = isStaleNonMutatingEvent(
+            input.eventCreatedAt,
+            binding.lastNonMutatingEventCreatedAt
+          );
+          if (!stale) {
+            this.db
+              .prepare(
+                `update checkout_subscription_bindings
+                 set last_non_mutating_event_created_at = max(
+                   coalesce(last_non_mutating_event_created_at, ?), ?
+                 )
+                 where issuance_idempotency_key = ?`
+              )
+              .run(
+                input.eventCreatedAt,
+                input.eventCreatedAt,
+                input.issuanceIdempotencyKey
+              );
+          }
+          result = stale
+            ? "ignored_stale"
+            : input.command === "payment_attention"
+              ? "payment_attention"
+              : "updated";
+          break;
+        }
+        case "revoke":
+          this.db
+            .prepare(
+              `update licenses
+               set status = 'revoked', revocation_reason = ?
+               where license_key_hash = ?`
+            )
+            .run(input.reason ?? null, record.licenseKeyHash);
+          result = "terminally_revoked";
+          break;
+        default:
+          throw new SubscriptionLifecycleUnsupportedCommandError(
+            "subscription lifecycle command is not implemented"
+          );
       }
-      const effectivePeriodEnd = Math.max(storedPeriodEnd, incomingPeriodEnd);
-      const expiresAt = new Date(effectivePeriodEnd).toISOString();
-
-      this.db
-        .prepare(
-          `update licenses
-           set expires_at = ?, status = 'active'
-           where license_key_hash = ?`
-        )
-        .run(expiresAt, record.licenseKeyHash);
       this.db
         .prepare(
           `insert into license_subscription_lifecycle_events (
@@ -616,7 +661,7 @@ export class LicenseStore {
             external_subscription_id, request_hash, event_created_at,
             provider, provider_account_id, provider_mode, provider_event_type,
             command, payment_reference_fingerprint, normalized_transition, result
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'renew_paid', 'updated')`
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           input.eventId,
@@ -630,14 +675,16 @@ export class LicenseStore {
           input.providerMode,
           input.providerEventType,
           input.command,
-          input.paymentReferenceFingerprint
+          input.command === "renew_paid" ? input.paymentReferenceFingerprint : null,
+          input.command,
+          result
         );
       const updated = this.getLicenseByHash(record.licenseKeyHash);
-      if (!updated?.expiresAt || updated.status !== "active") {
+      if (!updated) {
         throw new Error("subscription entitlement update did not persist");
       }
       this.db.exec("commit");
-      return lifecycleResult("updated", false, updated);
+      return lifecycleResult(result, false, updated);
     } catch (error) {
       if (transactionStarted) this.db.exec("rollback");
       if (isSqliteBusy(error)) {
@@ -817,6 +864,9 @@ function mapCheckoutSubscriptionBinding(
     providerMode: row.provider_mode,
     externalSubscriptionId: row.external_subscription_id,
     externalCheckoutId: row.external_checkout_id,
+    ...(row.last_non_mutating_event_created_at !== null
+      ? { lastNonMutatingEventCreatedAt: row.last_non_mutating_event_created_at }
+      : {}),
     createdAt: row.created_at
   };
 }
@@ -870,6 +920,16 @@ function validatePaidPeriodEnd(
   return milliseconds;
 }
 
+function isStaleNonMutatingEvent(
+  eventCreatedAt: number,
+  lastEventCreatedAt: number | undefined
+): boolean {
+  // Provider seconds are not unique. Equal-second events are concurrent and
+  // therefore all remain auditable non-stale updates; command precedence is
+  // carried by terminal revoke, monotonic renewal, and audit-only updates.
+  return lastEventCreatedAt !== undefined && eventCreatedAt < lastEventCreatedAt;
+}
+
 function maximumPeriodDaysForPlan(plan: string): number {
   for (const lookupKey of CHECKOUT_LOOKUP_KEYS) {
     const policy = checkoutPolicyFor(lookupKey);
@@ -890,7 +950,7 @@ function lifecycleResult(
     status,
     replayed,
     entitlement: {
-      status: "active",
+      status: record.status,
       plan: record.plan,
       seats: record.seats,
       expiresAt: record.expiresAt
