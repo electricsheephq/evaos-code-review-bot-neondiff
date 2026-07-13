@@ -702,7 +702,9 @@ function validateOutputBoundary(outputDir: string, safeOutputRoot: string): void
 function readBoundedFile(path: string, maximumBytes: number, label: string): Buffer {
   const descriptor = openSync(path, "r");
   try {
-    const declaredSize = fstatSync(descriptor).size;
+    const input = fstatSync(descriptor);
+    if (!input.isFile()) throw new Error(`${label} must be a regular file`);
+    const declaredSize = input.size;
     if (declaredSize > maximumBytes) throw new Error(`${label} exceeds its bounded input byte limit`);
     const bytes = readFileSync(descriptor);
     if (bytes.byteLength > maximumBytes) throw new Error(`${label} exceeds its bounded input byte limit`);

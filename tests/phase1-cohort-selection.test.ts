@@ -161,6 +161,22 @@ describe("phase 1 cohort selection", () => {
     expect(() => runPhase1CohortSelectionCli(["select", ...args, "--policy", f.policyPath])).toThrow(/duplicate option/i);
   });
 
+  it("rejects non-regular candidate and policy input descriptors", () => {
+    const candidate = fixture();
+    expect(() => selectAndSealPhase1Cohort({
+      ...selectionOptions(candidate),
+      candidatePoolPath: "/dev/null",
+      candidatePoolSha256: digest("")
+    })).toThrow(/regular file/i);
+
+    const policyInput = fixture();
+    expect(() => selectAndSealPhase1Cohort({
+      ...selectionOptions(policyInput),
+      policyPath: "/dev/null",
+      policySha256: digest("")
+    })).toThrow(/regular file/i);
+  });
+
   it("selects deterministically under input reordering with exact cohort and first-five strata", () => {
     const first = fixture();
     const firstManifest = seal(first);
