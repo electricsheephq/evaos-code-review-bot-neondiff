@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   LifecycleRequestError,
   MAX_LIFECYCLE_BODY_BYTES,
@@ -9,6 +11,59 @@ import {
 } from "../src/subscription-lifecycle.js";
 
 const NOW = new Date("2026-07-13T12:00:00.000Z");
+const SERVICE_ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+const COMMAND_MATRIX = {
+  renew_paid: {
+    events: ["invoice.paid", "invoice.payment_succeeded"],
+    statuses: ["active"]
+  },
+  reconcile: {
+    events: ["customer.subscription.updated"],
+    statuses: ["active", "trialing"]
+  },
+  cancel_at_period_end: {
+    events: ["customer.subscription.updated"],
+    statuses: ["active", "trialing"]
+  },
+  payment_attention: {
+    events: ["invoice.payment_failed", "customer.subscription.updated"],
+    statuses: ["active", "past_due", "incomplete", "paused"]
+  },
+  revoke: {
+    events: ["customer.subscription.deleted", "customer.subscription.updated"],
+    statuses: ["canceled", "unpaid", "incomplete_expired"]
+  }
+} as const;
+
+type MatrixCommand = keyof typeof COMMAND_MATRIX;
+
+const ALL_EVENTS = [
+  "invoice.paid",
+  "invoice.payment_succeeded",
+  "customer.subscription.updated",
+  "invoice.payment_failed",
+  "customer.subscription.deleted"
+] as const;
+
+const ALL_STATUSES = [
+  "active",
+  "trialing",
+  "past_due",
+  "incomplete",
+  "paused",
+  "canceled",
+  "unpaid",
+  "incomplete_expired"
+] as const;
+
+const PAYMENT_FIELDS = [
+  "paymentReference",
+  "amountPaidMinor",
+  "currency",
+  "paidOutOfBand",
+  "billingReason"
+] as const;
 
 function validRenewal(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -38,6 +93,27 @@ function parse(body: Record<string, unknown>) {
   return parseSubscriptionLifecycleRequest(JSON.stringify(body), NOW);
 }
 
+function lifecycleBody(
+  command: MatrixCommand,
+  event: string = COMMAND_MATRIX[command].events[0],
+  status: string = COMMAND_MATRIX[command].statuses[0]
+): Record<string, unknown> {
+  const body = validRenewal({
+    command,
+    providerEventType: event,
+    subscriptionStatus: status
+  });
+  if (command !== "renew_paid") {
+    for (const field of PAYMENT_FIELDS) delete body[field];
+  }
+  if (command === "reconcile" || command === "payment_attention") {
+    delete body.currentPeriodEnd;
+  }
+  if (command === "cancel_at_period_end") body.cancelAtPeriodEnd = true;
+  if (command === "revoke") delete body.currentPeriodEnd;
+  return body;
+}
+
 function invalid(body: Record<string, unknown>, pattern?: RegExp): void {
   assert.throws(
     () => parse(body),
@@ -59,6 +135,48 @@ test("parses a paid renewal without retaining its raw payment reference", () => 
   assert.equal("paymentReference" in parsed, false);
   assert.match(parsed.paymentReferenceFingerprint!, /^[a-f0-9]{64}$/);
   assert.match(parsed.requestHash, /^[a-f0-9]{64}$/);
+});
+
+test("separates diagnostic period ends from authoritative renewal and cancellation periods", () => {
+  for (const command of ["reconcile", "payment_attention"] as const) {
+    const parsed = parse({
+      ...lifecycleBody(command),
+      currentPeriodEnd: "2026-08-13T12:00:00.000Z"
+    });
+    assert.equal(parsed.command, command);
+    assert.equal(parsed.diagnosticCurrentPeriodEnd, "2026-08-13T12:00:00.000Z");
+    assert.equal("currentPeriodEnd" in parsed, false);
+  }
+
+  for (const command of ["renew_paid", "cancel_at_period_end"] as const) {
+    const parsed = parse(lifecycleBody(command));
+    assert.equal(parsed.command, command);
+    assert.equal(parsed.currentPeriodEnd, "2026-08-13T12:00:00.000Z");
+    assert.equal("diagnosticCurrentPeriodEnd" in parsed, false);
+  }
+});
+
+test("compile-time command narrowing prevents diagnostic period authority smuggling", () => {
+  assert.doesNotThrow(() =>
+    execFileSync(
+      process.execPath,
+      [
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "--strict",
+        "--target",
+        "ES2023",
+        "--module",
+        "NodeNext",
+        "--moduleResolution",
+        "NodeNext",
+        "--types",
+        "node",
+        "test/subscription-lifecycle-authority-types.ts"
+      ],
+      { cwd: SERVICE_ROOT, stdio: "pipe" }
+    )
+  );
 });
 
 test("rejects a body over the byte limit before JSON parsing", () => {
@@ -106,77 +224,107 @@ test("requires an integer epoch event time and permits at most five minutes of f
   );
 });
 
-test("accepts every supported command, provider-event, and status tuple", () => {
-  const cases: Record<string, unknown>[] = [
-    validRenewal(),
-    validRenewal({ providerEventType: "invoice.payment_succeeded" }),
-    {
-      ...validRenewal({
-        providerEventType: "customer.subscription.updated",
-        command: "reconcile",
-        subscriptionStatus: "trialing"
-      }),
-      cancelAtPeriodEnd: false
-    },
-    validRenewal({
-      providerEventType: "customer.subscription.updated",
-      command: "cancel_at_period_end",
-      subscriptionStatus: "active",
-      cancelAtPeriodEnd: true
-    }),
-    validRenewal({
-      providerEventType: "invoice.payment_failed",
-      command: "payment_attention",
-      subscriptionStatus: "past_due"
-    }),
-    validRenewal({
-      providerEventType: "customer.subscription.updated",
-      command: "payment_attention",
-      subscriptionStatus: "paused"
-    }),
-    validRenewal({
-      providerEventType: "customer.subscription.deleted",
-      command: "revoke",
-      subscriptionStatus: "canceled",
-      reason: "subscription deleted"
-    }),
-    validRenewal({
-      providerEventType: "customer.subscription.updated",
-      command: "revoke",
-      subscriptionStatus: "incomplete_expired"
-    })
-  ];
-
-  for (const body of cases) {
-    if (body.command !== "renew_paid") {
-      delete body.paymentReference;
-      delete body.amountPaidMinor;
-      delete body.currency;
-      delete body.paidOutOfBand;
-      delete body.billingReason;
+test("accepts every valid command, provider-event, status, and optional-period combination", () => {
+  let accepted = 0;
+  for (const command of Object.keys(COMMAND_MATRIX) as MatrixCommand[]) {
+    const rule = COMMAND_MATRIX[command];
+    for (const event of rule.events) {
+      for (const status of rule.statuses) {
+        parse(lifecycleBody(command, event, status));
+        accepted += 1;
+        if (command === "reconcile" || command === "payment_attention") {
+          const parsed = parse({
+            ...lifecycleBody(command, event, status),
+            currentPeriodEnd: "2026-08-13T12:00:00.000Z"
+          });
+          assert.equal(parsed.diagnosticCurrentPeriodEnd, "2026-08-13T12:00:00.000Z");
+          accepted += 1;
+        }
+      }
     }
-    if (body.command === "reconcile" || body.command === "payment_attention") {
-      delete body.currentPeriodEnd;
-    }
-    if (body.command === "revoke") delete body.currentPeriodEnd;
-    parse(body);
   }
+  assert.equal(accepted, 30);
 });
 
-test("rejects unsupported command, event, and status cross-pairings", () => {
-  const cases: Array<[Record<string, unknown>, RegExp]> = [
-    [validRenewal({ command: "extend" }), /command is unsupported/],
-    [validRenewal({ providerEventType: "customer.subscription.updated" }), /providerEventType is invalid for renew_paid/],
-    [validRenewal({ subscriptionStatus: "trialing" }), /subscriptionStatus is invalid for renew_paid/],
-    [validRenewal({ command: "reconcile", providerEventType: "invoice.paid" }), /providerEventType is invalid for reconcile/],
-    [validRenewal({ command: "reconcile", providerEventType: "customer.subscription.updated", subscriptionStatus: "past_due" }), /subscriptionStatus is invalid for reconcile/],
-    [validRenewal({ command: "cancel_at_period_end", providerEventType: "customer.subscription.updated", subscriptionStatus: "past_due" }), /subscriptionStatus is invalid for cancel_at_period_end/],
-    [validRenewal({ command: "payment_attention", providerEventType: "invoice.paid", subscriptionStatus: "past_due" }), /providerEventType is invalid for payment_attention/],
-    [validRenewal({ command: "payment_attention", providerEventType: "invoice.payment_failed", subscriptionStatus: "trialing" }), /subscriptionStatus is invalid for payment_attention/],
-    [validRenewal({ command: "revoke", providerEventType: "invoice.payment_failed", subscriptionStatus: "canceled" }), /providerEventType is invalid for revoke/],
-    [validRenewal({ command: "revoke", providerEventType: "customer.subscription.deleted", subscriptionStatus: "active" }), /subscriptionStatus is invalid for revoke/]
-  ];
-  for (const [body, pattern] of cases) invalid(body, pattern);
+test("rejects every cross-command event and status tuple plus unsupported values", () => {
+  let rejected = 0;
+  for (const command of Object.keys(COMMAND_MATRIX) as MatrixCommand[]) {
+    const rule = COMMAND_MATRIX[command];
+    for (const event of ALL_EVENTS) {
+      for (const status of ALL_STATUSES) {
+        const isValid =
+          (rule.events as readonly string[]).includes(event) &&
+          (rule.statuses as readonly string[]).includes(status);
+        if (isValid) continue;
+        invalid(lifecycleBody(command, event, status));
+        rejected += 1;
+      }
+    }
+    invalid(lifecycleBody(command, "unsupported.event", rule.statuses[0]));
+    invalid(lifecycleBody(command, rule.events[0], "unsupported_status"));
+    rejected += 2;
+  }
+  assert.equal(rejected, 190);
+  invalid(validRenewal({ command: "extend" }), /command is unsupported/);
+});
+
+test("exhaustively enforces shared and command-specific required fields", () => {
+  const sharedRequired = [
+    "schemaVersion",
+    "issuanceIdempotencyKey",
+    "eventId",
+    "eventCreatedAt",
+    "provider",
+    "providerAccountId",
+    "providerMode",
+    "externalSubscriptionId",
+    "providerEventType",
+    "command",
+    "subscriptionStatus",
+    "cancelAtPeriodEnd"
+  ] as const;
+  for (const command of Object.keys(COMMAND_MATRIX) as MatrixCommand[]) {
+    for (const field of sharedRequired) {
+      const body = lifecycleBody(command);
+      delete body[field];
+      invalid(body);
+    }
+  }
+  for (const field of [...PAYMENT_FIELDS, "currentPeriodEnd"] as const) {
+    const body = lifecycleBody("renew_paid");
+    delete body[field];
+    invalid(body);
+  }
+  const cancel = lifecycleBody("cancel_at_period_end");
+  delete cancel.currentPeriodEnd;
+  invalid(cancel, /currentPeriodEnd is required/);
+});
+
+test("exhaustively rejects fields forbidden by each command", () => {
+  for (const command of [
+    "reconcile",
+    "cancel_at_period_end",
+    "payment_attention",
+    "revoke"
+  ] as const) {
+    for (const field of PAYMENT_FIELDS) {
+      invalid({ ...lifecycleBody(command), [field]: validRenewal()[field] }, /payment fields/);
+    }
+  }
+  for (const command of [
+    "renew_paid",
+    "reconcile",
+    "cancel_at_period_end",
+    "payment_attention"
+  ] as const) {
+    invalid({ ...lifecycleBody(command), reason: "not a revocation" }, /reason is only allowed/);
+  }
+  invalid(
+    { ...lifecycleBody("revoke"), currentPeriodEnd: "2026-08-13T12:00:00.000Z" },
+    /currentPeriodEnd is forbidden/
+  );
+  invalid({ ...lifecycleBody("reconcile"), cancelAtPeriodEnd: true }, /must be false/);
+  invalid({ ...lifecycleBody("cancel_at_period_end"), cancelAtPeriodEnd: false }, /must be true/);
 });
 
 test("requires paid active subscription-cycle evidence for renew_paid", () => {

@@ -49,7 +49,7 @@ export type SubscriptionLifecycleCommand =
 
 export type SubscriptionProviderMode = "test" | "live";
 
-export interface ParsedSubscriptionLifecycleRequest {
+interface CommonSubscriptionLifecycleRequest {
   readonly schemaVersion: 1;
   readonly issuanceIdempotencyKey: string;
   readonly eventId: string;
@@ -58,19 +58,68 @@ export interface ParsedSubscriptionLifecycleRequest {
   readonly providerAccountId: string;
   readonly providerMode: SubscriptionProviderMode;
   readonly externalSubscriptionId: string;
-  readonly providerEventType: string;
-  readonly command: SubscriptionLifecycleCommand;
-  readonly subscriptionStatus: string;
   readonly cancelAtPeriodEnd: boolean;
-  readonly amountPaidMinor?: number;
-  readonly currency?: "usd";
-  readonly paidOutOfBand?: false;
-  readonly billingReason?: "subscription_cycle";
-  readonly currentPeriodEnd?: string;
-  readonly reason?: string;
-  readonly paymentReferenceFingerprint?: string;
-  readonly requestHash: string;
 }
+
+export interface RenewPaidSubscriptionLifecycleRequest
+  extends CommonSubscriptionLifecycleRequest {
+  readonly command: "renew_paid";
+  readonly providerEventType: "invoice.paid" | "invoice.payment_succeeded";
+  readonly subscriptionStatus: "active";
+  readonly paymentReferenceFingerprint: string;
+  readonly amountPaidMinor: number;
+  readonly currency: "usd";
+  readonly paidOutOfBand: false;
+  readonly billingReason: "subscription_cycle";
+  readonly currentPeriodEnd: string;
+}
+
+export interface ReconcileSubscriptionLifecycleRequest
+  extends CommonSubscriptionLifecycleRequest {
+  readonly command: "reconcile";
+  readonly providerEventType: "customer.subscription.updated";
+  readonly subscriptionStatus: "active" | "trialing";
+  readonly cancelAtPeriodEnd: false;
+  readonly diagnosticCurrentPeriodEnd?: string;
+}
+
+export interface CancelSubscriptionLifecycleRequest
+  extends CommonSubscriptionLifecycleRequest {
+  readonly command: "cancel_at_period_end";
+  readonly providerEventType: "customer.subscription.updated";
+  readonly subscriptionStatus: "active" | "trialing";
+  readonly cancelAtPeriodEnd: true;
+  readonly currentPeriodEnd: string;
+}
+
+export interface PaymentAttentionSubscriptionLifecycleRequest
+  extends CommonSubscriptionLifecycleRequest {
+  readonly command: "payment_attention";
+  readonly providerEventType: "invoice.payment_failed" | "customer.subscription.updated";
+  readonly subscriptionStatus: "active" | "past_due" | "incomplete" | "paused";
+  readonly diagnosticCurrentPeriodEnd?: string;
+}
+
+export interface RevokeSubscriptionLifecycleRequest
+  extends CommonSubscriptionLifecycleRequest {
+  readonly command: "revoke";
+  readonly providerEventType:
+    | "customer.subscription.deleted"
+    | "customer.subscription.updated";
+  readonly subscriptionStatus: "canceled" | "unpaid" | "incomplete_expired";
+  readonly reason?: string;
+}
+
+export type SubscriptionLifecycleRequestWithoutHash =
+  | RenewPaidSubscriptionLifecycleRequest
+  | ReconcileSubscriptionLifecycleRequest
+  | CancelSubscriptionLifecycleRequest
+  | PaymentAttentionSubscriptionLifecycleRequest
+  | RevokeSubscriptionLifecycleRequest;
+
+export type ParsedSubscriptionLifecycleRequest = SubscriptionLifecycleRequestWithoutHash & {
+  readonly requestHash: string;
+};
 
 export class LifecycleRequestError extends Error {
   constructor(message: string) {
@@ -177,15 +226,15 @@ export function parseSubscriptionLifecycleRequest(
     throw new LifecycleRequestError("payment fields are forbidden for this command");
   }
 
-  let currentPeriodEnd: string | undefined;
+  let parsedPeriodEnd: string | undefined;
   if (command === "revoke") {
     if (body.currentPeriodEnd !== undefined) {
       throw new LifecycleRequestError("currentPeriodEnd is forbidden for revoke");
     }
   } else if (command === "renew_paid" || command === "cancel_at_period_end") {
-    currentPeriodEnd = readFuturePeriodEnd(body.currentPeriodEnd, now, true);
+    parsedPeriodEnd = readFuturePeriodEnd(body.currentPeriodEnd, now, true);
   } else if (body.currentPeriodEnd !== undefined) {
-    currentPeriodEnd = readFuturePeriodEnd(body.currentPeriodEnd, now, false);
+    parsedPeriodEnd = readFuturePeriodEnd(body.currentPeriodEnd, now, false);
   }
 
   if (command === "reconcile" && cancelAtPeriodEnd) {
@@ -203,7 +252,7 @@ export function parseSubscriptionLifecycleRequest(
     reason = readRequiredString(body, "reason", MAX_REASON_LENGTH);
   }
 
-  const requestWithoutHash: Omit<ParsedSubscriptionLifecycleRequest, "requestHash"> = {
+  const common: CommonSubscriptionLifecycleRequest = {
     schemaVersion: 1,
     issuanceIdempotencyKey,
     eventId,
@@ -212,20 +261,68 @@ export function parseSubscriptionLifecycleRequest(
     providerAccountId,
     providerMode,
     externalSubscriptionId,
-    providerEventType,
-    command,
-    subscriptionStatus,
-    cancelAtPeriodEnd,
-    ...(amountPaidMinor !== undefined ? { amountPaidMinor } : {}),
-    ...(currency !== undefined ? { currency } : {}),
-    ...(paidOutOfBand !== undefined ? { paidOutOfBand } : {}),
-    ...(billingReason !== undefined ? { billingReason } : {}),
-    ...(currentPeriodEnd !== undefined ? { currentPeriodEnd } : {}),
-    ...(reason !== undefined ? { reason } : {}),
-    ...(paymentFingerprint !== undefined
-      ? { paymentReferenceFingerprint: paymentFingerprint }
-      : {})
+    cancelAtPeriodEnd
   };
+
+  let requestWithoutHash: SubscriptionLifecycleRequestWithoutHash;
+  switch (command) {
+    case "renew_paid":
+      requestWithoutHash = {
+        ...common,
+        command,
+        providerEventType: providerEventType as RenewPaidSubscriptionLifecycleRequest["providerEventType"],
+        subscriptionStatus: "active",
+        paymentReferenceFingerprint: paymentFingerprint!,
+        amountPaidMinor: amountPaidMinor!,
+        currency: currency!,
+        paidOutOfBand: paidOutOfBand!,
+        billingReason: billingReason!,
+        currentPeriodEnd: parsedPeriodEnd!
+      };
+      break;
+    case "reconcile":
+      requestWithoutHash = {
+        ...common,
+        command,
+        providerEventType: "customer.subscription.updated",
+        subscriptionStatus: subscriptionStatus as ReconcileSubscriptionLifecycleRequest["subscriptionStatus"],
+        cancelAtPeriodEnd: false,
+        ...(parsedPeriodEnd !== undefined
+          ? { diagnosticCurrentPeriodEnd: parsedPeriodEnd }
+          : {})
+      };
+      break;
+    case "cancel_at_period_end":
+      requestWithoutHash = {
+        ...common,
+        command,
+        providerEventType: "customer.subscription.updated",
+        subscriptionStatus: subscriptionStatus as CancelSubscriptionLifecycleRequest["subscriptionStatus"],
+        cancelAtPeriodEnd: true,
+        currentPeriodEnd: parsedPeriodEnd!
+      };
+      break;
+    case "payment_attention":
+      requestWithoutHash = {
+        ...common,
+        command,
+        providerEventType: providerEventType as PaymentAttentionSubscriptionLifecycleRequest["providerEventType"],
+        subscriptionStatus: subscriptionStatus as PaymentAttentionSubscriptionLifecycleRequest["subscriptionStatus"],
+        ...(parsedPeriodEnd !== undefined
+          ? { diagnosticCurrentPeriodEnd: parsedPeriodEnd }
+          : {})
+      };
+      break;
+    case "revoke":
+      requestWithoutHash = {
+        ...common,
+        command,
+        providerEventType: providerEventType as RevokeSubscriptionLifecycleRequest["providerEventType"],
+        subscriptionStatus: subscriptionStatus as RevokeSubscriptionLifecycleRequest["subscriptionStatus"],
+        ...(reason !== undefined ? { reason } : {})
+      };
+      break;
+  }
 
   return {
     ...requestWithoutHash,
@@ -234,9 +331,9 @@ export function parseSubscriptionLifecycleRequest(
 }
 
 export function canonicalSubscriptionLifecycleRequestHash(
-  request: Omit<ParsedSubscriptionLifecycleRequest, "requestHash"> | ParsedSubscriptionLifecycleRequest
+  request: SubscriptionLifecycleRequestWithoutHash | ParsedSubscriptionLifecycleRequest
 ): string {
-  const canonicalFields = [
+  const commonFields = [
     request.schemaVersion,
     request.issuanceIdempotencyKey,
     request.eventId,
@@ -245,21 +342,63 @@ export function canonicalSubscriptionLifecycleRequestHash(
     request.providerAccountId,
     request.providerMode,
     request.externalSubscriptionId,
-    request.providerEventType,
-    request.command,
-    request.subscriptionStatus,
-    request.cancelAtPeriodEnd,
-    request.paymentReferenceFingerprint ?? null,
-    request.amountPaidMinor ?? null,
-    request.currency ?? null,
-    request.paidOutOfBand ?? null,
-    request.billingReason ?? null,
-    request.currentPeriodEnd ?? null,
-    request.reason ?? null
   ];
+  let commandFields: readonly unknown[];
+  switch (request.command) {
+    case "renew_paid":
+      commandFields = [
+        request.command,
+        request.providerEventType,
+        request.subscriptionStatus,
+        request.cancelAtPeriodEnd,
+        request.paymentReferenceFingerprint,
+        request.amountPaidMinor,
+        request.currency,
+        request.paidOutOfBand,
+        request.billingReason,
+        request.currentPeriodEnd
+      ];
+      break;
+    case "reconcile":
+      commandFields = [
+        request.command,
+        request.providerEventType,
+        request.subscriptionStatus,
+        request.cancelAtPeriodEnd,
+        request.diagnosticCurrentPeriodEnd ?? null
+      ];
+      break;
+    case "cancel_at_period_end":
+      commandFields = [
+        request.command,
+        request.providerEventType,
+        request.subscriptionStatus,
+        request.cancelAtPeriodEnd,
+        request.currentPeriodEnd
+      ];
+      break;
+    case "payment_attention":
+      commandFields = [
+        request.command,
+        request.providerEventType,
+        request.subscriptionStatus,
+        request.cancelAtPeriodEnd,
+        request.diagnosticCurrentPeriodEnd ?? null
+      ];
+      break;
+    case "revoke":
+      commandFields = [
+        request.command,
+        request.providerEventType,
+        request.subscriptionStatus,
+        request.cancelAtPeriodEnd,
+        request.reason ?? null
+      ];
+      break;
+  }
   return createHash("sha256")
     .update("neondiff:subscription-lifecycle-request:v1\n")
-    .update(JSON.stringify(canonicalFields))
+    .update(JSON.stringify([...commonFields, ...commandFields]))
     .digest("hex");
 }
 
