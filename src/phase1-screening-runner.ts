@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -12,8 +12,8 @@ import {
   rmSync,
   writeFileSync
 } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
-import { connect } from "node:net";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { connect, createServer } from "node:net";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 export type Phase1TerminalStatus = "completed" | "failed" | "stopped" | "oom" | "schema_failed";
@@ -135,14 +135,25 @@ export interface Phase1ResourceSample {
 }
 
 export interface Phase1ResourceMonitor {
-  identity: { version: string; sha256: string };
   start(context: { target: Phase1Target; cell: Phase1Cell; outputDir: string }): Promise<{ id: string }>;
   sample(session: { id: string }, context: { phase: "before" | "after"; input: Phase1Input }): Promise<Phase1ResourceSample>;
   classify?(samples: Phase1ResourceSample[]): { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined;
   stop(session: { id: string }): Promise<Phase1ResourceSample>;
 }
 
-export interface Phase1RunnerOptions { monitor?: Phase1ResourceMonitor }
+export interface Phase1ResourceMonitorModule {
+  version: string;
+  modulePath: string;
+  moduleSha256: string;
+  approvedRoot: string;
+  exportName: string;
+}
+
+export interface Phase1RunnerOptions {
+  monitorModule?: Phase1ResourceMonitorModule;
+}
+
+type ResolvedRunnerOptions = { monitor?: Phase1ResourceMonitor; monitorIdentity?: Phase1ResourceMonitorModule };
 
 type ResidentProcess = {
   process: ChildProcess;
@@ -331,6 +342,7 @@ type Manifest = {
   gateFingerprint: string;
   requestFingerprint: string;
   monitorFingerprint: string;
+  monitorIdentity: Phase1ResourceMonitorModule | { version: "none"; moduleSha256: string; modulePath: "none"; approvedRoot: "none"; exportName: "none" };
   harnessFingerprint: string;
   target: Phase1Target;
   prompt: Phase1RunSpec["prompt"];
@@ -338,7 +350,7 @@ type Manifest = {
   gate: Phase1RunSpec["gate"];
   request: Phase1RunSpec["request"];
   harness: Phase1RunSpec["harness"];
-  cells: Array<Phase1Cell & { fingerprint: string; effectiveArgvFingerprint: string }>;
+  cells: Array<Phase1Cell & { fingerprint: string; cohortFingerprint: string; effectiveArgvFingerprint: string }>;
   inputs: Array<Omit<Phase1Input, "prompt"> & { fingerprint: string; promptSha256: string }>;
 };
 
@@ -362,7 +374,7 @@ export function verifyPairedPhase1Cohort(
     ["request", left.requestFingerprint, right.requestFingerprint],
     ["monitor", left.monitorFingerprint, right.monitorFingerprint],
     ["harness", left.harnessFingerprint, right.harnessFingerprint],
-    ["cells", fingerprint(left.cells), fingerprint(right.cells)],
+    ["cells", fingerprint(left.cells.map(pairedCellIdentity)), fingerprint(right.cells.map(pairedCellIdentity))],
     ["inputs", fingerprint(left.inputs), fingerprint(right.inputs)]
   ] as const) {
     if (leftValue !== rightValue) throw new Error(`paired cohort drift detected in ${name}`);
@@ -373,11 +385,23 @@ export function verifyPairedPhase1Cohort(
     gateFingerprint: left.gateFingerprint,
     requestFingerprint: left.requestFingerprint,
     monitorFingerprint: left.monitorFingerprint,
+    monitorIdentity: left.monitorIdentity,
     harnessFingerprint: left.harnessFingerprint,
-    cells: left.cells,
+    cells: left.cells.map(pairedCellIdentity),
     inputs: left.inputs
   };
   return { ok: true, cohortFingerprint: fingerprint(cohort) };
+}
+
+function pairedCellIdentity(cell: Manifest["cells"][number]): Record<string, unknown> {
+  return {
+    id: cell.id,
+    contextTokens: cell.contextTokens,
+    repetition: cell.repetition,
+    parameters: cell.parameters,
+    executableArgs: cell.executableArgs,
+    cohortFingerprint: cell.cohortFingerprint
+  };
 }
 
 function assertPairedManifestIntegrity(manifest: Manifest, side: string): void {
@@ -387,6 +411,7 @@ function assertPairedManifestIntegrity(manifest: Manifest, side: string): void {
     ["parser", manifest.parserFingerprint, fingerprint(manifest.parser)],
     ["gate", manifest.gateFingerprint, fingerprint(manifest.gate)],
     ["request", manifest.requestFingerprint, fingerprint(manifest.request)],
+    ["monitor", manifest.monitorFingerprint, fingerprint(manifest.monitorIdentity)],
     ["harness", manifest.harnessFingerprint, fingerprint(manifest.harness)]
   ] as const) {
     if (declared !== actual) throw new Error(`paired cohort drift detected in ${name} (${side} manifest integrity)`);
@@ -401,11 +426,12 @@ export async function runPhase1Screen(
   options: Phase1RunnerOptions = {}
 ): Promise<Phase1RunSummary> {
   validateSpec(spec);
-  if (options.monitor && !/^[a-f0-9]{64}$/.test(options.monitor.identity.sha256)) throw new Error("resource monitor identity requires a SHA-256 source fingerprint");
+  if ("monitor" in (options as object)) throw new Error("injected resource monitor methods are forbidden; configure a pinned monitor module");
+  if (options.monitorModule && !/^[a-f0-9]{64}$/.test(options.monitorModule.moduleSha256)) throw new Error("resource monitor module requires a SHA-256 source fingerprint");
   validateOutputBoundary(spec);
   mkdirSync(spec.outputDir, { recursive: true, mode: 0o700 });
   const leasePath = join(spec.outputDir, ".phase1-run.lock");
-  const lease = acquireRunLease(leasePath);
+  const lease = await acquireRunLease(leasePath);
   try {
     return await runPhase1ScreenWithLease(spec, adapter, options);
   } finally {
@@ -421,9 +447,18 @@ async function runPhase1ScreenWithLease(
 ): Promise<Phase1RunSummary> {
   const actualHarnessSha256 = await sha256File(spec.harness.sourcePath);
   if (actualHarnessSha256 !== spec.harness.sourceSha256) throw new Error("harness source SHA-256 does not match the implementation artifact");
+  const harnessRelativePath = relative(spec.checkoutRoot, spec.harness.sourcePath);
+  if (!harnessRelativePath || harnessRelativePath.startsWith(`..${sep}`) || harnessRelativePath === ".." || resolve(spec.checkoutRoot, harnessRelativePath) !== resolve(spec.harness.sourcePath)) {
+    throw new Error("harness source must be a repository-relative path inside checkoutRoot");
+  }
+  if (!gitCommitContainsBytes(spec.checkoutRoot, spec.harness.commit, harnessRelativePath, spec.harness.sourceSha256)) {
+    throw new Error("harness source bytes are not present at the declared commit");
+  }
+  if (options.monitorModule) await verifyResourceMonitorModuleIdentity(options.monitorModule);
+  const resolvedOptions: ResolvedRunnerOptions = options.monitorModule ? { monitorIdentity: options.monitorModule } : {};
   assertSecretSafe("target argv", [spec.target.executable, ...spec.target.args].join("\n"));
   assertJsonValuesSecretSafe("target manifest", spec.target);
-  const manifest = buildManifest(spec, options.monitor);
+  const manifest = buildManifest(spec, resolvedOptions.monitorIdentity);
   assertManifestMetadataSecretSafe(spec);
   const manifestPath = join(spec.outputDir, "manifest.json");
   if (existsSync(manifestPath)) {
@@ -441,9 +476,11 @@ async function runPhase1ScreenWithLease(
       if (existsSync(path)) validateExistingResult(path, manifest, cell.fingerprint, input);
       else missingResults += 1;
     }
-    if (options.monitor) {
+    if (resolvedOptions.monitorIdentity) {
       const resourcePath = join(spec.outputDir, "resources", `${cell.id}.json`);
+      const unavailablePath = join(spec.outputDir, `resource-unavailable-${cell.id}.json`);
       if (existsSync(resourcePath)) validateResourceEvidence(resourcePath, manifest, cell.fingerprint);
+      else if (existsSync(unavailablePath)) validateResourceEvidence(unavailablePath, manifest, cell.fingerprint);
       else if (spec.inputs.every((input) => existsSync(resultFile(spec.outputDir, cell.id, input.id)))) {
         throw new Error(`terminal resource evidence is missing for cell ${cell.id}`);
       }
@@ -461,13 +498,17 @@ async function runPhase1ScreenWithLease(
   atomicWriteText(join(spec.outputDir, "RUNNING"), `${manifest.runFingerprint}\n`);
 
   let infrastructureFailure: string | undefined;
+  if (resolvedOptions.monitorIdentity) {
+    try { resolvedOptions.monitor = await loadResourceMonitorModule(resolvedOptions.monitorIdentity); }
+    catch (error) { infrastructureFailure = `resource monitor module load failed: ${errorMessage(error)}`; }
+  }
   for (const cell of manifest.cells) {
     const cellHasWork = spec.inputs.some((input) => !existsSync(resultFile(spec.outputDir, cell.id, input.id)));
     if (!cellHasWork) continue;
     let monitorSession: { id: string } | undefined;
     const resourceSamples: Phase1ResourceSample[] = [];
-    if (options.monitor) {
-      try { monitorSession = await options.monitor.start({ target: spec.target, cell, outputDir: spec.outputDir }); }
+    if (resolvedOptions.monitor) {
+      try { monitorSession = await resolvedOptions.monitor.start({ target: spec.target, cell, outputDir: spec.outputDir }); }
       catch (error) { infrastructureFailure = errorMessage(error); }
     }
     const resident = infrastructureFailure ? undefined : await startResident(adapter, spec, manifest, cell).catch((error) => {
@@ -476,10 +517,11 @@ async function runPhase1ScreenWithLease(
     });
     if (!resident) {
       for (const input of spec.inputs) writeMissingTerminalResult(spec.outputDir, manifest, cell, input, infrastructureFailure ?? "resident_start_failed");
-      if (options.monitor && monitorSession) {
-        const monitorFailure = await finalizeMonitorEvidence(options.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
-        if (monitorFailure) infrastructureFailure = monitorFailure;
-      } else if (options.monitor) {
+      if (resolvedOptions.monitor && monitorSession) {
+        const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
+        if (finalized.infrastructureFailure) infrastructureFailure = finalized.infrastructureFailure;
+        if (finalized.terminalClassification) rewriteCellTerminalResults(spec.outputDir, manifest, cell, finalized.terminalClassification);
+      } else if (resolvedOptions.monitorIdentity) {
         writeUnavailableMonitorEvidence(spec.outputDir, manifest, cell, infrastructureFailure ?? "monitor_start_failed");
       }
       continue;
@@ -499,7 +541,7 @@ async function runPhase1ScreenWithLease(
         try {
           if (cellTerminal) result = cellTerminal;
           else {
-            if (options.monitor && monitorSession) resourceSamples.push(await monitorSample(options.monitor, monitorSession, { phase: "before", input }));
+            if (resolvedOptions.monitor && monitorSession) resourceSamples.push(await monitorSample(resolvedOptions.monitor, monitorSession, { phase: "before", input }));
             const renderedPrompt = renderPrompt(spec.prompt.template, input.prompt);
             result = await adapter.invoke(resident, {
               input,
@@ -510,9 +552,9 @@ async function runPhase1ScreenWithLease(
               parserFingerprint: manifest.parserFingerprint,
               gateFingerprint: manifest.gateFingerprint
             });
-            if (options.monitor && monitorSession) {
-              resourceSamples.push(await monitorSample(options.monitor, monitorSession, { phase: "after", input }));
-              const classification = monitorClassify(options.monitor, resourceSamples);
+            if (resolvedOptions.monitor && monitorSession) {
+              resourceSamples.push(await monitorSample(resolvedOptions.monitor, monitorSession, { phase: "after", input }));
+              const classification = monitorClassify(resolvedOptions.monitor, resourceSamples);
               if (classification) result = { ...result, ...classification, residentTerminal: true };
             }
           }
@@ -550,9 +592,10 @@ async function runPhase1ScreenWithLease(
       } catch (error) {
         infrastructureFailure = errorMessage(error);
       }
-      if (options.monitor && monitorSession) {
-        const monitorFailure = await finalizeMonitorEvidence(options.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
-        if (monitorFailure) infrastructureFailure = monitorFailure;
+      if (resolvedOptions.monitor && monitorSession) {
+        const finalized = await finalizeMonitorEvidence(resolvedOptions.monitor, monitorSession, resourceSamples, spec.outputDir, manifest, cell);
+        if (finalized.infrastructureFailure) infrastructureFailure = finalized.infrastructureFailure;
+        if (finalized.terminalClassification) rewriteCellTerminalResults(spec.outputDir, manifest, cell, finalized.terminalClassification);
       }
     }
   }
@@ -601,17 +644,19 @@ async function startResident(
   });
 }
 
-function buildManifest(spec: Phase1RunSpec, monitor?: Phase1ResourceMonitor): Manifest {
+function buildManifest(spec: Phase1RunSpec, monitorIdentityInput?: Phase1ResourceMonitorModule): Manifest {
   const targetFingerprint = fingerprint(spec.target);
   const promptFingerprint = fingerprint(spec.prompt);
   const parserFingerprint = fingerprint(spec.parser);
   const gateFingerprint = fingerprint(spec.gate);
   const requestFingerprint = fingerprint(spec.request);
   const harnessFingerprint = fingerprint(spec.harness);
-  const monitorFingerprint = fingerprint(monitor?.identity ?? { version: "none", sha256: sha256("none") });
+  const monitorIdentity = monitorIdentityInput ?? { version: "none" as const, moduleSha256: sha256("none"), modulePath: "none" as const, approvedRoot: "none" as const, exportName: "none" as const };
+  const monitorFingerprint = fingerprint(monitorIdentity);
   const cells = spec.cells.map((cell) => {
     const effectiveArgvFingerprint = fingerprint([spec.target.executable, ...spec.target.args, ...(cell.executableArgs ?? [])]);
-    return { ...cell, effectiveArgvFingerprint, fingerprint: fingerprint({ ...cell, effectiveArgvFingerprint }) };
+    const cohortFingerprint = fingerprint({ id: cell.id, contextTokens: cell.contextTokens, repetition: cell.repetition, parameters: cell.parameters, executableArgs: cell.executableArgs });
+    return { ...cell, cohortFingerprint, effectiveArgvFingerprint, fingerprint: fingerprint({ ...cell, cohortFingerprint, effectiveArgvFingerprint }) };
   });
   const inputs = spec.inputs.map(({ prompt, ...input }) => ({
     ...input,
@@ -626,6 +671,7 @@ function buildManifest(spec: Phase1RunSpec, monitor?: Phase1ResourceMonitor): Ma
     gateFingerprint,
     requestFingerprint,
     monitorFingerprint,
+    monitorIdentity,
     harnessFingerprint,
     target: spec.target,
     prompt: spec.prompt,
@@ -821,20 +867,52 @@ function canonicalProspectivePath(path: string): string {
   return resolve(realpathSync(cursor), ...suffix);
 }
 
-function acquireRunLease(path: string): number {
+async function acquireRunLease(path: string): Promise<number> {
+  const coordinator = createServer((socket) => socket.destroy());
+  const coordinationPort = phase1LeaseCoordinationPort(path);
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    const fail = (error: Error & { code?: string }) => {
+      coordinator.removeListener("listening", ready);
+      rejectPromise(new Error(error.code === "EADDRINUSE"
+        ? "Phase 1 lease acquisition is already coordinated by another writer"
+        : `Phase 1 lease coordination failed: ${errorMessage(error)}`));
+    };
+    const ready = () => {
+      coordinator.removeListener("error", fail);
+      resolvePromise();
+    };
+    coordinator.once("error", fail);
+    coordinator.once("listening", ready);
+    coordinator.listen({ host: "127.0.0.1", port: coordinationPort, exclusive: true });
+  });
   try {
-    const fd = openSync(path, "wx", 0o600);
-    writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`);
-    return fd;
-  } catch (error) {
-    if (!existsSync(path)) throw error;
-    const prior = parseJson<{ pid?: number }>(path);
-    if (typeof prior.pid === "number" && isProcessAlive(prior.pid)) throw new Error(`Phase 1 output has an active exclusive run lease held by PID ${prior.pid}`);
-    rmSync(path, { force: true });
-    const fd = openSync(path, "wx", 0o600);
-    writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
-    return fd;
+    try {
+      const fd = openSync(path, "wx", 0o600);
+      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`);
+      return fd;
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) throw error;
+      const prior = parseJson<{ pid?: number }>(path);
+      if (typeof prior.pid === "number" && isProcessAlive(prior.pid)) throw new Error(`Phase 1 output has an active exclusive run lease held by PID ${prior.pid}`);
+      // Every conforming writer must own the crash-released loopback
+      // coordinator before touching the canonical lease, so no new lease can
+      // appear between this removal and the exclusive replacement open.
+      rmSync(path, { force: true });
+      const fd = openSync(path, "wx", 0o600);
+      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
+      return fd;
+    }
+  } finally {
+    await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
   }
+}
+
+export function phase1LeaseCoordinationPort(path: string): number {
+  return 20_000 + (Number.parseInt(sha256(resolve(path)).slice(0, 8), 16) % 20_000);
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST";
 }
 
 function renderPrompt(template: string, input: string): string {
@@ -880,7 +958,10 @@ async function finalizeMonitorEvidence(
   outputDir: string,
   manifest: Manifest,
   cell: Manifest["cells"][number]
-): Promise<string | undefined> {
+): Promise<{
+  infrastructureFailure?: string;
+  terminalClassification?: { status: "failed" | "stopped" | "oom"; errorCode: string };
+}> {
   let infrastructureFailure: string | undefined;
   let terminalClassification: { status: "failed" | "stopped" | "oom"; errorCode: string } | undefined;
   try { samples.push(await monitor.stop(session)); }
@@ -902,12 +983,65 @@ async function finalizeMonitorEvidence(
     } : undefined,
     terminalInfrastructureErrorCode: infrastructureFailure ? sanitizeIdentifier(infrastructureFailure) : undefined
   };
-  assertJsonValuesSecretSafe("resource evidence", resourceRecord);
-  atomicWriteJson(join(outputDir, "resources", `${cell.id}.json`), {
+  try {
+    assertJsonValuesSecretSafe("resource evidence", resourceRecord);
+    atomicWriteJson(join(outputDir, "resources", `${cell.id}.json`), {
+      ...resourceRecord,
+      evidenceSha256: fingerprint(resourceRecord)
+    });
+  } catch (error) {
+    infrastructureFailure = `monitor evidence finalization failed: ${errorMessage(error)}`;
+    try { writeResourceUnavailableFallback(outputDir, manifest, cell, infrastructureFailure); }
+    catch (fallbackError) {
+      infrastructureFailure = `monitor evidence finalization and fallback write failed: ${errorMessage(fallbackError)}`;
+    }
+  }
+  return { infrastructureFailure, terminalClassification };
+}
+
+function writeResourceUnavailableFallback(
+  outputDir: string,
+  manifest: Manifest,
+  cell: Manifest["cells"][number],
+  error: string
+): void {
+  const resourceRecord = {
+    schemaVersion: "neondiff-phase1-resources/v1",
+    runFingerprint: manifest.runFingerprint,
+    cellFingerprint: cell.fingerprint,
+    monitorFingerprint: manifest.monitorFingerprint,
+    samples: [] as Phase1ResourceSample[],
+    terminalInfrastructureErrorCode: sanitizeIdentifier(error),
+    unavailable: true
+  };
+  atomicWriteJson(join(outputDir, `resource-unavailable-${cell.id}.json`), {
     ...resourceRecord,
     evidenceSha256: fingerprint(resourceRecord)
   });
-  return infrastructureFailure;
+}
+
+function rewriteCellTerminalResults(
+  outputDir: string,
+  manifest: Manifest,
+  cell: Manifest["cells"][number],
+  terminal: { status: "failed" | "stopped" | "oom"; errorCode: string }
+): void {
+  for (const input of manifest.inputs) {
+    const path = resultFile(outputDir, cell.id, input.id);
+    if (!existsSync(path)) continue;
+    const record = parseJson<Record<string, unknown>>(path);
+    if (record.status !== "completed") continue;
+    const { evidenceSha256: _discarded, ...body } = record;
+    const rewritten = {
+      ...body,
+      status: terminal.status,
+      errorCode: sanitizeIdentifier(terminal.errorCode),
+      residentTerminal: true,
+      completedAt: new Date().toISOString()
+    };
+    assertResultPayloadSecretSafe(rewritten);
+    atomicWriteJson(path, { ...rewritten, evidenceSha256: fingerprint(rewritten) });
+  }
 }
 
 function numericMetadata(value: unknown): number {
@@ -1002,8 +1136,8 @@ function fingerprint(value: unknown): string {
   return sha256(canonicalJson(value));
 }
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
+function sha256(value: string | Buffer): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function canonicalJson(value: unknown): string {
@@ -1100,7 +1234,12 @@ async function recoverResidentJournal(
   signalProcessGroup(journal.pid, "SIGTERM");
   const deadline = Date.now() + stopTimeoutMs;
   while (isProcessAlive(journal.pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-  if (isProcessAlive(journal.pid)) signalProcessGroup(journal.pid, "SIGKILL");
+  if (isProcessAlive(journal.pid)) {
+    signalProcessGroup(journal.pid, "SIGKILL");
+    const killDeadline = Date.now() + stopTimeoutMs;
+    while (isProcessAlive(journal.pid) && Date.now() < killDeadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    if (isProcessAlive(journal.pid)) throw new Error("stale resident recovery could not be proven after SIGKILL");
+  }
   atomicWriteJson(path, { ...journal, state: "recovered_stopped", recoveredAt: new Date().toISOString() });
 }
 
@@ -1108,6 +1247,109 @@ async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
+}
+
+function gitCommitContainsBytes(checkoutRoot: string, commit: string, relativePath: string, expectedSha256: string): boolean {
+  if (!/^[a-f0-9]{40}$/.test(commit) || relativePath.includes("\0") || relativePath.includes(":") || relativePath.includes("\\")
+    || relativePath.startsWith("/") || relativePath.split("/").some((part) => part === "" || part === "." || part === "..")) return false;
+  try {
+    const bytes = execFileSync("git", ["-C", checkoutRoot, "show", `${commit}:${relativePath}`], {
+      encoding: "buffer",
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return sha256(bytes) === expectedSha256;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyResourceMonitorModuleIdentity(identity: Phase1ResourceMonitorModule): Promise<void> {
+  const { modulePath, approvedRoot, moduleSha256, exportName } = identity;
+  if (resolve(modulePath) !== modulePath || resolve(approvedRoot) !== approvedRoot) {
+    throw new Error("resource monitor source and approved root paths must be absolute");
+  }
+  if (!/^[a-zA-Z_$][a-zA-Z0-9_$]{0,127}$/.test(exportName)) throw new Error("resource monitor export name is invalid");
+  const source = realpathSync(modulePath);
+  const root = realpathSync(approvedRoot);
+  if (source !== root && !source.startsWith(`${root}${sep}`)) throw new Error("resource monitor source must be inside its approved boundary");
+  if (await sha256File(source) !== moduleSha256) throw new Error("resource monitor source SHA-256 does not match its immutable identity");
+  assertMonitorModuleImportsAreLoadable(readFileSync(source, "utf8"));
+}
+
+async function loadResourceMonitorModule(identity: Phase1ResourceMonitorModule): Promise<Phase1ResourceMonitor> {
+  await verifyResourceMonitorModuleIdentity(identity);
+  const bytes = readFileSync(realpathSync(identity.modulePath));
+  if (sha256(bytes) !== identity.moduleSha256) throw new Error("resource monitor module changed before exact-byte loading");
+  // Import the verified bytes themselves, rather than re-opening the path via
+  // the module loader. This closes the hash-check/import TOCTOU window and
+  // ensures the executing factory is exactly the artifact named in evidence.
+  // The nonce is deliberately run-local and excluded from evidence identity.
+  // Node caches ESM namespaces by URL; a unique fragment ensures module-scope
+  // counters cannot leak between candidates or repeated runPhase1Screen calls.
+  const moduleUrl = `data:text/javascript;base64,${bytes.toString("base64")}#sha256=${identity.moduleSha256}&load=${randomUUID()}`;
+  const loaded = await import(moduleUrl) as Record<string, unknown>;
+  const factory = loaded[identity.exportName];
+  if (typeof factory !== "function") throw new Error("resource monitor module does not export the pinned factory");
+  const monitor = await (factory as () => unknown)();
+  if (!monitor || typeof monitor !== "object") throw new Error("resource monitor factory did not return an object");
+  const candidate = monitor as Partial<Phase1ResourceMonitor>;
+  if (typeof candidate.start !== "function" || typeof candidate.sample !== "function" || typeof candidate.stop !== "function"
+    || (candidate.classify !== undefined && typeof candidate.classify !== "function")) {
+    throw new Error("resource monitor factory returned an invalid monitor implementation");
+  }
+  return candidate as Phase1ResourceMonitor;
+}
+
+function assertMonitorModuleImportsAreLoadable(source: string): void {
+  const lexicalSource = stripJavaScriptComments(source);
+  if (/\bimport\s*\(/.test(lexicalSource)) {
+    throw new Error("resource monitor module must be self-contained; dynamic import syntax is forbidden");
+  }
+  const specifiers: string[] = [];
+  for (const pattern of [/\bfrom\s*["']([^"']+)["']/g, /\bimport\s*["']([^"']+)["']/g]) {
+    for (const match of lexicalSource.matchAll(pattern)) specifiers.push(match[1]);
+  }
+  const unsupported = specifiers.find((specifier) => !specifier.startsWith("node:"));
+  if (unsupported) {
+    throw new Error(`resource monitor module must be self-contained; unsupported import specifier: ${sanitizeIdentifier(unsupported)}`);
+  }
+}
+
+function stripJavaScriptComments(source: string): string {
+  let output = "";
+  let quote: "'" | '"' | "`" | undefined;
+  for (let index = 0; index < source.length; index += 1) {
+    const current = source[index];
+    const next = source[index + 1];
+    if (quote) {
+      output += current;
+      if (current === "\\") {
+        output += next ?? "";
+        index += 1;
+      } else if (current === quote) quote = undefined;
+      continue;
+    }
+    if (current === "'" || current === '"' || current === "`") {
+      quote = current;
+      output += current;
+      continue;
+    }
+    if (current === "/" && next === "/") {
+      while (index < source.length && source[index] !== "\n") index += 1;
+      output += "\n";
+      continue;
+    }
+    if (current === "/" && next === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index += 1;
+      index += 1;
+      output += " ";
+      continue;
+    }
+    output += current;
+  }
+  return output;
 }
 
 async function readResponseBody(response: Response, maximumBytes: number): Promise<string> {
@@ -1142,6 +1384,7 @@ async function readStreamingAssistant(
   let content = "";
   let used = 0;
   let ttftMs: number | undefined;
+  const terminalMetrics: Record<string, number> = {};
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -1161,6 +1404,9 @@ async function readStreamingAssistant(
         let envelope: unknown;
         try { envelope = JSON.parse(data); }
         catch { throw new Error("invalid llama-server streaming envelope"); }
+        const envelopeMetrics = readResponseMetrics(envelope, 0);
+        delete envelopeMetrics.latencyMs;
+        Object.assign(terminalMetrics, envelopeMetrics);
         const delta = readDeltaContent(envelope);
         if (delta) {
           if (ttftMs === undefined) ttftMs = Math.max(0, performance.now() - requestStartedAt);
@@ -1174,6 +1420,7 @@ async function readStreamingAssistant(
   return {
     content,
     metrics: {
+      ...terminalMetrics,
       latencyMs: Math.max(0, performance.now() - requestStartedAt),
       ttftMs: ttftMs ?? 0,
       responseBytes: Buffer.byteLength(content, "utf8")
