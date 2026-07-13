@@ -670,6 +670,10 @@ describe("worker context budget preflight", () => {
     expect(scenario.result).toBe("skipped_consumed_authorization");
     expect(createdReviews).toEqual([]);
     expect(zcodePrompts).toEqual([]);
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 503, headSha)).toMatchObject({
+      status: "skipped",
+      error: "exact_authorization_already_consumed"
+    });
     expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "consumed-authorization-incident.json"), "utf8"))).toMatchObject({
       reason: "exact_authorization_already_consumed",
       repo: "electricsheephq/WorldOS",
@@ -840,6 +844,17 @@ describe("worker context budget preflight", () => {
 
     expect(scenario.result).toBe("posted_stale_head");
     expect(createdReviews[0]).toMatchObject({ headSha, event: "REQUEST_CHANGES" });
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 510, headSha)).toMatchObject({
+      status: "posted",
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/510#pullrequestreview-1",
+      error: "review_posted_head_changed"
+    });
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "posted-review.json"), "utf8"))).toEqual({
+      event: "REQUEST_CHANGES",
+      reviewId: 1,
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/510#pullrequestreview-1"
+    });
     expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "head-changed-during-post.json"), "utf8"))).toEqual({
       reason: "head_changed_during_post",
       repo: "electricsheephq/WorldOS",
@@ -1036,7 +1051,14 @@ describe("worker context budget preflight", () => {
     expect(createdReviews).toHaveLength(1);
     expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 517, headSha)).toMatchObject({
       status: "posted",
-      event: "REQUEST_CHANGES"
+      event: "REQUEST_CHANGES",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/517#pullrequestreview-1",
+      error: "post_review_head_unverified"
+    });
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "posted-review.json"), "utf8"))).toEqual({
+      event: "REQUEST_CHANGES",
+      reviewId: 1,
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/517#pullrequestreview-1"
     });
     const incident = JSON.parse(readFileSync(join(scenario.evidenceDir, "post-review-head-lookup-failed.json"), "utf8"));
     expect(incident).toMatchObject({
@@ -1088,6 +1110,18 @@ describe("worker context budget preflight", () => {
     expect(existsSync(join(second.evidenceDir, "review-event-decision.json"))).toBe(true);
     expect(existsSync(join(first.evidenceDir, "command.json"))).toBe(false);
     expect(existsSync(join(second.evidenceDir, "command.json"))).toBe(false);
+    expect(JSON.parse(readFileSync(join(first.evidenceDir, "posted-review.json"), "utf8"))).toEqual({
+      event: "REQUEST_CHANGES",
+      reviewId: 1,
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/519#pullrequestreview-1"
+    });
+    expect(JSON.parse(readFileSync(join(second.evidenceDir, "posted-review.json"), "utf8"))).toEqual({
+      event: "COMMENT",
+      reviewId: 2,
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/519#pullrequestreview-2"
+    });
+    expect(readFileSync(join(first.evidenceDir, "posted-review.json"), "utf8")).not.toContain("request-changes --repo");
+    expect(readFileSync(join(second.evidenceDir, "posted-review.json"), "utf8")).not.toContain("request-changes --repo");
     expect(JSON.stringify(readDecision(first.evidenceDir))).not.toContain("request-changes");
     expect(JSON.stringify(readDecision(second.evidenceDir))).not.toContain("request-changes");
     second.state.close();

@@ -38,6 +38,9 @@ import {
 } from "./review-budget.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+  POST_REVIEW_HEAD_UNVERIFIED_ERROR,
+  REVIEW_POSTED_HEAD_CHANGED_ERROR,
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
@@ -1850,11 +1853,11 @@ function readinessReasonForReviewResult(
     case "reviewed_command":
       return processed?.event === "REQUEST_CHANGES" ? "request_changes_review_posted" : "comment_review_posted";
     case "posted_stale_head":
-      return "head_changed_during_review_post";
+      return REVIEW_POSTED_HEAD_CHANGED_ERROR;
     case "posted_head_unverified":
-      return "post_review_head_unverified";
+      return POST_REVIEW_HEAD_UNVERIFIED_ERROR;
     case "skipped_consumed_authorization":
-      return "exact_authorization_already_consumed";
+      return EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR;
     case "skipped_processed":
       return processed ? readinessReasonForProcessedHead(processed) : "processed_head_already_unknown";
     case "skipped_provider_cooldown":
@@ -1890,6 +1893,8 @@ function readinessStateForProcessedStatus(
   error?: string
 ): ReviewReadinessState {
   if (parseProviderCooldownError(error)) return "provider_deferred";
+  if (error === POST_REVIEW_HEAD_UNVERIFIED_ERROR || error === EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR) return "failed";
+  if (error === REVIEW_POSTED_HEAD_CHANGED_ERROR) return "stale";
   switch (status) {
     case "posted":
     case "dry_run":
@@ -1910,6 +1915,13 @@ function readinessReasonForProcessedHead(processed: { status: ProcessedStatus; e
   if (providerCooldown) return `processed_head_provider_deferred: ${providerCooldown.reason ?? "provider_cooldown"}`;
   if (processed.status === "skipped" && processed.error === ACTIVATION_BASELINE_EXISTING_HEAD_ERROR) {
     return ACTIVATION_BASELINE_EXISTING_HEAD_ERROR;
+  }
+  if (
+    processed.error === POST_REVIEW_HEAD_UNVERIFIED_ERROR ||
+    processed.error === REVIEW_POSTED_HEAD_CHANGED_ERROR ||
+    processed.error === EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR
+  ) {
+    return processed.error;
   }
   return `processed_head_already_${processed.status}`;
 }
@@ -2151,7 +2163,7 @@ function updateQueueJobAfterReviewStatus(input: {
       }
       input.state.updateReviewQueueJobState({
         jobId: input.job.jobId,
-        state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun),
+        state: reviewQueueJobStateForProcessedStatus(processed?.status, input.dryRun, processed?.error),
         ...(processed?.reviewUrl ? { reviewUrl: processed.reviewUrl } : {}),
         lastError: `processed_head_already_${processed?.status ?? "unknown"}`
       });
@@ -2253,6 +2265,10 @@ function reviewStatusCommentStateForProcessedStatus(
   processed?: { status: ProcessedStatus; error?: string }
 ): ReviewStatusCommentState {
   if (parseProviderCooldownError(processed?.error)) return "provider_deferred";
+  if (processed?.error === POST_REVIEW_HEAD_UNVERIFIED_ERROR || processed?.error === EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR) {
+    return "failed";
+  }
+  if (processed?.error === REVIEW_POSTED_HEAD_CHANGED_ERROR) return "stale_head";
   const status = processed?.status;
   switch (status) {
     case "posted":
@@ -2269,7 +2285,13 @@ function reviewStatusCommentStateForProcessedStatus(
   }
 }
 
-function reviewQueueJobStateForProcessedStatus(status: ProcessedStatus | undefined, dryRun: boolean): ReviewQueueJobState {
+function reviewQueueJobStateForProcessedStatus(
+  status: ProcessedStatus | undefined,
+  dryRun: boolean,
+  error?: string
+): ReviewQueueJobState {
+  if (error === POST_REVIEW_HEAD_UNVERIFIED_ERROR || error === EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR) return "failed";
+  if (error === REVIEW_POSTED_HEAD_CHANGED_ERROR) return "stale_retired";
   switch (status) {
     case "posted":
       return "posted";

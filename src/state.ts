@@ -116,6 +116,9 @@ export interface RepoActivationRecord {
 }
 
 export const ACTIVATION_BASELINE_EXISTING_HEAD_ERROR = "activation_baseline_existing_head";
+export const EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR = "exact_authorization_already_consumed";
+export const POST_REVIEW_HEAD_UNVERIFIED_ERROR = "post_review_head_unverified";
+export const REVIEW_POSTED_HEAD_CHANGED_ERROR = "review_posted_head_changed";
 
 export function isActivationBaselineProcessedReview(
   processed: Pick<StoredProcessedReviewRecord, "status" | "error"> | undefined

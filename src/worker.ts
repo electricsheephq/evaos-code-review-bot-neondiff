@@ -83,6 +83,9 @@ import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skil
 import { writeSecureFileSync } from "./temp-files.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
+  POST_REVIEW_HEAD_UNVERIFIED_ERROR,
+  REVIEW_POSTED_HEAD_CHANGED_ERROR,
   isActivationBaselineProcessedReview,
   parseProviderCooldownError,
   ReviewStateStore,
@@ -399,25 +402,68 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
           result.failed += 1;
           continue;
         }
-        if (status === "reviewed" || status === "reviewed_command") result.reviewed += 1;
-        if (status === "skipped_draft") result.skippedDraft += 1;
-        if (status === "skipped_canary") result.skippedCanary += 1;
-        if (status === "skipped_policy" || status === "skipped_license_gate") result.skippedPolicy += 1;
-        if (status === "skipped_license_gate") result.skippedLicenseGate += 1;
-        if (status === "skipped_command_stop") result.skippedCommandStop += 1;
-        if (status === "skipped_command_explain") result.skippedCommandExplain += 1;
-        if (status === "skipped_finishing_touch_draft") result.skippedFinishingTouchDraft += 1;
-        if (status === "reviewed_command") result.commandReviewRequested += 1;
-        if (status === "skipped_processed") result.skippedProcessed += 1;
-        if (status === "skipped_capacity") result.skippedCapacity += 1;
-        if (status === "skipped_context_budget") result.skippedContextBudget += 1;
-        if (status === "skipped_provider_cooldown") result.skippedProviderCooldown += 1;
-        if (status === "skipped_stale_head") result.skippedStaleHead += 1;
+        applyReviewPullResultToRunOnceResult(result, status);
       }
     }
     return result;
   } finally {
     state.close();
+  }
+}
+
+export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, status: ReviewPullResult): void {
+  switch (status) {
+    case "reviewed":
+      result.reviewed += 1;
+      return;
+    case "reviewed_command":
+      result.reviewed += 1;
+      result.commandReviewRequested += 1;
+      return;
+    case "posted_head_unverified":
+    case "skipped_consumed_authorization":
+      result.failed += 1;
+      return;
+    case "posted_stale_head":
+    case "skipped_stale_head":
+      result.skippedStaleHead += 1;
+      return;
+    case "skipped_draft":
+      result.skippedDraft += 1;
+      return;
+    case "skipped_canary":
+      result.skippedCanary += 1;
+      return;
+    case "skipped_policy":
+      result.skippedPolicy += 1;
+      return;
+    case "skipped_license_gate":
+      result.skippedPolicy += 1;
+      result.skippedLicenseGate += 1;
+      return;
+    case "skipped_command_stop":
+      result.skippedCommandStop += 1;
+      return;
+    case "skipped_command_explain":
+      result.skippedCommandExplain += 1;
+      return;
+    case "skipped_finishing_touch_draft":
+      result.skippedFinishingTouchDraft += 1;
+      return;
+    case "skipped_processed":
+      result.skippedProcessed += 1;
+      return;
+    case "skipped_capacity":
+      result.skippedCapacity += 1;
+      return;
+    case "skipped_context_budget":
+      result.skippedContextBudget += 1;
+      return;
+    case "skipped_provider_cooldown":
+      result.skippedProviderCooldown += 1;
+      return;
+    default:
+      assertNever(status);
   }
 }
 
@@ -1444,12 +1490,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       const evidenceDir = buildEvidenceDir(config, repo, pull, commandDecision, input.commandCommentId);
       mkdirSync(evidenceDir, { recursive: true });
       writeRedactedJson(join(evidenceDir, "consumed-authorization-incident.json"), {
-        reason: "exact_authorization_already_consumed",
+        reason: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
         repo,
         pullNumber: pull.number,
         headSha: pull.head.sha,
         commentId: input.commandCommentId,
         consumedAt: consumption.consumedAt
+      });
+      state.recordProcessed({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        status: "skipped",
+        error: EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR
       });
       return "skipped_consumed_authorization";
     }
@@ -1945,6 +1998,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
+    writeRedactedJson(join(evidenceDir, "posted-review.json"), {
+      event: plan.event,
+      reviewId: review.id,
+      reviewUrl: review.html_url
+    });
     const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
     if (!(priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT")) {
       state.recordProcessed({
@@ -1985,6 +2043,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         reviewId: review.id,
         error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(0, 300)
       });
+    }
+    if (headChangedDuringPost || postReviewHeadLookupFailed) {
+      const durablePosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
+      if (durablePosted?.status === "posted") {
+        state.recordProcessed({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          ...(durablePosted.event ? { event: durablePosted.event } : {}),
+          ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
+          error: headChangedDuringPost ? REVIEW_POSTED_HEAD_CHANGED_ERROR : POST_REVIEW_HEAD_UNVERIFIED_ERROR
+        });
+      }
     }
     releaseReviewCapacity();
     if (headChangedDuringPost) return "posted_stale_head";
