@@ -163,6 +163,13 @@ let offsetClockFixture = Data(
 )
 expectFixtureFailure("non-canonical offset fixture clock", data: offsetClockFixture)
 
+let invalidCalendarClockFixture = Data(
+    String(decoding: validFixture, as: UTF8.self)
+        .replacingOccurrences(of: "2026-07-10T12:00:00Z", with: "2026-02-30T12:00:00Z")
+        .utf8
+)
+expectFixtureFailure("invalid calendar fixture clock", data: invalidCalendarClockFixture)
+
 let stringContentSizeFixture = try mutatedManifest(validFixture) { object in
     var environment = object["environment"] as! [String: Any]
     environment["contentSize"] = ["width": "1040", "height": "680"]
@@ -192,6 +199,24 @@ let hostlessProviderURL = try mutatedManifest(validFixture) { object in
     object["state"] = state
 }
 expectFixtureFailure("hostless provider base URL", data: hostlessProviderURL)
+
+let offsetRepositoryTimestamp = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var repositories = state["repositories"] as! [[String: Any]]
+    repositories[0]["lastReview"] = "2026-07-10T11:55:00+07:00"
+    state["repositories"] = repositories
+    object["state"] = state
+}
+expectFixtureFailure("non-canonical repository timestamp", data: offsetRepositoryTimestamp)
+
+let invalidCalendarRepositoryTimestamp = try mutatedManifest(validFixture) { object in
+    var state = object["state"] as! [String: Any]
+    var repositories = state["repositories"] as! [[String: Any]]
+    repositories[0]["lastReview"] = "2026-02-30T11:55:00Z"
+    state["repositories"] = repositories
+    object["state"] = state
+}
+expectFixtureFailure("invalid calendar repository timestamp", data: invalidCalendarRepositoryTimestamp)
 
 let unactivatedPostOnboardingFixture = try mutatedManifest(validFixture) { object in
     var state = object["state"] as! [String: Any]

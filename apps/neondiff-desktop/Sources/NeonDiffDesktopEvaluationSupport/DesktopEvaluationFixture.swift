@@ -224,11 +224,7 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
         guard id.range(of: #"^[a-z0-9][a-z0-9-]{0,63}$"#, options: .regularExpression) != nil else {
             throw DesktopEvaluationFixtureError.invalidValue("id")
         }
-        guard environment.clock.range(
-            of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"#,
-            options: .regularExpression
-        ) != nil,
-        ISO8601DateFormatter().date(from: environment.clock) != nil else {
+        guard Self.isCanonicalTimestamp(environment.clock) else {
             throw DesktopEvaluationFixtureError.invalidValue("clock")
         }
         guard environment.locale.range(of: #"^[A-Za-z0-9_@.-]{2,48}$"#, options: .regularExpression) != nil else {
@@ -251,9 +247,11 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
             throw DesktopEvaluationFixtureError.invalidValue("collection limit")
         }
         for repository in state.repositories {
-            guard repository.name.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil,
-                  ISO8601DateFormatter().date(from: repository.lastReview) != nil else {
+            guard repository.name.range(of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil else {
                 throw DesktopEvaluationFixtureError.invalidValue("repository.name")
+            }
+            guard Self.isCanonicalTimestamp(repository.lastReview) else {
+                throw DesktopEvaluationFixtureError.invalidValue("repository.lastReview")
             }
         }
         if let provider = state.provider {
@@ -317,6 +315,16 @@ public struct DesktopEvaluationFixture: Codable, Equatable, Sendable {
                 throw DesktopEvaluationFixtureError.invalidValue("scriptedOutcomes.delayMilliseconds")
             }
         }
+    }
+
+    private static func isCanonicalTimestamp(_ value: String) -> Bool {
+        guard value.range(
+            of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"#,
+            options: .regularExpression
+        ) != nil else { return false }
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: value) else { return false }
+        return formatter.string(from: date) == value
     }
 
     private static func validateShape(_ root: [String: Any]) throws {

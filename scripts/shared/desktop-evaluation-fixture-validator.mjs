@@ -103,7 +103,7 @@ export function validateDesktopEvaluationFixture(input) {
     enumValue(provider.authMode, authModes, "provider.authMode");
     enumValue(provider.verification, verificationStates, "provider.verification");
     boolean(provider.credentialPresent, "provider.credentialPresent");
-    if (typeof provider.baseURL !== "string") fail("provider.baseURL is invalid");
+    if (typeof provider.baseURL !== "string" || !/^https?:\/\//i.test(provider.baseURL)) fail("provider.baseURL is invalid");
     let url;
     try { url = new URL(provider.baseURL); } catch { fail("provider.baseURL is invalid"); }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) fail("provider.baseURL is invalid");

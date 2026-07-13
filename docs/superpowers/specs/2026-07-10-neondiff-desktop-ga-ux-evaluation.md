@@ -61,8 +61,10 @@ model importability.
 - UI-test hooks and fixture content are absent from release artifacts.
 - No test mutates live config, Keychain, GitHub, provider, daemon, or posting
   state unless a separately scoped installed-candidate scenario requires it.
-- Public setup does not require a license. Private setup cannot enter an
-  unavailable activation dead end.
+- API-backed activation is mandatory before useful work for every repository
+  visibility. Public/private selection changes repository scope, not the
+  activation requirement; activation failures remain explicit recoverable
+  blockers.
 - Screenshot approval cannot replace interaction, geometry, accessibility, or
   installed-artifact proof.
 - #503 stays open until browser/native parity is independently measured.
@@ -149,16 +151,17 @@ settled-state signal.
 
 Issue #519 owns the first-success path:
 
-1. Welcome and choose public or private mode.
+1. Welcome and choose the intended public or private repository scope.
 2. Run CLI/config/Keychain/GitHub readiness checks.
-3. Connect GitHub.
-4. Select repositories.
-5. Choose a provider preset.
-6. Store and verify credentials when required.
-7. Accept a recommended review policy.
-8. Run one dry-run review.
-9. Start monitoring only after dry-run success.
-10. Show readiness and the next recommended action.
+3. Activate NeonDiff through the API-backed license service.
+4. Connect GitHub.
+5. Select repositories.
+6. Choose a provider preset.
+7. Store and verify credentials when required.
+8. Accept a recommended review policy.
+9. Run one dry-run review.
+10. Start monitoring only after dry-run success.
+11. Show readiness and the next recommended action.
 
 Presets and safe defaults come first. Endpoint, model, auth, path, and CLI
 equivalent details live under Advanced disclosures. Progress persists and

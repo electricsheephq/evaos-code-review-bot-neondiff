@@ -41,6 +41,21 @@ describe("desktop fixture validator parity", () => {
     }
   });
 
+  it("rejects invalid calendar timestamps for the clock and repositories", () => {
+    const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
+    source.environment.clock = "2026-02-30T12:00:00Z";
+    expect(() => validateDesktopEvaluationFixture(source)).toThrow(/clock is invalid/);
+    source.environment.clock = "2026-07-10T12:00:00Z";
+    source.state.repositories[0].lastReview = "2026-02-30T11:55:00Z";
+    expect(() => validateDesktopEvaluationFixture(source)).toThrow(/lastReview is invalid/);
+  });
+
+  it("rejects non-canonical offset repository timestamps", () => {
+    const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
+    source.state.repositories[0].lastReview = "2026-07-10T11:55:00+07:00";
+    expect(() => validateDesktopEvaluationFixture(source)).toThrow(/lastReview is invalid/);
+  });
+
   it("rejects string dimensions and non-string IDs instead of coercing them", () => {
     const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json", "utf8"));
     source.environment.contentSize = { width: "1040", height: "680" };
@@ -60,6 +75,14 @@ describe("desktop fixture validator parity", () => {
     const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-providers.json", "utf8"));
     source.state.provider.baseURL = "https://";
     expect(() => validateDesktopEvaluationFixture(source)).toThrow(/baseURL is invalid/);
+  });
+
+  it("rejects WHATWG shorthand provider URLs that Swift cannot resolve with a host", () => {
+    for (const baseURL of ["https:foo", "https:/example.com"]) {
+      const source = JSON.parse(readFileSync("apps/neondiff-desktop/fixtures/ui/tab-providers.json", "utf8"));
+      source.state.provider.baseURL = baseURL;
+      expect(() => validateDesktopEvaluationFixture(source)).toThrow(/baseURL is invalid/);
+    }
   });
 
   it("rejects unactivated post-onboarding surfaces", () => {
