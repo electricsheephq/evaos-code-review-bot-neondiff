@@ -29,6 +29,9 @@ const MAX_POLICY_BYTES = 256 * 1024;
 const MAX_CANDIDATE_POOL_SIZE = 64;
 const MIN_CANONICAL_SEARCH_STATES = 100_000;
 const MAX_CANONICAL_SEARCH_STATES = 5_000_000;
+const CONCURRENT_SEAL_VERIFY_ATTEMPTS = 25;
+const CONCURRENT_SEAL_VERIFY_WAIT_MS = 10;
+const CONCURRENT_SEAL_WAIT_CELL = new Int32Array(new SharedArrayBuffer(4));
 export const PHASE1_COHORT_PROOF_BOUNDARY = "This may prove only that a metadata-only 14-case advisory cohort is selected and immutably sealed under the named workload and privacy contracts. It does not admit Corpus v1 scenarios, prove labels, review quality, noninferiority, production routing, runtime safety, customer readiness, or public claims. No model run may begin until separate hidden outcomes, blinded adjudication, and restricted identity sidecars pass their own gates.";
 export const PHASE1_COHORT_LANGUAGES = Object.freeze([
   "typescript", "javascript", "swift", "python", "go", "rust", "java", "kotlin",
@@ -744,12 +747,43 @@ function finalizeNewArtifacts(outputDir: string, artifacts: Map<string, string>)
     mkdirSync(outputDir, { mode: 0o700 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    verifyArtifactBytes(outputDir, artifacts);
+    waitForConcurrentArtifactBytes(outputDir, artifacts);
     return;
   }
   for (const [name, expected] of artifacts) {
     atomicCreatePrivateFile(join(outputDir, name), expected);
   }
+}
+
+function waitForConcurrentArtifactBytes(outputDir: string, artifacts: Map<string, string>): void {
+  for (let attempt = 0; attempt < CONCURRENT_SEAL_VERIFY_ATTEMPTS; attempt += 1) {
+    if (isCompleteMatchingArtifactSet(outputDir, artifacts)) {
+      verifyArtifactBytes(outputDir, artifacts);
+      return;
+    }
+    if (attempt + 1 < CONCURRENT_SEAL_VERIFY_ATTEMPTS) {
+      Atomics.wait(CONCURRENT_SEAL_WAIT_CELL, 0, 0, CONCURRENT_SEAL_VERIFY_WAIT_MS);
+    }
+  }
+  throw new Error("timed out waiting for a concurrent deterministic cohort seal to complete");
+}
+
+function isCompleteMatchingArtifactSet(outputDir: string, artifacts: Map<string, string>): boolean {
+  const output = lstatSync(outputDir);
+  if (output.isSymbolicLink() || !output.isDirectory()) throw new Error("sealed output path must be a regular directory, not a symlink");
+  if ((output.mode & 0o777) !== 0o700) throw new Error("sealed output directory mode must be exactly 0700");
+  const entries = readdirSync(outputDir);
+  for (const name of entries) {
+    const expected = artifacts.get(name);
+    if (expected === undefined) throw new Error(`undeclared entry in sealed artifact set: ${name}`);
+    const path = join(outputDir, name);
+    const entry = lstatSync(path);
+    if (entry.isSymbolicLink()) throw new Error(`symlinked sealed artifact is forbidden: ${name}`);
+    if (!entry.isFile()) throw new Error(`sealed artifact entry must be a regular file: ${name}`);
+    if (readFileMode(path) !== 0o600) throw new Error(`sealed artifact permissions must be exactly 0600: ${name}`);
+    if (readFileSync(path, "utf8") !== expected) throw new Error(`sealed artifact tamper or fingerprint mismatch: ${name}`);
+  }
+  return entries.length === artifacts.size && [...artifacts.keys()].every((name) => entries.includes(name));
 }
 
 function verifyArtifactBytes(outputDir: string, artifacts: Map<string, string>): void {
@@ -766,7 +800,11 @@ function verifyArtifactBytes(outputDir: string, artifacts: Map<string, string>):
 }
 
 function atomicCreatePrivateFile(path: string, value: string): void {
-  const temp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomBytes(12).toString("hex")}.tmp`);
+  const outputDir = dirname(path);
+  const temp = join(
+    dirname(outputDir),
+    `.${basename(outputDir)}.${basename(path)}.${process.pid}.${randomBytes(12).toString("hex")}.tmp`
+  );
   let descriptor: number | undefined;
   try {
     descriptor = openSync(temp, "wx", 0o600);

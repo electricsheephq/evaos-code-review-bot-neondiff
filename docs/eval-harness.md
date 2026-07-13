@@ -131,6 +131,12 @@ estimate. They are not exact provider/backend model token counts. Record actual
 provider token usage separately when execution evidence becomes available; the
 cohort seal does not execute a model.
 
+If an identical writer wins the final output-directory creation race, `select`
+waits for at most 25 checks spaced 10 ms apart and accepts only the exact complete
+matching seal. This is a bounded idempotency aid, not a lock or a general
+multi-writer coordination guarantee; timeout, tamper, mode drift, symlinks, and
+undeclared entries fail closed.
+
 The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.

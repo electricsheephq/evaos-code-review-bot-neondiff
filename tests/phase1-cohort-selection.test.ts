@@ -25,26 +25,58 @@ import * as cohortSelectionModule from "../src/phase1-cohort-selection.js";
 import { runPhase1CohortSelectionCli } from "../src/phase1-cohort-selection-cli.js";
 
 const inputPathRace = vi.hoisted(() => ({ armed: false, path: "", target: "", swapped: false }));
-const outputDirectoryRace = vi.hoisted(() => ({ armed: false, path: "", sourceDir: "", raced: false }));
+const outputDirectoryRace = vi.hoisted(() => ({
+  armed: false,
+  pendingCompletion: false,
+  path: "",
+  sourceDir: "",
+  raced: false,
+  observations: 0,
+  completion: "complete" as "complete" | "timeout" | "tamper" | "wrong_mode" | "undeclared"
+}));
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const { join: joinPath } = await import("node:path");
+  const copySeal = (target: string) => {
+    for (const name of actual.readdirSync(outputDirectoryRace.sourceDir)) {
+      const sourcePath = joinPath(outputDirectoryRace.sourceDir, name);
+      const targetPath = joinPath(target, name);
+      actual.writeFileSync(targetPath, actual.readFileSync(sourcePath), { mode: 0o600 });
+      actual.chmodSync(targetPath, 0o600);
+    }
+  };
   return {
     ...actual,
     mkdirSync(path: Parameters<typeof actual.mkdirSync>[0], options?: Parameters<typeof actual.mkdirSync>[1]) {
       if (outputDirectoryRace.armed && path === outputDirectoryRace.path) {
         outputDirectoryRace.armed = false;
+        outputDirectoryRace.pendingCompletion = true;
         outputDirectoryRace.raced = true;
         actual.mkdirSync(path, options);
-        for (const name of actual.readdirSync(outputDirectoryRace.sourceDir)) {
-          const sourcePath = joinPath(outputDirectoryRace.sourceDir, name);
-          const targetPath = joinPath(String(path), name);
-          actual.writeFileSync(targetPath, actual.readFileSync(sourcePath), { mode: 0o600 });
-          actual.chmodSync(targetPath, 0o600);
-        }
       }
       return actual.mkdirSync(path, options);
+    },
+    readdirSync(path: Parameters<typeof actual.readdirSync>[0], options?: Parameters<typeof actual.readdirSync>[1]) {
+      const entries = actual.readdirSync(path, options as never);
+      if (outputDirectoryRace.pendingCompletion && path === outputDirectoryRace.path) {
+        outputDirectoryRace.pendingCompletion = false;
+        outputDirectoryRace.observations += 1;
+        if (outputDirectoryRace.completion !== "timeout") {
+          if (outputDirectoryRace.completion === "undeclared") {
+            actual.writeFileSync(joinPath(String(path), "UNDECLARED"), "unexpected\n", { mode: 0o600 });
+          } else {
+            copySeal(String(path));
+            if (outputDirectoryRace.completion === "tamper") {
+              actual.writeFileSync(joinPath(String(path), "selection-manifest.json"), "{}\n", { mode: 0o600 });
+            }
+            if (outputDirectoryRace.completion === "wrong_mode") {
+              actual.chmodSync(joinPath(String(path), "selection-manifest.json"), 0o644);
+            }
+          }
+        }
+      }
+      return entries;
     },
     lstatSync(path: Parameters<typeof actual.lstatSync>[0]) {
       const metadata = actual.lstatSync(path);
@@ -371,14 +403,44 @@ describe("phase 1 cohort selection", () => {
     outputDirectoryRace.path = racedOutputDir;
     outputDirectoryRace.sourceDir = f.outputDir;
     outputDirectoryRace.raced = false;
+    outputDirectoryRace.observations = 0;
+    outputDirectoryRace.completion = "complete";
     outputDirectoryRace.armed = true;
 
     try {
       expect(selectAndSealPhase1Cohort({ ...selectionOptions(f), outputDir: racedOutputDir }).manifestSha256)
         .toBe(sourceManifest.manifestSha256);
       expect(outputDirectoryRace.raced).toBe(true);
+      expect(outputDirectoryRace.observations).toBe(1);
     } finally {
       outputDirectoryRace.armed = false;
+      outputDirectoryRace.pendingCompletion = false;
+    }
+  });
+
+  it.each([
+    ["timeout", /timed out.*concurrent.*seal/i],
+    ["tamper", /tamper|fingerprint mismatch/i],
+    ["wrong_mode", /permission|0600/i],
+    ["undeclared", /undeclared/i]
+  ] as const)("fails closed when a concurrent seal creation ends in %s", (completion, error) => {
+    const f = fixture();
+    seal(f);
+    const racedOutputDir = join(f.root, "sealed", `race-${completion}`);
+    outputDirectoryRace.path = racedOutputDir;
+    outputDirectoryRace.sourceDir = f.outputDir;
+    outputDirectoryRace.raced = false;
+    outputDirectoryRace.observations = 0;
+    outputDirectoryRace.completion = completion;
+    outputDirectoryRace.armed = true;
+
+    try {
+      expect(() => selectAndSealPhase1Cohort({ ...selectionOptions(f), outputDir: racedOutputDir })).toThrow(error);
+      expect(outputDirectoryRace.raced).toBe(true);
+      expect(outputDirectoryRace.observations).toBe(1);
+    } finally {
+      outputDirectoryRace.armed = false;
+      outputDirectoryRace.pendingCompletion = false;
     }
   });
 
