@@ -5,6 +5,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import NeonDiffDesktopCore
+import NeonDiffDesktopEvaluationSupport
 
 private enum CaptureError: LocalizedError {
     case usage
@@ -17,7 +18,7 @@ private enum CaptureError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .usage:
-            "usage: NeonDiffDesktopCapture --pid <pid> --ready <ready.json> --output-dir <directory>"
+            "usage: NeonDiffDesktopCapture --pid <pid> --ready <ready.json> --output-dir <directory> [--repos-reachability]"
         case .unsafePath(let detail): "Unsafe capture path: \(detail)"
         case .invalidReadyFile: "Evaluation readiness file is invalid or does not match the target process."
         case .permission(let detail): "Capture permission is unavailable: \(detail)"
@@ -49,6 +50,7 @@ private struct Options {
     let pid: Int32
     let readyURL: URL
     let outputDirectory: URL
+    let capturesReposReachability: Bool
 
     static func parse(_ arguments: [String]) throws -> Options {
         func value(_ flag: String) throws -> String {
@@ -60,7 +62,9 @@ private struct Options {
             }
             return arguments[index + 1]
         }
-        guard arguments.count == 7,
+        let capturesReposReachability = arguments.contains("--repos-reachability")
+        guard arguments.filter({ $0 == "--repos-reachability" }).count <= 1,
+              arguments.count == (capturesReposReachability ? 8 : 7),
               let pid = Int32(try value("--pid")),
               pid > 0 else {
             throw CaptureError.usage
@@ -68,7 +72,8 @@ private struct Options {
         return Options(
             pid: pid,
             readyURL: URL(fileURLWithPath: try value("--ready")).standardizedFileURL,
-            outputDirectory: URL(fileURLWithPath: try value("--output-dir"), isDirectory: true).standardizedFileURL
+            outputDirectory: URL(fileURLWithPath: try value("--output-dir"), isDirectory: true).standardizedFileURL,
+            capturesReposReachability: capturesReposReachability
         )
     }
 }
@@ -110,6 +115,7 @@ private struct CaptureRunner {
         ]
         let geometryData = try JSONSerialization.data(withJSONObject: geometry, options: [.prettyPrinted, .sortedKeys])
         try geometryData.write(to: geometryURL, options: [.atomic])
+        try writeReachabilityIfRequired(ready: ready)
 
         return [
             "ok": true,
@@ -136,6 +142,23 @@ private struct CaptureRunner {
             throw CaptureError.invalidReadyFile
         }
         return ready
+    }
+
+    private func writeReachabilityIfRequired(ready: ReadyDocument) throws {
+        guard options.capturesReposReachability,
+              ready.fixtureId == DesktopReposReachabilityFixture.tabRepos.rawValue,
+              abs(ready.contentFrame.width - 1040) <= 1,
+              abs(ready.contentFrame.height - 680) <= 1 else {
+            return
+        }
+        let trace = DesktopReposReachabilityAXTracer(pid: options.pid, ready: ready).capture()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(trace)
+        try data.write(
+            to: options.outputDirectory.appendingPathComponent("reachability.json"),
+            options: [.atomic]
+        )
     }
 
     private func requireRegularFile(_ url: URL, label: String) throws {
@@ -315,6 +338,382 @@ private struct CaptureRunner {
 
     private func frameDictionary(_ frame: Frame) -> [String: Double] {
         ["x": frame.x, "y": frame.y, "width": frame.width, "height": frame.height]
+    }
+}
+
+private struct DesktopReposReachabilityAXTracer {
+    private static let intervalNanoseconds: UInt64 = 100_000_000
+    private static let maximumAcquisitionMilliseconds = 5_000
+    private static let tolerance = 1.0
+
+    let pid: Int32
+    let ready: ReadyDocument
+
+    func capture() -> DesktopReposReachabilityTrace {
+        let systemWide = AXUIElementCreateSystemWide()
+        let timeoutInstalled = AXUIElementSetMessagingTimeout(systemWide, 1.0) == .success
+        defer {
+            if timeoutInstalled {
+                _ = AXUIElementSetMessagingTimeout(systemWide, 0)
+            }
+        }
+
+        let pre: (samples: [DesktopReposReachabilitySample], durationMilliseconds: Int, stable: Bool) = timeoutInstalled
+            ? acquireStableSamples()
+            : (samples: [], durationMilliseconds: 0, stable: false)
+        let scroll = timeoutInstalled ? scrollBoundaryAncestorToMaximum() : nil
+        let post = timeoutInstalled ? acquireStableSamples() : (samples: [], durationMilliseconds: 0, stable: false)
+
+        // The ready document is emitted only after the DEBUG fixture render
+        // latch and three stable 100 ms readiness samples have completed.
+        let readinessGatePassed = ready.ready
+        return DesktopReposReachabilityTrace(
+            schemaVersion: 1,
+            fixture: .tabRepos,
+            ready: readinessGatePassed,
+            quiescent: readinessGatePassed && pre.stable,
+            requestedContentSize: DesktopEvaluationContentSize(width: 1040, height: 680),
+            sampleIntervalMilliseconds: 100,
+            preScrollAcquisitionMilliseconds: pre.durationMilliseconds,
+            postScrollAcquisitionMilliseconds: post.durationMilliseconds,
+            tolerancePoints: Self.tolerance,
+            preScrollSamples: pre.samples,
+            outerScroll: scroll,
+            postScrollSamples: post.samples
+        )
+    }
+
+    private func acquireStableSamples() -> (
+        samples: [DesktopReposReachabilitySample],
+        durationMilliseconds: Int,
+        stable: Bool
+    ) {
+        let started = DispatchTime.now().uptimeNanoseconds
+        var nextDeadline = started
+        var rolling: [DesktopReposReachabilitySample] = []
+        while true {
+            let beforeSample = DispatchTime.now().uptimeNanoseconds
+            let elapsed = milliseconds(from: started, to: beforeSample)
+            guard elapsed <= Self.maximumAcquisitionMilliseconds else {
+                return (rolling, elapsed, false)
+            }
+            rolling.append(sample(elapsedMilliseconds: elapsed))
+            if rolling.count > 3 { rolling.removeFirst() }
+            let duration = milliseconds(from: started, to: DispatchTime.now().uptimeNanoseconds)
+            if rolling.count == 3,
+               samplesMatch(rolling[0], rolling[1]),
+               samplesMatch(rolling[0], rolling[2]),
+               duration <= Self.maximumAcquisitionMilliseconds {
+                return (rolling, duration, true)
+            }
+            guard duration <= Self.maximumAcquisitionMilliseconds else {
+                return (rolling, duration, false)
+            }
+            nextDeadline += Self.intervalNanoseconds
+            let now = DispatchTime.now().uptimeNanoseconds
+            if nextDeadline > now {
+                usleep(useconds_t((nextDeadline - now) / 1_000))
+            }
+        }
+    }
+
+    private func milliseconds(from start: UInt64, to end: UInt64) -> Int {
+        Int((end - start) / 1_000_000)
+    }
+
+    private func sample(elapsedMilliseconds: Int) -> DesktopReposReachabilitySample {
+        guard let window = verifiedWindow(),
+              let viewport = elementFrame(window),
+              let elements = semanticElements(in: window) else {
+            return DesktopReposReachabilitySample(
+                elapsedMilliseconds: elapsedMilliseconds,
+                viewport: DesktopReposReachabilityFrame(x: 0, y: 0, width: 0, height: 0),
+                regions: []
+            )
+        }
+        let pairs: [(DesktopReposReachabilityRegion, AXUIElement?)] = [
+            (.table, elements.table),
+            (.applyAllowlist, elements.applyAllowlist),
+            (.boundaryBody, elements.boundaryBody)
+        ]
+        let regions = pairs.compactMap { id, element -> DesktopReposReachabilityRegionFrame? in
+            guard let element, let frame = elementFrame(element) else { return nil }
+            return DesktopReposReachabilityRegionFrame(id: id, frame: frame)
+        }
+        return DesktopReposReachabilitySample(
+            elapsedMilliseconds: elapsedMilliseconds,
+            viewport: viewport,
+            regions: regions
+        )
+    }
+
+    private func samplesMatch(
+        _ lhs: DesktopReposReachabilitySample,
+        _ rhs: DesktopReposReachabilitySample
+    ) -> Bool {
+        guard framesMatch(lhs.viewport, rhs.viewport), lhs.regions.count == rhs.regions.count else {
+            return false
+        }
+        let right = Dictionary(uniqueKeysWithValues: rhs.regions.map { ($0.id, $0.frame) })
+        return lhs.regions.allSatisfy { region in
+            right[region.id].map { framesMatch(region.frame, $0) } == true
+        }
+    }
+
+    private func framesMatch(
+        _ lhs: DesktopReposReachabilityFrame,
+        _ rhs: DesktopReposReachabilityFrame
+    ) -> Bool {
+        abs(lhs.x - rhs.x) <= Self.tolerance
+            && abs(lhs.y - rhs.y) <= Self.tolerance
+            && abs(lhs.width - rhs.width) <= Self.tolerance
+            && abs(lhs.height - rhs.height) <= Self.tolerance
+    }
+
+    private func scrollBoundaryAncestorToMaximum() -> DesktopReposOuterScrollObservation? {
+        guard let window = verifiedWindow(),
+              let boundary = semanticElements(in: window)?.boundaryBody,
+              let scrollArea = outermostScrollArea(from: boundary, to: window) else {
+            return nil
+        }
+        guard case .value(let rawScrollBar) = copyAttribute(scrollArea, kAXVerticalScrollBarAttribute as CFString),
+              CFGetTypeID(rawScrollBar) == AXUIElementGetTypeID() else {
+            return unsupportedScroll()
+        }
+        let scrollBar = rawScrollBar as! AXUIElement
+        guard elementBelongsToTarget(scrollBar) else { return unsupportedScroll() }
+
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(
+            scrollBar,
+            kAXValueAttribute as CFString,
+            &settable
+        ) == .success, settable.boolValue else {
+            return unsupportedScroll()
+        }
+        guard case .value(let rawMinimum) = copyAttribute(scrollBar, kAXMinValueAttribute as CFString),
+              case .value(let rawMaximum) = copyAttribute(scrollBar, kAXMaxValueAttribute as CFString),
+              case .value(let rawBefore) = copyAttribute(scrollBar, kAXValueAttribute as CFString),
+              let minimum = numericValue(rawMinimum),
+              let maximum = numericValue(rawMaximum),
+              let before = numericValue(rawBefore) else {
+            return unsupportedScroll()
+        }
+        let setResult = AXUIElementSetAttributeValue(
+            scrollBar,
+            kAXValueAttribute as CFString,
+            rawMaximum
+        )
+        guard setResult == .success,
+              case .value(let rawReadback) = copyAttribute(scrollBar, kAXValueAttribute as CFString),
+              let readback = numericValue(rawReadback) else {
+            return DesktopReposOuterScrollObservation(
+                verticalScrollBarSupported: true,
+                minimumValue: minimum,
+                maximumValue: maximum,
+                valueBeforeScroll: before,
+                valueAfterScroll: nil,
+                setToMaximumSucceeded: false
+            )
+        }
+        return DesktopReposOuterScrollObservation(
+            verticalScrollBarSupported: true,
+            minimumValue: minimum,
+            maximumValue: maximum,
+            valueBeforeScroll: before,
+            valueAfterScroll: readback,
+            setToMaximumSucceeded: abs(maximum - readback) <= 0.001
+        )
+    }
+
+    private func unsupportedScroll() -> DesktopReposOuterScrollObservation {
+        DesktopReposOuterScrollObservation(
+            verticalScrollBarSupported: false,
+            minimumValue: nil,
+            maximumValue: nil,
+            valueBeforeScroll: nil,
+            valueAfterScroll: nil,
+            setToMaximumSucceeded: false
+        )
+    }
+
+    private func verifiedWindow() -> AXUIElement? {
+        let application = AXUIElementCreateApplication(pid)
+        guard elementBelongsToTarget(application),
+              case .value(let rawWindows) = copyAttribute(application, kAXWindowsAttribute as CFString),
+              CFGetTypeID(rawWindows) == CFArrayGetTypeID() else {
+            return nil
+        }
+        let windows = rawWindows as! [AXUIElement]
+        guard windows.count == 1, let window = windows.first,
+              elementBelongsToTarget(window),
+              stringValue(window, kAXRoleAttribute as CFString) == (kAXWindowRole as String),
+              let frame = elementFrame(window),
+              abs(frame.width - ready.windowFrame.width) <= Self.tolerance,
+              abs(frame.height - ready.windowFrame.height) <= Self.tolerance else {
+            return nil
+        }
+        return window
+    }
+
+    private func semanticElements(in window: AXUIElement) -> SemanticElements? {
+        var result = SemanticElements()
+        var remaining = 10_000
+        var visited = Set<CFHashCode>()
+        visit(
+            window,
+            depth: 0,
+            remaining: &remaining,
+            visited: &visited,
+            result: &result
+        )
+        return result
+    }
+
+    private func visit(
+        _ element: AXUIElement,
+        depth: Int,
+        remaining: inout Int,
+        visited: inout Set<CFHashCode>,
+        result: inout SemanticElements
+    ) {
+        guard depth <= 32, remaining > 0, elementBelongsToTarget(element) else { return }
+        let hash = CFHash(element)
+        guard visited.insert(hash).inserted else { return }
+        remaining -= 1
+
+        let role = stringValue(element, kAXRoleAttribute as CFString)
+        let description = stringValue(element, kAXDescriptionAttribute as CFString)
+        let value = stringValue(element, kAXValueAttribute as CFString)
+        if result.table == nil, role == (kAXTableRole as String) {
+            result.table = element
+        }
+        if result.applyAllowlist == nil,
+           role == (kAXButtonRole as String),
+           [description, value].compactMap({ $0 }).contains("Apply Allowlist") {
+            result.applyAllowlist = element
+        }
+        if result.boundaryBody == nil,
+           role == (kAXStaticTextRole as String),
+           [description, value].compactMap({ $0 }).contains(where: {
+               $0.contains("Repo changes are written through")
+           }) {
+            result.boundaryBody = element
+        }
+
+        guard case .value(let rawChildren) = copyAttribute(element, kAXChildrenAttribute as CFString),
+              CFGetTypeID(rawChildren) == CFArrayGetTypeID() else { return }
+        let children = rawChildren as! [AXUIElement]
+        for child in children {
+            visit(
+                child,
+                depth: depth + 1,
+                remaining: &remaining,
+                visited: &visited,
+                result: &result
+            )
+        }
+    }
+
+    private func outermostScrollArea(
+        from boundary: AXUIElement,
+        to window: AXUIElement
+    ) -> AXUIElement? {
+        var current = boundary
+        var outermost: AXUIElement?
+        var visited = Set<CFHashCode>()
+        for _ in 0..<64 {
+            guard visited.insert(CFHash(current)).inserted,
+                  case .value(let rawParent) = copyAttribute(current, kAXParentAttribute as CFString),
+                  CFGetTypeID(rawParent) == AXUIElementGetTypeID() else {
+                return nil
+            }
+            let parent = rawParent as! AXUIElement
+            guard elementBelongsToTarget(parent) else { return nil }
+            if CFEqual(parent, window) {
+                return outermost
+            }
+            if stringValue(parent, kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
+                outermost = parent
+            }
+            current = parent
+        }
+        return nil
+    }
+
+    private func elementBelongsToTarget(_ element: AXUIElement) -> Bool {
+        var elementPID: pid_t = 0
+        return AXUIElementGetPid(element, &elementPID) == .success && elementPID == pid
+    }
+
+    private func elementFrame(_ element: AXUIElement) -> DesktopReposReachabilityFrame? {
+        guard case .value(let rawPosition) = copyAttribute(element, kAXPositionAttribute as CFString),
+              case .value(let rawSize) = copyAttribute(element, kAXSizeAttribute as CFString),
+              let position = pointValue(rawPosition),
+              let size = sizeValue(rawSize),
+              position.x.isFinite,
+              position.y.isFinite,
+              size.width.isFinite,
+              size.height.isFinite,
+              size.width > 0,
+              size.height > 0 else {
+            return nil
+        }
+        return DesktopReposReachabilityFrame(
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private func stringValue(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        guard case .value(let raw) = copyAttribute(element, attribute),
+              CFGetTypeID(raw) == CFStringGetTypeID() else { return nil }
+        return raw as? String
+    }
+
+    private func numericValue(_ raw: CFTypeRef) -> Double? {
+        guard CFGetTypeID(raw) == CFNumberGetTypeID() else { return nil }
+        guard let value = (raw as? NSNumber)?.doubleValue, value.isFinite else { return nil }
+        return value
+    }
+
+    private func pointValue(_ raw: CFTypeRef) -> CGPoint? {
+        guard CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        return AXValueGetValue(raw as! AXValue, .cgPoint, &point) ? point : nil
+    }
+
+    private func sizeValue(_ raw: CFTypeRef) -> CGSize? {
+        guard CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var size = CGSize.zero
+        return AXValueGetValue(raw as! AXValue, .cgSize, &size) ? size : nil
+    }
+
+    private func copyAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXReadResult {
+        for attempt in 0..<3 {
+            var raw: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(element, attribute, &raw)
+            if result == .success, let raw { return .value(raw) }
+            if result == .cannotComplete, attempt < 2 {
+                usleep(20_000)
+                continue
+            }
+            return .failure(result)
+        }
+        return .failure(.cannotComplete)
+    }
+
+    private struct SemanticElements {
+        var table: AXUIElement?
+        var applyAllowlist: AXUIElement?
+        var boundaryBody: AXUIElement?
+    }
+
+    private enum AXReadResult {
+        case value(CFTypeRef)
+        case failure(AXError)
     }
 }
 
