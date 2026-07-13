@@ -461,6 +461,48 @@ describe("checkout subscription lifecycle replay", () => {
     }
   });
 
+  it("replays elapsed diagnostic periods but rejects brand-new elapsed diagnostics", () => {
+    const delayedNow = new Date("2026-08-21T00:00:00.000Z");
+    for (const command of ["reconcile", "payment_attention"] as const) {
+      const path = databasePath();
+      let storeNow = NOW;
+      const store = new LicenseStore(path, { now: () => storeNow });
+      try {
+        const issued = issueBound(store, {
+          idempotencyKey: `checkout-session:delayed-diagnostic-${command}`,
+          externalSubscriptionId: `sub_delayed_diagnostic_${command}`,
+          externalCheckoutId: `cs_delayed_diagnostic_${command}`
+        });
+        const period = "2026-08-20T00:00:00.000Z";
+        const original = lifecycleRequest(command, issued.request, {
+          eventId: `evt_delayed_diagnostic_${command}`,
+          currentPeriodEnd: period
+        });
+        applyLifecycle(store, original);
+
+        storeNow = delayedNow;
+        const delayedReplay = lifecycleRequest(command, issued.request, {
+          eventId: original.eventId,
+          currentPeriodEnd: period
+        }, delayedNow);
+        assert.equal(delayedReplay.requestHash, original.requestHash, command);
+        assert.equal(applyLifecycle(store, delayedReplay).status, "replayed", command);
+
+        const newElapsed = lifecycleRequest(command, issued.request, {
+          eventId: `evt_new_elapsed_diagnostic_${command}`,
+          currentPeriodEnd: period
+        }, delayedNow);
+        assert.throws(
+          () => applyLifecycle(store, newElapsed),
+          (error: unknown) => errorName(error) === "SubscriptionLifecyclePolicyError",
+          command
+        );
+      } finally {
+        store.close();
+      }
+    }
+  });
+
   it("projects an exact replay as expired after the paid period elapses", () => {
     const path = databasePath();
     let storeNow = NOW;

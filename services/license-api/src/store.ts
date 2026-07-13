@@ -772,8 +772,11 @@ export class LicenseStore {
         case "reconcile":
         case "cancel_at_period_end":
         case "payment_attention": {
-          if (input.command === "cancel_at_period_end") {
-            validateCancellationPeriodEnd(input.currentPeriodEnd, appliedAt);
+          const nonPaidPeriodEnd = input.command === "cancel_at_period_end"
+            ? input.currentPeriodEnd
+            : input.diagnosticCurrentPeriodEnd;
+          if (nonPaidPeriodEnd !== undefined) {
+            validateNonPaidPeriodEnd(nonPaidPeriodEnd, appliedAt);
           }
           const stale = isStaleNonMutatingEvent(
             input.eventCreatedAt,
@@ -1089,7 +1092,7 @@ function validatePaidPeriodEnd(
   return milliseconds;
 }
 
-function validateCancellationPeriodEnd(value: string, now: Date): void {
+function validateNonPaidPeriodEnd(value: string, now: Date): void {
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds) || milliseconds <= now.getTime()) {
     throw new SubscriptionLifecyclePolicyError("cancellation period end is invalid");
