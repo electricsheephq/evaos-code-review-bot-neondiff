@@ -133,7 +133,7 @@ describe("GEX44 Linux Phase 1 runtime", () => {
     const monitor = createGex44ResourceMonitor({ nvidiaSmiSha256: "f".repeat(64) });
     const session = await monitor.start();
     await expect(monitor.attach(session, { metadata: { pid: process.pid } })).rejects.toThrow(/SHA-256.*drifted/i);
-    await expect(monitor.stop(session)).rejects.toThrow(/no pinned nvidia-smi descriptor/i);
+    await expect(monitor.stop(session)).rejects.toThrow(/not attached/i);
   });
 
   it.skipIf(!functionalNvidiaSmi)("executes the opened pinned nvidia-smi image through procfs", async () => {

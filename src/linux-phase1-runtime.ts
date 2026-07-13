@@ -245,10 +245,18 @@ export function createGex44ResourceMonitor(parameters: { nvidiaSmiSha256: string
       const startToken = processStartToken(pid);
       if (!startToken) throw new Error("resident process start identity is unavailable");
       const nvidiaSmiFd = openPinnedNvidiaSmi(expectedNvidiaSmiSha256);
+      const attached: Session = { ...session, samples: [...session.samples], pid, processStartToken: startToken, nvidiaSmiFd };
+      try {
+        capture(attached, "attached");
+      } catch (error) {
+        closeSync(nvidiaSmiFd);
+        throw error;
+      }
       session.pid = pid;
       session.processStartToken = startToken;
       session.nvidiaSmiFd = nvidiaSmiFd;
-      capture(session, "attached");
+      session.samples = attached.samples;
+      session.sequence = attached.sequence;
       session.timer = setInterval(() => {
         try { capture(session, "periodic"); }
         catch (error) { session.periodicFailure = error instanceof Error ? error.name : "periodic_sample_failed"; }
