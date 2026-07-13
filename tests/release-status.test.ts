@@ -5962,7 +5962,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     ]);
   });
 
-  it("reports durable review queue counts and fails retryable deferred or failed jobs", () => {
+  it("reports durable review queue counts and distinguishes capacity-blocked retries from failed jobs", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-review-queue-"));
     roots.push(root);
     const dbPath = join(root, "reviews.sqlite");
@@ -6044,15 +6044,16 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
       providerDeferred: {
         total: 2,
         retryable: 1,
-        readyToRetry: 1,
-        waitingCooldown: 1
+        readyToRetry: 0,
+        waitingCooldown: 1,
+        waitingProviderCapacity: 1
       },
       delayedByReason: {
-        repo_capacity: 1,
-        provider_cooldown: 1
+        provider_cooldown: 1,
+        provider_capacity: 2
       },
-      wouldLeaseCount: 1,
-      delayedCount: 2,
+      wouldLeaseCount: 0,
+      delayedCount: 3,
       details: {
         included: false,
         wouldLeaseReturned: 0,
@@ -6101,10 +6102,10 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     });
     expect(status.gates).toContainEqual({
       name: "queue_no_retryable_provider_deferred_jobs",
-      ok: false,
-      detail: "1 ready-to-retry provider-deferred queue job(s); provider_deferred total=2 retryable=1 waiting_cooldown=1 waiting_capacity=0; queue total=5 queued=1 leased=0 running=1 provider_deferred=2 failed=1"
+      ok: true,
+      detail: "0 ready-to-retry provider-deferred queue job(s); provider_deferred total=2 retryable=1 waiting_cooldown=1 waiting_capacity=1; queue total=5 queued=1 leased=0 running=1 provider_deferred=2 failed=1"
     });
-    expect(status.recommendedActions).toContain("wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry");
+    expect(status.recommendedActions).not.toContain("wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry");
 
     const detailedStatus = collectReleaseStatus({
       cwd: process.cwd(),
