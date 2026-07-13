@@ -152,7 +152,7 @@ function lifecycleRequest(
       providerEventType: "customer.subscription.deleted",
       subscriptionStatus: "canceled",
       cancelAtPeriodEnd: false,
-      reason: "provider subscription terminated"
+      reason: "subscription_canceled"
     }
   } as const;
   return {
