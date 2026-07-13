@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { assertCharacterizationLoadedArtifacts, assertMonitorNvidiaBinding, assertPinnedLoadedJavaScript } from "../src/phase1-characterization-cli.js";
+import { assertCharacterizationLoadedArtifacts, assertMonitorNvidiaBinding, assertPinnedLoadedJavaScript, importVerifiedModule } from "../src/phase1-characterization-cli.js";
 
 const cli = join(process.cwd(), "src", "phase1-characterization-cli.ts");
 const tsx = join(process.cwd(), "node_modules", ".bin", "tsx");
@@ -20,6 +20,19 @@ function run(args: string[]): { status: number | null; stderr: string; stdout: s
 }
 
 describe("private Phase 1 characterization entrypoint", () => {
+  it("rejects unverified module bytes before their top-level code can execute", async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "phase1-verified-module-")));
+    const marker = join(directory, "executed");
+    const modulePath = join(directory, "payload.js");
+    const source = `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "executed"); export const ok = true;\n`;
+    writeFileSync(modulePath, source);
+    await expect(importVerifiedModule(modulePath, "0".repeat(64), "payload")).rejects.toThrow(/SHA-256/i);
+    expect(existsSync(marker)).toBe(false);
+    const loaded = await importVerifiedModule<{ ok: boolean }>(modulePath, createHash("sha256").update(source).digest("hex"), "payload");
+    expect(loaded.ok).toBe(true);
+    expect(existsSync(marker)).toBe(true);
+  });
+
   it("binds the monitor factory to the plan's exact nvidia-smi digest", () => {
     const digest = "a".repeat(64);
     const identity = { version: "monitor/v1", modulePath: "/tmp/monitor.js", moduleSha256: "b".repeat(64), approvedRoot: "/tmp", exportName: "createMonitor", factoryParameters: { nvidiaSmiSha256: digest } };

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   runPhase1Screen as executePhase1Screen,
   createLlamaServerExecutableAdapter,
+  phase1ScreeningRunnerModulePath,
   phase1LeaseCoordinationPort,
   verifyPairedPhase1Cohort,
   type Phase1ResidentAdapter,
@@ -42,15 +43,14 @@ const ownershipProof = {
   verifyProcessIdentity: async () => true
 };
 const runnerSourcePath = join(process.cwd(), "src", "phase1-screening-runner.ts");
-const harnessRepo = mkdtempSync(join(tmpdir(), "neondiff-phase1-harness-repo-"));
+const harnessRepo = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-phase1-harness-repo-")));
 const harnessRepoSource = join(harnessRepo, "src", "phase1-screening-runner.ts");
 const harnessEntrypoint = join(harnessRepo, "dist", "src", "phase1-characterization-cli.js");
-const harnessRunner = join(harnessRepo, "dist", "src", "phase1-screening-runner.js");
+const harnessRunner = realpathSync(phase1ScreeningRunnerModulePath());
 mkdirSync(dirname(harnessRepoSource), { recursive: true });
 mkdirSync(dirname(harnessEntrypoint), { recursive: true });
 writeFileSync(harnessRepoSource, readFileSync(runnerSourcePath));
 writeFileSync(harnessEntrypoint, "export const entrypoint = true;\n");
-writeFileSync(harnessRunner, "export const runner = true;\n");
 execFileSync("git", ["init", "-q", harnessRepo]);
 execFileSync("git", ["-C", harnessRepo, "config", "user.email", "phase1@example.invalid"]);
 execFileSync("git", ["-C", harnessRepo, "config", "user.name", "Phase 1 Test"]);
@@ -67,6 +67,7 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
     let sequence = 0;
     let attachObserved = false;
     let forceStopOom = false;
+    let attemptTag = "none";
     export function createMonitor(factoryParameters) {
       if (kind === "factory-parameters" && (!Object.isFrozen(factoryParameters) || factoryParameters?.nvidiaSmiSha256 !== ${JSON.stringify("a".repeat(64))})) {
         throw new Error("factory parameters were not immutably bound");
@@ -85,12 +86,13 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
           if (kind === "attach-and-stop-error") throw new Error("monitor attach exploded");
           if (kind === "attach-unsafe-probe") attachObserved = true;
           if (kind === "conditional-stop-oom") forceStopOom = resident.metadata?.forceStopOom === true;
+          if (kind === "attempt-tagged") attemptTag = resident.metadata?.attemptTag ?? "none";
           if (!resident.metadata || resident.metadata.pid !== 42) throw new Error("monitor did not receive resident metadata");
         },
         async sample(_session, context) {
           if (kind === "throw-" + context.phase) throw new Error("monitor " + context.phase + " exploded");
           sequence += 1;
-          const base = { capturedAt: "sample-" + sequence, phase: context.phase, rssBytes: 100 + sequence, vramBytes: 200, swapBytes: kind === "swap" && sequence > 2 ? 4096 : 0, factoryParametersBound: kind === "factory-parameters" ? 1 : 0 };
+          const base = { capturedAt: "sample-" + sequence, phase: context.phase, rssBytes: 100 + sequence, vramBytes: 200, swapBytes: kind === "swap" && sequence > 2 ? 4096 : 0, factoryParametersBound: kind === "factory-parameters" ? 1 : 0, attemptTag };
           if (kind === "sample-nan") return { ...base, rssBytes: Number.NaN };
           if (kind === "sample-infinity") return { ...base, diagnosticValue: Number.POSITIVE_INFINITY };
           if (kind === "sample-negative") return { ...base, vramBytes: -1 };
@@ -101,13 +103,14 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
           if (kind === "classify-invalid-status") return { status: "completed", errorCode: "invalid" };
           if (kind === "classify-missing-code") return { status: "stopped" };
           if (kind === "classify-scalar") return "stopped";
+          if (kind === "attempt-tagged" && samples.some(sample => sample.attemptTag === "old") && samples.some(sample => sample.attemptTag === "current")) return { status: "stopped", errorCode: "stale_attempt_included" };
           if (kind === "swap" && samples.some(sample => sample.swapBytes >= 4096)) return { status: "stopped", errorCode: "sustained_swap_growth" };
           if (kind === "stop-oom" && samples.some(sample => sample.phase === "stopped")) return { status: "oom", errorCode: "stop_time_oom" };
           if (kind === "conditional-stop-oom" && forceStopOom && samples.some(sample => sample.phase === "stopped")) return { status: "oom", errorCode: "stop_time_oom" };
           return undefined;
         },
         async stop() {
-          const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0, attachObserved: attachObserved ? 1 : 0 };
+          const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0, attachObserved: attachObserved ? 1 : 0, attemptTag };
           if (kind === "attach-and-stop-error") throw new Error("monitor stop exploded");
           if (kind === "stop-empty") return [];
           if (kind === "stop-array") return [{ ...base, capturedAt: "periodic", phase: "periodic" }, base];
@@ -351,6 +354,37 @@ describe("Phase 1 screening runner", () => {
     outside.harness.sourcePath = outsideSource;
     outside.harness.sourceSha256 = digest(readFileSync(outsideSource));
     await expect(runPhase1Screen(outside, adapter())).rejects.toThrow(/inside checkoutRoot/i);
+  });
+
+  it("verifies declared entrypoint and runner bytes before manifest persistence or adapter startup", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-phase1-loaded-artifacts-")));
+    for (const artifact of ["entrypoint", "runner"] as const) {
+      const outputDir = join(root, artifact);
+      const runSpec = spec(outputDir);
+      const path = join(root, `${artifact}.js`);
+      writeFileSync(path, `export const ${artifact} = true;\n`);
+      runSpec.harness[`${artifact}Path`] = path;
+      runSpec.harness[`${artifact}Sha256`] = "0".repeat(64);
+      let starts = 0;
+      await expect(runPhase1Screen(runSpec, adapter({
+        async start() { starts += 1; return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42 } }; }
+      }))).rejects.toThrow(new RegExp(`${artifact} SHA-256`, "i"));
+      expect(starts).toBe(0);
+      expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+    }
+
+    const outputDir = join(root, "unrelated-runner");
+    const runSpec = spec(outputDir);
+    const unrelatedRunner = join(root, "unrelated-runner.js");
+    writeFileSync(unrelatedRunner, "export const runner = true;\n");
+    runSpec.harness.runnerPath = unrelatedRunner;
+    runSpec.harness.runnerSha256 = digest(readFileSync(unrelatedRunner));
+    let starts = 0;
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { starts += 1; return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42 } }; }
+    }))).rejects.toThrow(/does not identify the executing implementation artifact/i);
+    expect(starts).toBe(0);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
   });
 
   it("turns parser and deterministic gate failures into explicit schema_failed terminals", async () => {
@@ -624,6 +658,32 @@ describe("Phase 1 screening runner", () => {
     await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
     const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
     expect(resources.samples.map((sample: { capturedAt: string }) => sample.capturedAt)).toEqual(expect.arrayContaining(reconstructedCapturedAt));
+  });
+
+  it("excludes reconstructed history from resumed terminal classification while retaining it as evidence", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-current-terminal-classification-"));
+    const identity = monitorModule("attempt-tagged");
+    let starts = 0;
+    const taggedAdapter = adapter({
+      async start() {
+        starts += 1;
+        return { id: `resident-${starts}`, argv: ["/opt/llama-server"], metadata: { pid: 42, attemptTag: starts === 1 ? "old" : "current" } };
+      }
+    });
+    await runPhase1Screen(spec(outputDir), taggedAdapter, { monitorModule: identity });
+    const existingPath = join(outputDir, "results", "warm-8k", "pr-1.json");
+    const existingBytes = readFileSync(existingPath);
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "resources", "warm-8k.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+    const result = await runPhase1Screen(spec(outputDir), taggedAdapter, { monitorModule: identity });
+    expect(result.status).toBe("completed");
+    expect(readFileSync(existingPath)).toEqual(existingBytes);
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.some((sample: { attemptTag: string }) => sample.attemptTag === "old")).toBe(true);
+    expect(resources.samples.some((sample: { attemptTag: string }) => sample.attemptTag === "current")).toBe(true);
+    expect(resources.terminalClassification).toBeUndefined();
   });
 
   it("rejects an empty terminal monitor trace", async () => {
