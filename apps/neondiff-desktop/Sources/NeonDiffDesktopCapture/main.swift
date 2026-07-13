@@ -482,13 +482,23 @@ private struct DesktopReposReachabilityAXTracer {
 
             let verticalScrollBar = try verticalScrollBar(in: outerScrollArea)
             let scrollBarActionNames = try verticalScrollBar.map(actionNames)
+            let incrementPage: AXUIElement?
+            if let verticalScrollBar {
+                incrementPage = try incrementPageButton(in: verticalScrollBar)
+            } else {
+                incrementPage = nil
+            }
+            let incrementPageActionNames = try incrementPage.map(actionNames)
             return try DesktopReposScrollCapabilityContract.evaluate(
                 osMajorVersion: osMajorVersion,
                 boundaryActionNames: boundaryActionNames,
                 verticalScrollBarResolved: verticalScrollBar != nil,
                 scrollBarActionNames: scrollBarActionNames,
+                incrementPageResolved: incrementPage != nil,
+                incrementPageActionNames: incrementPageActionNames,
                 scrollToVisibleActionName: scrollToVisibleActionName,
-                incrementActionName: NSAccessibility.Action.increment.rawValue
+                incrementActionName: NSAccessibility.Action.increment.rawValue,
+                pressActionName: NSAccessibility.Action.press.rawValue
             )
         } catch let reason as Failure {
             return .failed(osMajorVersion: osMajorVersion, reason: reason)
@@ -776,6 +786,53 @@ private struct DesktopReposReachabilityAXTracer {
             return .invalidType
         case .ambiguousVerticalChildren:
             return .semanticDuplicate
+        }
+    }
+
+    private func incrementPageButton(in scrollBar: AXUIElement) throws -> AXUIElement? {
+        guard let rawChildren = try optionalAttribute(
+            scrollBar,
+            kAXChildrenAttribute as CFString
+        ) else {
+            throw Failure.attributeUnavailable
+        }
+        guard CFGetTypeID(rawChildren) == CFArrayGetTypeID(),
+              let children = rawChildren as? [AXUIElement] else {
+            throw Failure.invalidType
+        }
+
+        var candidates: [DesktopReposIncrementPageCandidate] = []
+        candidates.reserveCapacity(children.count)
+        for child in children {
+            try requireTargetPID(child)
+            candidates.append(.init(
+                role: try optionalString(child, kAXRoleAttribute as CFString),
+                subrole: try optionalString(child, kAXSubroleAttribute as CFString)
+            ))
+        }
+
+        let selection: DesktopReposIncrementPageSelection
+        do {
+            selection = try DesktopReposIncrementPageSelectionContract.select(
+                directChildren: candidates
+            )
+        } catch let error as DesktopReposIncrementPageSelectionError {
+            switch error {
+            case .missingRole, .missingSubrole:
+                throw Failure.attributeUnavailable
+            case .invalidIncrementPageRole:
+                throw Failure.invalidType
+            case .duplicateIncrementPage:
+                throw Failure.semanticDuplicate
+            }
+        }
+
+        switch selection {
+        case .directChild(let index):
+            guard children.indices.contains(index) else { throw Failure.invalidType }
+            return children[index]
+        case .unsupported:
+            return nil
         }
     }
 

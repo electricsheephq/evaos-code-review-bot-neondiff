@@ -175,13 +175,22 @@ printf '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width"
   >"$output_dir/reachability.json"
 case "\${FAKE_CAPABILITIES_MODE:-valid}" in
   valid)
-    printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false}' \\
+    printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false,"outerVerticalIncrementPageResolved":true,"outerVerticalIncrementPageAdvertisesPress":false}' \\
       >"$output_dir/scroll-capabilities.json"
     ;;
   failed)
-    printf '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"failed","failureReason":"%s"},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":null,"outerVerticalScrollBarResolved":null,"outerVerticalScrollBarAdvertisesIncrement":null}\n' \
+    printf '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"failed","failureReason":"%s"},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":null,"outerVerticalScrollBarResolved":null,"outerVerticalScrollBarAdvertisesIncrement":null,"outerVerticalIncrementPageResolved":null,"outerVerticalIncrementPageAdvertisesPress":null}\n' \
       "\${FAKE_CAPABILITY_FAILURE_REASON:-semantic-missing}" \
       >"$output_dir/scroll-capabilities.json"
+    ;;
+  missing-page-field)
+    printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false,"outerVerticalIncrementPageResolved":true}' >"$output_dir/scroll-capabilities.json"
+    ;;
+  unknown-page-field)
+    printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false,"outerVerticalIncrementPageResolved":true,"outerVerticalIncrementPageAdvertisesPress":false,"rawIncrementPage":"forbidden"}' >"$output_dir/scroll-capabilities.json"
+    ;;
+  invalid-page-cross-field)
+    printf '%s\\n' '{"schemaVersion":1,"fixture":"tab-repos","requestedContentSize":{"width":1040,"height":680},"osMajorVersion":26,"acquisition":{"status":"complete","failureReason":null},"scrollToVisibleActionAvailable":true,"boundaryAdvertisesScrollToVisible":false,"outerVerticalScrollBarResolved":true,"outerVerticalScrollBarAdvertisesIncrement":false,"outerVerticalIncrementPageResolved":false,"outerVerticalIncrementPageAdvertisesPress":true}' >"$output_dir/scroll-capabilities.json"
     ;;
   invalid) printf '%s\\n' '{}' >"$output_dir/scroll-capabilities.json" ;;
   missing) ;;
@@ -303,6 +312,25 @@ describe("focused Repos reachability capture", () => {
     expect(script).not.toContain("1440x900");
   });
 
+  it("keeps the Increment Page probe direct-child, PID-bound, and action-free", () => {
+    const captureSource = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopCapture/main.swift",
+      "utf8"
+    );
+    const incrementPageProbe = captureSource.match(
+      /private func incrementPageButton[\s\S]*?private func unsupportedScroll/
+    )?.[0];
+    expect(incrementPageProbe).toBeDefined();
+    expect(incrementPageProbe).toContain("kAXChildrenAttribute");
+    expect(incrementPageProbe).toMatch(/for child in children[\s\S]*try requireTargetPID\(child\)/);
+    expect(incrementPageProbe).toContain("kAXRoleAttribute");
+    expect(incrementPageProbe).toContain("kAXSubroleAttribute");
+    expect(incrementPageProbe).not.toContain("visit(");
+    expect(captureSource).toContain("NSAccessibility.Action.press.rawValue");
+    expect(captureSource).toContain("AXUIElementCopyActionNames");
+    expect(captureSource).not.toContain("AXUIElementPerformAction");
+  });
+
   it.runIf(process.platform === "darwin")(
     "preserves reachability and public-safe status evidence when the checker reports the expected pre-fix failure",
     { timeout: 30_000 },
@@ -328,7 +356,9 @@ describe("focused Repos reachability capture", () => {
         scrollToVisibleActionAvailable: true,
         boundaryAdvertisesScrollToVisible: false,
         outerVerticalScrollBarResolved: true,
-        outerVerticalScrollBarAdvertisesIncrement: false
+        outerVerticalScrollBarAdvertisesIncrement: false,
+        outerVerticalIncrementPageResolved: true,
+        outerVerticalIncrementPageAdvertisesPress: false
       });
       expect(JSON.parse(readFileSync(join(caseRoot, "capture.json"), "utf8")))
         .toMatchObject({ scrollCapabilities: { path: "scroll-capabilities.json", sha256: expect.any(String) } });
@@ -383,18 +413,25 @@ describe("focused Repos reachability capture", () => {
     "rejects a malformed sanitized scroll capability artifact",
     { timeout: 30_000 },
     () => {
-      const harness = createFakeHarnessRepository();
-      const result = runHarness(harness, { FAKE_CAPABILITIES_MODE: "invalid" });
+      for (const mode of [
+        "invalid",
+        "missing-page-field",
+        "unknown-page-field",
+        "invalid-page-cross-field"
+      ]) {
+        const harness = createFakeHarnessRepository();
+        const result = runHarness(harness, { FAKE_CAPABILITIES_MODE: mode });
 
-      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
-      expect(focusedStatus(harness)).toMatchObject({
-        status: "incomplete",
-        phase: "capture",
-        reasonCode: "capture_output_incomplete",
-        focusedProof: "not_emitted"
-      });
-      expect(existsSync(join(harness.output, "cases/tab-repos/1040x680"))).toBe(false);
-      expectNoFinalProof(harness);
+        expect(result.status, `${mode}: ${result.stderr}\n${result.stdout}`).toBe(1);
+        expect(focusedStatus(harness)).toMatchObject({
+          status: "incomplete",
+          phase: "capture",
+          reasonCode: "capture_output_incomplete",
+          focusedProof: "not_emitted"
+        });
+        expect(existsSync(join(harness.output, "cases/tab-repos/1040x680"))).toBe(false);
+        expectNoFinalProof(harness);
+      }
     }
   );
 
@@ -413,7 +450,9 @@ describe("focused Repos reachability capture", () => {
         acquisition: { status: "failed", failureReason: "semantic-missing" },
         boundaryAdvertisesScrollToVisible: null,
         outerVerticalScrollBarResolved: null,
-        outerVerticalScrollBarAdvertisesIncrement: null
+        outerVerticalScrollBarAdvertisesIncrement: null,
+        outerVerticalIncrementPageResolved: null,
+        outerVerticalIncrementPageAdvertisesPress: null
       });
     }
   );

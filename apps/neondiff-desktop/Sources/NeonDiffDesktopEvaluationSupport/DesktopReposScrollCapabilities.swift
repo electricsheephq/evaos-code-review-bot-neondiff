@@ -6,11 +6,67 @@ public enum DesktopReposScrollCapabilityContractError: Error, Equatable, Sendabl
     case unexpectedBoundaryActionNames
     case missingScrollBarActionNames
     case unexpectedScrollBarActionNames
+    case missingIncrementPageActionNames
+    case unexpectedIncrementPageActionNames
     case missingActionName
 }
 
 public enum DesktopReposScrollCapabilitiesValidationError: Error, Equatable, Sendable {
     case invalidContract
+}
+
+public struct DesktopReposIncrementPageCandidate: Equatable, Sendable {
+    public let role: String?
+    public let subrole: String?
+
+    public init(role: String?, subrole: String?) {
+        self.role = role
+        self.subrole = subrole
+    }
+}
+
+public enum DesktopReposIncrementPageSelection: Equatable, Sendable {
+    case directChild(index: Int)
+    case unsupported
+}
+
+public enum DesktopReposIncrementPageSelectionError: Error, Equatable, Sendable {
+    case missingRole
+    case missingSubrole
+    case invalidIncrementPageRole
+    case duplicateIncrementPage
+}
+
+public enum DesktopReposIncrementPageSelectionContract {
+    public static let buttonRole = "AXButton"
+    public static let incrementPageSubrole = "AXIncrementPage"
+
+    public static func select(
+        directChildren: [DesktopReposIncrementPageCandidate]
+    ) throws -> DesktopReposIncrementPageSelection {
+        var incrementPageIndices: [Int] = []
+        for (index, child) in directChildren.enumerated() {
+            guard let role = child.role else {
+                throw DesktopReposIncrementPageSelectionError.missingRole
+            }
+            guard let subrole = child.subrole else {
+                throw DesktopReposIncrementPageSelectionError.missingSubrole
+            }
+            guard subrole == incrementPageSubrole else { continue }
+            guard role == buttonRole else {
+                throw DesktopReposIncrementPageSelectionError.invalidIncrementPageRole
+            }
+            incrementPageIndices.append(index)
+        }
+        switch incrementPageIndices.count {
+        case 0:
+            return .unsupported
+        case 1:
+            return .directChild(index: incrementPageIndices[0])
+        default:
+            throw DesktopReposIncrementPageSelectionError.duplicateIncrementPage
+        }
+    }
 }
 
 public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
@@ -23,6 +79,8 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
     public let boundaryAdvertisesScrollToVisible: Bool?
     public let outerVerticalScrollBarResolved: Bool?
     public let outerVerticalScrollBarAdvertisesIncrement: Bool?
+    public let outerVerticalIncrementPageResolved: Bool?
+    public let outerVerticalIncrementPageAdvertisesPress: Bool?
 
     public init(
         schemaVersion: Int = 1,
@@ -33,7 +91,9 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
         scrollToVisibleActionAvailable: Bool,
         boundaryAdvertisesScrollToVisible: Bool?,
         outerVerticalScrollBarResolved: Bool?,
-        outerVerticalScrollBarAdvertisesIncrement: Bool?
+        outerVerticalScrollBarAdvertisesIncrement: Bool?,
+        outerVerticalIncrementPageResolved: Bool?,
+        outerVerticalIncrementPageAdvertisesPress: Bool?
     ) {
         self.schemaVersion = schemaVersion
         self.fixture = fixture
@@ -44,6 +104,8 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
         self.boundaryAdvertisesScrollToVisible = boundaryAdvertisesScrollToVisible
         self.outerVerticalScrollBarResolved = outerVerticalScrollBarResolved
         self.outerVerticalScrollBarAdvertisesIncrement = outerVerticalScrollBarAdvertisesIncrement
+        self.outerVerticalIncrementPageResolved = outerVerticalIncrementPageResolved
+        self.outerVerticalIncrementPageAdvertisesPress = outerVerticalIncrementPageAdvertisesPress
     }
 
     public static func failed(
@@ -58,7 +120,9 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
             scrollToVisibleActionAvailable: osMajorVersion >= 26,
             boundaryAdvertisesScrollToVisible: nil,
             outerVerticalScrollBarResolved: nil,
-            outerVerticalScrollBarAdvertisesIncrement: nil
+            outerVerticalScrollBarAdvertisesIncrement: nil,
+            outerVerticalIncrementPageResolved: nil,
+            outerVerticalIncrementPageAdvertisesPress: nil
         )
     }
 
@@ -77,15 +141,21 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
                   let boundaryAdvertisesScrollToVisible,
                   let outerVerticalScrollBarResolved,
                   let outerVerticalScrollBarAdvertisesIncrement,
+                  let outerVerticalIncrementPageResolved,
+                  let outerVerticalIncrementPageAdvertisesPress,
                   scrollToVisibleActionAvailable || !boundaryAdvertisesScrollToVisible,
-                  outerVerticalScrollBarResolved || !outerVerticalScrollBarAdvertisesIncrement else {
+                  outerVerticalScrollBarResolved || !outerVerticalScrollBarAdvertisesIncrement,
+                  outerVerticalScrollBarResolved || !outerVerticalIncrementPageResolved,
+                  outerVerticalIncrementPageResolved || !outerVerticalIncrementPageAdvertisesPress else {
                 throw DesktopReposScrollCapabilitiesValidationError.invalidContract
             }
         case .failed:
             guard acquisition.failureReason != nil,
                   boundaryAdvertisesScrollToVisible == nil,
                   outerVerticalScrollBarResolved == nil,
-                  outerVerticalScrollBarAdvertisesIncrement == nil else {
+                  outerVerticalScrollBarAdvertisesIncrement == nil,
+                  outerVerticalIncrementPageResolved == nil,
+                  outerVerticalIncrementPageAdvertisesPress == nil else {
                 throw DesktopReposScrollCapabilitiesValidationError.invalidContract
             }
         }
@@ -121,6 +191,8 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
         case boundaryAdvertisesScrollToVisible
         case outerVerticalScrollBarResolved
         case outerVerticalScrollBarAdvertisesIncrement
+        case outerVerticalIncrementPageResolved
+        case outerVerticalIncrementPageAdvertisesPress
     }
 
     public init(from decoder: Decoder) throws {
@@ -150,6 +222,14 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
             Bool.self,
             forKey: .outerVerticalScrollBarAdvertisesIncrement
         )
+        outerVerticalIncrementPageResolved = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .outerVerticalIncrementPageResolved
+        )
+        outerVerticalIncrementPageAdvertisesPress = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .outerVerticalIncrementPageAdvertisesPress
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -178,6 +258,22 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
         } else {
             try container.encodeNil(forKey: .outerVerticalScrollBarAdvertisesIncrement)
         }
+        if let outerVerticalIncrementPageResolved {
+            try container.encode(
+                outerVerticalIncrementPageResolved,
+                forKey: .outerVerticalIncrementPageResolved
+            )
+        } else {
+            try container.encodeNil(forKey: .outerVerticalIncrementPageResolved)
+        }
+        if let outerVerticalIncrementPageAdvertisesPress {
+            try container.encode(
+                outerVerticalIncrementPageAdvertisesPress,
+                forKey: .outerVerticalIncrementPageAdvertisesPress
+            )
+        } else {
+            try container.encodeNil(forKey: .outerVerticalIncrementPageAdvertisesPress)
+        }
     }
 }
 
@@ -187,14 +283,30 @@ public enum DesktopReposScrollCapabilityContract {
         boundaryActionNames: [String]?,
         verticalScrollBarResolved: Bool,
         scrollBarActionNames: [String]?,
+        incrementPageResolved: Bool,
+        incrementPageActionNames: [String]?,
         scrollToVisibleActionName: String?,
-        incrementActionName: String
+        incrementActionName: String,
+        pressActionName: String
     ) throws -> DesktopReposScrollCapabilities {
         guard (1...100).contains(osMajorVersion) else {
             throw DesktopReposScrollCapabilityContractError.invalidOperatingSystemVersion
         }
-        guard !incrementActionName.isEmpty else {
+        guard !incrementActionName.isEmpty, !pressActionName.isEmpty else {
             throw DesktopReposScrollCapabilityContractError.missingActionName
+        }
+
+        let incrementPageAdvertisesPress: Bool
+        if incrementPageResolved {
+            guard let incrementPageActionNames else {
+                throw DesktopReposScrollCapabilityContractError.missingIncrementPageActionNames
+            }
+            incrementPageAdvertisesPress = incrementPageActionNames.contains(pressActionName)
+        } else {
+            guard incrementPageActionNames == nil else {
+                throw DesktopReposScrollCapabilityContractError.unexpectedIncrementPageActionNames
+            }
+            incrementPageAdvertisesPress = false
         }
 
         let scrollToVisibleAvailable = osMajorVersion >= 26
@@ -235,7 +347,9 @@ public enum DesktopReposScrollCapabilityContract {
             scrollToVisibleActionAvailable: scrollToVisibleAvailable,
             boundaryAdvertisesScrollToVisible: boundaryAdvertisesScrollToVisible,
             outerVerticalScrollBarResolved: verticalScrollBarResolved,
-            outerVerticalScrollBarAdvertisesIncrement: advertisesIncrement
+            outerVerticalScrollBarAdvertisesIncrement: advertisesIncrement,
+            outerVerticalIncrementPageResolved: incrementPageResolved,
+            outerVerticalIncrementPageAdvertisesPress: incrementPageAdvertisesPress
         ).validated()
     }
 }

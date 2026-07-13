@@ -161,7 +161,13 @@ the focused evidence for secret-shaped text. The capability packet is bound to
 the `tab-repos` fixture and requested `1040x680` content size, is capped at 4096
 bytes, and contains only schema/OS metadata, typed acquisition state, and
 sanitized capability booleans. It uses `AXUIElementCopyActionNames` only to
-check the verified Boundary and outer vertical scrollbar; it does not perform accessibility actions.
+check the verified Boundary, outer vertical scrollbar, and one exact direct
+child with role `AXButton` and subrole `AXIncrementPage`; it does not perform accessibility actions.
+The probe requires every direct scrollbar child to retain the fixture PID and
+well-typed role/subrole attributes, never recurses into descendants, and never
+substitutes increment/decrement arrows or geometry. It records only whether the
+Increment Page child resolved and whether that child advertises the exact public
+`AXPress` action.
 Missing, malformed, or failed action-name acquisition is
 a typed acquisition failure rather than a false capability result. It never
 reads live configuration, Keychain, GitHub, provider, daemon, network, or

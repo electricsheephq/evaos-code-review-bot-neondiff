@@ -10,8 +10,11 @@ struct DesktopReposScrollCapabilitiesTests {
             boundaryActionNames: ["AXScrollToVisible", "AXShowMenu"],
             verticalScrollBarResolved: true,
             scrollBarActionNames: ["AXIncrement"],
+            incrementPageResolved: true,
+            incrementPageActionNames: ["AXPress"],
             scrollToVisibleActionName: "AXScrollToVisible",
-            incrementActionName: "AXIncrement"
+            incrementActionName: "AXIncrement",
+            pressActionName: "AXPress"
         )
 
         #expect(capabilities.acquisition == .init(status: .complete, failureReason: nil))
@@ -21,6 +24,8 @@ struct DesktopReposScrollCapabilitiesTests {
         #expect(capabilities.boundaryAdvertisesScrollToVisible == true)
         #expect(capabilities.outerVerticalScrollBarResolved == true)
         #expect(capabilities.outerVerticalScrollBarAdvertisesIncrement == true)
+        #expect(capabilities.outerVerticalIncrementPageResolved == true)
+        #expect(capabilities.outerVerticalIncrementPageAdvertisesPress == true)
     }
 
     @Test func recordsScrollToVisibleAsUnavailableBelowMacOS26WithoutInspectingBoundaryActions() throws {
@@ -29,14 +34,19 @@ struct DesktopReposScrollCapabilitiesTests {
             boundaryActionNames: nil,
             verticalScrollBarResolved: false,
             scrollBarActionNames: nil,
+            incrementPageResolved: false,
+            incrementPageActionNames: nil,
             scrollToVisibleActionName: nil,
-            incrementActionName: "AXIncrement"
+            incrementActionName: "AXIncrement",
+            pressActionName: "AXPress"
         )
 
         #expect(!capabilities.scrollToVisibleActionAvailable)
         #expect(capabilities.boundaryAdvertisesScrollToVisible == false)
         #expect(capabilities.outerVerticalScrollBarResolved == false)
         #expect(capabilities.outerVerticalScrollBarAdvertisesIncrement == false)
+        #expect(capabilities.outerVerticalIncrementPageResolved == false)
+        #expect(capabilities.outerVerticalIncrementPageAdvertisesPress == false)
     }
 
     @Test func requiresActionNamesOnlyForCapabilitiesThatWereAvailableAndResolved() {
@@ -46,8 +56,11 @@ struct DesktopReposScrollCapabilitiesTests {
                 boundaryActionNames: nil,
                 verticalScrollBarResolved: false,
                 scrollBarActionNames: nil,
+                incrementPageResolved: false,
+                incrementPageActionNames: nil,
                 scrollToVisibleActionName: "AXScrollToVisible",
-                incrementActionName: "AXIncrement"
+                incrementActionName: "AXIncrement",
+                pressActionName: "AXPress"
             )
         }
         #expect(throws: DesktopReposScrollCapabilityContractError.missingScrollBarActionNames) {
@@ -56,8 +69,24 @@ struct DesktopReposScrollCapabilitiesTests {
                 boundaryActionNames: [],
                 verticalScrollBarResolved: true,
                 scrollBarActionNames: nil,
+                incrementPageResolved: false,
+                incrementPageActionNames: nil,
                 scrollToVisibleActionName: "AXScrollToVisible",
-                incrementActionName: "AXIncrement"
+                incrementActionName: "AXIncrement",
+                pressActionName: "AXPress"
+            )
+        }
+        #expect(throws: DesktopReposScrollCapabilityContractError.missingIncrementPageActionNames) {
+            try DesktopReposScrollCapabilityContract.evaluate(
+                osMajorVersion: 26,
+                boundaryActionNames: [],
+                verticalScrollBarResolved: true,
+                scrollBarActionNames: [],
+                incrementPageResolved: true,
+                incrementPageActionNames: nil,
+                scrollToVisibleActionName: "AXScrollToVisible",
+                incrementActionName: "AXIncrement",
+                pressActionName: "AXPress"
             )
         }
     }
@@ -73,6 +102,8 @@ struct DesktopReposScrollCapabilitiesTests {
         #expect(object["boundaryAdvertisesScrollToVisible"] is NSNull)
         #expect(object["outerVerticalScrollBarResolved"] is NSNull)
         #expect(object["outerVerticalScrollBarAdvertisesIncrement"] is NSNull)
+        #expect(object["outerVerticalIncrementPageResolved"] is NSNull)
+        #expect(object["outerVerticalIncrementPageAdvertisesPress"] is NSNull)
         #expect(try DesktopReposScrollCapabilities.decode(data: data) == capabilities)
     }
 
@@ -82,8 +113,11 @@ struct DesktopReposScrollCapabilitiesTests {
             boundaryActionNames: ["AXScrollToVisible"],
             verticalScrollBarResolved: true,
             scrollBarActionNames: [],
+            incrementPageResolved: true,
+            incrementPageActionNames: [],
             scrollToVisibleActionName: "AXScrollToVisible",
-            incrementActionName: "AXIncrement"
+            incrementActionName: "AXIncrement",
+            pressActionName: "AXPress"
         )
         let data = try JSONEncoder().encode(capabilities)
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -97,11 +131,14 @@ struct DesktopReposScrollCapabilitiesTests {
             "scrollToVisibleActionAvailable",
             "boundaryAdvertisesScrollToVisible",
             "outerVerticalScrollBarResolved",
-            "outerVerticalScrollBarAdvertisesIncrement"
+            "outerVerticalScrollBarAdvertisesIncrement",
+            "outerVerticalIncrementPageResolved",
+            "outerVerticalIncrementPageAdvertisesPress"
         ]))
         let text = String(decoding: data, as: UTF8.self)
         #expect(!text.contains("AXScrollToVisible"))
         #expect(!text.contains("AXIncrement"))
+        #expect(!text.contains("AXPress"))
         #expect(!text.contains("actionNames"))
         #expect(!text.contains("path"))
         #expect(!text.contains("identifier"))
@@ -132,6 +169,78 @@ struct DesktopReposScrollCapabilitiesTests {
         let oversized = Data(repeating: 0x20, count: 4_097)
         #expect(throws: DesktopReposScrollCapabilitiesValidationError.invalidContract) {
             try DesktopReposScrollCapabilities.decode(data: oversized)
+        }
+    }
+
+    @Test func selectsOnlyOneExactDirectIncrementPageChild() throws {
+        let selection = try DesktopReposIncrementPageSelectionContract.select(
+            directChildren: [
+                .init(role: "AXButton", subrole: "AXDecrementPage"),
+                .init(role: "AXButton", subrole: "AXIncrementPage"),
+                .init(role: "AXButton", subrole: "AXIncrementArrow")
+            ]
+        )
+        #expect(selection == .directChild(index: 1))
+    }
+
+    @Test func arrowsSubstitutionsAndUnknownSubrolesDoNotResolveIncrementPage() throws {
+        #expect(try DesktopReposIncrementPageSelectionContract.select(directChildren: [
+            .init(role: "AXButton", subrole: "AXIncrementArrow"),
+            .init(role: "AXButton", subrole: "AXUnknown")
+        ]) == .unsupported)
+        #expect(try DesktopReposIncrementPageSelectionContract.select(directChildren: []) == .unsupported)
+    }
+
+    @Test func incrementPageSelectionFailsClosedOnMalformedOrDuplicateChildren() {
+        #expect(throws: DesktopReposIncrementPageSelectionError.missingRole) {
+            try DesktopReposIncrementPageSelectionContract.select(directChildren: [
+                .init(role: nil, subrole: "AXIncrementPage")
+            ])
+        }
+        #expect(throws: DesktopReposIncrementPageSelectionError.missingSubrole) {
+            try DesktopReposIncrementPageSelectionContract.select(directChildren: [
+                .init(role: "AXButton", subrole: nil)
+            ])
+        }
+        #expect(throws: DesktopReposIncrementPageSelectionError.invalidIncrementPageRole) {
+            try DesktopReposIncrementPageSelectionContract.select(directChildren: [
+                .init(role: "AXCheckBox", subrole: "AXIncrementPage")
+            ])
+        }
+        #expect(throws: DesktopReposIncrementPageSelectionError.duplicateIncrementPage) {
+            try DesktopReposIncrementPageSelectionContract.select(directChildren: [
+                .init(role: "AXButton", subrole: "AXIncrementPage"),
+                .init(role: "AXButton", subrole: "AXIncrementPage")
+            ])
+        }
+    }
+
+    @Test func capabilityCrossFieldsRejectPageWithoutScrollbarAndPressWithoutPage() {
+        let base = DesktopReposScrollCapabilities(
+            osMajorVersion: 26,
+            acquisition: .init(status: .complete, failureReason: nil),
+            scrollToVisibleActionAvailable: true,
+            boundaryAdvertisesScrollToVisible: false,
+            outerVerticalScrollBarResolved: false,
+            outerVerticalScrollBarAdvertisesIncrement: false,
+            outerVerticalIncrementPageResolved: true,
+            outerVerticalIncrementPageAdvertisesPress: false
+        )
+        #expect(throws: DesktopReposScrollCapabilitiesValidationError.invalidContract) {
+            try base.validated()
+        }
+        let pressWithoutPage = DesktopReposScrollCapabilities(
+            osMajorVersion: 26,
+            acquisition: .init(status: .complete, failureReason: nil),
+            scrollToVisibleActionAvailable: true,
+            boundaryAdvertisesScrollToVisible: false,
+            outerVerticalScrollBarResolved: true,
+            outerVerticalScrollBarAdvertisesIncrement: false,
+            outerVerticalIncrementPageResolved: false,
+            outerVerticalIncrementPageAdvertisesPress: true
+        )
+        #expect(throws: DesktopReposScrollCapabilitiesValidationError.invalidContract) {
+            try pressWithoutPage.validated()
         }
     }
 }

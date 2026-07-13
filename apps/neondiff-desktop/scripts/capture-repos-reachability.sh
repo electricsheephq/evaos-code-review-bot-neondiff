@@ -237,6 +237,8 @@ done
       "boundaryAdvertisesScrollToVisible",
       "fixture",
       "osMajorVersion",
+      "outerVerticalIncrementPageAdvertisesPress",
+      "outerVerticalIncrementPageResolved",
       "outerVerticalScrollBarAdvertisesIncrement",
       "outerVerticalScrollBarResolved",
       "requestedContentSize",
@@ -253,10 +255,14 @@ done
       if .acquisition.status == "complete" then
         .acquisition.failureReason == null
         and (.boundaryAdvertisesScrollToVisible | type == "boolean")
+        and (.outerVerticalIncrementPageAdvertisesPress | type == "boolean")
+        and (.outerVerticalIncrementPageResolved | type == "boolean")
         and (.outerVerticalScrollBarResolved | type == "boolean")
         and (.outerVerticalScrollBarAdvertisesIncrement | type == "boolean")
         and (.scrollToVisibleActionAvailable or (.boundaryAdvertisesScrollToVisible | not))
         and (.outerVerticalScrollBarResolved or (.outerVerticalScrollBarAdvertisesIncrement | not))
+        and (.outerVerticalScrollBarResolved or (.outerVerticalIncrementPageResolved | not))
+        and (.outerVerticalIncrementPageResolved or (.outerVerticalIncrementPageAdvertisesPress | not))
       elif .acquisition.status == "failed" then
         (.acquisition.failureReason as $reason | [
           "cannot-complete",
@@ -275,6 +281,8 @@ done
           "messaging-timeout-unavailable"
         ] | index($reason) != null)
         and .boundaryAdvertisesScrollToVisible == null
+        and .outerVerticalIncrementPageAdvertisesPress == null
+        and .outerVerticalIncrementPageResolved == null
         and .outerVerticalScrollBarResolved == null
         and .outerVerticalScrollBarAdvertisesIncrement == null
       else false end
