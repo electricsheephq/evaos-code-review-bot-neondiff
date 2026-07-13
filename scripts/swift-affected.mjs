@@ -25,6 +25,7 @@ const SWIFT_ROOT_FILES = new Set([
   "scripts/shared/swift-corpus-boundary.mjs",
   "scripts/check-desktop-fixture-boundary.mjs",
   "tests/desktop-evaluation-boundary.test.ts",
+  "tests/desktop-repos-reachability-capture.test.ts",
   "scripts/secret-rule-foundation-runner.swift"
 ]);
 

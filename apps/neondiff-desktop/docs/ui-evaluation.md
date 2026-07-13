@@ -138,6 +138,52 @@ Those two sizes cover the main-window minimum and baseline only. The onboarding
 760x560, Settings 560x700, and wide 1440x900 captures, plus click-to-click
 geometry traces, remain #515/#517 work and are not implied by this packet.
 
+## Focused #517 Repos Reachability Proof
+
+The Repos-only runner is a focused partial #517 proof outside the canonical #515 packet.
+From a clean exact HEAD, give it a fresh absolute output path:
+
+```bash
+apps/neondiff-desktop/scripts/capture-repos-reachability.sh \
+  --output /absolute/fresh/evidence/path
+```
+
+The runner creates a private `/tmp` workspace, keeps SwiftPM DEBUG products and
+the launched app there, builds one app bundle plus the capture and reachability
+checker products, and launches only the public-safe `tab-repos` fixture at
+`1040x680`. Only this focused runner passes the explicit
+`--repos-reachability` opt-in to the capture helper, so canonical #515 captures
+keep their existing byte and artifact shape. The runner waits boundedly for
+app-authored readiness, captures the window, AX tree, geometry, and
+`reachability.json`, terminates its children, runs the checker against the
+absolute reachability path, and scans the focused evidence for secret-shaped
+text. It never reads live configuration, Keychain, GitHub, provider, daemon,
+network, or customer state.
+
+The current pre-fix result is the missing outer `AXScrollArea` ancestor.
+Boundary is a sibling of Table, so a Table scroll does not satisfy the checker.
+The DEBUG fixture may
+mutate only its deterministic test UI to exercise scroll reachability; it does
+not authorize live product or runtime mutation. A checker failure preserves `reachability.json`.
+The normalized checker status and public-safety result are written before the
+runner returns the nonzero checker exit.
+
+This focused packet does not prove:
+
+- the rest of the fixture catalog, the second baseline size, wide, onboarding,
+  Settings, or the remaining state matrix;
+- successful clicks, scripted outcomes, keyboard focus order, tooltips,
+  before/after geometry, or full issue #517 layout-stability and accessibility
+  conformance;
+- the canonical #515 schema-2 manifest, reference comparison, or full baseline;
+- release-bundle isolation, signing, notarization, appcast, installed-app, live
+  runtime, customer, browser/native parity, GA, or customer readiness.
+
+Rebuilding the DEBUG app or capture helper can change its code requirement and
+invalidate an existing macOS TCC Screen Recording or Accessibility grant. A TCC
+failure limits this local dev proof; it is not a Repos reachability result and
+must not be bypassed by touching privacy settings from the runner.
+
 The Swift desktop gate runs the fixture checks whenever evaluation sources or
 catalog files change. It keeps the normal debug bundle separate, stages an
 explicit release bundle under `dist-release`, and scans only the release
