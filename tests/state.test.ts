@@ -1024,6 +1024,53 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("reserves a manual slot when the global cap is lower than the provider cap", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-global-manual-reserve-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-07-01T00:00:00.000Z");
+
+    const firstBackground = store.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "background-a",
+      providerId: "zai",
+      priority: 1,
+      now
+    }).job;
+    store.enqueueReviewQueueJob({
+      repo: "org/repo-b",
+      pullNumber: 2,
+      headSha: "background-b",
+      providerId: "zai",
+      priority: 2,
+      now
+    });
+    const manual = store.enqueueReviewQueueJob({
+      repo: "org/repo-c",
+      pullNumber: 3,
+      headSha: "manual",
+      source: "manual_command",
+      commentId: 1,
+      providerId: "zai",
+      priority: 3,
+      now
+    }).job;
+
+    const leased = store.leaseNextReviewQueueJobs({
+      maxGlobalActive: 2,
+      maxProviderActive: 3,
+      maxOrgActive: 3,
+      maxRepoActive: 1,
+      manualCommandReserve: 1,
+      limit: 2,
+      now: new Date("2026-07-01T00:00:10.000Z")
+    });
+
+    expect(leased.map((job) => job.jobId)).toEqual([firstBackground.jobId, manual.jobId]);
+    store.close();
+  });
+
   it("honors repo-specific active caps while leasing queued work", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-repo-specific-lease-"));
     roots.push(root);

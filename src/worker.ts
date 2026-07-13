@@ -1758,7 +1758,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
     // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
     // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.
-    const selfConsistency = applySelfConsistencyRecheck({
+    const selfConsistency = await applySelfConsistencyRecheck({
       config,
       gate,
       files: reviewFiles,
@@ -3174,20 +3174,20 @@ function providerCooldownJitterMs(
   return Math.floor(Math.random() * (max + 1));
 }
 
-function applySelfConsistencyRecheck(input: {
+async function applySelfConsistencyRecheck(input: {
   config: BotConfig;
   gate: DeterministicReviewGateResult;
   files: PullFilePatch[];
   worktreePath: string;
   evidenceDir: string;
-}): { comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string } {
+}): Promise<{ comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string }> {
   const selfConsistencyConfig = input.config.reviewGate?.selfConsistency;
   if (!selfConsistencyConfig?.enabled) {
     return { comments: input.gate.comments, event: input.gate.event };
   }
 
   const providerId = selfConsistencyConfig.provider ?? input.config.zcode.providerId;
-  const result = runSelfConsistencyRecheck({
+  const result = await runSelfConsistencyRecheck({
     comments: input.gate.comments,
     files: input.files,
     config: selfConsistencyConfig,
@@ -3197,8 +3197,8 @@ function applySelfConsistencyRecheck(input: {
     ...(input.config.reviewGate?.categoryPrecisionFloors
       ? { categoryPrecisionFloors: input.config.reviewGate.categoryPrecisionFloors }
       : {}),
-    secondDraw: ({ comment, hunk }) => {
-      const draw = runZCodeReview({
+    secondDraw: async ({ comment, hunk }) => {
+      const draw = await runZCodeReview({
         cwd: input.worktreePath,
         prompt: buildSelfConsistencyPrompt(comment, hunk),
         cliPath: input.config.zcode.cliPath,

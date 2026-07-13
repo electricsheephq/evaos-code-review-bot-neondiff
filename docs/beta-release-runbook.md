@@ -501,10 +501,38 @@ record that as supporting evidence for provider/request throttling, not as proof
 that the bot should disable cooldown handling.
 
 Keep provider cooldown rows visible in `release:status`, then retry after the
-cooldown expires or resolve the ZCode provider source. The bot should run with
-one in-flight ZCode review by default; live configs that override
-`reviewConcurrency.maxActiveRuns` must set it to `1` unless a later release
-proves a higher concurrency is safe. A release may be green with provider
+cooldown expires or resolve the ZCode provider source. New installs should run
+with one in-flight ZCode review until an operator completes a bounded
+concurrency canary. Scheduler-enabled releases that promote above one must use
+the asynchronous ZCode transport and bounded parallel batch scheduler, set
+`reviewConcurrency.maxActiveRuns` and `reviewScheduler.maxProviderActive` to
+the intended cap, and keep org/repo caps no higher than the reviewed policy.
+The effective batch size is the lower of the review and provider caps, reduced
+by durable active leases.
+
+For a direct-to-three local canary, wait for existing review and issue leases to
+drain, promote the exact reviewed merge through the normal clean-checkout and
+launchd gates, then require all of the following before retaining three:
+
+- `daemon_cycle_complete.result.queue.execution` reports
+  `mode=bounded_parallel_batch`, `effectiveSlots=3`, and
+  `peakJobsInFlight=3` on a naturally eligible batch;
+- three `reviewer_session_jobs` intervals overlap for those exact PR heads;
+- issue enrichment remains at `maxActiveRuns=1` and can begin before the PR
+  batch completes;
+- no new Z.ai `429`, `1302`, or `1305`, timeout/retry growth, provider
+  cooldown, persistent SQLite lock, `owner_pid_not_alive`, orphan ZCode child,
+  duplicate comment, stale-head post, or unreleased lease appears during the
+  batch and the following 60-minute soak.
+
+Reduce the configured PR cap to two for provider throttling or severe latency
+without a correctness failure. Stop the daemon for duplicate/stale posting,
+persistent database locking, orphan children, lease corruption, or repeated
+cycle failures; source rollback remains a reviewed revert followed by a
+fast-forward promotion. Never infer concurrency from queue admission timestamps
+alone.
+
+A release may be green with provider
 cooldown rows only when all provider cooldown rows are still active and the
 packet names the affected PR head and follow-up.
 

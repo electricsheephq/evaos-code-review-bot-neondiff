@@ -163,6 +163,15 @@ export function buildReviewBudgetStatus(input: {
     manualCommandReserve: 0,
     backgroundPriority: 50
   };
+  const effectiveGlobalLimit = Math.min(
+    input.config.reviewConcurrency.maxActiveRuns,
+    scheduler.maxProviderActive
+  );
+  const effectiveScheduler = {
+    ...scheduler,
+    maxProviderActive: effectiveGlobalLimit,
+    manualCommandReserve: Math.min(scheduler.manualCommandReserve, effectiveGlobalLimit)
+  };
   const jobs = input.jobs.map((job) =>
     normalizeExpiredLeaseJob(job, now, input.config.reviewConcurrency.leaseTtlMs)
   );
@@ -209,7 +218,7 @@ export function buildReviewBudgetStatus(input: {
     const repoCount = simulatedRepoActive.get(job.repo) ?? 0;
     const repoActiveLimit = cachedRepoActiveLimit(job.repo);
     const capacityReason = capacityDelayReason(job, {
-      scheduler,
+      scheduler: effectiveScheduler,
       providerCount,
       orgCount,
       repoCount,
@@ -220,11 +229,10 @@ export function buildReviewBudgetStatus(input: {
       delayed.push(delay(job, capacityReason));
       continue;
     }
-    if (wouldLease.length >= scheduler.maxProviderActive) {
+    if (active.length + wouldLease.length >= effectiveGlobalLimit) {
       delayed.push(delay(job, "lease_limit"));
       continue;
     }
-
     wouldLease.push(candidate(job));
     simulatedProviderActive.set(provider, providerCount + 1);
     simulatedOrgActive.set(job.org, orgCount + 1);
@@ -295,10 +303,10 @@ export function buildReviewBudgetStatus(input: {
       configured: scheduler.manualCommandReserve,
       activeManual,
       queuedManual: manualQueued,
-      reservedSlotsOpen: Math.max(0, scheduler.manualCommandReserve - activeManual),
+      reservedSlotsOpen: Math.max(0, effectiveScheduler.manualCommandReserve - activeManual),
       backgroundSlotsAvailableBeforeReserve: Math.max(
         0,
-        scheduler.maxProviderActive - scheduler.manualCommandReserve - active.length
+        effectiveGlobalLimit - effectiveScheduler.manualCommandReserve - active.length
       )
     },
     wouldLeaseCount: wouldLease.length,

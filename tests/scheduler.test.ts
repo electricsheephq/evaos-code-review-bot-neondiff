@@ -156,7 +156,121 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("leases queued jobs just in time so provider capacity does not create idle leases", async () => {
+  it("starts one bounded batch up to the effective review/provider capacity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-parallel-batch-"));
+    roots.push(root);
+    const repos = ["org-a/repo-a", "org-b/repo-b", "org-c/repo-c", "org-d/repo-d"];
+    const config = schedulerConfig(root, repos);
+    config.reviewConcurrency.maxActiveRuns = 3;
+    config.reviewScheduler!.maxProviderActive = 4;
+    config.reviewScheduler!.maxOrgActive = 3;
+    config.reviewScheduler!.maxRepoActive = 1;
+    const state = new ReviewStateStore(config.statePath);
+    const started: string[] = [];
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const pullsByRepo = new Map(repos.map((repo, index) => [repo, [pull(repo, index + 1, String(index + 1).repeat(40))]]));
+
+    const cycle = runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(pullsByRepo),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        started.push(repo);
+        await barrier;
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      }
+    });
+
+    let overlapError: unknown;
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(3), { timeout: 250 });
+      expect(started).not.toContain("org-d/repo-d");
+    } catch (error) {
+      overlapError = error;
+    } finally {
+      release();
+    }
+    const result = await cycle;
+    if (overlapError) throw overlapError;
+
+    expect(result.queue.leased).toBe(3);
+    expect(result.queue.execution).toEqual({
+      mode: "bounded_parallel_batch",
+      configuredRunSlots: 3,
+      configuredProviderSlots: 4,
+      effectiveSlots: 3,
+      started: 3,
+      peakJobsInFlight: 3
+    });
+    expect(state.listReviewQueueJobs({ state: "queued" })).toHaveLength(4);
+    state.close();
+  });
+
+  it("counts durable active leases against the global effective slot cap", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-global-active-cap-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org-b/repo-b", "org-c/repo-c"]);
+    config.reviewConcurrency.maxActiveRuns = 2;
+    config.reviewScheduler!.maxProviderActive = 3;
+    config.reviewScheduler!.maxOrgActive = 3;
+    const state = new ReviewStateStore(config.statePath);
+    const active = state.enqueueReviewQueueJob({
+      repo: "org-a/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      providerId: "other-provider",
+      priority: 1,
+      now: new Date("2026-07-02T00:00:00.000Z")
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: active.jobId,
+      state: "running",
+      leaseId: "active-other-provider",
+      leaseExpiresAt: "2026-07-02T01:00:00.000Z",
+      clearLease: false,
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+    const reviewed: string[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org-b/repo-b", [pull("org-b/repo-b", 2, HEAD_B)]],
+        ["org-c/repo-c", [pull("org-c/repo-c", 3, HEAD_C)]]
+      ])),
+      state,
+      options: { dryRun: true, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewed.push(repo);
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "dry_run",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:01.000Z")
+    });
+
+    expect(reviewed).toHaveLength(1);
+    expect(result.queue.leased).toBe(1);
+    expect(result.queue.execution).toMatchObject({ effectiveSlots: 2, started: 1, peakJobsInFlight: 1 });
+    expect(result.queue.budget?.wouldLeaseCount).toBe(1);
+    state.close();
+  });
+
+  it("leases the bounded batch before execution so every admitted job starts in the same cycle", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-jit-lease-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]);
@@ -206,10 +320,56 @@ describe("provider-aware review scheduler", () => {
     });
     expect(reviewed).toEqual(["org/repo-a#1", "org/repo-b#1"]);
     expect(observedDuringFirstReview).toEqual([
-      { repo: "org/repo-b", state: "queued" }
+      { repo: "org/repo-b", state: "running", startedAt: "2026-07-02T00:00:00.000Z" }
     ]);
     expect(state.listReviewQueueJobs({ state: "leased" })).toHaveLength(0);
     expect(state.listReviewQueueJobs({ state: "running" })).toHaveLength(0);
+    state.close();
+  });
+
+  it("records fresh execution timestamps for both queue and reviewer-session transitions", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-execution-clock-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewConcurrency.maxActiveRuns = 1;
+    config.reviewScheduler!.maxProviderActive = 1;
+    config.reviewerSessions = { enabled: true, ttlMs: 60_000, headCountLimit: 10 };
+    const state = new ReviewStateStore(config.statePath);
+    const clockValues = [
+      new Date("2026-07-02T00:00:01.000Z"),
+      new Date("2026-07-02T00:00:02.000Z"),
+      new Date("2026-07-02T00:00:09.000Z")
+    ];
+
+    await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewState.recordProcessed({
+          repo,
+          pullNumber: reviewPull.number,
+          headSha: reviewPull.head.sha,
+          status: "posted",
+          event: "COMMENT"
+        });
+        return "reviewed";
+      },
+      now: new Date("2026-07-02T00:00:00.000Z"),
+      clock: () => clockValues.shift() ?? new Date("2026-07-02T00:00:09.000Z")
+    });
+
+    expect(state.listReviewQueueJobs()).toEqual([
+      expect.objectContaining({
+        startedAt: "2026-07-02T00:00:02.000Z",
+        finishedAt: "2026-07-02T00:00:09.000Z"
+      })
+    ]);
+    expect(state.getReviewerSessionJob("org/repo-a", 1, HEAD_A)).toMatchObject({
+      startedAt: "2026-07-02T00:00:02.000Z",
+      finishedAt: "2026-07-02T00:00:09.000Z"
+    });
     state.close();
   });
 
@@ -970,7 +1130,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("stops provider leasing after an overload without starting unstarted provider jobs", async () => {
+  it("settles the admitted batch after overload and defers only unstarted background jobs", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-overload-stop-"));
     roots.push(root);
     const config = schedulerConfig(root, []);
@@ -983,9 +1143,18 @@ describe("provider-aware review scheduler", () => {
       pullNumber: 1,
       headSha: HEAD_A,
       baseSha: "base",
-      priority: 10,
+      priority: 0,
       providerId: "zai-coding-plan",
       now: new Date("2026-07-02T00:00:00.000Z")
+    }).job;
+    const elevatedBackground = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 6,
+      headSha: "f".repeat(40),
+      baseSha: "base",
+      priority: 1,
+      providerId: "zai-coding-plan",
+      now: new Date("2026-07-02T00:00:00.500Z")
     }).job;
     const second = state.enqueueReviewQueueJob({
       repo: "org/repo-b",
@@ -996,6 +1165,22 @@ describe("provider-aware review scheduler", () => {
       providerId: "zai-coding-plan",
       now: new Date("2026-07-02T00:00:01.000Z")
     }).job;
+    const retryableDeferred = state.enqueueReviewQueueJob({
+      repo: "org/repo-e",
+      pullNumber: 5,
+      headSha: "e".repeat(40),
+      baseSha: "base",
+      priority: 60,
+      providerId: "zai-coding-plan",
+      now: new Date("2026-07-02T00:00:01.500Z")
+    }).job;
+    state.updateReviewQueueJobState({
+      jobId: retryableDeferred.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:04:00.000Z",
+      lastError: "expired prior provider cooldown",
+      now: new Date("2026-07-02T00:00:01.600Z")
+    });
     const manual = state.enqueueReviewQueueJob({
       repo: "org/repo-c",
       pullNumber: 3,
@@ -1006,6 +1191,17 @@ describe("provider-aware review scheduler", () => {
       providerId: "zai-coding-plan",
       commentId: 123,
       now: new Date("2026-07-02T00:00:02.000Z")
+    }).job;
+    const queuedManual = state.enqueueReviewQueueJob({
+      repo: "org/repo-d",
+      pullNumber: 4,
+      headSha: HEAD_D,
+      baseSha: "base",
+      source: "manual_command",
+      priority: 100,
+      providerId: "zai-coding-plan",
+      commentId: 124,
+      now: new Date("2026-07-02T00:00:03.000Z")
     }).job;
     const attempted: string[] = [];
 
@@ -1020,18 +1216,21 @@ describe("provider-aware review scheduler", () => {
       options: { dryRun: false, useZCode: true },
       reviewPullImpl: async ({ repo }) => {
         attempted.push(repo);
+        if (repo === "org/repo-a") {
+          throw new Error("ProviderBusinessError: [1302][Rate limit reached for requests]");
+        }
         throw new Error("ProviderBusinessError: [1305][The service may be temporarily overloaded]");
       },
       now: new Date("2026-07-02T00:05:00.000Z")
     });
 
-    expect(attempted).toEqual(["org/repo-a"]);
-    expect(result.skippedProviderCooldown).toBe(1);
-    expect(result.queue.providerDeferred).toBe(2);
+    expect(attempted).toEqual(["org/repo-c", "org/repo-a"]);
+    expect(result.skippedProviderCooldown).toBe(2);
+    expect(result.queue.providerDeferred).toBe(5);
     expect(state.getReviewQueueJob(first.jobId)).toMatchObject({
       state: "provider_deferred",
-      nextEligibleAt: "2026-07-02T00:07:00.000Z",
-      lastError: expect.stringContaining("reason=provider_overloaded")
+      nextEligibleAt: "2026-07-02T00:06:30.000Z",
+      lastError: expect.stringContaining("reason=provider_request_rate_limit")
     });
     const secondAfterOverload = state.getReviewQueueJob(second.jobId);
     expect(secondAfterOverload).toMatchObject({
@@ -1040,7 +1239,24 @@ describe("provider-aware review scheduler", () => {
       lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-02T00:07:00.000Z")
     });
     expect(secondAfterOverload?.startedAt).toBeUndefined();
-    expect(state.getReviewQueueJob(manual.jobId)).toMatchObject({ state: "queued" });
+    expect(state.getReviewQueueJob(elevatedBackground.jobId)).toMatchObject({
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:07:00.000Z",
+      lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-02T00:07:00.000Z")
+    });
+    expect(state.getReviewQueueJob(retryableDeferred.jobId)).toMatchObject({
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:07:00.000Z",
+      lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-02T00:07:00.000Z")
+    });
+    expect(state.getReviewQueueJob(manual.jobId)).toMatchObject({
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-02T00:07:00.000Z",
+      lastError: expect.stringContaining("reason=provider_overloaded")
+    });
+    const queuedManualAfterOverload = state.getReviewQueueJob(queuedManual.jobId);
+    expect(queuedManualAfterOverload).toMatchObject({ state: "queued" });
+    expect(queuedManualAfterOverload?.startedAt).toBeUndefined();
     state.close();
   });
 
@@ -2183,7 +2399,7 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
-  it("records provider throttle and stops leasing more provider jobs", async () => {
+  it("records provider throttle while allowing already-started siblings to settle", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-provider-throttle-"));
     roots.push(root);
     const config = schedulerConfig(root, ["org/repo-a", "org/repo-b", "org/repo-c"]);
@@ -2216,25 +2432,22 @@ describe("provider-aware review scheduler", () => {
       now: new Date("2026-07-01T00:00:00.000Z")
     });
 
-    expect(result.reviewed).toBe(0);
+    expect(result.reviewed).toBe(1);
     expect(result.skippedProviderCooldown).toBe(1);
-    expect(result.queue.providerDeferred).toBe(3);
+    expect(result.queue.providerDeferred).toBe(2);
     expect(state.getActiveRepoProviderCooldown("org/repo-a", new Date("2026-07-01T00:00:01.000Z"))).toBeDefined();
     expect(state.getActiveRepoProviderCooldown("org/repo-b", new Date("2026-07-01T00:00:01.000Z"))).toBeUndefined();
     expect(state.listReviewQueueJobs({ state: "provider_deferred" })).toEqual([
       expect.objectContaining({ repo: "org/repo-a", pullNumber: 1, nextEligibleAt: "2026-07-01T00:01:30.000Z" }),
-      expect.objectContaining({
-        repo: "org/repo-b",
-        pullNumber: 1,
-        nextEligibleAt: "2026-07-01T00:01:30.000Z",
-        lastError: expect.stringContaining("provider_throttle_cycle_deferred_until=2026-07-01T00:01:30.000Z")
-      }),
       expect.objectContaining({
         repo: "org/repo-c",
         pullNumber: 1,
         nextEligibleAt: "2026-07-01T00:01:30.000Z",
         lastError: expect.stringContaining("trigger_repo=org/repo-a")
       })
+    ]);
+    expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([
+      expect.objectContaining({ repo: "org/repo-b", pullNumber: 1 })
     ]);
     expect(state.listReviewQueueJobs({ state: "queued" })).toEqual([]);
     expect(state.listReviewQueueJobs({ state: "provider_deferred" })

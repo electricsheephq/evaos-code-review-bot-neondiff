@@ -93,6 +93,10 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     commandsEnabled: input.commandsEnabled
   }));
 
+  const issueEnrichmentPromise = input.issueEnrichmentEnabled === true
+    ? runIssueEnrichmentLane({ input, admissions, stdout, stderr })
+    : Promise.resolve();
+
   try {
     const result = await runOnceImpl({
       configPath: input.configPath,
@@ -133,31 +137,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
         error: message
       }));
     }
-    if (input.issueEnrichmentEnabled === true) {
-      const issueEnrichmentCycleImpl = input.issueEnrichmentCycleImpl ?? runIssueEnrichmentCycleFromConfig;
-      try {
-        const issueEnrichment = await issueEnrichmentCycleImpl({
-          configPath: input.configPath,
-          dryRun: input.dryRun,
-          ...(admissions ? { licenseAdmission: admissions.issueEnrichment } : {})
-        });
-        stdout(formatDaemonLog({
-          event: "daemon_issue_enrichment",
-          cycle: input.cycle,
-          dryRun: input.dryRun,
-          result: issueEnrichment
-        }));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        stderr(formatDaemonLog({
-          event: "daemon_issue_enrichment_failed",
-          level: "error",
-          cycle: input.cycle,
-          dryRun: input.dryRun,
-          error: message
-        }));
-      }
-    }
+    await issueEnrichmentPromise;
     stdout(formatDaemonLog({
       event: "daemon_cycle_complete",
       cycle: input.cycle,
@@ -167,6 +147,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     recordHeartbeat("daemon_cycle_complete");
     return { ok: true, result };
   } catch (error) {
+    await issueEnrichmentPromise;
     const message = error instanceof Error ? error.message : String(error);
     stderr(formatDaemonLog({
       event: "daemon_cycle_failed",
@@ -177,6 +158,43 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     }));
     recordHeartbeat("daemon_cycle_failed", message);
     return { ok: false, failureKind: "runtime_failure", error: message };
+  }
+}
+
+async function runIssueEnrichmentLane(input: {
+  input: RunDaemonCycleOptions;
+  admissions: DaemonCycleAdmissions | void;
+  stdout: (line: string) => void;
+  stderr: (line: string) => void;
+}): Promise<void> {
+  const issueEnrichmentCycleImpl = input.input.issueEnrichmentCycleImpl ?? runIssueEnrichmentCycleFromConfig;
+  input.stdout(formatDaemonLog({
+    event: "daemon_issue_enrichment_start",
+    cycle: input.input.cycle,
+    dryRun: input.input.dryRun
+  }));
+  try {
+    const issueEnrichment = await issueEnrichmentCycleImpl({
+      configPath: input.input.configPath,
+      dryRun: input.input.dryRun,
+      ...(input.admissions ? { licenseAdmission: input.admissions.issueEnrichment } : {})
+    });
+    input.stdout(formatDaemonLog({
+      event: "daemon_issue_enrichment",
+      phase: "complete",
+      cycle: input.input.cycle,
+      dryRun: input.input.dryRun,
+      result: issueEnrichment
+    }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    input.stderr(formatDaemonLog({
+      event: "daemon_issue_enrichment_failed",
+      level: "error",
+      cycle: input.input.cycle,
+      dryRun: input.input.dryRun,
+      error: message
+    }));
   }
 }
 

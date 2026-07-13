@@ -16,6 +16,10 @@ for the semver/GA-line and npm dist-tag policy.
 
 ### Fixed
 
+- Make configured review concurrency real: ZCode execution is asynchronous,
+  each daemon cycle settles one bounded parallel PR batch, issue enrichment
+  runs independently at its durable single-lane cap, and execution/session
+  timestamps expose actual overlap instead of queue-admission timing.
 - Add the workflow-only #542 recovery for the immutable v1.0.4 reviewed
   tarball: an absent npm `gitHead` may be replaced only by exact
   package bytes, npm signatures, and Sigstore/SLSA provenance, while
