@@ -43,6 +43,7 @@ struct DesktopSettledGeometryTraceTests {
     }
 
     @Test func requiresExactScenarioIdentityAndSequence() {
+        #expect(makeTrace().coordinateSpace == .globalTopLeft)
         #expect(throws: DesktopSettledGeometryValidationError.invalidContract) {
             try DesktopSettledGeometryValidator.validate(makeTrace(schemaVersion: 2))
         }
@@ -65,6 +66,15 @@ struct DesktopSettledGeometryTraceTests {
         checkpoints[1] = checkpoint(index: 1, section: .providers)
         #expect(throws: DesktopSettledGeometryValidationError.invalidSequence(index: 1)) {
             try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
+        }
+
+        let encoded = try? JSONEncoder().encode(makeTrace())
+        var root = encoded.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        root?["coordinateSpace"] = "global-bottom-left"
+        #expect(throws: DesktopSettledGeometryValidationError.invalidContract) {
+            try DesktopSettledGeometryTrace.decode(
+                data: try #require(root).withJSONData()
+            )
         }
     }
 
@@ -91,6 +101,28 @@ struct DesktopSettledGeometryTraceTests {
         checkpoints[1] = checkpoint(index: 1, section: .repos, samples: wrongCadence)
         #expect(throws: DesktopSettledGeometryValidationError.invalidCadence(index: 1)) {
             try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
+        }
+
+        var overflowingCadence = samples(section: .repos)
+        overflowingCadence[2] = overflowingCadence[2].withElapsedMilliseconds(Int.min)
+        checkpoints = makeCheckpoints()
+        checkpoints[1] = checkpoint(index: 1, section: .repos, samples: overflowingCadence)
+        #expect(throws: DesktopSettledGeometryValidationError.invalidCadence(index: 1)) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
+        }
+    }
+
+    @Test func checkerInputRequiresAnAbsoluteCanonicalArtifactPath() throws {
+        let accepted = try DesktopSettledGeometryInputPath.validate(
+            rawArgument: "/tmp/neondiff-focused/settled-geometry.json"
+        )
+        #expect(accepted.path == "/tmp/neondiff-focused/settled-geometry.json")
+
+        #expect(throws: DesktopSettledGeometryInputPathError.unsafeInput) {
+            try DesktopSettledGeometryInputPath.validate(rawArgument: "settled-geometry.json")
+        }
+        #expect(throws: DesktopSettledGeometryInputPathError.unsafeInput) {
+            try DesktopSettledGeometryInputPath.validate(rawArgument: "/tmp/not-the-contract.json")
         }
     }
 
@@ -301,11 +333,18 @@ private func makeTrace(
         fixtureId: fixtureId,
         pid: pid,
         windowNumber: windowNumber,
+        coordinateSpace: .globalTopLeft,
         requestedContentSize: requestedContentSize,
         tolerancePoints: 1,
         sampleIntervalMilliseconds: 100,
         checkpoints: checkpoints
     )
+}
+
+private extension Dictionary where Key == String, Value == Any {
+    func withJSONData() throws -> Data {
+        try JSONSerialization.data(withJSONObject: self)
+    }
 }
 
 private func makeCheckpoints() -> [DesktopSettledGeometryCheckpoint] {
@@ -364,6 +403,15 @@ private func sample(
 }
 
 private extension DesktopSettledGeometrySample {
+    func withElapsedMilliseconds(_ elapsedMilliseconds: Int) -> Self {
+        .init(
+            elapsedMilliseconds: elapsedMilliseconds,
+            windowFrame: windowFrame,
+            contentFrame: contentFrame,
+            regions: regions
+        )
+    }
+
     func removing(_ id: DesktopSettledGeometryRegion) -> Self {
         .init(
             elapsedMilliseconds: elapsedMilliseconds,

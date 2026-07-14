@@ -244,7 +244,10 @@ transition slice. Schema 1 admits only one same-process scenario:
 fixture at `1040x680`. Every checkpoint must explicitly report readiness and
 quiescence, complete within five seconds, and contain at least three stable
 samples at the 100ms cadence. The trace binds one positive PID and window
-number for the complete sequence.
+number for the complete sequence. Every frame uses one explicit
+`global-top-left` screen coordinate space. A future runner must normalize
+AppKit-authored window/content frames into that convention before comparison
+with Accessibility frames; mixed or implicit coordinate systems are invalid.
 
 Every sample requires finite window/content frames plus uniquely identified
 chrome, sidebar, and detail regions. The Repos checkpoint additionally requires
@@ -261,11 +264,14 @@ machine for that exact sequence. `NeonDiffDesktopGeometryChecks` emits one
 typed `input`, `contract`, `sequence`, or `geometry` result for an absolute
 regular file named `settled-geometry.json`.
 
-This slice establishes contracts and stable Accessibility bindings only. It
-does not run a real scenario, emit a capture packet, produce `.xcresult`, or
-prove click-to-click stability. A later focused runner must acquire all three
-checkpoints from one freshly launched DEBUG fixture PID before any real #517
-transition claim is allowed.
+This slice establishes contracts and DEBUG-fixture-only Accessibility bindings.
+The chrome/sidebar/detail container probes are default-off and enabled only
+when a resolved evaluation context exists, so normal debug launches and release
+builds retain the production VoiceOver hierarchy. It does not run a real
+scenario, emit a capture packet, produce `.xcresult`, or prove click-to-click
+stability. A later focused runner must acquire all three checkpoints from one
+freshly launched DEBUG fixture PID before any real #517 transition claim is
+allowed.
 
 The Swift desktop gate runs the fixture checks whenever evaluation sources or
 catalog files change. It keeps the normal debug bundle separate, stages an

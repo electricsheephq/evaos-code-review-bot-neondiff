@@ -11,6 +11,10 @@ public enum DesktopSettledGeometryScenario: String, Codable, Equatable, Sendable
     }
 }
 
+public enum DesktopSettledGeometryCoordinateSpace: String, Codable, Equatable, Sendable {
+    case globalTopLeft = "global-top-left"
+}
+
 public enum DesktopSettledGeometryRegion: String, Codable, CaseIterable, Equatable, Sendable {
     case chrome
     case sidebar
@@ -132,6 +136,7 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
     public let fixtureId: String
     public let pid: Int32
     public let windowNumber: Int
+    public let coordinateSpace: DesktopSettledGeometryCoordinateSpace
     public let requestedContentSize: DesktopEvaluationContentSize
     public let tolerancePoints: Double
     public let sampleIntervalMilliseconds: Int
@@ -143,6 +148,7 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
         fixtureId: String,
         pid: Int32,
         windowNumber: Int,
+        coordinateSpace: DesktopSettledGeometryCoordinateSpace,
         requestedContentSize: DesktopEvaluationContentSize,
         tolerancePoints: Double,
         sampleIntervalMilliseconds: Int,
@@ -153,6 +159,7 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
         self.fixtureId = fixtureId
         self.pid = pid
         self.windowNumber = windowNumber
+        self.coordinateSpace = coordinateSpace
         self.requestedContentSize = requestedContentSize
         self.tolerancePoints = tolerancePoints
         self.sampleIntervalMilliseconds = sampleIntervalMilliseconds
@@ -186,7 +193,8 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
         guard let root = object as? [String: Any],
               hasOnly(root, [
                   "schemaVersion", "scenario", "fixtureId", "pid", "windowNumber",
-                  "requestedContentSize", "tolerancePoints", "sampleIntervalMilliseconds", "checkpoints"
+                  "coordinateSpace", "requestedContentSize", "tolerancePoints",
+                  "sampleIntervalMilliseconds", "checkpoints"
               ]),
               let size = root["requestedContentSize"] as? [String: Any],
               hasOnly(size, ["width", "height"]),
@@ -231,6 +239,25 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
     }
 }
 
+public enum DesktopSettledGeometryInputPathError: Error, Equatable, Sendable {
+    case unsafeInput
+}
+
+public enum DesktopSettledGeometryInputPath {
+    public static func validate(rawArgument: String) throws -> URL {
+        guard NSString(string: rawArgument).isAbsolutePath else {
+            throw DesktopSettledGeometryInputPathError.unsafeInput
+        }
+        let input = URL(fileURLWithPath: rawArgument).standardizedFileURL
+        guard input.isFileURL,
+              input.path.hasPrefix("/"),
+              input.lastPathComponent == "settled-geometry.json" else {
+            throw DesktopSettledGeometryInputPathError.unsafeInput
+        }
+        return input
+    }
+}
+
 public enum DesktopSettledGeometryValidationStatus: String, Codable, Equatable, Sendable {
     case stable
 }
@@ -268,6 +295,7 @@ public enum DesktopSettledGeometryValidator {
               trace.fixtureId.range(of: #"^[a-z0-9][a-z0-9-]{0,63}$"#, options: .regularExpression) != nil,
               trace.pid > 0,
               trace.windowNumber > 0,
+              trace.coordinateSpace == .globalTopLeft,
               trace.requestedContentSize == .init(width: 1040, height: 680),
               trace.tolerancePoints.isFinite,
               trace.tolerancePoints > 0,
@@ -333,9 +361,19 @@ public enum DesktopSettledGeometryValidator {
               last.elapsedMilliseconds <= acquisitionMilliseconds else {
             throw DesktopSettledGeometryValidationError.invalidCadence(index: checkpoint)
         }
+        guard samples.allSatisfy({
+            $0.elapsedMilliseconds >= 0
+                && $0.elapsedMilliseconds <= acquisitionMilliseconds
+        }) else {
+            throw DesktopSettledGeometryValidationError.invalidCadence(index: checkpoint)
+        }
         for pair in zip(samples, samples.dropFirst()) {
-            let delta = pair.1.elapsedMilliseconds - pair.0.elapsedMilliseconds
-            guard delta >= interval - 10, delta <= interval + 25 else {
+            let subtraction = pair.1.elapsedMilliseconds.subtractingReportingOverflow(
+                pair.0.elapsedMilliseconds
+            )
+            guard !subtraction.overflow,
+                  subtraction.partialValue >= interval - 10,
+                  subtraction.partialValue <= interval + 25 else {
                 throw DesktopSettledGeometryValidationError.invalidCadence(index: checkpoint)
             }
         }

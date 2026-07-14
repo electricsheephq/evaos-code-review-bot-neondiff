@@ -4,7 +4,6 @@ import NeonDiffDesktopEvaluationSupport
 
 private enum CheckerError: Error {
     case usage
-    case unsafeInput
 }
 
 private func emit(_ result: DesktopSettledGeometryCheckResult) {
@@ -22,15 +21,10 @@ private func emit(_ result: DesktopSettledGeometryCheckResult) {
 
 do {
     guard CommandLine.arguments.count == 2 else { throw CheckerError.usage }
-    let input = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
-    guard input.isFileURL,
-          input.path.hasPrefix("/"),
-          input.lastPathComponent == "settled-geometry.json" else {
-        throw CheckerError.unsafeInput
-    }
+    let input = try DesktopSettledGeometryInputPath.validate(rawArgument: CommandLine.arguments[1])
     let values = try input.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
     guard values.isRegularFile == true, values.isSymbolicLink != true else {
-        throw CheckerError.unsafeInput
+        throw DesktopSettledGeometryInputPathError.unsafeInput
     }
     let trace = try DesktopSettledGeometryTrace.decode(
         data: Data(contentsOf: input, options: [.mappedIfSafe])
@@ -40,7 +34,7 @@ do {
 } catch CheckerError.usage {
     emit(.inputFailure("usage"))
     exit(64)
-} catch CheckerError.unsafeInput {
+} catch DesktopSettledGeometryInputPathError.unsafeInput {
     emit(.inputFailure("unsafe-input"))
     exit(65)
 } catch let error as DesktopSettledGeometryValidationError {

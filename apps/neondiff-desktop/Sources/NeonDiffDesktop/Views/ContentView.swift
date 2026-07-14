@@ -7,6 +7,7 @@ struct ContentView: View {
     @ObservedObject var updateController: NeonUpdateController
     let preferredColorScheme: ColorScheme?
     let rootAccessibilityIdentifier: String
+    let enablesEvaluationRegionBindings: Bool
     let onSurfaceReady: (() -> Void)?
 
     init(
@@ -14,12 +15,14 @@ struct ContentView: View {
         updateController: NeonUpdateController,
         preferredColorScheme: ColorScheme? = .dark,
         rootAccessibilityIdentifier: String = "neondiff.desktop.root",
+        enablesEvaluationRegionBindings: Bool = false,
         onSurfaceReady: (() -> Void)? = nil
     ) {
         self.model = model
         self.updateController = updateController
         self.preferredColorScheme = preferredColorScheme
         self.rootAccessibilityIdentifier = rootAccessibilityIdentifier
+        self.enablesEvaluationRegionBindings = enablesEvaluationRegionBindings
         self.onSurfaceReady = onSurfaceReady
     }
 
@@ -35,15 +38,19 @@ struct ContentView: View {
 
             VStack(spacing: 0) {
                 NeonChromeStrip(model: model, updateController: updateController)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("neondiff-chrome")
                     .ignoresSafeArea(.container, edges: .top)
+                    .evaluationAccessibilityRegion(
+                        "neondiff-chrome",
+                        enabled: enablesEvaluationRegionBindings
+                    )
 
                 HStack(spacing: 0) {
                     SidebarView(selection: $model.selectedSection)
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("neondiff-sidebar")
                         .frame(width: 230)
+                        .evaluationAccessibilityRegion(
+                            "neondiff-sidebar",
+                            enabled: enablesEvaluationRegionBindings
+                        )
 
                     Rectangle()
                         .fill(NeonDiffTheme.stroke.opacity(0.55))
@@ -54,9 +61,11 @@ struct ContentView: View {
                         updateController: updateController,
                         onSurfaceReady: model.isOnboardingPresented ? nil : onSurfaceReady
                     )
-                        .accessibilityElement(children: .contain)
-                        .accessibilityIdentifier("neondiff-detail")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .evaluationAccessibilityRegion(
+                            "neondiff-detail",
+                            enabled: enablesEvaluationRegionBindings
+                        )
                 }
             }
         }
@@ -71,6 +80,18 @@ struct ContentView: View {
                 .preferredColorScheme(preferredColorScheme)
                 .interactiveDismissDisabled(model.onboardingFlow.currentStep != .done)
                 .onAppear { onSurfaceReady?() }
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func evaluationAccessibilityRegion(_ identifier: String, enabled: Bool) -> some View {
+        if enabled {
+            accessibilityElement(children: .contain)
+                .accessibilityIdentifier(identifier)
+        } else {
+            self
         }
     }
 }
