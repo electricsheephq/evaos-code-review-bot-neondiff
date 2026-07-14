@@ -268,7 +268,7 @@ describe("desktop settled geometry capture runner", () => {
       phase: "complete",
       reasonCode: "none",
       publicSafety: "passed",
-      proof: "emitted"
+      proof: "publication_ready"
     });
     expect(existsSync(join(
       harness.output,

@@ -309,7 +309,11 @@ jq -e '
 cp "$tmp_root/packet-safety.json" "validation/packet-safety-scan.json"
 printf 'ok\n' >"validation/packet-safety-scan.ok"
 assert_clean_head
-render_status "validation/.settled-capture-status.final.pending" complete complete none passed emitted
+# The proof rename below is the packet's sole publication commit marker. Keep
+# the status truthful even if the process is interrupted between the two
+# renames: the completed capture is ready for publication, but only proof-file
+# presence means it was emitted.
+render_status "validation/.settled-capture-status.final.pending" complete complete none passed publication_ready
 assert_clean_head
 mv "validation/.settled-capture-status.final.pending" "$status_path"
 mv ".settled-geometry-proof.json.pending" "settled-geometry-proof.json"
