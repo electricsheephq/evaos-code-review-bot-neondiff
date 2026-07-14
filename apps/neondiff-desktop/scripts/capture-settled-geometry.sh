@@ -260,8 +260,9 @@ cp "$tmp_root/debug-app-tree.json" "$pending/debug-app-tree.json"
 mv "$pending" "$case_dir"
 
 checker_exit=0
+checker_input="$output/$case_dir/settled-geometry.json"
 if swift run --skip-build --package-path "$package_dir" \
-  NeonDiffDesktopGeometryChecks "$case_dir/settled-geometry.json" \
+  NeonDiffDesktopGeometryChecks "$checker_input" \
   >"validation/settled-geometry-check.json" \
   2>"$tmp_root/checker.stderr"; then
   :
