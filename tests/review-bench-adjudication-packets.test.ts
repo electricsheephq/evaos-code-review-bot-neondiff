@@ -472,6 +472,24 @@ describe("review-bench adjudication packet preparation", () => {
     expect(() => prepare(secret)).toThrow(/secret/i);
   });
 
+  it("rejects non-diff text outside validated hunks", () => {
+    for (const contaminatedDiff of [
+      `Known answer: stale state write\n${DIFF}`,
+      `${DIFF}\nKnown answer: stale state write\n`
+    ]) {
+      const input = fixture();
+      input.candidate.sourceArtifactSha256 = sha256(contaminatedDiff);
+      writeJson(input.candidatePath, input.candidate);
+      writeFileSync(
+        join(input.artifactsDirectory, `${input.candidate.sourceArtifactSha256}.diff`),
+        contaminatedDiff
+      );
+
+      expect(() => prepare(input)).toThrow(/outside validated hunks|unexpected content/i);
+      expect(() => statSync(input.outputDirectory)).toThrow();
+    }
+  });
+
   it("rejects unified diff hunks whose declared line counts do not match their body", () => {
     const input = fixture();
     const malformedDiff = [
@@ -671,6 +689,26 @@ describe("review-bench adjudication packet preparation", () => {
 });
 
 describe("review-bench adjudication response verification", () => {
+  it("rejects a packet whose annotation universe froze after packet preparation", () => {
+    const prepared = prepare();
+    prepared.packet.annotationUniverse.frozenAt = "2026-07-13T08:30:00.000Z";
+    const packetBasis = { ...prepared.packet } as Record<string, unknown>;
+    delete packetBasis.packetFingerprint;
+    prepared.packet.packetFingerprint = sha256(stableJson(packetBasis));
+    writeJson(prepared.packetPath, prepared.packet);
+    const paths = responsePaths(
+      prepared,
+      response(prepared.packet, "human:one"),
+      response(prepared.packet, "human:two")
+    );
+
+    expect(() => verifyReviewBenchAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      ...paths,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/frozenAt.*preparedAt|annotation universe chronology/i);
+  });
+
   it("runs the offline prepare and verify CLI happy path without echoing private content", () => {
     const input = fixture();
     const prepareResult = spawnSync("npx", [

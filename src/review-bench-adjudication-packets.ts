@@ -718,6 +718,9 @@ function validatePacket(packet: ReviewBenchAdjudicationPacketV1): void {
     throw new Error("packet annotation universe must bind the exact adjudication protocol");
   }
   requireIsoTimestamp(packet.preparedAt, "packet.preparedAt");
+  if (Date.parse(packet.annotationUniverse.frozenAt) > Date.parse(packet.preparedAt)) {
+    throw new Error("packet annotation universe frozenAt must not follow preparedAt");
+  }
   requireExactKeys(packet.declarations, [
     "providerIdentityExcluded", "peerDecisionsExcluded", "oracleGoldAnswersExcluded"
   ], "packet.declarations");
@@ -1202,7 +1205,13 @@ function parseDiffAnchors(diff: string): {
       changedPaths.add(path);
       continue;
     }
-    if (!inHunk || path === undefined || line === "\\ No newline at end of file") continue;
+    if (!inHunk) {
+      if (line === "") continue;
+      if (path !== undefined && !oldHeaderSeen && isAllowedGitDiffMetadataLine(line)) continue;
+      throw new Error("source diff contains unexpected content outside validated hunks");
+    }
+    if (path === undefined) throw new Error("source diff hunk lacks a diff --git path");
+    if (line === "\\ No newline at end of file") continue;
     if (line === "" && oldRemaining === 0 && newRemaining === 0) {
       inHunk = false;
       continue;
@@ -1231,6 +1240,10 @@ function parseDiffAnchors(diff: string): {
   }
   if (changedPaths.size === 0) throw new Error("source diff contains no changed paths");
   return { anchors, changedPaths };
+}
+
+function isAllowedGitDiffMetadataLine(line: string): boolean {
+  return /^(?:index [0-9a-f]{7,64}\.\.[0-9a-f]{7,64}(?: [0-7]{6})?|(?:new file|deleted file|old|new) mode [0-7]{6})$/.test(line);
 }
 
 function readCanonicalJson<T>(path: string, maximumBytes: number, label: string): T {
