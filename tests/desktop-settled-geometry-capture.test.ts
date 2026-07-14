@@ -86,6 +86,7 @@ function traceFixture(): object {
     checkpoints: ["overview", "repos", "overview"].map((section, index) => ({
       index,
       section,
+      surfaceGeneration: index,
       ready: true,
       quiescent: true,
       acquisitionMilliseconds: 250,
@@ -108,12 +109,14 @@ function createHarness(): {
   const commandLog = join(root, "commands.log");
   const appTemplate = join(root, "fake-app");
   const trace = join(root, "trace.json");
+  const gitState = join(root, "git-state");
   mkdirSync(fakeBin, { recursive: true });
   mkdirSync(swiftBin, { recursive: true });
   mkdirSync(join(root, "apps/neondiff-desktop/scripts"), { recursive: true });
   mkdirSync(join(root, "apps/neondiff-desktop/script"), { recursive: true });
   mkdirSync(join(root, "apps/neondiff-desktop/fixtures/ui"), { recursive: true });
   mkdirSync(join(root, "scripts"), { recursive: true });
+  mkdirSync(gitState);
   writeFileSync(join(root, scriptPath), readFileSync(scriptPath));
   chmodSync(join(root, scriptPath), 0o755);
   writeFileSync(join(root, "apps/neondiff-desktop/fixtures/ui/tab-overview.json"), "{}\n");
@@ -143,7 +146,11 @@ if [ "\${1:-}" = -C ]; then shift 2; fi
 printf 'git %s\\n' "$*" >>"$FAKE_COMMAND_LOG"
 case "$*" in
   'status --porcelain --untracked-files=all')
-    [ "\${FAKE_GIT_DIRTY:-false}" = false ] || printf ' M drifted-file\\n'
+    count=0
+    [ ! -f "$FAKE_GIT_STATE/status-count" ] || count=$(cat "$FAKE_GIT_STATE/status-count")
+    count=$((count + 1))
+    printf '%s\\n' "$count" >"$FAKE_GIT_STATE/status-count"
+    if [ "\${FAKE_GIT_DIRTY_STATUS_CALL:-0}" -eq "$count" ]; then printf ' M drifted-file\\n'; fi
     ;;
   'rev-parse HEAD') printf '%040d\\n' 0 ;;
   *) exit 2 ;;
@@ -157,6 +164,12 @@ exit 0
 
   writeExecutable(join(fakeBin, "node"), `#!/bin/sh
 printf 'node %s\\n' "$*" >>"$FAKE_COMMAND_LOG"
+case "$*" in
+  *hash-desktop-bundle-tree.mjs*)
+    printf '%s\\n' '{"algorithm":"sha256-tree-v1","entryCount":3,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+    exit 0
+    ;;
+esac
 if [ "\${FAKE_SAFETY_OK:-true}" = true ]; then
   printf '%s\\n' '{"ok":true,"findings":[],"sensitiveFiles":[],"invalidImages":[],"unsupportedEntries":[]}'
   exit 0
@@ -187,10 +200,11 @@ set -eu
 printf 'capture %s\\n' "$*" >>"$FAKE_COMMAND_LOG"
 pid=
 output=
+ready=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --pid) pid=$2; shift 2 ;;
-    --ready) shift 2 ;;
+    --ready) ready=$2; shift 2 ;;
     --output) output=$2; shift 2 ;;
     *) exit 64 ;;
   esac
@@ -201,6 +215,7 @@ if [ "\${FAKE_CAPTURE_OK:-true}" != true ]; then
 fi
 jq --argjson pid "$pid" '.pid = $pid' "$FAKE_TRACE" >"$output.tmp"
 mv "$output.tmp" "$output"
+jq -n --argjson pid "$pid" '{schemaVersion:1,fixtureId:"tab-overview",pid:$pid,windowNumber:41,section:"overview",surfaceGeneration:2,windowFrame:{x:0,y:0,width:1040,height:710},contentFrame:{x:0,y:0,width:1040,height:680},backingScale:2,quiescent:true}' >"$(dirname "$ready")/surface-state.json"
 printf '%s\\n' '{"ok":true,"reasonCode":"none","schemaVersion":1,"status":"complete"}'
 `);
 
@@ -218,7 +233,8 @@ printf '%s\\n' '{"ok":true,"reasonCode":"none","schemaVersion":1,"status":"compl
       FAKE_CAPTURE_OK: "true",
       FAKE_CHECKER_OK: "true",
       FAKE_SAFETY_OK: "true",
-      FAKE_GIT_DIRTY: "false",
+      FAKE_GIT_STATE: gitState,
+      FAKE_GIT_DIRTY_STATUS_CALL: "0",
       NEONDIFF_DESKTOP_TEST_MODE: "1",
       NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS: "20"
     }
@@ -259,6 +275,12 @@ describe("desktop settled geometry capture runner", () => {
       "cases/overview-repos-overview/1040x680/settled-geometry.json"
     ))).toBe(true);
     expect(existsSync(join(harness.output, "settled-geometry-proof.json"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(harness.output, "settled-geometry-proof.json"), "utf8")))
+      .toMatchObject({
+        appTreeAlgorithm: "sha256-tree-v1",
+        appTreeSha256: "a".repeat(64),
+        proofBoundary: "settled-geometry-only"
+      });
     expect(statSync(harness.output).mode & 0o777).toBe(0o700);
     const commandLog = readFileSync(harness.commandLog, "utf8");
     expect(commandLog).toMatch(/capture --pid [0-9]+ --ready \/tmp\/[^ ]+\/ready\/ready\.json --output \/tmp\/[^ ]+\/capture\/settled-geometry\.json/);
@@ -334,6 +356,24 @@ describe("desktop settled geometry capture runner", () => {
     expect(result.status).toBe(65);
     expect(result.stderr).toContain("real directory");
     expect(existsSync(join(realParent, "evidence"))).toBe(false);
+  });
+
+  it("withholds proof when source drift appears at the final publication gate", () => {
+    const harness = createHarness();
+    const result = runHarness(harness, { FAKE_GIT_DIRTY_STATUS_CALL: "5" });
+
+    expect(result.status).toBe(65);
+    expect(JSON.parse(readFileSync(
+      join(harness.output, "validation/settled-capture-status.json"),
+      "utf8"
+    ))).toMatchObject({
+      status: "incomplete",
+      phase: "source",
+      reasonCode: "source_changed",
+      proof: "not_emitted"
+    });
+    expect(existsSync(join(harness.output, "settled-geometry-proof.json"))).toBe(false);
+    expect(existsSync(join(harness.output, ".settled-geometry-proof.json.pending"))).toBe(false);
   });
 
   it("routes the fake runner contract through the Swift desktop gate", () => {

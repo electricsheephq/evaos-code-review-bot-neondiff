@@ -79,11 +79,32 @@ import Testing
         #expect(source.contains("AXUIElementGetPid"))
         #expect(source.contains("CGWindowListCopyWindowInfo"))
         #expect(source.contains("ready.windowNumber <= Int(CGWindowID.max)"))
+        #expect(source.contains("state.surfaceGeneration == expectedGeneration"))
+        #expect(source.contains("state.section == expectedSection"))
+        #expect(source.contains("state.quiescent"))
         #expect(source.contains(#"neondiff-sidebar-section-\(to.rawValue)"#))
         #expect(!source.contains("AXUIElementSetAttributeValue"))
         #expect(!source.contains("AXUIElementPostKeyboardEvent"))
         #expect(!source.contains("CGEventPost"))
         #expect(!source.contains("kAXTrustedCheckOptionPrompt"))
         #expect(!source.contains("CGRequestScreenCaptureAccess"))
+    }
+
+    @Test func debugSurfaceStateRearmsPerSectionWithFreshAppKitGeometry() throws {
+        let configurator = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktop/Support/NeonWindowConfigurator.swift")
+        )
+        let readiness = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift")
+        )
+
+        #expect(configurator.contains("evaluationSection"))
+        #expect(configurator.contains("surfaceGeneration"))
+        #expect(configurator.contains("sampleSurfaceState"))
+        #expect(configurator.contains("DesktopEvaluationSurfaceStateWriter.sample(window: window)"))
+        #expect(readiness.contains("surface-state.json"))
+        #expect(readiness.contains("quiescent"))
     }
 }

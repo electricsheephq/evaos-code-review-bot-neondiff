@@ -56,7 +56,9 @@ cd "$output"
 mkdir -m 700 validation
 status_path="validation/settled-capture-status.json"
 
-write_status() {
+render_status() {
+  target=$1
+  shift
   status=$1
   phase=$2
   reason=$3
@@ -69,7 +71,11 @@ write_status() {
     --arg publicSafety "$safety" \
     --arg proof "$proof" \
     '{schemaVersion:1,status:$status,phase:$phase,reasonCode:$reasonCode,publicSafety:$publicSafety,proof:$proof}' \
-    >"$status_path.tmp"
+    >"$target"
+}
+
+write_status() {
+  render_status "$status_path.tmp" "$@"
   mv "$status_path.tmp" "$status_path"
 }
 
@@ -100,6 +106,7 @@ cleanup() {
   if [ -n "$capture_pid" ]; then terminate_process "$capture_pid"; fi
   if [ -n "$app_pid" ]; then terminate_process "$app_pid"; fi
   rm -f ".settled-geometry-proof.json.pending"
+  rm -f "validation/.settled-capture-status.final.pending"
   rm -rf "$tmp_root"
 }
 trap cleanup EXIT HUP INT TERM
@@ -133,6 +140,14 @@ app_bin="$dist_dir/NeonDiffDesktop.app/Contents/MacOS/NeonDiffDesktop"
 capture_bin="$swift_bin/NeonDiffDesktopSettledGeometryCapture"
 [ -x "$app_bin" ] && [ -x "$capture_bin" ] \
   || { write_status incomplete build products_missing incomplete not_emitted; exit 65; }
+node "$repo_dir/scripts/hash-desktop-bundle-tree.mjs" "$dist_dir/NeonDiffDesktop.app" \
+  >"$tmp_root/debug-app-tree.json"
+jq -e '
+  .algorithm == "sha256-tree-v1"
+  and (.entryCount | type == "number" and . > 0)
+  and (.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+' "$tmp_root/debug-app-tree.json" >/dev/null \
+  || { write_status incomplete build app_identity_invalid incomplete not_emitted; exit 65; }
 assert_clean_head
 
 npm --prefix "$repo_dir" run check:secrets >"$tmp_root/repository-secret-scan.log" 2>&1
@@ -141,6 +156,7 @@ ready_dir="$tmp_root/ready"
 capture_stage="$tmp_root/capture"
 mkdir -m 700 "$ready_dir" "$capture_stage"
 ready="$ready_dir/ready.json"
+surface_state="$ready_dir/surface-state.json"
 settled="$capture_stage/settled-geometry.json"
 NEONDIFF_DESKTOP_EVALUATION_READY_PATH="$ready" \
   "$app_bin" \
@@ -212,6 +228,20 @@ jq -e '
   || { write_status incomplete capture capture_status_invalid incomplete not_emitted; exit 1; }
 [ -f "$settled" ] && [ ! -L "$settled" ] \
   || { write_status incomplete capture capture_output_missing incomplete not_emitted; exit 1; }
+[ -f "$surface_state" ] && [ ! -L "$surface_state" ] \
+  || { write_status incomplete capture surface_state_missing incomplete not_emitted; exit 1; }
+jq -e --argjson pid "$app_pid" '
+  type == "object"
+  and .schemaVersion == 1
+  and .fixtureId == "tab-overview"
+  and .pid == $pid
+  and .section == "overview"
+  and .surfaceGeneration == 2
+  and .quiescent == true
+  and .contentFrame.width == 1040
+  and .contentFrame.height == 680
+' "$surface_state" >/dev/null \
+  || { write_status incomplete capture surface_state_invalid incomplete not_emitted; exit 1; }
 
 terminate_process "$app_pid"
 app_pid=
@@ -223,8 +253,10 @@ case_dir="$case_parent/1040x680"
 mkdir -p "$case_parent"
 mkdir -m 700 "$pending"
 cp "$ready" "$pending/readiness.json"
+cp "$surface_state" "$pending/final-surface-state.json"
 cp "$settled" "$pending/settled-geometry.json"
 cp "$tmp_root/capture-status.json" "$pending/capture-status.json"
+cp "$tmp_root/debug-app-tree.json" "$pending/debug-app-tree.json"
 mv "$pending" "$case_dir"
 
 checker_exit=0
@@ -250,10 +282,12 @@ jq -e '
   || { write_status incomplete checker checker_rejected incomplete not_emitted; exit "$checker_exit"; }
 
 trace_sha=$(shasum -a 256 "$case_dir/settled-geometry.json" | awk '{print $1}')
+app_tree_sha=$(jq -r '.sha256' "$case_dir/debug-app-tree.json")
 jq -n \
   --arg head "$head_sha" \
   --arg traceSha256 "$trace_sha" \
-  '{schemaVersion:1,head:$head,scenario:"overview-repos-overview",contentSize:"1040x680",traceSha256:$traceSha256,checker:"stable",proofBoundary:"settled-geometry-only"}' \
+  --arg appTreeSha256 "$app_tree_sha" \
+  '{schemaVersion:1,head:$head,scenario:"overview-repos-overview",contentSize:"1040x680",traceSha256:$traceSha256,appTreeAlgorithm:"sha256-tree-v1",appTreeSha256:$appTreeSha256,checker:"stable",proofBoundary:"settled-geometry-only"}' \
   >".settled-geometry-proof.json.pending"
 
 if node "$repo_dir/scripts/check-desktop-evaluation-packet-secrets.mjs" --packet . \
@@ -274,7 +308,8 @@ jq -e '
   || { write_status incomplete safety public_safety_failed failed not_emitted; exit 1; }
 cp "$tmp_root/packet-safety.json" "validation/packet-safety-scan.json"
 printf 'ok\n' >"validation/packet-safety-scan.ok"
+assert_clean_head
+render_status "validation/.settled-capture-status.final.pending" complete complete none passed emitted
+assert_clean_head
+mv "validation/.settled-capture-status.final.pending" "$status_path"
 mv ".settled-geometry-proof.json.pending" "settled-geometry-proof.json"
-assert_clean_head
-write_status complete complete none passed emitted
-assert_clean_head

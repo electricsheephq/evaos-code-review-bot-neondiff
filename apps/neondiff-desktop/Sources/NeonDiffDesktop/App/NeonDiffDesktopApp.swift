@@ -172,7 +172,8 @@ struct NeonDiffDesktopApp: App {
         NeonWindowConfigurator(
             requestedContentSize: requestedContentSize,
             disablesAnimations: disablesAnimations,
-            readinessRequest: evaluationReadinessRequest
+            readinessRequest: evaluationReadinessRequest,
+            evaluationSection: evaluationContext == nil ? nil : model.selectedSection
         )
 #else
         NeonWindowConfigurator(

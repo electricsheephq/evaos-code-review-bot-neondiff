@@ -53,6 +53,19 @@ private struct ReadyDocument: Codable {
     let ready: Bool
 }
 
+private struct SurfaceStateDocument: Codable, Equatable {
+    let schemaVersion: Int
+    let fixtureId: String
+    let pid: Int32
+    let windowNumber: Int
+    let section: DesktopSection
+    let surfaceGeneration: Int
+    let windowFrame: DesktopSettledGeometryFrame
+    let contentFrame: DesktopSettledGeometryFrame
+    let backingScale: Double
+    let quiescent: Bool
+}
+
 private struct Options {
     let pid: Int32
     let readyURL: URL
@@ -199,6 +212,54 @@ private struct SettledGeometryRunner {
         return Set(frame.keys) == ["x", "y", "width", "height"]
     }
 
+    private func loadSurfaceState(
+        ready: ReadyDocument,
+        expectedGeneration: Int,
+        expectedSection: DesktopSection
+    ) throws -> SurfaceStateDocument {
+        let url = options.readyURL.deletingLastPathComponent()
+            .appendingPathComponent("surface-state.json")
+        do {
+            try requireRegularNonSymlink(url)
+        } catch {
+            throw CaptureFailure.semanticMissing
+        }
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        guard data.count <= 64 * 1024,
+              strictSurfaceStateShape(data),
+              let state = try? JSONDecoder().decode(SurfaceStateDocument.self, from: data),
+              state.schemaVersion == 1,
+              state.fixtureId == ready.fixtureId,
+              state.pid == ready.pid,
+              state.windowNumber == ready.windowNumber,
+              state.windowNumber > 0,
+              state.windowNumber <= Int(CGWindowID.max),
+              state.section == expectedSection,
+              state.surfaceGeneration == expectedGeneration,
+              state.quiescent,
+              state.backingScale.isFinite,
+              state.backingScale > 0,
+              abs(state.contentFrame.width - 1040) <= Self.tolerance,
+              abs(state.contentFrame.height - 680) <= Self.tolerance else {
+            throw CaptureFailure.semanticChanged
+        }
+        return state
+    }
+
+    private func strictSurfaceStateShape(_ data: Data) -> Bool {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(root.keys) == [
+                  "schemaVersion", "fixtureId", "pid", "windowNumber", "section",
+                  "surfaceGeneration", "windowFrame", "contentFrame", "backingScale",
+                  "quiescent"
+              ],
+              strictFrameShape(root["windowFrame"]),
+              strictFrameShape(root["contentFrame"]) else {
+            return false
+        }
+        return true
+    }
+
     private func requireRegularNonSymlink(_ url: URL) throws {
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true else {
@@ -241,6 +302,11 @@ private struct SettledGeometryRunner {
         var lastFailure: CaptureFailure = .semanticMissing
         while elapsedMilliseconds(since: phaseStarted) <= Self.maximumAcquisitionMilliseconds {
             do {
+                let surfaceState = try loadSurfaceState(
+                    ready: ready,
+                    expectedGeneration: index,
+                    expectedSection: section
+                )
                 let samplingStarted = DispatchTime.now().uptimeNanoseconds
                 var samples: [DesktopSettledGeometrySample] = []
                 for sampleIndex in 0..<3 {
@@ -248,7 +314,12 @@ private struct SettledGeometryRunner {
                         samplingStarted + UInt64(sampleIndex * Self.sampleIntervalMilliseconds) * 1_000_000
                     )
                     let elapsed = elapsedMilliseconds(since: samplingStarted)
-                    samples.append(try sample(section: section, elapsed: elapsed, ready: ready))
+                    samples.append(try sample(
+                        section: section,
+                        elapsed: elapsed,
+                        ready: ready,
+                        surfaceState: surfaceState
+                    ))
                 }
                 guard stable(samples), validCadence(samples) else {
                     lastFailure = .semanticChanged
@@ -259,6 +330,7 @@ private struct SettledGeometryRunner {
                 return .init(
                     index: index,
                     section: section,
+                    surfaceGeneration: surfaceState.surfaceGeneration,
                     ready: true,
                     quiescent: true,
                     acquisitionMilliseconds: acquisition,
@@ -279,15 +351,24 @@ private struct SettledGeometryRunner {
     private func sample(
         section: DesktopSection,
         elapsed: Int,
-        ready: ReadyDocument
+        ready: ReadyDocument,
+        surfaceState: SurfaceStateDocument
     ) throws -> DesktopSettledGeometrySample {
+        let currentSurfaceState = try loadSurfaceState(
+            ready: ready,
+            expectedGeneration: surfaceState.surfaceGeneration,
+            expectedSection: section
+        )
+        guard currentSurfaceState == surfaceState else {
+            throw CaptureFailure.semanticChanged
+        }
         let binding = try semanticBinding(section: section, ready: ready)
         let windowFrame = try elementFrame(binding.window)
         let contentFrame: DesktopSettledGeometryFrame
         do {
             contentFrame = try DesktopSettledGeometryCoordinateNormalizer.normalizeContentFrame(
-                appKitWindowFrame: ready.windowFrame,
-                appKitContentFrame: ready.contentFrame,
+                appKitWindowFrame: surfaceState.windowFrame,
+                appKitContentFrame: surfaceState.contentFrame,
                 axWindowFrame: windowFrame,
                 tolerancePoints: Self.tolerance
             )

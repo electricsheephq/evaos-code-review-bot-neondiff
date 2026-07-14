@@ -132,6 +132,10 @@ jobs:
         timeout-minutes: 3
         run: npm test -- --run tests/desktop-evaluation-boundary.test.ts
 
+      - name: Desktop settled geometry runner contracts
+        timeout-minutes: 3
+        run: npm test -- --run tests/desktop-settled-geometry-capture.test.ts
+
       - name: Build Swift Keychain checks target
         working-directory: apps/neondiff-desktop
         run: swift build --target NeonDiffDesktopKeychainChecks
@@ -140,6 +144,8 @@ jobs:
         working-directory: apps/neondiff-desktop
         run: |
           swift build -c debug --product NeonDiffDesktop
+          swift build -c debug --product NeonDiffDesktopSettledGeometryCapture
+          swift build -c debug --product NeonDiffDesktopGeometryChecks
           swift build -c release --product NeonDiffDesktop
 
       - name: Swift core, AppCore, and evaluation-support tests

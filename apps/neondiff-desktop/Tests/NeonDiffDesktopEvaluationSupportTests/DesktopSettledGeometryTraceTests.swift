@@ -138,6 +138,12 @@ struct DesktopSettledGeometryTraceTests {
             try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
         }
 
+        checkpoints = makeCheckpoints()
+        checkpoints[1] = checkpoint(index: 1, section: .repos, surfaceGeneration: 0)
+        #expect(throws: DesktopSettledGeometryValidationError.invalidSequence(index: 1)) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
+        }
+
         let encoded = try? JSONEncoder().encode(makeTrace())
         var root = encoded.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         root?["coordinateSpace"] = "global-bottom-left"
@@ -239,6 +245,7 @@ struct DesktopSettledGeometryTraceTests {
             DesktopSettledGeometryCheckpoint(
                 index: checkpoint.index,
                 section: checkpoint.section,
+                surfaceGeneration: checkpoint.surfaceGeneration,
                 ready: checkpoint.ready,
                 quiescent: checkpoint.quiescent,
                 acquisitionMilliseconds: checkpoint.acquisitionMilliseconds,
@@ -486,12 +493,14 @@ private func makeCheckpoints() -> [DesktopSettledGeometryCheckpoint] {
 private func checkpoint(
     index: Int,
     section: DesktopSection,
+    surfaceGeneration: Int? = nil,
     quiescent: Bool = true,
     samples providedSamples: [DesktopSettledGeometrySample]? = nil
 ) -> DesktopSettledGeometryCheckpoint {
     .init(
         index: index,
         section: section,
+        surfaceGeneration: surfaceGeneration ?? index,
         ready: true,
         quiescent: quiescent,
         acquisitionMilliseconds: 250,

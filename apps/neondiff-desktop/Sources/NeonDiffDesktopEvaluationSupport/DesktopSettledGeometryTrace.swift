@@ -162,6 +162,7 @@ public struct DesktopSettledGeometrySample: Codable, Equatable, Sendable {
 public struct DesktopSettledGeometryCheckpoint: Codable, Equatable, Sendable {
     public let index: Int
     public let section: DesktopSection
+    public let surfaceGeneration: Int
     public let ready: Bool
     public let quiescent: Bool
     public let acquisitionMilliseconds: Int
@@ -170,6 +171,7 @@ public struct DesktopSettledGeometryCheckpoint: Codable, Equatable, Sendable {
     public init(
         index: Int,
         section: DesktopSection,
+        surfaceGeneration: Int,
         ready: Bool,
         quiescent: Bool,
         acquisitionMilliseconds: Int,
@@ -177,6 +179,7 @@ public struct DesktopSettledGeometryCheckpoint: Codable, Equatable, Sendable {
     ) {
         self.index = index
         self.section = section
+        self.surfaceGeneration = surfaceGeneration
         self.ready = ready
         self.quiescent = quiescent
         self.acquisitionMilliseconds = acquisitionMilliseconds
@@ -304,7 +307,8 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
         return checkpoints.allSatisfy { value in
             guard let checkpoint = value as? [String: Any],
                   hasOnly(checkpoint, [
-                      "index", "section", "ready", "quiescent", "acquisitionMilliseconds", "samples"
+                      "index", "section", "surfaceGeneration", "ready", "quiescent",
+                      "acquisitionMilliseconds", "samples"
                   ]),
                   let samples = checkpoint["samples"] as? [Any] else {
                 return false
@@ -413,7 +417,8 @@ public enum DesktopSettledGeometryValidator {
         var settledCheckpoints: [[DesktopSettledGeometrySample]] = []
         for (checkpointIndex, checkpoint) in trace.checkpoints.enumerated() {
             guard checkpoint.index == checkpointIndex,
-                  checkpoint.section == trace.scenario.sections[checkpointIndex] else {
+                  checkpoint.section == trace.scenario.sections[checkpointIndex],
+                  checkpoint.surfaceGeneration == checkpointIndex else {
                 throw DesktopSettledGeometryValidationError.invalidSequence(index: checkpointIndex)
             }
             guard checkpoint.ready else {

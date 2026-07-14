@@ -1,23 +1,27 @@
 import AppKit
 import SwiftUI
 import NeonDiffDesktopAppCore
+import NeonDiffDesktopCore
 
 struct NeonWindowConfigurator: NSViewRepresentable {
     let requestedContentSize: NSSize?
     let disablesAnimations: Bool
 #if DEBUG
     let readinessRequest: DesktopEvaluationReadinessRequest?
+    let evaluationSection: DesktopSection?
 #endif
 
 #if DEBUG
     init(
         requestedContentSize: NSSize? = nil,
         disablesAnimations: Bool = false,
-        readinessRequest: DesktopEvaluationReadinessRequest? = nil
+        readinessRequest: DesktopEvaluationReadinessRequest? = nil,
+        evaluationSection: DesktopSection? = nil
     ) {
         self.requestedContentSize = requestedContentSize
         self.disablesAnimations = disablesAnimations
         self.readinessRequest = readinessRequest
+        self.evaluationSection = evaluationSection
     }
 #else
     init(requestedContentSize: NSSize? = nil, disablesAnimations: Bool = false) {
@@ -112,6 +116,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         paintNativeTitlebar(in: window)
 #if DEBUG
         scheduleReadinessSample(window: window, coordinator: coordinator)
+        scheduleSurfaceStateSample(window: window, coordinator: coordinator)
 #endif
     }
 
@@ -141,6 +146,12 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         var lastSample: DesktopEvaluationGeometrySample?
         var stableSampleCount = 0
         var readinessAttemptCount = 0
+        var surfaceSection: DesktopSection?
+        var surfaceGeneration = -1
+        var surfaceSamplingToken = 0
+        var surfaceLastSample: DesktopEvaluationGeometrySample?
+        var surfaceStableSampleCount = 0
+        var surfaceAttemptCount = 0
 #endif
     }
 
@@ -193,6 +204,92 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
             sampleReadiness(window: window, coordinator: coordinator)
+        }
+    }
+
+    private func scheduleSurfaceStateSample(window: NSWindow, coordinator: Coordinator) {
+        guard readinessRequest != nil,
+              let evaluationSection,
+              coordinator.surfaceSection != evaluationSection else {
+            return
+        }
+        coordinator.surfaceSection = evaluationSection
+        coordinator.surfaceGeneration += 1
+        coordinator.surfaceSamplingToken += 1
+        coordinator.surfaceLastSample = nil
+        coordinator.surfaceStableSampleCount = 0
+        coordinator.surfaceAttemptCount = 0
+        let token = coordinator.surfaceSamplingToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+            sampleSurfaceState(
+                window: window,
+                section: evaluationSection,
+                generation: coordinator.surfaceGeneration,
+                token: token,
+                coordinator: coordinator
+            )
+        }
+    }
+
+    private func sampleSurfaceState(
+        window: NSWindow,
+        section: DesktopSection,
+        generation: Int,
+        token: Int,
+        coordinator: Coordinator
+    ) {
+        guard let readinessRequest,
+              token == coordinator.surfaceSamplingToken,
+              section == coordinator.surfaceSection,
+              generation == coordinator.surfaceGeneration else {
+            return
+        }
+        coordinator.surfaceAttemptCount += 1
+        guard coordinator.surfaceAttemptCount < 50 else {
+            fatalError("NeonDiff Desktop evaluation surface state did not settle within five seconds.")
+        }
+        guard readinessRequest.renderLatch.isReady else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                sampleSurfaceState(
+                    window: window,
+                    section: section,
+                    generation: generation,
+                    token: token,
+                    coordinator: coordinator
+                )
+            }
+            return
+        }
+        let sample = DesktopEvaluationSurfaceStateWriter.sample(window: window)
+        if let previous = coordinator.surfaceLastSample,
+           sample.approximatelyEquals(previous) {
+            coordinator.surfaceStableSampleCount += 1
+        } else {
+            coordinator.surfaceStableSampleCount = 1
+        }
+        coordinator.surfaceLastSample = sample
+        if coordinator.surfaceStableSampleCount >= 3 {
+            do {
+                try DesktopEvaluationSurfaceStateWriter.write(
+                    request: readinessRequest,
+                    window: window,
+                    sample: sample,
+                    section: section,
+                    surfaceGeneration: generation
+                )
+            } catch {
+                fatalError("NeonDiff Desktop evaluation surface state failed: \(error.localizedDescription)")
+            }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+            sampleSurfaceState(
+                window: window,
+                section: section,
+                generation: generation,
+                token: token,
+                coordinator: coordinator
+            )
         }
     }
 #endif
