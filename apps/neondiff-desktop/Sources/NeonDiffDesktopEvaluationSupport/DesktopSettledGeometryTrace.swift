@@ -19,6 +19,7 @@ public enum DesktopSettledGeometryRegion: String, Codable, CaseIterable, Equatab
     case chrome
     case sidebar
     case detail
+    case overviewSentinel = "overview-sentinel"
     case reposOuterScroll = "repos-outer-scroll"
     case reposBottomSentinel = "repos-bottom-sentinel"
 
@@ -27,6 +28,7 @@ public enum DesktopSettledGeometryRegion: String, Codable, CaseIterable, Equatab
         case .chrome: "neondiff-chrome"
         case .sidebar: "neondiff-sidebar"
         case .detail: "neondiff-detail"
+        case .overviewSentinel: "neondiff-overview-start-dashboard"
         case .reposOuterScroll: "neondiff-repos-outer-scroll"
         case .reposBottomSentinel: "neondiff-repos-boundary"
         }
@@ -77,6 +79,54 @@ public struct DesktopSettledGeometryFrame: Codable, Equatable, Sendable {
         let overlapWidth = min(x + width, other.x + other.width) - max(x, other.x)
         let overlapHeight = min(y + height, other.y + other.height) - max(y, other.y)
         return overlapWidth > tolerance && overlapHeight > tolerance
+    }
+}
+
+public enum DesktopSettledGeometryCoordinateNormalizationError: Error, Equatable, Sendable {
+    case invalidFrame
+    case windowSizeMismatch
+    case contentOutsideWindow
+}
+
+public enum DesktopSettledGeometryCoordinateNormalizer {
+    public static func normalizeContentFrame(
+        appKitWindowFrame: DesktopSettledGeometryFrame,
+        appKitContentFrame: DesktopSettledGeometryFrame,
+        axWindowFrame: DesktopSettledGeometryFrame,
+        tolerancePoints: Double
+    ) throws -> DesktopSettledGeometryFrame {
+        guard tolerancePoints.isFinite,
+              tolerancePoints >= 0,
+              tolerancePoints <= 1,
+              appKitWindowFrame.isFiniteAndNonempty,
+              appKitContentFrame.isFiniteAndNonempty,
+              axWindowFrame.isFiniteAndNonempty else {
+            throw DesktopSettledGeometryCoordinateNormalizationError.invalidFrame
+        }
+        guard appKitWindowFrame.contains(appKitContentFrame, tolerance: tolerancePoints) else {
+            throw DesktopSettledGeometryCoordinateNormalizationError.contentOutsideWindow
+        }
+        guard abs(appKitWindowFrame.width - axWindowFrame.width) <= tolerancePoints,
+              abs(appKitWindowFrame.height - axWindowFrame.height) <= tolerancePoints else {
+            throw DesktopSettledGeometryCoordinateNormalizationError.windowSizeMismatch
+        }
+
+        let horizontalInset = appKitContentFrame.x - appKitWindowFrame.x
+        let topInset = (appKitWindowFrame.y + appKitWindowFrame.height)
+            - (appKitContentFrame.y + appKitContentFrame.height)
+        let normalized = DesktopSettledGeometryFrame(
+            x: axWindowFrame.x + horizontalInset,
+            y: axWindowFrame.y + topInset,
+            width: appKitContentFrame.width,
+            height: appKitContentFrame.height
+        )
+        guard normalized.isFiniteAndNonempty else {
+            throw DesktopSettledGeometryCoordinateNormalizationError.invalidFrame
+        }
+        guard axWindowFrame.contains(normalized, tolerance: tolerancePoints) else {
+            throw DesktopSettledGeometryCoordinateNormalizationError.contentOutsideWindow
+        }
+        return normalized
     }
 }
 
@@ -134,6 +184,39 @@ public struct DesktopSettledGeometryCheckpoint: Codable, Equatable, Sendable {
     }
 }
 
+public enum DesktopSettledGeometryNavigationActionResult: String, Codable, Equatable, Sendable {
+    case success
+    case failure
+}
+
+public struct DesktopSettledGeometryNavigationAction: Codable, Equatable, Sendable {
+    public let index: Int
+    public let fromSection: DesktopSection
+    public let toSection: DesktopSection
+    public let controlIdentifier: String
+    public let actionAdvertised: Bool
+    public let attemptCount: Int
+    public let performResult: DesktopSettledGeometryNavigationActionResult
+
+    public init(
+        index: Int,
+        fromSection: DesktopSection,
+        toSection: DesktopSection,
+        controlIdentifier: String,
+        actionAdvertised: Bool,
+        attemptCount: Int,
+        performResult: DesktopSettledGeometryNavigationActionResult
+    ) {
+        self.index = index
+        self.fromSection = fromSection
+        self.toSection = toSection
+        self.controlIdentifier = controlIdentifier
+        self.actionAdvertised = actionAdvertised
+        self.attemptCount = attemptCount
+        self.performResult = performResult
+    }
+}
+
 public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
     public let schemaVersion: Int
     public let scenario: DesktopSettledGeometryScenario
@@ -144,6 +227,7 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
     public let requestedContentSize: DesktopEvaluationContentSize
     public let tolerancePoints: Double
     public let sampleIntervalMilliseconds: Int
+    public let navigationActions: [DesktopSettledGeometryNavigationAction]
     public let checkpoints: [DesktopSettledGeometryCheckpoint]
 
     public init(
@@ -156,6 +240,7 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
         requestedContentSize: DesktopEvaluationContentSize,
         tolerancePoints: Double,
         sampleIntervalMilliseconds: Int,
+        navigationActions: [DesktopSettledGeometryNavigationAction],
         checkpoints: [DesktopSettledGeometryCheckpoint]
     ) {
         self.schemaVersion = schemaVersion
@@ -167,6 +252,7 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
         self.requestedContentSize = requestedContentSize
         self.tolerancePoints = tolerancePoints
         self.sampleIntervalMilliseconds = sampleIntervalMilliseconds
+        self.navigationActions = navigationActions
         self.checkpoints = checkpoints
     }
 
@@ -198,11 +284,21 @@ public struct DesktopSettledGeometryTrace: Codable, Equatable, Sendable {
               hasOnly(root, [
                   "schemaVersion", "scenario", "fixtureId", "pid", "windowNumber",
                   "coordinateSpace", "requestedContentSize", "tolerancePoints",
-                  "sampleIntervalMilliseconds", "checkpoints"
+                  "sampleIntervalMilliseconds", "navigationActions", "checkpoints"
               ]),
               let size = root["requestedContentSize"] as? [String: Any],
               hasOnly(size, ["width", "height"]),
+              let navigationActions = root["navigationActions"] as? [Any],
               let checkpoints = root["checkpoints"] as? [Any] else {
+            return false
+        }
+        guard navigationActions.allSatisfy({ value in
+            guard let action = value as? [String: Any] else { return false }
+            return hasOnly(action, [
+                "index", "fromSection", "toSection", "controlIdentifier",
+                "actionAdvertised", "attemptCount", "performResult"
+            ])
+        }) else {
             return false
         }
         return checkpoints.allSatisfy { value in
@@ -269,6 +365,7 @@ public enum DesktopSettledGeometryValidationStatus: String, Codable, Equatable, 
 public enum DesktopSettledGeometryValidationError: Error, Equatable, Sendable {
     case invalidContract
     case invalidSequence(index: Int)
+    case invalidNavigationAction(index: Int)
     case notQuiescent(index: Int)
     case insufficientSamples(index: Int)
     case invalidCadence(index: Int)
@@ -287,6 +384,9 @@ public enum DesktopSettledGeometryValidationError: Error, Equatable, Sendable {
 
 public enum DesktopSettledGeometryValidator {
     private static let genericRegions: Set<DesktopSettledGeometryRegion> = [.chrome, .sidebar, .detail]
+    private static let overviewRegions: Set<DesktopSettledGeometryRegion> = [
+        .chrome, .sidebar, .detail, .overviewSentinel
+    ]
     private static let reposRegions: Set<DesktopSettledGeometryRegion> = [
         .chrome, .sidebar, .detail, .reposOuterScroll, .reposBottomSentinel
     ]
@@ -308,6 +408,7 @@ public enum DesktopSettledGeometryValidator {
               trace.checkpoints.count == trace.scenario.sections.count else {
             throw DesktopSettledGeometryValidationError.invalidContract
         }
+        try validateNavigationActions(trace.navigationActions, scenario: trace.scenario)
 
         var settledCheckpoints: [[DesktopSettledGeometrySample]] = []
         for (checkpointIndex, checkpoint) in trace.checkpoints.enumerated() {
@@ -352,6 +453,30 @@ public enum DesktopSettledGeometryValidator {
         return .stable
     }
 
+    private static func validateNavigationActions(
+        _ actions: [DesktopSettledGeometryNavigationAction],
+        scenario: DesktopSettledGeometryScenario
+    ) throws {
+        let transitions = Array(zip(scenario.sections, scenario.sections.dropFirst()))
+        guard actions.count == transitions.count else {
+            throw DesktopSettledGeometryValidationError.invalidNavigationAction(
+                index: min(actions.count, transitions.count)
+            )
+        }
+        for (index, transition) in transitions.enumerated() {
+            let action = actions[index]
+            guard action.index == index,
+                  action.fromSection == transition.0,
+                  action.toSection == transition.1,
+                  action.controlIdentifier == "neondiff-sidebar-section-\(transition.1.rawValue)",
+                  action.actionAdvertised,
+                  action.attemptCount == 1,
+                  action.performResult == .success else {
+                throw DesktopSettledGeometryValidationError.invalidNavigationAction(index: index)
+            }
+        }
+    }
+
     private static func validateCadence(
         _ samples: [DesktopSettledGeometrySample],
         checkpoint: Int,
@@ -390,7 +515,7 @@ public enum DesktopSettledGeometryValidator {
         requestedContentSize: DesktopEvaluationContentSize,
         tolerance: Double
     ) throws {
-        let required = section == .repos ? reposRegions : genericRegions
+        let required = section == .repos ? reposRegions : overviewRegions
         for (sampleIndex, sample) in samples.enumerated() {
             guard sample.windowFrame.isFiniteAndNonempty,
                   sample.contentFrame.isFiniteAndNonempty else {
@@ -439,7 +564,7 @@ public enum DesktopSettledGeometryValidator {
                     region: unexpected
                 )
             }
-            for region in genericRegions.union([.reposOuterScroll]) {
+            for region in genericRegions.union([.overviewSentinel, .reposOuterScroll]) {
                 guard let frame = byID[region] else { continue }
                 guard sample.windowFrame.contains(frame, tolerance: tolerance) else {
                     throw DesktopSettledGeometryValidationError.regionOutsideWindow(
@@ -535,6 +660,14 @@ public enum DesktopSettledGeometryValidator {
                         )
                     }
                 }
+                if let original = baselineByID[.overviewSentinel],
+                   let current = byID[.overviewSentinel],
+                   current.differs(from: original, byMoreThan: tolerance) {
+                    throw DesktopSettledGeometryValidationError.unstableTransition(
+                        checkpoint: checkpoint,
+                        region: .overviewSentinel
+                    )
+                }
             }
         }
     }
@@ -586,6 +719,8 @@ public struct DesktopSettledGeometryCheckResult: Codable, Equatable, Sendable {
             failed(.contract, "invalid-contract")
         case .invalidSequence:
             failed(.sequence, "invalid-sequence")
+        case .invalidNavigationAction:
+            failed(.sequence, "invalid-navigation-action")
         case .notQuiescent:
             failed(.sequence, "not-quiescent")
         case .insufficientSamples:

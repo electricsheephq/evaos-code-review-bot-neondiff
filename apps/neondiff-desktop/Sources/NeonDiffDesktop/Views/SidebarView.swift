@@ -46,6 +46,7 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(section.title)
+                        .accessibilityIdentifier("neondiff-sidebar-section-\(section.rawValue)")
                     }
                 }
 
