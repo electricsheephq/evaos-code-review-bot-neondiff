@@ -24,6 +24,21 @@ head_sha=$(git rev-parse HEAD)
 printf '%s\n' "$head_sha" | grep -Eq '^[0-9a-f]{40}$' \
   || { echo "could not bind focused capture to an exact HEAD" >&2; exit 65; }
 
+capture_attempt_limit=150
+if [ "${NEONDIFF_DESKTOP_TEST_MODE:-}" = 1 ]; then
+  capture_attempt_limit=${NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS:-150}
+  case "$capture_attempt_limit" in ''|*[!0-9]*)
+    echo "test capture attempt limit must be an integer from 1 through 150" >&2
+    exit 65
+  esac
+  [ "$capture_attempt_limit" -ge 1 ] && [ "$capture_attempt_limit" -le 150 ] \
+    || { echo "test capture attempt limit must be an integer from 1 through 150" >&2; exit 65; }
+elif [ -n "${NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS:-}" ]; then
+  echo "test capture attempt limit requires explicit test mode" >&2
+  exit 65
+fi
+unset NEONDIFF_DESKTOP_TEST_MODE NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS
+
 assert_clean_head() {
   current_head=$(git rev-parse HEAD 2>/dev/null || true)
   current_status=$(git status --porcelain --untracked-files=all 2>/dev/null || printf 'git-status-failed\n')
@@ -196,7 +211,7 @@ cp "$ready" "$capture_stage/readiness.json"
   2>"$tmp_root/capture.stderr" &
 capture_pid=$!
 capture_attempts=0
-while kill -0 "$capture_pid" 2>/dev/null && [ "$capture_attempts" -lt 150 ]; do
+while kill -0 "$capture_pid" 2>/dev/null && [ "$capture_attempts" -lt "$capture_attempt_limit" ]; do
   /bin/sleep 0.1
   capture_attempts=$((capture_attempts + 1))
 done

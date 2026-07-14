@@ -237,6 +237,8 @@ fi
       FAKE_CAPTURE_STATUS: "0",
       FAKE_CAPTURE_MESSAGE: "",
       FAKE_CAPTURE_HANG: "false",
+      NEONDIFF_DESKTOP_TEST_MODE: "1",
+      NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS: "30",
       FAKE_ACQUISITION_STATUS: "complete",
       FAKE_ACQUISITION_FAILURE_REASON: "null",
       FAKE_CAPABILITIES_MODE: "valid",
@@ -308,11 +310,25 @@ describe("focused Repos reachability capture", () => {
     expect(script).toContain('content_size="1040x680"');
     expect(script).toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
     expect(script).toContain("capture helper timed out");
+    expect(script).toContain("NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS");
+    expect(script).toContain("unset NEONDIFF_DESKTOP_TEST_MODE NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS");
     expect(script).toContain("kill -KILL");
     expect(script).toContain("npm run check:secrets");
     expect(script).toContain("check-desktop-evaluation-packet-secrets.mjs");
     expect(script).not.toMatch(/\bsecurity\s+find-|\blaunchctl\b|\bdefaults\s+(?:read|write)\b/);
   });
+
+  it.runIf(process.platform === "darwin")(
+    "rejects an unsafe test-only capture timeout override before launching",
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, { NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS: "151" });
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(65);
+      expect(result.stderr).toContain("test capture attempt limit must be an integer from 1 through 150");
+      expect(readFileSync(harness.commandLog, "utf8")).not.toContain("build-app");
+    }
+  );
 
   it("builds one DEBUG app, capture helper, and checker and launches only the Repos fixture", () => {
     const script = readFileSync(scriptPath, "utf8");
@@ -679,8 +695,34 @@ describe("focused Repos reachability capture", () => {
   );
 
   it.runIf(process.platform === "darwin")(
+    "normalizes an Accessibility failure without raw stderr",
+    { timeout: 30_000 },
+    () => {
+      const harness = createFakeHarnessRepository();
+      const result = runHarness(harness, {
+        FAKE_CAPTURE_STATUS: "13",
+        FAKE_CAPTURE_MESSAGE: "Capture permission is unavailable: Accessibility"
+      });
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(13);
+      expect(focusedStatus(harness)).toMatchObject({
+        status: "incomplete",
+        phase: "capture",
+        reasonCode: "accessibility_unavailable",
+        captureExitCode: 13,
+        publicSafety: "incomplete",
+        focusedProof: "not_emitted"
+      });
+      expectNoFinalProof(harness);
+      expect(existsSync(join(harness.output, "cases/tab-repos/1040x680"))).toBe(false);
+      expect(existsSync(join(harness.output, "validation/capture.stderr"))).toBe(false);
+      expect(() => process.kill(launchedPID(harness), 0)).toThrow();
+    }
+  );
+
+  it.runIf(process.platform === "darwin")(
     "terminates timed-out capture and app processes without publishing partials",
-    { timeout: 25_000 },
+    { timeout: 30_000 },
     () => {
       const harness = createFakeHarnessRepository();
       const result = runHarness(harness, { FAKE_CAPTURE_HANG: "true" });
