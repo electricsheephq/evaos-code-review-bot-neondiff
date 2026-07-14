@@ -47,7 +47,11 @@ public struct DesktopSettledGeometryFrame: Codable, Equatable, Sendable {
     }
 
     fileprivate var isFiniteAndNonempty: Bool {
-        [x, y, width, height].allSatisfy(\.isFinite) && width > 0 && height > 0
+        let maxX = x + width
+        let maxY = y + height
+        return [x, y, width, height, maxX, maxY].allSatisfy(\.isFinite)
+            && width > 0
+            && height > 0
     }
 
     fileprivate func contains(_ other: Self, tolerance: Double) -> Bool {

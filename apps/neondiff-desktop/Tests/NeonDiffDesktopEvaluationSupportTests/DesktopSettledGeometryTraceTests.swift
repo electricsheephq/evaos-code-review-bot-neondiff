@@ -165,6 +165,23 @@ struct DesktopSettledGeometryTraceTests {
     }
 
     @Test func rejectsInvalidContainmentOverlapAndReposAncestryGeometry() {
+        let overflowingCheckpoints = makeCheckpoints().map { checkpoint in
+            DesktopSettledGeometryCheckpoint(
+                index: checkpoint.index,
+                section: checkpoint.section,
+                ready: checkpoint.ready,
+                quiescent: checkpoint.quiescent,
+                acquisitionMilliseconds: checkpoint.acquisitionMilliseconds,
+                samples: checkpoint.samples.map(\.withOverflowingHorizontalEdges)
+            )
+        }
+        #expect(throws: DesktopSettledGeometryValidationError.nonfiniteFrame(
+            checkpoint: 0,
+            sample: 0
+        )) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: overflowingCheckpoints))
+        }
+
         var wrongContentSize = samples(section: .overview)
         wrongContentSize[0] = sample(
             section: .overview,
@@ -403,6 +420,24 @@ private func sample(
 }
 
 private extension DesktopSettledGeometrySample {
+    var withOverflowingHorizontalEdges: Self {
+        let origin = Double.greatestFiniteMagnitude
+        func moved(_ frame: DesktopSettledGeometryFrame) -> DesktopSettledGeometryFrame {
+            .init(x: origin, y: frame.y, width: frame.width, height: frame.height)
+        }
+        return .init(
+            elapsedMilliseconds: elapsedMilliseconds,
+            windowFrame: .init(
+                x: origin,
+                y: windowFrame.y,
+                width: Double.greatestFiniteMagnitude,
+                height: windowFrame.height
+            ),
+            contentFrame: moved(contentFrame),
+            regions: regions.map { .init(id: $0.id, frame: moved($0.frame)) }
+        )
+    }
+
     func withElapsedMilliseconds(_ elapsedMilliseconds: Int) -> Self {
         .init(
             elapsedMilliseconds: elapsedMilliseconds,
