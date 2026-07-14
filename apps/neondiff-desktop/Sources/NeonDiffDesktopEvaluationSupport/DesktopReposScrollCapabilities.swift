@@ -281,6 +281,8 @@ public struct DesktopReposScrollCapabilities: Codable, Equatable, Sendable {
 }
 
 public enum DesktopReposScrollCapabilityContract {
+    public static let scrollToVisibleActionName = "AXScrollToVisible"
+
     public static func evaluate(
         osMajorVersion: Int,
         boundaryActionNames: [String]?,

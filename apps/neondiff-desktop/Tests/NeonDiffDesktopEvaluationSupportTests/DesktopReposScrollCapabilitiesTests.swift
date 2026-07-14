@@ -4,6 +4,13 @@ import Testing
 
 @Suite("Desktop Repositories scroll capabilities")
 struct DesktopReposScrollCapabilitiesTests {
+    @Test func exposesSDKIndependentPublicScrollToVisibleActionName() {
+        #expect(
+            DesktopReposScrollCapabilityContract.scrollToVisibleActionName
+                == "AXScrollToVisible"
+        )
+    }
+
     @Test func reducesMacOS26ActionNamesToSanitizedBooleans() throws {
         let capabilities = try DesktopReposScrollCapabilityContract.evaluate(
             osMajorVersion: 26,

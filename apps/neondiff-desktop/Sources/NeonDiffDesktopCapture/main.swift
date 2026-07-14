@@ -483,12 +483,9 @@ private struct DesktopReposReachabilityAXTracer {
             let boundaryActionNames: [String]?
             let scrollToVisibleActionName: String?
             if osMajorVersion >= 26 {
-                if #available(macOS 26.0, *) {
-                    boundaryActionNames = try actionNames(elements.boundaryBody)
-                    scrollToVisibleActionName = NSAccessibility.Action.scrollToVisibleAction.rawValue
-                } else {
-                    throw Failure.invalidType
-                }
+                boundaryActionNames = try actionNames(elements.boundaryBody)
+                scrollToVisibleActionName = DesktopReposScrollCapabilityContract
+                    .scrollToVisibleActionName
             } else {
                 boundaryActionNames = nil
                 scrollToVisibleActionName = nil
