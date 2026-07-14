@@ -107,4 +107,18 @@ import Testing
         #expect(readiness.contains("surface-state.json"))
         #expect(readiness.contains("quiescent"))
     }
+
+    @Test func settledGeometryRunnerUsesTheReadinessApprovedPrivateWorkspacePrefix() throws {
+        let runner = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("scripts/capture-settled-geometry.sh")
+        )
+        let readiness = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift")
+        )
+
+        #expect(runner.contains(#"/tmp/neondiff-desktop-evaluation.XXXXXXXX"#))
+        #expect(readiness.contains(#"^neondiff-desktop-evaluation\.[A-Za-z0-9]{8}$"#))
+    }
 }

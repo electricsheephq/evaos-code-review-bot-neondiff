@@ -81,7 +81,7 @@ write_status() {
 
 write_status incomplete setup capture_in_progress incomplete not_emitted
 
-tmp_root=$(/usr/bin/mktemp -d "/tmp/neondiff-settled-geometry.XXXXXXXX")
+tmp_root=$(/usr/bin/mktemp -d "/tmp/neondiff-desktop-evaluation.XXXXXXXX")
 /bin/chmod 700 "$tmp_root"
 tmp_mode=$(/usr/bin/stat -f '%Lp' "$tmp_root" 2>/dev/null || /usr/bin/stat -c '%a' "$tmp_root")
 [ "$tmp_mode" = 700 ] \
