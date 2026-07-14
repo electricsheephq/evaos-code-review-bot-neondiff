@@ -35,10 +35,14 @@ struct ContentView: View {
 
             VStack(spacing: 0) {
                 NeonChromeStrip(model: model, updateController: updateController)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("neondiff-chrome")
                     .ignoresSafeArea(.container, edges: .top)
 
                 HStack(spacing: 0) {
                     SidebarView(selection: $model.selectedSection)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("neondiff-sidebar")
                         .frame(width: 230)
 
                     Rectangle()
@@ -50,6 +54,8 @@ struct ContentView: View {
                         updateController: updateController,
                         onSurfaceReady: model.isOnboardingPresented ? nil : onSurfaceReady
                     )
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("neondiff-detail")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }

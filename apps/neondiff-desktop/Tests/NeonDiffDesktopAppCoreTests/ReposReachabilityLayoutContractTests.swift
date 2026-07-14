@@ -36,6 +36,20 @@ import Testing
         #expect(pageStack.lowerBound < readOnlyBoundary.lowerBound)
         #expect(source.contains(".frame(height: 360)"))
         #expect(!source.contains(".frame(minHeight: 360)"))
+        #expect(source.contains(".accessibilityIdentifier(\"neondiff-repos-outer-scroll\")"))
         #expect(source.contains(".accessibilityIdentifier(\"neondiff-repos-boundary\")"))
+    }
+
+    @Test func settledGeometryBindingsPreserveContainedNativeRegions() throws {
+        let contentView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/ContentView.swift")
+        let source = try sourceBoundaryText(at: contentView)
+
+        for identifier in ["neondiff-chrome", "neondiff-sidebar", "neondiff-detail"] {
+            #expect(source.contains(".accessibilityIdentifier(\"\(identifier)\")"))
+        }
+        #expect(source.components(separatedBy: ".accessibilityElement(children: .contain)").count - 1 >= 3)
+        #expect(source.contains("SidebarView(selection: $model.selectedSection)"))
+        #expect(source.contains("DetailView("))
     }
 }
