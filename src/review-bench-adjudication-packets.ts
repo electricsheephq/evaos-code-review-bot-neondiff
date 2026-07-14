@@ -994,7 +994,7 @@ function resolveDisagreements(
   packet: ReviewBenchAdjudicationPacketV1,
   primary: ReviewBenchComparableResponseV1,
   secondary: ReviewBenchComparableResponseV1,
-  resolver: ReviewBenchAdjudicationResolverResponseV1,
+  resolver: ReviewBenchComparableResponseV1,
   queue: ReviewBenchAdjudicationDisagreementV1,
   primaryById: Map<string, ReviewBenchAdjudicationDecisionV1>,
   secondaryById: Map<string, ReviewBenchAdjudicationDecisionV1>
