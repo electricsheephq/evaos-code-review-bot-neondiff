@@ -236,6 +236,43 @@ invalidate an existing macOS TCC Screen Recording or Accessibility grant. A TCC
 failure limits this local dev proof; it is not a Repos reachability result and
 must not be bypassed by touching privacy settings from the runner.
 
+## Contract-First Cross-Tab Settled Geometry
+
+`DesktopSettledGeometryTrace` is the strict schema seed for the next #517
+transition slice. Schema 1 admits only one same-process scenario:
+`overview -> repos -> overview`, starting from the public-safe `tab-overview`
+fixture at `1040x680`. Every checkpoint must explicitly report readiness and
+quiescence, complete within five seconds, and contain at least three stable
+samples at the 100ms cadence. The trace binds one positive PID and window
+number for the complete sequence. Every frame uses one explicit
+`global-top-left` screen coordinate space. A future runner must normalize
+AppKit-authored window/content frames into that convention before comparison
+with Accessibility frames; mixed or implicit coordinate systems are invalid.
+
+Every sample requires finite window/content frames plus uniquely identified
+chrome, sidebar, and detail regions. The Repos checkpoint additionally requires
+the outer page scroll and bottom sentinel bindings. The validator rejects
+unknown fields, missing or extra regions, invalid containment, sidebar/detail
+overlap, a Repos scroll outside the detail region, a sentinel that does not
+share the scroll surface's horizontal extent, within-checkpoint drift, and
+cross-transition window/content/chrome/sidebar/detail drift above one point.
+Sentinel presence is not treated as bottom reachability; that remains a later
+interaction proof.
+
+`DesktopSettledGeometryScenarioCoordinator` is a single-use, fail-closed state
+machine for that exact sequence. `NeonDiffDesktopGeometryChecks` emits one
+typed `input`, `contract`, `sequence`, or `geometry` result for an absolute
+regular file named `settled-geometry.json`.
+
+This slice establishes contracts and DEBUG-fixture-only Accessibility bindings.
+The chrome/sidebar/detail container probes are default-off and enabled only
+when a resolved evaluation context exists, so normal debug launches and release
+builds retain the production VoiceOver hierarchy. It does not run a real
+scenario, emit a capture packet, produce `.xcresult`, or prove click-to-click
+stability. A later focused runner must acquire all three checkpoints from one
+freshly launched DEBUG fixture PID before any real #517 transition claim is
+allowed.
+
 The Swift desktop gate runs the fixture checks whenever evaluation sources or
 catalog files change. It keeps the normal debug bundle separate, stages an
 explicit release bundle under `dist-release`, and scans only the release

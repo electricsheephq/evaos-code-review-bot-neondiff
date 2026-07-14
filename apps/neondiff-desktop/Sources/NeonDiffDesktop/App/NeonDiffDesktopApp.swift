@@ -60,6 +60,7 @@ struct NeonDiffDesktopApp: App {
                 updateController: updateController,
                 preferredColorScheme: preferredColorScheme,
                 rootAccessibilityIdentifier: rootAccessibilityIdentifier,
+                enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled,
                 onSurfaceReady: evaluationSurfaceReadyAction
             )
                 .frame(
@@ -187,6 +188,14 @@ struct NeonDiffDesktopApp: App {
             ?? "neondiff.desktop.root"
 #else
         "neondiff.desktop.root"
+#endif
+    }
+
+    private var evaluationRegionBindingsEnabled: Bool {
+#if DEBUG
+        evaluationContext != nil
+#else
+        false
 #endif
     }
 

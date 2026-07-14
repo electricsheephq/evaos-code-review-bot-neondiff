@@ -9,6 +9,7 @@ struct ReposView: View {
         ScrollView(.vertical) {
             pageContent
         }
+        .accessibilityIdentifier("neondiff-repos-outer-scroll")
         .scrollContentBackground(.hidden)
         .scrollIndicators(.visible, axes: .vertical)
     }

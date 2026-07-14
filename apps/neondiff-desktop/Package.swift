@@ -60,6 +60,10 @@ let package = Package(
             dependencies: ["NeonDiffDesktopEvaluationSupport"]
         ),
         .executableTarget(
+            name: "NeonDiffDesktopGeometryChecks",
+            dependencies: ["NeonDiffDesktopEvaluationSupport"]
+        ),
+        .executableTarget(
             name: "NeonDiffDesktopFixtureResolve",
             dependencies: ["NeonDiffDesktopEvaluationSupport"]
         ),
