@@ -1243,7 +1243,7 @@ function parseDiffAnchors(diff: string): {
 }
 
 function isAllowedGitDiffMetadataLine(line: string): boolean {
-  return /^(?:index [0-9a-f]{7,64}\.\.[0-9a-f]{7,64}(?: [0-7]{6})?|(?:new file|deleted file|old|new) mode [0-7]{6})$/.test(line);
+  return /^(?:index [0-9a-f]{4,64}\.\.[0-9a-f]{4,64}(?: [0-7]{6})?|(?:new file|deleted file|old|new) mode [0-7]{6})$/.test(line);
 }
 
 function readCanonicalJson<T>(path: string, maximumBytes: number, label: string): T {

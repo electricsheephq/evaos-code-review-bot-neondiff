@@ -490,6 +490,25 @@ describe("review-bench adjudication packet preparation", () => {
     }
   });
 
+  it("accepts Git-generated index metadata with short object abbreviations", () => {
+    for (const abbreviatedIndex of [
+      "index 7f72..9485 100644",
+      "index 7f72a..9485b 100644",
+      "index 7f72ab..9485bc 100644"
+    ]) {
+      const input = fixture();
+      const abbreviatedDiff = DIFF.replace("index 1111111..2222222 100644", abbreviatedIndex);
+      input.candidate.sourceArtifactSha256 = sha256(abbreviatedDiff);
+      writeJson(input.candidatePath, input.candidate);
+      writeFileSync(
+        join(input.artifactsDirectory, `${input.candidate.sourceArtifactSha256}.diff`),
+        abbreviatedDiff
+      );
+
+      expect(() => prepare(input), abbreviatedIndex).not.toThrow();
+    }
+  });
+
   it("rejects unified diff hunks whose declared line counts do not match their body", () => {
     const input = fixture();
     const malformedDiff = [
