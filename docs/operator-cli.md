@@ -130,6 +130,17 @@ evaos-review-bot status --config config.local.json
   retain stdout and branch on the emitted JSON `status` before deciding that a
   nonzero exit represents a broken run. A resolver may later close only the
   frozen disagreements; these commands do not assemble or admit Corpus v1.
+- `review-bench verify-advisory-adjudication`: setup-safe, provider-free Phase 1
+  routing for two distinct blinded `agent:*` responses over a packet bound to
+  `review-bench-phase1-advisory-protocol/v1`. Human-only Corpus v1 protocol
+  packets are rejected rather than silently reinterpreted.
+  Agreement emits only `pilot_ready`; disagreement preserves an immutable
+  receipt, exits with code 1, and requires a later canonical `human:*` resolver.
+  Every advisory receipt declares `profile: phase1_advisory`,
+  `corpusV1Eligible: false`, and `publicationEligible: false`. It cannot satisfy
+  Corpus v1, source admission, promotion, or publication gates. The receipt
+  records asserted logical identities and does not authenticate separate agent processes;
+  it also does not authenticate providers, models, or actual execution independence.
 - `review-bench verify-sources`: setup-safe Corpus v1 admission gate. It reads a
   corpus manifest, digest-named public source diffs, and digest-named
   `<oracle-evidence-sha256>.oracle.json` packets plus

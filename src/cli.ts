@@ -1744,9 +1744,31 @@ async function main(): Promise<void> {
       if (summary.status === "needs_resolution") process.exitCode = 1;
       return;
     }
+    if (subcommand === "verify-advisory-adjudication") {
+      if (!args.packet) throw new Error("--packet is required for review-bench verify-advisory-adjudication");
+      if (!args.primary) throw new Error("--primary is required for review-bench verify-advisory-adjudication");
+      if (!args.secondary) throw new Error("--secondary is required for review-bench verify-advisory-adjudication");
+      if (!args.receipt) throw new Error("--receipt is required for review-bench verify-advisory-adjudication");
+      const receiptPath = parseSingleArg(args.receipt, "--receipt");
+      assertEvalOutputDirSafe(dirname(receiptPath));
+      const { verifyReviewBenchAdvisoryAdjudicationResponses } =
+        await import("./review-bench-adjudication-packets.js");
+      const summary = verifyReviewBenchAdvisoryAdjudicationResponses({
+        packetPath: parseSingleArg(args.packet, "--packet"),
+        primaryResponsePath: parseSingleArg(args.primary, "--primary"),
+        secondaryResponsePath: parseSingleArg(args.secondary, "--secondary"),
+        ...(args.resolver === undefined ? {} : {
+          resolverResponsePath: parseSingleArg(args.resolver, "--resolver")
+        }),
+        receiptPath
+      });
+      console.log(stringifyRedactedJson({ command: "review-bench", subcommand, ...summary }));
+      if (summary.status === "needs_human_resolution") process.exitCode = 1;
+      return;
+    }
     if (subcommand !== "verify-sources") {
       throw new Error(
-        "review-bench subcommand must be: verify-sources, prepare-adjudication, or verify-adjudication"
+        "review-bench subcommand must be: verify-sources, prepare-adjudication, verify-adjudication, or verify-advisory-adjudication"
       );
     }
     if (!args.corpus) throw new Error("--corpus is required for review-bench verify-sources");
@@ -3295,7 +3317,7 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     ]
   },
   "review-bench": {
-    description: "Prepare and verify private Corpus v1 human-adjudication evidence or verify public sources; no model/provider execution or publication.",
+    description: "Prepare blinded packets, verify private human or Phase 1 advisory evidence, or verify public sources; no model/provider execution or publication.",
     flags: [
       { name: "--candidate", description: "Canonical candidate manifest for prepare-adjudication." },
       { name: "--output", description: "Fresh private output directory for prepare-adjudication." },
@@ -3434,6 +3456,7 @@ function buildHelp(command?: string) {
         "review-bench verify-sources",
         "review-bench prepare-adjudication",
         "review-bench verify-adjudication",
+        "review-bench verify-advisory-adjudication",
         "review-lenses-eval",
         "outcome-ledger",
         "outcome-scorecard",
@@ -3499,6 +3522,7 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts review-bench verify-sources --corpus /path/to/corpus.json --artifacts /path/to/source-artifacts --receipt /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/source-admission.json",
       "npx tsx src/cli.ts review-bench prepare-adjudication --candidate /path/to/candidate.json --artifacts /path/to/source-artifacts --output /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/adjudication-packet",
       "npx tsx src/cli.ts review-bench verify-adjudication --packet /path/to/packet.json --primary /path/to/primary.json --secondary /path/to/secondary.json --receipt /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/adjudication-receipt.json",
+      "npx tsx src/cli.ts review-bench verify-advisory-adjudication --packet /path/to/packet.json --primary /path/to/agent-a.json --secondary /path/to/agent-b.json --receipt /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/advisory-receipt.json",
       "npx tsx src/cli.ts review-lenses-eval --input-dir tests/fixtures/review-lenses-eval --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) --dry-run true",
       "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
       "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",

@@ -59,7 +59,8 @@ export function classifyCommandLicensePolicy(input: {
   if (input.command === "review-bench" && (
     input.subcommand === "verify-sources" ||
     input.subcommand === "prepare-adjudication" ||
-    input.subcommand === "verify-adjudication"
+    input.subcommand === "verify-adjudication" ||
+    input.subcommand === "verify-advisory-adjudication"
   )) {
     return { mode: "setup_safe" };
   }

@@ -173,6 +173,19 @@ oracle assembly, live source verification, and final admission remain separate
 gates. Packet and response material stays in the private Lexar evaluation root,
 not in fixtures or public documentation.
 
+Phase 1 model selection has a separate
+`review-bench verify-advisory-adjudication` command. It accepts exactly two
+distinct canonical `agent:*` responses and may use one later canonical
+`human:*` response only to resolve a frozen disagreement. Advisory packets must
+bind `review-bench-phase1-advisory-protocol/v1`; the verifier rejects packets
+bound to the human-only Corpus v1 protocol. Its receipt is a
+different schema with `profile: phase1_advisory`,
+`corpusV1Eligible: false`, and `publicationEligible: false`; `pilot_ready`
+means only that the private advisory screen may proceed. This evidence cannot
+assemble or admit Corpus v1 and cannot support a promotion or public claim. An
+advisory receipt records asserted logical identities and does not authenticate separate agent processes;
+it also does not authenticate providers, models, or actual execution independence.
+
 ## Supported provenance
 
 Corpus v1 supports immutable public GitHub pull-request, commit, and revert

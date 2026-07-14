@@ -17,7 +17,10 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   prepareReviewBenchAdjudicationPacket,
+  verifyReviewBenchAdvisoryAdjudicationResponses,
   verifyReviewBenchAdjudicationResponses,
+  type ReviewBenchAdvisoryAdjudicationResponseV1,
+  type ReviewBenchAdvisoryAdjudicationReceiptV1,
   type ReviewBenchAdjudicationCandidateV1,
   type ReviewBenchAdjudicationPacketV1,
   type ReviewBenchAdjudicationResponseV1,
@@ -29,6 +32,7 @@ const PREPARED_AT = "2026-07-13T08:00:00.000Z";
 const VERIFIED_AT = "2026-07-13T10:00:00.000Z";
 const RUBRIC = "# review-bench-rubric/v1\nActionability and severity definitions.\n";
 const PROTOCOL = "# review-bench-adjudication-protocol/v1\nIndependent blinded adjudication.\n";
+const ADVISORY_PROTOCOL = "# review-bench-phase1-advisory-protocol/v1\nIndependent blinded agent advisory adjudication.\n";
 const DIFF = [
   "diff --git a/src/state.ts b/src/state.ts",
   "index 1111111..2222222 100644",
@@ -126,6 +130,24 @@ function prepare(input = fixture()): ReturnType<typeof fixture> & { packetPath: 
   return { ...input, packetPath, packet: JSON.parse(readFileSync(packetPath, "utf8")) as ReviewBenchAdjudicationPacketV1 };
 }
 
+function advisoryFixture(): ReturnType<typeof fixture> {
+  const input = fixture();
+  input.candidate.protocolVersion = "review-bench-phase1-advisory-protocol/v1";
+  input.candidate.protocolSha256 = sha256(ADVISORY_PROTOCOL);
+  input.candidate.annotationUniverse.methodVersion = input.candidate.protocolVersion;
+  input.candidate.annotationUniverse.methodSha256 = input.candidate.protocolSha256;
+  writeFileSync(input.candidatePath, `${stableJson(input.candidate)}\n`);
+  writeFileSync(
+    join(input.artifactsDirectory, `${input.candidate.protocolSha256}.protocol.md`),
+    ADVISORY_PROTOCOL
+  );
+  return input;
+}
+
+function prepareAdvisory(): ReturnType<typeof prepare> {
+  return prepare(advisoryFixture());
+}
+
 function response(
   packet: ReviewBenchAdjudicationPacketV1,
   adjudicatorId: string,
@@ -167,6 +189,29 @@ function resolver(
     completedAt: "2026-07-13T09:30:00.000Z",
     blindedToProviderIdentity: true,
     reviewedDisagreement: true,
+    ...overrides
+  };
+}
+
+function agentResponse(
+  packet: ReviewBenchAdjudicationPacketV1,
+  adjudicatorId: string,
+  overrides: Partial<ReviewBenchAdvisoryAdjudicationResponseV1> = {}
+): ReviewBenchAdvisoryAdjudicationResponseV1 {
+  return {
+    schemaVersion: "review-bench-advisory-adjudication-response/v1",
+    packetFingerprint: packet.packetFingerprint,
+    adjudicatorId,
+    verdict: "defect_present",
+    decisions: packet.annotationUniverse.candidates.map((candidate) => ({
+      candidateId: candidate.id,
+      actionability: "actionable" as const,
+      severity: "P1" as const
+    })),
+    rationale: "The blinded advisory reviewer found a correctness risk.",
+    completedAt: "2026-07-13T09:00:00.000Z",
+    blindedToProviderIdentity: true,
+    blindedToPeerDecision: true,
     ...overrides
   };
 }
@@ -685,6 +730,33 @@ describe("review-bench adjudication response verification", () => {
     expect(receipt.resolvedDecisionSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(receipt.disagreementQueueSha256).toBe(sha256(stableJson(receipt.disagreementQueue)));
     expect(receipt.disagreementQueueSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.keys(receipt).sort()).toEqual([
+      "actionabilityBothActionableCount",
+      "actionabilityNeitherCount",
+      "actionabilityPrimaryOnlyCount",
+      "actionabilitySecondaryOnlyCount",
+      "artifactBothCleanCount",
+      "artifactBothDefectCount",
+      "artifactPrimaryOnlyDefectCount",
+      "artifactSecondaryOnlyDefectCount",
+      "disagreementCount",
+      "disagreementQueue",
+      "disagreementQueueSha256",
+      "packetFingerprint",
+      "packetSha256",
+      "primaryAdjudicatorId",
+      "primaryResponseSha256",
+      "receiptKind",
+      "receiptSha256",
+      "resolvedDecisionSha256",
+      "schemaVersion",
+      "secondaryAdjudicatorId",
+      "secondaryResponseSha256",
+      "severityBothActionableCount",
+      "severityWithinOneTierCount",
+      "status",
+      "verifiedAt"
+    ]);
     expect(statSync(paths.receiptPath).mode & 0o777).toBe(0o600);
     expect(() => verifyReviewBenchAdjudicationResponses({
       packetPath: prepared.packetPath,
@@ -993,5 +1065,286 @@ describe("review-bench adjudication response verification", () => {
       ...duplicatePaths,
       verifiedAt: VERIFIED_AT
     })).toThrow(/canonical|duplicate/i);
+  });
+
+  it("rejects Phase 1 advisory protocol packets from the human Corpus v1 receipt path", () => {
+    const prepared = prepareAdvisory();
+    const paths = responsePaths(
+      prepared,
+      response(prepared.packet, "human:one"),
+      response(prepared.packet, "human:two")
+    );
+
+    expect(() => verifyReviewBenchAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      ...paths,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/rejects the Phase 1 advisory protocol/i);
+  });
+});
+
+describe("review-bench advisory agent response verification", () => {
+  it("emits only a Corpus-ineligible pilot-ready receipt when two blinded agents agree", () => {
+    const prepared = prepareAdvisory();
+    const paths = responsePaths(
+      prepared,
+      agentResponse(prepared.packet, "agent:blind-a"),
+      agentResponse(prepared.packet, "agent:blind-b")
+    );
+
+    const summary = verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      primaryResponsePath: paths.primaryResponsePath,
+      secondaryResponsePath: paths.secondaryResponsePath,
+      receiptPath: paths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    });
+    const receipt = JSON.parse(readFileSync(paths.receiptPath, "utf8")) as ReviewBenchAdvisoryAdjudicationReceiptV1;
+
+    expect(summary).toMatchObject({ status: "pilot_ready", receiptKind: "agent_agreement" });
+    expect(receipt).toMatchObject({
+      schemaVersion: "review-bench-advisory-adjudication-receipt/v1",
+      profile: "phase1_advisory",
+      claimClass: "advisory_model_selection_only",
+      corpusV1Eligible: false,
+      publicationEligible: false,
+      advisoryProtocolVersion: "review-bench-phase1-advisory-protocol/v1",
+      advisoryProtocolSha256: sha256(ADVISORY_PROTOCOL),
+      status: "pilot_ready",
+      receiptKind: "agent_agreement",
+      primaryAdjudicatorId: "agent:blind-a",
+      secondaryAdjudicatorId: "agent:blind-b"
+    });
+  });
+
+  it("fails closed on agent disagreement until a distinct human resolves it", () => {
+    const prepared = prepareAdvisory();
+    const secondary = agentResponse(prepared.packet, "agent:blind-b", {
+      verdict: "verified_clean",
+      decisions: [{
+        candidateId: prepared.packet.annotationUniverse.candidates[0]!.id,
+        actionability: "not_actionable"
+      }],
+      rationale: "The blinded advisory reviewer found no actionable defect."
+    });
+    const unresolved = responsePaths(
+      prepared,
+      agentResponse(prepared.packet, "agent:blind-a"),
+      secondary
+    );
+
+    const unresolvedSummary = verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      primaryResponsePath: unresolved.primaryResponsePath,
+      secondaryResponsePath: unresolved.secondaryResponsePath,
+      receiptPath: unresolved.receiptPath,
+      verifiedAt: VERIFIED_AT
+    });
+    expect(unresolvedSummary).toMatchObject({
+      status: "needs_human_resolution",
+      receiptKind: "agent_disagreement"
+    });
+
+    const resolvedReceiptPath = join(prepared.root, "resolved-advisory-receipt.json");
+    const resolverPath = join(prepared.root, "human-resolver.json");
+    writeJson(resolverPath, resolver(prepared.packet));
+    const resolvedSummary = verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      primaryResponsePath: unresolved.primaryResponsePath,
+      secondaryResponsePath: unresolved.secondaryResponsePath,
+      resolverResponsePath: resolverPath,
+      receiptPath: resolvedReceiptPath,
+      verifiedAt: VERIFIED_AT
+    });
+    expect(resolvedSummary).toMatchObject({ status: "pilot_ready", receiptKind: "human_resolved" });
+  });
+
+  it("keeps agent and human identities separated across advisory and Corpus v1 verification", () => {
+    const prepared = prepareAdvisory();
+    const advisoryPaths = responsePaths(
+      prepared,
+      agentResponse(prepared.packet, "human:not-an-agent"),
+      agentResponse(prepared.packet, "agent:blind-b")
+    );
+    expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      primaryResponsePath: advisoryPaths.primaryResponsePath,
+      secondaryResponsePath: advisoryPaths.secondaryResponsePath,
+      receiptPath: advisoryPaths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/canonical ASCII agent:\*/i);
+
+    const humanPrepared = prepare();
+    const humanPaths = responsePaths(
+      humanPrepared,
+      response(humanPrepared.packet, "agent:blind-a"),
+      response(humanPrepared.packet, "human:two")
+    );
+    expect(() => verifyReviewBenchAdjudicationResponses({
+      packetPath: humanPrepared.packetPath,
+      ...humanPaths,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/canonical ASCII human:\*/i);
+  });
+
+  it("exposes a setup-safe CLI that exits one with a structured human-resolution status", () => {
+    const prepared = prepareAdvisory();
+    const paths = responsePaths(
+      prepared,
+      agentResponse(prepared.packet, "agent:blind-a"),
+      agentResponse(prepared.packet, "agent:blind-b", {
+        verdict: "verified_clean",
+        decisions: [{
+          candidateId: prepared.packet.annotationUniverse.candidates[0]!.id,
+          actionability: "not_actionable"
+        }],
+        rationale: "The blinded advisory reviewer found no actionable defect."
+      })
+    );
+    const result = spawnSync("npx", [
+      "tsx", "src/cli.ts", "review-bench", "verify-advisory-adjudication",
+      "--packet", prepared.packetPath,
+      "--primary", paths.primaryResponsePath,
+      "--secondary", paths.secondaryResponsePath,
+      "--receipt", paths.receiptPath
+    ], { cwd: process.cwd(), encoding: "utf8" });
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "needs_human_resolution" });
+  }, 20_000);
+
+  it("rejects packets bound to the human-only Corpus v1 adjudication protocol", () => {
+    const prepared = prepare();
+    const paths = responsePaths(
+      prepared,
+      agentResponse(prepared.packet, "agent:blind-a"),
+      agentResponse(prepared.packet, "agent:blind-b")
+    );
+
+    expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      primaryResponsePath: paths.primaryResponsePath,
+      secondaryResponsePath: paths.secondaryResponsePath,
+      receiptPath: paths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/Phase 1 advisory protocol/i);
+  });
+
+  it("rejects advisory identity, schema, completeness, and chronology violations", () => {
+    const cases: Array<[string, (packet: ReviewBenchAdjudicationPacketV1) => [unknown, unknown]]> = [
+      ["distinct", (packet) => [
+        agentResponse(packet, "agent:same"),
+        agentResponse(packet, "agent:same")
+      ]],
+      ["canonical", (packet) => [
+        agentResponse(packet, "Agent:blind-a"),
+        agentResponse(packet, "agent:blind-b")
+      ]],
+      ["canonical", (packet) => [
+        agentResponse(packet, "agent:blіnd-a"),
+        agentResponse(packet, "agent:blind-b")
+      ]],
+      ["schemaVersion", (packet) => [
+        response(packet, "agent:blind-a"),
+        agentResponse(packet, "agent:blind-b")
+      ]],
+      ["complete", (packet) => [
+        agentResponse(packet, "agent:blind-a", { decisions: [] }),
+        agentResponse(packet, "agent:blind-b")
+      ]],
+      ["chronology", (packet) => [
+        agentResponse(packet, "agent:blind-a", { completedAt: "2026-07-13T06:00:00.000Z" }),
+        agentResponse(packet, "agent:blind-b")
+      ]]
+    ];
+
+    for (const [expected, build] of cases) {
+      const prepared = prepareAdvisory();
+      const [primary, secondary] = build(prepared.packet);
+      const paths = responsePaths(prepared, primary, secondary);
+      expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
+        packetPath: prepared.packetPath,
+        primaryResponsePath: paths.primaryResponsePath,
+        secondaryResponsePath: paths.secondaryResponsePath,
+        receiptPath: paths.receiptPath,
+        verifiedAt: VERIFIED_AT
+      })).toThrow(new RegExp(expected, "i"));
+    }
+  });
+
+  it("requires a human resolver only for disagreements and preserves no-clobber and tamper checks", () => {
+    const disagreement = prepareAdvisory();
+    const secondary = agentResponse(disagreement.packet, "agent:blind-b", {
+      verdict: "verified_clean",
+      decisions: [{
+        candidateId: disagreement.packet.annotationUniverse.candidates[0]!.id,
+        actionability: "not_actionable"
+      }],
+      rationale: "The blinded advisory reviewer found no actionable defect."
+    });
+    const disagreementPaths = responsePaths(
+      disagreement,
+      agentResponse(disagreement.packet, "agent:blind-a"),
+      secondary
+    );
+    const agentResolverPath = join(disagreement.root, "agent-resolver.json");
+    writeJson(agentResolverPath, resolver(disagreement.packet, { adjudicatorId: "agent:resolver" }));
+    expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: disagreement.packetPath,
+      primaryResponsePath: disagreementPaths.primaryResponsePath,
+      secondaryResponsePath: disagreementPaths.secondaryResponsePath,
+      resolverResponsePath: agentResolverPath,
+      receiptPath: disagreementPaths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/canonical ASCII human:\*/i);
+
+    const agreement = prepareAdvisory();
+    const agreementPaths = responsePaths(
+      agreement,
+      agentResponse(agreement.packet, "agent:blind-a"),
+      agentResponse(agreement.packet, "agent:blind-b")
+    );
+    const unnecessaryResolverPath = join(agreement.root, "unnecessary-resolver.json");
+    writeJson(unnecessaryResolverPath, resolver(agreement.packet));
+    expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: agreement.packetPath,
+      primaryResponsePath: agreementPaths.primaryResponsePath,
+      secondaryResponsePath: agreementPaths.secondaryResponsePath,
+      resolverResponsePath: unnecessaryResolverPath,
+      receiptPath: agreementPaths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/unnecessary|no disagreement/i);
+
+    verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: agreement.packetPath,
+      primaryResponsePath: agreementPaths.primaryResponsePath,
+      secondaryResponsePath: agreementPaths.secondaryResponsePath,
+      receiptPath: agreementPaths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    });
+    expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: agreement.packetPath,
+      primaryResponsePath: agreementPaths.primaryResponsePath,
+      secondaryResponsePath: agreementPaths.secondaryResponsePath,
+      receiptPath: agreementPaths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/exist|no-clobber/i);
+
+    const tampered = prepareAdvisory();
+    const sourcePath = join(tampered.outputDirectory, `${tampered.candidate.sourceArtifactSha256}.diff`);
+    chmodSync(sourcePath, 0o600);
+    writeFileSync(sourcePath, `${DIFF}tampered\n`);
+    const tamperedPaths = responsePaths(
+      tampered,
+      agentResponse(tampered.packet, "agent:blind-a"),
+      agentResponse(tampered.packet, "agent:blind-b")
+    );
+    expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: tampered.packetPath,
+      primaryResponsePath: tamperedPaths.primaryResponsePath,
+      secondaryResponsePath: tamperedPaths.secondaryResponsePath,
+      receiptPath: tamperedPaths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/sha256|digest|tamper/i);
   });
 });
