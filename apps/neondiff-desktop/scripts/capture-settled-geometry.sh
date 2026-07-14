@@ -259,8 +259,13 @@ cp "$tmp_root/capture-status.json" "$pending/capture-status.json"
 cp "$tmp_root/debug-app-tree.json" "$pending/debug-app-tree.json"
 mv "$pending" "$case_dir"
 
+case_trace="$case_dir/settled-geometry.json"
+checker_input="$settled"
+checker_trace_sha_before=$(shasum -a 256 "$checker_input" | awk '{print $1}')
+case_trace_sha_before=$(shasum -a 256 "$case_trace" | awk '{print $1}')
+[ "$checker_trace_sha_before" = "$case_trace_sha_before" ] \
+  || { write_status incomplete checker checked_artifact_mismatch incomplete not_emitted; exit 1; }
 checker_exit=0
-checker_input="$output/$case_dir/settled-geometry.json"
 if swift run --skip-build --package-path "$package_dir" \
   NeonDiffDesktopGeometryChecks "$checker_input" \
   >"validation/settled-geometry-check.json" \
@@ -281,8 +286,13 @@ jq -e '
   || { write_status incomplete checker checker_rejected incomplete not_emitted; exit 1; }
 [ "$checker_exit" -eq 0 ] \
   || { write_status incomplete checker checker_rejected incomplete not_emitted; exit "$checker_exit"; }
+checker_trace_sha_after=$(shasum -a 256 "$checker_input" | awk '{print $1}')
+case_trace_sha_after=$(shasum -a 256 "$case_trace" | awk '{print $1}')
+[ "$checker_trace_sha_before" = "$checker_trace_sha_after" ] \
+  && [ "$checker_trace_sha_after" = "$case_trace_sha_after" ] \
+  || { write_status incomplete checker checked_artifact_changed incomplete not_emitted; exit 1; }
 
-trace_sha=$(shasum -a 256 "$case_dir/settled-geometry.json" | awk '{print $1}')
+trace_sha=$checker_trace_sha_after
 app_tree_sha=$(jq -r '.sha256' "$case_dir/debug-app-tree.json")
 jq -n \
   --arg head "$head_sha" \
@@ -310,6 +320,9 @@ jq -e '
 cp "$tmp_root/packet-safety.json" "validation/packet-safety-scan.json"
 printf 'ok\n' >"validation/packet-safety-scan.ok"
 assert_clean_head
+final_trace_sha=$(shasum -a 256 "$case_trace" | awk '{print $1}')
+[ "$final_trace_sha" = "$trace_sha" ] \
+  || { write_status incomplete checker checked_artifact_changed passed not_emitted; exit 1; }
 # The proof rename below is the packet's sole publication commit marker. Keep
 # the status truthful even if the process is interrupted between the two
 # renames: the completed capture is ready for publication, but only proof-file

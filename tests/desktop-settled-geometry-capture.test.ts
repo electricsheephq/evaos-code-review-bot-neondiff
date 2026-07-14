@@ -284,8 +284,8 @@ describe("desktop settled geometry capture runner", () => {
     expect(statSync(harness.output).mode & 0o777).toBe(0o700);
     const commandLog = readFileSync(harness.commandLog, "utf8");
     expect(commandLog).toMatch(/capture --pid [0-9]+ --ready \/tmp\/[^ ]+\/ready\/ready\.json --output \/tmp\/[^ ]+\/capture\/settled-geometry\.json/);
-    expect(commandLog).toContain(
-      `NeonDiffDesktopGeometryChecks ${harness.output}/cases/overview-repos-overview/1040x680/settled-geometry.json`
+    expect(commandLog).toMatch(
+      /NeonDiffDesktopGeometryChecks \/tmp\/neondiff-desktop-evaluation\.[A-Za-z0-9]{8}\/capture\/settled-geometry\.json/
     );
   });
 
