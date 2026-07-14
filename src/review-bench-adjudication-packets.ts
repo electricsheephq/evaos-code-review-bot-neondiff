@@ -140,6 +140,18 @@ export interface ReviewBenchAdjudicationResolverResponseV1 {
   reviewedDisagreement: true;
 }
 
+export interface ReviewBenchAdvisoryAiResolverResponseV1 {
+  schemaVersion: "review-bench-advisory-ai-resolver-response/v1";
+  packetFingerprint: string;
+  adjudicatorId: string;
+  verdict: "defect_present" | "verified_clean";
+  decisions: ReviewBenchAdjudicationDecisionV1[];
+  rationale: string;
+  completedAt: string;
+  blindedToProviderIdentity: true;
+  reviewedDisagreement: true;
+}
+
 export interface ReviewBenchAdjudicationDisagreementV1 {
   schemaVersion: "review-bench-adjudication-disagreement/v1";
   verdictDisagreement?: {
@@ -219,6 +231,43 @@ export interface ReviewBenchAdvisoryAdjudicationReceiptV1 {
   receiptSha256: string;
 }
 
+export interface ReviewBenchAdvisoryAdjudicationReceiptV2 {
+  schemaVersion: "review-bench-advisory-adjudication-receipt/v2";
+  profile: "phase1_advisory";
+  claimClass: "advisory_model_selection_only";
+  corpusV1Eligible: false;
+  publicationEligible: false;
+  resolutionAuthority: "independent_ai";
+  advisoryProtocolVersion: typeof PHASE1_ADVISORY_PROTOCOL_VERSION;
+  advisoryProtocolSha256: string;
+  packetFingerprint: string;
+  packetSha256: string;
+  primaryResponseSha256: string;
+  secondaryResponseSha256: string;
+  resolverResponseSha256?: string;
+  primaryAdjudicatorId: string;
+  secondaryAdjudicatorId: string;
+  resolverAdjudicatorId?: string;
+  status: "pilot_ready" | "needs_ai_resolution";
+  receiptKind: "agent_agreement" | "agent_disagreement" | "ai_resolved";
+  artifactBothDefectCount: number;
+  artifactPrimaryOnlyDefectCount: number;
+  artifactSecondaryOnlyDefectCount: number;
+  artifactBothCleanCount: number;
+  actionabilityBothActionableCount: number;
+  actionabilityPrimaryOnlyCount: number;
+  actionabilitySecondaryOnlyCount: number;
+  actionabilityNeitherCount: number;
+  severityBothActionableCount: number;
+  severityWithinOneTierCount: number;
+  disagreementCount: number;
+  disagreementQueue: ReviewBenchAdjudicationDisagreementV1;
+  disagreementQueueSha256: string;
+  resolvedDecisionSha256?: string;
+  verifiedAt: string;
+  receiptSha256: string;
+}
+
 export interface ReviewBenchAdjudicationPrepareSummary {
   schemaVersion: "review-bench-adjudication-prepare-summary/v1";
   packetFingerprint: string;
@@ -239,9 +288,9 @@ export interface ReviewBenchAdjudicationVerifySummary {
 }
 
 export interface ReviewBenchAdvisoryAdjudicationVerifySummary {
-  schemaVersion: "review-bench-advisory-adjudication-verify-summary/v1";
-  status: ReviewBenchAdvisoryAdjudicationReceiptV1["status"];
-  receiptKind: ReviewBenchAdvisoryAdjudicationReceiptV1["receiptKind"];
+  schemaVersion: "review-bench-advisory-adjudication-verify-summary/v2";
+  status: ReviewBenchAdvisoryAdjudicationReceiptV2["status"];
+  receiptKind: ReviewBenchAdvisoryAdjudicationReceiptV2["receiptKind"];
   packetFingerprint: string;
   disagreementCount: number;
   resolvedDecisionSha256?: string;
@@ -535,7 +584,7 @@ export function verifyReviewBenchAdvisoryAdjudicationResponses(input: {
   const secondaryById = decisionMap(secondary.decisions);
   const queue = buildDisagreementQueue(packet, primary, secondary, primaryById, secondaryById);
   const disagreementCount = (queue.verdictDisagreement ? 1 : 0) + queue.candidateDisagreements.length;
-  let resolverRead: ReturnType<typeof readPrivateCanonicalJsonWithBytes<ReviewBenchAdjudicationResolverResponseV1>> | undefined;
+  let resolverRead: ReturnType<typeof readPrivateCanonicalJsonWithBytes<ReviewBenchAdvisoryAiResolverResponseV1>> | undefined;
   let resolvedDecisionSha256: string | undefined;
   if (disagreementCount === 0) {
     if (input.resolverResponsePath !== undefined) {
@@ -543,11 +592,14 @@ export function verifyReviewBenchAdvisoryAdjudicationResponses(input: {
     }
     resolvedDecisionSha256 = computeResolvedDecisionSha256(primary.verdict, primary.decisions);
   } else if (input.resolverResponsePath !== undefined) {
-    resolverRead = readPrivateCanonicalJsonWithBytes<ReviewBenchAdjudicationResolverResponseV1>(
-      input.resolverResponsePath, MAX_RESPONSE_BYTES, "resolver response"
+    resolverRead = readPrivateCanonicalJsonWithBytes<ReviewBenchAdvisoryAiResolverResponseV1>(
+      input.resolverResponsePath, MAX_RESPONSE_BYTES, "advisory AI resolver response"
     );
-    validateResolverResponse(resolverRead.value, packet);
+    validateAdvisoryAiResolverResponse(resolverRead.value, packet);
     const resolver = resolverRead.value;
+    if (resolver.adjudicatorId === primary.adjudicatorId || resolver.adjudicatorId === secondary.adjudicatorId) {
+      throw new Error("advisory AI resolver identity must be distinct from both initial adjudicators");
+    }
     const latestInitial = Math.max(Date.parse(primary.completedAt), Date.parse(secondary.completedAt));
     if (Date.parse(resolver.completedAt) <= latestInitial || Date.parse(resolver.completedAt) > Date.parse(verifiedAt)) {
       throw new Error("resolver chronology requires completion later than both initial responses and not after verifiedAt");
@@ -564,19 +616,20 @@ export function verifyReviewBenchAdvisoryAdjudicationResponses(input: {
   }
 
   const counts = computeAgreementCounts(packet, primary, secondary, primaryById, secondaryById);
-  const status: ReviewBenchAdvisoryAdjudicationReceiptV1["status"] =
-    resolvedDecisionSha256 === undefined ? "needs_human_resolution" : "pilot_ready";
-  const receiptKind: ReviewBenchAdvisoryAdjudicationReceiptV1["receiptKind"] = resolverRead !== undefined
-    ? "human_resolved"
+  const status: ReviewBenchAdvisoryAdjudicationReceiptV2["status"] =
+    resolvedDecisionSha256 === undefined ? "needs_ai_resolution" : "pilot_ready";
+  const receiptKind: ReviewBenchAdvisoryAdjudicationReceiptV2["receiptKind"] = resolverRead !== undefined
+    ? "ai_resolved"
     : status === "pilot_ready"
       ? "agent_agreement"
       : "agent_disagreement";
-  const receiptBasis: Omit<ReviewBenchAdvisoryAdjudicationReceiptV1, "receiptSha256"> = {
-    schemaVersion: "review-bench-advisory-adjudication-receipt/v1" as const,
+  const receiptBasis: Omit<ReviewBenchAdvisoryAdjudicationReceiptV2, "receiptSha256"> = {
+    schemaVersion: "review-bench-advisory-adjudication-receipt/v2" as const,
     profile: "phase1_advisory" as const,
     claimClass: "advisory_model_selection_only" as const,
     corpusV1Eligible: false as const,
     publicationEligible: false as const,
+    resolutionAuthority: "independent_ai" as const,
     advisoryProtocolVersion: PHASE1_ADVISORY_PROTOCOL_VERSION,
     advisoryProtocolSha256: packet.protocolSha256,
     packetFingerprint: packet.packetFingerprint,
@@ -596,7 +649,7 @@ export function verifyReviewBenchAdvisoryAdjudicationResponses(input: {
     ...(resolvedDecisionSha256 === undefined ? {} : { resolvedDecisionSha256 }),
     verifiedAt
   };
-  const receipt: ReviewBenchAdvisoryAdjudicationReceiptV1 = {
+  const receipt: ReviewBenchAdvisoryAdjudicationReceiptV2 = {
     ...receiptBasis,
     receiptSha256: sha256(stableJson(receiptBasis))
   };
@@ -607,7 +660,7 @@ export function verifyReviewBenchAdvisoryAdjudicationResponses(input: {
   publishImmutableFile(receiptParent, receiptLeaf, Buffer.from(`${stableJson(receipt)}\n`), "receipt");
   assertFinalArtifact(receiptPath, Buffer.from(`${stableJson(receipt)}\n`), "receipt output");
   return {
-    schemaVersion: "review-bench-advisory-adjudication-verify-summary/v1",
+    schemaVersion: "review-bench-advisory-adjudication-verify-summary/v2",
     status,
     receiptKind,
     packetFingerprint: packet.packetFingerprint,
@@ -824,10 +877,28 @@ function validateResolverResponse(
   if (response.reviewedDisagreement !== true) throw new Error("resolver must declare reviewedDisagreement");
 }
 
+function validateAdvisoryAiResolverResponse(
+  response: ReviewBenchAdvisoryAiResolverResponseV1,
+  packet: ReviewBenchAdjudicationPacketV1
+): void {
+  requireExactKeys(response, [
+    "schemaVersion", "packetFingerprint", "adjudicatorId", "verdict", "decisions", "rationale",
+    "completedAt", "blindedToProviderIdentity", "reviewedDisagreement"
+  ], "advisory AI resolver response");
+  if (response.schemaVersion !== "review-bench-advisory-ai-resolver-response/v1") {
+    throw new Error("advisory AI resolver response schemaVersion is invalid");
+  }
+  validateResponseCommon(response, packet, "advisory AI resolver response", "agent");
+  if (response.reviewedDisagreement !== true) {
+    throw new Error("advisory AI resolver must declare reviewedDisagreement");
+  }
+}
+
 function validateResponseCommon(
   response: Omit<ReviewBenchAdjudicationResponseV1, "schemaVersion" | "blindedToPeerDecision"> |
     Omit<ReviewBenchAdvisoryAdjudicationResponseV1, "schemaVersion" | "blindedToPeerDecision"> |
-    Omit<ReviewBenchAdjudicationResolverResponseV1, "schemaVersion" | "reviewedDisagreement">,
+    Omit<ReviewBenchAdjudicationResolverResponseV1, "schemaVersion" | "reviewedDisagreement"> |
+    Omit<ReviewBenchAdvisoryAiResolverResponseV1, "schemaVersion" | "reviewedDisagreement">,
   packet: ReviewBenchAdjudicationPacketV1,
   label: string,
   identityKind: "human" | "agent"

@@ -1763,7 +1763,7 @@ async function main(): Promise<void> {
         receiptPath
       });
       console.log(stringifyRedactedJson({ command: "review-bench", subcommand, ...summary }));
-      if (summary.status === "needs_human_resolution") process.exitCode = 1;
+      if (summary.status === "needs_ai_resolution") process.exitCode = 1;
       return;
     }
     if (subcommand !== "verify-sources") {

@@ -135,9 +135,12 @@ evaos-review-bot status --config config.local.json
   `review-bench-phase1-advisory-protocol/v1`. Human-only Corpus v1 protocol
   packets are rejected rather than silently reinterpreted.
   Agreement emits only `pilot_ready`; disagreement preserves an immutable
-  receipt, exits with code 1, and requires a later canonical `human:*` resolver.
+  receipt, exits with code 1 as `needs_ai_resolution`, and requires a later
+  third distinct canonical `agent:*` resolver using
+  `review-bench-advisory-ai-resolver-response/v1`.
   Every advisory receipt declares `profile: phase1_advisory`,
-  `corpusV1Eligible: false`, and `publicationEligible: false`. It cannot satisfy
+  `resolutionAuthority: independent_ai`, `corpusV1Eligible: false`, and
+  `publicationEligible: false`. It cannot satisfy
   Corpus v1, source admission, promotion, or publication gates. The receipt
   records asserted logical identities and does not authenticate separate agent processes;
   it also does not authenticate providers, models, or actual execution independence.

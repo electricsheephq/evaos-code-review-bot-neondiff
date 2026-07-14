@@ -181,6 +181,7 @@ describe("Review Bench public corpus gate", () => {
       expect(docs).toContain("review-bench-phase1-advisory-protocol/v1");
       expect(docs).toContain("corpusV1Eligible: false");
       expect(docs).toContain("publicationEligible: false");
+      expect(docs).toContain("resolutionAuthority: independent_ai");
       expect(docs).toContain("does not authenticate separate agent processes");
     }
   });
@@ -189,19 +190,25 @@ describe("Review Bench public corpus gate", () => {
     const root = mkdtempSync(join(tmpdir(), "review-bench-advisory-publication-gate-"));
     try {
       const advisoryPath = join(root, "advisory-receipt.json");
-      const advisory = {
-        schemaVersion: "review-bench-advisory-adjudication-receipt/v1",
-        profile: "phase1_advisory",
-        claimClass: "advisory_model_selection_only",
-        corpusV1Eligible: false,
-        publicationEligible: false,
-        receiptSha256: "a".repeat(64)
-      };
-      writeFileSync(advisoryPath, `${stableJson(advisory)}\n`);
+      for (const schemaVersion of [
+        "review-bench-advisory-adjudication-receipt/v1",
+        "review-bench-advisory-adjudication-receipt/v2"
+      ]) {
+        const advisory = {
+          schemaVersion,
+          profile: "phase1_advisory",
+          claimClass: "advisory_model_selection_only",
+          corpusV1Eligible: false,
+          publicationEligible: false,
+          resolutionAuthority: "independent_ai",
+          receiptSha256: "a".repeat(64)
+        };
+        writeFileSync(advisoryPath, `${stableJson(advisory)}\n`);
 
-      const rejected = runReceiptGate(advisoryPath, advisoryPath);
-      expect(rejected.status).not.toBe(0);
-      expect(`${rejected.stdout}\n${rejected.stderr}`).toMatch(/missing or unknown keys|invalid fields/i);
+        const rejected = runReceiptGate(advisoryPath, advisoryPath);
+        expect(rejected.status).not.toBe(0);
+        expect(`${rejected.stdout}\n${rejected.stderr}`).toMatch(/missing or unknown keys|invalid fields/i);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

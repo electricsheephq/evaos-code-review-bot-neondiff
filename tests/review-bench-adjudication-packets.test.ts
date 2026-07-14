@@ -20,7 +20,8 @@ import {
   verifyReviewBenchAdvisoryAdjudicationResponses,
   verifyReviewBenchAdjudicationResponses,
   type ReviewBenchAdvisoryAdjudicationResponseV1,
-  type ReviewBenchAdvisoryAdjudicationReceiptV1,
+  type ReviewBenchAdvisoryAdjudicationReceiptV2,
+  type ReviewBenchAdvisoryAiResolverResponseV1,
   type ReviewBenchAdjudicationCandidateV1,
   type ReviewBenchAdjudicationPacketV1,
   type ReviewBenchAdjudicationResponseV1,
@@ -186,6 +187,28 @@ function resolver(
       severity: "P2" as const
     })),
     rationale: "The disputed unit is resolved from the same blinded packet.",
+    completedAt: "2026-07-13T09:30:00.000Z",
+    blindedToProviderIdentity: true,
+    reviewedDisagreement: true,
+    ...overrides
+  };
+}
+
+function aiResolver(
+  packet: ReviewBenchAdjudicationPacketV1,
+  overrides: Partial<ReviewBenchAdvisoryAiResolverResponseV1> = {}
+): ReviewBenchAdvisoryAiResolverResponseV1 {
+  return {
+    schemaVersion: "review-bench-advisory-ai-resolver-response/v1",
+    packetFingerprint: packet.packetFingerprint,
+    adjudicatorId: "agent:high-reasoning-resolver",
+    verdict: "defect_present",
+    decisions: packet.annotationUniverse.candidates.map((candidate) => ({
+      candidateId: candidate.id,
+      actionability: "actionable" as const,
+      severity: "P2" as const
+    })),
+    rationale: "The independent AI resolver re-analyzed the supplied packet and frozen disagreement.",
     completedAt: "2026-07-13T09:30:00.000Z",
     blindedToProviderIdentity: true,
     reviewedDisagreement: true,
@@ -1099,15 +1122,16 @@ describe("review-bench advisory agent response verification", () => {
       receiptPath: paths.receiptPath,
       verifiedAt: VERIFIED_AT
     });
-    const receipt = JSON.parse(readFileSync(paths.receiptPath, "utf8")) as ReviewBenchAdvisoryAdjudicationReceiptV1;
+    const receipt = JSON.parse(readFileSync(paths.receiptPath, "utf8")) as ReviewBenchAdvisoryAdjudicationReceiptV2;
 
     expect(summary).toMatchObject({ status: "pilot_ready", receiptKind: "agent_agreement" });
     expect(receipt).toMatchObject({
-      schemaVersion: "review-bench-advisory-adjudication-receipt/v1",
+      schemaVersion: "review-bench-advisory-adjudication-receipt/v2",
       profile: "phase1_advisory",
       claimClass: "advisory_model_selection_only",
       corpusV1Eligible: false,
       publicationEligible: false,
+      resolutionAuthority: "independent_ai",
       advisoryProtocolVersion: "review-bench-phase1-advisory-protocol/v1",
       advisoryProtocolSha256: sha256(ADVISORY_PROTOCOL),
       status: "pilot_ready",
@@ -1117,7 +1141,7 @@ describe("review-bench advisory agent response verification", () => {
     });
   });
 
-  it("fails closed on agent disagreement until a distinct human resolves it", () => {
+  it("fails closed on agent disagreement until a third distinct AI resolves it", () => {
     const prepared = prepareAdvisory();
     const secondary = agentResponse(prepared.packet, "agent:blind-b", {
       verdict: "verified_clean",
@@ -1141,13 +1165,13 @@ describe("review-bench advisory agent response verification", () => {
       verifiedAt: VERIFIED_AT
     });
     expect(unresolvedSummary).toMatchObject({
-      status: "needs_human_resolution",
+      status: "needs_ai_resolution",
       receiptKind: "agent_disagreement"
     });
 
     const resolvedReceiptPath = join(prepared.root, "resolved-advisory-receipt.json");
-    const resolverPath = join(prepared.root, "human-resolver.json");
-    writeJson(resolverPath, resolver(prepared.packet));
+    const resolverPath = join(prepared.root, "ai-resolver.json");
+    writeJson(resolverPath, aiResolver(prepared.packet));
     const resolvedSummary = verifyReviewBenchAdvisoryAdjudicationResponses({
       packetPath: prepared.packetPath,
       primaryResponsePath: unresolved.primaryResponsePath,
@@ -1156,7 +1180,7 @@ describe("review-bench advisory agent response verification", () => {
       receiptPath: resolvedReceiptPath,
       verifiedAt: VERIFIED_AT
     });
-    expect(resolvedSummary).toMatchObject({ status: "pilot_ready", receiptKind: "human_resolved" });
+    expect(resolvedSummary).toMatchObject({ status: "pilot_ready", receiptKind: "ai_resolved" });
   });
 
   it("keeps agent and human identities separated across advisory and Corpus v1 verification", () => {
@@ -1187,7 +1211,7 @@ describe("review-bench advisory agent response verification", () => {
     })).toThrow(/canonical ASCII human:\*/i);
   });
 
-  it("exposes a setup-safe CLI that exits one with a structured human-resolution status", () => {
+  it("exposes a setup-safe CLI that exits one with a structured AI-resolution status", () => {
     const prepared = prepareAdvisory();
     const paths = responsePaths(
       prepared,
@@ -1210,7 +1234,7 @@ describe("review-bench advisory agent response verification", () => {
     ], { cwd: process.cwd(), encoding: "utf8" });
 
     expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({ status: "needs_human_resolution" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "needs_ai_resolution" });
   }, 20_000);
 
   it("rejects packets bound to the human-only Corpus v1 adjudication protocol", () => {
@@ -1272,7 +1296,7 @@ describe("review-bench advisory agent response verification", () => {
     }
   });
 
-  it("requires a human resolver only for disagreements and preserves no-clobber and tamper checks", () => {
+  it("requires a third distinct AI resolver only for disagreements and preserves no-clobber and tamper checks", () => {
     const disagreement = prepareAdvisory();
     const secondary = agentResponse(disagreement.packet, "agent:blind-b", {
       verdict: "verified_clean",
@@ -1287,16 +1311,27 @@ describe("review-bench advisory agent response verification", () => {
       agentResponse(disagreement.packet, "agent:blind-a"),
       secondary
     );
-    const agentResolverPath = join(disagreement.root, "agent-resolver.json");
-    writeJson(agentResolverPath, resolver(disagreement.packet, { adjudicatorId: "agent:resolver" }));
+    const duplicateResolverPath = join(disagreement.root, "duplicate-agent-resolver.json");
+    writeJson(duplicateResolverPath, aiResolver(disagreement.packet, { adjudicatorId: "agent:blind-a" }));
     expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
       packetPath: disagreement.packetPath,
       primaryResponsePath: disagreementPaths.primaryResponsePath,
       secondaryResponsePath: disagreementPaths.secondaryResponsePath,
-      resolverResponsePath: agentResolverPath,
+      resolverResponsePath: duplicateResolverPath,
       receiptPath: disagreementPaths.receiptPath,
       verifiedAt: VERIFIED_AT
-    })).toThrow(/canonical ASCII human:\*/i);
+    })).toThrow(/distinct/i);
+
+    const humanResolverPath = join(disagreement.root, "human-resolver.json");
+    writeJson(humanResolverPath, resolver(disagreement.packet));
+    expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
+      packetPath: disagreement.packetPath,
+      primaryResponsePath: disagreementPaths.primaryResponsePath,
+      secondaryResponsePath: disagreementPaths.secondaryResponsePath,
+      resolverResponsePath: humanResolverPath,
+      receiptPath: disagreementPaths.receiptPath,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/advisory AI resolver|schemaVersion/i);
 
     const agreement = prepareAdvisory();
     const agreementPaths = responsePaths(
