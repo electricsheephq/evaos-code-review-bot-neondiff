@@ -26,6 +26,7 @@ const SWIFT_ROOT_FILES = new Set([
   "scripts/check-desktop-fixture-boundary.mjs",
   "tests/desktop-evaluation-boundary.test.ts",
   "tests/desktop-repos-reachability-capture.test.ts",
+  "tests/desktop-settled-geometry-capture.test.ts",
   "scripts/secret-rule-foundation-runner.swift"
 ]);
 

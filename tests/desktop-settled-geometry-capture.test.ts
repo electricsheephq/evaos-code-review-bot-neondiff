@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const scriptPath = "apps/neondiff-desktop/scripts/capture-settled-geometry.sh";
+const testPath = "tests/desktop-settled-geometry-capture.test.ts";
 const roots: string[] = [];
 
 afterEach(() => {
@@ -23,6 +24,12 @@ function writeExecutable(path: string, contents: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents);
   chmodSync(path, 0o755);
+}
+
+function swiftAffected(files: string[]): { affected: boolean; matched: string[] } {
+  return JSON.parse(
+    execFileSync("node", ["scripts/swift-affected.mjs", "--files", ...files], { encoding: "utf8" })
+  );
 }
 
 function traceFixture(): object {
@@ -295,5 +302,9 @@ describe("desktop settled geometry capture runner", () => {
       reasonCode: "public_safety_failed",
       publicSafety: "failed"
     });
+  });
+
+  it("routes the fake runner contract through the Swift desktop gate", () => {
+    expect(swiftAffected([testPath])).toMatchObject({ affected: true, matched: [testPath] });
   });
 });
