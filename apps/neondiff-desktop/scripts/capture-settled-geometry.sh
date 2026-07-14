@@ -12,15 +12,22 @@ output=$2
 case "$output" in /*) ;; *) usage ;; esac
 [ ! -e "$output" ] && [ ! -L "$output" ] \
   || { echo "settled geometry output must not already exist" >&2; exit 65; }
+output_parent=$(dirname -- "$output")
+output_name=$(basename -- "$output")
+case "$output_name" in ''|.|..) usage ;; esac
+[ -d "$output_parent" ] && [ ! -L "$output_parent" ] \
+  || { echo "settled geometry output parent must be a real directory" >&2; exit 65; }
+physical_parent=$(CDPATH='' cd -P -- "$output_parent" && pwd -P)
+[ "$output" = "$physical_parent/$output_name" ] \
+  || { echo "settled geometry output must be a canonical path without symlinked parents" >&2; exit 65; }
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 package_dir=$(dirname -- "$script_dir")
 repo_dir=$(CDPATH='' cd -- "$package_dir/../.." && pwd)
-cd "$repo_dir"
 
-[ -z "$(git status --porcelain --untracked-files=all)" ] \
+[ -z "$(git -C "$repo_dir" status --porcelain --untracked-files=all)" ] \
   || { echo "settled geometry capture requires a clean worktree" >&2; exit 65; }
-head_sha=$(git rev-parse HEAD)
+head_sha=$(git -C "$repo_dir" rev-parse HEAD)
 printf '%s\n' "$head_sha" | grep -Eq '^[0-9a-f]{40}$' \
   || { echo "could not bind capture to an exact HEAD" >&2; exit 65; }
 
@@ -40,8 +47,14 @@ fi
 unset NEONDIFF_DESKTOP_TEST_MODE NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS
 
 mkdir -m 700 "$output"
-mkdir -m 700 "$output/validation"
-status_path="$output/validation/settled-capture-status.json"
+output_metadata=$(/usr/bin/stat -f '%u:%Lp' "$output" 2>/dev/null || /usr/bin/stat -c '%u:%a' "$output")
+[ "$output_metadata" = "$(id -u):700" ] \
+  || { echo "settled geometry output must be owned by the caller with mode 700" >&2; exit 65; }
+cd "$output"
+[ "$(pwd -P)" = "$output" ] \
+  || { echo "settled geometry output identity changed during setup" >&2; exit 65; }
+mkdir -m 700 validation
+status_path="validation/settled-capture-status.json"
 
 write_status() {
   status=$1
@@ -86,13 +99,14 @@ terminate_process() {
 cleanup() {
   if [ -n "$capture_pid" ]; then terminate_process "$capture_pid"; fi
   if [ -n "$app_pid" ]; then terminate_process "$app_pid"; fi
+  rm -f ".settled-geometry-proof.json.pending"
   rm -rf "$tmp_root"
 }
 trap cleanup EXIT HUP INT TERM
 
 assert_clean_head() {
-  current_head=$(git rev-parse HEAD 2>/dev/null || true)
-  current_status=$(git status --porcelain --untracked-files=all 2>/dev/null || printf 'failed\n')
+  current_head=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null || true)
+  current_status=$(git -C "$repo_dir" status --porcelain --untracked-files=all 2>/dev/null || printf 'failed\n')
   if [ "$current_head" != "$head_sha" ] || [ -n "$current_status" ]; then
     write_status incomplete source source_changed incomplete not_emitted
     echo "source changed during settled geometry capture" >&2
@@ -121,7 +135,7 @@ capture_bin="$swift_bin/NeonDiffDesktopSettledGeometryCapture"
   || { write_status incomplete build products_missing incomplete not_emitted; exit 65; }
 assert_clean_head
 
-npm run check:secrets >"$tmp_root/repository-secret-scan.log" 2>&1
+npm --prefix "$repo_dir" run check:secrets >"$tmp_root/repository-secret-scan.log" 2>&1
 
 ready_dir="$tmp_root/ready"
 capture_stage="$tmp_root/capture"
@@ -203,7 +217,7 @@ terminate_process "$app_pid"
 app_pid=
 assert_clean_head
 
-case_parent="$output/cases/overview-repos-overview"
+case_parent="cases/overview-repos-overview"
 pending="$case_parent/.1040x680.pending"
 case_dir="$case_parent/1040x680"
 mkdir -p "$case_parent"
@@ -216,7 +230,7 @@ mv "$pending" "$case_dir"
 checker_exit=0
 if swift run --skip-build --package-path "$package_dir" \
   NeonDiffDesktopGeometryChecks "$case_dir/settled-geometry.json" \
-  >"$output/validation/settled-geometry-check.json" \
+  >"validation/settled-geometry-check.json" \
   2>"$tmp_root/checker.stderr"; then
   :
 else
@@ -230,7 +244,7 @@ jq -e '
   and .status == "stable"
   and .category == "none"
   and .reasonCode == "none"
-' "$output/validation/settled-geometry-check.json" >/dev/null \
+' "validation/settled-geometry-check.json" >/dev/null \
   || { write_status incomplete checker checker_rejected incomplete not_emitted; exit 1; }
 [ "$checker_exit" -eq 0 ] \
   || { write_status incomplete checker checker_rejected incomplete not_emitted; exit "$checker_exit"; }
@@ -240,9 +254,9 @@ jq -n \
   --arg head "$head_sha" \
   --arg traceSha256 "$trace_sha" \
   '{schemaVersion:1,head:$head,scenario:"overview-repos-overview",contentSize:"1040x680",traceSha256:$traceSha256,checker:"stable",proofBoundary:"settled-geometry-only"}' \
-  >"$output/settled-geometry-proof.json"
+  >".settled-geometry-proof.json.pending"
 
-if node scripts/check-desktop-evaluation-packet-secrets.mjs --packet "$output" \
+if node "$repo_dir/scripts/check-desktop-evaluation-packet-secrets.mjs" --packet . \
   >"$tmp_root/packet-safety.json"; then
   :
 else
@@ -258,8 +272,9 @@ jq -e '
   and .unsupportedEntries == []
 ' "$tmp_root/packet-safety.json" >/dev/null \
   || { write_status incomplete safety public_safety_failed failed not_emitted; exit 1; }
-cp "$tmp_root/packet-safety.json" "$output/validation/packet-safety-scan.json"
-printf 'ok\n' >"$output/validation/packet-safety-scan.ok"
+cp "$tmp_root/packet-safety.json" "validation/packet-safety-scan.json"
+printf 'ok\n' >"validation/packet-safety-scan.ok"
+mv ".settled-geometry-proof.json.pending" "settled-geometry-proof.json"
 assert_clean_head
 write_status complete complete none passed emitted
 assert_clean_head

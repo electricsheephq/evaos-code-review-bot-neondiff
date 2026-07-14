@@ -5,7 +5,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -97,7 +100,7 @@ function createHarness(): {
   env: NodeJS.ProcessEnv;
   commandLog: string;
 } {
-  const root = mkdtempSync(join(tmpdir(), "neondiff-settled-capture-test-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-settled-capture-test-")));
   roots.push(root);
   const fakeBin = join(root, "fake-bin");
   const swiftBin = join(root, "swift-bin");
@@ -136,6 +139,7 @@ chmod +x "$app"
 
   writeExecutable(join(fakeBin, "git"), `#!/bin/sh
 set -eu
+if [ "\${1:-}" = -C ]; then shift 2; fi
 printf 'git %s\\n' "$*" >>"$FAKE_COMMAND_LOG"
 case "$*" in
   'status --porcelain --untracked-files=all')
@@ -223,9 +227,10 @@ printf '%s\\n' '{"ok":true,"reasonCode":"none","schemaVersion":1,"status":"compl
 
 function runHarness(
   harness: ReturnType<typeof createHarness>,
-  overrides: NodeJS.ProcessEnv = {}
+  overrides: NodeJS.ProcessEnv = {},
+  output = harness.output
 ) {
-  return spawnSync(join(harness.root, scriptPath), ["--output", harness.output], {
+  return spawnSync(join(harness.root, scriptPath), ["--output", output], {
     cwd: harness.root,
     env: { ...harness.env, ...overrides },
     encoding: "utf8",
@@ -254,6 +259,7 @@ describe("desktop settled geometry capture runner", () => {
       "cases/overview-repos-overview/1040x680/settled-geometry.json"
     ))).toBe(true);
     expect(existsSync(join(harness.output, "settled-geometry-proof.json"))).toBe(true);
+    expect(statSync(harness.output).mode & 0o777).toBe(0o700);
     const commandLog = readFileSync(harness.commandLog, "utf8");
     expect(commandLog).toMatch(/capture --pid [0-9]+ --ready \/tmp\/[^ ]+\/ready\/ready\.json --output \/tmp\/[^ ]+\/capture\/settled-geometry\.json/);
   });
@@ -302,6 +308,32 @@ describe("desktop settled geometry capture runner", () => {
       reasonCode: "public_safety_failed",
       publicSafety: "failed"
     });
+    expect(existsSync(join(harness.output, "settled-geometry-proof.json"))).toBe(false);
+    expect(existsSync(join(harness.output, ".settled-geometry-proof.json.pending"))).toBe(false);
+  });
+
+  it("rejects noncanonical output paths before creating evidence", () => {
+    const harness = createHarness();
+    mkdirSync(join(harness.root, "nested"));
+    const noncanonical = `${harness.root}/nested/../evidence`;
+    const result = runHarness(harness, {}, noncanonical);
+
+    expect(result.status).toBe(65);
+    expect(result.stderr).toContain("canonical path");
+    expect(existsSync(harness.output)).toBe(false);
+  });
+
+  it("rejects a symlinked output parent before creating evidence", () => {
+    const harness = createHarness();
+    const realParent = join(harness.root, "real-parent");
+    const linkedParent = join(harness.root, "linked-parent");
+    mkdirSync(realParent);
+    symlinkSync(realParent, linkedParent);
+    const result = runHarness(harness, {}, join(linkedParent, "evidence"));
+
+    expect(result.status).toBe(65);
+    expect(result.stderr).toContain("real directory");
+    expect(existsSync(join(realParent, "evidence"))).toBe(false);
   });
 
   it("routes the fake runner contract through the Swift desktop gate", () => {

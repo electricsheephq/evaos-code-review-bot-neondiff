@@ -170,6 +170,7 @@ private struct SettledGeometryRunner {
               ready.pid == options.pid,
               ready.pid > 0,
               ready.windowNumber > 0,
+              ready.windowNumber <= Int(CGWindowID.max),
               ready.ready,
               ready.backingScale.isFinite,
               ready.backingScale > 0,

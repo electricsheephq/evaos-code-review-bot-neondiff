@@ -78,6 +78,7 @@ import Testing
         #expect(source.contains("AXUIElementCopyActionNames"))
         #expect(source.contains("AXUIElementGetPid"))
         #expect(source.contains("CGWindowListCopyWindowInfo"))
+        #expect(source.contains("ready.windowNumber <= Int(CGWindowID.max)"))
         #expect(source.contains(#"neondiff-sidebar-section-\(to.rawValue)"#))
         #expect(!source.contains("AXUIElementSetAttributeValue"))
         #expect(!source.contains("AXUIElementPostKeyboardEvent"))
