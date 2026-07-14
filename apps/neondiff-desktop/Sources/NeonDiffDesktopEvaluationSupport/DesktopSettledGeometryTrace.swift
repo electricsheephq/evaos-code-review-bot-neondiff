@@ -569,7 +569,7 @@ public enum DesktopSettledGeometryValidator {
                     region: unexpected
                 )
             }
-            for region in genericRegions.union([.overviewSentinel, .reposOuterScroll]) {
+            for region in genericRegions.union([.reposOuterScroll]) {
                 guard let frame = byID[region] else { continue }
                 guard sample.windowFrame.contains(frame, tolerance: tolerance) else {
                     throw DesktopSettledGeometryValidationError.regionOutsideWindow(
@@ -587,6 +587,16 @@ public enum DesktopSettledGeometryValidator {
                     checkpoint: checkpoint,
                     sample: sampleIndex
                 )
+            }
+            if section == .overview {
+                guard let sentinel = byID[.overviewSentinel],
+                      detail.containsHorizontally(sentinel, tolerance: tolerance) else {
+                    throw DesktopSettledGeometryValidationError.regionOutsideWindow(
+                        checkpoint: checkpoint,
+                        sample: sampleIndex,
+                        region: .overviewSentinel
+                    )
+                }
             }
             if section == .repos {
                 guard let scroll = byID[.reposOuterScroll],

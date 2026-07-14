@@ -13,6 +13,29 @@ struct DesktopSettledGeometryTraceTests {
         #expect(DesktopSettledGeometryCheckResult.stable.ok)
     }
 
+    @Test func acceptsStableOffscreenScrollSentinelsWithoutClaimingVisibility() throws {
+        let offscreenOverview = samples(section: .overview).map {
+            $0.replacing(
+                .overviewSentinel,
+                frame: .init(x: 255, y: 1_156, width: 180, height: 30)
+            )
+        }
+        let offscreenRepos = samples(section: .repos).map {
+            $0.replacing(
+                .reposBottomSentinel,
+                frame: .init(x: 279, y: 1_251, width: 713, height: 16)
+            )
+        }
+        var checkpoints = makeCheckpoints()
+        checkpoints[0] = checkpoint(index: 0, section: .overview, samples: offscreenOverview)
+        checkpoints[1] = checkpoint(index: 1, section: .repos, samples: offscreenRepos)
+        checkpoints[2] = checkpoint(index: 2, section: .overview, samples: offscreenOverview)
+
+        #expect(try DesktopSettledGeometryValidator.validate(
+            makeTrace(checkpoints: checkpoints)
+        ) == .stable)
+    }
+
     @Test func bindsEveryRegionToOneUniquePublicAccessibilityIdentifier() {
         let identifiers = DesktopSettledGeometryRegion.allCases.map(\.accessibilityIdentifier)
 
@@ -281,6 +304,25 @@ struct DesktopSettledGeometryTraceTests {
             checkpoint: 0,
             sample: 0,
             region: .chrome
+        )) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
+        }
+
+        var sentinelOutsideDetailWidth = samples(section: .overview)
+        sentinelOutsideDetailWidth[0] = sentinelOutsideDetailWidth[0].replacing(
+            .overviewSentinel,
+            frame: .init(x: -10, y: 900, width: 180, height: 30)
+        )
+        checkpoints = makeCheckpoints()
+        checkpoints[0] = checkpoint(
+            index: 0,
+            section: .overview,
+            samples: sentinelOutsideDetailWidth
+        )
+        #expect(throws: DesktopSettledGeometryValidationError.regionOutsideWindow(
+            checkpoint: 0,
+            sample: 0,
+            region: .overviewSentinel
         )) {
             try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
         }
