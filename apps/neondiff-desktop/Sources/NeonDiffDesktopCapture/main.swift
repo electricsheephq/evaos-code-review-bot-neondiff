@@ -5,11 +5,13 @@ import CryptoKit
 import Darwin
 import Foundation
 import NeonDiffDesktopCore
+import NeonDiffDesktopEvaluationSupport
 
 private enum CaptureError: LocalizedError {
     case usage
     case unsafePath(String)
     case invalidReadyFile
+    case unsupportedReachabilityTarget
     case permission(String)
     case window(String)
     case screenshot(String)
@@ -17,9 +19,11 @@ private enum CaptureError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .usage:
-            "usage: NeonDiffDesktopCapture --pid <pid> --ready <ready.json> --output-dir <directory>"
+            "usage: NeonDiffDesktopCapture --pid <pid> --ready <ready.json> --output-dir <directory> [--repos-reachability]"
         case .unsafePath(let detail): "Unsafe capture path: \(detail)"
         case .invalidReadyFile: "Evaluation readiness file is invalid or does not match the target process."
+        case .unsupportedReachabilityTarget:
+            "Repositories reachability capture requires tab-repos at 1040x680."
         case .permission(let detail): "Capture permission is unavailable: \(detail)"
         case .window(let detail): "Target window is unavailable: \(detail)"
         case .screenshot(let detail): "Window screenshot failed: \(detail)"
@@ -49,6 +53,7 @@ private struct Options {
     let pid: Int32
     let readyURL: URL
     let outputDirectory: URL
+    let capturesReposReachability: Bool
 
     static func parse(_ arguments: [String]) throws -> Options {
         func value(_ flag: String) throws -> String {
@@ -60,7 +65,9 @@ private struct Options {
             }
             return arguments[index + 1]
         }
-        guard arguments.count == 7,
+        let capturesReposReachability = arguments.contains("--repos-reachability")
+        guard arguments.filter({ $0 == "--repos-reachability" }).count <= 1,
+              arguments.count == (capturesReposReachability ? 8 : 7),
               let pid = Int32(try value("--pid")),
               pid > 0 else {
             throw CaptureError.usage
@@ -68,9 +75,15 @@ private struct Options {
         return Options(
             pid: pid,
             readyURL: URL(fileURLWithPath: try value("--ready")).standardizedFileURL,
-            outputDirectory: URL(fileURLWithPath: try value("--output-dir"), isDirectory: true).standardizedFileURL
+            outputDirectory: URL(fileURLWithPath: try value("--output-dir"), isDirectory: true).standardizedFileURL,
+            capturesReposReachability: capturesReposReachability
         )
     }
+}
+
+private struct ReposFocusedEvidence {
+    let reachability: [String: String]
+    let scrollCapabilities: [String: String]
 }
 
 private struct CaptureRunner {
@@ -78,6 +91,17 @@ private struct CaptureRunner {
 
     func run() throws -> [String: Any] {
         let ready = try loadReady()
+        if options.capturesReposReachability {
+            do {
+                _ = try DesktopReposReachabilityTarget.requireSupported(
+                    fixtureId: ready.fixtureId,
+                    contentWidth: ready.contentFrame.width,
+                    contentHeight: ready.contentFrame.height
+                )
+            } catch {
+                throw CaptureError.unsupportedReachabilityTarget
+            }
+        }
         guard CGPreflightScreenCaptureAccess() else {
             throw CaptureError.permission("Screen Recording")
         }
@@ -110,8 +134,9 @@ private struct CaptureRunner {
         ]
         let geometryData = try JSONSerialization.data(withJSONObject: geometry, options: [.prettyPrinted, .sortedKeys])
         try geometryData.write(to: geometryURL, options: [.atomic])
+        let reposFocusedEvidence = try writeReposFocusedEvidenceIfRequired(ready: ready)
 
-        return [
+        var result: [String: Any] = [
             "ok": true,
             "fixtureId": ready.fixtureId,
             "windowNumber": ready.windowNumber,
@@ -119,6 +144,11 @@ private struct CaptureRunner {
             "accessibility": try evidence(accessibilityURL),
             "geometry": try evidence(geometryURL)
         ]
+        if let reposFocusedEvidence {
+            result["reachability"] = reposFocusedEvidence.reachability
+            result["scrollCapabilities"] = reposFocusedEvidence.scrollCapabilities
+        }
+        return result
     }
 
     private func loadReady() throws -> ReadyDocument {
@@ -136,6 +166,41 @@ private struct CaptureRunner {
             throw CaptureError.invalidReadyFile
         }
         return ready
+    }
+
+    private func writeReposFocusedEvidenceIfRequired(ready: ReadyDocument) throws -> ReposFocusedEvidence? {
+        guard options.capturesReposReachability else { return nil }
+        let tracer = DesktopReposReachabilityAXTracer(pid: options.pid, ready: ready)
+        let trace = tracer.capture()
+        let scrollCapabilities = tracer.captureScrollCapabilities()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let reachabilityData = try encoder.encode(trace)
+        let reachabilityURL = options.outputDirectory.appendingPathComponent("reachability.json")
+        try reachabilityData.write(to: reachabilityURL, options: [.atomic])
+        let capabilitiesData = try encoder.encode(scrollCapabilities.validated())
+        let capabilitiesURL = options.outputDirectory.appendingPathComponent("scroll-capabilities.json")
+        try capabilitiesData.write(to: capabilitiesURL, options: [.atomic])
+        let status: String
+        do {
+            _ = try DesktopReposReachabilityValidator.validate(trace)
+            status = "reachable"
+        } catch DesktopReposReachabilityValidationError.acquisitionFailed {
+            status = "acquisition-failed"
+        } catch {
+            status = "unreachable"
+        }
+        return ReposFocusedEvidence(
+            reachability: [
+                "path": reachabilityURL.lastPathComponent,
+                "sha256": try sha256(reachabilityURL),
+                "status": status
+            ],
+            scrollCapabilities: [
+                "path": capabilitiesURL.lastPathComponent,
+                "sha256": try sha256(capabilitiesURL)
+            ]
+        )
     }
 
     private func requireRegularFile(_ url: URL, label: String) throws {
@@ -315,6 +380,835 @@ private struct CaptureRunner {
 
     private func frameDictionary(_ frame: Frame) -> [String: Double] {
         ["x": frame.x, "y": frame.y, "width": frame.width, "height": frame.height]
+    }
+}
+
+private struct DesktopReposReachabilityAXTracer {
+    private static let intervalNanoseconds: UInt64 = 100_000_000
+    private static let maximumAcquisitionMilliseconds = 5_000
+    private static let tolerance = 1.0
+
+    let pid: Int32
+    let ready: ReadyDocument
+
+    func capture() -> DesktopReposReachabilityTrace {
+        let systemWide = AXUIElementCreateSystemWide()
+        let timeoutInstalled = AXUIElementSetMessagingTimeout(systemWide, 1.0) == .success
+        defer {
+            if timeoutInstalled {
+                _ = AXUIElementSetMessagingTimeout(systemWide, 0)
+            }
+        }
+
+        var pre = PhaseAcquisition.empty
+        var post = PhaseAcquisition.empty
+        var scrollInteraction: DesktopReposScrollInteraction?
+        var failure: DesktopReposReachabilityAcquisitionFailureReason?
+        if timeoutInstalled {
+            do {
+                let binding = try incrementPagePressBinding()
+                pre = acquireStableSamples(binding: binding.semantic)
+                failure = pre.failure
+                if failure == nil, let settledBefore = pre.samples.last?.outerClip {
+                    scrollInteraction = try performIncrementPagePress(
+                        binding,
+                        settledOuterClipBefore: settledBefore
+                    )
+                }
+            } catch let reason as Failure {
+                failure = reason
+            } catch {
+                failure = .invalidType
+            }
+            if failure == nil,
+               scrollInteraction?.incrementPagePress?.performResult == .success {
+                post = acquireStableSamples()
+                failure = post.failure
+                if failure == nil,
+                   let interaction = scrollInteraction,
+                   let settledAfter = post.samples.last?.outerClip {
+                    scrollInteraction = interactionWithSettledOuterClipAfter(
+                        interaction,
+                        settledOuterClipAfter: settledAfter
+                    )
+                }
+            }
+        } else {
+            failure = .messagingTimeoutUnavailable
+        }
+
+        // The ready document is emitted only after the DEBUG fixture render
+        // latch and three stable 100 ms readiness samples have completed.
+        let readinessGatePassed = ready.ready
+        let acquisition = DesktopReposReachabilityAcquisition(
+            status: failure == nil ? .complete : .failed,
+            failureReason: failure
+        )
+        return DesktopReposReachabilityTrace(
+            schemaVersion: 2,
+            fixture: .tabRepos,
+            ready: readinessGatePassed,
+            quiescent: readinessGatePassed && pre.stable && post.stable,
+            requestedContentSize: DesktopEvaluationContentSize(width: 1040, height: 680),
+            sampleIntervalMilliseconds: 100,
+            preScrollAcquisitionMilliseconds: pre.durationMilliseconds,
+            postScrollAcquisitionMilliseconds: post.durationMilliseconds,
+            tolerancePoints: Self.tolerance,
+            acquisition: acquisition,
+            preScrollSamples: pre.samples,
+            scrollInteraction: scrollInteraction,
+            postScrollSamples: post.samples
+        )
+    }
+
+    func captureScrollCapabilities() -> DesktopReposScrollCapabilities {
+        let osMajorVersion = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        let systemWide = AXUIElementCreateSystemWide()
+        let timeoutInstalled = AXUIElementSetMessagingTimeout(systemWide, 1.0) == .success
+        guard timeoutInstalled else {
+            return .failed(osMajorVersion: osMajorVersion, reason: .messagingTimeoutUnavailable)
+        }
+        defer { _ = AXUIElementSetMessagingTimeout(systemWide, 0) }
+
+        do {
+            let window = try verifiedWindow()
+            let elements = try semanticElements(in: window)
+            guard let outerScrollArea = try outermostScrollArea(
+                from: elements.boundaryBody,
+                to: window
+            ) else {
+                throw Failure.ancestryUnavailable
+            }
+
+            let boundaryActionNames: [String]?
+            let scrollToVisibleActionName: String?
+            if osMajorVersion >= 26 {
+                boundaryActionNames = try actionNames(elements.boundaryBody)
+                scrollToVisibleActionName = DesktopReposScrollCapabilityContract
+                    .scrollToVisibleActionName
+            } else {
+                boundaryActionNames = nil
+                scrollToVisibleActionName = nil
+            }
+
+            let verticalScrollBar = try verticalScrollBar(in: outerScrollArea)
+            let scrollBarActionNames = try verticalScrollBar.map(actionNames)
+            let incrementPage: AXUIElement?
+            if let verticalScrollBar {
+                incrementPage = try incrementPageButton(in: verticalScrollBar)
+            } else {
+                incrementPage = nil
+            }
+            let incrementPageActionNames = try incrementPage.map(actionNames)
+            return try DesktopReposScrollCapabilityContract.evaluate(
+                osMajorVersion: osMajorVersion,
+                boundaryActionNames: boundaryActionNames,
+                verticalScrollBarResolved: verticalScrollBar != nil,
+                scrollBarActionNames: scrollBarActionNames,
+                incrementPageResolved: incrementPage != nil,
+                incrementPageActionNames: incrementPageActionNames,
+                scrollToVisibleActionName: scrollToVisibleActionName,
+                incrementActionName: NSAccessibility.Action.increment.rawValue,
+                pressActionName: NSAccessibility.Action.press.rawValue
+            )
+        } catch let reason as Failure {
+            return .failed(osMajorVersion: osMajorVersion, reason: reason)
+        } catch {
+            return .failed(osMajorVersion: osMajorVersion, reason: .invalidType)
+        }
+    }
+
+    private func acquireStableSamples(binding providedBinding: SemanticBinding? = nil) -> PhaseAcquisition {
+        let phaseStarted = DispatchTime.now().uptimeNanoseconds
+        let binding: SemanticBinding
+        do {
+            if let providedBinding {
+                binding = providedBinding
+            } else {
+                binding = try semanticBinding()
+            }
+        } catch let reason as DesktopReposReachabilityAcquisitionFailureReason {
+            return PhaseAcquisition(
+                samples: [],
+                durationMilliseconds: milliseconds(
+                    from: phaseStarted,
+                    to: DispatchTime.now().uptimeNanoseconds
+                ),
+                stable: false,
+                failure: reason
+            )
+        } catch {
+            return PhaseAcquisition(
+                samples: [],
+                durationMilliseconds: milliseconds(
+                    from: phaseStarted,
+                    to: DispatchTime.now().uptimeNanoseconds
+                ),
+                stable: false,
+                failure: .invalidType
+            )
+        }
+
+        let samplingStarted = DispatchTime.now().uptimeNanoseconds
+        guard milliseconds(from: phaseStarted, to: samplingStarted) <= Self.maximumAcquisitionMilliseconds else {
+            return PhaseAcquisition(
+                samples: [],
+                durationMilliseconds: milliseconds(from: phaseStarted, to: samplingStarted),
+                stable: false,
+                failure: .timeout
+            )
+        }
+        var rolling: [DesktopReposReachabilitySample] = []
+        while true {
+            let beforeSample = DispatchTime.now().uptimeNanoseconds
+            let elapsedBeforeSample = milliseconds(from: phaseStarted, to: beforeSample)
+            guard elapsedBeforeSample <= Self.maximumAcquisitionMilliseconds else {
+                return PhaseAcquisition(
+                    samples: rolling,
+                    durationMilliseconds: elapsedBeforeSample,
+                    stable: false,
+                    failure: .timeout
+                )
+            }
+            let elapsed = milliseconds(from: samplingStarted, to: beforeSample)
+            switch sample(binding: binding, elapsedMilliseconds: elapsed) {
+            case .success(let value):
+                rolling.append(value)
+            case .failure(let reason):
+                return PhaseAcquisition(
+                    samples: rolling,
+                    durationMilliseconds: milliseconds(
+                        from: phaseStarted,
+                        to: DispatchTime.now().uptimeNanoseconds
+                    ),
+                    stable: false,
+                    failure: reason
+                )
+            }
+            if rolling.count > DesktopReposReachabilitySamplingContract.minimumStableSampleCount {
+                rolling.removeFirst()
+            }
+            let duration = milliseconds(from: phaseStarted, to: DispatchTime.now().uptimeNanoseconds)
+            if rolling.count == DesktopReposReachabilitySamplingContract.minimumStableSampleCount,
+               DesktopReposReachabilitySamplingContract.hasStableCadence(
+                   rolling.map(\.elapsedMilliseconds)
+               ),
+               samplesMatch(rolling[0], rolling[1]),
+               samplesMatch(rolling[0], rolling[2]),
+               duration <= Self.maximumAcquisitionMilliseconds {
+                return PhaseAcquisition(samples: rolling, durationMilliseconds: duration, stable: true, failure: nil)
+            }
+            guard duration <= Self.maximumAcquisitionMilliseconds else {
+                return PhaseAcquisition(samples: rolling, durationMilliseconds: duration, stable: false, failure: .timeout)
+            }
+            let now = DispatchTime.now().uptimeNanoseconds
+            let nextDeadline = max(beforeSample + Self.intervalNanoseconds, now)
+            if nextDeadline > now {
+                usleep(useconds_t((nextDeadline - now) / 1_000))
+            }
+        }
+    }
+
+    private func incrementPagePressBinding() throws -> ScrollBehaviorBinding {
+        let semantic = try semanticBinding()
+        guard let scrollBar = try verticalScrollBar(in: semantic.outerScrollArea),
+              let incrementPage = try incrementPageButton(in: scrollBar) else {
+            throw Failure.semanticMissing
+        }
+        let advertised = try actionNames(incrementPage).contains(NSAccessibility.Action.press.rawValue)
+        return ScrollBehaviorBinding(
+            semantic: semantic,
+            verticalScrollBar: scrollBar,
+            incrementPage: incrementPage,
+            actionAdvertised: advertised
+        )
+    }
+
+    private func performIncrementPagePress(
+        _ binding: ScrollBehaviorBinding,
+        settledOuterClipBefore: DesktopReposReachabilityFrame
+    ) throws -> DesktopReposScrollInteraction {
+        let current = try revalidatedIncrementPagePressBinding(binding)
+        guard current.actionAdvertised else {
+            return DesktopReposScrollInteraction(
+                mechanism: .incrementPagePress,
+                incrementPagePress: .init(
+                    actionAdvertised: false,
+                    attemptCount: 0,
+                    performResult: nil,
+                    outerClipBefore: settledOuterClipBefore,
+                    outerClipAfter: nil
+                ),
+                valueMutation: nil
+            )
+        }
+        let result = AXUIElementPerformAction(
+            current.incrementPage,
+            NSAccessibility.Action.press.rawValue as CFString
+        )
+        let performResult = scrollActionResult(result)
+        return DesktopReposScrollInteraction(
+            mechanism: .incrementPagePress,
+            incrementPagePress: .init(
+                actionAdvertised: true,
+                attemptCount: 1,
+                performResult: performResult,
+                outerClipBefore: settledOuterClipBefore,
+                outerClipAfter: nil
+            ),
+            valueMutation: nil
+        )
+    }
+
+    private func revalidatedIncrementPagePressBinding(
+        _ original: ScrollBehaviorBinding
+    ) throws -> ScrollBehaviorBinding {
+        let current = try incrementPagePressBinding()
+        guard CFEqual(original.semantic.window, current.semantic.window),
+              CFEqual(original.semantic.elements.table, current.semantic.elements.table),
+              CFEqual(original.semantic.elements.applyAllowlist, current.semantic.elements.applyAllowlist),
+              CFEqual(original.semantic.elements.boundaryBody, current.semantic.elements.boundaryBody),
+              CFEqual(original.semantic.outerScrollArea, current.semantic.outerScrollArea),
+              original.semantic.boundaryScrollAncestorCount == current.semantic.boundaryScrollAncestorCount,
+              CFEqual(original.verticalScrollBar, current.verticalScrollBar),
+              CFEqual(original.incrementPage, current.incrementPage),
+              original.actionAdvertised == current.actionAdvertised else {
+            throw Failure.semanticChanged
+        }
+        return current
+    }
+
+    private func interactionWithSettledOuterClipAfter(
+        _ interaction: DesktopReposScrollInteraction,
+        settledOuterClipAfter: DesktopReposReachabilityFrame
+    ) -> DesktopReposScrollInteraction {
+        guard let press = interaction.incrementPagePress else { return interaction }
+        return DesktopReposScrollInteraction(
+            mechanism: interaction.mechanism,
+            incrementPagePress: .init(
+                actionAdvertised: press.actionAdvertised,
+                attemptCount: press.attemptCount,
+                performResult: press.performResult,
+                outerClipBefore: press.outerClipBefore,
+                outerClipAfter: settledOuterClipAfter
+            ),
+            valueMutation: interaction.valueMutation
+        )
+    }
+
+    private func scrollActionResult(_ error: AXError) -> DesktopReposScrollActionResult {
+        switch error {
+        case .success: return .success
+        case .cannotComplete: return .cannotComplete
+        case .actionUnsupported: return .actionUnsupported
+        case .invalidUIElement, .invalidUIElementObserver: return .invalidElement
+        case .apiDisabled: return .permissionDenied
+        default: return .otherError
+        }
+    }
+
+    private func milliseconds(from start: UInt64, to end: UInt64) -> Int {
+        Int((end - start) / 1_000_000)
+    }
+
+    private func sample(
+        binding: SemanticBinding,
+        elapsedMilliseconds: Int
+    ) -> Result<DesktopReposReachabilitySample, DesktopReposReachabilityAcquisitionFailureReason> {
+        do {
+            let viewport = try elementFrame(binding.window)
+            let outerClip = try elementFrame(binding.outerScrollArea)
+            let pairs: [(DesktopReposReachabilityRegion, AXUIElement)] = [
+                (.table, binding.elements.table),
+                (.applyAllowlist, binding.elements.applyAllowlist),
+                (.boundaryBody, binding.elements.boundaryBody)
+            ]
+            let regions = try pairs.map { id, element in
+                DesktopReposReachabilityRegionFrame(id: id, frame: try elementFrame(element))
+            }
+            return .success(DesktopReposReachabilitySample(
+                elapsedMilliseconds: elapsedMilliseconds,
+                viewport: viewport,
+                outerClip: outerClip,
+                boundaryScrollAncestorCount: binding.boundaryScrollAncestorCount,
+                regions: regions
+            ))
+        } catch let reason as DesktopReposReachabilityAcquisitionFailureReason {
+            return .failure(reason)
+        } catch {
+            return .failure(.invalidType)
+        }
+    }
+
+    private func semanticBinding() throws -> SemanticBinding {
+        let window = try verifiedWindow()
+        let elements = try semanticElements(in: window)
+        guard let ancestry = try scrollAreaAncestry(from: elements.boundaryBody, to: window) else {
+            throw Failure.ancestryUnavailable
+        }
+        return SemanticBinding(
+            window: window,
+            elements: elements,
+            outerScrollArea: ancestry.outermost,
+            boundaryScrollAncestorCount: ancestry.count
+        )
+    }
+
+    private func samplesMatch(
+        _ lhs: DesktopReposReachabilitySample,
+        _ rhs: DesktopReposReachabilitySample
+    ) -> Bool {
+        guard framesMatch(lhs.viewport, rhs.viewport),
+              framesMatch(lhs.outerClip, rhs.outerClip),
+              lhs.boundaryScrollAncestorCount == rhs.boundaryScrollAncestorCount,
+              lhs.regions.count == rhs.regions.count else {
+            return false
+        }
+        let right = Dictionary(uniqueKeysWithValues: rhs.regions.map { ($0.id, $0.frame) })
+        return lhs.regions.allSatisfy { region in
+            right[region.id].map { framesMatch(region.frame, $0) } == true
+        }
+    }
+
+    private func framesMatch(
+        _ lhs: DesktopReposReachabilityFrame,
+        _ rhs: DesktopReposReachabilityFrame
+    ) -> Bool {
+        abs(lhs.x - rhs.x) <= Self.tolerance
+            && abs(lhs.y - rhs.y) <= Self.tolerance
+            && abs(lhs.width - rhs.width) <= Self.tolerance
+            && abs(lhs.height - rhs.height) <= Self.tolerance
+    }
+
+    private func verticalScrollBar(in scrollArea: AXUIElement) throws -> AXUIElement? {
+        if let rawScrollBar = try optionalAttribute(
+            scrollArea,
+            kAXVerticalScrollBarAttribute as CFString
+        ) {
+            guard CFGetTypeID(rawScrollBar) == AXUIElementGetTypeID() else {
+                throw Failure.invalidType
+            }
+            let scrollBar = rawScrollBar as! AXUIElement
+            try requireTargetPID(scrollBar)
+            let candidate = DesktopReposVerticalScrollBarCandidate(
+                role: try optionalString(scrollBar, kAXRoleAttribute as CFString),
+                orientation: try optionalString(scrollBar, kAXOrientationAttribute as CFString)
+            )
+            do {
+                guard try DesktopReposVerticalScrollBarSelectionContract.select(
+                    convenienceCandidate: candidate,
+                    directChildren: []
+                ) == .convenienceAttribute else {
+                    throw Failure.invalidType
+                }
+            } catch let error as DesktopReposVerticalScrollBarSelectionError {
+                throw selectionFailure(error)
+            }
+            return scrollBar
+        }
+
+        guard let rawChildren = try optionalAttribute(
+            scrollArea,
+            kAXChildrenAttribute as CFString
+        ) else {
+            return nil
+        }
+        guard CFGetTypeID(rawChildren) == CFArrayGetTypeID(),
+              let children = rawChildren as? [AXUIElement] else {
+            throw Failure.invalidType
+        }
+
+        var candidates: [DesktopReposVerticalScrollBarCandidate] = []
+        candidates.reserveCapacity(children.count)
+        for child in children {
+            try requireTargetPID(child)
+            let role = try optionalString(child, kAXRoleAttribute as CFString)
+            let orientation = role == (kAXScrollBarRole as String)
+                ? try optionalString(child, kAXOrientationAttribute as CFString)
+                : nil
+            candidates.append(.init(role: role, orientation: orientation))
+        }
+
+        let selection: DesktopReposVerticalScrollBarSelection
+        do {
+            selection = try DesktopReposVerticalScrollBarSelectionContract.select(
+                convenienceCandidate: nil,
+                directChildren: candidates
+            )
+        } catch let error as DesktopReposVerticalScrollBarSelectionError {
+            throw selectionFailure(error)
+        }
+
+        switch selection {
+        case .convenienceAttribute:
+            throw Failure.invalidType
+        case .directChild(let index):
+            guard children.indices.contains(index) else { throw Failure.invalidType }
+            return children[index]
+        case .unsupported:
+            return nil
+        }
+    }
+
+    private func selectionFailure(
+        _ error: DesktopReposVerticalScrollBarSelectionError
+    ) -> Failure {
+        switch error {
+        case .missingRole, .missingOrientation:
+            return .attributeUnavailable
+        case .invalidRole, .invalidOrientation:
+            return .invalidType
+        case .ambiguousVerticalChildren:
+            return .semanticDuplicate
+        }
+    }
+
+    private func incrementPageButton(in scrollBar: AXUIElement) throws -> AXUIElement? {
+        guard let rawChildren = try optionalAttribute(
+            scrollBar,
+            kAXChildrenAttribute as CFString
+        ) else {
+            throw Failure.attributeUnavailable
+        }
+        guard CFGetTypeID(rawChildren) == CFArrayGetTypeID(),
+              let children = rawChildren as? [AXUIElement] else {
+            throw Failure.invalidType
+        }
+
+        var candidates: [DesktopReposIncrementPageCandidate] = []
+        candidates.reserveCapacity(children.count)
+        for child in children {
+            try requireTargetPID(child)
+            candidates.append(.init(
+                role: try optionalString(child, kAXRoleAttribute as CFString),
+                subrole: try optionalString(child, kAXSubroleAttribute as CFString)
+            ))
+        }
+
+        let selection: DesktopReposIncrementPageSelection
+        do {
+            selection = try DesktopReposIncrementPageSelectionContract.select(
+                directChildren: candidates
+            )
+        } catch let error as DesktopReposIncrementPageSelectionError {
+            switch error {
+            case .missingRole, .missingSubrole:
+                throw Failure.attributeUnavailable
+            case .invalidIncrementPageRole:
+                throw Failure.invalidType
+            case .duplicateIncrementPage:
+                throw Failure.semanticDuplicate
+            }
+        }
+
+        switch selection {
+        case .directChild(let index):
+            guard children.indices.contains(index) else { throw Failure.invalidType }
+            return children[index]
+        case .unsupported:
+            return nil
+        }
+    }
+
+    private func verifiedWindow() throws -> AXUIElement {
+        let application = AXUIElementCreateApplication(pid)
+        try requireTargetPID(application)
+        let rawWindows = try requiredAttribute(application, kAXWindowsAttribute as CFString)
+        guard CFGetTypeID(rawWindows) == CFArrayGetTypeID() else { throw Failure.invalidType }
+        let windows = rawWindows as! [AXUIElement]
+        guard windows.count == 1, let window = windows.first,
+              try optionalString(window, kAXRoleAttribute as CFString) == (kAXWindowRole as String) else {
+            throw Failure.windowMismatch
+        }
+        try requireTargetPID(window)
+        let frame = try elementFrame(window)
+        guard
+              abs(frame.width - ready.windowFrame.width) <= Self.tolerance,
+              abs(frame.height - ready.windowFrame.height) <= Self.tolerance else {
+            throw Failure.windowMismatch
+        }
+        return window
+    }
+
+    private func semanticElements(in window: AXUIElement) throws -> SemanticElements {
+        var candidates = SemanticCandidates()
+        var remaining = 10_000
+        var visited = Set<CFHashCode>()
+        try visit(
+            window,
+            depth: 0,
+            remaining: &remaining,
+            visited: &visited,
+            candidates: &candidates
+        )
+        if let reason = DesktopReposReachabilitySemanticContract.failureReason(
+            tableCount: candidates.table.count,
+            applyAllowlistCount: candidates.applyAllowlist.count,
+            boundaryBodyCount: candidates.boundaryBody.count
+        ) {
+            throw reason
+        }
+        return SemanticElements(
+            table: candidates.table[0],
+            applyAllowlist: candidates.applyAllowlist[0],
+            boundaryBody: candidates.boundaryBody[0]
+        )
+    }
+
+    private func visit(
+        _ element: AXUIElement,
+        depth: Int,
+        remaining: inout Int,
+        visited: inout Set<CFHashCode>,
+        candidates: inout SemanticCandidates
+    ) throws {
+        guard depth <= 32, remaining > 0 else { throw Failure.ancestryLimit }
+        try requireTargetPID(element)
+        let hash = CFHash(element)
+        guard visited.insert(hash).inserted else { throw Failure.ancestryCycle }
+        remaining -= 1
+
+        let role = try optionalString(element, kAXRoleAttribute as CFString)
+        let title = try optionalString(element, kAXTitleAttribute as CFString)
+        let description = try optionalString(element, kAXDescriptionAttribute as CFString)
+        let value = try optionalTextValue(element, kAXValueAttribute as CFString)
+        let identifier = try optionalString(element, kAXIdentifierAttribute as CFString)
+        if DesktopReposReachabilitySemanticContract.matchesTable(role: role) {
+            candidates.table.append(element)
+        }
+        if DesktopReposReachabilitySemanticContract.matchesApplyAllowlist(
+            isButton: role == (kAXButtonRole as String),
+            identifier: identifier,
+            title: title,
+            description: description,
+            value: value
+        ) {
+            candidates.applyAllowlist.append(element)
+        }
+        if DesktopReposReachabilitySemanticContract.matchesBoundaryBody(
+            isStaticText: role == (kAXStaticTextRole as String),
+            identifier: identifier,
+            description: description,
+            value: value
+        ) {
+            candidates.boundaryBody.append(element)
+        }
+
+        guard let rawChildren = try optionalAttribute(element, kAXChildrenAttribute as CFString) else { return }
+        guard CFGetTypeID(rawChildren) == CFArrayGetTypeID() else { throw Failure.invalidType }
+        let children = rawChildren as! [AXUIElement]
+        for child in children {
+            try visit(
+                child,
+                depth: depth + 1,
+                remaining: &remaining,
+                visited: &visited,
+                candidates: &candidates
+            )
+        }
+    }
+
+    private func outermostScrollArea(
+        from boundary: AXUIElement,
+        to window: AXUIElement
+    ) throws -> AXUIElement? {
+        try scrollAreaAncestry(from: boundary, to: window)?.outermost
+    }
+
+    private func scrollAreaAncestry(
+        from boundary: AXUIElement,
+        to window: AXUIElement
+    ) throws -> ScrollAncestry? {
+        var current = boundary
+        var outermost: AXUIElement?
+        var count = 0
+        var visited = Set<CFHashCode>()
+        for _ in 0..<64 {
+            guard visited.insert(CFHash(current)).inserted else { throw Failure.ancestryCycle }
+            guard let rawParent = try optionalAttribute(current, kAXParentAttribute as CFString) else {
+                throw Failure.ancestryUnavailable
+            }
+            guard CFGetTypeID(rawParent) == AXUIElementGetTypeID() else { throw Failure.invalidType }
+            let parent = rawParent as! AXUIElement
+            try requireTargetPID(parent)
+            if CFEqual(parent, window) {
+                return outermost.map { ScrollAncestry(outermost: $0, count: count) }
+            }
+            if try optionalString(parent, kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
+                outermost = parent
+                count += 1
+            }
+            current = parent
+        }
+        throw Failure.ancestryLimit
+    }
+
+    private func requireTargetPID(_ element: AXUIElement) throws {
+        var elementPID: pid_t = 0
+        let result = AXUIElementGetPid(element, &elementPID)
+        guard result == .success else { throw mapAXError(result) }
+        guard elementPID == pid else { throw Failure.pidMismatch }
+    }
+
+    private func elementFrame(_ element: AXUIElement) throws -> DesktopReposReachabilityFrame {
+        let rawPosition = try requiredAttribute(element, kAXPositionAttribute as CFString)
+        let rawSize = try requiredAttribute(element, kAXSizeAttribute as CFString)
+        let position = try pointValue(rawPosition)
+        let size = try sizeValue(rawSize)
+        guard
+              position.x.isFinite,
+              position.y.isFinite,
+              size.width.isFinite,
+              size.height.isFinite,
+              size.width > 0,
+              size.height > 0 else {
+            throw Failure.invalidType
+        }
+        return DesktopReposReachabilityFrame(
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private func optionalString(_ element: AXUIElement, _ attribute: CFString) throws -> String? {
+        guard let raw = try optionalAttribute(element, attribute) else { return nil }
+        guard CFGetTypeID(raw) == CFStringGetTypeID() else { throw Failure.invalidType }
+        return raw as? String
+    }
+
+    private func actionNames(_ element: AXUIElement) throws -> [String] {
+        try requireTargetPID(element)
+        var rawActionNames: CFArray?
+        let result = AXUIElementCopyActionNames(element, &rawActionNames)
+        guard result == .success else { throw mapAXError(result) }
+        guard let rawActionNames else { throw Failure.attributeUnavailable }
+        guard CFGetTypeID(rawActionNames) == CFArrayGetTypeID(),
+              let names = rawActionNames as? [String],
+              names.allSatisfy({ !$0.isEmpty }) else {
+            throw Failure.invalidType
+        }
+        return names
+    }
+
+    private func optionalTextValue(_ element: AXUIElement, _ attribute: CFString) throws -> String? {
+        guard let raw = try optionalAttribute(element, attribute),
+              CFGetTypeID(raw) == CFStringGetTypeID() else { return nil }
+        return raw as? String
+    }
+
+    private func numericValue(_ raw: CFTypeRef) throws -> Double {
+        guard CFGetTypeID(raw) == CFNumberGetTypeID(),
+              let value = (raw as? NSNumber)?.doubleValue,
+              value.isFinite else { throw Failure.invalidType }
+        return value
+    }
+
+    private func pointValue(_ raw: CFTypeRef) throws -> CGPoint {
+        guard CFGetTypeID(raw) == AXValueGetTypeID() else { throw Failure.invalidType }
+        var point = CGPoint.zero
+        guard AXValueGetValue(raw as! AXValue, .cgPoint, &point) else { throw Failure.invalidType }
+        return point
+    }
+
+    private func sizeValue(_ raw: CFTypeRef) throws -> CGSize {
+        guard CFGetTypeID(raw) == AXValueGetTypeID() else { throw Failure.invalidType }
+        var size = CGSize.zero
+        guard AXValueGetValue(raw as! AXValue, .cgSize, &size) else { throw Failure.invalidType }
+        return size
+    }
+
+    private func requiredAttribute(_ element: AXUIElement, _ attribute: CFString) throws -> CFTypeRef {
+        guard let value = try optionalAttribute(element, attribute) else { throw Failure.attributeUnavailable }
+        return value
+    }
+
+    private func optionalAttribute(_ element: AXUIElement, _ attribute: CFString) throws -> CFTypeRef? {
+        switch copyAttribute(element, attribute) {
+        case .value(let value):
+            return value
+        case .failure(let error) where error == .noValue || error == .attributeUnsupported:
+            return nil
+        case .failure(let error):
+            throw mapAXError(error)
+        }
+    }
+
+    private func copyAttribute(_ element: AXUIElement, _ attribute: CFString) -> AXReadResult {
+        for attempt in 0..<3 {
+            var raw: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(element, attribute, &raw)
+            if result == .success, let raw { return .value(raw) }
+            if result == .cannotComplete, attempt < 2 {
+                usleep(20_000)
+                continue
+            }
+            return .failure(result)
+        }
+        return .failure(.cannotComplete)
+    }
+
+    private func mapAXError(_ error: AXError) -> Failure {
+        switch error {
+        case .cannotComplete:
+            return .cannotComplete
+        case .invalidUIElement, .invalidUIElementObserver:
+            return .invalidElement
+        case .apiDisabled:
+            return .permissionDenied
+        case .attributeUnsupported, .noValue:
+            return .attributeUnavailable
+        default:
+            return .invalidType
+        }
+    }
+
+    private typealias Failure = DesktopReposReachabilityAcquisitionFailureReason
+
+    private struct PhaseAcquisition {
+        let samples: [DesktopReposReachabilitySample]
+        let durationMilliseconds: Int
+        let stable: Bool
+        let failure: Failure?
+
+        static let empty = PhaseAcquisition(samples: [], durationMilliseconds: 0, stable: false, failure: nil)
+    }
+
+    private struct SemanticBinding {
+        let window: AXUIElement
+        let elements: SemanticElements
+        let outerScrollArea: AXUIElement
+        let boundaryScrollAncestorCount: Int
+    }
+
+    private struct ScrollBehaviorBinding {
+        let semantic: SemanticBinding
+        let verticalScrollBar: AXUIElement
+        let incrementPage: AXUIElement
+        let actionAdvertised: Bool
+    }
+
+    private struct ScrollAncestry {
+        let outermost: AXUIElement
+        let count: Int
+    }
+
+    private struct SemanticElements {
+        let table: AXUIElement
+        let applyAllowlist: AXUIElement
+        let boundaryBody: AXUIElement
+    }
+
+    private struct SemanticCandidates {
+        var table: [AXUIElement] = []
+        var applyAllowlist: [AXUIElement] = []
+        var boundaryBody: [AXUIElement] = []
+    }
+
+    private enum AXReadResult {
+        case value(CFTypeRef)
+        case failure(AXError)
     }
 }
 

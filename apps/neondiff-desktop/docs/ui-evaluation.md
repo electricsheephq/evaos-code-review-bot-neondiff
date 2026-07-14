@@ -138,6 +138,104 @@ Those two sizes cover the main-window minimum and baseline only. The onboarding
 760x560, Settings 560x700, and wide 1440x900 captures, plus click-to-click
 geometry traces, remain #515/#517 work and are not implied by this packet.
 
+## Focused #517 Repos Reachability Proof
+
+The Repos-only runner is a focused partial #517 proof outside the canonical #515 packet.
+From a clean exact HEAD, give it a fresh absolute output path:
+
+```bash
+apps/neondiff-desktop/scripts/capture-repos-reachability.sh \
+  --output /absolute/fresh/evidence/path
+```
+
+The runner creates a private `/tmp` workspace, keeps SwiftPM DEBUG products and
+the launched app there, builds one app bundle plus the capture and reachability
+checker products, and launches only the public-safe `tab-repos` fixture at
+`1040x680`. Only this focused runner passes the explicit
+`--repos-reachability` opt-in to the capture helper, so canonical #515 captures
+keep their existing byte and artifact shape. The runner waits boundedly for
+app-authored readiness, captures the window, AX tree, geometry, and
+`reachability.json`, plus a separate `scroll-capabilities.json`, terminates its
+children, runs the checker against the absolute reachability path, and scans
+the focused evidence for secret-shaped text. The capability packet is bound to
+the `tab-repos` fixture and requested `1040x680` content size, is capped at 4096
+bytes, and contains only schema/OS metadata, typed acquisition state, and
+sanitized capability booleans. It uses `AXUIElementCopyActionNames` only to
+check the verified Boundary, outer vertical scrollbar, and one exact direct
+child with role `AXButton` and subrole `AXIncrementPage`; it does not perform accessibility actions.
+The probe requires every direct scrollbar child to retain the fixture PID and
+a well-typed role, and every button child to provide a well-typed subrole. A
+non-button such as `AXValueIndicator` may omit its subrole, but cannot claim
+`AXIncrementPage`. The probe never recurses into descendants or substitutes
+increment/decrement arrows or geometry. It records only whether the
+Increment Page child resolved and whether that child advertises the exact public
+`AXPress` action.
+Missing, malformed, or failed action-name acquisition is
+a typed acquisition failure rather than a false capability result. It never
+reads live configuration, Keychain, GitHub, provider, daemon, network, or
+customer state.
+
+The separate schema-v2 reachability behavior is enabled only by this focused
+DEBUG runner. After binding the freshly launched fixture PID, unique Table,
+Apply, Boundary, Boundary's outermost scroll ancestor, and the exact direct
+Increment Page child, it collects settled pre-action samples. Every settled
+pre/post sample records the current window frame, outer scroll clip, Boundary
+scroll-ancestor count, and semantic-region frames. Immediately before the sole
+press, the helper re-resolves the full Boundary -> outer scroll -> vertical
+scrollbar -> direct Increment Page chain and requires every cached semantic and
+action element plus the ancestry count to match. A replaced or stale chain is a
+typed `semantic-changed` acquisition failure and no action is performed.
+
+Only after that revalidation does the helper recheck advertised `AXPress`; the
+helper performs that public action exactly once. It does not retry, substitute
+arrows, use a private action, or target an installed/live app. The successful action
+ledger is persisted before any post-action read, so a later acquisition failure
+retains `attemptCount: 1` and `performResult: success` without inventing a
+settled post clip. API acceptance is recorded but is not treated as
+reachability: the checker requires a one-point all-phase envelope for the
+window, every settled outer clip, and the Boundary ancestry count; one rigid
+upward translation of Table, Apply, and Boundary; and Apply/Boundary containment
+against every settled post-action outer clip.
+
+Capture output remains in the private workspace until the helper exits
+successfully and every required file is present. A fixture exit before
+readiness, bounded readiness timeout, capture timeout, TCC denial, partial
+capture, or source-HEAD drift leaves `focused-capture-status.json` marked
+`incomplete`, does not publish a focused proof or safety `ok` marker, and does
+not expose raw launch or capture logs. The final proof, safety result, and `ok`
+marker are published only after the packet scan passes and a final clean
+exact-HEAD check succeeds.
+
+All checker failures are ordinary typed failures; there is no legacy
+"expected pre-fix" exception. The checker emits one strict public-safe JSON
+result with `input`, `contract`, `acquisition`, `action`, or `geometry`
+classification and an allowlisted reason code. The runner validates that
+result and its exit-status relationship; malformed output fails closed as
+`checker-result-invalid` and the runner does not infer a result from the raw
+trace. Boundary is a sibling of Table, so nested Table scrolling cannot satisfy
+the rigid page-translation contract. The DEBUG fixture may mutate only its
+deterministic test UI to exercise scroll reachability; it does not authorize
+live product or runtime mutation. A checker failure preserves
+`reachability.json` and `scroll-capabilities.json`. The normalized checker
+status and public-safety result are written before the runner returns the
+nonzero checker exit.
+
+This focused packet does not prove:
+
+- the rest of the fixture catalog, the second baseline size, wide, onboarding,
+  Settings, or the remaining state matrix;
+- successful clicks, scripted outcomes, keyboard focus order, tooltips,
+  before/after geometry, or full issue #517 layout-stability and accessibility
+  conformance;
+- the canonical #515 schema-2 manifest, reference comparison, or full baseline;
+- release-bundle isolation, signing, notarization, appcast, installed-app, live
+  runtime, customer, browser/native parity, GA, or customer readiness.
+
+Rebuilding the DEBUG app or capture helper can change its code requirement and
+invalidate an existing macOS TCC Screen Recording or Accessibility grant. A TCC
+failure limits this local dev proof; it is not a Repos reachability result and
+must not be bypassed by touching privacy settings from the runner.
+
 The Swift desktop gate runs the fixture checks whenever evaluation sources or
 catalog files change. It keeps the normal debug bundle separate, stages an
 explicit release bundle under `dist-release`, and scans only the release
