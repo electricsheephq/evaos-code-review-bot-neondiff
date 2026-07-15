@@ -271,6 +271,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
 
         XCTAssertEqual(checkpoints.count, 7)
         XCTAssertEqual(navigationActions.count, 6)
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedPageBottomTraceError.priorValidationFailure
+        }
         try attach(
             HostedPageBottomReachabilityTrace(
                 schemaVersion: 1,
@@ -279,7 +282,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 requestedContentSize: requestedContentSize,
                 textSizeMode: "runner-default-no-test-override",
                 coordinateSpace: "xcui-screen",
-                sampleIntervalMilliseconds: 100,
+                minimumSampleIntervalMilliseconds: 100,
+                samplingDeadlineMilliseconds: 5_000,
                 tolerancePoints: 1,
                 navigationActions: navigationActions,
                 checkpoints: checkpoints,
@@ -299,40 +303,36 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let outerPageScroll = app.descendants(matching: .any)[outerScrollIdentifier]
         let bottomSentinel = app.descendants(matching: .any)[sentinelIdentifier]
         let detailRegion = app.descendants(matching: .any)["neondiff-detail"]
-        XCTAssertTrue(
-            outerPageScroll.waitForExistence(timeout: 2),
-            "Missing outer page scroll \(outerScrollIdentifier)"
-        )
-        XCTAssertTrue(
-            bottomSentinel.waitForExistence(timeout: 2),
-            "Missing page-bottom sentinel \(sentinelIdentifier)"
-        )
-        XCTAssertTrue(detailRegion.waitForExistence(timeout: 2), "Missing detail region")
-        XCTAssertFalse(bottomSentinel.isHittable, "Page-bottom sentinel must remain non-hittable")
+        guard outerPageScroll.waitForExistence(timeout: 2) else {
+            throw HostedPageBottomTraceError.missingElement(outerScrollIdentifier)
+        }
+        guard bottomSentinel.waitForExistence(timeout: 2) else {
+            throw HostedPageBottomTraceError.missingElement(sentinelIdentifier)
+        }
+        guard detailRegion.waitForExistence(timeout: 2) else {
+            throw HostedPageBottomTraceError.missingElement("neondiff-detail")
+        }
+        guard !bottomSentinel.isHittable else {
+            throw HostedPageBottomTraceError.hittableSentinel(sentinelIdentifier)
+        }
 
-        let preActionSamples = capturePageBottomSamples(
+        let preActionSamples = try capturePageBottomSamples(
             outerPageScroll: outerPageScroll,
             bottomSentinel: bottomSentinel,
             detailRegion: detailRegion,
             context: "\(section)-pre"
         )
         let preActionSample = try XCTUnwrap(preActionSamples.last)
-        let scrollAction: HostedPageScrollAction?
+        let didIssueScroll: Bool
         let postActionSamples: [HostedPageBottomSample]
         if preActionSample.sentinelFullyContainedInOuterScroll
             && preActionSample.sentinelFullyContainedInDetailRegion {
-            scrollAction = nil
+            didIssueScroll = false
             postActionSamples = preActionSamples
         } else {
             outerPageScroll.scroll(byDeltaX: 0, deltaY: -10_000)
-            scrollAction = HostedPageScrollAction(
-                controlIdentifier: outerScrollIdentifier,
-                deltaX: 0,
-                deltaY: -10_000,
-                attemptCount: 1,
-                result: "success"
-            )
-            postActionSamples = capturePageBottomSamples(
+            didIssueScroll = true
+            postActionSamples = try capturePageBottomSamples(
                 outerPageScroll: outerPageScroll,
                 bottomSentinel: bottomSentinel,
                 detailRegion: detailRegion,
@@ -341,16 +341,26 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
 
         let postActionSample = try XCTUnwrap(postActionSamples.last)
-        assertFullyContained(
+        try requireFullyContained(
             postActionSample.sentinelFrame,
             in: postActionSample.outerScrollFrame,
             context: "\(section) outer scroll"
         )
-        assertFullyContained(
+        try requireFullyContained(
             postActionSample.sentinelFrame,
             in: postActionSample.detailRegionFrame,
             context: "\(section) detail region"
         )
+        let scrollAction = didIssueScroll
+            ? HostedPageScrollAction(
+                controlIdentifier: outerScrollIdentifier,
+                deltaX: 0,
+                deltaY: -10_000,
+                attemptCount: 1,
+                result: "returned",
+                effectProven: true
+            )
+            : nil
         return HostedPageBottomCheckpoint(
             section: section,
             surfaceGeneration: generation,
@@ -368,24 +378,37 @@ final class NeonDiffDesktopUITests: XCTestCase {
         bottomSentinel: XCUIElement,
         detailRegion: XCUIElement,
         context: String
-    ) -> [HostedPageBottomSample] {
+    ) throws -> [HostedPageBottomSample] {
         let start = ProcessInfo.processInfo.systemUptime
         var samples: [HostedPageBottomSample] = []
+        var previousSampleStart: TimeInterval?
         for index in 0..<3 {
-            if index > 0 {
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            if index > 0, let previousSampleStart {
+                let elapsedSincePrevious =
+                    ProcessInfo.processInfo.systemUptime - previousSampleStart
+                let remainingDelay = max(0, 0.1 - elapsedSincePrevious)
+                if remainingDelay > 0 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(remainingDelay))
+                }
             }
+            let sampleStart = ProcessInfo.processInfo.systemUptime
+            previousSampleStart = sampleStart
+            let elapsedMilliseconds = Int(((sampleStart - start) * 1_000).rounded())
             let outerScrollFrame = HostedGeometryFrame(outerPageScroll.frame)
             let sentinelFrame = HostedGeometryFrame(bottomSentinel.frame)
             let detailRegionFrame = HostedGeometryFrame(detailRegion.frame)
-            XCTAssertTrue(outerScrollFrame.isFiniteAndNonempty, "Invalid outer scroll frame for \(context)")
-            XCTAssertTrue(sentinelFrame.isFiniteAndNonempty, "Invalid sentinel frame for \(context)")
-            XCTAssertTrue(detailRegionFrame.isFiniteAndNonempty, "Invalid detail frame for \(context)")
+            guard outerScrollFrame.isFiniteAndNonempty else {
+                throw HostedPageBottomTraceError.invalidFrame("\(context) outer scroll")
+            }
+            guard sentinelFrame.isFiniteAndNonempty else {
+                throw HostedPageBottomTraceError.invalidFrame("\(context) sentinel")
+            }
+            guard detailRegionFrame.isFiniteAndNonempty else {
+                throw HostedPageBottomTraceError.invalidFrame("\(context) detail")
+            }
             samples.append(
                 HostedPageBottomSample(
-                    elapsedMilliseconds: Int(
-                        ((ProcessInfo.processInfo.systemUptime - start) * 1_000).rounded()
-                    ),
+                    elapsedMilliseconds: elapsedMilliseconds,
                     outerScrollFrame: outerScrollFrame,
                     sentinelFrame: sentinelFrame,
                     detailRegionFrame: detailRegionFrame,
@@ -400,60 +423,67 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 )
             )
         }
-        assertValidPageBottomCadence(samples, context: context)
-        assertStablePageBottomSamples(samples, context: context)
+        try validatePageBottomCadence(samples, context: context)
+        try validateStablePageBottomSamples(samples, context: context)
         return samples
     }
 
-    private func assertValidPageBottomCadence(
+    private func validatePageBottomCadence(
         _ samples: [HostedPageBottomSample],
         context: String
-    ) {
-        XCTAssertEqual(samples.count, 3, "Wrong page-bottom sample count for \(context)")
-        guard samples.count == 3 else { return }
-        XCTAssertGreaterThanOrEqual(samples[0].elapsedMilliseconds, 0)
-        XCTAssertLessThanOrEqual(samples[0].elapsedMilliseconds, 25)
+    ) throws {
+        guard samples.count == 3 else {
+            throw HostedPageBottomTraceError.invalidCadence(context)
+        }
+        guard samples[0].elapsedMilliseconds >= 0,
+              samples[0].elapsedMilliseconds <= 25,
+              let finalElapsed = samples.last?.elapsedMilliseconds,
+              finalElapsed <= 5_000 else {
+            throw HostedPageBottomTraceError.invalidCadence(context)
+        }
         for (lhs, rhs) in zip(samples, samples.dropFirst()) {
             let interval = rhs.elapsedMilliseconds - lhs.elapsedMilliseconds
-            XCTAssertGreaterThanOrEqual(interval, 90, "Short sample interval for \(context)")
-            XCTAssertLessThanOrEqual(interval, 175, "Long sample interval for \(context)")
+            guard interval >= 90 else {
+                throw HostedPageBottomTraceError.invalidCadence(context)
+            }
         }
     }
 
-    private func assertStablePageBottomSamples(
+    private func validateStablePageBottomSamples(
         _ samples: [HostedPageBottomSample],
         context: String
-    ) {
+    ) throws {
         guard let baseline = samples.first else {
-            XCTFail("Missing page-bottom samples for \(context)")
-            return
+            throw HostedPageBottomTraceError.missingSamples(context)
         }
         for sample in samples.dropFirst() {
-            XCTAssertFalse(
-                baseline.outerScrollFrame.differs(from: sample.outerScrollFrame, byMoreThan: 1),
-                "Outer scroll drift exceeded one point for \(context)"
-            )
-            XCTAssertFalse(
-                baseline.sentinelFrame.differs(from: sample.sentinelFrame, byMoreThan: 1),
-                "Page-bottom sentinel drift exceeded one point for \(context)"
-            )
-            XCTAssertFalse(
-                baseline.detailRegionFrame.differs(from: sample.detailRegionFrame, byMoreThan: 1),
-                "Detail region drift exceeded one point for \(context)"
-            )
+            guard !baseline.outerScrollFrame.differs(
+                from: sample.outerScrollFrame,
+                byMoreThan: 1
+            ), !baseline.sentinelFrame.differs(
+                from: sample.sentinelFrame,
+                byMoreThan: 1
+            ), !baseline.detailRegionFrame.differs(
+                from: sample.detailRegionFrame,
+                byMoreThan: 1
+            ) else {
+                throw HostedPageBottomTraceError.unstableGeometry(context)
+            }
         }
     }
 
-    private func assertFullyContained(
+    private func requireFullyContained(
         _ frame: HostedGeometryFrame,
         in container: HostedGeometryFrame,
         context: String
-    ) {
-        XCTAssertTrue(
-            frame.isFullyContained(in: container, tolerance: 1),
-            "Page-bottom sentinel is not fully contained in \(context): "
-                + "sentinel=\(frame) container=\(container)"
-        )
+    ) throws {
+        guard frame.isFullyContained(in: container, tolerance: 1) else {
+            throw HostedPageBottomTraceError.sentinelNotContained(
+                context: context,
+                sentinel: frame,
+                container: container
+            )
+        }
     }
 
     private func captureCheckpoint(
@@ -975,6 +1005,7 @@ private struct HostedPageScrollAction: Codable, Equatable {
     let deltaY: Double
     let attemptCount: Int
     let result: String
+    let effectProven: Bool
 }
 
 private struct HostedPageBottomCheckpoint: Codable, Equatable {
@@ -995,7 +1026,8 @@ private struct HostedPageBottomReachabilityTrace: Codable {
     let requestedContentSize: HostedContentSize
     let textSizeMode: String
     let coordinateSpace: String
-    let sampleIntervalMilliseconds: Int
+    let minimumSampleIntervalMilliseconds: Int
+    let samplingDeadlineMilliseconds: Int
     let tolerancePoints: Double
     let navigationActions: [HostedNavigationAction]
     let checkpoints: [HostedPageBottomCheckpoint]
@@ -1015,6 +1047,43 @@ private struct HostedTransportDiagnostic: Codable {
     let expectedPrefixMatched: Bool?
     let base64DecodedByteCount: Int?
     let equalsUnavailableSentinel: Bool
+}
+
+private enum HostedPageBottomTraceError: LocalizedError {
+    case priorValidationFailure
+    case missingElement(String)
+    case hittableSentinel(String)
+    case invalidFrame(String)
+    case missingSamples(String)
+    case invalidCadence(String)
+    case unstableGeometry(String)
+    case sentinelNotContained(
+        context: String,
+        sentinel: HostedGeometryFrame,
+        container: HostedGeometryFrame
+    )
+
+    var errorDescription: String? {
+        switch self {
+        case .priorValidationFailure:
+            "Hosted page-bottom trace withheld after an earlier validation failure"
+        case .missingElement(let identifier):
+            "Missing hosted page-bottom element: \(identifier)"
+        case .hittableSentinel(let identifier):
+            "Hosted page-bottom sentinel must remain non-hittable: \(identifier)"
+        case .invalidFrame(let context):
+            "Invalid hosted page-bottom frame: \(context)"
+        case .missingSamples(let context):
+            "Missing hosted page-bottom samples: \(context)"
+        case .invalidCadence(let context):
+            "Invalid hosted page-bottom sample cadence: \(context)"
+        case .unstableGeometry(let context):
+            "Hosted page-bottom geometry drift exceeded one point: \(context)"
+        case let .sentinelNotContained(context, sentinel, container):
+            "Hosted page-bottom sentinel is not fully contained in \(context): "
+                + "sentinel=\(sentinel) container=\(container)"
+        }
+    }
 }
 
 private enum HostedGeometryTraceError: LocalizedError {

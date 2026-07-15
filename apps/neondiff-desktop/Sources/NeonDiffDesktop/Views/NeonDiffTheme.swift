@@ -223,16 +223,27 @@ struct OperatorCommandText: View {
 struct PageBottomSentinel: View {
     let section: String
 
+    @ViewBuilder
     var body: some View {
-        Color.clear
-            .frame(maxWidth: .infinity)
-            .frame(height: 1)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Bottom of \(section) page")
-            .accessibilityIdentifier("neondiff-\(section)-page-bottom")
-            .allowsHitTesting(false)
+        #if DEBUG
+        if HostedEvaluationAccessibility.isActive {
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Bottom of \(section) page")
+                .accessibilityIdentifier("neondiff-\(section)-page-bottom")
+                .allowsHitTesting(false)
+        }
+        #endif
     }
 }
+
+#if DEBUG
+private enum HostedEvaluationAccessibility {
+    static let isActive = ProcessInfo.processInfo.arguments.contains("--ui-testing")
+}
+#endif
 
 struct OperatorButtonStyle: ButtonStyle {
     var solid = false

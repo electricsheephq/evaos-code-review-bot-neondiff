@@ -216,8 +216,20 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain(
       'proofBoundary: "hosted-outer-page-bottom-reachability-only-inner-scroll-exhaustion-excluded"'
     );
-    expect(source).toContain("outerPageScroll.scroll(byDeltaX: 0, deltaY: -10_000)");
-    expect(source).toContain("assertFullyContained(");
+    expect(
+      source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
+    ).toHaveLength(1);
+    expect(source).not.toContain(".swipeUp(");
+    expect(source).not.toContain(".swipeDown(");
+    expect(source).not.toContain("coordinate(withNormalizedOffset:");
+    expect(source).toContain("try requireFullyContained(");
+    expect(source).toContain('result: "returned"');
+    expect(source).toContain("effectProven: true");
+    expect(source).toContain("throw HostedPageBottomTraceError");
+    expect(source).toContain("testRun?.failureCount");
+    expect(source).toContain("priorValidationFailure");
+    expect(source).toContain("minimumSampleIntervalMilliseconds: 100");
+    expect(source).toContain("samplingDeadlineMilliseconds: 5_000");
     expect(source).toContain("neondiff-hosted-page-bottom-reachability.json");
 
     for (const [section, fileName] of pageSources) {
@@ -231,6 +243,14 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
       expect(page).toContain(`PageBottomSentinel(section: "${section}")`);
       expect(source).toContain(`"neondiff-${section}-page-bottom"`);
     }
+
+    const theme = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/NeonDiffTheme.swift",
+      "utf8"
+    );
+    expect(theme).toContain("HostedEvaluationAccessibility.isActive");
+    expect(theme).toContain('arguments.contains("--ui-testing")');
+    expect(theme).toMatch(/PageBottomSentinel[\s\S]*#if DEBUG/);
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
