@@ -106,6 +106,8 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain("assertObservedContentSize(");
     expect(source).toContain("marker.value");
     expect(source).toContain("parseAppAuthoredGeometrySamples(marker.value)");
+    expect(source).toContain('"neondiff-hosted-geometry-v2:"');
+    expect(source).toContain("CompactHostedGeometryCursor");
     expect(source).toMatch(/XCTAssertFalse\(\s*marker\.isHittable/);
     expect(source).not.toContain("Thread.sleep");
     expect(source).toContain("XCTAttachment");
@@ -118,6 +120,8 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(readiness).toContain("func markQuiescent(");
     expect(readiness).toContain("contentFrame:");
     expect(readiness).toContain("geometryAccessibilityValue");
+    expect(readiness).toContain("DesktopHostedGeometryCompactTransport");
+    expect(readiness).toContain("value.utf8.count <= 512");
     expect(readiness).toContain("DesktopHostedGeometrySample");
     expect(readiness).toContain("updateRegionFrames(");
     expect(configurator).toContain("surfaceStatus.isRendered(");

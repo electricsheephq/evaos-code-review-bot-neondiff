@@ -140,21 +140,42 @@ final class NeonDiffDesktopUITests: XCTestCase {
             rawValue as? String,
             "Missing app-authored geometry trace"
         )
-        let prefix = "neondiff-hosted-geometry-v1:"
+        let prefix = "neondiff-hosted-geometry-v2:"
         guard value.hasPrefix(prefix),
-              let data = Data(base64Encoded: String(value.dropFirst(prefix.count))) else {
+              let data = Data(base64Encoded: String(value.dropFirst(prefix.count))),
+              data.count == CompactHostedGeometryCursor.encodedByteCount else {
             throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
         }
-        let payload = try JSONDecoder().decode(
-            HostedAppAuthoredGeometryPayload.self,
-            from: data
-        )
-        XCTAssertEqual(payload.schemaVersion, 1)
-        XCTAssertEqual(payload.samples.count, 3)
-        guard payload.schemaVersion == 1, payload.samples.count == 3 else {
+        var cursor = CompactHostedGeometryCursor(data: data)
+        try cursor.validateHeader()
+        let sampleCount = Int(try cursor.readByte())
+        guard sampleCount == 3 else {
             throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
         }
-        for sample in payload.samples {
+        var samples: [HostedGeometrySample] = []
+        samples.reserveCapacity(sampleCount)
+        for _ in 0..<sampleCount {
+            let elapsedMilliseconds = Int(try cursor.readUInt32())
+            let windowFrame = try cursor.readFrame()
+            let contentFrame = try cursor.readFrame()
+            let backingScale = try cursor.readFloat()
+            let regions = try HostedGeometryRegionFrame.requiredIdentifiers.map { identifier in
+                HostedGeometryRegionFrame(identifier: identifier, frame: try cursor.readFrame())
+            }
+            samples.append(
+                HostedGeometrySample(
+                    elapsedMilliseconds: elapsedMilliseconds,
+                    windowFrame: windowFrame,
+                    contentFrame: contentFrame,
+                    backingScale: backingScale,
+                    regions: regions
+                )
+            )
+        }
+        guard cursor.isAtEnd else {
+            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+        }
+        for sample in samples {
             XCTAssertTrue(sample.windowFrame.isFiniteAndNonempty)
             XCTAssertTrue(sample.contentFrame.isFiniteAndNonempty)
             XCTAssertTrue(sample.backingScale.isFinite && sample.backingScale > 0)
@@ -164,7 +185,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
             XCTAssertTrue(sample.regions.allSatisfy { $0.frame.isFiniteAndNonempty })
         }
-        return payload.samples
+        return samples
     }
 
     private func assertObservedContentSize(
@@ -364,9 +385,55 @@ private struct HostedGeometrySample: Codable, Equatable {
     let regions: [HostedGeometryRegionFrame]
 }
 
-private struct HostedAppAuthoredGeometryPayload: Codable {
-    let schemaVersion: Int
-    let samples: [HostedGeometrySample]
+private struct CompactHostedGeometryCursor {
+    static let encodedByteCount = 269
+    private static let magic: [UInt8] = [0x4E, 0x44, 0x47, 0x32]
+
+    private let data: Data
+    private var index = 0
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    var isAtEnd: Bool {
+        index == data.count
+    }
+
+    mutating func validateHeader() throws {
+        let header = try (0..<Self.magic.count).map { _ in try readByte() }
+        guard header == Self.magic else {
+            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+        }
+    }
+
+    mutating func readByte() throws -> UInt8 {
+        guard index < data.count else {
+            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+        }
+        defer { index += 1 }
+        return data[index]
+    }
+
+    mutating func readUInt32() throws -> UInt32 {
+        let byte0 = UInt32(try readByte())
+        let byte1 = UInt32(try readByte())
+        let byte2 = UInt32(try readByte())
+        let byte3 = UInt32(try readByte())
+        return byte0 | (byte1 << 8) | (byte2 << 16) | (byte3 << 24)
+    }
+
+    mutating func readFloat() throws -> Double {
+        Double(Float(bitPattern: try readUInt32()))
+    }
+
+    mutating func readFrame() throws -> HostedGeometryFrame {
+        let x = try readFloat()
+        let y = try readFloat()
+        let width = try readFloat()
+        let height = try readFloat()
+        return HostedGeometryFrame(x: x, y: y, width: width, height: height)
+    }
 }
 
 private struct HostedGeometryCheckpoint: Codable, Equatable {

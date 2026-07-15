@@ -73,15 +73,14 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
         guard let snapshot,
               snapshot.quiescent,
               snapshot.samples.count == 3,
-              let data = try? JSONEncoder().encode(
-                  DesktopHostedGeometryAccessibilityPayload(
-                      schemaVersion: 1,
-                      samples: snapshot.samples
-                  )
-              ) else {
+              let data = DesktopHostedGeometryCompactTransport.encode(snapshot.samples) else {
             return "neondiff-hosted-geometry-unavailable"
         }
-        return "neondiff-hosted-geometry-v1:\(data.base64EncodedString())"
+        let value = "neondiff-hosted-geometry-v2:\(data.base64EncodedString())"
+        guard value.utf8.count <= 512 else {
+            return "neondiff-hosted-geometry-unavailable"
+        }
+        return value
     }
 
     @discardableResult
@@ -192,9 +191,45 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
     }
 }
 
-private struct DesktopHostedGeometryAccessibilityPayload: Codable {
-    let schemaVersion: Int
-    let samples: [DesktopHostedGeometrySample]
+private enum DesktopHostedGeometryCompactTransport {
+    private static let magic: [UInt8] = [0x4E, 0x44, 0x47, 0x32]
+    private static let sampleCount = 3
+    private static let componentsPerSample = 21
+    private static let encodedByteCount = 5 + sampleCount * (4 + componentsPerSample * 4)
+
+    static func encode(_ samples: [DesktopHostedGeometrySample]) -> Data? {
+        guard samples.count == sampleCount else { return nil }
+        var data = Data(magic + [UInt8(sampleCount)])
+        for sample in samples {
+            guard sample.elapsedMilliseconds >= 0,
+                  let elapsed = UInt32(exactly: sample.elapsedMilliseconds) else {
+                return nil
+            }
+            let orderedRegions = DesktopHostedGeometryRegionFrame.requiredIdentifiers.compactMap {
+                identifier in
+                sample.regions.first(where: { $0.identifier == identifier })
+            }
+            guard orderedRegions.count == DesktopHostedGeometryRegionFrame.requiredIdentifiers.count else {
+                return nil
+            }
+            let components = sample.windowFrame.compactComponents
+                + sample.contentFrame.compactComponents
+                + [sample.backingScale]
+                + orderedRegions.flatMap { $0.frame.compactComponents }
+            guard components.count == componentsPerSample,
+                  components.allSatisfy(\.isFinite) else {
+                return nil
+            }
+            data.appendLittleEndian(elapsed)
+            for component in components {
+                let compact = Float(component)
+                guard compact.isFinite else { return nil }
+                data.appendLittleEndian(compact.bitPattern)
+            }
+        }
+        guard data.count == encodedByteCount else { return nil }
+        return data
+    }
 }
 
 struct DesktopHostedGeometryFrame: Codable, Equatable {
@@ -210,6 +245,10 @@ struct DesktopHostedGeometryFrame: Codable, Equatable {
         height = frame.height
     }
 
+    fileprivate var compactComponents: [Double] {
+        [x, y, width, height]
+    }
+
     var isFiniteAndNonempty: Bool {
         [x, y, width, height, x + width, y + height].allSatisfy(\.isFinite)
             && width > 0
@@ -221,6 +260,15 @@ struct DesktopHostedGeometryFrame: Codable, Equatable {
             && abs(y - other.y) <= 0.5
             && abs(width - other.width) <= 0.5
             && abs(height - other.height) <= 0.5
+    }
+}
+
+private extension Data {
+    mutating func appendLittleEndian(_ value: UInt32) {
+        append(UInt8(truncatingIfNeeded: value))
+        append(UInt8(truncatingIfNeeded: value >> 8))
+        append(UInt8(truncatingIfNeeded: value >> 16))
+        append(UInt8(truncatingIfNeeded: value >> 24))
     }
 }
 
