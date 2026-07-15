@@ -170,7 +170,7 @@ jobs:
           scripts/run-required-swift-test-suite.sh NeonDiffDesktopEvaluationSupportTests
 
       - name: Hosted XCUITest smoke
-        timeout-minutes: 15
+        timeout-minutes: 25
         env:
           PROOF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           DERIVED_DATA: ${{ runner.temp }}/neondiff-desktop-derived-data

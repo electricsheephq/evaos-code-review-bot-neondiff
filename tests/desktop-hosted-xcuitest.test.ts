@@ -237,6 +237,16 @@ private func target() {
     expect(project).toContain("alwaysOutOfDate = 1;");
     expect(project.match(/SKIP_INSTALL = YES;/g)).toHaveLength(2);
     expect(project).toContain("tab-overview.json in Resources");
+    for (const fixture of [
+      "onboarding-welcome",
+      "onboarding-provider",
+      "onboarding-daemon",
+      "onboarding-license",
+      "onboarding-done"
+    ]) {
+      expect(project).toContain(`${fixture}.json in Resources`);
+      expect(project).toContain(`path = fixtures/ui/${fixture}.json`);
+    }
     expect(source).toContain('"--ui-testing"');
     expect(source).toContain('"--ui-fixture"');
     expect(source).toContain('"--content-size"');
@@ -517,6 +527,100 @@ private func target() {
     expect(app).toContain(".dynamicTypeSize(.accessibility3)");
     expect(app).toContain(
       String.raw`neondiff.fixture.\(fixtureId).text-size.accessibility3`
+    );
+  });
+
+  it("pins the canonical five-step onboarding geometry matrix", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const onboarding = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift",
+      "utf8"
+    );
+    const workflow = readFileSync(workflowPath, "utf8");
+
+    expect(source).toContain(
+      "testStrictFixtureSettlesAcrossEveryOnboardingStepAtCanonicalSize"
+    );
+    expect(source).toContain("HostedContentSize(width: 760, height: 560)");
+    expect(source).toContain(
+      'HostedOnboardingFixtureStep(fixtureId: "onboarding-welcome", onboardingStep: "welcome", section: "overview")'
+    );
+    expect(source).toContain(
+      'HostedOnboardingFixtureStep(fixtureId: "onboarding-provider", onboardingStep: "provider", section: "providers")'
+    );
+    expect(source).toContain(
+      'HostedOnboardingFixtureStep(fixtureId: "onboarding-daemon", onboardingStep: "daemon", section: "overview")'
+    );
+    expect(source).toContain(
+      'HostedOnboardingFixtureStep(fixtureId: "onboarding-license", onboardingStep: "license", section: "license")'
+    );
+    expect(source).toContain(
+      'HostedOnboardingFixtureStep(fixtureId: "onboarding-done", onboardingStep: "done", section: "overview")'
+    );
+    expect(source).toContain(
+      '"--content-size", "\\(requestedContentSize.width)x\\(requestedContentSize.height)"'
+    );
+    expect(source).toContain("wizardFrame.matches(requestedContentSize");
+    expect(source).toContain('"neondiff-onboarding-wizard"');
+    expect(source).toContain('"neondiff-onboarding-header"');
+    expect(source).toContain('"neondiff-onboarding-step-list"');
+    expect(source).toContain('"neondiff-onboarding-step-content"');
+    expect(source).toContain('"neondiff-onboarding-footer"');
+    expect(source).toContain(
+      '"neondiff-onboarding-current-step-\\(fixtureStep.onboardingStep)"'
+    );
+    expect(source).toContain("captureStableOnboardingSamples");
+    expect(source).toContain("samples.count == 3");
+    expect(source).toContain("finalCompletionElapsedMilliseconds <= 5_000");
+    expect(source).toContain("completionElapsedMilliseconds");
+    expect(source).toContain("validateStableOnboardingSamples");
+    expect(source).toContain("validateOnboardingRegionLayout");
+    expect(source).toContain("fullyContainedInWizard");
+    expect(source).toContain("fullyContainedInWindow");
+    expect(source).toContain("testRun?.failureCount");
+    expect(source).toContain("priorValidationFailure");
+    expect(source).toContain("HostedOnboardingMatrixTrace(");
+    expect(source).toContain("neondiff-hosted-onboarding-matrix.json");
+    expect(source).toContain(
+      'proofBoundary: "hosted-five-onboarding-fixtures-760x560-settled-geometry-only-actions-scroll-large-text-manual-excluded"'
+    );
+    const onboardingImplementationStart = source.indexOf(
+      "func testStrictFixtureSettlesAcrossEveryOnboardingStepAtCanonicalSize"
+    );
+    const onboardingImplementationEnd = source.indexOf(
+      "private func captureRenderedTextScaleScenario",
+      onboardingImplementationStart
+    );
+    expect(onboardingImplementationStart).toBeGreaterThanOrEqual(0);
+    expect(onboardingImplementationEnd).toBeGreaterThan(
+      onboardingImplementationStart
+    );
+    const onboardingImplementation = source.slice(
+      onboardingImplementationStart,
+      onboardingImplementationEnd
+    );
+    expect(onboardingImplementation).not.toMatch(
+      /\.(?:click|doubleClick|rightClick|hover|tap|twoFingerTap|press|typeKey|typeText|scroll|swipe\w*|drag|coordinate|perform|pinch|rotate)\s*\(/
+    );
+
+    for (const identifier of [
+      "neondiff-onboarding-wizard",
+      "neondiff-onboarding-header",
+      "neondiff-onboarding-step-list",
+      "neondiff-onboarding-step-content",
+      "neondiff-onboarding-footer"
+    ]) {
+      expect(onboarding).toContain(
+        `.hostedOnboardingEvaluationRegion("${identifier}")`
+      );
+    }
+    expect(onboarding).toContain(
+      '"neondiff-onboarding-current-step-\\(model.onboardingFlow.currentStep.rawValue)"'
+    );
+    expect(onboarding).toContain("#if DEBUG");
+    expect(onboarding).toContain("hostedOnboardingEvaluationRegion");
+    expect(workflow).toMatch(
+      /name: Hosted XCUITest smoke\s+timeout-minutes: 25/
     );
   });
 
