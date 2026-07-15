@@ -13,74 +13,25 @@ function extractBalancedSwiftDeclaration(
   source: string,
   declaration: string
 ): string {
-  const declarationStart = source.indexOf(declaration);
+  const code = maskSwiftCommentsAndLiterals(source);
+  const declarationStart = code.indexOf(declaration);
   if (declarationStart < 0) {
     throw new Error(`Missing Swift declaration: ${declaration}`);
   }
+  if (code.indexOf(declaration, declarationStart + declaration.length) >= 0) {
+    throw new Error(`Ambiguous Swift declaration: ${declaration}`);
+  }
 
-  const bodyStart = source.indexOf("{", declarationStart);
+  const bodyStart = code.indexOf("{", declarationStart);
   if (bodyStart < 0) {
     throw new Error(`Missing Swift declaration body: ${declaration}`);
   }
 
   let depth = 0;
-  let blockCommentDepth = 0;
-  let inLineComment = false;
-  let inString = false;
-  let inMultilineString = false;
-  let escaping = false;
-
-  for (let index = bodyStart; index < source.length; index += 1) {
-    const current = source[index];
-    const next = source[index + 1];
-    const nextTwo = source.slice(index, index + 3);
-
-    if (inLineComment) {
-      if (current === "\n") inLineComment = false;
-      continue;
-    }
-    if (blockCommentDepth > 0) {
-      if (current === "/" && next === "*") {
-        blockCommentDepth += 1;
-        index += 1;
-      } else if (current === "*" && next === "/") {
-        blockCommentDepth -= 1;
-        index += 1;
-      }
-      continue;
-    }
-    if (inMultilineString) {
-      if (nextTwo === '\"\"\"') {
-        inMultilineString = false;
-        index += 2;
-      }
-      continue;
-    }
-    if (inString) {
-      if (escaping) {
-        escaping = false;
-      } else if (current === "\\") {
-        escaping = true;
-      } else if (current === '\"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (current === "/" && next === "/") {
-      inLineComment = true;
-      index += 1;
-    } else if (current === "/" && next === "*") {
-      blockCommentDepth = 1;
-      index += 1;
-    } else if (nextTwo === '\"\"\"') {
-      inMultilineString = true;
-      index += 2;
-    } else if (current === '\"') {
-      inString = true;
-    } else if (current === "{") {
+  for (let index = bodyStart; index < code.length; index += 1) {
+    if (code[index] === "{") {
       depth += 1;
-    } else if (current === "}") {
+    } else if (code[index] === "}") {
       depth -= 1;
       if (depth === 0) return source.slice(declarationStart, index + 1);
     }
@@ -89,7 +40,160 @@ function extractBalancedSwiftDeclaration(
   throw new Error(`Unbalanced Swift declaration body: ${declaration}`);
 }
 
+function maskSwiftCommentsAndLiterals(source: string): string {
+  const masked = [...source];
+  let index = 0;
+
+  while (index < source.length) {
+    if (source.startsWith("//", index)) {
+      const end = source.indexOf("\n", index + 2);
+      index = maskSwiftRange(masked, index, end < 0 ? source.length : end);
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      let end = index + 2;
+      let depth = 1;
+      while (end < source.length && depth > 0) {
+        if (source.startsWith("/*", end)) {
+          depth += 1;
+          end += 2;
+        } else if (source.startsWith("*/", end)) {
+          depth -= 1;
+          end += 2;
+        } else {
+          end += 1;
+        }
+      }
+      if (depth !== 0) throw new Error("Unterminated Swift block comment");
+      index = maskSwiftRange(masked, index, end);
+      continue;
+    }
+
+    const poundCount = countLeadingPounds(source, index);
+    const literalStart = index + poundCount;
+    const quoteCount = source.startsWith('\"\"\"', literalStart)
+      ? 3
+      : source[literalStart] === '\"'
+        ? 1
+        : 0;
+    if (quoteCount > 0) {
+      const closing = '\"'.repeat(quoteCount) + "#".repeat(poundCount);
+      let end = literalStart + quoteCount;
+      let closed = false;
+      while (end < source.length) {
+        if (poundCount === 0 && source[end] === "\\") {
+          end += 2;
+        } else if (source.startsWith(closing, end)) {
+          end += closing.length;
+          closed = true;
+          break;
+        } else {
+          end += 1;
+        }
+      }
+      if (!closed) throw new Error("Unterminated Swift string literal");
+      index = maskSwiftRange(masked, index, end);
+      continue;
+    }
+
+    if (poundCount > 0 && source[literalStart] === "/") {
+      const end = findSwiftRegexEnd(
+        source,
+        literalStart + 1,
+        "/" + "#".repeat(poundCount)
+      );
+      index = maskSwiftRange(masked, index, end);
+      continue;
+    }
+    if (
+      source[index] === "/" &&
+      source[index + 1] !== "/" &&
+      source[index + 1] !== "*" &&
+      isSwiftBareRegexStart(masked, index)
+    ) {
+      const end = findSwiftRegexEnd(source, index + 1, "/");
+      index = maskSwiftRange(masked, index, end);
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return masked.join("");
+}
+
+function countLeadingPounds(source: string, start: number): number {
+  let count = 0;
+  while (source[start + count] === "#") count += 1;
+  return count;
+}
+
+function maskSwiftRange(masked: string[], start: number, end: number): number {
+  for (let index = start; index < end; index += 1) {
+    if (masked[index] !== "\n") masked[index] = " ";
+  }
+  return end;
+}
+
+function isSwiftBareRegexStart(masked: string[], index: number): boolean {
+  let previousIndex = index - 1;
+  while (previousIndex >= 0 && /\s/.test(masked[previousIndex])) {
+    previousIndex -= 1;
+  }
+  if (previousIndex < 0) return true;
+  return "=([{,:;!&|?+-*%^~<>".includes(masked[previousIndex]);
+}
+
+function findSwiftRegexEnd(
+  source: string,
+  contentStart: number,
+  closing: string
+): number {
+  let inCharacterClass = false;
+  let escaping = false;
+  for (let index = contentStart; index < source.length; index += 1) {
+    const current = source[index];
+    if (escaping) {
+      escaping = false;
+    } else if (current === "\\") {
+      escaping = true;
+    } else if (current === "[") {
+      inCharacterClass = true;
+    } else if (current === "]") {
+      inCharacterClass = false;
+    } else if (!inCharacterClass && source.startsWith(closing, index)) {
+      return index + closing.length;
+    }
+  }
+  throw new Error("Unterminated Swift regex literal");
+}
+
 describe("hosted NeonDiff desktop XCTest foundation", () => {
+  it("extracts a Swift declaration without literal or comment decoys", () => {
+    const source = `
+let decoy = #"private func target() { decoy() }"#
+/* private func target() { commentDecoy() } */
+private func target() {
+  let raw = #"quote \" and brace } stay literal"#
+  let multiline = ##"""
+  quote " and brace } stay literal
+  """##
+  let pattern = /[}]/
+  let extendedPattern = #/[}]/#
+  expected()
+}
+`;
+
+    expect(extractBalancedSwiftDeclaration(source, "private func target()"))
+      .toContain("expected()");
+    expect(() =>
+      extractBalancedSwiftDeclaration(
+        `${source}\nprivate func target() { duplicate() }`,
+        "private func target()"
+      )
+    ).toThrow(/Ambiguous Swift declaration/);
+  });
+
   it("checks in a shared app/UI-test project and test plan", () => {
     expect(existsSync(projectPath)).toBe(true);
     expect(existsSync(schemePath)).toBe(true);
@@ -299,6 +403,7 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(
       source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
     ).toHaveLength(1);
+    expect(source.match(/\.scroll\s*\(/g)).toHaveLength(1);
     const checkpointSource = extractBalancedSwiftDeclaration(
       source,
       "private func capturePageBottomCheckpoint("
