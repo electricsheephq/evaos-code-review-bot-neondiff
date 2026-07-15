@@ -144,6 +144,8 @@ export async function startBroker(
     fake?: ReturnType<typeof fakeGitHubClient>;
     /** A pre-built broker store so a test can inspect the decision ledger. */
     store?: unknown;
+    /** Entitlement authority for private/internal issuance (#614 fixtures). */
+    resolveEntitlement?: unknown;
     deviceRegisterRateLimiter?: RateLimiter;
     tokenRateLimiter?: RateLimiter;
     connectRateLimiter?: RateLimiter;
@@ -161,6 +163,7 @@ export async function startBroker(
       ...(options.store ? { store: options.store } : { dbPath: ":memory:" }),
       githubClient: fake.client,
       installBaseUrl: INSTALL_BASE_URL,
+      ...(options.resolveEntitlement ? { resolveEntitlement: options.resolveEntitlement } : {}),
       now: nowFn,
       deviceRegisterRateLimiter: options.deviceRegisterRateLimiter,
       tokenRateLimiter: options.tokenRateLimiter,

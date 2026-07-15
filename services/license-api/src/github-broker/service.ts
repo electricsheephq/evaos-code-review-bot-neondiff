@@ -1,7 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { createHash } from "node:crypto";
 import { RateLimiter } from "../service.js";
-import { authorizeTokenIssuance, type RequestedRepository } from "./authorization.js";
+import {
+  authorizeTokenIssuance,
+  type EntitlementSnapshot,
+  type RequestedRepository
+} from "./authorization.js";
 import { authenticateDevice, deviceIdFromPublicJwk } from "./device-auth.js";
 import { BrokerError } from "./errors.js";
 import {
@@ -30,11 +34,46 @@ export const MINIMAL_REVIEW_PERMISSIONS: Record<string, string> = {
 
 const PERMISSION_SCOPE_RANK: Record<string, number> = { read: 1, write: 2, admin: 3 };
 
+/**
+ * Context handed to the entitlement resolver for a private/internal token
+ * request. Only the ids and the private repository names are exposed — never a
+ * license key or provider secret — so a resolver stays public-safe.
+ */
+export interface EntitlementResolutionContext {
+  deviceId: string;
+  installationId: number;
+  accountLogin?: string;
+  /** The requested repositories whose visibility is private or internal. */
+  privateRepositories: string[];
+}
+
+/**
+ * Resolves the production entitlement for a private/internal token request,
+ * bound to the license authority (contract shape: license-api `Entitlement`,
+ * merged #574). The live device<->license linkage and deployment wiring are the
+ * deploy lane's (#559); the broker only depends on this narrow snapshot function,
+ * proven here with fixtures. It is called ONLY when a request includes a
+ * non-public repository, so the public-free tier never depends on the license
+ * service. Any throw is treated as a service outage and fails closed.
+ */
+export type EntitlementResolver = (
+  context: EntitlementResolutionContext
+) => EntitlementSnapshot | Promise<EntitlementSnapshot>;
+
+/** The fail-closed default: no entitlement authority wired -> private denied. */
+const denyPrivateEntitlementResolver: EntitlementResolver = () => ({ status: "none" });
+
 export interface GitHubBrokerServiceOptions {
   store: GitHubBrokerStore;
   githubClient: GitHubInstallationClient;
   /** Official App install URL, e.g. https://github.com/apps/<app>/installations/new. */
   installBaseUrl: string;
+  /**
+   * Entitlement authority for private/internal issuance. Defaults to a fail-closed
+   * resolver (denies all private work) until the deploy lane wires the license
+   * linkage; public/free issuance never calls it.
+   */
+  resolveEntitlement?: EntitlementResolver;
   now?: () => Date;
   deviceRegisterRateLimiter?: RateLimiter;
   connectRateLimiter?: RateLimiter;
@@ -52,6 +91,7 @@ export class GitHubBrokerService {
   private readonly store: GitHubBrokerStore;
   private readonly githubClient: GitHubInstallationClient;
   private readonly installBaseUrl: string;
+  private readonly resolveEntitlement: EntitlementResolver;
   private readonly now: () => Date;
   private readonly deviceRegisterRateLimiter: RateLimiter;
   private readonly connectRateLimiter: RateLimiter;
@@ -61,6 +101,7 @@ export class GitHubBrokerService {
     this.store = options.store;
     this.githubClient = options.githubClient;
     this.installBaseUrl = options.installBaseUrl;
+    this.resolveEntitlement = options.resolveEntitlement ?? denyPrivateEntitlementResolver;
     this.now = options.now ?? (() => new Date());
     this.deviceRegisterRateLimiter =
       options.deviceRegisterRateLimiter ?? new RateLimiter({ maxPerWindow: 20, windowMs: 60_000 });
@@ -188,8 +229,20 @@ export class GitHubBrokerService {
 
       const requested = await this.resolveRequestedRepositories(installationId, repositories);
 
-      // The issuance seam: the ONLY path to minting. #614 replaces its body.
-      const decision = authorizeTokenIssuance({ requestedRepositories: requested });
+      // Bind entitlement for any non-public repository BEFORE the seam and BEFORE
+      // any mint. Resolution is a license-authority lookup (no GitHub content, no
+      // provider call), so a blocked private path egresses nothing. The all-public
+      // path never calls the authority, so the free tier does not depend on the
+      // license service being reachable (AC2).
+      const entitlement = await this.resolveEntitlementForRequest(
+        deviceId,
+        installationId,
+        installation.account_login,
+        requested
+      );
+
+      // The issuance seam: the ONLY path to minting.
+      const decision = authorizeTokenIssuance({ requestedRepositories: requested, entitlement });
       if (decision.decision === "deny") {
         throw new BrokerError(decision.reason, "token issuance is not authorized for the requested repositories");
       }
@@ -252,6 +305,34 @@ export class GitHubBrokerService {
       if (!match) throw new BrokerError("repo_outside_installation", "a requested repository is not in the installation selection");
       return { fullName, id: match.id, visibility: match.visibility };
     });
+  }
+
+  /**
+   * Resolve the entitlement snapshot the seam binds a non-public request against.
+   * Returns the public-free default (`none`) without touching the authority when
+   * every requested repository is public. A resolver throw is a service outage and
+   * fails closed as `service_unavailable` (never an allow).
+   */
+  private async resolveEntitlementForRequest(
+    deviceId: string,
+    installationId: number,
+    accountLogin: string | undefined,
+    requested: RequestedRepository[]
+  ): Promise<EntitlementSnapshot> {
+    const privateRepositories = requested
+      .filter((repository) => repository.visibility !== "public")
+      .map((repository) => repository.fullName);
+    if (privateRepositories.length === 0) return { status: "none" };
+    try {
+      return await this.resolveEntitlement({
+        deviceId,
+        installationId,
+        ...(accountLogin ? { accountLogin } : {}),
+        privateRepositories
+      });
+    } catch {
+      return { status: "service_unavailable" };
+    }
   }
 
   private async mintToken(

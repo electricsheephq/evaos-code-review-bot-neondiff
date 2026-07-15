@@ -19,7 +19,9 @@ export {
 export {
   GitHubBrokerService,
   MINIMAL_REVIEW_PERMISSIONS,
-  type GitHubBrokerServiceOptions
+  type GitHubBrokerServiceOptions,
+  type EntitlementResolver,
+  type EntitlementResolutionContext
 } from "./service.js";
 export { GitHubBrokerStore } from "./store.js";
 export {
