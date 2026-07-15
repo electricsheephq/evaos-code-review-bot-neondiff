@@ -48,6 +48,7 @@ const ALLOWED_DSYM_DEBUG_SOURCE_PATHS = [
   "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopResolvedEvaluationFixture.swift",
   "apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/VisualProofDesktopDependencies.swift"
 ];
+const ALLOWED_DSYM_DWARF_PATH = "/dsyms/neondiffdesktop.app.dsym/contents/resources/dwarf/neondiffdesktop";
 const ALLOWED_DSYM_DEBUG_SOURCE_FILENAMES = ALLOWED_DSYM_DEBUG_SOURCE_PATHS
   .map((sourcePath) => Buffer.from(basename(sourcePath)));
 
@@ -152,7 +153,7 @@ function scan(inputPaths) {
     const data = readFileSync(file.physicalPath);
     const isArchiveDsymDwarf = file.isArchiveRoot
       && !file.throughSymlink
-      && /^\/dsyms\/[^/]+\.dsym\/contents\/resources\/dwarf\/[^/]+$/.test(normalizedPath);
+      && normalizedPath === ALLOWED_DSYM_DWARF_PATH;
     const content = isArchiveDsymDwarf
       ? maskAllowedDsymSourceFilenames(data)
       : data;

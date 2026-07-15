@@ -280,6 +280,31 @@ describe("desktop fixture release-artifact boundary", () => {
     });
   });
 
+  it("rejects an allowed source filename in an unrelated top-level archive dSYM", () => {
+    const artifacts = releaseArtifacts();
+    const archive = join(artifacts.root, "NeonDiffDesktop.xcarchive");
+    const dwarf = join(
+      archive,
+      "dSYMs",
+      "Other.framework.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "Other"
+    );
+    mkdirSync(dirname(dwarf), { recursive: true });
+    writeFileSync(dwarf, "/build/Support/DesktopEvaluationReadiness.swift\0");
+
+    const result = scan([archive]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
   it("scans an archive dSYM file again without masking through an app-resource symlink", () => {
     const artifacts = releaseArtifacts();
     const archive = join(artifacts.root, "NeonDiffDesktop.xcarchive");
