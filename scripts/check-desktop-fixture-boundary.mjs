@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const MAX_FILES = 20_000;
 const MAX_FILE_BYTES = 128 * 1024 * 1024;
@@ -40,13 +40,15 @@ const FORBIDDEN_PATH_MARKERS = [
     matches: (path) => path.includes("/neondiffdesktopfixtureresolve")
   }
 ];
-const ALLOWED_DSYM_DEBUG_SOURCE_FILENAMES = [
-  "DesktopEvaluationDependencies.swift",
-  "DesktopEvaluationModelAdapter.swift",
-  "DesktopEvaluationReadiness.swift",
-  "DesktopResolvedEvaluationFixture.swift",
-  "VisualProofDesktopDependencies.swift"
-].map((filename) => Buffer.from(filename));
+const ALLOWED_DSYM_DEBUG_SOURCE_PATHS = [
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/DesktopEvaluationDependencies.swift",
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopEvaluationModelAdapter.swift",
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift",
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopResolvedEvaluationFixture.swift",
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/VisualProofDesktopDependencies.swift"
+];
+const ALLOWED_DSYM_DEBUG_SOURCE_FILENAMES = ALLOWED_DSYM_DEBUG_SOURCE_PATHS
+  .map((sourcePath) => Buffer.from(basename(sourcePath)));
 
 function maskAllowedDsymSourceFilenames(data) {
   const masked = Buffer.from(data);

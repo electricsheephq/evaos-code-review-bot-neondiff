@@ -22,6 +22,13 @@ const fixtureMarkers = [
   "applyInitialState",
   "NEONDIFF_DESKTOP_EVALUATION_READY_PATH"
 ];
+const allowedDsymDebugSourcePaths = [
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/DesktopEvaluationDependencies.swift",
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopEvaluationModelAdapter.swift",
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift",
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopResolvedEvaluationFixture.swift",
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Adapters/VisualProofDesktopDependencies.swift"
+];
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -54,6 +61,17 @@ function scan(paths: string[]) {
 }
 
 describe("desktop fixture release-artifact boundary", () => {
+  it("anchors every allowed dSYM basename to an existing whole-file DEBUG app source", () => {
+    const scannerSource = readFileSync("scripts/check-desktop-fixture-boundary.mjs", "utf8");
+
+    for (const sourcePath of allowedDsymDebugSourcePaths) {
+      expect(scannerSource, sourcePath).toContain(`"${sourcePath}"`);
+      const source = readFileSync(sourcePath, "utf8").trim();
+      expect(source, sourcePath).toMatch(/^#if DEBUG\n/);
+      expect(source, sourcePath).toMatch(/\n#endif$/);
+    }
+  });
+
   it("accepts clean AppCore objects, modules, resources, and frameworks", () => {
     const artifacts = releaseArtifacts();
     for (const path of [artifacts.object, artifacts.module, artifacts.resource, artifacts.framework]) {
