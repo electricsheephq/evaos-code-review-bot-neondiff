@@ -482,6 +482,42 @@ private func target() {
     expect(source).toContain("neondiff-hosted-canonical-size-matrix.json");
   });
 
+  it("pins the strict accessibility3 large-text hosted matrix", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const launchOptions = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopEvaluationSupport/DesktopEvaluationLaunchOptions.swift",
+      "utf8"
+    );
+    const resolvedLaunch = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopResolvedEvaluationFixture.swift",
+      "utf8"
+    );
+    const app = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift",
+      "utf8"
+    );
+
+    expect(source).toContain(
+      "testStrictFixtureSettlesAndReachesEverySidebarPageBottomAtMinimumSizeWithAccessibility3Text"
+    );
+    expect(source).toContain('"--text-size", "accessibility3"');
+    expect(source).toContain(
+      'let textSizeMode = "swiftui-dynamic-type-accessibility3-test-override"'
+    );
+    expect(source).toContain(
+      'proofBoundary: "hosted-accessibility3-minimum-size-outer-geometry-and-page-bottom-only-inner-scroll-exhaustion-excluded"'
+    );
+    expect(source).toContain("neondiff-hosted-large-text-matrix.json");
+    expect(launchOptions).toContain('"--text-size"');
+    expect(launchOptions).toContain("case accessibility3");
+    expect(resolvedLaunch).toContain('"--text-size"');
+    expect(resolvedLaunch).toContain("textSizeMode: DesktopResolvedEvaluationTextSizeMode");
+    expect(app).toContain(".dynamicTypeSize(.accessibility3)");
+    expect(app).toContain(
+      String.raw`neondiff.fixture.\(fixtureId).text-size.accessibility3`
+    );
+  });
+
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("Hosted XCUITest smoke");
