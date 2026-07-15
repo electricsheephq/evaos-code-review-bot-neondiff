@@ -8,6 +8,26 @@ export interface RequestedRepository {
   visibility: GitHubRepositoryVisibility;
 }
 
+/**
+ * The entitlement snapshot the seam binds a private/internal request against.
+ * It is derived from the production entitlement contract (the license-api
+ * `Entitlement`, merged #574) BEFORE the seam runs, so the decision function
+ * stays pure and table-testable. `active` carries whether the live license
+ * covers private repositories; every terminal state maps to a distinct
+ * fail-closed reason code. `none` is the public-free default — no NeonDiff
+ * Activation Key was presented. The broker never derives entitlement from a
+ * provider key; only an active, private-covering entitlement unlocks private.
+ */
+export type EntitlementSnapshot =
+  | { status: "active"; privateRepoAllowed: boolean }
+  | { status: "expired" }
+  | { status: "revoked" }
+  | { status: "invalid" }
+  | { status: "seat_exhausted" }
+  | { status: "replay_conflict" }
+  | { status: "service_unavailable" }
+  | { status: "none" };
+
 export type IssuanceAuthorizationDecision =
   | { decision: "allow"; repositories: string[] }
   | { decision: "deny"; reason: BrokerReason };
@@ -28,6 +48,7 @@ export type IssuanceAuthorizationDecision =
  */
 export function authorizeTokenIssuance(input: {
   requestedRepositories: RequestedRepository[];
+  entitlement?: EntitlementSnapshot;
 }): IssuanceAuthorizationDecision {
   if (input.requestedRepositories.length === 0) {
     return { decision: "deny", reason: "invalid_request" };

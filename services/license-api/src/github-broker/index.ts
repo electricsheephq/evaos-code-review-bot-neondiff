@@ -1,4 +1,9 @@
-export { authorizeTokenIssuance, type RequestedRepository, type IssuanceAuthorizationDecision } from "./authorization.js";
+export {
+  authorizeTokenIssuance,
+  type RequestedRepository,
+  type EntitlementSnapshot,
+  type IssuanceAuthorizationDecision
+} from "./authorization.js";
 export { BrokerError, type BrokerReason } from "./errors.js";
 export {
   createGitHubInstallationClient,
