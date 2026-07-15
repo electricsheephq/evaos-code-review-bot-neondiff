@@ -114,6 +114,7 @@ struct OperatorSectionHeader: View {
                 Text(title)
                     .font(NeonDiffTheme.headlineFont)
                     .foregroundStyle(NeonDiffTheme.textPrimary)
+                    .accessibilityIdentifier("neondiff-section-title")
             }
 
             Spacer(minLength: 16)
