@@ -27,7 +27,7 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
       "PRODUCT_BUNDLE_IDENTIFIER = com.electricsheephq.NeonDiffDesktop"
     );
     expect(project).toContain("TEST_TARGET_NAME = NeonDiffDesktopHostedApp");
-    expect(project).not.toContain("CODE_SIGNING_ALLOWED = NO");
+    expect(project).not.toMatch(/CODE_SIGNING_ALLOWED\s*=\s*["']?NO["']?/i);
     expect(project).not.toContain("UITargetAppPath");
     expect(project).not.toContain("UITargetAppBundleIdentifier");
 
@@ -62,6 +62,10 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(workflow).toContain(
       'PROOF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}'
     );
+    expect(workflow).toContain(
+      'DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer'
+    );
+    expect(workflow).toContain("Record pinned Xcode toolchain");
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$PROOF_SHA"');
     expect(workflow).toContain(
       'NeonDiffDesktop-${{ github.event.pull_request.head.sha || github.sha }}.xcresult'
@@ -70,7 +74,7 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
       'neondiff-desktop-xcresult-${{ github.event.pull_request.head.sha || github.sha }}'
     );
     expect(workflow).toContain("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
-    expect(workflow).not.toContain("CODE_SIGNING_ALLOWED=NO");
+    expect(workflow).not.toMatch(/CODE_SIGNING_ALLOWED\s*=\s*["']?NO["']?/i);
 
     const routing = JSON.parse(execFileSync(
       "node",
