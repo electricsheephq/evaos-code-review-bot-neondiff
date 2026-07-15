@@ -2,45 +2,58 @@ import SwiftUI
 import NeonDiffDesktopAppCore
 import NeonDiffDesktopCore
 
+// Reference screen for issue #611: applies the live-site design contract
+// (docs/design/live-site-design-source.md) as native translation — tokenized
+// colors for both appearances, mono uppercase section labels, status rows with
+// glyph + text (never color alone), one bracket primary action, and a
+// corner-ticked readiness console. Behavior, bindings, accessibility
+// identifiers, and the #517 geometry sentinel (neondiff-overview-start-dashboard)
+// are preserved; structural Home redesign remains owned by #521.
 struct OverviewView: View {
     @ObservedObject var model: NeonDiffDesktopModel
-    private let statusColumns = [GridItem(.adaptive(minimum: 160), spacing: 12)]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                LazyVGrid(columns: statusColumns, alignment: .leading, spacing: 12) {
-                    StatusTile(title: "Runtime", value: model.status.healthState, systemImage: "bolt.horizontal.circle")
-                    StatusTile(title: "Repos", value: "\(model.status.monitoredRepos.count)", systemImage: "folder")
-                    StatusTile(title: "Keys", value: model.providers.providerKeyStored ? "stored" : "missing", systemImage: "key")
-                    StatusTile(title: "Dashboard", value: model.dashboardProcessIdentifier == nil ? model.dashboardLaunchStatus : "launched", systemImage: "macwindow")
+                NDConsolePanel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Readiness // Overview").ndSectionLabel()
+                        StatusRow(title: "Runtime", value: model.status.healthState)
+                        StatusRow(title: "Repos", value: "\(model.status.monitoredRepos.count)")
+                        StatusRow(title: "Keys", value: model.providers.providerKeyStored ? "stored" : "missing")
+                        StatusRow(
+                            title: "Dashboard",
+                            value: model.dashboardProcessIdentifier == nil ? model.dashboardLaunchStatus : "launched"
+                        )
+                    }
                 }
 
-                OperatorSection("Local Dashboard Launcher") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("The Mac app stays in control on launch. Start the local dashboard service here, then open the browser dashboard only when you choose to inspect the full HTML setup surface.")
-                            .operatorBodyText()
-                            .fixedSize(horizontal: false, vertical: true)
+                OverviewSection(title: "Local Dashboard Launcher // Operator") {
+                    Text("The Mac app stays in control on launch. Start the local dashboard service here, then open the browser dashboard only when you choose to inspect the full HTML setup surface.")
+                        .font(.body)
+                        .foregroundStyle(NDColor.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                        HStack(spacing: 10) {
-                            Button { model.startDashboardServer() } label: {
-                                Label("Start Local Dashboard", systemImage: "play.circle")
-                            }
-                            .accessibilityIdentifier("neondiff-start-dashboard-server")
-
-                            Button { model.openDashboard() } label: {
-                                Label("Open Browser Dashboard", systemImage: "safari")
-                            }
-                            .accessibilityIdentifier("neondiff-open-browser-dashboard")
-
-                            Button { model.copyCommand(model.dashboardCommand) } label: {
-                                Label("Copy Dashboard Command", systemImage: "doc.on.doc")
-                            }
-                            .accessibilityIdentifier("neondiff-copy-dashboard-command")
+                    HStack(spacing: 10) {
+                        // The one bracket primary action for this screen.
+                        Button { model.startDashboardServer() } label: {
+                            Text("Start Local Dashboard")
                         }
+                        .buttonStyle(NDBracketButtonStyle())
+                        .accessibilityIdentifier("neondiff-start-dashboard-server")
 
-                        OperatorCommandText(text: model.dashboardCommand.commandLine, lineLimit: 3)
+                        Button { model.openDashboard() } label: {
+                            Label("Open Browser Dashboard", systemImage: "safari")
+                        }
+                        .accessibilityIdentifier("neondiff-open-browser-dashboard")
+
+                        Button { model.copyCommand(model.dashboardCommand) } label: {
+                            Label("Copy Dashboard Command", systemImage: "doc.on.doc")
+                        }
+                        .accessibilityIdentifier("neondiff-copy-dashboard-command")
                     }
+
+                    OperatorCommandText(text: model.dashboardCommand.commandLine, lineLimit: 3)
                 }
 
                 CommandPanel(commands: [
@@ -87,13 +100,21 @@ struct OverviewView: View {
                 }
 
                 if let lastError = model.lastError, !lastError.isEmpty {
-                    Text(lastError)
-                        .foregroundStyle(NeonDiffTheme.warning)
-                        .font(.callout)
-                        .operatorPanel()
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("◆")
+                            .foregroundStyle(NDColor.danger)
+                            .accessibilityHidden(true)
+                        Text(lastError)
+                            .foregroundStyle(NDColor.danger)
+                            .font(.callout)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(Rectangle().fill(NDColor.surface))
+                    .overlay(Rectangle().stroke(NDColor.danger.opacity(0.5), lineWidth: 1))
                 }
 
-                OperatorSection("Last Command") {
+                OverviewSection(title: "Last Command // Log") {
                     OperatorCommandText(text: model.lastCommandLine, lineLimit: 4)
                 }
             }
@@ -102,28 +123,73 @@ struct OverviewView: View {
                 PageBottomSentinel(section: "overview")
             }
         }
+        .background(NDColor.background)
         .accessibilityIdentifier("neondiff-overview-outer-scroll")
         .scrollContentBackground(.hidden)
     }
 }
 
-private struct StatusTile: View {
-    var title: String
-    var value: String
-    var systemImage: String
+/// A working-screen section: mono uppercase label header over a tokenized
+/// surface. Local to the reference screen; the shared component system is #520.
+private struct OverviewSection<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(NeonDiffTheme.badgeFont)
-                .foregroundStyle(NeonDiffTheme.textSecondary)
-            Text(value)
-                .font(.system(.title3, design: .monospaced).weight(.black))
-                .foregroundStyle(NeonDiffTheme.statusColor(value))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).ndSectionLabel()
+            content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .operatorPanel(active: true)
+        .padding(16)
+        .background(Rectangle().fill(NDColor.surface))
+        .overlay(Rectangle().stroke(NDColor.borderInput, lineWidth: 1))
+    }
+}
+
+/// Key-value status row: mono uppercase label left, glyph + mono value right.
+/// Status is carried by glyph + text, not color alone.
+private struct StatusRow: View {
+    var title: String
+    var value: String
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 6) {
+                Text(glyph)
+                    .font(NDFont.mono)
+                    .foregroundStyle(color)
+                    .accessibilityHidden(true)
+                Text(value)
+                    .font(NDFont.mono)
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        } label: {
+            Text(title).ndSectionLabel()
+        }
+    }
+
+    private var normalized: String { value.lowercased() }
+
+    private var isHealthy: Bool {
+        ["ok", "stored", "ready", "active", "launched"].contains { normalized.contains($0) }
+    }
+
+    private var isAttention: Bool {
+        ["missing", "blocked", "error", "unknown", "stopped"].contains { normalized.contains($0) }
+    }
+
+    private var glyph: String {
+        if isHealthy { return "●" }
+        if isAttention { return "◆" }
+        return "◇"
+    }
+
+    private var color: Color {
+        if isHealthy { return NDColor.accentPrimary }
+        if isAttention { return NDColor.warning }
+        return NDColor.textSecondary
     }
 }
