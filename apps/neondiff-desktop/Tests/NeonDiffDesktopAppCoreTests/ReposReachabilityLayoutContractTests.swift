@@ -1,5 +1,7 @@
 import Foundation
+import CoreGraphics
 import Testing
+@testable import NeonDiffDesktopAppCore
 
 @Suite struct ReposReachabilityLayoutContractTests {
     @Test func reposPageKeepsApplyAndBoundaryReachableAtCompactHeights() throws {
@@ -65,6 +67,21 @@ import Testing
         #expect(app.contains("enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled"))
         #expect(app.contains("evaluationContext != nil"))
         #expect(sidebar.contains(#"neondiff-sidebar-section-\(section.rawValue)"#))
+
+        let detailView = try #require(source.range(of: "private struct DetailView"))
+        let keyedAppearance = try #require(
+            source.range(
+                of: ".onAppear { onSurfaceReady?(model.selectedSection) }",
+                range: detailView.upperBound..<source.endIndex
+            )
+        )
+        let surfaceIdentity = try #require(
+            source.range(
+                of: ".modifier(\n                    SurfaceIdentityModifier(",
+                range: detailView.upperBound..<source.endIndex
+            )
+        )
+        #expect(keyedAppearance.lowerBound < surfaceIdentity.lowerBound)
     }
 
     @Test func settledGeometryCaptureUsesOnlyTwoLedgeredPublicSamePIDPresses() throws {
@@ -106,6 +123,137 @@ import Testing
         #expect(configurator.contains("DesktopEvaluationSurfaceStateWriter.sample(window: window)"))
         #expect(readiness.contains("surface-state.json"))
         #expect(readiness.contains("quiescent"))
+    }
+
+    @Test func hostedRegionFramesInvalidateAcrossGenerationsAndBadSnapshots() throws {
+        let required = ["chrome", "sidebar", "detail"]
+        let valid: [String: CGRect] = [
+            "chrome": CGRect(x: 0, y: 0, width: 1040, height: 82),
+            "sidebar": CGRect(x: 0, y: 82, width: 230, height: 598),
+            "detail": CGRect(x: 231, y: 82, width: 809, height: 598)
+        ]
+        var state = GenerationBoundRegionFrameState()
+
+        state.begin(generation: 0)
+        let acceptedGeneration0 = state.replace(
+            generation: 0,
+            frames: valid,
+            requiredIdentifiers: required
+        )
+        #expect(acceptedGeneration0)
+        #expect(state.snapshot(generation: 0, requiredIdentifiers: required) != nil)
+
+        state.begin(generation: 1)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+        let acceptedMissing = state.replace(
+            generation: 1,
+            frames: ["chrome": valid["chrome"]!],
+            requiredIdentifiers: required
+        )
+        #expect(!acceptedMissing)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+
+        var invalid = valid
+        invalid["detail"] = CGRect.zero
+        let acceptedInvalid = state.replace(
+            generation: 1,
+            frames: invalid,
+            requiredIdentifiers: required
+        )
+        #expect(!acceptedInvalid)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+        let acceptedStale = state.replace(
+            generation: 0,
+            frames: valid,
+            requiredIdentifiers: required
+        )
+        #expect(!acceptedStale)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+
+        let acceptedGeneration1 = state.replace(
+            generation: 1,
+            frames: valid,
+            requiredIdentifiers: required
+        )
+        #expect(acceptedGeneration1)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == valid)
+        let acceptedInvalidation = state.replace(
+            generation: 1,
+            frames: ["chrome": valid["chrome"]!],
+            requiredIdentifiers: required
+        )
+        #expect(!acceptedInvalidation)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+    }
+
+    @Test func hostedRegionPreferenceRoutingPreservesGenerationFreshness() throws {
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 1,
+                observedGenerations: [1],
+                framesAreEmpty: false
+            ) == .replace(generation: 1)
+        )
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 1,
+                observedGenerations: [0],
+                framesAreEmpty: false
+            ) == .replace(generation: 0)
+        )
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 1,
+                observedGenerations: [],
+                framesAreEmpty: true
+            ) == .invalidate(generation: 1)
+        )
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 1,
+                observedGenerations: [0, 1],
+                framesAreEmpty: false
+            ) == .invalidate(generation: 1)
+        )
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 2,
+                observedGenerations: [0, 1],
+                framesAreEmpty: false
+            ) == .ignore
+        )
+
+        let required = ["chrome", "sidebar", "detail"]
+        let valid: [String: CGRect] = [
+            "chrome": CGRect(x: 0, y: 0, width: 1040, height: 82),
+            "sidebar": CGRect(x: 0, y: 82, width: 230, height: 598),
+            "detail": CGRect(x: 231, y: 82, width: 809, height: 598)
+        ]
+        var state = GenerationBoundRegionFrameState()
+        state.begin(generation: 1)
+        let acceptedCurrent = state.replace(
+            generation: 1,
+            frames: valid,
+            requiredIdentifiers: required
+        )
+        #expect(acceptedCurrent)
+
+        let staleRoute = GenerationBoundRegionFrameRouting.route(
+            currentGeneration: 1,
+            observedGenerations: [0],
+            framesAreEmpty: false
+        )
+        if case let .replace(observedGeneration) = staleRoute {
+            let acceptedStale = state.replace(
+                generation: observedGeneration,
+                frames: valid,
+                requiredIdentifiers: required
+            )
+            #expect(!acceptedStale)
+        } else {
+            Issue.record("Expected a stale packet to preserve its observed generation")
+        }
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == valid)
     }
 
     @Test func settledGeometryRunnerUsesTheReadinessApprovedPrivateWorkspacePrefix() throws {

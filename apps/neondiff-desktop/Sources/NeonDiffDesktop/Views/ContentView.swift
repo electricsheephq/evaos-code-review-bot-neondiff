@@ -8,15 +8,37 @@ struct ContentView: View {
     let preferredColorScheme: ColorScheme?
     let rootAccessibilityIdentifier: String
     let enablesEvaluationRegionBindings: Bool
-    let onSurfaceReady: (() -> Void)?
+    let onSurfaceReady: ((DesktopSection) -> Void)?
+#if DEBUG
+    let evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus?
+#endif
 
+#if DEBUG
     init(
         model: NeonDiffDesktopModel,
         updateController: NeonUpdateController,
         preferredColorScheme: ColorScheme? = .dark,
         rootAccessibilityIdentifier: String = "neondiff.desktop.root",
         enablesEvaluationRegionBindings: Bool = false,
-        onSurfaceReady: (() -> Void)? = nil
+        onSurfaceReady: ((DesktopSection) -> Void)? = nil,
+        evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus? = nil
+    ) {
+        self.model = model
+        self.updateController = updateController
+        self.preferredColorScheme = preferredColorScheme
+        self.rootAccessibilityIdentifier = rootAccessibilityIdentifier
+        self.enablesEvaluationRegionBindings = enablesEvaluationRegionBindings
+        self.onSurfaceReady = onSurfaceReady
+        self.evaluationSurfaceStatus = evaluationSurfaceStatus
+    }
+#else
+    init(
+        model: NeonDiffDesktopModel,
+        updateController: NeonUpdateController,
+        preferredColorScheme: ColorScheme? = .dark,
+        rootAccessibilityIdentifier: String = "neondiff.desktop.root",
+        enablesEvaluationRegionBindings: Bool = false,
+        onSurfaceReady: ((DesktopSection) -> Void)? = nil
     ) {
         self.model = model
         self.updateController = updateController
@@ -25,11 +47,31 @@ struct ContentView: View {
         self.enablesEvaluationRegionBindings = enablesEvaluationRegionBindings
         self.onSurfaceReady = onSurfaceReady
     }
+#endif
 
     var body: some View {
+#if DEBUG
+        if let evaluationSurfaceStatus {
+            EvaluationRegionFrameCollector(status: evaluationSurfaceStatus) { generation in
+                content(evaluationSurfaceGeneration: generation)
+            }
+        } else {
+            content(evaluationSurfaceGeneration: nil)
+        }
+#else
+        content(evaluationSurfaceGeneration: nil)
+#endif
+    }
+
+    private func content(evaluationSurfaceGeneration: Int?) -> some View {
         ZStack(alignment: .top) {
             OperatorBackdrop()
             EvaluationRootAccessibilityMarker(identifier: rootAccessibilityIdentifier)
+#if DEBUG
+            if let evaluationSurfaceStatus {
+                EvaluationSurfaceAccessibilityMarker(status: evaluationSurfaceStatus)
+            }
+#endif
             Rectangle()
                 .fill(NeonDiffTheme.accent)
                 .frame(height: 34)
@@ -41,7 +83,8 @@ struct ContentView: View {
                     .ignoresSafeArea(.container, edges: .top)
                     .evaluationAccessibilityRegion(
                         "neondiff-chrome",
-                        enabled: enablesEvaluationRegionBindings
+                        enabled: enablesEvaluationRegionBindings,
+                        generation: evaluationSurfaceGeneration
                     )
 
                 HStack(spacing: 0) {
@@ -49,7 +92,8 @@ struct ContentView: View {
                         .frame(width: 230)
                         .evaluationAccessibilityRegion(
                             "neondiff-sidebar",
-                            enabled: enablesEvaluationRegionBindings
+                            enabled: enablesEvaluationRegionBindings,
+                            generation: evaluationSurfaceGeneration
                         )
 
                     Rectangle()
@@ -64,7 +108,8 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .evaluationAccessibilityRegion(
                             "neondiff-detail",
-                            enabled: enablesEvaluationRegionBindings
+                            enabled: enablesEvaluationRegionBindings,
+                            generation: evaluationSurfaceGeneration
                         )
                 }
             }
@@ -79,22 +124,99 @@ struct ContentView: View {
                 .tint(NeonDiffTheme.accent)
                 .preferredColorScheme(preferredColorScheme)
                 .interactiveDismissDisabled(model.onboardingFlow.currentStep != .done)
-                .onAppear { onSurfaceReady?() }
+                .onAppear { onSurfaceReady?(model.selectedSection) }
         }
     }
 }
 
 private extension View {
     @ViewBuilder
-    func evaluationAccessibilityRegion(_ identifier: String, enabled: Bool) -> some View {
+    func evaluationAccessibilityRegion(
+        _ identifier: String,
+        enabled: Bool,
+        generation: Int?
+    ) -> some View {
         if enabled {
             accessibilityElement(children: .contain)
                 .accessibilityIdentifier(identifier)
+#if DEBUG
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: EvaluationRegionFramesPreferenceKey.self,
+                            value: generation.map {
+                                [
+                                    identifier: EvaluationRegionFramePreference(
+                                        generation: $0,
+                                        frame: proxy.frame(in: .global)
+                                    )
+                                ]
+                            } ?? [:]
+                        )
+                    }
+                }
+#endif
         } else {
             self
         }
     }
 }
+
+#if DEBUG
+private struct EvaluationRegionFrameCollector<Content: View>: View {
+    @ObservedObject var status: DesktopEvaluationSurfaceStatus
+    let content: (Int?) -> Content
+
+    init(
+        status: DesktopEvaluationSurfaceStatus,
+        @ViewBuilder content: @escaping (Int?) -> Content
+    ) {
+        self.status = status
+        self.content = content
+    }
+
+    var body: some View {
+        content(status.snapshot?.generation)
+            .onPreferenceChange(EvaluationRegionFramesPreferenceKey.self) { frames in
+                guard let generation = status.snapshot?.generation else {
+                    return
+                }
+                let generations = Set(frames.values.map(\.generation))
+                switch GenerationBoundRegionFrameRouting.route(
+                    currentGeneration: generation,
+                    observedGenerations: generations,
+                    framesAreEmpty: frames.isEmpty
+                ) {
+                case let .replace(observedGeneration):
+                    status.updateRegionFrames(
+                        frames.mapValues(\.frame),
+                        generation: observedGeneration
+                    )
+                case let .invalidate(currentGeneration):
+                    status.updateRegionFrames([:], generation: currentGeneration)
+                case .ignore:
+                    break
+                }
+            }
+    }
+}
+
+private struct EvaluationRegionFramesPreferenceKey: PreferenceKey {
+    static let defaultValue: [String: EvaluationRegionFramePreference] = [:]
+
+    static func reduce(
+        value: inout [String: EvaluationRegionFramePreference],
+        nextValue: () -> [String: EvaluationRegionFramePreference]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
+private struct EvaluationRegionFramePreference: Equatable {
+    let generation: Int
+    let frame: CGRect
+}
+#endif
 
 private struct EvaluationRootAccessibilityMarker: View {
     let identifier: String
@@ -109,10 +231,45 @@ private struct EvaluationRootAccessibilityMarker: View {
     }
 }
 
+#if DEBUG
+private struct EvaluationSurfaceAccessibilityMarker: View {
+    @ObservedObject var status: DesktopEvaluationSurfaceStatus
+
+    var body: some View {
+        ZStack {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(status.geometryAccessibilityManifest)
+                .accessibilityIdentifier(status.accessibilityIdentifier)
+                .allowsHitTesting(false)
+            ForEach(status.geometryAccessibilityChunks) { chunk in
+                EvaluationSurfaceGeometryChunkMarker(chunk: chunk)
+            }
+        }
+        .frame(width: 1, height: 1)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct EvaluationSurfaceGeometryChunkMarker: View {
+    let chunk: DesktopHostedGeometryAccessibilityChunk
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(chunk.label)
+            .accessibilityIdentifier(chunk.identifier)
+            .allowsHitTesting(false)
+    }
+}
+#endif
+
 private struct DetailView: View {
     @ObservedObject var model: NeonDiffDesktopModel
     @ObservedObject var updateController: NeonUpdateController
-    let onSurfaceReady: (() -> Void)?
+    let onSurfaceReady: ((DesktopSection) -> Void)?
 
     var body: some View {
         ZStack {
@@ -133,8 +290,28 @@ private struct DetailView: View {
                     case .settings: SettingsPane(model: model, updateController: updateController)
                     }
                 }
-                .onAppear { onSurfaceReady?() }
+                .onAppear { onSurfaceReady?(model.selectedSection) }
+                .modifier(
+                    SurfaceIdentityModifier(
+                        section: model.selectedSection,
+                        enabled: onSurfaceReady != nil
+                    )
+                )
             }
+        }
+    }
+}
+
+private struct SurfaceIdentityModifier: ViewModifier {
+    let section: DesktopSection
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.id(section)
+        } else {
+            content
         }
     }
 }

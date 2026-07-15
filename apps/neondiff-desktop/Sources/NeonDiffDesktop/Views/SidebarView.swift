@@ -35,6 +35,7 @@ struct SidebarView: View {
                             .foregroundStyle(selection == section ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 9)
+                            .contentShape(Rectangle())
                             .background {
                                 AngularRectangle(corner: 8)
                                     .fill(selection == section ? NeonDiffTheme.panelActive.opacity(0.92) : Color.clear)

@@ -70,6 +70,95 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).not.toContain('NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE');
   });
 
+  it("retains app-authored quiescent cross-tab geometry evidence in the xcresult", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const app = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift",
+      "utf8"
+    );
+    const content = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ContentView.swift",
+      "utf8"
+    );
+    const readiness = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift",
+      "utf8"
+    );
+    const configurator = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/NeonWindowConfigurator.swift",
+      "utf8"
+    );
+    const sidebar = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/SidebarView.swift",
+      "utf8"
+    );
+
+    expect(source).toContain("testStrictFixtureSettlesAcrossOverviewReposOverview");
+    expect(source).toContain('"neondiff.evaluation.surface.overview.0.quiescent"');
+    expect(source).toContain('"neondiff.evaluation.surface.repos.1.quiescent"');
+    expect(source).toContain('"neondiff.evaluation.surface.overview.2.quiescent"');
+    expect(source).toContain('"neondiff-sidebar-section-repos"');
+    expect(source).toContain('"neondiff-sidebar-section-overview"');
+    expect(source).toContain("button.click()");
+    expect(source).not.toContain("button.tap()");
+    expect(source).toContain('"neondiff-chrome"');
+    expect(source).toContain('"neondiff-sidebar"');
+    expect(source).toContain('"neondiff-detail"');
+    expect(source).toContain("sampleIntervalMilliseconds: 100");
+    expect(source).toContain("tolerancePoints: 1");
+    expect(source).toContain('windowAndContent: "appkit-screen"');
+    expect(source).toContain('regions: "swiftui-global"');
+    expect(source).toContain("observedContentGeometry:");
+    expect(source).toContain("assertObservedContentSize(");
+    expect(source).toContain("marker.label");
+    expect(source).toContain("parseAppAuthoredGeometrySamples(");
+    expect(source).toContain('"ndg2-chunks:4"');
+    expect(source).toContain('"ndg2:\\(index):4:"');
+    expect(source).toContain("CompactHostedGeometryCursor");
+    expect(source).toContain("invalidTransportManifest");
+    expect(source).toContain("invalidTransportChunk");
+    expect(source).toContain("neondiff-hosted-transport-diagnostic.json");
+    expect(source).toMatch(/XCTAssertFalse\(\s*marker\.isHittable/);
+    expect(source).not.toContain("Thread.sleep");
+    expect(source).toContain("XCTAttachment");
+    expect(source).toContain("neondiff-hosted-settled-geometry.json");
+    expect(source).toContain(".keepAlways");
+
+    expect(readiness).toContain("final class DesktopEvaluationSurfaceStatus: ObservableObject");
+    expect(readiness).toContain("func begin(section:");
+    expect(readiness).toContain("func markRendered(section:");
+    expect(readiness).toContain("func markQuiescent(");
+    expect(readiness).toContain("contentFrame:");
+    expect(readiness).toContain("geometryAccessibilityManifest");
+    expect(readiness).toContain("geometryAccessibilityChunks");
+    expect(readiness).toContain('"rendered-regions-ready"');
+    expect(readiness).toContain('"rendered-regions-missing"');
+    expect(readiness).toContain("DesktopHostedGeometryCompactTransport");
+    expect(readiness).toContain("chunkByteCount = 68");
+    expect(readiness).toContain("label.utf8.count <= 128");
+    expect(readiness).toContain("DesktopHostedGeometrySample");
+    expect(readiness).toContain("updateRegionFrames(");
+    expect(configurator).toContain("surfaceStatus.isRendered(");
+    expect(configurator).toContain("surfaceStatus.markQuiescent(");
+    expect(configurator).toContain("surfaceStatus.hostedGeometrySample(");
+    expect(content).toContain("EvaluationSurfaceAccessibilityMarker");
+    expect(content).toContain("EvaluationSurfaceGeometryChunkMarker");
+    expect(content).toContain(".accessibilityLabel(status.geometryAccessibilityManifest)");
+    expect(content).toContain(".accessibilityLabel(chunk.label)");
+    expect(content).not.toContain(".accessibilityValue(status.geometryAccessibilityValue)");
+    expect(content).toContain("EvaluationRegionFramesPreferenceKey");
+    expect(content).toContain("EvaluationRegionFrameCollector");
+    expect(content).toContain("@ObservedObject var status: DesktopEvaluationSurfaceStatus");
+    expect(content).toContain("content(status.snapshot?.generation)");
+    expect(content).toContain("GenerationBoundRegionFrameRouting.route(");
+    expect(sidebar).toMatch(
+      /\.padding\(\.horizontal, 10\)\s*\.padding\(\.vertical, 9\)\s*\.contentShape\(Rectangle\(\)\)/
+    );
+    expect(app).toContain("evaluationSurfaceStatus");
+    expect(source).not.toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
+    expect(source).not.toContain("createDirectory");
+  });
+
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("Hosted XCUITest smoke");

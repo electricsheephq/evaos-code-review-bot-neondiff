@@ -9,6 +9,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
 #if DEBUG
     let readinessRequest: DesktopEvaluationReadinessRequest?
     let evaluationSection: DesktopSection?
+    let surfaceStatus: DesktopEvaluationSurfaceStatus?
 #endif
 
 #if DEBUG
@@ -16,12 +17,14 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         requestedContentSize: NSSize? = nil,
         disablesAnimations: Bool = false,
         readinessRequest: DesktopEvaluationReadinessRequest? = nil,
-        evaluationSection: DesktopSection? = nil
+        evaluationSection: DesktopSection? = nil,
+        surfaceStatus: DesktopEvaluationSurfaceStatus? = nil
     ) {
         self.requestedContentSize = requestedContentSize
         self.disablesAnimations = disablesAnimations
         self.readinessRequest = readinessRequest
         self.evaluationSection = evaluationSection
+        self.surfaceStatus = surfaceStatus
     }
 #else
     init(requestedContentSize: NSSize? = nil, disablesAnimations: Bool = false) {
@@ -147,10 +150,10 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         var stableSampleCount = 0
         var readinessAttemptCount = 0
         var surfaceSection: DesktopSection?
-        var surfaceGeneration = -1
         var surfaceSamplingToken = 0
-        var surfaceLastSample: DesktopEvaluationGeometrySample?
-        var surfaceStableSampleCount = 0
+        var surfaceLastSample: DesktopHostedGeometrySample?
+        var surfaceSamples: [DesktopHostedGeometrySample] = []
+        var surfaceSamplingStartedAt: TimeInterval?
         var surfaceAttemptCount = 0
 #endif
     }
@@ -208,23 +211,24 @@ struct NeonWindowConfigurator: NSViewRepresentable {
     }
 
     private func scheduleSurfaceStateSample(window: NSWindow, coordinator: Coordinator) {
-        guard readinessRequest != nil,
+        guard let surfaceStatus,
               let evaluationSection,
               coordinator.surfaceSection != evaluationSection else {
             return
         }
         coordinator.surfaceSection = evaluationSection
-        coordinator.surfaceGeneration += 1
+        let generation = surfaceStatus.begin(section: evaluationSection)
         coordinator.surfaceSamplingToken += 1
         coordinator.surfaceLastSample = nil
-        coordinator.surfaceStableSampleCount = 0
+        coordinator.surfaceSamples = []
+        coordinator.surfaceSamplingStartedAt = nil
         coordinator.surfaceAttemptCount = 0
         let token = coordinator.surfaceSamplingToken
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
             sampleSurfaceState(
                 window: window,
                 section: evaluationSection,
-                generation: coordinator.surfaceGeneration,
+                generation: generation,
                 token: token,
                 coordinator: coordinator
             )
@@ -238,17 +242,17 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         token: Int,
         coordinator: Coordinator
     ) {
-        guard let readinessRequest,
+        guard let surfaceStatus,
               token == coordinator.surfaceSamplingToken,
               section == coordinator.surfaceSection,
-              generation == coordinator.surfaceGeneration else {
+              surfaceStatus.snapshot?.generation == generation else {
             return
         }
         coordinator.surfaceAttemptCount += 1
         guard coordinator.surfaceAttemptCount < 50 else {
             fatalError("NeonDiff Desktop evaluation surface state did not settle within five seconds.")
         }
-        guard readinessRequest.renderLatch.isReady else {
+        guard surfaceStatus.isRendered(section: section, generation: generation) else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
                 sampleSurfaceState(
                     window: window,
@@ -260,20 +264,58 @@ struct NeonWindowConfigurator: NSViewRepresentable {
             }
             return
         }
-        let sample = DesktopEvaluationSurfaceStateWriter.sample(window: window)
-        if let previous = coordinator.surfaceLastSample,
-           sample.approximatelyEquals(previous) {
-            coordinator.surfaceStableSampleCount += 1
-        } else {
-            coordinator.surfaceStableSampleCount = 1
+        let windowSample = DesktopEvaluationSurfaceStateWriter.sample(window: window)
+        let sampledAt = ProcessInfo.processInfo.systemUptime
+        guard let rawSample = surfaceStatus.hostedGeometrySample(
+            windowSample: windowSample,
+            section: section,
+            generation: generation,
+            elapsedMilliseconds: 0
+        ) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                sampleSurfaceState(
+                    window: window,
+                    section: section,
+                    generation: generation,
+                    token: token,
+                    coordinator: coordinator
+                )
+            }
+            return
         }
-        coordinator.surfaceLastSample = sample
-        if coordinator.surfaceStableSampleCount >= 3 {
+        if let previous = coordinator.surfaceLastSample,
+           let startedAt = coordinator.surfaceSamplingStartedAt,
+           rawSample.approximatelyEquals(previous) {
+            let elapsed = Int(((sampledAt - startedAt) * 1_000).rounded())
+            let priorElapsed = coordinator.surfaceSamples.last?.elapsedMilliseconds ?? 0
+            let interval = elapsed - priorElapsed
+            if interval >= 90, interval <= 150 {
+                coordinator.surfaceSamples.append(
+                    rawSample.withElapsedMilliseconds(elapsed)
+                )
+            } else {
+                coordinator.surfaceSamplingStartedAt = sampledAt
+                coordinator.surfaceSamples = [rawSample.withElapsedMilliseconds(0)]
+            }
+        } else {
+            coordinator.surfaceSamplingStartedAt = sampledAt
+            coordinator.surfaceSamples = [rawSample.withElapsedMilliseconds(0)]
+        }
+        coordinator.surfaceLastSample = rawSample
+        if coordinator.surfaceSamples.count >= 3 {
+            guard surfaceStatus.markQuiescent(
+                section: section,
+                generation: generation,
+                samples: Array(coordinator.surfaceSamples.suffix(3))
+            ) else {
+                return
+            }
+            guard let readinessRequest else { return }
             do {
                 try DesktopEvaluationSurfaceStateWriter.write(
                     request: readinessRequest,
                     window: window,
-                    sample: sample,
+                    sample: windowSample,
                     section: section,
                     surfaceGeneration: generation
                 )
