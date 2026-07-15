@@ -5,12 +5,13 @@ that lets a NeonDiff desktop client connect the official NeonDiff GitHub App and
 obtain bounded, short-lived installation access without ever holding the App
 private key.
 
-This document covers the **server-side slice only** (issue #613). Native connect
-UI states are sequenced after #611/#612; the repository-visibility and
-entitlement decision that #614 binds at token issuance is present here only as a
-single seam function (`authorizeTokenIssuance`) with a fail-closed pre-#614
-default. No production GitHub App exists yet; every code path below is exercised
-against fixtures, never a live install (see "Owner-gated boundary").
+This document covers the **server-side slice** (issues #613 and #614). Native
+connect UI states are sequenced after #611/#612. The repository-visibility and
+entitlement decision is bound at token issuance in the single seam function
+`authorizeTokenIssuance` (#614); the live device<->license linkage and deployment
+wiring belong to the deploy lane (#559). No production GitHub App exists yet;
+every code path below is exercised against fixtures, never a live install (see
+"Owner-gated boundary").
 
 ## Problem
 
@@ -140,12 +141,22 @@ embedded key (see Rollback in issue #613).
 - `repo_renamed_or_transferred` — the installation repository list is re-fetched at
   issuance; a stale repository reference is a typed error, never a silent pass.
 - `visibility_unknown` — a requested repo's visibility could not be determined;
-  fail closed rather than assume public.
-- `entitlement_gate_not_implemented` — the pre-#614 default: a requested repo is
-  private or internal and the entitlement gate that would authorize it is not yet
-  implemented. Fail closed.
-- `entitlement_missing` — reserved for #614 (private repo without active
-  entitlement).
+  fail closed rather than assume public (HTTP 403).
+- Entitlement decisions for a private/internal request (#614), each a distinct
+  fail-closed reason code so native/CLI consumers can key their locked/free
+  explanation and recovery action off the exact state:
+  - `entitlement_missing` — no active entitlement was resolved (HTTP 403).
+  - `entitlement_expired` — the entitlement has lapsed (HTTP 403).
+  - `entitlement_revoked` — the entitlement was revoked (HTTP 403).
+  - `entitlement_invalid` — the entitlement is not recognized (HTTP 403).
+  - `entitlement_scope_insufficient` — an active license whose scope covers only
+    public repositories (HTTP 403).
+  - `entitlement_seat_exhausted` — the license seat allocation is exhausted for
+    this device (HTTP 409).
+  - `entitlement_replay_conflict` — an entitlement event-order/replay conflict
+    (HTTP 409).
+  - `entitlement_service_unavailable` — the license authority could not be
+    reached; fail closed, never allow (HTTP 503).
 - `rate_limited` — per-device and per-installation budgets on the broker; GitHub
   secondary limits are surfaced distinctly.
 - `broker_unavailable` — the broker or its GitHub dependency is unreachable; the
@@ -154,17 +165,47 @@ embedded key (see Rollback in issue #613).
 ## The issuance seam (`authorizeTokenIssuance`)
 
 There is exactly one code path that can mint an installation token, and it flows
-through `authorizeTokenIssuance`. The function receives the requested repositories
-already resolved against the installation's repository list (each with its
-visibility) and returns either `allow` (with the exact repositories to narrow to)
-or `deny` with a typed reason code.
-
-Pre-#614 policy: `allow` only when **every** requested repository is verified
-`public`; any `private`, `internal`, or `unknown` visibility denies with
-`entitlement_gate_not_implemented` (or `visibility_unknown`). #614 replaces the
-body of this one function to add the entitlement decision; no caller can skip it
-because minting is unreachable except through its `allow` result (the
+through `authorizeTokenIssuance`. The function is pure: it receives the requested
+repositories already resolved against the installation's repository list (each
+with its GitHub-authoritative visibility) plus the entitlement snapshot the
+service resolved from the license authority, and returns either `allow` (with the
+exact repositories to narrow to) or `deny` with a typed reason code. No caller can
+skip it because minting is unreachable except through its `allow` result (the
 gate-every-caller rule).
+
+#614 policy, evaluated in order:
+
+1. An empty request is `invalid_request`.
+2. Any repository whose visibility could not be authoritatively determined denies
+   with `visibility_unknown` — never assume public.
+3. An **all-public** request is authorized with **no NeonDiff Activation Key**
+   (the public-free tier); the entitlement snapshot is not consulted, so the free
+   tier does not depend on the license authority being reachable.
+4. Otherwise (at least one `private`/`internal` repository) an **active,
+   private-covering entitlement** is required. Every other entitlement state
+   denies with its own distinct reason code (see "Failure and abuse states").
+
+**Ordering and egress.** The service resolves entitlement for the non-public
+repositories *before* calling the seam and *before* any mint, using only the
+license authority (no GitHub content API, no provider/model call). A blocked
+private request therefore mints no usable installation token — zero content
+egress. Reading the installation's repository list to determine visibility uses a
+separate **metadata:read-only** token, so no broad token exists before the seam
+authorizes.
+
+**Server-authoritative visibility (AC1/AC6).** The token request body carries no
+visibility field; the broker derives visibility from GitHub. A modified client
+that believes a private repo is public gains nothing — the server's fresh read
+wins, and a private repo without an active entitlement is denied.
+
+**A provider key never unlocks private (AC5).** The seam has no provider-key
+input by construction; the only snapshot that authorizes a private request is an
+active, private-covering entitlement.
+
+The entitlement snapshot is resolved through an injected authority (contract
+shape: the license-api `Entitlement`, merged #574). Its default is fail-closed
+(deny all private work) until the deploy lane (#559) wires the live device<->
+license linkage; the broker slice proves the binding against fixtures only.
 
 ## Threat model (STRIDE)
 
