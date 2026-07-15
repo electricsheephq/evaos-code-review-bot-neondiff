@@ -194,22 +194,27 @@ struct PolicyView: View {
     }
 }
 
+// Overview-only CLI-equivalents list. Tokenized via `NDPalette` so it renders
+// correctly in both appearances (the retired operator dark chrome broke in
+// light). Square surfaces + borderInput, no corner-tick flourish — the bracket
+// CTA stays the screen's single decorative brand moment (#611 neon budget). The
+// CLI-equivalents *content* is #521-owned; this is a color/style pass only.
 struct CommandPanel: View {
     var commands: [DesktopCommand]
     var copy: (DesktopCommand) -> Void
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let nd = NDPalette(scheme: colorScheme)
         VStack(alignment: .leading, spacing: 10) {
-            Text("CLI Equivalents")
-                .font(NeonDiffTheme.headlineFont)
-                .foregroundStyle(NeonDiffTheme.accentSoft)
+            Text("CLI Equivalents // Reference").ndSectionLabel(nd)
             ForEach(commands) { command in
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(command.title)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(NeonDiffTheme.textPrimary)
-                        OperatorCommandText(text: command.commandLine)
+                            .foregroundStyle(nd.textPrimary)
+                        OperatorCommandText(text: command.commandLine, palette: nd)
                     }
                     Spacer()
                     Button {
@@ -218,8 +223,15 @@ struct CommandPanel: View {
                         Image(systemName: "doc.on.doc")
                     }
                     .help("Copy command")
+                    .foregroundStyle(nd.textSecondary)
+                    // Image-only control: name the exact command for VoiceOver so
+                    // the repeated copy buttons are distinguishable (a11y floor).
+                    .accessibilityLabel("Copy command: \(command.title)")
                 }
-                .operatorPanel(padding: 10)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Rectangle().fill(nd.surface))
+                .overlay(Rectangle().stroke(nd.borderInput, lineWidth: 1))
             }
         }
     }

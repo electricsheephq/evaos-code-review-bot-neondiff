@@ -62,6 +62,7 @@ struct NeonDiffDesktopApp: App {
                     minWidth: CGFloat(minimumContentSize.width),
                     minHeight: CGFloat(minimumContentSize.height)
                 )
+                .applyingEvaluationDynamicTypeSize(evaluationDynamicTypeSize)
                 .environment(\.locale, evaluationLocale)
                 .transaction { transaction in
                     if disablesAnimations {
@@ -182,6 +183,31 @@ struct NeonDiffDesktopApp: App {
 #endif
     }
 
+    // DEBUG-only hook so design-reference evidence can capture the large-text
+    // appearance of a working screen. Gated on an env var and never set by the
+    // hosted geometry harness, so it does not affect any geometry contract.
+    private var evaluationDynamicTypeSize: DynamicTypeSize? {
+#if DEBUG
+        guard let raw = ProcessInfo.processInfo.environment["NEONDIFF_DESKTOP_EVALUATION_DYNAMIC_TYPE"] else {
+            return nil
+        }
+        switch raw {
+        case "large": return .large
+        case "xLarge": return .xLarge
+        case "xxLarge": return .xxLarge
+        case "xxxLarge": return .xxxLarge
+        case "accessibility1": return .accessibility1
+        case "accessibility2": return .accessibility2
+        case "accessibility3": return .accessibility3
+        case "accessibility4": return .accessibility4
+        case "accessibility5": return .accessibility5
+        default: return nil
+        }
+#else
+        return nil
+#endif
+    }
+
     private var evaluationLocale: Locale {
 #if DEBUG
         evaluationContext.map { Locale(identifier: $0.fixture.environment.locale) } ?? .current
@@ -249,6 +275,17 @@ struct NeonDiffDesktopApp: App {
 #else
         nil
 #endif
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func applyingEvaluationDynamicTypeSize(_ size: DynamicTypeSize?) -> some View {
+        if let size {
+            self.dynamicTypeSize(size)
+        } else {
+            self
+        }
     }
 }
 
