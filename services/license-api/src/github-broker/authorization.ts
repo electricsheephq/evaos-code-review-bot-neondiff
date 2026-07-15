@@ -3,6 +3,8 @@ import type { GitHubRepositoryVisibility } from "./github-app.js";
 
 export interface RequestedRepository {
   fullName: string;
+  /** The installation's canonical repository id, used to narrow the minted token. */
+  id: number;
   visibility: GitHubRepositoryVisibility;
 }
 

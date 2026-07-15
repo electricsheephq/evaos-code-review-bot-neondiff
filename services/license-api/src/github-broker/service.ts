@@ -14,6 +14,22 @@ import { GitHubBrokerStore } from "./store.js";
 const STATE_TTL_MS = 10 * 60 * 1_000;
 const MAX_REPOSITORIES_PER_REQUEST = 50;
 
+/**
+ * The server-defined minimal review permission set (matches
+ * docs/github-app-setup.md). Every minted token is clamped to at most these
+ * scopes; the broker never trusts the device to widen them, and never omits the
+ * `permissions` field (an omitted field makes GitHub grant ALL App permissions).
+ */
+export const MINIMAL_REVIEW_PERMISSIONS: Record<string, string> = {
+  actions: "read",
+  checks: "read",
+  contents: "read",
+  metadata: "read",
+  pull_requests: "write"
+};
+
+const PERMISSION_SCOPE_RANK: Record<string, number> = { read: 1, write: 2, admin: 3 };
+
 export interface GitHubBrokerServiceOptions {
   store: GitHubBrokerStore;
   githubClient: GitHubInstallationClient;
@@ -129,6 +145,11 @@ export class GitHubBrokerService {
       throw new BrokerError("state_not_found", "connect state is not recognized");
     }
     if (!stored.consumed_at || stored.installation_id === null) {
+      // A poll after the TTL is unrecoverable — surface the typed expiry so the
+      // client restarts the connect flow instead of polling a dead state forever.
+      if (Date.parse(stored.expires_at) <= at.getTime()) {
+        throw new BrokerError("state_expired", "connect state has expired");
+      }
       return { status: "pending" };
     }
     const binding = this.store.getBinding(deviceId, stored.installation_id);
@@ -173,14 +194,20 @@ export class GitHubBrokerService {
         throw new BrokerError(decision.reason, "token issuance is not authorized for the requested repositories");
       }
 
-      const minted = await this.mintToken(installationId, decision.repositories, permissions);
+      // Narrow to canonical repository ids (GitHub rejects owner/name here) and to
+      // a server-clamped permission set (never the device-supplied one verbatim).
+      const idByName = new Map(requested.map((repository) => [repository.fullName, repository.id]));
+      const repositoryIds = decision.repositories.map((fullName) => idByName.get(fullName) as number);
+      const effectivePermissions = permissions ?? { ...MINIMAL_REVIEW_PERMISSIONS };
+
+      const minted = await this.mintToken(installationId, repositoryIds, effectivePermissions);
       this.store.appendDecision(deviceId, installationId, "allow", "issued", at.toISOString());
       return {
         status: "issued",
         token: minted.token,
         expiresAt: minted.expires_at,
         repositories: decision.repositories,
-        ...(permissions ? { permissions } : {})
+        permissions: effectivePermissions
       };
     } catch (error) {
       if (error instanceof BrokerError) {
@@ -223,19 +250,19 @@ export class GitHubBrokerService {
     return repositories.map((fullName) => {
       const match = byName.get(fullName);
       if (!match) throw new BrokerError("repo_outside_installation", "a requested repository is not in the installation selection");
-      return { fullName, visibility: match.visibility };
+      return { fullName, id: match.id, visibility: match.visibility };
     });
   }
 
   private async mintToken(
     installationId: number,
-    repositories: string[],
-    permissions: Record<string, string> | undefined
+    repositoryIds: number[],
+    permissions: Record<string, string>
   ): Promise<{ token: string; expires_at: string }> {
     try {
       return await this.githubClient.createInstallationAccessToken(installationId, {
-        repositories,
-        ...(permissions ? { permissions } : {})
+        repositoryIds,
+        permissions
       });
     } catch (error) {
       throw mapClientError(error);
@@ -295,6 +322,12 @@ function parsePermissions(value: unknown): Record<string, string> | undefined {
   for (const [key, scope] of Object.entries(value)) {
     if (!/^[a-z_]{1,40}$/.test(key) || typeof scope !== "string" || !/^(read|write|admin)$/.test(scope)) {
       throw new BrokerError("invalid_request", "permissions must map scope names to read/write/admin");
+    }
+    // Clamp to the server allowlist: a device may only request a subset of the
+    // minimal review permissions, never a wider scope or an off-list permission.
+    const allowed = MINIMAL_REVIEW_PERMISSIONS[key];
+    if (allowed === undefined || PERMISSION_SCOPE_RANK[scope] > PERMISSION_SCOPE_RANK[allowed]) {
+      throw new BrokerError("invalid_request", "permissions exceed the minimal review allowlist");
     }
     permissions[key] = scope;
   }

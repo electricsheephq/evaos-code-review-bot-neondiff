@@ -46,10 +46,11 @@ export interface GitHubInstallationClient {
   /** The installation's current repository selection, with each repo's visibility. */
   listInstallationRepositories(installationId: number): Promise<InstallationRepository[]>;
   /** Mint a narrowed installation access token. This is the RETURNED token; it is
-   * reached only after the issuance seam authorizes the request. */
+   * reached only after the issuance seam authorizes the request. Narrowing uses
+   * `repositoryIds` (GitHub's canonical `repository_ids`), never `owner/name`. */
   createInstallationAccessToken(
     installationId: number,
-    params: { repositories?: string[]; permissions?: Record<string, string> }
+    params: { repositoryIds?: number[]; permissions?: Record<string, string> }
   ): Promise<InstallationAccessToken>;
 }
 
@@ -116,11 +117,17 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
     return { status: response.status, json: text ? (JSON.parse(text) as T) : undefined, text };
   }
 
-  async function installationToken(installationId: number, params: { repositories?: string[]; permissions?: Record<string, string> }): Promise<InstallationAccessToken> {
+  async function installationToken(
+    installationId: number,
+    params: { repositoryIds?: number[]; permissions?: Record<string, string> }
+  ): Promise<InstallationAccessToken> {
     const jwt = createAppJwt(config.appId, config.privateKey);
+    const body: Record<string, unknown> = {};
+    if (params.repositoryIds) body.repository_ids = params.repositoryIds;
+    if (params.permissions) body.permissions = params.permissions;
     const result = await request<{ token: string; expires_at: string }>(
       `/app/installations/${installationId}/access_tokens`,
-      { method: "POST", token: jwt, body: params }
+      { method: "POST", token: jwt, body }
     );
     if (!result.json) throw new GitHubBrokerClientError("unavailable", "installation token response was empty");
     return { token: result.json.token, expires_at: result.json.expires_at };
@@ -147,10 +154,11 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
       }
     },
     async listInstallationRepositories(installationId: number): Promise<InstallationRepository[]> {
-      // Listing an installation's repositories requires an installation token; this
-      // is authorization metadata (visibility) used to make the seam decision, not
-      // the narrowed token returned to the client.
-      const token = (await installationToken(installationId, {})).token;
+      // Listing an installation's repositories requires an installation token. It is
+      // scoped to metadata:read ONLY — the minimum needed to read visibility for the
+      // seam decision — so no broad, all-permissions token is ever minted before
+      // authorizeTokenIssuance runs. This is not the token returned to the client.
+      const token = (await installationToken(installationId, { permissions: { metadata: "read" } })).token;
       const repositories: InstallationRepository[] = [];
       for (let page = 1; ; page += 1) {
         const result = await request<{ repositories: Array<{ id: number; full_name: string; visibility?: string; private?: boolean }> }>(
@@ -169,7 +177,10 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
       }
     },
     createInstallationAccessToken(installationId, params) {
-      return installationToken(installationId, params);
+      return installationToken(installationId, {
+        ...(params.repositoryIds ? { repositoryIds: params.repositoryIds } : {}),
+        ...(params.permissions ? { permissions: params.permissions } : {})
+      });
     }
   };
 }

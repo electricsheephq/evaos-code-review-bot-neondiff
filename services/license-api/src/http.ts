@@ -37,6 +37,7 @@ import {
   SubscriptionLifecycleUnsupportedCommandError
 } from "./store.js";
 import {
+  BrokerError,
   createGitHubBrokerService,
   handleGitHubBrokerRequest,
   isGitHubBrokerPath,
@@ -96,7 +97,13 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
     }
     const path = req.url?.split("?")[0];
     if (isGitHubBrokerPath(path)) {
-      if (!githubBrokerService) return writeJson(res, 503, { status: "unavailable" });
+      if (!githubBrokerService) {
+        // Fail closed with the broker's typed contract so clients (and tests) can
+        // distinguish the expected pre-provisioning offline state from an untyped
+        // failure.
+        const unavailable = new BrokerError("broker_unavailable", "the GitHub broker is not configured");
+        return writeJson(res, unavailable.httpStatus, unavailable.body());
+      }
       const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
       return handleGitHubBrokerRequest(githubBrokerService, req, res, { sourceAddress });
     }

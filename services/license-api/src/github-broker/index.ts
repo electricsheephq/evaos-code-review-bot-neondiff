@@ -11,7 +11,11 @@ export {
   type GitHubRepositoryVisibility,
   type GitHubAppConfig
 } from "./github-app.js";
-export { GitHubBrokerService, type GitHubBrokerServiceOptions } from "./service.js";
+export {
+  GitHubBrokerService,
+  MINIMAL_REVIEW_PERMISSIONS,
+  type GitHubBrokerServiceOptions
+} from "./service.js";
 export { GitHubBrokerStore } from "./store.js";
 export {
   createGitHubBrokerService,
