@@ -182,15 +182,20 @@ private struct EvaluationRegionFrameCollector<Content: View>: View {
                     return
                 }
                 let generations = Set(frames.values.map(\.generation))
-                if generations.count == 1, let observedGeneration = generations.first {
+                switch GenerationBoundRegionFrameRouting.route(
+                    currentGeneration: generation,
+                    observedGenerations: generations,
+                    framesAreEmpty: frames.isEmpty
+                ) {
+                case let .replace(observedGeneration):
                     status.updateRegionFrames(
                         frames.mapValues(\.frame),
                         generation: observedGeneration
                     )
-                    return
-                }
-                if frames.isEmpty || generations.contains(generation) {
-                    status.updateRegionFrames([:], generation: generation)
+                case let .invalidate(currentGeneration):
+                    status.updateRegionFrames([:], generation: currentGeneration)
+                case .ignore:
+                    break
                 }
             }
     }

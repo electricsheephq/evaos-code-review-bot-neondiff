@@ -171,6 +171,76 @@ import Testing
         #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
     }
 
+    @Test func hostedRegionPreferenceRoutingPreservesGenerationFreshness() throws {
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 1,
+                observedGenerations: [1],
+                framesAreEmpty: false
+            ) == .replace(generation: 1)
+        )
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 1,
+                observedGenerations: [0],
+                framesAreEmpty: false
+            ) == .replace(generation: 0)
+        )
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 1,
+                observedGenerations: [],
+                framesAreEmpty: true
+            ) == .invalidate(generation: 1)
+        )
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 1,
+                observedGenerations: [0, 1],
+                framesAreEmpty: false
+            ) == .invalidate(generation: 1)
+        )
+        #expect(
+            GenerationBoundRegionFrameRouting.route(
+                currentGeneration: 2,
+                observedGenerations: [0, 1],
+                framesAreEmpty: false
+            ) == .ignore
+        )
+
+        let required = ["chrome", "sidebar", "detail"]
+        let valid: [String: CGRect] = [
+            "chrome": CGRect(x: 0, y: 0, width: 1040, height: 82),
+            "sidebar": CGRect(x: 0, y: 82, width: 230, height: 598),
+            "detail": CGRect(x: 231, y: 82, width: 809, height: 598)
+        ]
+        var state = GenerationBoundRegionFrameState()
+        state.begin(generation: 1)
+        let acceptedCurrent = state.replace(
+            generation: 1,
+            frames: valid,
+            requiredIdentifiers: required
+        )
+        #expect(acceptedCurrent)
+
+        let staleRoute = GenerationBoundRegionFrameRouting.route(
+            currentGeneration: 1,
+            observedGenerations: [0],
+            framesAreEmpty: false
+        )
+        if case let .replace(observedGeneration) = staleRoute {
+            let acceptedStale = state.replace(
+                generation: observedGeneration,
+                frames: valid,
+                requiredIdentifiers: required
+            )
+            #expect(!acceptedStale)
+        } else {
+            Issue.record("Expected a stale packet to preserve its observed generation")
+        }
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == valid)
+    }
+
     @Test func settledGeometryRunnerUsesTheReadinessApprovedPrivateWorkspacePrefix() throws {
         let runner = try sourceBoundaryText(
             at: sourceBoundaryPackageRoot()
