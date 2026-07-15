@@ -106,6 +106,7 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain("assertObservedContentSize(");
     expect(source).toContain("marker.value");
     expect(source).toContain("parseAppAuthoredGeometrySamples(marker.value)");
+    expect(source).toMatch(/XCTAssertFalse\(\s*marker\.isHittable/);
     expect(source).not.toContain("Thread.sleep");
     expect(source).toContain("XCTAttachment");
     expect(source).toContain("neondiff-hosted-settled-geometry.json");

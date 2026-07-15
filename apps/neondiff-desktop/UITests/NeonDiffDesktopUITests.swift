@@ -97,6 +97,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
             marker.waitForExistence(timeout: 5),
             "Missing app-authored quiescence marker \(markerIdentifier)"
         )
+        XCTAssertFalse(
+            marker.isHittable,
+            "App-authored quiescence marker must remain non-hittable"
+        )
         let samples = try parseAppAuthoredGeometrySamples(marker.value)
         for identifier in HostedGeometryRegionFrame.requiredIdentifiers {
             XCTAssertTrue(
