@@ -88,6 +88,10 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/NeonWindowConfigurator.swift",
       "utf8"
     );
+    const sidebar = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/SidebarView.swift",
+      "utf8"
+    );
 
     expect(source).toContain("testStrictFixtureSettlesAcrossOverviewReposOverview");
     expect(source).toContain('"neondiff.evaluation.surface.overview.0.quiescent"');
@@ -144,6 +148,9 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(content).toContain("EvaluationRegionFrameCollector");
     expect(content).toContain("@ObservedObject var status: DesktopEvaluationSurfaceStatus");
     expect(content).toContain("content(status.snapshot?.generation)");
+    expect(sidebar).toMatch(
+      /\.padding\(\.horizontal, 10\)\s*\.padding\(\.vertical, 9\)\s*\.contentShape\(Rectangle\(\)\)/
+    );
     expect(app).toContain("evaluationSurfaceStatus");
     expect(source).not.toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
     expect(source).not.toContain("createDirectory");
