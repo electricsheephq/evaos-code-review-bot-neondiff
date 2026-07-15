@@ -551,6 +551,7 @@ private func target() {
     expect(theme).toContain(
       '.accessibilityIdentifier("neondiff-section-title")'
     );
+    expect(theme).toContain(".accessibilityLabel(title)");
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
