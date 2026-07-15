@@ -34,7 +34,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             markerIdentifier: "neondiff.evaluation.surface.overview.0.quiescent",
             requestedContentSize: requestedContentSize
         )
-        let reposAction = try tapNavigation(
+        let reposAction = try clickNavigation(
             app: app,
             index: 0,
             fromSection: "overview",
@@ -48,7 +48,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             markerIdentifier: "neondiff.evaluation.surface.repos.1.quiescent",
             requestedContentSize: requestedContentSize
         )
-        let overviewAction = try tapNavigation(
+        let overviewAction = try clickNavigation(
             app: app,
             index: 1,
             fromSection: "repos",
@@ -273,7 +273,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
     }
 
-    private func tapNavigation(
+    private func clickNavigation(
         app: XCUIApplication,
         index: Int,
         fromSection: String,
@@ -283,7 +283,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let button = app.buttons[identifier]
         XCTAssertTrue(button.waitForExistence(timeout: 2), "Missing navigation button \(identifier)")
         XCTAssertTrue(button.isHittable, "Navigation button is not hittable: \(identifier)")
-        button.tap()
+        button.click()
         return HostedNavigationAction(
             index: index,
             fromSection: fromSection,

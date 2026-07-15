@@ -95,6 +95,8 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain('"neondiff.evaluation.surface.overview.2.quiescent"');
     expect(source).toContain('"neondiff-sidebar-section-repos"');
     expect(source).toContain('"neondiff-sidebar-section-overview"');
+    expect(source).toContain("button.click()");
+    expect(source).not.toContain("button.tap()");
     expect(source).toContain('"neondiff-chrome"');
     expect(source).toContain('"neondiff-sidebar"');
     expect(source).toContain('"neondiff-detail"');
