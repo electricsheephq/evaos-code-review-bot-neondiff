@@ -5,6 +5,7 @@ public enum DesktopEvaluationLaunchOptionsError: LocalizedError, Equatable {
     case duplicate(String)
     case relativeFixturePath
     case unsupportedContentSize
+    case unsupportedTextSize
     case fixtureFlagWithoutUITesting
 
     public var errorDescription: String? {
@@ -13,18 +14,28 @@ public enum DesktopEvaluationLaunchOptionsError: LocalizedError, Equatable {
         case .duplicate(let flag): "Duplicate UI-testing launch argument: \(flag)."
         case .relativeFixturePath: "UI fixture path must be absolute."
         case .unsupportedContentSize: "UI-testing content size is not canonical."
+        case .unsupportedTextSize: "UI-testing text size is not supported."
         case .fixtureFlagWithoutUITesting: "UI fixture flags require --ui-testing."
         }
     }
 }
 
+public enum DesktopEvaluationTextSizeMode: String, Equatable, Sendable {
+    case runnerDefault = "runner-default"
+    case accessibility3
+}
+
 public struct DesktopEvaluationLaunchOptions: Equatable, Sendable {
     public let fixtureURL: URL
     public let contentSize: DesktopEvaluationContentSize
+    public let textSizeMode: DesktopEvaluationTextSizeMode
     public let disableAnimations: Bool
 
     public static func parse(arguments: [String]) throws -> DesktopEvaluationLaunchOptions? {
-        let evaluationFlags: Set<String> = ["--ui-testing", "--ui-fixture", "--content-size", "--disable-animations"]
+        let evaluationFlags: Set<String> = [
+            "--ui-testing", "--ui-fixture", "--content-size", "--text-size",
+            "--disable-animations"
+        ]
         let suppliedEvaluationFlags = arguments.filter(evaluationFlags.contains)
         guard !suppliedEvaluationFlags.isEmpty else { return nil }
         guard arguments.contains("--ui-testing") else {
@@ -51,9 +62,19 @@ public struct DesktopEvaluationLaunchOptions: Equatable, Sendable {
         guard DesktopEvaluationContentSize.canonical.contains(contentSize) else {
             throw DesktopEvaluationLaunchOptionsError.unsupportedContentSize
         }
+        let textSizeValue = value(after: "--text-size", in: arguments)
+        if arguments.contains("--text-size"), textSizeValue == nil {
+            throw DesktopEvaluationLaunchOptionsError.incomplete
+        }
+        guard let textSizeMode = DesktopEvaluationTextSizeMode(
+            rawValue: textSizeValue ?? DesktopEvaluationTextSizeMode.runnerDefault.rawValue
+        ) else {
+            throw DesktopEvaluationLaunchOptionsError.unsupportedTextSize
+        }
         return DesktopEvaluationLaunchOptions(
             fixtureURL: URL(fileURLWithPath: fixturePath),
             contentSize: contentSize,
+            textSizeMode: textSizeMode,
             disableAnimations: true
         )
     }

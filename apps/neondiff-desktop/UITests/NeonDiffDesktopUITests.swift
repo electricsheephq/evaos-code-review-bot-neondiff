@@ -280,6 +280,121 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
     }
 
+    func testStrictFixtureSettlesAndReachesEverySidebarPageBottomAtMinimumSizeWithAccessibility3Text() throws {
+        let requestedContentSize = HostedContentSize(width: 1040, height: 680)
+        let textSizeMode = "swiftui-dynamic-type-accessibility3-test-override"
+        let route = everySidebarPageBottomRoute
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "tab-overview", withExtension: "json")
+        )
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "1040x680",
+            "--text-size", "accessibility3",
+            "--disable-animations"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "neondiff.fixture.tab-overview.text-size.accessibility3"
+            ].waitForExistence(timeout: 10)
+        )
+        XCTAssertEqual(app.state, .runningForeground)
+
+        var geometryCheckpoints: [HostedGeometryCheckpoint] = []
+        var pageBottomCheckpoints: [HostedPageBottomCheckpoint] = []
+        var navigationActions: [HostedNavigationAction] = []
+        for (routeIndex, step) in route.enumerated() {
+            if routeIndex > 0 {
+                let previous = route[routeIndex - 1]
+                navigationActions.append(
+                    try clickNavigation(
+                        app: app,
+                        index: routeIndex - 1,
+                        fromSection: previous.section,
+                        toSection: step.section,
+                        identifier: "neondiff-sidebar-section-\(step.section)"
+                    )
+                )
+            }
+
+            let markerIdentifier =
+                "neondiff.evaluation.surface.\(step.section).\(step.generation).quiescent"
+            geometryCheckpoints.append(
+                try captureCheckpoint(
+                    app: app,
+                    section: step.section,
+                    generation: step.generation,
+                    markerIdentifier: markerIdentifier,
+                    requestedContentSize: requestedContentSize
+                )
+            )
+            pageBottomCheckpoints.append(
+                try capturePageBottomCheckpoint(
+                    app: app,
+                    section: step.section,
+                    generation: step.generation,
+                    markerIdentifier: markerIdentifier,
+                    outerScrollIdentifier: step.outerScrollIdentifier,
+                    sentinelIdentifier: step.sentinelIdentifier
+                )
+            )
+        }
+
+        XCTAssertEqual(geometryCheckpoints.count, 7)
+        XCTAssertEqual(pageBottomCheckpoints.count, 7)
+        XCTAssertEqual(navigationActions.count, 6)
+        assertStableAcrossTransitions(geometryCheckpoints)
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedPageBottomTraceError.priorValidationFailure
+        }
+
+        try attach(
+            HostedLargeTextMatrixTrace(
+                schemaVersion: 1,
+                fixtureId: "tab-overview",
+                requestedContentSize: requestedContentSize,
+                textSizeMode: textSizeMode,
+                settledGeometry: HostedSettledGeometryTrace(
+                    schemaVersion: 2,
+                    scenario: "every-sidebar-destination-1040x680-accessibility3",
+                    fixtureId: "tab-overview",
+                    requestedContentSize: requestedContentSize,
+                    textSizeMode: textSizeMode,
+                    coordinateSpaces: HostedGeometryCoordinateSpaces(
+                        windowAndContent: "appkit-screen",
+                        regions: "swiftui-global"
+                    ),
+                    sampleIntervalMilliseconds: 100,
+                    tolerancePoints: 1,
+                    navigationActions: navigationActions,
+                    checkpoints: geometryCheckpoints,
+                    proofBoundary: "hosted-every-sidebar-destination-1040x680-accessibility3-geometry-only"
+                ),
+                pageBottomReachability: HostedPageBottomReachabilityTrace(
+                    schemaVersion: 1,
+                    scenario: "every-sidebar-page-bottom-1040x680-accessibility3",
+                    fixtureId: "tab-overview",
+                    requestedContentSize: requestedContentSize,
+                    textSizeMode: textSizeMode,
+                    coordinateSpace: "xcui-screen",
+                    minimumSampleIntervalMilliseconds: 100,
+                    samplingDeadlineMilliseconds: 5_000,
+                    tolerancePoints: 1,
+                    navigationActions: navigationActions,
+                    checkpoints: pageBottomCheckpoints,
+                    proofBoundary: "hosted-outer-page-bottom-1040x680-accessibility3-reachability-only-inner-scroll-exhaustion-excluded"
+                ),
+                proofBoundary: "hosted-accessibility3-minimum-size-outer-geometry-and-page-bottom-only-inner-scroll-exhaustion-excluded"
+            )
+        )
+    }
+
     private func captureCanonicalSizeScenario(
         _ request: HostedCanonicalSizeRequest
     ) throws -> HostedCanonicalSizeScenario {
@@ -964,6 +1079,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
         add(attachment)
     }
 
+    private func attach(_ trace: HostedLargeTextMatrixTrace) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let attachment = XCTAttachment(
+            data: try encoder.encode(trace),
+            uniformTypeIdentifier: "public.json"
+        )
+        attachment.name = "neondiff-hosted-large-text-matrix.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func attachTransportDiagnostic(_ diagnostic: HostedTransportDiagnostic) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1204,6 +1331,16 @@ private struct HostedCanonicalSizeMatrixTrace: Codable {
     let fixtureId: String
     let textSizeMode: String
     let scenarios: [HostedCanonicalSizeScenario]
+    let proofBoundary: String
+}
+
+private struct HostedLargeTextMatrixTrace: Codable {
+    let schemaVersion: Int
+    let fixtureId: String
+    let requestedContentSize: HostedContentSize
+    let textSizeMode: String
+    let settledGeometry: HostedSettledGeometryTrace
+    let pageBottomReachability: HostedPageBottomReachabilityTrace
     let proofBoundary: String
 }
 
