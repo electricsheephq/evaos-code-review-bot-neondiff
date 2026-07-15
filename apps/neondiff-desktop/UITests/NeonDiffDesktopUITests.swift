@@ -6,6 +6,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     func testStrictFixtureSettlesAcrossOverviewReposOverview() throws {
+        let requestedContentSize = HostedContentSize(width: 1040, height: 680)
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "tab-overview", withExtension: "json")
         )
@@ -30,7 +31,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
             app: app,
             section: "overview",
             generation: 0,
-            markerIdentifier: "neondiff.evaluation.surface.overview.0.quiescent"
+            markerIdentifier: "neondiff.evaluation.surface.overview.0.quiescent",
+            requestedContentSize: requestedContentSize
         )
         let reposAction = try tapNavigation(
             app: app,
@@ -43,7 +45,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
             app: app,
             section: "repos",
             generation: 1,
-            markerIdentifier: "neondiff.evaluation.surface.repos.1.quiescent"
+            markerIdentifier: "neondiff.evaluation.surface.repos.1.quiescent",
+            requestedContentSize: requestedContentSize
         )
         let overviewAction = try tapNavigation(
             app: app,
@@ -56,17 +59,19 @@ final class NeonDiffDesktopUITests: XCTestCase {
             app: app,
             section: "overview",
             generation: 2,
-            markerIdentifier: "neondiff.evaluation.surface.overview.2.quiescent"
+            markerIdentifier: "neondiff.evaluation.surface.overview.2.quiescent",
+            requestedContentSize: requestedContentSize
         )
 
         let checkpoints = [overview0, repos1, overview2]
         assertStableAcrossTransitions(checkpoints)
         try attach(
             HostedSettledGeometryTrace(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 scenario: "overview-repos-overview",
                 fixtureId: "tab-overview",
-                requestedContentSize: HostedContentSize(width: 1040, height: 680),
+                requestedContentSize: requestedContentSize,
+                textSizeMode: "runner-default-no-test-override",
                 sampleIntervalMilliseconds: 100,
                 tolerancePoints: 1,
                 navigationActions: [reposAction, overviewAction],
@@ -80,12 +85,19 @@ final class NeonDiffDesktopUITests: XCTestCase {
         app: XCUIApplication,
         section: String,
         generation: Int,
-        markerIdentifier: String
+        markerIdentifier: String,
+        requestedContentSize: HostedContentSize
     ) throws -> HostedGeometryCheckpoint {
         let marker = app.descendants(matching: .any)[markerIdentifier]
         XCTAssertTrue(
             marker.waitForExistence(timeout: 5),
             "Missing app-authored quiescence marker \(markerIdentifier)"
+        )
+        let observedContentGeometry = try parseObservedContentGeometry(marker.value)
+        assertObservedContentSize(
+            observedContentGeometry,
+            requested: requestedContentSize,
+            context: "\(section)-\(generation)"
         )
 
         let started = ProcessInfo.processInfo.systemUptime
@@ -107,7 +119,59 @@ final class NeonDiffDesktopUITests: XCTestCase {
             section: section,
             surfaceGeneration: generation,
             quiescenceMarkerIdentifier: markerIdentifier,
+            observedContentGeometry: observedContentGeometry,
             samples: samples
+        )
+    }
+
+    private func parseObservedContentGeometry(
+        _ rawValue: Any?
+    ) throws -> HostedObservedContentGeometry {
+        let value = try XCTUnwrap(rawValue as? String, "Missing app-authored geometry value")
+        let fields = Dictionary(uniqueKeysWithValues: value.split(separator: ";").compactMap {
+            field -> (String, String)? in
+            let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
+            guard pair.count == 2 else { return nil }
+            return (pair[0], pair[1])
+        })
+        let frameValues = try XCTUnwrap(fields["contentFrame"])
+            .split(separator: ",")
+            .compactMap { Double($0) }
+        XCTAssertEqual(frameValues.count, 4, "Invalid app-authored content frame")
+        guard frameValues.count == 4 else {
+            throw HostedGeometryTraceError.invalidObservedContentGeometry
+        }
+        let backingScale = try XCTUnwrap(
+            fields["backingScale"].flatMap(Double.init),
+            "Invalid app-authored backing scale"
+        )
+        let frame = HostedGeometryFrame(
+            x: frameValues[0],
+            y: frameValues[1],
+            width: frameValues[2],
+            height: frameValues[3]
+        )
+        XCTAssertTrue(frame.isFiniteAndNonempty, "Invalid app-authored content frame")
+        XCTAssertTrue(backingScale.isFinite && backingScale > 0, "Invalid app-authored backing scale")
+        return HostedObservedContentGeometry(contentFrame: frame, backingScale: backingScale)
+    }
+
+    private func assertObservedContentSize(
+        _ observed: HostedObservedContentGeometry,
+        requested: HostedContentSize,
+        context: String
+    ) {
+        XCTAssertEqual(
+            observed.contentFrame.width,
+            Double(requested.width),
+            accuracy: 1,
+            "Observed content width does not match requested width for \(context)"
+        )
+        XCTAssertEqual(
+            observed.contentFrame.height,
+            Double(requested.height),
+            accuracy: 1,
+            "Observed content height does not match requested height for \(context)"
         )
     }
 
@@ -257,6 +321,13 @@ private struct HostedGeometryFrame: Codable, Equatable {
         height = frame.height
     }
 
+    init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
     var isFiniteAndNonempty: Bool {
         [x, y, width, height, x + width, y + height].allSatisfy(\.isFinite)
             && width > 0
@@ -286,7 +357,13 @@ private struct HostedGeometryCheckpoint: Codable, Equatable {
     let section: String
     let surfaceGeneration: Int
     let quiescenceMarkerIdentifier: String
+    let observedContentGeometry: HostedObservedContentGeometry
     let samples: [HostedGeometrySample]
+}
+
+private struct HostedObservedContentGeometry: Codable, Equatable {
+    let contentFrame: HostedGeometryFrame
+    let backingScale: Double
 }
 
 private struct HostedNavigationAction: Codable {
@@ -303,9 +380,14 @@ private struct HostedSettledGeometryTrace: Codable {
     let scenario: String
     let fixtureId: String
     let requestedContentSize: HostedContentSize
+    let textSizeMode: String
     let sampleIntervalMilliseconds: Int
     let tolerancePoints: Double
     let navigationActions: [HostedNavigationAction]
     let checkpoints: [HostedGeometryCheckpoint]
     let proofBoundary: String
+}
+
+private enum HostedGeometryTraceError: Error {
+    case invalidObservedContentGeometry
 }

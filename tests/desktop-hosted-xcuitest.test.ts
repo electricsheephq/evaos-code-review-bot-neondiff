@@ -100,6 +100,9 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain('"neondiff-detail"');
     expect(source).toContain("sampleIntervalMilliseconds: 100");
     expect(source).toContain("tolerancePoints: 1");
+    expect(source).toContain("observedContentGeometry:");
+    expect(source).toContain("assertObservedContentSize(");
+    expect(source).toContain("marker.value");
     expect(source).toContain("XCTAttachment");
     expect(source).toContain("neondiff-hosted-settled-geometry.json");
     expect(source).toContain(".keepAlways");
@@ -107,10 +110,13 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(readiness).toContain("final class DesktopEvaluationSurfaceStatus: ObservableObject");
     expect(readiness).toContain("func begin(section:");
     expect(readiness).toContain("func markRendered(section:");
-    expect(readiness).toContain("func markQuiescent(section:");
+    expect(readiness).toContain("func markQuiescent(");
+    expect(readiness).toContain("contentFrame:");
+    expect(readiness).toContain("geometryAccessibilityValue");
     expect(configurator).toContain("surfaceStatus.isRendered(");
     expect(configurator).toContain("surfaceStatus.markQuiescent(");
     expect(content).toContain("EvaluationSurfaceAccessibilityMarker");
+    expect(content).toContain(".accessibilityValue(status.geometryAccessibilityValue)");
     expect(app).toContain("evaluationSurfaceStatus");
     expect(source).not.toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
     expect(source).not.toContain("createDirectory");

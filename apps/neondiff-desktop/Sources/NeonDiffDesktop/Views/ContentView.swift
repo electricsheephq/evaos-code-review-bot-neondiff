@@ -147,6 +147,7 @@ private struct EvaluationSurfaceAccessibilityMarker: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("NeonDiff Desktop evaluation surface state")
             .accessibilityIdentifier(status.accessibilityIdentifier)
+            .accessibilityValue(status.geometryAccessibilityValue)
             .allowsHitTesting(false)
     }
 }

@@ -271,7 +271,11 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         }
         coordinator.surfaceLastSample = sample
         if coordinator.surfaceStableSampleCount >= 3 {
-            guard surfaceStatus.markQuiescent(section: section, generation: generation) else {
+            guard surfaceStatus.markQuiescent(
+                section: section,
+                generation: generation,
+                sample: sample
+            ) else {
                 return
             }
             guard let readinessRequest else { return }

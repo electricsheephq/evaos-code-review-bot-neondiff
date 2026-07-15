@@ -54,6 +54,8 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
         let generation: Int
         let rendered: Bool
         let quiescent: Bool
+        let contentFrame: NSRect?
+        let backingScale: CGFloat?
     }
 
     @Published private(set) var snapshot: Snapshot?
@@ -66,6 +68,22 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
         return "neondiff.evaluation.surface.\(snapshot.section.rawValue).\(snapshot.generation).\(state)"
     }
 
+    var geometryAccessibilityValue: String {
+        guard let snapshot,
+              snapshot.quiescent,
+              let contentFrame = snapshot.contentFrame,
+              let backingScale = snapshot.backingScale else {
+            return "contentFrame=unavailable;backingScale=unavailable"
+        }
+        let frameValues = [
+            contentFrame.origin.x,
+            contentFrame.origin.y,
+            contentFrame.width,
+            contentFrame.height
+        ].map(Self.format)
+        return "contentFrame=\(frameValues.joined(separator: ","));backingScale=\(Self.format(backingScale))"
+    }
+
     @discardableResult
     func begin(section: DesktopSection) -> Int {
         if let snapshot, snapshot.section == section {
@@ -76,7 +94,9 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             section: section,
             generation: generation,
             rendered: false,
-            quiescent: false
+            quiescent: false,
+            contentFrame: nil,
+            backingScale: nil
         )
         return generation
     }
@@ -93,7 +113,9 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             section: section,
             generation: generation,
             rendered: true,
-            quiescent: false
+            quiescent: false,
+            contentFrame: nil,
+            backingScale: nil
         )
     }
 
@@ -105,7 +127,11 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
     }
 
     @discardableResult
-    func markQuiescent(section: DesktopSection, generation: Int) -> Bool {
+    func markQuiescent(
+        section: DesktopSection,
+        generation: Int,
+        sample: DesktopEvaluationGeometrySample
+    ) -> Bool {
         guard let snapshot,
               snapshot.section == section,
               snapshot.generation == generation,
@@ -117,9 +143,19 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             section: section,
             generation: generation,
             rendered: true,
-            quiescent: true
+            quiescent: true,
+            contentFrame: sample.contentFrame,
+            backingScale: sample.backingScale
         )
         return true
+    }
+
+    private static func format(_ value: CGFloat) -> String {
+        String(
+            format: "%.3f",
+            locale: Locale(identifier: "en_US_POSIX"),
+            Double(value)
+        )
     }
 }
 
