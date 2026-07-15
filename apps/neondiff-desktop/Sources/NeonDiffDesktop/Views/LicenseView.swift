@@ -7,6 +7,9 @@ struct LicenseView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if model.activationHandoffEnabled {
+                    ActivationStateView(model: model)
+                }
                 OperatorSection("License") {
                     OperatorTextField(title: "License Key", text: $model.pendingLicenseKey, secure: true)
                     HStack(spacing: 10) {
