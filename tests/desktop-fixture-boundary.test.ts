@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const roots: string[] = [];
@@ -54,6 +54,32 @@ function scan(paths: string[]) {
 }
 
 describe("desktop fixture release-artifact boundary", () => {
+  it("anchors every allowed dSYM basename to an existing whole-file DEBUG app source", () => {
+    const scannerSource = readFileSync("scripts/check-desktop-fixture-boundary.mjs", "utf8");
+    const manifestMatch = scannerSource.match(/const ALLOWED_DSYM_DEBUG_SOURCE_PATHS = (\[[\s\S]*?\]);/);
+    expect(manifestMatch).not.toBeNull();
+    const sourcePaths = JSON.parse(manifestMatch![1]) as unknown;
+    expect(Array.isArray(sourcePaths)).toBe(true);
+    expect(sourcePaths).toHaveLength(5);
+    expect(sourcePaths.every((sourcePath) => typeof sourcePath === "string")).toBe(true);
+
+    const typedSourcePaths = sourcePaths as string[];
+    expect(new Set(typedSourcePaths).size).toBe(typedSourcePaths.length);
+    const appSourceRoot = "apps/neondiff-desktop/Sources/NeonDiffDesktop";
+    const appSwiftPaths = readdirSync(appSourceRoot, { recursive: true, encoding: "utf8" })
+      .filter((entry) => entry.endsWith(".swift"))
+      .map((entry) => join(appSourceRoot, entry));
+
+    for (const sourcePath of typedSourcePaths) {
+      expect(sourcePath.startsWith(`${appSourceRoot}/`), sourcePath).toBe(true);
+      const source = readFileSync(sourcePath, "utf8").trim();
+      expect(source, sourcePath).toMatch(/^#if DEBUG\n/);
+      expect(source, sourcePath).toMatch(/\n#endif$/);
+      const basename = sourcePath.split("/").at(-1);
+      expect(appSwiftPaths.filter((path) => path.endsWith(`/${basename}`)), sourcePath).toEqual([sourcePath]);
+    }
+  });
+
   it("accepts clean AppCore objects, modules, resources, and frameworks", () => {
     const artifacts = releaseArtifacts();
     for (const path of [artifacts.object, artifacts.module, artifacts.resource, artifacts.framework]) {
@@ -95,6 +121,26 @@ describe("desktop fixture release-artifact boundary", () => {
     expect(result.stderr).toMatch(/symlink escapes artifact root/);
   });
 
+  it("fails closed when an empty directory symlink DAG exceeds the traversal bound", () => {
+    const artifacts = releaseArtifacts();
+    const archive = join(artifacts.root, "NeonDiffDesktop.xcarchive");
+    const layers = join(archive, "empty-alias-layers");
+    const depth = 14;
+    for (let index = 0; index <= depth; index += 1) {
+      mkdirSync(join(layers, `layer-${index}`), { recursive: true });
+    }
+    for (let index = 0; index < depth; index += 1) {
+      const layer = join(layers, `layer-${index}`);
+      const target = `../layer-${index + 1}`;
+      symlinkSync(target, join(layer, "left"));
+      symlinkSync(target, join(layer, "right"));
+    }
+
+    const result = scan([archive]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/artifact traversal exceeds scan bound/);
+  });
+
   it("rejects the canonical fixture at an archive-like resource path", () => {
     const artifacts = releaseArtifacts();
     const fixturePath = join(
@@ -122,6 +168,235 @@ describe("desktop fixture release-artifact boundary", () => {
       violations: expect.arrayContaining([
         expect.objectContaining({ marker: "path:fixtures/ui" }),
         expect.objectContaining({ marker: "content:tab-overview" })
+      ])
+    });
+  });
+
+  it("accepts an excluded DEBUG source filename in dSYM metadata", () => {
+    const artifacts = releaseArtifacts();
+    const dwarf = join(
+      artifacts.root,
+      "NeonDiffDesktop.xcarchive",
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(join(dwarf, ".."), { recursive: true });
+    writeFileSync(
+      dwarf,
+      "/build/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift\0"
+    );
+
+    const result = scan([join(artifacts.root, "NeonDiffDesktop.xcarchive")]);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      violationCount: 0,
+      scannedFiles: 1
+    });
+  });
+
+  it("rejects an evaluation symbol in dSYM metadata after an allowed source filename", () => {
+    const artifacts = releaseArtifacts();
+    const dwarf = join(
+      artifacts.root,
+      "NeonDiffDesktop.xcarchive",
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(join(dwarf, ".."), { recursive: true });
+    writeFileSync(
+      dwarf,
+      "/build/Support/DesktopEvaluationReadiness.swift\0_$s15NeonDiffDesktop26DesktopEvaluationReadinessV"
+    );
+
+    const result = scan([join(artifacts.root, "NeonDiffDesktop.xcarchive")]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
+  it("rejects an allowlisted basename without a path-component boundary", () => {
+    const artifacts = releaseArtifacts();
+    const dwarf = join(
+      artifacts.root,
+      "NeonDiffDesktop.xcarchive",
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(join(dwarf, ".."), { recursive: true });
+    writeFileSync(dwarf, "leaked DesktopEvaluationReadiness.swift\0");
+
+    const result = scan([join(artifacts.root, "NeonDiffDesktop.xcarchive")]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
+  it("rejects a fake nested dSYM path inside a release app resource", () => {
+    const artifacts = releaseArtifacts();
+    const payload = join(
+      artifacts.appBundle,
+      "Contents",
+      "Resources",
+      "payload.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "payload"
+    );
+    mkdirSync(join(payload, ".."), { recursive: true });
+    writeFileSync(
+      payload,
+      "/build/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift\0"
+    );
+
+    const result = scan([artifacts.appBundle]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
+  it("rejects an allowed source filename in an unrelated top-level archive dSYM", () => {
+    const artifacts = releaseArtifacts();
+    const archive = join(artifacts.root, "NeonDiffDesktop.xcarchive");
+    const dwarf = join(
+      archive,
+      "dSYMs",
+      "Other.framework.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "Other"
+    );
+    mkdirSync(dirname(dwarf), { recursive: true });
+    writeFileSync(dwarf, "/build/Support/DesktopEvaluationReadiness.swift\0");
+
+    const result = scan([archive]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
+  it("rejects an allowed source filename in an alternate-case app dSYM path", () => {
+    const artifacts = releaseArtifacts();
+    const archive = join(artifacts.root, "NeonDiffDesktop.xcarchive");
+    const dwarf = join(
+      archive,
+      "dSyMs",
+      "NeonDiffDesktop.App.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(dirname(dwarf), { recursive: true });
+    writeFileSync(dwarf, "/build/Support/DesktopEvaluationReadiness.swift\0");
+
+    const result = scan([archive]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
+  it("scans an archive dSYM file again without masking through an app-resource symlink", () => {
+    const artifacts = releaseArtifacts();
+    const archive = join(artifacts.root, "NeonDiffDesktop.xcarchive");
+    const dwarf = join(
+      archive,
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(dirname(dwarf), { recursive: true });
+    writeFileSync(dwarf, "/build/Support/DesktopEvaluationReadiness.swift\0");
+
+    const alias = join(
+      archive,
+      "Products",
+      "Applications",
+      "NeonDiffDesktop.app",
+      "Contents",
+      "Resources",
+      "leaked-debug-payload"
+    );
+    mkdirSync(dirname(alias), { recursive: true });
+    symlinkSync(relative(dirname(alias), dwarf), alias);
+
+    const result = scan([archive]);
+    expect(result.status).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+    const aliasViolation = report.violations.find(
+      (violation: { path: string; marker: string }) => violation.marker === "DesktopEvaluationReadiness"
+    );
+    expect(aliasViolation.path).toMatch(
+      /\/Products\/Applications\/NeonDiffDesktop\.app\/Contents\/Resources\/leaked-debug-payload$/
+    );
+  });
+
+  it("rejects a top-level dSYMs tree when the scan root is not an xcarchive", () => {
+    const artifacts = releaseArtifacts();
+    const dwarf = join(
+      artifacts.root,
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(join(dwarf, ".."), { recursive: true });
+    writeFileSync(
+      dwarf,
+      "/build/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift\0"
+    );
+
+    const result = scan([artifacts.root]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
       ])
     });
   });

@@ -1,0 +1,219 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+
+/**
+ * Persistence for the GitHub App broker. Mirrors the LicenseStore patterns
+ * (DatabaseSync, `pragma foreign_keys`, user_version migration guard, prepared
+ * statements, row mapping) but lives in its OWN database so the license store's
+ * strict schema verification is unaffected and the two schemas evolve
+ * independently (see docs/security/github-app-broker.md, "Architecture").
+ *
+ * Retention (public-safe by construction): device public keys, one-shot connect
+ * states, installation bindings, and an append-only decision ledger. No tokens,
+ * private keys, source, or diffs are ever stored.
+ */
+const SCHEMA_VERSION = 1;
+const DEFAULT_BUSY_TIMEOUT_MS = 250;
+
+const SCHEMA = `
+  create table devices (
+    device_id text primary key,
+    public_jwk text not null,
+    created_at text not null,
+    last_seen_at text not null
+  );
+
+  create table connect_states (
+    state text primary key,
+    device_id text not null,
+    installation_id integer,
+    created_at text not null,
+    expires_at text not null,
+    consumed_at text,
+    foreign key (device_id) references devices(device_id)
+  );
+
+  create table installation_bindings (
+    device_id text not null,
+    installation_id integer not null,
+    account_login text,
+    created_at text not null,
+    primary key (device_id, installation_id),
+    foreign key (device_id) references devices(device_id)
+  );
+
+  create table decision_ledger (
+    id integer primary key autoincrement,
+    device_id text not null,
+    installation_id integer,
+    decision text not null,
+    reason_code text not null,
+    created_at text not null
+  );
+`;
+
+export interface DeviceRow {
+  device_id: string;
+  public_jwk: string;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export interface ConnectStateRow {
+  state: string;
+  device_id: string;
+  installation_id: number | null;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+}
+
+export interface InstallationBindingRow {
+  device_id: string;
+  installation_id: number;
+  account_login: string | null;
+  created_at: string;
+}
+
+export interface DecisionLedgerRow {
+  id: number;
+  device_id: string;
+  installation_id: number | null;
+  decision: string;
+  reason_code: string;
+  created_at: string;
+}
+
+export class GitHubBrokerStore {
+  private readonly db: DatabaseSync;
+
+  constructor(dbPath: string) {
+    if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
+    this.db = new DatabaseSync(dbPath, { timeout: DEFAULT_BUSY_TIMEOUT_MS });
+    try {
+      this.db.exec("pragma foreign_keys = on");
+      this.ensureSchema();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
+  }
+
+  private ensureSchema(): void {
+    const version = this.readUserVersion();
+    if (version === SCHEMA_VERSION) return;
+    if (version !== 0) throw new Error(`unsupported github broker schema version ${version}`);
+    this.db.exec("begin immediate");
+    try {
+      // Re-check under the writer lock in case a peer migrated first.
+      if (this.readUserVersion() === SCHEMA_VERSION) {
+        this.db.exec("commit");
+        return;
+      }
+      this.db.exec(SCHEMA);
+      this.db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  private readUserVersion(): number {
+    const row = this.db.prepare("pragma user_version").get() as { user_version: number };
+    return Number(row.user_version);
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  /** Register or refresh a device public key. Idempotent: the id is the key thumbprint. */
+  upsertDevice(deviceId: string, publicJwk: string, now: string): void {
+    this.db
+      .prepare(
+        `insert into devices (device_id, public_jwk, created_at, last_seen_at)
+         values (?, ?, ?, ?)
+         on conflict (device_id)
+         do update set public_jwk = excluded.public_jwk, last_seen_at = excluded.last_seen_at`
+      )
+      .run(deviceId, publicJwk, now, now);
+  }
+
+  getDevice(deviceId: string): DeviceRow | undefined {
+    return this.db.prepare("select * from devices where device_id = ?").get(deviceId) as DeviceRow | undefined;
+  }
+
+  touchDevice(deviceId: string, now: string): void {
+    this.db.prepare("update devices set last_seen_at = ? where device_id = ?").run(now, deviceId);
+  }
+
+  createConnectState(state: string, deviceId: string, createdAt: string, expiresAt: string): void {
+    this.db
+      .prepare(
+        `insert into connect_states (state, device_id, created_at, expires_at) values (?, ?, ?, ?)`
+      )
+      .run(state, deviceId, createdAt, expiresAt);
+  }
+
+  getConnectState(state: string): ConnectStateRow | undefined {
+    return this.db
+      .prepare("select * from connect_states where state = ?")
+      .get(state) as ConnectStateRow | undefined;
+  }
+
+  /**
+   * Atomically consume a one-shot connect state. Returns true only for the first
+   * caller; a second callback for the same state changes no rows (state_replayed).
+   */
+  consumeConnectState(state: string, installationId: number, consumedAt: string): boolean {
+    const info = this.db
+      .prepare(
+        `update connect_states set consumed_at = ?, installation_id = ?
+         where state = ? and consumed_at is null`
+      )
+      .run(consumedAt, installationId, state);
+    return Number(info.changes) > 0;
+  }
+
+  upsertBinding(deviceId: string, installationId: number, accountLogin: string | undefined, now: string): void {
+    this.db
+      .prepare(
+        `insert into installation_bindings (device_id, installation_id, account_login, created_at)
+         values (?, ?, ?, ?)
+         on conflict (device_id, installation_id)
+         do update set account_login = excluded.account_login`
+      )
+      .run(deviceId, installationId, accountLogin ?? null, now);
+  }
+
+  getBinding(deviceId: string, installationId: number): InstallationBindingRow | undefined {
+    return this.db
+      .prepare("select * from installation_bindings where device_id = ? and installation_id = ?")
+      .get(deviceId, installationId) as InstallationBindingRow | undefined;
+  }
+
+  /** Append a public-safe decision row. Never carries repo content or key material. */
+  appendDecision(
+    deviceId: string,
+    installationId: number | null,
+    decision: "allow" | "deny",
+    reasonCode: string,
+    now: string
+  ): void {
+    this.db
+      .prepare(
+        `insert into decision_ledger (device_id, installation_id, decision, reason_code, created_at)
+         values (?, ?, ?, ?, ?)`
+      )
+      .run(deviceId, installationId, decision, reasonCode, now);
+  }
+
+  listDecisions(deviceId?: string): DecisionLedgerRow[] {
+    const rows = deviceId
+      ? this.db.prepare("select * from decision_ledger where device_id = ? order by id asc").all(deviceId)
+      : this.db.prepare("select * from decision_ledger order by id asc").all();
+    return rows as unknown as DecisionLedgerRow[];
+  }
+}
