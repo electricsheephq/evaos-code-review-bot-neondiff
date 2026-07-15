@@ -3,6 +3,7 @@ import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const MAX_FILES = 20_000;
+const MAX_TRAVERSAL_ENTRIES = MAX_FILES * 2;
 const MAX_FILE_BYTES = 128 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 const FORBIDDEN_MARKERS = [
@@ -77,7 +78,12 @@ function collectFiles(inputPaths) {
     const logicalPath = stat.isDirectory() ? "" : relative(root, path);
     return { path, root, logicalPath, isArchiveRoot, throughSymlink: false, ancestorDirectories: [] };
   });
+  let traversalEntries = 0;
   while (pending.length > 0) {
+    traversalEntries += 1;
+    if (traversalEntries > MAX_TRAVERSAL_ENTRIES) {
+      throw new Error("artifact traversal exceeds scan bound");
+    }
     const { path, root, logicalPath, isArchiveRoot, throughSymlink, ancestorDirectories } = pending.pop();
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) {

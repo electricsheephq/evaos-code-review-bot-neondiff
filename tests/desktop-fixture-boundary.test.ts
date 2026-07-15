@@ -121,6 +121,26 @@ describe("desktop fixture release-artifact boundary", () => {
     expect(result.stderr).toMatch(/symlink escapes artifact root/);
   });
 
+  it("fails closed when an empty directory symlink DAG exceeds the traversal bound", () => {
+    const artifacts = releaseArtifacts();
+    const archive = join(artifacts.root, "NeonDiffDesktop.xcarchive");
+    const layers = join(archive, "empty-alias-layers");
+    const depth = 14;
+    for (let index = 0; index <= depth; index += 1) {
+      mkdirSync(join(layers, `layer-${index}`), { recursive: true });
+    }
+    for (let index = 0; index < depth; index += 1) {
+      const layer = join(layers, `layer-${index}`);
+      const target = `../layer-${index + 1}`;
+      symlinkSync(target, join(layer, "left"));
+      symlinkSync(target, join(layer, "right"));
+    }
+
+    const result = scan([archive]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/artifact traversal exceeds scan bound/);
+  });
+
   it("rejects the canonical fixture at an archive-like resource path", () => {
     const artifacts = releaseArtifacts();
     const fixturePath = join(
