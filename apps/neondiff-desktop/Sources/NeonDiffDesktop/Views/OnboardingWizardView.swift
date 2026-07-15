@@ -235,6 +235,7 @@ struct OnboardingWizardView: View {
             VStack(alignment: .leading, spacing: 16) {
                 ActivationStateView(model: model)
             }
+            .onAppear { model.syncActivationEntryFromOnboardingMode() }
         } else {
             legacyLicenseStep
         }

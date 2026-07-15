@@ -1132,13 +1132,25 @@ package final class NeonDiffDesktopModel: ObservableObject {
         ActivationStateMachine.presentation(for: activationState, redactedKeyPrefix: activationKeyRedactedPrefix)
     }
 
-    private var activationLicenseClient: any ActivationLicenseClienting {
-        activationLicenseClientOverride ?? DesktopActivationLicenseClient(
+    private var activationLicenseClient: (any ActivationLicenseClienting)? {
+        if let activationLicenseClientOverride { return activationLicenseClientOverride }
+        // The real CLI adapter is withheld by default. The CLI's `license activate`
+        // persists the stdin key to `license.keyPath` under the default file backend
+        // (`src/license.ts` writeLicenseKey), which would create a SECOND raw copy on
+        // disk and break the Keychain-only promise. It is only used when explicitly
+        // enabled — production checkout is disabled anyway (#562 + website #46) —
+        // pending a no-file-persist stdin-validate CLI verb.
+        guard dependencies.preferences.bool(forKey: activationCliBackedEnabledKey) else { return nil }
+        return DesktopActivationLicenseClient(
             cli: dependencies.cli,
             executablePath: cliPath,
             configPath: configPath
         )
     }
+
+    /// Tags each activation attempt so a slow in-flight result that lands after a
+    /// cancellation or a newer request is dropped (resume-exact race guard).
+    private var activationRequestGeneration: UInt64 = 0
 
     package func applyActivationEvent(_ event: ActivationEvent) {
         let next = ActivationStateMachine.reduce(activationState, on: event)
@@ -1154,30 +1166,59 @@ package final class NeonDiffDesktopModel: ObservableObject {
         applyActivationEvent(mode == .publicReposOnly ? .choosePublicPath : .choosePrivatePath)
     }
 
+    /// Align the activation entry state with the onboarding mode when the flow
+    /// first reaches activation, so choosing Public Repos actually skips the
+    /// license wall. Only flips between the two entry states — never disturbs a
+    /// mid-flow or resumed state (resume-exact).
+    package func syncActivationEntryFromOnboardingMode() {
+        switch activationState {
+        case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
+            applyActivationEvent(.choosePublicPath)
+        case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
+            applyActivationEvent(.choosePrivatePath)
+        default:
+            break
+        }
+    }
+
     package func beginActivationCheckout() {
         applyActivationEvent(activationCheckoutEnabled ? .beginCheckout : .checkoutUnavailable)
     }
 
     package func cancelActivationCheckout() {
+        // Invalidate any in-flight activation so its late result is ignored.
+        activationRequestGeneration &+= 1
         applyActivationEvent(.checkoutCancelled)
     }
 
     /// Existing keys still activate while checkout is paused. The key is stored in
     /// the Keychain only; only a redacted prefix is retained in memory for display.
     package func provideExistingActivationKey() {
+        guard persistPendingActivationKey(requireNonEmpty: true) else { return }
+        lastError = nil
+        applyActivationEvent(.provideExistingKey)
+    }
+
+    /// Upsert the pasted key into the Keychain (single canonical item) and retain
+    /// only a redacted prefix in memory. Returns false when there is nothing to
+    /// store (or the store failed).
+    @discardableResult
+    private func persistPendingActivationKey(requireNonEmpty: Bool = false) -> Bool {
         let material = ActivationKeyMaterial(pendingActivationKey)
         guard !material.isEmpty else {
-            lastError = "Enter your \(ActivationTerminology.activationKey) to continue."
-            return
+            if requireNonEmpty {
+                lastError = "Enter your \(ActivationTerminology.activationKey) to continue."
+            }
+            return false
         }
         do {
             try dependencies.secretStore.setSecret(pendingActivationKey, account: activationKeyAccount)
             activationKeyRedactedPrefix = material.redactedPrefix
             pendingActivationKey = ""
-            lastError = nil
-            applyActivationEvent(.provideExistingKey)
+            return true
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
+            return false
         }
     }
 
@@ -1218,12 +1259,21 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func submitActivation() async {
         guard activationState == .keyReady else { return }
+        // A corrected/replacement key typed on the key-entry screen must be stored
+        // (and thus used) before we activate — otherwise the previous, rejected key
+        // would be retried.
+        if !pendingActivationKey.isEmpty {
+            guard persistPendingActivationKey() else { return }
+        }
         applyActivationEvent(.submitActivation)
         await performActivation()
     }
 
     package func retryActivation() async {
         guard activationState == .offline || activationState == .serviceError else { return }
+        if !pendingActivationKey.isEmpty {
+            guard persistPendingActivationKey() else { return }
+        }
         applyActivationEvent(.retry)
         await performActivation()
     }
@@ -1231,6 +1281,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// Runs against `activation_pending`: read the key lazily from the Keychain
     /// (off the launch path) and hand it to the license client over bounded stdin.
     private func performActivation() async {
+        activationRequestGeneration &+= 1
+        let generation = activationRequestGeneration
+
+        guard let client = activationLicenseClient else {
+            // No CLI-backed validation available (default): never invoke the
+            // file-persisting CLI. Land in a retryable state instead.
+            applyActivationEvent(.activationServiceError)
+            lastError = activationPresentation.cause
+            return
+        }
         let rawKey: String?
         do {
             rawKey = try dependencies.secretStore.readSecret(account: activationKeyAccount, allowUserInteraction: true)
@@ -1240,18 +1300,34 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         guard let rawKey, !rawKey.isEmpty else {
+            // Missing Keychain item mid-activation → back to key entry, not a dead
+            // Activating state (reenterKey now transitions from activationPending).
             applyActivationEvent(.reenterKey)
-            lastError = "No stored \(ActivationTerminology.activationKey) to activate."
+            lastError = "No stored \(ActivationTerminology.activationKey) to activate. Enter it again."
             return
         }
         let outcome: ActivationClientOutcome
         do {
-            outcome = try await activationLicenseClient.activate(key: ActivationKeyMaterial(rawKey))
+            outcome = try await client.activate(key: ActivationKeyMaterial(rawKey))
         } catch {
             outcome = .offline
         }
-        applyActivationEvent(ActivationLicenseOutcomeMapping.event(for: outcome))
-        applyActivationOutcomeSideEffects(outcome)
+        // Drop stale results after a cancellation or a newer activation request.
+        guard generation == activationRequestGeneration else { return }
+        let resolved = resolveActivationOutcome(outcome)
+        applyActivationEvent(ActivationLicenseOutcomeMapping.event(for: resolved))
+        applyActivationOutcomeSideEffects(resolved)
+    }
+
+    /// A 200-`active` response can still be public-only or `privateRepoAllowed=false`,
+    /// which the server review gate rejects for private repos. Downgrade such a
+    /// scope-insufficient success to a scope conflict so the pane never reports
+    /// private review as unlocked when it is not.
+    private func resolveActivationOutcome(_ outcome: ActivationClientOutcome) -> ActivationClientOutcome {
+        if case let .active(summary) = outcome, !summary.coversPrivateRepos {
+            return .scopeConflict
+        }
+        return outcome
     }
 
     private func applyActivationOutcomeSideEffects(_ outcome: ActivationClientOutcome) {
@@ -1262,7 +1338,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             let plan = summary.plan.map { " · \($0)" } ?? ""
             license.entitlement = "active (\(scope)\(plan))"
             logText = "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
-        case .expired, .revoked, .invalid, .scopeConflict, .offline, .serviceError, .malformed:
+            // Let onboarding finish through the native handoff (Continue enables).
+            onboardingFlow.licenseActivation = .activated
+        case .scopeConflict:
+            lastError = "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
+        case .expired, .revoked, .invalid, .offline, .serviceError, .malformed:
             // Cause copy comes from the typed state presentation — never a raw
             // error string, and never any key material.
             lastError = activationPresentation.cause
@@ -2134,6 +2214,7 @@ private let activationKeyAccount = "activation-key/default"
 private let activationStateKey = "neondiff.activationState.v1"
 private let activationHandoffEnabledKey = "neondiff.activationHandoffEnabled"
 private let activationCheckoutEnabledKey = "neondiff.activationCheckoutEnabled"
+private let activationCliBackedEnabledKey = "neondiff.activationCliBackedValidation"
 
 private func isValidRepoName(_ value: String) -> Bool {
     let parts = value.split(separator: "/", omittingEmptySubsequences: false)

@@ -151,6 +151,20 @@ import Testing
         }
     }
 
+    @Test func entitlementScopeCoverageMatchesServerGate() {
+        func summary(scope: String, privateAllowed: Bool?) -> ActivationEntitlementSummary {
+            .init(status: .active, repoVisibilityScope: scope, privateRepoAllowed: privateAllowed,
+                  updateEntitlement: true, expiresAt: nil, plan: nil, seats: nil)
+        }
+        #expect(summary(scope: "private", privateAllowed: nil).coversPrivateRepos)
+        #expect(summary(scope: "all", privateAllowed: nil).coversPrivateRepos)
+        #expect(summary(scope: "private", privateAllowed: true).coversPrivateRepos)
+        // Public-only or explicit privateRepoAllowed=false does NOT cover private.
+        #expect(!summary(scope: "public", privateAllowed: nil).coversPrivateRepos)
+        #expect(!summary(scope: "all", privateAllowed: false).coversPrivateRepos)
+        #expect(!summary(scope: "private", privateAllowed: false).coversPrivateRepos)
+    }
+
     @Test func keyMaterialNeverExposesRawSecret() {
         let key = ActivationKeyMaterial("NDL-SUPER-SECRET-0123456789")
         #expect(!key.description.contains("SUPER-SECRET"))

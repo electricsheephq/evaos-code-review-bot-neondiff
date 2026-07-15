@@ -37,23 +37,48 @@ import NeonDiffDesktopCore
     private final class FakeActivationClient: ActivationLicenseClienting, @unchecked Sendable {
         private let lock = NSLock()
         private var outcome: ActivationClientOutcome
+        private(set) var lastKeyDescription: String = ""
 
         init(_ outcome: ActivationClientOutcome) { self.outcome = outcome }
         func set(_ outcome: ActivationClientOutcome) { lock.withLock { self.outcome = outcome } }
-        func activate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome { lock.withLock { outcome } }
+        func activate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+            lock.withLock { lastKeyDescription = key.redactedPrefix; return outcome }
+        }
         func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome { lock.withLock { outcome } }
+    }
+
+    /// Suspends `activate` until `release(_:)` is called, so a cancellation can be
+    /// interleaved with an in-flight activation.
+    private final class GatedActivationClient: ActivationLicenseClienting, @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<ActivationClientOutcome, Never>?
+        private var pending: ActivationClientOutcome?
+
+        func activate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+            await withCheckedContinuation { c in
+                lock.lock(); defer { lock.unlock() }
+                if let pending { c.resume(returning: pending) } else { continuation = c }
+            }
+        }
+        func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome { .offline }
+        func release(_ outcome: ActivationClientOutcome) {
+            lock.lock(); defer { lock.unlock() }
+            if let continuation { continuation.resume(returning: outcome); self.continuation = nil }
+            else { pending = outcome }
+        }
     }
 
     private func makeModel(
         preferences: MemoryPreferences = MemoryPreferences(),
         secretStore: RecordingKeychain = RecordingKeychain(),
+        cli: RecordingCLIExecutor = RecordingCLIExecutor(),
         client: (any ActivationLicenseClienting)? = nil
     ) -> NeonDiffDesktopModel {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let dependencies = DesktopAppDependencies(
             clipboard: RecordingClipboard(),
             urlOpener: RecordingURLOpener(),
-            cli: RecordingCLIExecutor(),
+            cli: cli,
             dashboard: RecordingDashboardLauncher(),
             preferences: preferences,
             clock: TestClock(),
@@ -64,6 +89,11 @@ import NeonDiffDesktopCore
             productionBoundary: .testVerified
         )
         return NeonDiffDesktopModel(dependencies: dependencies, activationLicenseClient: client)
+    }
+
+    private func activeSummary(scope: String = "private", privateAllowed: Bool? = true) -> ActivationClientOutcome {
+        .active(.init(status: .active, repoVisibilityScope: scope, privateRepoAllowed: privateAllowed,
+                      updateEntitlement: true, expiresAt: nil, plan: "team", seats: 3))
     }
 
     private let activationKeyAccount = "activation-key/default"
@@ -187,5 +217,124 @@ import NeonDiffDesktopCore
         model.activationState = .expired
         model.renewActivation()
         #expect(model.activationState == .purchaseRequired)
+    }
+
+    // MARK: - Review-thread regressions (#624)
+
+    /// Thread 1: successful handoff must let onboarding finish (Continue enables).
+    @Test func successMarksOnboardingActivated() async {
+        let keychain = RecordingKeychain()
+        let model = makeModel(secretStore: keychain, client: FakeActivationClient(activeSummary()))
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-GOOD-0123456789"
+        model.provideExistingActivationKey()
+        await model.submitActivation()
+        #expect(model.activationState == .active)
+        #expect(model.onboardingFlow.licenseActivation == .activated)
+    }
+
+    /// Thread 2: choosing Public Repos must skip the license wall, not sit at
+    /// purchase_required.
+    @Test func publicModeSyncSkipsLicenseWall() {
+        let model = makeModel()
+        model.onboardingFlow.mode = .publicReposOnly
+        #expect(model.activationState == .purchaseRequired)
+        model.syncActivationEntryFromOnboardingMode()
+        #expect(model.activationState == .publicFreeSkip)
+        // Flipping back to private re-enters the paid branch.
+        model.onboardingFlow.mode = .privateRepos
+        model.syncActivationEntryFromOnboardingMode()
+        #expect(model.activationState == .purchaseRequired)
+    }
+
+    /// Thread 3: a corrected key entered after a rejection must be the one used —
+    /// not the previously stored, rejected key.
+    @Test func correctedKeyReplacesRejectedKeyBeforeRetry() async {
+        let keychain = RecordingKeychain()
+        let client = FakeActivationClient(.invalid)
+        let model = makeModel(secretStore: keychain, client: client)
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-WRONG-0123456789"
+        model.provideExistingActivationKey()
+        await model.submitActivation()
+        #expect(model.activationState == .invalid)
+
+        model.reenterActivationKey()
+        #expect(model.activationState == .keyReady)
+        client.set(activeSummary())
+        model.pendingActivationKey = "NDL-CORRECTED-9999999999"
+        await model.submitActivation()
+        #expect(model.activationState == .active)
+        // The client saw the corrected key's prefix, and it is the stored one.
+        #expect(client.lastKeyDescription.hasPrefix("NDL-"))
+        #expect(try! keychain.readSecret(account: activationKeyAccount) == "NDL-CORRECTED-9999999999")
+    }
+
+    /// Thread 4: with no CLI-backed validation enabled (default), activation must
+    /// never invoke the file-persisting CLI (no second on-disk key copy).
+    @Test func defaultActivationNeverInvokesFilePersistingCLI() async {
+        let cli = RecordingCLIExecutor()
+        let keychain = RecordingKeychain()
+        let model = makeModel(secretStore: keychain, cli: cli, client: nil)
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-GOOD-0123456789"
+        model.provideExistingActivationKey()
+        await model.submitActivation()
+        #expect(cli.calls.isEmpty, "the file-persisting CLI must not run by default")
+        #expect(model.activationState == .serviceError)
+    }
+
+    /// Thread 6: a slow activation result that lands after Cancel must be dropped.
+    @Test func staleResultAfterCancelIsDropped() async {
+        let keychain = RecordingKeychain()
+        let gate = GatedActivationClient()
+        let model = makeModel(secretStore: keychain, client: gate)
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-GOOD-0123456789"
+        model.provideExistingActivationKey()
+
+        let task = Task { await model.submitActivation() }
+        var spins = 0
+        while model.activationState != .activationPending && spins < 10_000 {
+            await Task.yield(); spins += 1
+        }
+        #expect(model.activationState == .activationPending)
+        model.cancelActivationCheckout()
+        #expect(model.activationState == .keyReady)
+        gate.release(activeSummary())      // late success
+        await task.value
+        #expect(model.activationState == .keyReady, "stale result must not re-activate")
+        #expect(model.onboardingFlow.licenseActivation != .activated)
+    }
+
+    /// Thread 7: a keyReady state restored without a Keychain item must return to
+    /// key entry, not get stuck on Activating.
+    @Test func missingKeyDuringActivationReturnsToKeyEntry() async {
+        let prefs = MemoryPreferences()
+        prefs.set(ActivationState.keyReady.rawValue, forKey: activationStateKey)
+        let keychain = RecordingKeychain()   // empty: the stored item is gone
+        let model = makeModel(preferences: prefs, secretStore: keychain, client: FakeActivationClient(activeSummary()))
+        #expect(model.activationState == .keyReady)
+        await model.submitActivation()
+        #expect(model.activationState == .keyReady, "missing key must return to key entry")
+        #expect(model.lastError?.contains("Enter it again") == true)
+    }
+
+    /// Thread 8: an active response that does not cover private repos must NOT be
+    /// reported as unlocked.
+    @Test func scopeInsufficientActiveDoesNotUnlockPrivate() async {
+        let keychain = RecordingKeychain()
+        // 200 active but public-only scope — the server gate rejects this for private.
+        let client = FakeActivationClient(activeSummary(scope: "public", privateAllowed: nil))
+        let model = makeModel(secretStore: keychain, client: client)
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-PUBONLY-0123456789"
+        model.provideExistingActivationKey()
+        await model.submitActivation()
+        #expect(model.activationState != .active, "scope-insufficient active must not render as active")
+        #expect(model.activationState == .invalid)
+        #expect(!model.license.entitlement.contains("active ("))
+        #expect(model.onboardingFlow.licenseActivation != .activated)
+        #expect(model.lastError?.localizedCaseInsensitiveContains("private") == true)
     }
 }

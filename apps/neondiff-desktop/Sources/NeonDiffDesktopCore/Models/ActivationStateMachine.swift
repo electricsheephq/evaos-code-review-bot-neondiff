@@ -137,6 +137,9 @@ public enum ActivationStateMachine {
         case (.activationPending, .activationOffline): return .offline
         case (.activationPending, .activationServiceError): return .serviceError
         case (.activationPending, .checkoutCancelled): return .keyReady
+        // A stored key that has gone missing mid-activation returns to key entry
+        // rather than leaving the user stuck on the Activating state.
+        case (.activationPending, .reenterKey): return .keyReady
 
         case (.active, .activationExpired): return .expired
         case (.active, .activationRevoked): return .revoked

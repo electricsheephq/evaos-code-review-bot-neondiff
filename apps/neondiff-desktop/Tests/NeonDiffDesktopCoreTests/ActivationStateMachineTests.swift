@@ -34,6 +34,7 @@ import Testing
         (.activationPending, .activationOffline, .offline),
         (.activationPending, .activationServiceError, .serviceError),
         (.activationPending, .checkoutCancelled, .keyReady),
+        (.activationPending, .reenterKey, .keyReady),
 
         (.active, .activationExpired, .expired),
         (.active, .activationRevoked, .revoked),

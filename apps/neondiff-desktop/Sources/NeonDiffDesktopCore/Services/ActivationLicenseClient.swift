@@ -78,6 +78,15 @@ public struct ActivationEntitlementSummary: Sendable, Equatable {
         self.plan = plan
         self.seats = seats
     }
+
+    /// Whether this entitlement actually grants private-repo review. Mirrors the
+    /// server review gate (`src/license.ts` `entitlementCoversRepoVisibility`): a
+    /// public-only scope, or `privateRepoAllowed == false`, does NOT cover private
+    /// repos even when the response status is `active`.
+    public var coversPrivateRepos: Bool {
+        if privateRepoAllowed == false { return false }
+        return repoVisibilityScope == "all" || repoVisibilityScope == "private"
+    }
 }
 
 /// The classified outcome of an activation/validation call.
