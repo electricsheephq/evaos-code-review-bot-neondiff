@@ -5,6 +5,59 @@ final class NeonDiffDesktopUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testAccessibility3OverrideScalesVisibleProductionSectionTitle() throws {
+        let requestedContentSize = HostedContentSize(width: 1040, height: 680)
+        let defaultScenario = try captureRenderedTextScaleScenario(
+            requestedContentSize: requestedContentSize,
+            textSizeMode: "runner-default-no-test-override",
+            textSizeArgument: nil,
+            rootIdentifier: "neondiff.fixture.tab-overview"
+        )
+        let accessibility3Scenario = try captureRenderedTextScaleScenario(
+            requestedContentSize: requestedContentSize,
+            textSizeMode: "swiftui-dynamic-type-accessibility3-test-override",
+            textSizeArgument: "accessibility3",
+            rootIdentifier: "neondiff.fixture.tab-overview.text-size.accessibility3"
+        )
+        let defaultMaximumSample = try XCTUnwrap(
+            defaultScenario.samples.max { $0.frame.height < $1.frame.height }
+        )
+        let accessibility3MinimumSample = try XCTUnwrap(
+            accessibility3Scenario.samples.min { $0.frame.height < $1.frame.height }
+        )
+        let robustRenderedHeightGrowthPoints =
+            accessibility3MinimumSample.frame.height - defaultMaximumSample.frame.height
+        guard robustRenderedHeightGrowthPoints > 1 else {
+            throw HostedRenderedTextScaleError.insufficientRenderedScale(
+                defaultMaximumFrame: defaultMaximumSample.frame,
+                accessibility3MinimumFrame: accessibility3MinimumSample.frame
+            )
+        }
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedRenderedTextScaleError.priorValidationFailure
+        }
+
+        try attach(
+            HostedRenderedTextScaleTrace(
+                schemaVersion: 1,
+                fixtureId: "tab-overview",
+                requestedContentSize: requestedContentSize,
+                semanticTextIdentifier: "neondiff-section-title",
+                expectedSemanticValue: "Overview",
+                coordinateSpace: "xcui-screen",
+                sampleIntervalMilliseconds: 100,
+                tolerancePoints: 1,
+                minimumRequiredHeightGrowthPoints: 1,
+                defaultMaximumHeightPoints: defaultMaximumSample.frame.height,
+                accessibility3MinimumHeightPoints: accessibility3MinimumSample.frame.height,
+                robustRenderedHeightGrowthPoints: robustRenderedHeightGrowthPoints,
+                defaultScenario: defaultScenario,
+                accessibility3Scenario: accessibility3Scenario,
+                proofBoundary: "hosted-visible-production-section-title-rendered-scale-comparison-only-system-preference-excluded"
+            )
+        )
+    }
+
     func testStrictFixtureSettlesAcrossOverviewReposOverview() throws {
         let requestedContentSize = HostedContentSize(width: 1040, height: 680)
         let fixtureURL = try XCTUnwrap(
@@ -393,6 +446,165 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 proofBoundary: "hosted-accessibility3-minimum-size-outer-geometry-and-page-bottom-only-inner-scroll-exhaustion-excluded"
             )
         )
+    }
+
+    private func captureRenderedTextScaleScenario(
+        requestedContentSize: HostedContentSize,
+        textSizeMode: String,
+        textSizeArgument: String?,
+        rootIdentifier: String
+    ) throws -> HostedRenderedTextScaleScenario {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "tab-overview", withExtension: "json")
+        )
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "1040x680",
+            "--disable-animations"
+        ]
+        if let textSizeArgument {
+            app.launchArguments.append(contentsOf: ["--text-size", textSizeArgument])
+        }
+        app.launch()
+
+        guard app.windows.firstMatch.waitForExistence(timeout: 10) else {
+            throw HostedRenderedTextScaleError.missingElement("window")
+        }
+        let root = app.descendants(matching: .any)[rootIdentifier]
+        guard root.waitForExistence(timeout: 10) else {
+            throw HostedRenderedTextScaleError.missingElement(rootIdentifier)
+        }
+        guard app.state == .runningForeground else {
+            throw HostedRenderedTextScaleError.appNotForeground
+        }
+
+        let markerIdentifier = "neondiff.evaluation.surface.overview.0.quiescent"
+        _ = try captureCheckpoint(
+            app: app,
+            section: "overview",
+            generation: 0,
+            markerIdentifier: markerIdentifier,
+            requestedContentSize: requestedContentSize
+        )
+
+        let titleQuery = app.staticTexts.matching(identifier: "neondiff-section-title")
+        guard titleQuery.count == 1 else {
+            throw HostedRenderedTextScaleError.invalidElementCount(
+                identifier: "neondiff-section-title",
+                count: titleQuery.count
+            )
+        }
+        let title = titleQuery.element(boundBy: 0)
+        guard title.waitForExistence(timeout: 2) else {
+            throw HostedRenderedTextScaleError.missingElement("neondiff-section-title")
+        }
+        _ = try semanticStaticTextValue(title)
+        let samples = try captureStableVisibleTextSamples(
+            title,
+            visibleContainer: app.windows.firstMatch,
+            context: textSizeMode
+        )
+
+        return HostedRenderedTextScaleScenario(
+            textSizeMode: textSizeMode,
+            launchTextSizeArgument: textSizeArgument,
+            rootIdentifier: rootIdentifier,
+            quiescenceMarkerIdentifier: markerIdentifier,
+            samples: samples
+        )
+    }
+
+    private func captureStableVisibleTextSamples(
+        _ element: XCUIElement,
+        visibleContainer: XCUIElement,
+        context: String
+    ) throws -> [HostedRenderedTextSample] {
+        let start = ProcessInfo.processInfo.systemUptime
+        var previousSampleStart: TimeInterval?
+        var samples: [HostedRenderedTextSample] = []
+        for index in 0..<3 {
+            if index > 0, let previousSampleStart {
+                let elapsedSincePrevious =
+                    ProcessInfo.processInfo.systemUptime - previousSampleStart
+                let remainingDelay = max(0, 0.1 - elapsedSincePrevious)
+                if remainingDelay > 0 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(remainingDelay))
+                }
+            }
+            let sampleStart = ProcessInfo.processInfo.systemUptime
+            previousSampleStart = sampleStart
+            let frame = HostedGeometryFrame(element.frame)
+            let visibleContainerFrame = HostedGeometryFrame(visibleContainer.frame)
+            guard frame.isFiniteAndNonempty else {
+                throw HostedRenderedTextScaleError.invalidFrame(context)
+            }
+            guard visibleContainerFrame.isFiniteAndNonempty else {
+                throw HostedRenderedTextScaleError.invalidVisibleContainerFrame(context)
+            }
+            let semanticValue = try semanticStaticTextValue(element)
+            let fullyContainedInVisibleContainer = frame.isFullyContained(
+                in: visibleContainerFrame,
+                tolerance: 1
+            )
+            guard fullyContainedInVisibleContainer else {
+                throw HostedRenderedTextScaleError.textNotVisible(
+                    context: context,
+                    textFrame: frame,
+                    visibleContainerFrame: visibleContainerFrame
+                )
+            }
+            samples.append(
+                HostedRenderedTextSample(
+                    elapsedMilliseconds: Int(((sampleStart - start) * 1_000).rounded()),
+                    frame: frame,
+                    semanticValue: semanticValue,
+                    visibleContainerFrame: visibleContainerFrame,
+                    fullyContainedInVisibleContainer: fullyContainedInVisibleContainer
+                )
+            )
+        }
+
+        guard samples.count == 3,
+              samples[0].elapsedMilliseconds >= 0,
+              samples[0].elapsedMilliseconds <= 25,
+              let finalElapsedMilliseconds = samples.last?.elapsedMilliseconds,
+              finalElapsedMilliseconds <= 5_000 else {
+            throw HostedRenderedTextScaleError.invalidCadence(context)
+        }
+        for (lhs, rhs) in zip(samples, samples.dropFirst()) {
+            guard rhs.elapsedMilliseconds - lhs.elapsedMilliseconds >= 90 else {
+                throw HostedRenderedTextScaleError.invalidCadence(context)
+            }
+        }
+        guard let baseline = samples.first else {
+            throw HostedRenderedTextScaleError.missingSamples(context)
+        }
+        for sample in samples.dropFirst() {
+            guard !baseline.frame.differs(from: sample.frame, byMoreThan: 1),
+                  !baseline.visibleContainerFrame.differs(
+                      from: sample.visibleContainerFrame,
+                      byMoreThan: 1
+                  ),
+                  baseline.fullyContainedInVisibleContainer,
+                  sample.fullyContainedInVisibleContainer,
+                  baseline.semanticValue == sample.semanticValue else {
+                throw HostedRenderedTextScaleError.unstableGeometry(context)
+            }
+        }
+        return samples
+    }
+
+    private func semanticStaticTextValue(_ element: XCUIElement) throws -> String {
+        guard let semanticValue = element.value as? String,
+              semanticValue == "Overview" else {
+            throw HostedRenderedTextScaleError.unexpectedSemanticValue(
+                String(describing: element.value)
+            )
+        }
+        return semanticValue
     }
 
     private func captureCanonicalSizeScenario(
@@ -1091,6 +1303,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
         add(attachment)
     }
 
+    private func attach(_ trace: HostedRenderedTextScaleTrace) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let attachment = XCTAttachment(
+            data: try encoder.encode(trace),
+            uniformTypeIdentifier: "public.json"
+        )
+        attachment.name = "neondiff-hosted-rendered-text-scale.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func attachTransportDiagnostic(_ diagnostic: HostedTransportDiagnostic) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1344,6 +1568,40 @@ private struct HostedLargeTextMatrixTrace: Codable {
     let proofBoundary: String
 }
 
+private struct HostedRenderedTextSample: Codable, Equatable {
+    let elapsedMilliseconds: Int
+    let frame: HostedGeometryFrame
+    let semanticValue: String
+    let visibleContainerFrame: HostedGeometryFrame
+    let fullyContainedInVisibleContainer: Bool
+}
+
+private struct HostedRenderedTextScaleScenario: Codable {
+    let textSizeMode: String
+    let launchTextSizeArgument: String?
+    let rootIdentifier: String
+    let quiescenceMarkerIdentifier: String
+    let samples: [HostedRenderedTextSample]
+}
+
+private struct HostedRenderedTextScaleTrace: Codable {
+    let schemaVersion: Int
+    let fixtureId: String
+    let requestedContentSize: HostedContentSize
+    let semanticTextIdentifier: String
+    let expectedSemanticValue: String
+    let coordinateSpace: String
+    let sampleIntervalMilliseconds: Int
+    let tolerancePoints: Double
+    let minimumRequiredHeightGrowthPoints: Double
+    let defaultMaximumHeightPoints: Double
+    let accessibility3MinimumHeightPoints: Double
+    let robustRenderedHeightGrowthPoints: Double
+    let defaultScenario: HostedRenderedTextScaleScenario
+    let accessibility3Scenario: HostedRenderedTextScaleScenario
+    let proofBoundary: String
+}
+
 private struct HostedGeometryCoordinateSpaces: Codable {
     let windowAndContent: String
     let regions: String
@@ -1389,6 +1647,65 @@ private enum HostedPageBottomTraceError: LocalizedError {
         case let .sentinelNotContained(context, sentinel, container):
             "Hosted page-bottom sentinel is not fully contained in \(context): "
                 + "sentinel=\(sentinel) container=\(container)"
+        }
+    }
+}
+
+private enum HostedRenderedTextScaleError: LocalizedError {
+    case priorValidationFailure
+    case appNotForeground
+    case missingElement(String)
+    case invalidElementCount(identifier: String, count: Int)
+    case unexpectedSemanticValue(String)
+    case invalidFrame(String)
+    case invalidVisibleContainerFrame(String)
+    case textNotVisible(
+        context: String,
+        textFrame: HostedGeometryFrame,
+        visibleContainerFrame: HostedGeometryFrame
+    )
+    case missingSamples(String)
+    case invalidCadence(String)
+    case unstableGeometry(String)
+    case insufficientRenderedScale(
+        defaultMaximumFrame: HostedGeometryFrame,
+        accessibility3MinimumFrame: HostedGeometryFrame
+    )
+
+    var errorDescription: String? {
+        switch self {
+        case .priorValidationFailure:
+            "Hosted rendered-text trace withheld after an earlier validation failure"
+        case .appNotForeground:
+            "Hosted rendered-text fixture is not running in the foreground"
+        case .missingElement(let identifier):
+            "Missing hosted rendered-text element: \(identifier)"
+        case let .invalidElementCount(identifier, count):
+            "Hosted rendered-text element count is not exactly one: "
+                + "identifier=\(identifier) count=\(count)"
+        case .unexpectedSemanticValue(let value):
+            "Hosted rendered-text element has an unexpected semantic value: \(value)"
+        case .invalidFrame(let context):
+            "Hosted rendered-text frame is invalid: \(context)"
+        case .invalidVisibleContainerFrame(let context):
+            "Hosted rendered-text visible-container frame is invalid: \(context)"
+        case let .textNotVisible(context, textFrame, visibleContainerFrame):
+            "Hosted rendered-text frame is not fully contained in the visible container: "
+                + "context=\(context) text=\(textFrame) "
+                + "container=\(visibleContainerFrame)"
+        case .missingSamples(let context):
+            "Hosted rendered-text samples are missing: \(context)"
+        case .invalidCadence(let context):
+            "Hosted rendered-text sample cadence is invalid: \(context)"
+        case .unstableGeometry(let context):
+            "Hosted rendered-text geometry drift exceeded one point: \(context)"
+        case let .insufficientRenderedScale(
+            defaultMaximumFrame,
+            accessibility3MinimumFrame
+        ):
+            "Accessibility3 did not increase visible production text height by more than "
+                + "one point in the worst case: defaultMaximum=\(defaultMaximumFrame) "
+                + "accessibility3Minimum=\(accessibility3MinimumFrame)"
         }
     }
 }

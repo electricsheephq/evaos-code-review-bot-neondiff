@@ -7,6 +7,8 @@ const schemePath =
   "apps/neondiff-desktop/NeonDiffDesktop.xcodeproj/xcshareddata/xcschemes/NeonDiffDesktopHosted.xcscheme";
 const testPlanPath = "apps/neondiff-desktop/NeonDiffDesktop.xctestplan";
 const uiTestPath = "apps/neondiff-desktop/UITests/NeonDiffDesktopUITests.swift";
+const themePath =
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/NeonDiffTheme.swift";
 const workflowPath = ".github/workflows/swift-desktop-gate.yml";
 
 function extractBalancedSwiftDeclaration(
@@ -515,6 +517,51 @@ private func target() {
     expect(app).toContain(".dynamicTypeSize(.accessibility3)");
     expect(app).toContain(
       String.raw`neondiff.fixture.\(fixtureId).text-size.accessibility3`
+    );
+  });
+
+  it("requires settled rendered scaling for visible production text", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const theme = readFileSync(themePath, "utf8");
+
+    expect(source).toContain(
+      "testAccessibility3OverrideScalesVisibleProductionSectionTitle"
+    );
+    expect(source).toContain("captureStableVisibleTextSamples");
+    expect(source).toContain("HostedRenderedTextScaleTrace(");
+    expect(source).toContain("robustRenderedHeightGrowthPoints > 1");
+    expect(source).toContain("defaultScenario.samples.max");
+    expect(source).toContain("accessibility3Scenario.samples.min");
+    expect(source).toContain("case insufficientRenderedScale(");
+    expect(source).toContain("samples.count == 3");
+    expect(source).toContain("finalElapsedMilliseconds <= 5_000");
+    expect(source).toContain("visibleContainer: app.windows.firstMatch");
+    expect(source).toContain("fullyContainedInVisibleContainer");
+    expect(source).toContain("case textNotVisible(");
+    expect(source).toContain("element.value as? String");
+    expect(source).toContain("case unexpectedSemanticValue(String)");
+    expect(source).toContain('expectedSemanticValue: "Overview"');
+    expect(source).toContain(
+      'proofBoundary: "hosted-visible-production-section-title-rendered-scale-comparison-only-system-preference-excluded"'
+    );
+    expect(source).toContain("neondiff-hosted-rendered-text-scale.json");
+    expect(source).toContain(
+      'textSizeMode: "runner-default-no-test-override"'
+    );
+    expect(source).toContain(
+      'textSizeMode: "swiftui-dynamic-type-accessibility3-test-override"'
+    );
+    expect(theme).toContain(
+      '.accessibilityIdentifier("neondiff-section-title")'
+    );
+    expect(theme).toContain(
+      "@Environment(\\.dynamicTypeSize) private var dynamicTypeSize"
+    );
+    expect(theme).toContain("private var sectionTitleSize: CGFloat");
+    expect(theme).toContain("case .accessibility3: 23");
+    expect(theme).toContain("case .accessibility5: 30");
+    expect(theme).toContain(
+      ".font(.system(size: sectionTitleSize, weight: .bold, design: .monospaced))"
     );
   });
 
