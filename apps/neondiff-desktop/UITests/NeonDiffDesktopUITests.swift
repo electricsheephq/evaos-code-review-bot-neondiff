@@ -13,12 +13,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let runRoot = URL(fileURLWithPath: "/tmp/neondiff-desktop-evaluation.\(runID)")
         let caseDirectory = runRoot.appendingPathComponent("hosted", isDirectory: true)
         let readyURL = caseDirectory.appendingPathComponent("ready.json")
-        try FileManager.default.createDirectory(
-            at: caseDirectory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
         for directory in [runRoot, caseDirectory] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: false,
+                attributes: nil
+            )
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o700],
                 ofItemAtPath: directory.path

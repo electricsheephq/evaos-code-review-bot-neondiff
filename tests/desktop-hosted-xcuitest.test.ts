@@ -57,6 +57,7 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain('"tab-overview"');
     expect(source).toContain('"neondiff.fixture.tab-overview"');
     expect(source).toContain(".posixPermissions: 0o700");
+    expect(source.match(/withIntermediateDirectories: false/g)).toHaveLength(1);
     expect(source).toContain("XCUIApplication()");
     expect(source).not.toContain('NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE');
   });
