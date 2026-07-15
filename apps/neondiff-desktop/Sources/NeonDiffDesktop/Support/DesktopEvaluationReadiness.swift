@@ -59,13 +59,23 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
     }
 
     @Published private(set) var snapshot: Snapshot?
+    @Published private(set) var regionFramesReady = false
     private var regionFrameState = GenerationBoundRegionFrameState()
 
     var accessibilityIdentifier: String {
         guard let snapshot else {
             return "neondiff.evaluation.surface.unavailable"
         }
-        let state = snapshot.quiescent ? "quiescent" : "pending"
+        let state: String
+        if snapshot.quiescent {
+            state = "quiescent"
+        } else if !snapshot.rendered {
+            state = "pending"
+        } else if regionFramesReady {
+            state = "rendered-regions-ready"
+        } else {
+            state = "rendered-regions-missing"
+        }
         return "neondiff.evaluation.surface.\(snapshot.section.rawValue).\(snapshot.generation).\(state)"
     }
 
@@ -97,6 +107,7 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
         }
         let generation = snapshot.map { $0.generation + 1 } ?? 0
         regionFrameState.begin(generation: generation)
+        regionFramesReady = false
         snapshot = Snapshot(
             section: section,
             generation: generation,
@@ -132,11 +143,15 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
     }
 
     func updateRegionFrames(_ frames: [String: CGRect], generation: Int) {
-        _ = regionFrameState.replace(
+        guard snapshot?.generation == generation else { return }
+        let ready = regionFrameState.replace(
             generation: generation,
             frames: frames,
             requiredIdentifiers: DesktopHostedGeometryRegionFrame.requiredIdentifiers
         )
+        if regionFramesReady != ready {
+            regionFramesReady = ready
+        }
     }
 
     func hostedGeometrySample(

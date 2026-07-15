@@ -131,6 +131,8 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(readiness).toContain("contentFrame:");
     expect(readiness).toContain("geometryAccessibilityManifest");
     expect(readiness).toContain("geometryAccessibilityChunks");
+    expect(readiness).toContain('"rendered-regions-ready"');
+    expect(readiness).toContain('"rendered-regions-missing"');
     expect(readiness).toContain("DesktopHostedGeometryCompactTransport");
     expect(readiness).toContain("chunkByteCount = 68");
     expect(readiness).toContain("label.utf8.count <= 128");
