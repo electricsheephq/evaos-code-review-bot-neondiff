@@ -1,5 +1,7 @@
 import Foundation
+import CoreGraphics
 import Testing
+@testable import NeonDiffDesktopAppCore
 
 @Suite struct ReposReachabilityLayoutContractTests {
     @Test func reposPageKeepsApplyAndBoundaryReachableAtCompactHeights() throws {
@@ -106,6 +108,67 @@ import Testing
         #expect(configurator.contains("DesktopEvaluationSurfaceStateWriter.sample(window: window)"))
         #expect(readiness.contains("surface-state.json"))
         #expect(readiness.contains("quiescent"))
+    }
+
+    @Test func hostedRegionFramesInvalidateAcrossGenerationsAndBadSnapshots() throws {
+        let required = ["chrome", "sidebar", "detail"]
+        let valid: [String: CGRect] = [
+            "chrome": CGRect(x: 0, y: 0, width: 1040, height: 82),
+            "sidebar": CGRect(x: 0, y: 82, width: 230, height: 598),
+            "detail": CGRect(x: 231, y: 82, width: 809, height: 598)
+        ]
+        var state = GenerationBoundRegionFrameState()
+
+        state.begin(generation: 0)
+        let acceptedGeneration0 = state.replace(
+            generation: 0,
+            frames: valid,
+            requiredIdentifiers: required
+        )
+        #expect(acceptedGeneration0)
+        #expect(state.snapshot(generation: 0, requiredIdentifiers: required) != nil)
+
+        state.begin(generation: 1)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+        let acceptedMissing = state.replace(
+            generation: 1,
+            frames: ["chrome": valid["chrome"]!],
+            requiredIdentifiers: required
+        )
+        #expect(!acceptedMissing)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+
+        var invalid = valid
+        invalid["detail"] = CGRect.zero
+        let acceptedInvalid = state.replace(
+            generation: 1,
+            frames: invalid,
+            requiredIdentifiers: required
+        )
+        #expect(!acceptedInvalid)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+        let acceptedStale = state.replace(
+            generation: 0,
+            frames: valid,
+            requiredIdentifiers: required
+        )
+        #expect(!acceptedStale)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
+
+        let acceptedGeneration1 = state.replace(
+            generation: 1,
+            frames: valid,
+            requiredIdentifiers: required
+        )
+        #expect(acceptedGeneration1)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == valid)
+        let acceptedInvalidation = state.replace(
+            generation: 1,
+            frames: ["chrome": valid["chrome"]!],
+            requiredIdentifiers: required
+        )
+        #expect(!acceptedInvalidation)
+        #expect(state.snapshot(generation: 1, requiredIdentifiers: required) == nil)
     }
 
     @Test func settledGeometryRunnerUsesTheReadinessApprovedPrivateWorkspacePrefix() throws {

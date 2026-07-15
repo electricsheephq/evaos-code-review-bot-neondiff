@@ -52,7 +52,19 @@ struct ContentView: View {
     var body: some View {
 #if DEBUG
         content.onPreferenceChange(EvaluationRegionFramesPreferenceKey.self) { frames in
-            evaluationSurfaceStatus?.updateRegionFrames(frames)
+            guard let evaluationSurfaceStatus,
+                  let generation = evaluationSurfaceStatus.snapshot?.generation else {
+                return
+            }
+            let generations = Set(frames.values.map(\.generation))
+            guard generations == Set([generation]) else {
+                evaluationSurfaceStatus.updateRegionFrames([:], generation: generation)
+                return
+            }
+            evaluationSurfaceStatus.updateRegionFrames(
+                frames.mapValues(\.frame),
+                generation: generation
+            )
         }
 #else
         content
@@ -79,7 +91,8 @@ struct ContentView: View {
                     .ignoresSafeArea(.container, edges: .top)
                     .evaluationAccessibilityRegion(
                         "neondiff-chrome",
-                        enabled: enablesEvaluationRegionBindings
+                        enabled: enablesEvaluationRegionBindings,
+                        generation: evaluationSurfaceGeneration
                     )
 
                 HStack(spacing: 0) {
@@ -87,7 +100,8 @@ struct ContentView: View {
                         .frame(width: 230)
                         .evaluationAccessibilityRegion(
                             "neondiff-sidebar",
-                            enabled: enablesEvaluationRegionBindings
+                            enabled: enablesEvaluationRegionBindings,
+                            generation: evaluationSurfaceGeneration
                         )
 
                     Rectangle()
@@ -102,7 +116,8 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .evaluationAccessibilityRegion(
                             "neondiff-detail",
-                            enabled: enablesEvaluationRegionBindings
+                            enabled: enablesEvaluationRegionBindings,
+                            generation: evaluationSurfaceGeneration
                         )
                 }
             }
@@ -120,11 +135,23 @@ struct ContentView: View {
                 .onAppear { onSurfaceReady?(model.selectedSection) }
         }
     }
+
+    private var evaluationSurfaceGeneration: Int? {
+#if DEBUG
+        evaluationSurfaceStatus?.snapshot?.generation
+#else
+        nil
+#endif
+    }
 }
 
 private extension View {
     @ViewBuilder
-    func evaluationAccessibilityRegion(_ identifier: String, enabled: Bool) -> some View {
+    func evaluationAccessibilityRegion(
+        _ identifier: String,
+        enabled: Bool,
+        generation: Int?
+    ) -> some View {
         if enabled {
             accessibilityElement(children: .contain)
                 .accessibilityIdentifier(identifier)
@@ -133,7 +160,14 @@ private extension View {
                     GeometryReader { proxy in
                         Color.clear.preference(
                             key: EvaluationRegionFramesPreferenceKey.self,
-                            value: [identifier: proxy.frame(in: .global)]
+                            value: generation.map {
+                                [
+                                    identifier: EvaluationRegionFramePreference(
+                                        generation: $0,
+                                        frame: proxy.frame(in: .global)
+                                    )
+                                ]
+                            } ?? [:]
                         )
                     }
                 }
@@ -146,14 +180,19 @@ private extension View {
 
 #if DEBUG
 private struct EvaluationRegionFramesPreferenceKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
+    static let defaultValue: [String: EvaluationRegionFramePreference] = [:]
 
     static func reduce(
-        value: inout [String: CGRect],
-        nextValue: () -> [String: CGRect]
+        value: inout [String: EvaluationRegionFramePreference],
+        nextValue: () -> [String: EvaluationRegionFramePreference]
     ) {
         value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
+}
+
+private struct EvaluationRegionFramePreference: Equatable {
+    let generation: Int
+    let frame: CGRect
 }
 #endif
 

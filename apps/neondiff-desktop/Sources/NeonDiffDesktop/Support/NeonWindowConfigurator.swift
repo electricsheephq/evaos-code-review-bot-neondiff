@@ -268,6 +268,8 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         let sampledAt = ProcessInfo.processInfo.systemUptime
         guard let rawSample = surfaceStatus.hostedGeometrySample(
             windowSample: windowSample,
+            section: section,
+            generation: generation,
             elapsedMilliseconds: 0
         ) else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {

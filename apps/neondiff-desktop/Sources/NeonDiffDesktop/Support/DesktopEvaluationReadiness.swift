@@ -2,6 +2,7 @@
 import AppKit
 import Combine
 import Foundation
+import NeonDiffDesktopAppCore
 import NeonDiffDesktopCore
 
 struct DesktopEvaluationReadinessRequest {
@@ -58,7 +59,7 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
     }
 
     @Published private(set) var snapshot: Snapshot?
-    private var regionFrames: [String: DesktopHostedGeometryFrame] = [:]
+    private var regionFrameState = GenerationBoundRegionFrameState()
 
     var accessibilityIdentifier: String {
         guard let snapshot else {
@@ -89,6 +90,7 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             return snapshot.generation
         }
         let generation = snapshot.map { $0.generation + 1 } ?? 0
+        regionFrameState.begin(generation: generation)
         snapshot = Snapshot(
             section: section,
             generation: generation,
@@ -123,23 +125,35 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             && snapshot.rendered
     }
 
-    func updateRegionFrames(_ frames: [String: CGRect]) {
-        for identifier in DesktopHostedGeometryRegionFrame.requiredIdentifiers {
-            guard let frame = frames[identifier] else { continue }
-            let candidate = DesktopHostedGeometryFrame(frame)
-            guard candidate.isFiniteAndNonempty else { continue }
-            regionFrames[identifier] = candidate
-        }
+    func updateRegionFrames(_ frames: [String: CGRect], generation: Int) {
+        _ = regionFrameState.replace(
+            generation: generation,
+            frames: frames,
+            requiredIdentifiers: DesktopHostedGeometryRegionFrame.requiredIdentifiers
+        )
     }
 
     func hostedGeometrySample(
         windowSample: DesktopEvaluationGeometrySample,
+        section: DesktopSection,
+        generation: Int,
         elapsedMilliseconds: Int
     ) -> DesktopHostedGeometrySample? {
+        guard snapshot?.section == section,
+              snapshot?.generation == generation,
+              let regionFrames = regionFrameState.snapshot(
+                  generation: generation,
+                  requiredIdentifiers: DesktopHostedGeometryRegionFrame.requiredIdentifiers
+              ) else {
+            return nil
+        }
         let regions = DesktopHostedGeometryRegionFrame.requiredIdentifiers.compactMap {
             identifier -> DesktopHostedGeometryRegionFrame? in
             guard let frame = regionFrames[identifier] else { return nil }
-            return DesktopHostedGeometryRegionFrame(identifier: identifier, frame: frame)
+            return DesktopHostedGeometryRegionFrame(
+                identifier: identifier,
+                frame: DesktopHostedGeometryFrame(frame)
+            )
         }
         guard regions.count == DesktopHostedGeometryRegionFrame.requiredIdentifiers.count else {
             return nil
