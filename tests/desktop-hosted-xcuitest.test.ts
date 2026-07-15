@@ -150,6 +150,9 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(content).toContain("EvaluationRegionFrameCollector");
     expect(content).toContain("@ObservedObject var status: DesktopEvaluationSurfaceStatus");
     expect(content).toContain("content(status.snapshot?.generation)");
+    expect(content).toContain("generations.count == 1");
+    expect(content).toContain("generation: observedGeneration");
+    expect(content).toContain("generations.contains(generation)");
     expect(sidebar).toMatch(
       /\.padding\(\.horizontal, 10\)\s*\.padding\(\.vertical, 9\)\s*\.contentShape\(Rectangle\(\)\)/
     );

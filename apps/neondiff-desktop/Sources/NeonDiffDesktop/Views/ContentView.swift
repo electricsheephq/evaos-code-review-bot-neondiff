@@ -182,14 +182,16 @@ private struct EvaluationRegionFrameCollector<Content: View>: View {
                     return
                 }
                 let generations = Set(frames.values.map(\.generation))
-                guard generations == Set([generation]) else {
-                    status.updateRegionFrames([:], generation: generation)
+                if generations.count == 1, let observedGeneration = generations.first {
+                    status.updateRegionFrames(
+                        frames.mapValues(\.frame),
+                        generation: observedGeneration
+                    )
                     return
                 }
-                status.updateRegionFrames(
-                    frames.mapValues(\.frame),
-                    generation: generation
-                )
+                if frames.isEmpty || generations.contains(generation) {
+                    status.updateRegionFrames([:], generation: generation)
+                }
             }
     }
 }
