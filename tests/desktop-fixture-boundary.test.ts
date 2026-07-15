@@ -227,7 +227,7 @@ describe("desktop fixture release-artifact boundary", () => {
     });
   });
 
-  it("rejects an allowlisted basename outside a source-path string-table record", () => {
+  it("rejects an allowlisted basename without a path-component boundary", () => {
     const artifacts = releaseArtifacts();
     const dwarf = join(
       artifacts.root,
@@ -291,6 +291,31 @@ describe("desktop fixture release-artifact boundary", () => {
       "Resources",
       "DWARF",
       "Other"
+    );
+    mkdirSync(dirname(dwarf), { recursive: true });
+    writeFileSync(dwarf, "/build/Support/DesktopEvaluationReadiness.swift\0");
+
+    const result = scan([archive]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
+  it("rejects an allowed source filename in an alternate-case app dSYM path", () => {
+    const artifacts = releaseArtifacts();
+    const archive = join(artifacts.root, "NeonDiffDesktop.xcarchive");
+    const dwarf = join(
+      archive,
+      "dSyMs",
+      "NeonDiffDesktop.App.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
     );
     mkdirSync(dirname(dwarf), { recursive: true });
     writeFileSync(dwarf, "/build/Support/DesktopEvaluationReadiness.swift\0");
