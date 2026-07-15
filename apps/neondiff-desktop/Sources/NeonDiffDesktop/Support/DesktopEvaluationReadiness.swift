@@ -69,7 +69,7 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
         return "neondiff.evaluation.surface.\(snapshot.section.rawValue).\(snapshot.generation).\(state)"
     }
 
-    var geometryAccessibilityValue: String {
+    var geometryAccessibilityManifest: String {
         guard geometryAccessibilityChunks.count == 4 else {
             return "neondiff-hosted-geometry-unavailable"
         }
@@ -252,11 +252,11 @@ private enum DesktopHostedGeometryCompactTransport {
             let upperBound = min(lowerBound + chunkByteCount, data.count)
             guard lowerBound < upperBound else { return nil }
             let encoded = data.subdata(in: lowerBound..<upperBound).base64EncodedString()
-            let value = "ndg2:\(index):\(chunkCount):\(encoded)"
-            guard value.utf8.count <= 128 else { return nil }
+            let label = "ndg2:\(index):\(chunkCount):\(encoded)"
+            guard label.utf8.count <= 128 else { return nil }
             return DesktopHostedGeometryAccessibilityChunk(
                 identifier: "neondiff.evaluation.geometry.\(section.rawValue).\(generation).\(index)",
-                value: value
+                label: label
             )
         }
         guard chunks.count == chunkCount else { return [] }
@@ -266,7 +266,7 @@ private enum DesktopHostedGeometryCompactTransport {
 
 struct DesktopHostedGeometryAccessibilityChunk: Identifiable, Equatable {
     let identifier: String
-    let value: String
+    let label: String
 
     var id: String { identifier }
 }

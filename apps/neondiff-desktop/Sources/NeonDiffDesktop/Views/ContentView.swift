@@ -233,9 +233,8 @@ private struct EvaluationSurfaceAccessibilityMarker: View {
             Color.clear
                 .frame(width: 1, height: 1)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("NeonDiff Desktop evaluation surface state")
+                .accessibilityLabel(status.geometryAccessibilityManifest)
                 .accessibilityIdentifier(status.accessibilityIdentifier)
-                .accessibilityValue(status.geometryAccessibilityValue)
                 .allowsHitTesting(false)
             ForEach(status.geometryAccessibilityChunks) { chunk in
                 EvaluationSurfaceGeometryChunkMarker(chunk: chunk)
@@ -253,9 +252,8 @@ private struct EvaluationSurfaceGeometryChunkMarker: View {
         Color.clear
             .frame(width: 1, height: 1)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("NeonDiff Desktop evaluation geometry chunk")
+            .accessibilityLabel(chunk.label)
             .accessibilityIdentifier(chunk.identifier)
-            .accessibilityValue(chunk.value)
             .allowsHitTesting(false)
     }
 }

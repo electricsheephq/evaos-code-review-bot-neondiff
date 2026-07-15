@@ -104,7 +104,7 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain('regions: "swiftui-global"');
     expect(source).toContain("observedContentGeometry:");
     expect(source).toContain("assertObservedContentSize(");
-    expect(source).toContain("marker.value");
+    expect(source).toContain("marker.label");
     expect(source).toContain("parseAppAuthoredGeometrySamples(");
     expect(source).toContain('"ndg2-chunks:4"');
     expect(source).toContain('"ndg2:\\(index):4:"');
@@ -123,11 +123,11 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(readiness).toContain("func markRendered(section:");
     expect(readiness).toContain("func markQuiescent(");
     expect(readiness).toContain("contentFrame:");
-    expect(readiness).toContain("geometryAccessibilityValue");
+    expect(readiness).toContain("geometryAccessibilityManifest");
     expect(readiness).toContain("geometryAccessibilityChunks");
     expect(readiness).toContain("DesktopHostedGeometryCompactTransport");
     expect(readiness).toContain("chunkByteCount = 68");
-    expect(readiness).toContain("value.utf8.count <= 128");
+    expect(readiness).toContain("label.utf8.count <= 128");
     expect(readiness).toContain("DesktopHostedGeometrySample");
     expect(readiness).toContain("updateRegionFrames(");
     expect(configurator).toContain("surfaceStatus.isRendered(");
@@ -135,7 +135,9 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(configurator).toContain("surfaceStatus.hostedGeometrySample(");
     expect(content).toContain("EvaluationSurfaceAccessibilityMarker");
     expect(content).toContain("EvaluationSurfaceGeometryChunkMarker");
-    expect(content).toContain(".accessibilityValue(status.geometryAccessibilityValue)");
+    expect(content).toContain(".accessibilityLabel(status.geometryAccessibilityManifest)");
+    expect(content).toContain(".accessibilityLabel(chunk.label)");
+    expect(content).not.toContain(".accessibilityValue(status.geometryAccessibilityValue)");
     expect(content).toContain("EvaluationRegionFramesPreferenceKey");
     expect(content).toContain("EvaluationRegionFrameCollector");
     expect(content).toContain("@ObservedObject var status: DesktopEvaluationSurfaceStatus");

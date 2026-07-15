@@ -102,7 +102,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             "App-authored quiescence marker must remain non-hittable"
         )
         let samples = try parseAppAuthoredGeometrySamples(
-            markerValue: marker.value,
+            markerLabel: marker.label,
             app: app,
             section: section,
             generation: generation
@@ -139,20 +139,20 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func parseAppAuthoredGeometrySamples(
-        markerValue: Any?,
+        markerLabel: String,
         app: XCUIApplication,
         section: String,
         generation: Int
     ) throws -> [HostedGeometrySample] {
-        let manifest = markerValue as? String
+        let manifest = markerLabel
         guard manifest == "ndg2-chunks:4" else {
             attachTransportDiagnostic(
                 HostedTransportDiagnostic(
                     stage: "manifest",
                     chunkIndex: nil,
-                    runtimeValueType: runtimeValueType(markerValue),
-                    utf8ByteCount: manifest?.utf8.count,
-                    expectedPrefixMatched: manifest?.hasPrefix("ndg2-chunks:") ?? false,
+                    runtimeValueType: runtimeValueType(markerLabel),
+                    utf8ByteCount: manifest.utf8.count,
+                    expectedPrefixMatched: manifest.hasPrefix("ndg2-chunks:"),
                     base64DecodedByteCount: nil,
                     equalsUnavailableSentinel: manifest == "neondiff-hosted-geometry-unavailable"
                 )
@@ -186,11 +186,11 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 68,
                 CompactHostedGeometryCursor.encodedByteCount - index * 68
             )
-            let rawChunkValue = chunk.value
-            let value = rawChunkValue as? String
-            let prefixMatched = value?.hasPrefix(prefix) ?? false
+            let rawChunkLabel = chunk.label
+            let value = rawChunkLabel
+            let prefixMatched = value.hasPrefix(prefix)
             let decoded = prefixMatched
-                ? value.flatMap { Data(base64Encoded: String($0.dropFirst(prefix.count))) }
+                ? Data(base64Encoded: String(value.dropFirst(prefix.count)))
                 : nil
             guard let decoded,
                   decoded.count == expectedByteCount else {
@@ -198,8 +198,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
                     HostedTransportDiagnostic(
                         stage: "chunk",
                         chunkIndex: index,
-                        runtimeValueType: runtimeValueType(rawChunkValue),
-                        utf8ByteCount: value?.utf8.count,
+                        runtimeValueType: runtimeValueType(rawChunkLabel),
+                        utf8ByteCount: value.utf8.count,
                         expectedPrefixMatched: prefixMatched,
                         base64DecodedByteCount: decoded?.count,
                         equalsUnavailableSentinel: value == "neondiff-hosted-geometry-unavailable"
