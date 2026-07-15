@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RateLimiter } from "../service.js";
 import { BrokerError } from "./errors.js";
 import type { GitHubInstallationClient } from "./github-app.js";
-import { GitHubBrokerService } from "./service.js";
+import { GitHubBrokerService, type EntitlementResolver } from "./service.js";
 import { GitHubBrokerStore } from "./store.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -26,6 +26,7 @@ export interface GitHubBrokerDeps {
   dbPath?: string;
   githubClient: GitHubInstallationClient;
   installBaseUrl: string;
+  resolveEntitlement?: EntitlementResolver;
   now?: () => Date;
   deviceRegisterRateLimiter?: RateLimiter;
   connectRateLimiter?: RateLimiter;
@@ -43,6 +44,7 @@ export function createGitHubBrokerService(deps: GitHubBrokerDeps): GitHubBrokerS
     store,
     githubClient: deps.githubClient,
     installBaseUrl: deps.installBaseUrl,
+    resolveEntitlement: deps.resolveEntitlement,
     now: deps.now,
     deviceRegisterRateLimiter: deps.deviceRegisterRateLimiter,
     connectRateLimiter: deps.connectRateLimiter,

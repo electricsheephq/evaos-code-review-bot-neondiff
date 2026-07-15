@@ -11,8 +11,11 @@ Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
-API-backed activation is required for supported review work on every repository
-visibility. NeonDiff support licenses cost $1/month or $10/year for individuals,
+Public open-source repositories are free and require no NeonDiff Activation Key.
+API-backed activation is required for private, internal, and commercial repository
+work, and unknown visibility fails closed; GitHub-authoritative visibility decides
+the tier, and provider verification is still required for all tiers. NeonDiff
+support licenses cost $1/month or $10/year for individuals,
 or $100/year for organizations. Individual plans include a 7-day trial,
 organization plans include a 30-day trial, and legacy lifetime licenses remain
 honored but are no longer sold. NeonDiff is source-available commercial

@@ -22,6 +22,16 @@ import { RateLimiter } from "../src/service.ts";
 export const INSTALL_BASE_URL = "https://github.com/apps/neondiff-staging/installations/new";
 export const FIXED_NOW = new Date("2026-07-15T00:00:00.000Z");
 
+/**
+ * The install-time OAuth authorization code a legitimate identity would return
+ * for `installationId`. The fake treats this as proof of installation ownership;
+ * any other (or absent) code fails the callback identity check. Mirrors the real
+ * "OAuth-during-install code proves the user can access this installation".
+ */
+export function authorizationCodeFor(installationId: number): string {
+  return `oauth-code-${installationId}`;
+}
+
 /** A device identity mirroring the client: keypair + RFC 7638 thumbprint id. */
 export interface TestDevice {
   deviceId: string;
@@ -66,6 +76,13 @@ export interface FakeInstallation {
   /** null models an uninstalled/missing installation (GitHub 404). */
   missing?: boolean;
   repositories: FakeRepository[];
+  /**
+   * The `owner/name` set the connecting OAuth user can access in this installation
+   * (what `/user/installations/{id}/repositories` returns). Defaults to every
+   * installation repository; set a narrower list to model a user with partial
+   * access to an org installation.
+   */
+  userRepositories?: string[];
 }
 
 export interface FakeGitHubCall {
@@ -121,6 +138,16 @@ export function fakeGitHubClient(
         token: mintedToken,
         expires_at: new Date((overrides.mintedToken ? Date.now() : FIXED_NOW.getTime()) + 3_600_000).toISOString()
       };
+    },
+    async verifyInstallationForAuthorizationCode(installationId: number, code: string) {
+      // The code proves ownership of exactly this installation; a mismatched or
+      // absent code (a forged callback) is not authorized (null). A proven identity
+      // yields the repositories the user can access in the installation (the
+      // authorized set the binding is scoped to) — all installation repos by default.
+      if (code !== authorizationCodeFor(installationId)) return null;
+      const installation = byId.get(installationId);
+      if (!installation || installation.missing) return null;
+      return installation.userRepositories ?? installation.repositories.map((repository) => repository.full_name);
     }
   };
   return { client, calls, mintedToken };
@@ -144,6 +171,8 @@ export async function startBroker(
     fake?: ReturnType<typeof fakeGitHubClient>;
     /** A pre-built broker store so a test can inspect the decision ledger. */
     store?: unknown;
+    /** Entitlement authority for private/internal issuance (#614 fixtures). */
+    resolveEntitlement?: unknown;
     deviceRegisterRateLimiter?: RateLimiter;
     tokenRateLimiter?: RateLimiter;
     connectRateLimiter?: RateLimiter;
@@ -161,6 +190,7 @@ export async function startBroker(
       ...(options.store ? { store: options.store } : { dbPath: ":memory:" }),
       githubClient: fake.client,
       installBaseUrl: INSTALL_BASE_URL,
+      ...(options.resolveEntitlement ? { resolveEntitlement: options.resolveEntitlement } : {}),
       now: nowFn,
       deviceRegisterRateLimiter: options.deviceRegisterRateLimiter,
       tokenRateLimiter: options.tokenRateLimiter,
@@ -219,7 +249,7 @@ export async function connectInstallation(
   const start = await post(url, "/github/connect/start", {}, bearer(await device.sign()));
   const state = start.json.state as string;
   const callback = await fetch(
-    `${url}/github/connect/callback?installation_id=${installationId}&state=${encodeURIComponent(state)}`,
+    `${url}/github/connect/callback?installation_id=${installationId}&state=${encodeURIComponent(state)}&code=${encodeURIComponent(authorizationCodeFor(installationId))}`,
     { redirect: "manual" }
   );
   const complete = await post(url, "/github/connect/complete", { state }, bearer(await device.sign()));

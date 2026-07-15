@@ -18,9 +18,24 @@ production identity is created only after the committed security review
 1. Under the owning org (or a personal account for early staging), create a new
    GitHub App named distinctly for staging, e.g. `NeonDiff (Staging)`.
 2. Homepage URL: the NeonDiff website or repository URL.
-3. Leave "Request user authorization (OAuth) during installation" unchecked for
-   the install/authorize broker flow (the broker binds via installation id +
-   one-shot state, not a user OAuth token).
+3. **[OWNER-GATED — BLOCKING for #614]** **Enable** "Request user authorization
+   (OAuth) during installation", set the **User authorization callback URL** to
+   the broker's `/github/connect/callback`, and provision the App's OAuth
+   **client id** and **client secret** as deployment secrets
+   (`githubBroker.oauthClientId` / `oauthClientSecret`). Note that with
+   OAuth-during-install enabled GitHub makes the separate **Setup URL** field
+   **unavailable** (the two are mutually exclusive) and routes the post-install
+   return to this callback URL instead — so there is no Setup URL to set. The
+   broker binds a device to an installation ONLY after exchanging the install-time
+   authorization `code` and confirming the authorizing user can access it; because
+   installation membership alone (`GET /user/installations`) does not prove access
+   to every repository in an org installation, the broker enumerates the user's
+   accessible repositories with `GET /user/installations/{id}/repositories` and
+   scopes the binding to that exact set (per-repo, #614 P1). Without this, a valid
+   one-shot state alone lets a caller bind to an arbitrary (victim) installation id
+   — the install-binding forgery the #614 security review flagged (P1). Until it is
+   enabled, `connectCallback` fails closed with
+   `installation_authorization_unverified` and no binding is recorded.
 
 ## 2. Repository permissions
 
@@ -40,23 +55,33 @@ Issues merely because the App reviews PRs.
 
 Organization permissions: none. Account permissions: none.
 
-## 3. Setup URL (post-install redirect)
+## 3. Callback URL (post-install redirect)
 
-Because OAuth-during-install is disabled (step 1), GitHub sends the post-install
-browser return to the App's **Setup URL**, not the user authorization callback URL
-(see https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url).
-Get this wrong and the broker never receives the install return, so the desktop
-poll pends until the state expires.
+Because OAuth-during-install is **enabled** (step 1), the post-install browser
+return carries an OAuth **`code`** in addition to `installation_id`, `state`, and
+`setup_action`; the broker exchanges that code to prove the returning identity
+owns the installation before it records any binding (the #614 P1 requirement).
+With OAuth-during-install on, GitHub makes the separate **Setup URL** field
+**unavailable** — there is exactly one URL to set, and every install/reconfigure
+return comes through it. Get it wrong and the broker never receives the install
+return (or receives it without a `code` and fails closed with
+`installation_authorization_unverified`), so the desktop poll pends until the
+state expires.
 
-- **Setup URL (required):** the broker return route on the license-service host:
+- **User authorization callback URL (the only URL to set):** the broker return
+  route on the license-service host:
   `https://<license-service-host>/github/connect/callback`
-  After install, GitHub redirects here with `installation_id`, `setup_action`, and
-  the `state` the broker placed on the install link — exactly what
-  `GET /github/connect/callback` consumes.
-- **"Redirect on update":** enabled, so reconfiguring the installation returns
-  through the same route.
-- **User authorization callback URL:** unused in this flow (OAuth-on-install is
-  off); leave it blank or matching the Setup URL.
+  With OAuth-during-install enabled, GitHub redirects here after install with
+  `installation_id`, `setup_action`, the `state` the broker placed on the install
+  link, and the OAuth `code` — exactly what `GET /github/connect/callback`
+  consumes and verifies.
+- **Redirect on update (reconfigure):** a reconfigure/update return arrives at the
+  same callback URL but is **code-less** (it carries `setup_action` and
+  `installation_id`, not a new authorization `code`). The broker acknowledges it
+  with the neutral return page and binds nothing, so a legitimate installation
+  update is **never locked out** — the existing binding is untouched and the device
+  simply keeps polling. Only a code-less return that is *not* a `setup_action`
+  update fails closed with `installation_authorization_unverified`.
 
 ## 4. Webhook
 
@@ -88,20 +113,27 @@ depend on device flow; this setting is only for the existing desktop path until
 ## 7. Deployment secrets [OWNER-GATED]
 
 Place the following in the license-service deployment environment (Fly secrets for
-the shared `services/license-api` deployment). The broker reads the private key
-from this secret store at runtime and never persists, logs, or returns it. These
-names are the contract for the future production-wiring step in `server.ts`.
-Until it provides `githubBroker`, the shared license request listener matches every
-broker path and returns a typed `{ "reason": "broker_unavailable" }` 503 — a
-deliberate fail-closed status, not an unrouted 404:
+the shared `services/license-api` deployment). The broker reads the private key and
+the OAuth client secret from this secret store at runtime and never persists, logs,
+or returns them. These names are the contract for the future production-wiring step
+in `services/license-api/src/http.ts` (`HttpHandlerOptions.githubBroker` →
+`createGitHubBrokerService`), read there from the deployment environment; `server.ts`
+only starts the listener and today passes no `githubBroker` option and reads no
+`GITHUB_BROKER_*` env vars. Until `http.ts` is given `githubBroker`, the shared
+license request listener matches every broker path (`isGitHubBrokerPath`) and
+returns a typed `{ "reason": "broker_unavailable" }` 503 — a deliberate fail-closed
+status, not an unrouted 404:
 
 | Secret                          | Purpose |
 |---------------------------------|---------|
 | `GITHUB_BROKER_APP_ID`          | Numeric staging App id. |
 | `GITHUB_BROKER_PRIVATE_KEY`     | Staging App private key PEM contents. |
+| `GITHUB_BROKER_OAUTH_CLIENT_ID`     | Staging App OAuth **client id** ("Request user authorization (OAuth) during installation", step 1). Wires to `githubBroker.oauthClientId`. Required for callback identity verification (#614 P1). |
+| `GITHUB_BROKER_OAUTH_CLIENT_SECRET` | Staging App OAuth **client secret**. Wires to `githubBroker.oauthClientSecret`. Used only to exchange the callback `code` for a short-lived user token to confirm installation ownership; never persisted, logged, or returned. |
 | `GITHUB_BROKER_INSTALL_BASE_URL`| `https://github.com/apps/<staging-app-slug>/installations/new`. |
 | `GITHUB_BROKER_DB_PATH`         | Path for the broker SQLite DB on the mounted volume (separate from `LICENSE_DB_PATH`). |
 | `GITHUB_BROKER_API_BASE_URL`    | Optional; defaults to `https://api.github.com`. |
+| `GITHUB_BROKER_OAUTH_BASE_URL`  | Optional; OAuth authorization host, defaults to `https://github.com`. Wires to `githubBroker.oauthBaseUrl`. |
 
 Do not reuse the production `LICENSE_ISSUANCE_SECRET` or any production credential
 for staging.

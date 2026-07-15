@@ -43,6 +43,28 @@ export class GitHubBrokerClientError extends Error {
 export interface GitHubInstallationClient {
   /** Resolve an installation by id; returns null when it does not exist (uninstalled). */
   getInstallation(installationId: number): Promise<InstallationSummary | null>;
+  /**
+   * Verify that the identity behind an install-time OAuth authorization code is
+   * actually authorized for `installationId` — i.e. the user who completed the
+   * GitHub "Request user authorization (OAuth) during installation" flow can
+   * access this installation — AND return the exact set of repositories that user
+   * can access within it (the authorized set the binding is scoped to). Returns
+   * the repository `owner/name` list (possibly empty) when the exchanged user
+   * identity can access the installation; returns `null` to DENY the binding when
+   * the identity cannot be proven for this installation (no OAuth credentials, a
+   * bad/absent code, or the installation is not among the user's accessible ones).
+   * Transient failures throw a typed client error so the caller fails closed.
+   *
+   * This closes two callback forgeries: (1) a valid connect-state alone can no
+   * longer bind a device to an arbitrary (victim) installation id; and (2) an
+   * entitled but GitHub-unauthorized user can no longer mint a token for a private
+   * repo they cannot access — the binding, and every later token, is confined to
+   * the user's authorized repository set, not the whole installation selection.
+   */
+  verifyInstallationForAuthorizationCode(
+    installationId: number,
+    authorizationCode: string
+  ): Promise<string[] | null>;
   /** The installation's current repository selection, with each repo's visibility. */
   listInstallationRepositories(installationId: number): Promise<InstallationRepository[]>;
   /** Mint a narrowed installation access token. This is the RETURNED token; it is
@@ -60,6 +82,17 @@ export interface GitHubAppConfig {
   privateKey: string;
   apiBaseUrl?: string;
   requestTimeoutMs?: number;
+  /**
+   * OAuth client credentials for the App's "Request user authorization (OAuth)
+   * during installation" flow, used only to exchange the callback authorization
+   * code for a short-lived user token when verifying installation ownership. Both
+   * are OWNER-GATED deployment secrets (see docs/security/github-app-staging-registration.md);
+   * when either is absent, callback identity verification fails closed.
+   */
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  /** OAuth authorization host; defaults to https://github.com. */
+  oauthBaseUrl?: string;
 }
 
 /**
@@ -151,6 +184,79 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
         if (error instanceof GitHubBrokerClientError) throw error;
         if (isNotFound(error)) return null;
         throw error;
+      }
+    },
+    async verifyInstallationForAuthorizationCode(
+      installationId: number,
+      authorizationCode: string
+    ): Promise<string[] | null> {
+      // Owner-gated: without the OAuth-during-install client credentials the
+      // broker cannot prove installation ownership, so identity is UNVERIFIED.
+      // Return null (not a transient error) so the callback surfaces the
+      // documented pre-provisioning reason `installation_authorization_unverified`
+      // (403), not a broker outage (503).
+      if (!config.oauthClientId || !config.oauthClientSecret) {
+        return null;
+      }
+      const oauthBaseUrl = normalizeHttpApiBaseUrl(config.oauthBaseUrl, "githubBroker.oauthBaseUrl", "https://github.com");
+      // Build the endpoint with the URL resolver so a base with (or without) a
+      // trailing slash never produces a `//login/...` double slash that a strict
+      // OAuth host/proxy would 404.
+      const tokenUrl = new URL("/login/oauth/access_token", oauthBaseUrl).toString();
+      // GitHub's App web flow expects form-encoded parameters (not JSON) at this
+      // endpoint; keep `Accept: application/json` so the response is parseable.
+      const tokenForm = new URLSearchParams({
+        client_id: config.oauthClientId,
+        client_secret: config.oauthClientSecret,
+        code: authorizationCode
+      });
+      // Honor the configured request timeout so a stalled token exchange fails
+      // closed as a typed broker outage instead of holding the listener open.
+      let tokenResponse: Response;
+      const controller = config.requestTimeoutMs ? new AbortController() : undefined;
+      const timeout = controller
+        ? setTimeout(() => controller.abort(new Error("OAuth token exchange timed out")), config.requestTimeoutMs)
+        : undefined;
+      try {
+        tokenResponse = await fetch(tokenUrl, {
+          method: "POST",
+          signal: controller?.signal,
+          headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+          body: tokenForm.toString()
+        });
+      } catch {
+        throw new GitHubBrokerClientError("unavailable", "OAuth token exchange failed");
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+      if (!tokenResponse.ok) {
+        throw new GitHubBrokerClientError("unavailable", `OAuth token exchange ${tokenResponse.status}`);
+      }
+      const tokenBody = (await tokenResponse.json().catch(() => undefined)) as { access_token?: string } | undefined;
+      const userToken = tokenBody?.access_token;
+      // A bad/expired/forged code yields no user token: deny the binding (not a
+      // transient error — the identity was not proven).
+      if (!userToken) return null;
+      // Enumerate the repositories the authenticated user can access WITHIN this
+      // installation (not just installation membership). The binding is scoped to
+      // this authorized set, so a later token can never reach a private repo the
+      // connecting user cannot access on GitHub. A 404 means the user cannot access
+      // the installation at all -> identity unverified for it (null, fail closed).
+      const authorized: string[] = [];
+      for (let page = 1; ; page += 1) {
+        let result;
+        try {
+          result = await request<{ repositories?: Array<{ full_name: string }> }>(
+            `/user/installations/${installationId}/repositories?per_page=100&page=${page}`,
+            { token: userToken }
+          );
+        } catch (error) {
+          if (error instanceof GitHubApiStatusError && (error.status === 404 || error.status === 403)) return null;
+          throw error;
+        }
+        const chunk = result.json?.repositories ?? [];
+        for (const repository of chunk) authorized.push(repository.full_name);
+        if (chunk.length < 100) return authorized;
       }
     },
     async listInstallationRepositories(installationId: number): Promise<InstallationRepository[]> {

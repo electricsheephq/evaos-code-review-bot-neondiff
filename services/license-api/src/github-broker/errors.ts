@@ -15,11 +15,19 @@ export type BrokerReason =
   | "installation_not_found"
   | "installation_uninstalled"
   | "installation_suspended"
+  | "installation_authorization_unverified"
   | "repo_outside_installation"
+  | "repo_outside_authorization"
   | "repo_renamed_or_transferred"
   | "visibility_unknown"
-  | "entitlement_gate_not_implemented"
   | "entitlement_missing"
+  | "entitlement_expired"
+  | "entitlement_revoked"
+  | "entitlement_invalid"
+  | "entitlement_scope_insufficient"
+  | "entitlement_seat_exhausted"
+  | "entitlement_replay_conflict"
+  | "entitlement_service_unavailable"
   | "rate_limited"
   | "broker_unavailable";
 
@@ -34,11 +42,19 @@ const REASON_STATUS: Record<BrokerReason, number> = {
   installation_not_found: 404,
   installation_uninstalled: 409,
   installation_suspended: 409,
+  installation_authorization_unverified: 403,
   repo_outside_installation: 403,
+  repo_outside_authorization: 403,
   repo_renamed_or_transferred: 409,
   visibility_unknown: 403,
-  entitlement_gate_not_implemented: 403,
   entitlement_missing: 403,
+  entitlement_expired: 403,
+  entitlement_revoked: 403,
+  entitlement_invalid: 403,
+  entitlement_scope_insufficient: 403,
+  entitlement_seat_exhausted: 409,
+  entitlement_replay_conflict: 409,
+  entitlement_service_unavailable: 503,
   rate_limited: 429,
   broker_unavailable: 503
 };

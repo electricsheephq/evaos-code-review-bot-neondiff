@@ -104,8 +104,13 @@ Agents should read [AGENTS.md](AGENTS.md) before editing this repository.
 ## Pull Request Expectations
 
 - Preserve source-available beta wording unless #104 is updated with approved license text.
-- Preserve mandatory API-backed activation for public, private, internal, and
-  unknown repository work; do not reintroduce a free-use bypass.
+- Preserve mandatory API-backed activation for private, internal, and commercial
+  repository work, and fail closed on unknown visibility; the "no free-use bypass"
+  rule protects the PRIVATE-entitlement boundary. Public open-source repositories
+  are intentionally free (owner ruling — policy, not a bypass). Keep
+  GitHub-authoritative visibility with unknown failing closed; provider
+  verification remains required for all tiers. Public-facing website copy migration
+  is owned by website #52.
 - Preserve dry-run before live posting.
 - Preserve current-head duplicate suppression and stale-head checks.
 - Preserve secret-looking finding suppression.

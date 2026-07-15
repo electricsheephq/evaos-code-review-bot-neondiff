@@ -50,6 +50,10 @@ function mutableFake(config: {
     async createInstallationAccessToken(installationId: number, params: unknown) {
       calls.push({ op: "createInstallationAccessToken", installationId, params });
       return { token: "broker-test-mutable-token", expires_at: new Date(Date.now() + 3_600_000).toISOString() };
+    },
+    async verifyInstallationForAuthorizationCode(installationId: number, code: string) {
+      if (code !== `oauth-code-${installationId}`) return null;
+      return (config.repositories ?? []).map((repository) => repository.full_name);
     }
   };
   return { client, calls, state };
@@ -237,7 +241,7 @@ describe("github broker adversarial and lifecycle coverage", () => {
       const pending = await post(harness.url, "/github/connect/complete", { state }, bearer(await device.sign()));
       assert.equal(pending.json.status, "pending");
 
-      await fetch(`${harness.url}/github/connect/callback?installation_id=${PUBLIC_INSTALL.id}&state=${encodeURIComponent(state)}`, { redirect: "manual" });
+      await fetch(`${harness.url}/github/connect/callback?installation_id=${PUBLIC_INSTALL.id}&state=${encodeURIComponent(state)}&code=oauth-code-${PUBLIC_INSTALL.id}`, { redirect: "manual" });
 
       const bound = await post(harness.url, "/github/connect/complete", { state }, bearer(await device.sign()));
       assert.equal(bound.status, 200, bound.text);
@@ -286,7 +290,7 @@ describe("github broker adversarial and lifecycle coverage", () => {
       await registerDevice(denyHarness.url, device);
       await connectInstallation(denyHarness.url, device, PUBLIC_INSTALL.id);
       const deny = await post(denyHarness.url, "/github/token", { installationId: PUBLIC_INSTALL.id, repositories: ["octo/private"] }, bearer(await device.sign()));
-      assert.equal(deny.json.reason, "entitlement_gate_not_implemented");
+      assert.equal(deny.json.reason, "entitlement_missing");
       // A denied request must never reach the mint call.
       assert.equal(denyFake.calls.filter((call) => call.op === "createInstallationAccessToken").length, 0);
     } finally {
@@ -324,7 +328,7 @@ describe("github broker adversarial and lifecycle coverage", () => {
 
       const rows = store.listDecisions(device.deviceId);
       const reasons = rows.map((row) => `${row.decision}:${row.reason_code}`);
-      assert.ok(reasons.includes("deny:entitlement_gate_not_implemented"), JSON.stringify(reasons));
+      assert.ok(reasons.includes("deny:entitlement_missing"), JSON.stringify(reasons));
       assert.ok(reasons.includes("allow:issued"), JSON.stringify(reasons));
       const serialized = JSON.stringify(rows);
       assert.ok(!serialized.includes(harness.mintedToken), "no minted token in the ledger");

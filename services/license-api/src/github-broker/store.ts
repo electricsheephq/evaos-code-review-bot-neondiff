@@ -13,8 +13,24 @@ import { DatabaseSync } from "node:sqlite";
  * states, installation bindings, and an append-only decision ledger. No tokens,
  * private keys, source, or diffs are ever stored.
  */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
+
+/**
+ * The per-repo authorized-set table. Extracted so a fresh bootstrap and the
+ * v1 -> v2 upgrade create the exact same table (base v1 shipped
+ * `installation_bindings` without it, so an existing broker DB must gain it).
+ */
+const BINDING_REPOSITORIES_TABLE = `
+  create table binding_repositories (
+    device_id text not null,
+    installation_id integer not null,
+    full_name text not null,
+    primary key (device_id, installation_id, full_name),
+    foreign key (device_id, installation_id)
+      references installation_bindings(device_id, installation_id) on delete cascade
+  );
+`;
 
 const SCHEMA = `
   create table devices (
@@ -42,6 +58,8 @@ const SCHEMA = `
     primary key (device_id, installation_id),
     foreign key (device_id) references devices(device_id)
   );
+
+  ${BINDING_REPOSITORIES_TABLE.trim()}
 
   create table decision_ledger (
     id integer primary key autoincrement,
@@ -103,15 +121,27 @@ export class GitHubBrokerStore {
   private ensureSchema(): void {
     const version = this.readUserVersion();
     if (version === SCHEMA_VERSION) return;
-    if (version !== 0) throw new Error(`unsupported github broker schema version ${version}`);
+    if (version !== 0 && version !== 1) {
+      throw new Error(`unsupported github broker schema version ${version}`);
+    }
     this.db.exec("begin immediate");
     try {
       // Re-check under the writer lock in case a peer migrated first.
-      if (this.readUserVersion() === SCHEMA_VERSION) {
+      const current = this.readUserVersion();
+      if (current === SCHEMA_VERSION) {
         this.db.exec("commit");
         return;
       }
-      this.db.exec(SCHEMA);
+      if (current === 0) {
+        // Fresh bootstrap: the full schema (already includes binding_repositories).
+        this.db.exec(SCHEMA);
+      } else {
+        // v1 -> v2 upgrade: base v1 shipped installation_bindings WITHOUT the
+        // per-repo authorized-set table, so an existing broker DB must gain it in
+        // place — otherwise upsertBinding/listBindingRepositories hit "no such
+        // table". Idempotent and crash-safe under the same writer transaction.
+        this.db.exec(BINDING_REPOSITORIES_TABLE);
+      }
       this.db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
       this.db.exec("commit");
     } catch (error) {
@@ -177,21 +207,57 @@ export class GitHubBrokerStore {
     return Number(info.changes) > 0;
   }
 
-  upsertBinding(deviceId: string, installationId: number, accountLogin: string | undefined, now: string): void {
-    this.db
-      .prepare(
-        `insert into installation_bindings (device_id, installation_id, account_login, created_at)
-         values (?, ?, ?, ?)
-         on conflict (device_id, installation_id)
-         do update set account_login = excluded.account_login`
-      )
-      .run(deviceId, installationId, accountLogin ?? null, now);
+  /**
+   * Record (or refresh) a binding and REPLACE its authorized-repository set in one
+   * transaction. `authorizedRepositories` is the exact `owner/name` set the
+   * connecting OAuth user can access in the installation; token issuance is later
+   * confined to it, so an entitled-but-GitHub-unauthorized user cannot reach a
+   * private repo outside their access. Re-connecting refreshes the set atomically.
+   */
+  upsertBinding(
+    deviceId: string,
+    installationId: number,
+    accountLogin: string | undefined,
+    authorizedRepositories: string[],
+    now: string
+  ): void {
+    this.db.exec("begin immediate");
+    try {
+      this.db
+        .prepare(
+          `insert into installation_bindings (device_id, installation_id, account_login, created_at)
+           values (?, ?, ?, ?)
+           on conflict (device_id, installation_id)
+           do update set account_login = excluded.account_login`
+        )
+        .run(deviceId, installationId, accountLogin ?? null, now);
+      this.db
+        .prepare("delete from binding_repositories where device_id = ? and installation_id = ?")
+        .run(deviceId, installationId);
+      const insert = this.db.prepare(
+        `insert or ignore into binding_repositories (device_id, installation_id, full_name)
+         values (?, ?, ?)`
+      );
+      for (const fullName of authorizedRepositories) insert.run(deviceId, installationId, fullName);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   getBinding(deviceId: string, installationId: number): InstallationBindingRow | undefined {
     return this.db
       .prepare("select * from installation_bindings where device_id = ? and installation_id = ?")
       .get(deviceId, installationId) as InstallationBindingRow | undefined;
+  }
+
+  /** The `owner/name` set the connecting OAuth user was authorized for at bind time. */
+  listBindingRepositories(deviceId: string, installationId: number): string[] {
+    const rows = this.db
+      .prepare("select full_name from binding_repositories where device_id = ? and installation_id = ?")
+      .all(deviceId, installationId) as Array<{ full_name: string }>;
+    return rows.map((row) => row.full_name);
   }
 
   /** Append a public-safe decision row. Never carries repo content or key material. */

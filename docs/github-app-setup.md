@@ -54,6 +54,14 @@ because milestone or planning days can create large issue bursts.
 
 ## Selected-Repo Install Path
 
+> This page covers the shipped **local-worker direct install**, where the worker
+> holds the App private key itself and no OAuth-during-install step is needed. The
+> separate **managed authorization broker** (owner-gated, not yet wired to the
+> desktop — #612) instead requires the App to enable "Request user authorization
+> (OAuth) during installation" and set the `/github/connect/callback` URL; that
+> registration is documented in `docs/security/github-app-staging-registration.md`.
+> Do not enable OAuth-during-install for the local direct-install path below.
+
 1. Open the NeonDiff GitHub App install URL.
 2. Choose the user or organization that owns the repositories.
 3. Select `Only select repositories`.

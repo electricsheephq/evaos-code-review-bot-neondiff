@@ -71,7 +71,7 @@ describe("github broker token-issuance contract", () => {
     assert.doesNotMatch(response.text, /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
   });
 
-  it("(c) refuses issuance for a private repo with entitlement_gate_not_implemented", async () => {
+  it("(c) refuses issuance for a private repo without entitlement (entitlement_missing)", async () => {
     const fresh = await makeDevice();
     await registerDevice(harness.url, fresh);
     await connectInstallation(harness.url, fresh, 4001);
@@ -83,7 +83,9 @@ describe("github broker token-issuance contract", () => {
       bearer(await fresh.sign())
     );
     assert.equal(response.status, 403);
-    assert.equal(response.json.reason, "entitlement_gate_not_implemented");
+    // No entitlement resolver is configured here, so the fail-closed default
+    // denies the private request as entitlement_missing (never as public).
+    assert.equal(response.json.reason, "entitlement_missing");
     // Fail closed: no token minted for the denied request.
     assert.equal(response.json.token, undefined);
   });
@@ -96,7 +98,7 @@ describe("github broker token-issuance contract", () => {
     assert.ok(state, "connect start returns a state nonce");
 
     const first = await fetch(
-      `${harness.url}/github/connect/callback?installation_id=4001&state=${encodeURIComponent(state)}`,
+      `${harness.url}/github/connect/callback?installation_id=4001&state=${encodeURIComponent(state)}&code=oauth-code-4001`,
       { redirect: "manual" }
     );
     assert.ok(first.status < 400 || first.status === 302, `first callback consumed: ${first.status}`);

@@ -1,7 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { createHash } from "node:crypto";
 import { RateLimiter } from "../service.js";
-import { authorizeTokenIssuance, type RequestedRepository } from "./authorization.js";
+import {
+  authorizeTokenIssuance,
+  type EntitlementSnapshot,
+  type RequestedRepository
+} from "./authorization.js";
 import { authenticateDevice, deviceIdFromPublicJwk } from "./device-auth.js";
 import { BrokerError } from "./errors.js";
 import {
@@ -30,11 +34,46 @@ export const MINIMAL_REVIEW_PERMISSIONS: Record<string, string> = {
 
 const PERMISSION_SCOPE_RANK: Record<string, number> = { read: 1, write: 2, admin: 3 };
 
+/**
+ * Context handed to the entitlement resolver for a private/internal token
+ * request. Only the ids and the private repository names are exposed — never a
+ * license key or provider secret — so a resolver stays public-safe.
+ */
+export interface EntitlementResolutionContext {
+  deviceId: string;
+  installationId: number;
+  accountLogin?: string;
+  /** The requested repositories whose visibility is private or internal. */
+  privateRepositories: string[];
+}
+
+/**
+ * Resolves the production entitlement for a private/internal token request,
+ * bound to the license authority (contract shape: license-api `Entitlement`,
+ * merged #574). The live device<->license linkage and deployment wiring are the
+ * deploy lane's (#559); the broker only depends on this narrow snapshot function,
+ * proven here with fixtures. It is called ONLY when a request includes a
+ * non-public repository, so the public-free tier never depends on the license
+ * service. Any throw is treated as a service outage and fails closed.
+ */
+export type EntitlementResolver = (
+  context: EntitlementResolutionContext
+) => EntitlementSnapshot | Promise<EntitlementSnapshot>;
+
+/** The fail-closed default: no entitlement authority wired -> private denied. */
+const denyPrivateEntitlementResolver: EntitlementResolver = () => ({ status: "none" });
+
 export interface GitHubBrokerServiceOptions {
   store: GitHubBrokerStore;
   githubClient: GitHubInstallationClient;
   /** Official App install URL, e.g. https://github.com/apps/<app>/installations/new. */
   installBaseUrl: string;
+  /**
+   * Entitlement authority for private/internal issuance. Defaults to a fail-closed
+   * resolver (denies all private work) until the deploy lane wires the license
+   * linkage; public/free issuance never calls it.
+   */
+  resolveEntitlement?: EntitlementResolver;
   now?: () => Date;
   deviceRegisterRateLimiter?: RateLimiter;
   connectRateLimiter?: RateLimiter;
@@ -52,6 +91,7 @@ export class GitHubBrokerService {
   private readonly store: GitHubBrokerStore;
   private readonly githubClient: GitHubInstallationClient;
   private readonly installBaseUrl: string;
+  private readonly resolveEntitlement: EntitlementResolver;
   private readonly now: () => Date;
   private readonly deviceRegisterRateLimiter: RateLimiter;
   private readonly connectRateLimiter: RateLimiter;
@@ -61,6 +101,7 @@ export class GitHubBrokerService {
     this.store = options.store;
     this.githubClient = options.githubClient;
     this.installBaseUrl = options.installBaseUrl;
+    this.resolveEntitlement = options.resolveEntitlement ?? denyPrivateEntitlementResolver;
     this.now = options.now ?? (() => new Date());
     this.deviceRegisterRateLimiter =
       options.deviceRegisterRateLimiter ?? new RateLimiter({ maxPerWindow: 20, windowMs: 60_000 });
@@ -97,10 +138,21 @@ export class GitHubBrokerService {
   }
 
   /**
-   * GET /github/connect/callback — the browser return from GitHub. Verifies the
-   * one-shot state, confirms the installation belongs to the App, and records the
-   * (device, installation) binding. Returns a small HTML page telling the user to
-   * return to the app (no URL scheme is registered in v1; see the design doc).
+   * GET /github/connect/callback — the browser return from GitHub. Two distinct
+   * redirects can hit this one route (both configured to it per the staging spec):
+   *
+   *  - the **OAuth callback** (OAuth-during-install), which carries the user
+   *    authorization `code` alongside `installation_id` and `state`; and
+   *  - a bare **Setup-URL redirect** (install/reconfigure acknowledgment), which
+   *    carries `setup_action` but NO `code`.
+   *
+   * Only the OAuth callback can PROVE the returning identity owns the installation,
+   * so only it records a (device, installation) binding — and the proof is verified
+   * BEFORE the installation is resolved, so a forged callback cannot use this route
+   * to probe (App-JWT calls / 403-vs-404) arbitrary victim installation ids. A bare
+   * setup redirect is acknowledged with the neutral page and binds nothing (the
+   * device keeps polling until a real OAuth callback binds). Returns a small HTML
+   * page telling the user to return to the app (no URL scheme is registered in v1).
    */
   async connectCallback(query: URLSearchParams): Promise<{ html: string }> {
     const at = this.now();
@@ -118,14 +170,68 @@ export class GitHubBrokerService {
       throw new BrokerError("state_expired", "connect state has expired");
     }
 
+    const code = query.get("code");
+    if (!code) {
+      // No OAuth code ⇒ identity is unproven, so we never bind. A benign setup
+      // redirect is acknowledged; any other code-less callback is a typed refusal.
+      if (query.get("setup_action")) {
+        return { html: connectReturnPage() };
+      }
+      throw new BrokerError(
+        "installation_authorization_unverified",
+        "installation authorization was not proven for this identity"
+      );
+    }
+
+    // Verify the identity proof BEFORE resolving the installation (decide before
+    // side effects): a forged callback is rejected without any App-JWT GitHub call
+    // for the supplied installation id, closing the 403-vs-404 probing oracle. The
+    // proof also yields the repository set the connecting user can access in this
+    // installation — the binding is scoped to that authorized set.
+    const authorizedRepositories = await this.verifyInstallationAuthorization(installationId, code);
+
     const installation = await this.resolveInstallation(installationId);
 
     // One-shot: only the first caller flips consumed_at; a race loses as a replay.
     if (!this.store.consumeConnectState(state, installationId, at.toISOString())) {
       throw new BrokerError("state_replayed", "connect state was already used");
     }
-    this.store.upsertBinding(stored.device_id, installationId, installation.account_login, at.toISOString());
+    this.store.upsertBinding(
+      stored.device_id,
+      installationId,
+      installation.account_login,
+      authorizedRepositories,
+      at.toISOString()
+    );
     return { html: connectReturnPage() };
+  }
+
+  /**
+   * Fail closed unless the install-time OAuth authorization `code` proves the
+   * identity is authorized for `installationId`. Returns the repository set the
+   * connecting user can access in the installation (the authorized set the binding
+   * is scoped to). An unproven identity — including the owner-gated
+   * pre-provisioning state where OAuth-during-install is not configured (the client
+   * returns `null`) — is `installation_authorization_unverified` (403, no binding);
+   * a transient verification failure maps to a typed broker outage (503, no binding).
+   */
+  private async verifyInstallationAuthorization(
+    installationId: number,
+    authorizationCode: string
+  ): Promise<string[]> {
+    let authorized: string[] | null;
+    try {
+      authorized = await this.githubClient.verifyInstallationForAuthorizationCode(installationId, authorizationCode);
+    } catch (error) {
+      throw mapClientError(error);
+    }
+    if (authorized === null) {
+      throw new BrokerError(
+        "installation_authorization_unverified",
+        "installation authorization could not be verified for this identity"
+      );
+    }
+    return authorized;
   }
 
   /** POST /github/connect/complete — device polls to confirm the binding landed. */
@@ -188,8 +294,35 @@ export class GitHubBrokerService {
 
       const requested = await this.resolveRequestedRepositories(installationId, repositories);
 
-      // The issuance seam: the ONLY path to minting. #614 replaces its body.
-      const decision = authorizeTokenIssuance({ requestedRepositories: requested });
+      // Confine issuance to the repositories the connecting OAuth user was
+      // authorized for at bind time (a subset of the installation selection). This
+      // runs BEFORE entitlement resolution, so a repo outside the user's authorized
+      // set egresses nothing to the license authority — an entitled-but-GitHub-
+      // unauthorized user can never reach a private repo they cannot access (#620 P1).
+      const authorizedRepositories = new Set(this.store.listBindingRepositories(deviceId, installationId));
+      for (const repository of requested) {
+        if (!authorizedRepositories.has(repository.fullName)) {
+          throw new BrokerError(
+            "repo_outside_authorization",
+            "a requested repository is outside the connecting user's authorized set"
+          );
+        }
+      }
+
+      // Bind entitlement for any non-public repository BEFORE the seam and BEFORE
+      // any mint. Resolution is a license-authority lookup (no GitHub content, no
+      // provider call), so a blocked private path egresses nothing. The all-public
+      // path never calls the authority, so the free tier does not depend on the
+      // license service being reachable (AC2).
+      const entitlement = await this.resolveEntitlementForRequest(
+        deviceId,
+        installationId,
+        installation.account_login,
+        requested
+      );
+
+      // The issuance seam: the ONLY path to minting.
+      const decision = authorizeTokenIssuance({ requestedRepositories: requested, entitlement });
       if (decision.decision === "deny") {
         throw new BrokerError(decision.reason, "token issuance is not authorized for the requested repositories");
       }
@@ -252,6 +385,42 @@ export class GitHubBrokerService {
       if (!match) throw new BrokerError("repo_outside_installation", "a requested repository is not in the installation selection");
       return { fullName, id: match.id, visibility: match.visibility };
     });
+  }
+
+  /**
+   * Resolve the entitlement snapshot the seam binds a non-public request against.
+   * Returns the public-free default (`none`) without touching the authority when
+   * every requested repository is public. A resolver throw is a service outage and
+   * fails closed as `service_unavailable` (never an allow).
+   *
+   * Decide before side effects: if ANY requested repo has unknown visibility, the
+   * seam denies (`visibility_unknown`) regardless of entitlement, so no
+   * license-service lookup is performed for it — an undecidable request egresses
+   * nothing, not even to the license authority.
+   */
+  private async resolveEntitlementForRequest(
+    deviceId: string,
+    installationId: number,
+    accountLogin: string | undefined,
+    requested: RequestedRepository[]
+  ): Promise<EntitlementSnapshot> {
+    if (requested.some((repository) => repository.visibility === "unknown")) {
+      return { status: "none" };
+    }
+    const privateRepositories = requested
+      .filter((repository) => repository.visibility !== "public")
+      .map((repository) => repository.fullName);
+    if (privateRepositories.length === 0) return { status: "none" };
+    try {
+      return await this.resolveEntitlement({
+        deviceId,
+        installationId,
+        ...(accountLogin ? { accountLogin } : {}),
+        privateRepositories
+      });
+    } catch {
+      return { status: "service_unavailable" };
+    }
   }
 
   private async mintToken(
