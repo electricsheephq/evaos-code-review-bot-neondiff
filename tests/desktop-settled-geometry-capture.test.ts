@@ -382,4 +382,11 @@ describe("desktop settled geometry capture runner", () => {
   it("routes the fake runner contract through the Swift desktop gate", () => {
     expect(swiftAffected([testPath])).toMatchObject({ affected: true, matched: [testPath] });
   });
+
+  it("selects platform-specific stat syntax without GNU stat -f ambiguity", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    expect(source).toContain('case "$(/usr/bin/uname -s)" in');
+    expect(source).toContain("/usr/bin/stat -f '%u:%Lp'");
+    expect(source).toContain("/usr/bin/stat -c '%u:%a'");
+  });
 });

@@ -7,6 +7,22 @@ usage() {
   exit 64
 }
 
+stat_owner_mode() {
+  case "$(/usr/bin/uname -s)" in
+    Darwin) /usr/bin/stat -f '%u:%Lp' "$1" ;;
+    Linux) /usr/bin/stat -c '%u:%a' "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+stat_mode() {
+  case "$(/usr/bin/uname -s)" in
+    Darwin) /usr/bin/stat -f '%Lp' "$1" ;;
+    Linux) /usr/bin/stat -c '%a' "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
 [ "$#" -eq 2 ] && [ "$1" = "--output" ] || usage
 output=$2
 case "$output" in /*) ;; *) usage ;; esac
@@ -47,7 +63,7 @@ fi
 unset NEONDIFF_DESKTOP_TEST_MODE NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS
 
 mkdir -m 700 "$output"
-output_metadata=$(/usr/bin/stat -f '%u:%Lp' "$output" 2>/dev/null || /usr/bin/stat -c '%u:%a' "$output")
+output_metadata=$(stat_owner_mode "$output")
 [ "$output_metadata" = "$(id -u):700" ] \
   || { echo "settled geometry output must be owned by the caller with mode 700" >&2; exit 65; }
 cd "$output"
@@ -83,7 +99,7 @@ write_status incomplete setup capture_in_progress incomplete not_emitted
 
 tmp_root=$(/usr/bin/mktemp -d "/tmp/neondiff-desktop-evaluation.XXXXXXXX")
 /bin/chmod 700 "$tmp_root"
-tmp_mode=$(/usr/bin/stat -f '%Lp' "$tmp_root" 2>/dev/null || /usr/bin/stat -c '%a' "$tmp_root")
+tmp_mode=$(stat_mode "$tmp_root")
 [ "$tmp_mode" = 700 ] \
   || { write_status incomplete setup private_workspace_invalid incomplete not_emitted; exit 65; }
 
