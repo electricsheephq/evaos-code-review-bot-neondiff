@@ -19,7 +19,7 @@ const validDesignDoc = [
   "",
   "Captured: 2026-07-15",
   "Source: https://neondiff.com",
-  "The unshipped redesign is rejected.",
+  "The unshipped website redesign is rejected. Browser-dashboard parity and WebView product UI are rejected.",
   "",
   "## Design authority",
   "## Token table",
@@ -86,9 +86,27 @@ describe("design-source contract gate", () => {
   });
 
   it("fails when the rejected-direction statement is stripped", () => {
-    const stripped = validDesignDoc.replace("The unshipped redesign is rejected.", "The unshipped redesign is retired.");
+    const stripped = validDesignDoc.replace("The unshipped website redesign is rejected.", "The unshipped website redesign is retired.");
     const violations = collectViolations(writeFixture({ "docs/design/live-site-design-source.md": stripped }));
     expect(violations.some((v) => v.includes('the rejected-direction statement'))).toBe(true);
+  });
+
+  it("fails when the browser-dashboard/WebView rejection is deleted but a generic 'rejected' survives", () => {
+    // Keeps the unshipped-redesign rejection, drops the specific retired-direction
+    // boundary. A bare `includes("rejected")` would false-pass this.
+    const stripped = validDesignDoc.replace(
+      " Browser-dashboard parity and WebView product UI are rejected.",
+      ""
+    );
+    const violations = collectViolations(writeFixture({ "docs/design/live-site-design-source.md": stripped }));
+    expect(violations.some((v) => v.includes('the rejected-direction statement'))).toBe(true);
+  });
+
+  it("fails on a broadened dashboard-first-run verb (remains) in a guarded doc", () => {
+    const violations = collectViolations(
+      writeFixture({ "docs/SETUP.md": "The local HTML dashboard remains the first-run setup surface for everyone.\n" })
+    );
+    expect(violations.some((v) => v.startsWith("docs/SETUP.md:"))).toBe(true);
   });
 
   it.each([

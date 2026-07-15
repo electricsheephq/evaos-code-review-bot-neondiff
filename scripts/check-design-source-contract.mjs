@@ -49,7 +49,13 @@ function hasHeading(doc, heading) {
 // is legitimate — e.g. "no WebView product UI" is a disclaimer of the rejected
 // direction, not a reintroduction of it, so it must pass.
 const forbiddenDocPatterns = [
-  { pattern: /dashboard is the (human )?first-run/i },
+  // Retired "dashboard is the (human) first-run product surface" claim, allowing
+  // the affirmative-verb variants a rewrite might use ("remains", "serves as",
+  // "is still", …) so the exact retired direction cannot slip back with a
+  // synonym. Directional (dashboard → first-run) so the legitimate "the native
+  // app is the human first-run surface; the dashboard is an operator surface"
+  // framing does not false-positive.
+  { pattern: /dashboard\b[^.\n]{0,50}\b(is|is still|remains|serves as|stays|becomes|acts as|continues to be)\b[^.\n]{0,30}\bfirst-run\b/i },
   { pattern: /browser[- ]dashboard parity/i },
   {
     pattern: /webview/i,
@@ -81,9 +87,20 @@ export function collectViolations(root = process.cwd()) {
         violations.push(`${designDoc}: missing required section "${heading}"`);
       }
     }
-    // (C) the rejected-direction statement must survive.
-    if (!doc.includes("rejected")) {
-      violations.push(`${designDoc}: missing the rejected-direction statement ("rejected")`);
+    // (C) the SPECIFIC retired-direction rejections must survive — not merely the
+    // generic word "rejected". The unshipped-redesign line also says "rejected",
+    // so a bare includes() would pass even after the browser-dashboard/WebView
+    // boundary rejection is deleted. Each canonical rejection is checked
+    // individually so none can be stripped in isolation.
+    const requiredRejections = [
+      { label: "unshipped website redesign", pattern: /redesign is rejected/i },
+      { label: "browser-dashboard parity", pattern: /browser[- ]dashboard parity[\s\S]{0,80}\brejected\b/i },
+      { label: "WebView product UI", pattern: /webview[\s\S]{0,80}\brejected\b/i }
+    ];
+    for (const { label, pattern } of requiredRejections) {
+      if (!pattern.test(doc)) {
+        violations.push(`${designDoc}: missing the rejected-direction statement for "${label}"`);
+      }
     }
   }
 

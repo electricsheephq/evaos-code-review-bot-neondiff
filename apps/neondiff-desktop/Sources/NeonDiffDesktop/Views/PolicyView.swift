@@ -224,6 +224,9 @@ struct CommandPanel: View {
                     }
                     .help("Copy command")
                     .foregroundStyle(nd.textSecondary)
+                    // Image-only control: name the exact command for VoiceOver so
+                    // the repeated copy buttons are distinguishable (a11y floor).
+                    .accessibilityLabel("Copy command: \(command.title)")
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
