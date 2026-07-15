@@ -554,6 +554,11 @@ private func target() {
     expect(theme).toContain(
       '.accessibilityIdentifier("neondiff-section-title")'
     );
+    expect(theme).toContain("@ScaledMetric(relativeTo: .headline)");
+    expect(theme).toContain("private var sectionTitleSize: CGFloat = 13");
+    expect(theme).toContain(
+      ".font(.system(size: sectionTitleSize, weight: .bold, design: .monospaced))"
+    );
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {

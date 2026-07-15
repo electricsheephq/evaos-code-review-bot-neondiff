@@ -297,6 +297,7 @@ struct OperatorBackdrop: View {
 }
 
 struct OperatorSectionHeader: View {
+    @ScaledMetric(relativeTo: .headline) private var sectionTitleSize: CGFloat = 13
     var title: String
     var status: String
 
@@ -309,7 +310,7 @@ struct OperatorSectionHeader: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
                 Text(title)
-                    .font(NeonDiffTheme.headlineFont)
+                    .font(.system(size: sectionTitleSize, weight: .bold, design: .monospaced))
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                     .accessibilityIdentifier("neondiff-section-title")
             }
