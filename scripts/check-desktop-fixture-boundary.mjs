@@ -74,12 +74,11 @@ function collectFiles(inputPaths) {
     const stat = lstatSync(path);
     const root = realpathSync(stat.isDirectory() ? path : dirname(path));
     const isArchiveRoot = stat.isDirectory() && path.toLowerCase().endsWith(".xcarchive");
-    return { path, root, isArchiveRoot };
+    const logicalPath = stat.isDirectory() ? "" : relative(root, path);
+    return { path, root, logicalPath, isArchiveRoot, throughSymlink: false, ancestorDirectories: [] };
   });
-  const visitedDirectories = new Set();
-  const visitedFiles = new Set();
   while (pending.length > 0) {
-    const { path, root, isArchiveRoot } = pending.pop();
+    const { path, root, logicalPath, isArchiveRoot, throughSymlink, ancestorDirectories } = pending.pop();
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) {
       const target = realpathSync(path);
@@ -87,27 +86,43 @@ function collectFiles(inputPaths) {
       if (targetRelativePath === ".." || targetRelativePath.startsWith(`..${sep}`) || isAbsolute(targetRelativePath)) {
         throw new Error(`symlink escapes artifact root: ${path}`);
       }
-      pending.push({ path: target, root, isArchiveRoot });
+      pending.push({
+        path: target,
+        root,
+        logicalPath,
+        isArchiveRoot,
+        throughSymlink: true,
+        ancestorDirectories
+      });
       continue;
     }
     const realPath = realpathSync(path);
     if (stat.isDirectory()) {
-      if (visitedDirectories.has(realPath)) continue;
-      visitedDirectories.add(realPath);
+      if (ancestorDirectories.includes(realPath)) {
+        throw new Error(`symlink cycle inside artifact root: ${resolve(root, logicalPath)}`);
+      }
+      const childAncestors = [...ancestorDirectories, realPath];
       for (const entry of readdirSync(realPath)) {
-        pending.push({ path: resolve(realPath, entry), root, isArchiveRoot });
+        pending.push({
+          path: resolve(realPath, entry),
+          root,
+          logicalPath: logicalPath ? `${logicalPath}${sep}${entry}` : entry,
+          isArchiveRoot,
+          throughSymlink,
+          ancestorDirectories: childAncestors
+        });
       }
       continue;
     }
     if (!stat.isFile()) continue;
-    if (visitedFiles.has(realPath)) continue;
-    visitedFiles.add(realPath);
     if (stat.size > MAX_FILE_BYTES) throw new Error(`artifact file exceeds scan bound: ${path}`);
     files.push({
-      path: realPath,
-      relativePath: `/${relative(root, realPath).split(sep).join("/")}`,
+      path: resolve(root, logicalPath),
+      physicalPath: realPath,
+      relativePath: `/${logicalPath.split(sep).join("/")}`,
       size: stat.size,
-      isArchiveRoot
+      isArchiveRoot,
+      throughSymlink
     });
     if (files.length > MAX_FILES) throw new Error("artifact file count exceeds scan bound");
   }
@@ -128,8 +143,9 @@ function scan(inputPaths) {
         violations.push({ path: file.path, marker: rule.marker });
       }
     }
-    const data = readFileSync(file.path);
+    const data = readFileSync(file.physicalPath);
     const isArchiveDsymDwarf = file.isArchiveRoot
+      && !file.throughSymlink
       && /^\/dsyms\/[^/]+\.dsym\/contents\/resources\/dwarf\/[^/]+$/.test(normalizedPath);
     const content = isArchiveDsymDwarf
       ? maskAllowedDsymSourceFilenames(data)
