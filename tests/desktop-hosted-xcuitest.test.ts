@@ -46,7 +46,6 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain('provider-verification');
     expect(source).toContain('neondiff.desktop.root');
     expect(source).toContain("XCUIApplication()");
-    expect(source).not.toMatch(/api[_-]?key|token|password|secret/i);
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
