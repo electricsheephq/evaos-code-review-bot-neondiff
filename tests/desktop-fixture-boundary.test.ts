@@ -126,6 +126,61 @@ describe("desktop fixture release-artifact boundary", () => {
     });
   });
 
+  it("accepts an excluded DEBUG source filename in dSYM metadata", () => {
+    const artifacts = releaseArtifacts();
+    const dwarf = join(
+      artifacts.root,
+      "NeonDiffDesktop.xcarchive",
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(join(dwarf, ".."), { recursive: true });
+    writeFileSync(
+      dwarf,
+      "/build/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift\0"
+    );
+
+    const result = scan([join(artifacts.root, "NeonDiffDesktop.xcarchive")]);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      violationCount: 0,
+      scannedFiles: 1
+    });
+  });
+
+  it("rejects an evaluation symbol in dSYM metadata after an allowed source filename", () => {
+    const artifacts = releaseArtifacts();
+    const dwarf = join(
+      artifacts.root,
+      "NeonDiffDesktop.xcarchive",
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(join(dwarf, ".."), { recursive: true });
+    writeFileSync(
+      dwarf,
+      "/build/Support/DesktopEvaluationReadiness.swift\0_$s15NeonDiffDesktop26DesktopEvaluationReadinessV"
+    );
+
+    const result = scan([join(artifacts.root, "NeonDiffDesktop.xcarchive")]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
   it("scans only release fixture surfaces and all debug/release Core and AppCore secret surfaces", () => {
     const gate = readFileSync(".github/workflows/swift-desktop-gate.yml", "utf8");
 
