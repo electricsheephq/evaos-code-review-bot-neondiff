@@ -17,6 +17,7 @@ export type BrokerReason =
   | "installation_suspended"
   | "installation_authorization_unverified"
   | "repo_outside_installation"
+  | "repo_outside_authorization"
   | "repo_renamed_or_transferred"
   | "visibility_unknown"
   | "entitlement_missing"
@@ -43,6 +44,7 @@ const REASON_STATUS: Record<BrokerReason, number> = {
   installation_suspended: 409,
   installation_authorization_unverified: 403,
   repo_outside_installation: 403,
+  repo_outside_authorization: 403,
   repo_renamed_or_transferred: 409,
   visibility_unknown: 403,
   entitlement_missing: 403,

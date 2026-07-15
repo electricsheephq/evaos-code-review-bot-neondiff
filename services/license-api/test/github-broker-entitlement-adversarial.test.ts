@@ -56,6 +56,9 @@ function mutableFake(config: {
     client: {
       async getInstallation(installationId: number) {
         calls.push({ op: "getInstallation", installationId });
+        // Tighten the fixture boundary: only the configured installation exists; an
+        // unknown id (an install swap) resolves to null, exactly like GitHub's 404.
+        if (installationId !== config.installationId) return null;
         return { id: installationId, account_login: "octo", suspended: false };
       },
       async listInstallationRepositories(installationId: number) {
@@ -68,7 +71,8 @@ function mutableFake(config: {
         return { token: "broker-test-adversarial-token", expires_at: new Date(Date.now() + 3_600_000).toISOString() };
       },
       async verifyInstallationForAuthorizationCode(installationId: number, code: string) {
-        return code === `oauth-code-${installationId}`;
+        if (code !== `oauth-code-${installationId}`) return null;
+        return repositories.map((repository) => repository.full_name);
       }
     }
   };
@@ -198,7 +202,7 @@ describe("github broker #614 adversarial entitlement boundary", () => {
     }
   });
 
-  it("install swap: a private repo outside the installation selection is refused before the seam", async () => {
+  it("a private repo outside the installation selection is refused before the seam", async () => {
     const fake = mutableFake({ installationId: INSTALL_ID, repositories: baseRepositories });
     const resolver = countingResolver({ status: "active", coveredPrivateRepositories: ["octo/private"] });
     const harness = await startBroker({ fake: { client: fake.client, calls: fake.calls, mintedToken: "x" } as never, resolveEntitlement: resolver.resolveEntitlement });
@@ -215,6 +219,34 @@ describe("github broker #614 adversarial entitlement boundary", () => {
       );
       assert.equal(response.status, 403, response.text);
       assert.equal(response.json.reason, "repo_outside_installation");
+      assert.equal(resolver.contexts.length, 0);
+      assert.equal(mints(fake.calls), 0);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("install swap: a token request for a DIFFERENT installation than the device bound is refused with zero seam/mint", async () => {
+    const fake = mutableFake({ installationId: INSTALL_ID, repositories: baseRepositories });
+    const resolver = countingResolver({ status: "active", coveredPrivateRepositories: ["octo/private"] });
+    const harness = await startBroker({ fake: { client: fake.client, calls: fake.calls, mintedToken: "x" } as never, resolveEntitlement: resolver.resolveEntitlement });
+    try {
+      const device = await makeDevice();
+      await registerDevice(harness.url, device);
+      await connectInstallation(harness.url, device, INSTALL_ID);
+      fake.calls.length = 0;
+      // The device is bound to INSTALL_ID; it now targets a different installation id
+      // it never connected. The per-(device, installation) binding check fails closed
+      // before any installation resolution, entitlement lookup, or mint.
+      const OTHER_INSTALL_ID = INSTALL_ID + 1;
+      const response = await post(
+        harness.url,
+        "/github/token",
+        { installationId: OTHER_INSTALL_ID, repositories: ["octo/private"] },
+        bearer(await device.sign())
+      );
+      assert.equal(response.status, 404, response.text);
+      assert.equal(response.json.reason, "binding_not_found");
       assert.equal(resolver.contexts.length, 0);
       assert.equal(mints(fake.calls), 0);
     } finally {

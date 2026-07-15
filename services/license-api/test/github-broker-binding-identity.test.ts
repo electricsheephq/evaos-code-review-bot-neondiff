@@ -160,4 +160,55 @@ describe("github broker callback install-binding identity (#620 P1)", () => {
       harness.close();
     }
   });
+
+  it("confines the binding to the user's accessible repos: an unauthorized repo in the SAME installation is refused with zero mint (#620 P1)", async () => {
+    // An org installation with two private repos where the connecting OAuth user
+    // can access repo-a but NOT repo-b. /user/installations proves installation
+    // membership; only /user/installations/{id}/repositories proves per-repo access.
+    const ORG: FakeInstallation = {
+      id: 9100,
+      account_login: "org",
+      repositories: [
+        { id: 71, full_name: "org/repo-a", visibility: "private" },
+        { id: 72, full_name: "org/repo-b", visibility: "private" }
+      ],
+      userRepositories: ["org/repo-a"]
+    };
+    // Entitlement COVERS both private repos, isolating the per-repo access gate as
+    // the sole reason repo-b is refused (proving it is not merely an entitlement miss).
+    const harness = await startBroker({
+      installations: [ORG],
+      resolveEntitlement: () => ({ status: "active", coveredPrivateRepositories: ["org/repo-a", "org/repo-b"] })
+    });
+    try {
+      const device = await makeDevice();
+      await registerDevice(harness.url, device);
+      await connectInstallation(harness.url, device, ORG.id);
+      harness.calls.length = 0;
+
+      // repo-b is inside the installation and entitlement-covered, but OUTSIDE the
+      // connecting user's authorized set -> refused before the seam, zero mint.
+      const denied = await post(
+        harness.url,
+        "/github/token",
+        { installationId: ORG.id, repositories: ["org/repo-b"] },
+        bearer(await device.sign())
+      );
+      assert.equal(denied.status, 403, denied.text);
+      assert.equal(denied.json.reason, "repo_outside_authorization");
+      assert.equal(harness.calls.filter((call) => call.op === "createInstallationAccessToken").length, 0);
+
+      // repo-a (authorized AND covered) still mints normally through the same binding.
+      const allowed = await post(
+        harness.url,
+        "/github/token",
+        { installationId: ORG.id, repositories: ["org/repo-a"] },
+        bearer(await device.sign())
+      );
+      assert.equal(allowed.status, 200, allowed.text);
+      assert.equal(allowed.json.token, harness.mintedToken);
+    } finally {
+      harness.close();
+    }
+  });
 });

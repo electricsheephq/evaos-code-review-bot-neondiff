@@ -57,14 +57,27 @@ the license store's strict schema verification is unaffected.
    choice, repository selection, and permission display. NeonDiff never proxies
    or skins this step, so the user sees the official App identity and exact
    permissions on github.com (AC2).
-4. **Callback (GitHub to broker).** `GET /github/connect/callback?installation_id&state`.
-   Because OAuth-during-install is disabled, this route is registered as the App's
-   **Setup URL** (GitHub's post-install redirect), not the user authorization
-   callback URL. The broker verifies the one-shot state (unconsumed, unexpired, CSRF-proof —
-   mirrors website PR #48: one-shot fulfillment tokens + explicit owned return
-   origins + framework CSRF), verifies the installation exists and belongs to the
-   App (`GET /app/installations/{id}` with an App JWT), records the binding
-   (device id <-> installation id), and marks the state consumed.
+4. **Callback (GitHub to broker).** `GET /github/connect/callback?installation_id&state&code`.
+   OAuth-during-install is **enabled**, so this route is the App's **user
+   authorization callback URL** (with OAuth-during-install on, GitHub makes the
+   Setup URL unavailable and sends the post-install browser return here), carrying
+   an install-time OAuth `code` alongside `installation_id` and `state`. The broker
+   verifies the one-shot state (unconsumed, unexpired, CSRF-proof — mirrors website
+   PR #48: one-shot fulfillment tokens + explicit owned return origins + framework
+   CSRF), then — **before** resolving the installation (decide before side effects,
+   so a forged callback cannot use App-JWT 403-vs-404 to probe arbitrary victim
+   installation ids) — exchanges the `code` for the returning user identity and
+   confirms via `GET /user/installations/{id}/repositories` that the user can
+   access the installation, capturing the exact repositories they can access (the
+   authorized set the binding is scoped to). Only then does it verify the
+   installation exists and belongs to the App (`GET /app/installations/{id}` with an
+   App JWT), record the binding (device id <-> installation id, scoped to that
+   authorized repo set), and mark the state consumed. A **code-less** return — a
+   bare install/reconfigure **update** redirect that carries `setup_action` but no
+   `code` (GitHub sends these to the same callback URL and they prove no new
+   authorization) — is acknowledged with the neutral return page and binds nothing,
+   so legitimate updates are never locked out; any *other* code-less callback fails
+   closed with `installation_authorization_unverified`.
 5. **Return (native to broker).** The app confirms the binding at
    `POST /github/connect/complete` with its device credential and the original
    `state`. See "Return path" for why this is a device poll rather than a
@@ -73,7 +86,10 @@ the license store's strict schema verification is unaffected.
    device credential, `installation_id`, and the requested `repositories` /
    `permissions`. The broker checks, in order: the binding exists; the
    installation is live and not suspended; every requested repository is present
-   in the installation's current selection; **then** the seam decision
+   in the installation's current selection; every requested repository is within
+   the connecting user's authorized set captured at bind time (else
+   `repo_outside_authorization`, so an entitled but GitHub-unauthorized user cannot
+   reach a private repo they cannot access); **then** the seam decision
    (`authorizeTokenIssuance`, the #614 gate); and only on `allow` mints an
    installation access token via App JWT, narrowed by the canonical
    `repository_ids` (GitHub rejects `owner/name` here) and a **server-clamped**
@@ -104,10 +120,17 @@ one-shot state nonce alone is NOT sufficient: it binds the returning browser
 session to the initiating device, yet it does not prove the returning identity
 actually owns the installation id in the callback. So the callback additionally
 requires an **install-time OAuth authorization code** and verifies, via the
-exchanged user identity (`GET /user/installations`), that the user can access the
-requested installation before recording any binding (#614, P1). A device
-therefore obtains tokens only for installations whose ownership it proved at
-callback time — a valid state plus an arbitrary victim installation id binds
+exchanged user identity, that the user can access the requested installation
+before recording any binding (#614, P1). Membership alone
+(`GET /user/installations`) does **not** prove access to every repository in an
+installation — an org install can list for a user who can reach only some of its
+repos. The broker therefore uses `GET /user/installations/{id}/repositories` to
+capture the **exact repository set** the returning user can access and scopes the
+binding to it; a later `POST /github/token` for any repo outside that set fails
+closed with `repo_outside_authorization`, so an entitled but GitHub-unauthorized
+user can never mint a token for a private repo they cannot access on GitHub. A
+device therefore obtains tokens only for installations — and repositories — whose
+access it proved at callback time — a valid state plus an arbitrary victim installation id binds
 nothing. Enabling OAuth-during-install and provisioning the OAuth client
 credentials is OWNER-GATED (see the staging-registration spec); until then the
 callback fails closed with `installation_authorization_unverified`. Private-tier
@@ -151,6 +174,11 @@ embedded key (see Rollback in issue #613).
   (HTTP 403, #614 P1).
 - `repo_outside_installation` — a requested repo is not in the installation's
   current selection (AC4).
+- `repo_outside_authorization` — a requested repo is in the installation but
+  outside the set the connecting OAuth user could access at bind time; fail closed
+  (HTTP 403, #614 P1). Installation membership alone (`GET /user/installations`)
+  does not prove per-repo access, so the binding is scoped to the exact repository
+  set from `GET /user/installations/{id}/repositories`.
 - `repo_renamed_or_transferred` — the installation repository list is re-fetched at
   issuance; a stale repository reference is a typed error, never a silent pass.
 - `visibility_unknown` — a requested repo's visibility could not be determined;
@@ -186,7 +214,7 @@ exact repositories to narrow to) or `deny` with a typed reason code. No caller c
 skip it because minting is unreachable except through its `allow` result (the
 gate-every-caller rule).
 
-#614 policy, evaluated in order:
+**#614 policy, evaluated in order:**
 
 1. An empty request is `invalid_request`.
 2. Any repository whose visibility could not be authoritatively determined denies

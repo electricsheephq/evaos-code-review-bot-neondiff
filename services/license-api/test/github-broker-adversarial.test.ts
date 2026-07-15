@@ -52,7 +52,8 @@ function mutableFake(config: {
       return { token: "broker-test-mutable-token", expires_at: new Date(Date.now() + 3_600_000).toISOString() };
     },
     async verifyInstallationForAuthorizationCode(installationId: number, code: string) {
-      return code === `oauth-code-${installationId}`;
+      if (code !== `oauth-code-${installationId}`) return null;
+      return (config.repositories ?? []).map((repository) => repository.full_name);
     }
   };
   return { client, calls, state };

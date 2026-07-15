@@ -43,6 +43,15 @@ const SCHEMA = `
     foreign key (device_id) references devices(device_id)
   );
 
+  create table binding_repositories (
+    device_id text not null,
+    installation_id integer not null,
+    full_name text not null,
+    primary key (device_id, installation_id, full_name),
+    foreign key (device_id, installation_id)
+      references installation_bindings(device_id, installation_id) on delete cascade
+  );
+
   create table decision_ledger (
     id integer primary key autoincrement,
     device_id text not null,
@@ -177,21 +186,57 @@ export class GitHubBrokerStore {
     return Number(info.changes) > 0;
   }
 
-  upsertBinding(deviceId: string, installationId: number, accountLogin: string | undefined, now: string): void {
-    this.db
-      .prepare(
-        `insert into installation_bindings (device_id, installation_id, account_login, created_at)
-         values (?, ?, ?, ?)
-         on conflict (device_id, installation_id)
-         do update set account_login = excluded.account_login`
-      )
-      .run(deviceId, installationId, accountLogin ?? null, now);
+  /**
+   * Record (or refresh) a binding and REPLACE its authorized-repository set in one
+   * transaction. `authorizedRepositories` is the exact `owner/name` set the
+   * connecting OAuth user can access in the installation; token issuance is later
+   * confined to it, so an entitled-but-GitHub-unauthorized user cannot reach a
+   * private repo outside their access. Re-connecting refreshes the set atomically.
+   */
+  upsertBinding(
+    deviceId: string,
+    installationId: number,
+    accountLogin: string | undefined,
+    authorizedRepositories: string[],
+    now: string
+  ): void {
+    this.db.exec("begin immediate");
+    try {
+      this.db
+        .prepare(
+          `insert into installation_bindings (device_id, installation_id, account_login, created_at)
+           values (?, ?, ?, ?)
+           on conflict (device_id, installation_id)
+           do update set account_login = excluded.account_login`
+        )
+        .run(deviceId, installationId, accountLogin ?? null, now);
+      this.db
+        .prepare("delete from binding_repositories where device_id = ? and installation_id = ?")
+        .run(deviceId, installationId);
+      const insert = this.db.prepare(
+        `insert or ignore into binding_repositories (device_id, installation_id, full_name)
+         values (?, ?, ?)`
+      );
+      for (const fullName of authorizedRepositories) insert.run(deviceId, installationId, fullName);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   getBinding(deviceId: string, installationId: number): InstallationBindingRow | undefined {
     return this.db
       .prepare("select * from installation_bindings where device_id = ? and installation_id = ?")
       .get(deviceId, installationId) as InstallationBindingRow | undefined;
+  }
+
+  /** The `owner/name` set the connecting OAuth user was authorized for at bind time. */
+  listBindingRepositories(deviceId: string, installationId: number): string[] {
+    const rows = this.db
+      .prepare("select full_name from binding_repositories where device_id = ? and installation_id = ?")
+      .all(deviceId, installationId) as Array<{ full_name: string }>;
+    return rows.map((row) => row.full_name);
   }
 
   /** Append a public-safe decision row. Never carries repo content or key material. */

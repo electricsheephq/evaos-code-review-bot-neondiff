@@ -19,15 +19,22 @@ production identity is created only after the committed security review
    GitHub App named distinctly for staging, e.g. `NeonDiff (Staging)`.
 2. Homepage URL: the NeonDiff website or repository URL.
 3. **[OWNER-GATED — BLOCKING for #614]** **Enable** "Request user authorization
-   (OAuth) during installation", set the callback/Setup URL to the broker's
-   `/github/connect/callback`, and provision the App's OAuth **client id** and
-   **client secret** as deployment secrets (`githubBroker.oauthClientId` /
-   `oauthClientSecret`). The broker binds a device to an installation ONLY after
-   exchanging the install-time authorization `code` and confirming the
-   authorizing user can access that installation (`GET /user/installations`).
-   Without this, a valid one-shot state alone lets a caller bind to an arbitrary
-   (victim) installation id — the install-binding forgery the #614 security
-   review flagged (P1). Until it is enabled, `connectCallback` fails closed with
+   (OAuth) during installation", set the **User authorization callback URL** to
+   the broker's `/github/connect/callback`, and provision the App's OAuth
+   **client id** and **client secret** as deployment secrets
+   (`githubBroker.oauthClientId` / `oauthClientSecret`). Note that with
+   OAuth-during-install enabled GitHub makes the separate **Setup URL** field
+   **unavailable** (the two are mutually exclusive) and routes the post-install
+   return to this callback URL instead — so there is no Setup URL to set. The
+   broker binds a device to an installation ONLY after exchanging the install-time
+   authorization `code` and confirming the authorizing user can access it; because
+   installation membership alone (`GET /user/installations`) does not prove access
+   to every repository in an org installation, the broker enumerates the user's
+   accessible repositories with `GET /user/installations/{id}/repositories` and
+   scopes the binding to that exact set (per-repo, #614 P1). Without this, a valid
+   one-shot state alone lets a caller bind to an arbitrary (victim) installation id
+   — the install-binding forgery the #614 security review flagged (P1). Until it is
+   enabled, `connectCallback` fails closed with
    `installation_authorization_unverified` and no binding is recorded.
 
 ## 2. Repository permissions
@@ -48,30 +55,33 @@ Issues merely because the App reviews PRs.
 
 Organization permissions: none. Account permissions: none.
 
-## 3. Callback and Setup URLs (post-install redirect)
+## 3. Callback URL (post-install redirect)
 
 Because OAuth-during-install is **enabled** (step 1), the post-install browser
 return carries an OAuth **`code`** in addition to `installation_id`, `state`, and
 `setup_action`; the broker exchanges that code to prove the returning identity
-owns the installation before it records any binding (the #614 P1 requirement). Get
-these URLs wrong and the broker never receives the install return (or receives it
-without a `code` and fails closed with `installation_authorization_unverified`),
-so the desktop poll pends until the state expires.
+owns the installation before it records any binding (the #614 P1 requirement).
+With OAuth-during-install on, GitHub makes the separate **Setup URL** field
+**unavailable** — there is exactly one URL to set, and every install/reconfigure
+return comes through it. Get it wrong and the broker never receives the install
+return (or receives it without a `code` and fails closed with
+`installation_authorization_unverified`), so the desktop poll pends until the
+state expires.
 
-- **User authorization callback URL (required):** the broker return route on the
-  license-service host:
+- **User authorization callback URL (the only URL to set):** the broker return
+  route on the license-service host:
   `https://<license-service-host>/github/connect/callback`
   With OAuth-during-install enabled, GitHub redirects here after install with
   `installation_id`, `setup_action`, the `state` the broker placed on the install
   link, and the OAuth `code` — exactly what `GET /github/connect/callback`
   consumes and verifies.
-- **Setup URL:** set to the **same** route
-  (`https://<license-service-host>/github/connect/callback`) so a plain install or
-  reconfigure still returns through the broker; with "Redirect on update" enabled,
-  reconfiguring the installation returns through the same route.
-- Both URLs point at the one broker route; it tolerates the `code`-bearing OAuth
-  return and the code-less update return (the latter fails closed with no binding,
-  by design).
+- **Redirect on update (reconfigure):** a reconfigure/update return arrives at the
+  same callback URL but is **code-less** (it carries `setup_action` and
+  `installation_id`, not a new authorization `code`). The broker acknowledges it
+  with the neutral return page and binds nothing, so a legitimate installation
+  update is **never locked out** — the existing binding is untouched and the device
+  simply keeps polling. Only a code-less return that is *not* a `setup_action`
+  update fails closed with `installation_authorization_unverified`.
 
 ## 4. Webhook
 

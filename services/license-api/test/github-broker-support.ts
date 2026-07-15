@@ -76,6 +76,13 @@ export interface FakeInstallation {
   /** null models an uninstalled/missing installation (GitHub 404). */
   missing?: boolean;
   repositories: FakeRepository[];
+  /**
+   * The `owner/name` set the connecting OAuth user can access in this installation
+   * (what `/user/installations/{id}/repositories` returns). Defaults to every
+   * installation repository; set a narrower list to model a user with partial
+   * access to an org installation.
+   */
+  userRepositories?: string[];
 }
 
 export interface FakeGitHubCall {
@@ -134,8 +141,13 @@ export function fakeGitHubClient(
     },
     async verifyInstallationForAuthorizationCode(installationId: number, code: string) {
       // The code proves ownership of exactly this installation; a mismatched or
-      // absent code (a forged callback) is not authorized.
-      return code === authorizationCodeFor(installationId);
+      // absent code (a forged callback) is not authorized (null). A proven identity
+      // yields the repositories the user can access in the installation (the
+      // authorized set the binding is scoped to) — all installation repos by default.
+      if (code !== authorizationCodeFor(installationId)) return null;
+      const installation = byId.get(installationId);
+      if (!installation || installation.missing) return null;
+      return installation.userRepositories ?? installation.repositories.map((repository) => repository.full_name);
     }
   };
   return { client, calls, mintedToken };

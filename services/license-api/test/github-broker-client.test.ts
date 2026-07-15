@@ -28,10 +28,20 @@ afterEach(() => {
 function stubFetch(handler: (request: CapturedRequest) => { status?: number; json: unknown }): CapturedRequest[] {
   const captured: CapturedRequest[] = [];
   globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+    const rawBody = init?.body ? String(init.body) : undefined;
+    let parsedBody: unknown = rawBody;
+    if (rawBody !== undefined) {
+      // JSON for App-JWT calls; form-encoded for the OAuth token exchange.
+      try {
+        parsedBody = JSON.parse(rawBody);
+      } catch {
+        parsedBody = rawBody;
+      }
+    }
     const request: CapturedRequest = {
       url: String(input),
       method: init?.method ?? "GET",
-      body: init?.body ? JSON.parse(String(init.body)) : undefined
+      body: parsedBody
     };
     captured.push(request);
     const { status = 200, json } = handler(request);
@@ -69,19 +79,22 @@ describe("production github installation client wire contract", () => {
     });
   });
 
-  it("returns unverified (false) with no network call when OAuth-during-install is unconfigured", async () => {
+  it("returns unverified (null) with no network call when OAuth-during-install is unconfigured", async () => {
     const captured = stubFetch(() => ({ json: {} }));
     const client = createGitHubInstallationClient({ appId: "123", privateKey: appPrivateKey });
-    // No oauthClientId/Secret -> identity is unverified (the callback maps false to
+    // No oauthClientId/Secret -> identity is unverified (the callback maps null to
     // installation_authorization_unverified, 403), and no OAuth exchange is attempted.
-    assert.equal(await client.verifyInstallationForAuthorizationCode(6001, "any-code"), false);
+    assert.equal(await client.verifyInstallationForAuthorizationCode(6001, "any-code"), null);
     assert.equal(captured.length, 0);
   });
 
-  it("verifies installation ownership via the OAuth code exchange and /user/installations", async () => {
+  it("verifies ownership and returns the user's accessible repositories for the installation", async () => {
     const captured = stubFetch((request) => {
       if (request.url.includes("/login/oauth/access_token")) return { json: { access_token: "user-tok" } };
-      if (request.url.includes("/user/installations")) return { json: { installations: [{ id: 6001 }] } };
+      if (request.url.includes("/user/installations/6001/repositories")) {
+        return { json: { repositories: [{ full_name: "octo/site" }, { full_name: "octo/private" }] } };
+      }
+      if (request.url.includes("/user/installations/9999/repositories")) return { status: 404, json: { message: "Not Found" } };
       return { json: {} };
     });
     const client = createGitHubInstallationClient({
@@ -90,12 +103,20 @@ describe("production github installation client wire contract", () => {
       oauthClientId: "cid",
       oauthClientSecret: "csec"
     });
-    assert.equal(await client.verifyInstallationForAuthorizationCode(6001, "good-code"), true);
-    // An installation the OAuth user cannot access is not in the list -> unverified.
-    assert.equal(await client.verifyInstallationForAuthorizationCode(9999, "good-code"), false);
+    // A proven identity yields the EXACT repos the user can access in the
+    // installation (the per-repo authorized set), not mere installation membership.
+    assert.deepEqual(await client.verifyInstallationForAuthorizationCode(6001, "good-code"), ["octo/site", "octo/private"]);
+    // An installation the OAuth user cannot access returns 404 -> unverified (null).
+    assert.equal(await client.verifyInstallationForAuthorizationCode(9999, "good-code"), null);
     const exchange = captured.find((request) => request.url.includes("/login/oauth/access_token"));
     assert.equal(exchange?.method, "POST");
-    assert.deepEqual(exchange?.body, { client_id: "cid", client_secret: "csec", code: "good-code" });
+    // GitHub's web flow requires form-encoded parameters, not JSON.
+    const params = new URLSearchParams(String(exchange?.body));
+    assert.equal(params.get("client_id"), "cid");
+    assert.equal(params.get("client_secret"), "csec");
+    assert.equal(params.get("code"), "good-code");
+    // The endpoint is joined without a double slash.
+    assert.ok(!exchange?.url.includes("//login/oauth"), exchange?.url);
   });
 
   it("aborts a stalled OAuth exchange as a typed broker outage under the configured timeout", async () => {

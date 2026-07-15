@@ -185,8 +185,10 @@ export class GitHubBrokerService {
 
     // Verify the identity proof BEFORE resolving the installation (decide before
     // side effects): a forged callback is rejected without any App-JWT GitHub call
-    // for the supplied installation id, closing the 403-vs-404 probing oracle.
-    await this.verifyInstallationAuthorization(installationId, code);
+    // for the supplied installation id, closing the 403-vs-404 probing oracle. The
+    // proof also yields the repository set the connecting user can access in this
+    // installation — the binding is scoped to that authorized set.
+    const authorizedRepositories = await this.verifyInstallationAuthorization(installationId, code);
 
     const installation = await this.resolveInstallation(installationId);
 
@@ -194,34 +196,42 @@ export class GitHubBrokerService {
     if (!this.store.consumeConnectState(state, installationId, at.toISOString())) {
       throw new BrokerError("state_replayed", "connect state was already used");
     }
-    this.store.upsertBinding(stored.device_id, installationId, installation.account_login, at.toISOString());
+    this.store.upsertBinding(
+      stored.device_id,
+      installationId,
+      installation.account_login,
+      authorizedRepositories,
+      at.toISOString()
+    );
     return { html: connectReturnPage() };
   }
 
   /**
    * Fail closed unless the install-time OAuth authorization `code` proves the
-   * identity is authorized for `installationId`. An unproven identity — including
-   * the owner-gated pre-provisioning state where OAuth-during-install is not
-   * configured (the client returns `false`) — is `installation_authorization_unverified`
-   * (403, no binding); a transient verification failure maps to a typed broker
-   * outage (503, also no binding).
+   * identity is authorized for `installationId`. Returns the repository set the
+   * connecting user can access in the installation (the authorized set the binding
+   * is scoped to). An unproven identity — including the owner-gated
+   * pre-provisioning state where OAuth-during-install is not configured (the client
+   * returns `null`) — is `installation_authorization_unverified` (403, no binding);
+   * a transient verification failure maps to a typed broker outage (503, no binding).
    */
   private async verifyInstallationAuthorization(
     installationId: number,
     authorizationCode: string
-  ): Promise<void> {
-    let authorized: boolean;
+  ): Promise<string[]> {
+    let authorized: string[] | null;
     try {
       authorized = await this.githubClient.verifyInstallationForAuthorizationCode(installationId, authorizationCode);
     } catch (error) {
       throw mapClientError(error);
     }
-    if (!authorized) {
+    if (authorized === null) {
       throw new BrokerError(
         "installation_authorization_unverified",
         "installation authorization could not be verified for this identity"
       );
     }
+    return authorized;
   }
 
   /** POST /github/connect/complete — device polls to confirm the binding landed. */
@@ -283,6 +293,21 @@ export class GitHubBrokerService {
       if (installation.suspended) throw new BrokerError("installation_suspended", "installation is suspended");
 
       const requested = await this.resolveRequestedRepositories(installationId, repositories);
+
+      // Confine issuance to the repositories the connecting OAuth user was
+      // authorized for at bind time (a subset of the installation selection). This
+      // runs BEFORE entitlement resolution, so a repo outside the user's authorized
+      // set egresses nothing to the license authority — an entitled-but-GitHub-
+      // unauthorized user can never reach a private repo they cannot access (#620 P1).
+      const authorizedRepositories = new Set(this.store.listBindingRepositories(deviceId, installationId));
+      for (const repository of requested) {
+        if (!authorizedRepositories.has(repository.fullName)) {
+          throw new BrokerError(
+            "repo_outside_authorization",
+            "a requested repository is outside the connecting user's authorized set"
+          );
+        }
+      }
 
       // Bind entitlement for any non-public repository BEFORE the seam and BEFORE
       // any mint. Resolution is a license-authority lookup (no GitHub content, no
