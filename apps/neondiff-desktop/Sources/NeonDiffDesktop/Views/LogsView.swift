@@ -5,6 +5,15 @@ struct LogsView: View {
     @ObservedObject var model: NeonDiffDesktopModel
 
     var body: some View {
+        ScrollView(.vertical) {
+            pageContent
+        }
+        .accessibilityIdentifier("neondiff-logs-outer-scroll")
+        .scrollContentBackground(.hidden)
+        .scrollIndicators(.visible, axes: .vertical)
+    }
+
+    private var pageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Button { model.refreshStatus() } label: {
@@ -25,7 +34,7 @@ struct LogsView: View {
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                     .scrollContentBackground(.hidden)
                     .textSelection(.enabled)
-                    .frame(minHeight: 420)
+                    .frame(height: 360)
                     .padding(8)
                     .background(Color.black.opacity(0.42))
                     .overlay {
