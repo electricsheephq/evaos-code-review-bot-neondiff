@@ -9,6 +9,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
 #if DEBUG
     let readinessRequest: DesktopEvaluationReadinessRequest?
     let evaluationSection: DesktopSection?
+    let surfaceStatus: DesktopEvaluationSurfaceStatus?
 #endif
 
 #if DEBUG
@@ -16,12 +17,14 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         requestedContentSize: NSSize? = nil,
         disablesAnimations: Bool = false,
         readinessRequest: DesktopEvaluationReadinessRequest? = nil,
-        evaluationSection: DesktopSection? = nil
+        evaluationSection: DesktopSection? = nil,
+        surfaceStatus: DesktopEvaluationSurfaceStatus? = nil
     ) {
         self.requestedContentSize = requestedContentSize
         self.disablesAnimations = disablesAnimations
         self.readinessRequest = readinessRequest
         self.evaluationSection = evaluationSection
+        self.surfaceStatus = surfaceStatus
     }
 #else
     init(requestedContentSize: NSSize? = nil, disablesAnimations: Bool = false) {
@@ -147,7 +150,6 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         var stableSampleCount = 0
         var readinessAttemptCount = 0
         var surfaceSection: DesktopSection?
-        var surfaceGeneration = -1
         var surfaceSamplingToken = 0
         var surfaceLastSample: DesktopEvaluationGeometrySample?
         var surfaceStableSampleCount = 0
@@ -208,13 +210,13 @@ struct NeonWindowConfigurator: NSViewRepresentable {
     }
 
     private func scheduleSurfaceStateSample(window: NSWindow, coordinator: Coordinator) {
-        guard readinessRequest != nil,
+        guard let surfaceStatus,
               let evaluationSection,
               coordinator.surfaceSection != evaluationSection else {
             return
         }
         coordinator.surfaceSection = evaluationSection
-        coordinator.surfaceGeneration += 1
+        let generation = surfaceStatus.begin(section: evaluationSection)
         coordinator.surfaceSamplingToken += 1
         coordinator.surfaceLastSample = nil
         coordinator.surfaceStableSampleCount = 0
@@ -224,7 +226,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
             sampleSurfaceState(
                 window: window,
                 section: evaluationSection,
-                generation: coordinator.surfaceGeneration,
+                generation: generation,
                 token: token,
                 coordinator: coordinator
             )
@@ -238,17 +240,17 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         token: Int,
         coordinator: Coordinator
     ) {
-        guard let readinessRequest,
+        guard let surfaceStatus,
               token == coordinator.surfaceSamplingToken,
               section == coordinator.surfaceSection,
-              generation == coordinator.surfaceGeneration else {
+              surfaceStatus.snapshot?.generation == generation else {
             return
         }
         coordinator.surfaceAttemptCount += 1
         guard coordinator.surfaceAttemptCount < 50 else {
             fatalError("NeonDiff Desktop evaluation surface state did not settle within five seconds.")
         }
-        guard readinessRequest.renderLatch.isReady else {
+        guard surfaceStatus.isRendered(section: section, generation: generation) else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
                 sampleSurfaceState(
                     window: window,
@@ -269,6 +271,10 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         }
         coordinator.surfaceLastSample = sample
         if coordinator.surfaceStableSampleCount >= 3 {
+            guard surfaceStatus.markQuiescent(section: section, generation: generation) else {
+                return
+            }
+            guard let readinessRequest else { return }
             do {
                 try DesktopEvaluationSurfaceStateWriter.write(
                     request: readinessRequest,

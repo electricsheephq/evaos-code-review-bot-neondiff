@@ -8,15 +8,37 @@ struct ContentView: View {
     let preferredColorScheme: ColorScheme?
     let rootAccessibilityIdentifier: String
     let enablesEvaluationRegionBindings: Bool
-    let onSurfaceReady: (() -> Void)?
+    let onSurfaceReady: ((DesktopSection) -> Void)?
+#if DEBUG
+    let evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus?
+#endif
 
+#if DEBUG
     init(
         model: NeonDiffDesktopModel,
         updateController: NeonUpdateController,
         preferredColorScheme: ColorScheme? = .dark,
         rootAccessibilityIdentifier: String = "neondiff.desktop.root",
         enablesEvaluationRegionBindings: Bool = false,
-        onSurfaceReady: (() -> Void)? = nil
+        onSurfaceReady: ((DesktopSection) -> Void)? = nil,
+        evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus? = nil
+    ) {
+        self.model = model
+        self.updateController = updateController
+        self.preferredColorScheme = preferredColorScheme
+        self.rootAccessibilityIdentifier = rootAccessibilityIdentifier
+        self.enablesEvaluationRegionBindings = enablesEvaluationRegionBindings
+        self.onSurfaceReady = onSurfaceReady
+        self.evaluationSurfaceStatus = evaluationSurfaceStatus
+    }
+#else
+    init(
+        model: NeonDiffDesktopModel,
+        updateController: NeonUpdateController,
+        preferredColorScheme: ColorScheme? = .dark,
+        rootAccessibilityIdentifier: String = "neondiff.desktop.root",
+        enablesEvaluationRegionBindings: Bool = false,
+        onSurfaceReady: ((DesktopSection) -> Void)? = nil
     ) {
         self.model = model
         self.updateController = updateController
@@ -25,11 +47,17 @@ struct ContentView: View {
         self.enablesEvaluationRegionBindings = enablesEvaluationRegionBindings
         self.onSurfaceReady = onSurfaceReady
     }
+#endif
 
     var body: some View {
         ZStack(alignment: .top) {
             OperatorBackdrop()
             EvaluationRootAccessibilityMarker(identifier: rootAccessibilityIdentifier)
+#if DEBUG
+            if let evaluationSurfaceStatus {
+                EvaluationSurfaceAccessibilityMarker(status: evaluationSurfaceStatus)
+            }
+#endif
             Rectangle()
                 .fill(NeonDiffTheme.accent)
                 .frame(height: 34)
@@ -79,7 +107,7 @@ struct ContentView: View {
                 .tint(NeonDiffTheme.accent)
                 .preferredColorScheme(preferredColorScheme)
                 .interactiveDismissDisabled(model.onboardingFlow.currentStep != .done)
-                .onAppear { onSurfaceReady?() }
+                .onAppear { onSurfaceReady?(model.selectedSection) }
         }
     }
 }
@@ -109,10 +137,25 @@ private struct EvaluationRootAccessibilityMarker: View {
     }
 }
 
+#if DEBUG
+private struct EvaluationSurfaceAccessibilityMarker: View {
+    @ObservedObject var status: DesktopEvaluationSurfaceStatus
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("NeonDiff Desktop evaluation surface state")
+            .accessibilityIdentifier(status.accessibilityIdentifier)
+            .allowsHitTesting(false)
+    }
+}
+#endif
+
 private struct DetailView: View {
     @ObservedObject var model: NeonDiffDesktopModel
     @ObservedObject var updateController: NeonUpdateController
-    let onSurfaceReady: (() -> Void)?
+    let onSurfaceReady: ((DesktopSection) -> Void)?
 
     var body: some View {
         ZStack {
@@ -133,8 +176,28 @@ private struct DetailView: View {
                     case .settings: SettingsPane(model: model, updateController: updateController)
                     }
                 }
-                .onAppear { onSurfaceReady?() }
+                .modifier(
+                    SurfaceIdentityModifier(
+                        section: model.selectedSection,
+                        enabled: onSurfaceReady != nil
+                    )
+                )
+                .onAppear { onSurfaceReady?(model.selectedSection) }
             }
+        }
+    }
+}
+
+private struct SurfaceIdentityModifier: ViewModifier {
+    let section: DesktopSection
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.id(section)
+        } else {
+            content
         }
     }
 }

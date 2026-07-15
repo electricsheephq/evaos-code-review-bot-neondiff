@@ -70,6 +70,52 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).not.toContain('NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE');
   });
 
+  it("retains app-authored quiescent cross-tab geometry evidence in the xcresult", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const app = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift",
+      "utf8"
+    );
+    const content = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ContentView.swift",
+      "utf8"
+    );
+    const readiness = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift",
+      "utf8"
+    );
+    const configurator = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/NeonWindowConfigurator.swift",
+      "utf8"
+    );
+
+    expect(source).toContain("testStrictFixtureSettlesAcrossOverviewReposOverview");
+    expect(source).toContain('"neondiff.evaluation.surface.overview.0.quiescent"');
+    expect(source).toContain('"neondiff.evaluation.surface.repos.1.quiescent"');
+    expect(source).toContain('"neondiff.evaluation.surface.overview.2.quiescent"');
+    expect(source).toContain('"neondiff-sidebar-section-repos"');
+    expect(source).toContain('"neondiff-sidebar-section-overview"');
+    expect(source).toContain('"neondiff-chrome"');
+    expect(source).toContain('"neondiff-sidebar"');
+    expect(source).toContain('"neondiff-detail"');
+    expect(source).toContain("sampleIntervalMilliseconds: 100");
+    expect(source).toContain("tolerancePoints: 1");
+    expect(source).toContain("XCTAttachment");
+    expect(source).toContain("neondiff-hosted-settled-geometry.json");
+    expect(source).toContain(".keepAlways");
+
+    expect(readiness).toContain("final class DesktopEvaluationSurfaceStatus: ObservableObject");
+    expect(readiness).toContain("func begin(section:");
+    expect(readiness).toContain("func markRendered(section:");
+    expect(readiness).toContain("func markQuiescent(section:");
+    expect(configurator).toContain("surfaceStatus.isRendered(");
+    expect(configurator).toContain("surfaceStatus.markQuiescent(");
+    expect(content).toContain("EvaluationSurfaceAccessibilityMarker");
+    expect(app).toContain("evaluationSurfaceStatus");
+    expect(source).not.toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
+    expect(source).not.toContain("createDirectory");
+  });
+
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("Hosted XCUITest smoke");

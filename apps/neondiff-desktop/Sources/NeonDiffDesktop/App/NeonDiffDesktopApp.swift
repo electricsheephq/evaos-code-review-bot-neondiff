@@ -12,6 +12,7 @@ struct NeonDiffDesktopApp: App {
     private let evaluationContext: DesktopResolvedEvaluationLaunchContext?
     private let evaluationReadinessRequest: DesktopEvaluationReadinessRequest?
     private let evaluationRenderLatch: DesktopEvaluationRenderLatch?
+    private let evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus?
 #endif
 
     init() {
@@ -25,6 +26,7 @@ struct NeonDiffDesktopApp: App {
         evaluationContext = context
         let renderLatch = context.map { _ in DesktopEvaluationRenderLatch() }
         evaluationRenderLatch = renderLatch
+        evaluationSurfaceStatus = context.map { _ in DesktopEvaluationSurfaceStatus() }
         if let context,
            let renderLatch,
            let outputPath = ProcessInfo.processInfo.environment[
@@ -55,14 +57,7 @@ struct NeonDiffDesktopApp: App {
 
     var body: some Scene {
         WindowGroup("NeonDiff Desktop") {
-            ContentView(
-                model: model,
-                updateController: updateController,
-                preferredColorScheme: preferredColorScheme,
-                rootAccessibilityIdentifier: rootAccessibilityIdentifier,
-                enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled,
-                onSurfaceReady: evaluationSurfaceReadyAction
-            )
+            contentView
                 .frame(
                     minWidth: CGFloat(minimumContentSize.width),
                     minHeight: CGFloat(minimumContentSize.height)
@@ -115,6 +110,29 @@ struct NeonDiffDesktopApp: App {
             .preferredColorScheme(preferredColorScheme)
             .frame(width: 560)
         }
+    }
+
+    private var contentView: ContentView {
+#if DEBUG
+        ContentView(
+            model: model,
+            updateController: updateController,
+            preferredColorScheme: preferredColorScheme,
+            rootAccessibilityIdentifier: rootAccessibilityIdentifier,
+            enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled,
+            onSurfaceReady: evaluationSurfaceReadyAction,
+            evaluationSurfaceStatus: evaluationSurfaceStatus
+        )
+#else
+        ContentView(
+            model: model,
+            updateController: updateController,
+            preferredColorScheme: preferredColorScheme,
+            rootAccessibilityIdentifier: rootAccessibilityIdentifier,
+            enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled,
+            onSurfaceReady: evaluationSurfaceReadyAction
+        )
+#endif
     }
 
     private var requestedContentSize: NSSize? {
@@ -173,7 +191,8 @@ struct NeonDiffDesktopApp: App {
             requestedContentSize: requestedContentSize,
             disablesAnimations: disablesAnimations,
             readinessRequest: evaluationReadinessRequest,
-            evaluationSection: evaluationContext == nil ? nil : model.selectedSection
+            evaluationSection: evaluationContext == nil ? nil : model.selectedSection,
+            surfaceStatus: evaluationSurfaceStatus
         )
 #else
         NeonWindowConfigurator(
@@ -200,10 +219,13 @@ struct NeonDiffDesktopApp: App {
 #endif
     }
 
-    private var evaluationSurfaceReadyAction: (() -> Void)? {
+    private var evaluationSurfaceReadyAction: ((DesktopSection) -> Void)? {
 #if DEBUG
         evaluationRenderLatch.map { latch in
-            { latch.markReady() }
+            { section in
+                latch.markReady()
+                evaluationSurfaceStatus?.markRendered(section: section)
+            }
         }
 #else
         nil

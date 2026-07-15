@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import Combine
 import Foundation
 import NeonDiffDesktopCore
 
@@ -44,6 +45,82 @@ struct DesktopEvaluationReadinessRequest {
 final class DesktopEvaluationRenderLatch {
     private(set) var isReady = false
     func markReady() { isReady = true }
+}
+
+@MainActor
+final class DesktopEvaluationSurfaceStatus: ObservableObject {
+    struct Snapshot: Equatable {
+        let section: DesktopSection
+        let generation: Int
+        let rendered: Bool
+        let quiescent: Bool
+    }
+
+    @Published private(set) var snapshot: Snapshot?
+
+    var accessibilityIdentifier: String {
+        guard let snapshot else {
+            return "neondiff.evaluation.surface.unavailable"
+        }
+        let state = snapshot.quiescent ? "quiescent" : "pending"
+        return "neondiff.evaluation.surface.\(snapshot.section.rawValue).\(snapshot.generation).\(state)"
+    }
+
+    @discardableResult
+    func begin(section: DesktopSection) -> Int {
+        if let snapshot, snapshot.section == section {
+            return snapshot.generation
+        }
+        let generation = snapshot.map { $0.generation + 1 } ?? 0
+        snapshot = Snapshot(
+            section: section,
+            generation: generation,
+            rendered: false,
+            quiescent: false
+        )
+        return generation
+    }
+
+    func markRendered(section: DesktopSection) {
+        let generation = begin(section: section)
+        guard let snapshot,
+              snapshot.section == section,
+              snapshot.generation == generation,
+              !snapshot.rendered else {
+            return
+        }
+        self.snapshot = Snapshot(
+            section: section,
+            generation: generation,
+            rendered: true,
+            quiescent: false
+        )
+    }
+
+    func isRendered(section: DesktopSection, generation: Int) -> Bool {
+        guard let snapshot else { return false }
+        return snapshot.section == section
+            && snapshot.generation == generation
+            && snapshot.rendered
+    }
+
+    @discardableResult
+    func markQuiescent(section: DesktopSection, generation: Int) -> Bool {
+        guard let snapshot,
+              snapshot.section == section,
+              snapshot.generation == generation,
+              snapshot.rendered else {
+            return false
+        }
+        guard !snapshot.quiescent else { return true }
+        self.snapshot = Snapshot(
+            section: section,
+            generation: generation,
+            rendered: true,
+            quiescent: true
+        )
+        return true
+    }
 }
 
 enum DesktopEvaluationReadinessError: LocalizedError {
