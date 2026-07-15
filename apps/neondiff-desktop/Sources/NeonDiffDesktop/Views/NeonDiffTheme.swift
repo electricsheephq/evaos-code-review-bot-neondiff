@@ -233,6 +233,7 @@ struct PageBottomSentinel: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Bottom of \(section) page")
                 .accessibilityIdentifier("neondiff-\(section)-page-bottom")
+                .accessibilityRespondsToUserInteraction(false)
                 .allowsHitTesting(false)
         }
         #endif

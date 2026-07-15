@@ -268,7 +268,19 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     );
     expect(theme).toContain("HostedEvaluationAccessibility.isActive");
     expect(theme).toContain('arguments.contains("--ui-testing")');
-    expect(theme).toMatch(/PageBottomSentinel[\s\S]*#if DEBUG/);
+    const sentinelStart = theme.indexOf("struct PageBottomSentinel: View");
+    const sentinelEnd = theme.indexOf(
+      "private enum HostedEvaluationAccessibility",
+      sentinelStart
+    );
+    expect(sentinelStart).toBeGreaterThan(-1);
+    expect(sentinelEnd).toBeGreaterThan(sentinelStart);
+    const sentinelSource = theme.slice(sentinelStart, sentinelEnd);
+    expect(sentinelSource).toContain("#if DEBUG");
+    expect(sentinelSource).toContain(".allowsHitTesting(false)");
+    expect(sentinelSource).toContain(
+      ".accessibilityRespondsToUserInteraction(false)"
+    );
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
