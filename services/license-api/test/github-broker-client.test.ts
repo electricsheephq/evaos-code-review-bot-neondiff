@@ -68,4 +68,56 @@ describe("production github installation client wire contract", () => {
       permissions: { contents: "read", pull_requests: "write" }
     });
   });
+
+  it("returns unverified (false) with no network call when OAuth-during-install is unconfigured", async () => {
+    const captured = stubFetch(() => ({ json: {} }));
+    const client = createGitHubInstallationClient({ appId: "123", privateKey: appPrivateKey });
+    // No oauthClientId/Secret -> identity is unverified (the callback maps false to
+    // installation_authorization_unverified, 403), and no OAuth exchange is attempted.
+    assert.equal(await client.verifyInstallationForAuthorizationCode(6001, "any-code"), false);
+    assert.equal(captured.length, 0);
+  });
+
+  it("verifies installation ownership via the OAuth code exchange and /user/installations", async () => {
+    const captured = stubFetch((request) => {
+      if (request.url.includes("/login/oauth/access_token")) return { json: { access_token: "user-tok" } };
+      if (request.url.includes("/user/installations")) return { json: { installations: [{ id: 6001 }] } };
+      return { json: {} };
+    });
+    const client = createGitHubInstallationClient({
+      appId: "123",
+      privateKey: appPrivateKey,
+      oauthClientId: "cid",
+      oauthClientSecret: "csec"
+    });
+    assert.equal(await client.verifyInstallationForAuthorizationCode(6001, "good-code"), true);
+    // An installation the OAuth user cannot access is not in the list -> unverified.
+    assert.equal(await client.verifyInstallationForAuthorizationCode(9999, "good-code"), false);
+    const exchange = captured.find((request) => request.url.includes("/login/oauth/access_token"));
+    assert.equal(exchange?.method, "POST");
+    assert.deepEqual(exchange?.body, { client_id: "cid", client_secret: "csec", code: "good-code" });
+  });
+
+  it("aborts a stalled OAuth exchange as a typed broker outage under the configured timeout", async () => {
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      if (String(input).includes("/login/oauth/access_token")) {
+        // Hang until the timeout controller aborts the request.
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      }
+      return new Response(JSON.stringify({ installations: [{ id: 6001 }] }), { status: 200 });
+    }) as typeof fetch;
+    const client = createGitHubInstallationClient({
+      appId: "123",
+      privateKey: appPrivateKey,
+      oauthClientId: "cid",
+      oauthClientSecret: "csec",
+      requestTimeoutMs: 30
+    });
+    await assert.rejects(
+      () => client.verifyInstallationForAuthorizationCode(6001, "good-code"),
+      (error: unknown) => error instanceof Error && /OAuth token exchange failed/.test(error.message)
+    );
+  });
 });

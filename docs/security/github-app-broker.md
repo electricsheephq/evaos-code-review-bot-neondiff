@@ -245,6 +245,18 @@ license linkage; the broker slice proves the binding against fixtures only.
   bound to the requesting device, and refuses repositories outside the
   installation's selection (AC4). #614 refuses private repos without entitlement —
   all at the same seam, so no caller path can skip a gate.
+  - **Known limitation — installation-level, not per-repo, identity (OPEN, owner/#559).**
+    The callback proves the OAuth identity can access the *installation*
+    (`GET /user/installations`), not each *repository* in it. In an org
+    installation whose selection spans repos the OAuth user can only partially
+    access, the device binds to the whole installation, and token issuance is then
+    gated by entitlement + installation selection but not by that user's per-repo
+    GitHub access. The installation's repo selection (org-admin-controlled at
+    install) is the v1 access boundary GitHub itself enforces on installation
+    tokens; tightening to per-repo OAuth-user access requires storing the user's
+    accessible-repo set per binding (or re-checking with a user token at mint
+    time), which the device-bound v1 model does not carry. Deferred to the
+    OAuth-wiring lane (#559) where the live identity model is finalized.
 
 ## Retention
 

@@ -110,4 +110,54 @@ describe("github broker callback install-binding identity (#620 P1)", () => {
       harness.close();
     }
   });
+
+  it("acknowledges a bare Setup-URL redirect (setup_action, no code) without binding or resolving", async () => {
+    const harness = await startBroker({ installations: [VICTIM] });
+    try {
+      const device = await makeDevice();
+      await registerDevice(harness.url, device);
+      const start = await post(harness.url, "/github/connect/start", {}, bearer(await device.sign()));
+      const state = start.json.state as string;
+      harness.calls.length = 0;
+      const setup = await fetch(
+        `${harness.url}/github/connect/callback?installation_id=${VICTIM.id}&state=${encodeURIComponent(state)}&setup_action=install`,
+        { redirect: "manual" }
+      );
+      assert.equal(setup.status, 200, await setup.text());
+      // A code-less setup redirect never resolves the installation or binds.
+      assert.equal(harness.calls.filter((call) => call.op === "getInstallation").length, 0);
+      const token = await post(
+        harness.url,
+        "/github/token",
+        { installationId: VICTIM.id, repositories: ["victim-org/site"] },
+        bearer(await device.sign())
+      );
+      assert.equal(token.status, 404, token.text);
+      assert.equal(token.json.reason, "binding_not_found");
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("rejects a forged OAuth callback BEFORE resolving the installation (no App-JWT probe oracle)", async () => {
+    const harness = await startBroker({ installations: [VICTIM, ATTACKER] });
+    try {
+      const attacker = await makeDevice();
+      await registerDevice(harness.url, attacker);
+      const start = await post(harness.url, "/github/connect/start", {}, bearer(await attacker.sign()));
+      const state = start.json.state as string;
+      harness.calls.length = 0;
+      // A code proving the attacker's OWN installation, aimed at the victim id.
+      const forged = await fetch(
+        `${harness.url}/github/connect/callback?installation_id=${VICTIM.id}&state=${encodeURIComponent(state)}&code=${encodeURIComponent(authorizationCodeFor(ATTACKER.id))}`,
+        { redirect: "manual" }
+      );
+      assert.equal(forged.status, 403, await forged.text());
+      // Identity is verified before resolution, so the supplied victim id is never
+      // resolved via an App JWT — no 403-vs-404 existence oracle.
+      assert.equal(harness.calls.filter((call) => call.op === "getInstallation").length, 0);
+    } finally {
+      harness.close();
+    }
+  });
 });

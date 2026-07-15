@@ -106,10 +106,13 @@ Place the following in the license-service deployment environment (Fly secrets f
 the shared `services/license-api` deployment). The broker reads the private key and
 the OAuth client secret from this secret store at runtime and never persists, logs,
 or returns them. These names are the contract for the future production-wiring step
-in `server.ts`.
-Until it provides `githubBroker`, the shared license request listener matches every
-broker path and returns a typed `{ "reason": "broker_unavailable" }` 503 — a
-deliberate fail-closed status, not an unrouted 404:
+in `services/license-api/src/http.ts` (`HttpHandlerOptions.githubBroker` →
+`createGitHubBrokerService`), read there from the deployment environment; `server.ts`
+only starts the listener and today passes no `githubBroker` option and reads no
+`GITHUB_BROKER_*` env vars. Until `http.ts` is given `githubBroker`, the shared
+license request listener matches every broker path (`isGitHubBrokerPath`) and
+returns a typed `{ "reason": "broker_unavailable" }` 503 — a deliberate fail-closed
+status, not an unrouted 404:
 
 | Secret                          | Purpose |
 |---------------------------------|---------|

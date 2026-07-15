@@ -183,16 +183,25 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
       authorizationCode: string
     ): Promise<boolean> {
       // Owner-gated: without the OAuth-during-install client credentials the
-      // broker cannot prove installation ownership, so it fails closed (throws a
-      // typed transient error the callback maps to a fail-closed refusal).
+      // broker cannot prove installation ownership, so identity is UNVERIFIED.
+      // Return false (not a transient error) so the callback surfaces the
+      // documented pre-provisioning reason `installation_authorization_unverified`
+      // (403), not a broker outage (503).
       if (!config.oauthClientId || !config.oauthClientSecret) {
-        throw new GitHubBrokerClientError("unavailable", "OAuth-during-install is not configured");
+        return false;
       }
       const oauthBaseUrl = normalizeHttpApiBaseUrl(config.oauthBaseUrl, "githubBroker.oauthBaseUrl", "https://github.com");
+      // Honor the configured request timeout so a stalled token exchange fails
+      // closed as a typed broker outage instead of holding the listener open.
       let tokenResponse: Response;
+      const controller = config.requestTimeoutMs ? new AbortController() : undefined;
+      const timeout = controller
+        ? setTimeout(() => controller.abort(new Error("OAuth token exchange timed out")), config.requestTimeoutMs)
+        : undefined;
       try {
         tokenResponse = await fetch(`${oauthBaseUrl}/login/oauth/access_token`, {
           method: "POST",
+          signal: controller?.signal,
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({
             client_id: config.oauthClientId,
@@ -202,6 +211,8 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
         });
       } catch {
         throw new GitHubBrokerClientError("unavailable", "OAuth token exchange failed");
+      } finally {
+        if (timeout) clearTimeout(timeout);
       }
       if (!tokenResponse.ok) {
         throw new GitHubBrokerClientError("unavailable", `OAuth token exchange ${tokenResponse.status}`);

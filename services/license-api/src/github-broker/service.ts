@@ -138,16 +138,21 @@ export class GitHubBrokerService {
   }
 
   /**
-   * GET /github/connect/callback — the browser return from GitHub. Verifies the
-   * one-shot state, confirms the installation belongs to the App, PROVES the
-   * install-time identity is authorized for this installation (via the OAuth
-   * authorization code), and only then records the (device, installation)
-   * binding. Returns a small HTML page telling the user to return to the app (no
-   * URL scheme is registered in v1; see the design doc).
+   * GET /github/connect/callback — the browser return from GitHub. Two distinct
+   * redirects can hit this one route (both configured to it per the staging spec):
    *
-   * The identity proof is what stops a valid connect-state from binding a device
-   * to an arbitrary (victim) installation id: a forged direct callback carrying a
-   * state but no proof of installation ownership fails closed with no binding.
+   *  - the **OAuth callback** (OAuth-during-install), which carries the user
+   *    authorization `code` alongside `installation_id` and `state`; and
+   *  - a bare **Setup-URL redirect** (install/reconfigure acknowledgment), which
+   *    carries `setup_action` but NO `code`.
+   *
+   * Only the OAuth callback can PROVE the returning identity owns the installation,
+   * so only it records a (device, installation) binding — and the proof is verified
+   * BEFORE the installation is resolved, so a forged callback cannot use this route
+   * to probe (App-JWT calls / 403-vs-404) arbitrary victim installation ids. A bare
+   * setup redirect is acknowledged with the neutral page and binds nothing (the
+   * device keeps polling until a real OAuth callback binds). Returns a small HTML
+   * page telling the user to return to the app (no URL scheme is registered in v1).
    */
   async connectCallback(query: URLSearchParams): Promise<{ html: string }> {
     const at = this.now();
@@ -165,11 +170,25 @@ export class GitHubBrokerService {
       throw new BrokerError("state_expired", "connect state has expired");
     }
 
-    const installation = await this.resolveInstallation(installationId);
+    const code = query.get("code");
+    if (!code) {
+      // No OAuth code ⇒ identity is unproven, so we never bind. A benign setup
+      // redirect is acknowledged; any other code-less callback is a typed refusal.
+      if (query.get("setup_action")) {
+        return { html: connectReturnPage() };
+      }
+      throw new BrokerError(
+        "installation_authorization_unverified",
+        "installation authorization was not proven for this identity"
+      );
+    }
 
-    // Prove the identity completing the flow is authorized for THIS installation
-    // BEFORE any binding is recorded (closes the install-binding forgery).
-    await this.verifyInstallationAuthorization(installationId, query.get("code"));
+    // Verify the identity proof BEFORE resolving the installation (decide before
+    // side effects): a forged callback is rejected without any App-JWT GitHub call
+    // for the supplied installation id, closing the 403-vs-404 probing oracle.
+    await this.verifyInstallationAuthorization(installationId, code);
+
+    const installation = await this.resolveInstallation(installationId);
 
     // One-shot: only the first caller flips consumed_at; a race loses as a replay.
     if (!this.store.consumeConnectState(state, installationId, at.toISOString())) {
@@ -180,22 +199,17 @@ export class GitHubBrokerService {
   }
 
   /**
-   * Fail closed unless the install-time OAuth authorization code proves the
-   * identity is authorized for `installationId`. A missing code or an unproven
-   * identity is `installation_authorization_unverified` (403, no binding);
-   * transient/unconfigured verification is mapped to a typed transient error
-   * (also no binding).
+   * Fail closed unless the install-time OAuth authorization `code` proves the
+   * identity is authorized for `installationId`. An unproven identity — including
+   * the owner-gated pre-provisioning state where OAuth-during-install is not
+   * configured (the client returns `false`) — is `installation_authorization_unverified`
+   * (403, no binding); a transient verification failure maps to a typed broker
+   * outage (503, also no binding).
    */
   private async verifyInstallationAuthorization(
     installationId: number,
-    authorizationCode: string | null
+    authorizationCode: string
   ): Promise<void> {
-    if (!authorizationCode) {
-      throw new BrokerError(
-        "installation_authorization_unverified",
-        "installation authorization was not proven for this identity"
-      );
-    }
     let authorized: boolean;
     try {
       authorized = await this.githubClient.verifyInstallationForAuthorizationCode(installationId, authorizationCode);

@@ -97,13 +97,20 @@ describe("NeonDiff public community funnel", () => {
       "docs/neondiff-config.md",
       "docs/teams-marketplace-plan.md"
     ].map(read).join("\n");
-    // Owner ruling (reversing the #532 "activate every repository" pivot): public
-    // open-source repositories are FREE with no Activation Key, so the former
-    // "retired free-use claim" guards are removed. The correct layer-3 claim is now
-    // asserted positively (README required-claims above + check-public-claims.mjs):
+    // No public surface may reintroduce the retired #532 "activation required for
+    // public repositories" claim (owner ruling: public open-source repos are FREE).
+    expect(currentPublicSurfaces).not.toMatch(
+      /API-backed activation is required for (?:supported )?(?:public|every|all)[^.\n]*(?:repositor|repo)/i
+    );
+    // Guard the correct layer-3 claim on the SPECIFIC canonical surfaces that carry
+    // it (not the joined blob) so reverting either file's policy line fails here:
     // public free; private/internal/commercial require active API-backed entitlement.
-    expect(currentPublicSurfaces).toMatch(/public open-source repositor(?:y|ies) (?:are|is) free/i);
-    expect(currentPublicSurfaces).toMatch(/API-backed activation is required for private, internal, and commercial/i);
+    const readmePolicy = read("README.md");
+    const contributingPolicy = read("CONTRIBUTING.md");
+    expect(readmePolicy).toMatch(/public open-source repositor(?:y|ies) (?:are|is) free/i);
+    expect(readmePolicy).toMatch(/API-backed activation is required for private, internal, and commercial/i);
+    expect(contributingPolicy).toMatch(/public open-source repositor(?:y|ies)\s+are (?:intentionally )?free/i);
+    expect(contributingPolicy).toMatch(/API-backed activation for private, internal, and commercial/i);
   });
 
   it("pricing doc records support tiers, BYOK costs, and no hosted model credit bundle", () => {
