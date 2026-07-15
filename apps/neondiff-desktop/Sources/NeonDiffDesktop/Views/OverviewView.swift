@@ -174,7 +174,7 @@ private struct StatusRow: View {
     private var normalized: String { value.lowercased() }
 
     private var isHealthy: Bool {
-        ["ok", "stored", "ready", "active", "launched"].contains { normalized.contains($0) }
+        ["ok", "healthy", "stored", "ready", "active", "launched", "connected"].contains { normalized.contains($0) }
     }
 
     private var isAttention: Bool {
