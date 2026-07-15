@@ -90,8 +90,14 @@ status glyph language — not via neon-on-black.
 
 ## Accessibility floors
 
-- Text contrast ≥ 4.5:1 in both appearances (large text ≥ 3:1). Measured: #39FF88 on #000 ≈ 15.8:1;
-  #0F7A3D on white ≈ 5.4:1; #6D8A75 on #000 ≈ 5.5:1; #FF2BD6 on #000 ≈ 6.6:1.
+- Text contrast ≥ 4.5:1 in both appearances (large text ≥ 3:1). Measured (dark, on #000): textPrimary
+  #D9FFE6 ≈ 19.4:1; accentPrimary #39FF88 ≈ 15.8:1; textSecondary #6D8A75 ≈ 5.5:1; accentMagenta
+  #FF2BD6 ≈ 6.6:1. Measured (light, on #FAFAF8): textPrimary #1A211C ≈ 15.7:1; accentPrimary #0F7A3D
+  ≈ 5.2:1; textSecondary #5A6B5F ≈ 5.4:1.
+  Method: these ratios use the WCAG 2.x relative-luminance formula computed in
+  `apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests/NDDesignTokenContractTests.swift`, which fails
+  the build below the 4.5:1 floor for textPrimary/background and accentPrimary/background in both
+  appearances; the reference-screen run is recorded in the evidence `contrast.txt`.
 - Status is never conveyed by color alone (glyph + text always).
 - Full VoiceOver labels on all reference-screen controls; keyboard reachability preserved.
 - Respects Reduce Motion (no brand animation), Increase Contrast (borders step up to full alpha),

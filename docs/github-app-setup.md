@@ -5,6 +5,14 @@ runs on your own machine or server. The App identity is what authors review
 comments in GitHub; your local worker holds the App ID, private key, provider
 configuration, state database, and evidence files.
 
+On macOS the native app (`apps/neondiff-desktop`) is the human first-run surface:
+it drives the device-flow "Connect GitHub" authorization described below, while
+this document remains the operator/CLI reference for the App identity, permission
+set, and install path. The matching public website onboarding copy for this
+Mac-first journey lives in the website repo and is tracked in
+neon-diff-agent-website#52; it is intentionally not edited here (cross-repo
+change).
+
 ## Install URL
 
 Use the public NeonDiff GitHub App install URL from the release notes or website

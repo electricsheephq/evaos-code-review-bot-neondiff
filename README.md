@@ -108,8 +108,9 @@ substitute `./dist/src/cli.js` anywhere this guide calls `neondiff`.
 
 ## Set Up
 
-Follow [docs/SETUP.md](docs/SETUP.md) for the full first-run path. The short
-version is:
+Follow [docs/SETUP.md](docs/SETUP.md) for the CLI-first setup path (the
+first-run path on non-Mac platforms and the operator/advanced path on Mac). The
+short version is:
 
 ```bash
 neondiff init --config config.local.json
