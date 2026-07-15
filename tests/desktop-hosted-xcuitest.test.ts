@@ -464,6 +464,24 @@ private func target() {
     );
   });
 
+  it("encodes the remaining canonical content-size matrix", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+
+    expect(source).toContain(
+      "testStrictFixtureSettlesAndReachesEverySidebarPageBottomAtRemainingCanonicalSizes"
+    );
+    expect(source).toContain("HostedContentSize(width: 1280, height: 800)");
+    expect(source).toContain("HostedContentSize(width: 1440, height: 900)");
+    expect(source).toContain('contentSizeArgument: "1280x800"');
+    expect(source).toContain('contentSizeArgument: "1440x900"');
+    expect(source).toContain(
+      'proofBoundary: "hosted-remaining-canonical-size-outer-geometry-and-page-bottom-only-inner-scroll-exhaustion-excluded"'
+    );
+    expect(source).toContain("assertStableAcrossTransitions(geometryCheckpoints)");
+    expect(source).toContain("HostedCanonicalSizeMatrixTrace(");
+    expect(source).toContain("neondiff-hosted-canonical-size-matrix.json");
+  });
+
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("Hosted XCUITest smoke");

@@ -168,50 +168,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
 
     func testStrictFixtureReachesEverySidebarPageBottomAtMinimumSize() throws {
         let requestedContentSize = HostedContentSize(width: 1040, height: 680)
-        let route = [
-            HostedPageBottomRouteStep(
-                section: "overview",
-                generation: 0,
-                outerScrollIdentifier: "neondiff-overview-outer-scroll",
-                sentinelIdentifier: "neondiff-overview-page-bottom"
-            ),
-            HostedPageBottomRouteStep(
-                section: "repos",
-                generation: 1,
-                outerScrollIdentifier: "neondiff-repos-outer-scroll",
-                sentinelIdentifier: "neondiff-repos-page-bottom"
-            ),
-            HostedPageBottomRouteStep(
-                section: "providers",
-                generation: 2,
-                outerScrollIdentifier: "neondiff-providers-outer-scroll",
-                sentinelIdentifier: "neondiff-providers-page-bottom"
-            ),
-            HostedPageBottomRouteStep(
-                section: "license",
-                generation: 3,
-                outerScrollIdentifier: "neondiff-license-outer-scroll",
-                sentinelIdentifier: "neondiff-license-page-bottom"
-            ),
-            HostedPageBottomRouteStep(
-                section: "logs",
-                generation: 4,
-                outerScrollIdentifier: "neondiff-logs-outer-scroll",
-                sentinelIdentifier: "neondiff-logs-page-bottom"
-            ),
-            HostedPageBottomRouteStep(
-                section: "policy",
-                generation: 5,
-                outerScrollIdentifier: "neondiff-policy-outer-scroll",
-                sentinelIdentifier: "neondiff-policy-page-bottom"
-            ),
-            HostedPageBottomRouteStep(
-                section: "settings",
-                generation: 6,
-                outerScrollIdentifier: "neondiff-settings-outer-scroll",
-                sentinelIdentifier: "neondiff-settings-page-bottom"
-            )
-        ]
+        let route = everySidebarPageBottomRoute
         let fixtureURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "tab-overview", withExtension: "json")
         )
@@ -290,6 +247,192 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 proofBoundary: "hosted-outer-page-bottom-reachability-only-inner-scroll-exhaustion-excluded"
             )
         )
+    }
+
+    func testStrictFixtureSettlesAndReachesEverySidebarPageBottomAtRemainingCanonicalSizes() throws {
+        let requests = [
+            HostedCanonicalSizeRequest(
+                requestedContentSize: HostedContentSize(width: 1280, height: 800),
+                contentSizeArgument: "1280x800"
+            ),
+            HostedCanonicalSizeRequest(
+                requestedContentSize: HostedContentSize(width: 1440, height: 900),
+                contentSizeArgument: "1440x900"
+            )
+        ]
+        var scenarios: [HostedCanonicalSizeScenario] = []
+        for request in requests {
+            scenarios.append(try captureCanonicalSizeScenario(request))
+        }
+
+        XCTAssertEqual(scenarios.count, 2)
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedPageBottomTraceError.priorValidationFailure
+        }
+        try attach(
+            HostedCanonicalSizeMatrixTrace(
+                schemaVersion: 1,
+                fixtureId: "tab-overview",
+                textSizeMode: "runner-default-no-test-override",
+                scenarios: scenarios,
+                proofBoundary: "hosted-remaining-canonical-size-outer-geometry-and-page-bottom-only-inner-scroll-exhaustion-excluded"
+            )
+        )
+    }
+
+    private func captureCanonicalSizeScenario(
+        _ request: HostedCanonicalSizeRequest
+    ) throws -> HostedCanonicalSizeScenario {
+        let route = everySidebarPageBottomRoute
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "tab-overview", withExtension: "json")
+        )
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", request.contentSizeArgument,
+            "--disable-animations"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["neondiff.fixture.tab-overview"]
+                .waitForExistence(timeout: 10)
+        )
+        XCTAssertEqual(app.state, .runningForeground)
+
+        var geometryCheckpoints: [HostedGeometryCheckpoint] = []
+        var pageBottomCheckpoints: [HostedPageBottomCheckpoint] = []
+        var navigationActions: [HostedNavigationAction] = []
+        for (routeIndex, step) in route.enumerated() {
+            if routeIndex > 0 {
+                let previous = route[routeIndex - 1]
+                navigationActions.append(
+                    try clickNavigation(
+                        app: app,
+                        index: routeIndex - 1,
+                        fromSection: previous.section,
+                        toSection: step.section,
+                        identifier: "neondiff-sidebar-section-\(step.section)"
+                    )
+                )
+            }
+
+            let markerIdentifier =
+                "neondiff.evaluation.surface.\(step.section).\(step.generation).quiescent"
+            geometryCheckpoints.append(
+                try captureCheckpoint(
+                    app: app,
+                    section: step.section,
+                    generation: step.generation,
+                    markerIdentifier: markerIdentifier,
+                    requestedContentSize: request.requestedContentSize
+                )
+            )
+            pageBottomCheckpoints.append(
+                try capturePageBottomCheckpoint(
+                    app: app,
+                    section: step.section,
+                    generation: step.generation,
+                    markerIdentifier: markerIdentifier,
+                    outerScrollIdentifier: step.outerScrollIdentifier,
+                    sentinelIdentifier: step.sentinelIdentifier
+                )
+            )
+        }
+
+        XCTAssertEqual(geometryCheckpoints.count, 7)
+        XCTAssertEqual(pageBottomCheckpoints.count, 7)
+        XCTAssertEqual(navigationActions.count, 6)
+        assertStableAcrossTransitions(geometryCheckpoints)
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedPageBottomTraceError.priorValidationFailure
+        }
+
+        return HostedCanonicalSizeScenario(
+            requestedContentSize: request.requestedContentSize,
+            contentSizeArgument: request.contentSizeArgument,
+            settledGeometry: HostedSettledGeometryTrace(
+                schemaVersion: 2,
+                scenario: "every-sidebar-destination-\(request.contentSizeArgument)",
+                fixtureId: "tab-overview",
+                requestedContentSize: request.requestedContentSize,
+                textSizeMode: "runner-default-no-test-override",
+                coordinateSpaces: HostedGeometryCoordinateSpaces(
+                    windowAndContent: "appkit-screen",
+                    regions: "swiftui-global"
+                ),
+                sampleIntervalMilliseconds: 100,
+                tolerancePoints: 1,
+                navigationActions: navigationActions,
+                checkpoints: geometryCheckpoints,
+                proofBoundary: "hosted-every-sidebar-destination-\(request.contentSizeArgument)-geometry-only"
+            ),
+            pageBottomReachability: HostedPageBottomReachabilityTrace(
+                schemaVersion: 1,
+                scenario: "every-sidebar-page-bottom-\(request.contentSizeArgument)",
+                fixtureId: "tab-overview",
+                requestedContentSize: request.requestedContentSize,
+                textSizeMode: "runner-default-no-test-override",
+                coordinateSpace: "xcui-screen",
+                minimumSampleIntervalMilliseconds: 100,
+                samplingDeadlineMilliseconds: 5_000,
+                tolerancePoints: 1,
+                navigationActions: navigationActions,
+                checkpoints: pageBottomCheckpoints,
+                proofBoundary: "hosted-outer-page-bottom-\(request.contentSizeArgument)-reachability-only-inner-scroll-exhaustion-excluded"
+            )
+        )
+    }
+
+    private var everySidebarPageBottomRoute: [HostedPageBottomRouteStep] {
+        [
+            HostedPageBottomRouteStep(
+                section: "overview",
+                generation: 0,
+                outerScrollIdentifier: "neondiff-overview-outer-scroll",
+                sentinelIdentifier: "neondiff-overview-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "repos",
+                generation: 1,
+                outerScrollIdentifier: "neondiff-repos-outer-scroll",
+                sentinelIdentifier: "neondiff-repos-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "providers",
+                generation: 2,
+                outerScrollIdentifier: "neondiff-providers-outer-scroll",
+                sentinelIdentifier: "neondiff-providers-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "license",
+                generation: 3,
+                outerScrollIdentifier: "neondiff-license-outer-scroll",
+                sentinelIdentifier: "neondiff-license-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "logs",
+                generation: 4,
+                outerScrollIdentifier: "neondiff-logs-outer-scroll",
+                sentinelIdentifier: "neondiff-logs-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "policy",
+                generation: 5,
+                outerScrollIdentifier: "neondiff-policy-outer-scroll",
+                sentinelIdentifier: "neondiff-policy-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "settings",
+                generation: 6,
+                outerScrollIdentifier: "neondiff-settings-outer-scroll",
+                sentinelIdentifier: "neondiff-settings-page-bottom"
+            )
+        ]
     }
 
     private func capturePageBottomCheckpoint(
@@ -809,6 +952,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
         add(attachment)
     }
 
+    private func attach(_ trace: HostedCanonicalSizeMatrixTrace) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let attachment = XCTAttachment(
+            data: try encoder.encode(trace),
+            uniformTypeIdentifier: "public.json"
+        )
+        attachment.name = "neondiff-hosted-canonical-size-matrix.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func attachTransportDiagnostic(_ diagnostic: HostedTransportDiagnostic) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -839,6 +994,11 @@ private struct HostedPageBottomRouteStep {
     let generation: Int
     let outerScrollIdentifier: String
     let sentinelIdentifier: String
+}
+
+private struct HostedCanonicalSizeRequest {
+    let requestedContentSize: HostedContentSize
+    let contentSizeArgument: String
 }
 
 private struct HostedGeometryFrame: Codable, Equatable {
@@ -1029,6 +1189,21 @@ private struct HostedPageBottomReachabilityTrace: Codable {
     let tolerancePoints: Double
     let navigationActions: [HostedNavigationAction]
     let checkpoints: [HostedPageBottomCheckpoint]
+    let proofBoundary: String
+}
+
+private struct HostedCanonicalSizeScenario: Codable {
+    let requestedContentSize: HostedContentSize
+    let contentSizeArgument: String
+    let settledGeometry: HostedSettledGeometryTrace
+    let pageBottomReachability: HostedPageBottomReachabilityTrace
+}
+
+private struct HostedCanonicalSizeMatrixTrace: Codable {
+    let schemaVersion: Int
+    let fixtureId: String
+    let textSizeMode: String
+    let scenarios: [HostedCanonicalSizeScenario]
     let proofBoundary: String
 }
 
