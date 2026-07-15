@@ -119,6 +119,33 @@ describe("production github installation client wire contract", () => {
     assert.ok(!exchange?.url.includes("//login/oauth"), exchange?.url);
   });
 
+  it("paginates /user/installations/{id}/repositories so the authorized set spans every page", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ full_name: `octo/repo-${i}` }));
+    const captured = stubFetch((request) => {
+      if (request.url.includes("/login/oauth/access_token")) return { json: { access_token: "user-tok" } };
+      if (request.url.includes("/user/installations/6001/repositories")) {
+        const page = new URL(request.url).searchParams.get("page");
+        if (page === "1") return { json: { repositories: page1 } };
+        if (page === "2") return { json: { repositories: [{ full_name: "octo/on-page-2" }] } };
+        return { json: { repositories: [] } };
+      }
+      return { json: {} };
+    });
+    const client = createGitHubInstallationClient({
+      appId: "123",
+      privateKey: appPrivateKey,
+      oauthClientId: "cid",
+      oauthClientSecret: "csec"
+    });
+    const authorized = await client.verifyInstallationForAuthorizationCode(6001, "good-code");
+    // A repo on the SECOND page must be in the authorized set — a broken-pagination
+    // regression that dropped later pages would silently shrink the set and fail here.
+    assert.ok(Array.isArray(authorized) && authorized.includes("octo/on-page-2"), JSON.stringify(authorized));
+    assert.equal(authorized.length, 101);
+    const listCalls = captured.filter((request) => request.url.includes("/repositories"));
+    assert.equal(listCalls.length, 2, "both pages were fetched");
+  });
+
   it("aborts a stalled OAuth exchange as a typed broker outage under the configured timeout", async () => {
     globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
       if (String(input).includes("/login/oauth/access_token")) {

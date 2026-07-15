@@ -175,16 +175,23 @@ describe("github broker callback install-binding identity (#620 P1)", () => {
       userRepositories: ["org/repo-a"]
     };
     // Entitlement COVERS both private repos, isolating the per-repo access gate as
-    // the sole reason repo-b is refused (proving it is not merely an entitlement miss).
+    // the sole reason repo-b is refused (proving it is not merely an entitlement
+    // miss). A COUNTING SPY records every resolver call so we can assert the
+    // per-repo denial happens BEFORE entitlement resolution.
+    let entitlementCalls = 0;
     const harness = await startBroker({
       installations: [ORG],
-      resolveEntitlement: () => ({ status: "active", coveredPrivateRepositories: ["org/repo-a", "org/repo-b"] })
+      resolveEntitlement: () => {
+        entitlementCalls += 1;
+        return { status: "active", coveredPrivateRepositories: ["org/repo-a", "org/repo-b"] };
+      }
     });
     try {
       const device = await makeDevice();
       await registerDevice(harness.url, device);
       await connectInstallation(harness.url, device, ORG.id);
       harness.calls.length = 0;
+      entitlementCalls = 0;
 
       // repo-b is inside the installation and entitlement-covered, but OUTSIDE the
       // connecting user's authorized set -> refused before the seam, zero mint.
@@ -197,6 +204,10 @@ describe("github broker callback install-binding identity (#620 P1)", () => {
       assert.equal(denied.status, 403, denied.text);
       assert.equal(denied.json.reason, "repo_outside_authorization");
       assert.equal(harness.calls.filter((call) => call.op === "createInstallationAccessToken").length, 0);
+      // Ordering pin: the per-repo denial precedes entitlement resolution, so the
+      // license authority is never consulted for an unauthorized repo (a reorder
+      // that moved the gate after entitlement resolution would fail here).
+      assert.equal(entitlementCalls, 0, "entitlement authority must not be consulted for an unauthorized repo");
 
       // repo-a (authorized AND covered) still mints normally through the same binding.
       const allowed = await post(

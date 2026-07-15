@@ -13,8 +13,24 @@ import { DatabaseSync } from "node:sqlite";
  * states, installation bindings, and an append-only decision ledger. No tokens,
  * private keys, source, or diffs are ever stored.
  */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
+
+/**
+ * The per-repo authorized-set table. Extracted so a fresh bootstrap and the
+ * v1 -> v2 upgrade create the exact same table (base v1 shipped
+ * `installation_bindings` without it, so an existing broker DB must gain it).
+ */
+const BINDING_REPOSITORIES_TABLE = `
+  create table binding_repositories (
+    device_id text not null,
+    installation_id integer not null,
+    full_name text not null,
+    primary key (device_id, installation_id, full_name),
+    foreign key (device_id, installation_id)
+      references installation_bindings(device_id, installation_id) on delete cascade
+  );
+`;
 
 const SCHEMA = `
   create table devices (
@@ -43,14 +59,7 @@ const SCHEMA = `
     foreign key (device_id) references devices(device_id)
   );
 
-  create table binding_repositories (
-    device_id text not null,
-    installation_id integer not null,
-    full_name text not null,
-    primary key (device_id, installation_id, full_name),
-    foreign key (device_id, installation_id)
-      references installation_bindings(device_id, installation_id) on delete cascade
-  );
+  ${BINDING_REPOSITORIES_TABLE.trim()}
 
   create table decision_ledger (
     id integer primary key autoincrement,
@@ -112,15 +121,27 @@ export class GitHubBrokerStore {
   private ensureSchema(): void {
     const version = this.readUserVersion();
     if (version === SCHEMA_VERSION) return;
-    if (version !== 0) throw new Error(`unsupported github broker schema version ${version}`);
+    if (version !== 0 && version !== 1) {
+      throw new Error(`unsupported github broker schema version ${version}`);
+    }
     this.db.exec("begin immediate");
     try {
       // Re-check under the writer lock in case a peer migrated first.
-      if (this.readUserVersion() === SCHEMA_VERSION) {
+      const current = this.readUserVersion();
+      if (current === SCHEMA_VERSION) {
         this.db.exec("commit");
         return;
       }
-      this.db.exec(SCHEMA);
+      if (current === 0) {
+        // Fresh bootstrap: the full schema (already includes binding_repositories).
+        this.db.exec(SCHEMA);
+      } else {
+        // v1 -> v2 upgrade: base v1 shipped installation_bindings WITHOUT the
+        // per-repo authorized-set table, so an existing broker DB must gain it in
+        // place — otherwise upsertBinding/listBindingRepositories hit "no such
+        // table". Idempotent and crash-safe under the same writer transaction.
+        this.db.exec(BINDING_REPOSITORIES_TABLE);
+      }
       this.db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
       this.db.exec("commit");
     } catch (error) {

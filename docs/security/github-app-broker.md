@@ -133,7 +133,16 @@ device therefore obtains tokens only for installations — and repositories — 
 access it proved at callback time — a valid state plus an arbitrary victim installation id binds
 nothing. Enabling OAuth-during-install and provisioning the OAuth client
 credentials is OWNER-GATED (see the staging-registration spec); until then the
-callback fails closed with `installation_authorization_unverified`. Private-tier
+callback fails closed with `installation_authorization_unverified`.
+
+The authorized repository set is a **bind-time snapshot** — the short-lived user
+OAuth token is deliberately not persisted, so the set is not re-verified on every
+`POST /github/token`. A repository-access revocation on GitHub therefore takes
+effect for the broker on the user's **next connect/bind**, not mid-session; this
+is acceptable because the minted installation tokens are short-lived (GitHub TTL
+<= 1 h) and re-connecting refreshes the set atomically. A periodic bind-refresh
+(re-running the user-token repository check on a cadence, or on token renewal) is
+a possible future tightening if near-real-time revocation is required. Private-tier
 binding to an activation/entitlement record at the license service is #612/#614
 work, layered at the same seam.
 
