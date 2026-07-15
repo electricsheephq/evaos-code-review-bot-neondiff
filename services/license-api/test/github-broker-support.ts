@@ -91,7 +91,8 @@ export function fakeGitHubClient(
   mintedToken: string;
 } {
   const calls: FakeGitHubCall[] = [];
-  const mintedToken = overrides.mintedToken ?? "ghs_fake_installation_token_value";
+  // A non-GitHub-shaped sentinel so the secret scanner does not flag test source.
+  const mintedToken = overrides.mintedToken ?? "broker-test-installation-token-value";
   const byId = new Map(installations.map((installation) => [installation.id, installation]));
   const client = {
     async getInstallation(installationId: number) {
@@ -138,7 +139,11 @@ export async function startBroker(
   options: {
     installations?: FakeInstallation[];
     now?: Date;
+    /** Mutable clock override for expiry/renewal tests; wins over `now`. */
+    clock?: () => Date;
     fake?: ReturnType<typeof fakeGitHubClient>;
+    /** A pre-built broker store so a test can inspect the decision ledger. */
+    store?: unknown;
     deviceRegisterRateLimiter?: RateLimiter;
     tokenRateLimiter?: RateLimiter;
     connectRateLimiter?: RateLimiter;
@@ -146,17 +151,17 @@ export async function startBroker(
 ): Promise<BrokerHarness> {
   const licenseStore = new LicenseStore(":memory:");
   const fake = options.fake ?? fakeGitHubClient(options.installations ?? []);
-  const now = options.now ?? FIXED_NOW;
+  const nowFn = options.clock ?? (() => options.now ?? FIXED_NOW);
   const started = await startLicenseServer({
     store: licenseStore,
-    now: () => now,
-    // The broker deps are ignored until http.ts wires them (commit 3). Passing a
-    // db path (not a store instance) keeps this harness free of broker imports.
+    now: nowFn,
+    // Passing a db path (not a store instance) keeps this harness free of broker
+    // imports; a test may instead pass its own `store` to read the ledger.
     githubBroker: {
-      dbPath: ":memory:",
+      ...(options.store ? { store: options.store } : { dbPath: ":memory:" }),
       githubClient: fake.client,
       installBaseUrl: INSTALL_BASE_URL,
-      now: () => now,
+      now: nowFn,
       deviceRegisterRateLimiter: options.deviceRegisterRateLimiter,
       tokenRateLimiter: options.tokenRateLimiter,
       connectRateLimiter: options.connectRateLimiter
