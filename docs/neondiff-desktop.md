@@ -15,9 +15,10 @@ the same local HTML dashboard used by the CLI.
 
 - No review engine runs in the desktop app.
 - No UI path posts GitHub reviews directly.
-- The Mac launcher implements native setup/status controls only where they can
-  write through existing CLI contracts. The local HTML dashboard remains the
-  deeper browser-first setup surface.
+- The native Mac app is the product surface for the Mac customer journey and
+  implements native setup/status controls that write through existing CLI
+  contracts. The local HTML dashboard is a diagnostic/operator surface for
+  CLI-first and non-Mac setups, not the product UI.
 - No signing, notarization, Sparkle appcast, downloadable artifact, TCC, Mac-control, or customer-control proof is claimed here.
 - Provider and license keys are stored in macOS Keychain under a NeonDiff-specific service and are never written to config files.
 - Native provider verification starts only from an explicit **Verify API Key** click. The stored provider key is read from Keychain for that operation and sent to the child CLI only through bounded standard input; it never enters argv, process environment, config, command previews, stdout/stderr, logs, screenshots, or evidence.
@@ -199,9 +200,9 @@ neondiff dashboard --config config.local.json --launchd-label com.electricsheeph
 neondiff dashboard --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --open true
 ```
 
-The dashboard remains the deeper browser-first setup and readiness surface for
-license status, GitHub App status, daemon status, and provider readiness. The
-Swift Providers pane now also offers the explicit, Keychain-backed verification
-action described above and retains only its redacted result metadata. Neither
-surface proves signed/notarized distribution, Sparkle/appcast delivery,
-browser/native parity, customer readiness, or v1.1 release completion.
+The dashboard is a diagnostic/operator surface for license status, GitHub App
+status, daemon status, and provider readiness; the native Swift app is the
+product surface. The Swift Providers pane now also offers the explicit,
+Keychain-backed verification action described above and retains only its
+redacted result metadata. Neither surface proves signed/notarized distribution,
+Sparkle/appcast delivery, customer readiness, or v1.1 release completion.

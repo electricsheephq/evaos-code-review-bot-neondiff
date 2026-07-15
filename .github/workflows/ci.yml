@@ -71,6 +71,9 @@ jobs:
           npm pack --dry-run --json > pack.json
           node scripts/check-packlist.mjs pack.json
 
+      - name: Design-source contract
+        run: node scripts/check-design-source-contract.mjs
+
       - name: Forbidden public claims scan
         run: node scripts/check-public-claims.mjs
 
