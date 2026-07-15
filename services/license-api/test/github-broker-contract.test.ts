@@ -98,7 +98,7 @@ describe("github broker token-issuance contract", () => {
     assert.ok(state, "connect start returns a state nonce");
 
     const first = await fetch(
-      `${harness.url}/github/connect/callback?installation_id=4001&state=${encodeURIComponent(state)}`,
+      `${harness.url}/github/connect/callback?installation_id=4001&state=${encodeURIComponent(state)}&code=oauth-code-4001`,
       { redirect: "manual" }
     );
     assert.ok(first.status < 400 || first.status === 302, `first callback consumed: ${first.status}`);

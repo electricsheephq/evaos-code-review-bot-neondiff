@@ -66,6 +66,9 @@ function mutableFake(config: {
       async createInstallationAccessToken(installationId: number, params: unknown) {
         calls.push({ op: "createInstallationAccessToken", installationId, params });
         return { token: "broker-test-adversarial-token", expires_at: new Date(Date.now() + 3_600_000).toISOString() };
+      },
+      async verifyInstallationForAuthorizationCode(installationId: number, code: string) {
+        return code === `oauth-code-${installationId}`;
       }
     }
   };

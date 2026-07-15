@@ -43,6 +43,20 @@ export class GitHubBrokerClientError extends Error {
 export interface GitHubInstallationClient {
   /** Resolve an installation by id; returns null when it does not exist (uninstalled). */
   getInstallation(installationId: number): Promise<InstallationSummary | null>;
+  /**
+   * Verify that the identity behind an install-time OAuth authorization code is
+   * actually authorized for `installationId` — i.e. the user who completed the
+   * GitHub "Request user authorization (OAuth) during installation" flow can
+   * access this installation. Returns true only when the exchanged user identity
+   * lists the installation; false denies the binding. Transient failures throw a
+   * typed client error so the caller fails closed. This closes the callback
+   * install-binding forgery: a valid connect-state alone can no longer bind a
+   * device to an arbitrary (victim) installation id.
+   */
+  verifyInstallationForAuthorizationCode(
+    installationId: number,
+    authorizationCode: string
+  ): Promise<boolean>;
   /** The installation's current repository selection, with each repo's visibility. */
   listInstallationRepositories(installationId: number): Promise<InstallationRepository[]>;
   /** Mint a narrowed installation access token. This is the RETURNED token; it is
@@ -60,6 +74,17 @@ export interface GitHubAppConfig {
   privateKey: string;
   apiBaseUrl?: string;
   requestTimeoutMs?: number;
+  /**
+   * OAuth client credentials for the App's "Request user authorization (OAuth)
+   * during installation" flow, used only to exchange the callback authorization
+   * code for a short-lived user token when verifying installation ownership. Both
+   * are OWNER-GATED deployment secrets (see docs/security/github-app-staging-registration.md);
+   * when either is absent, callback identity verification fails closed.
+   */
+  oauthClientId?: string;
+  oauthClientSecret?: string;
+  /** OAuth authorization host; defaults to https://github.com. */
+  oauthBaseUrl?: string;
 }
 
 /**
@@ -151,6 +176,51 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
         if (error instanceof GitHubBrokerClientError) throw error;
         if (isNotFound(error)) return null;
         throw error;
+      }
+    },
+    async verifyInstallationForAuthorizationCode(
+      installationId: number,
+      authorizationCode: string
+    ): Promise<boolean> {
+      // Owner-gated: without the OAuth-during-install client credentials the
+      // broker cannot prove installation ownership, so it fails closed (throws a
+      // typed transient error the callback maps to a fail-closed refusal).
+      if (!config.oauthClientId || !config.oauthClientSecret) {
+        throw new GitHubBrokerClientError("unavailable", "OAuth-during-install is not configured");
+      }
+      const oauthBaseUrl = normalizeHttpApiBaseUrl(config.oauthBaseUrl, "githubBroker.oauthBaseUrl", "https://github.com");
+      let tokenResponse: Response;
+      try {
+        tokenResponse = await fetch(`${oauthBaseUrl}/login/oauth/access_token`, {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            client_id: config.oauthClientId,
+            client_secret: config.oauthClientSecret,
+            code: authorizationCode
+          })
+        });
+      } catch {
+        throw new GitHubBrokerClientError("unavailable", "OAuth token exchange failed");
+      }
+      if (!tokenResponse.ok) {
+        throw new GitHubBrokerClientError("unavailable", `OAuth token exchange ${tokenResponse.status}`);
+      }
+      const tokenBody = (await tokenResponse.json().catch(() => undefined)) as { access_token?: string } | undefined;
+      const userToken = tokenBody?.access_token;
+      // A bad/expired/forged code yields no user token: deny the binding (not a
+      // transient error — the identity was not proven).
+      if (!userToken) return false;
+      // List the installations the authenticated user can access; the binding is
+      // authorized only when the requested installation is among them.
+      for (let page = 1; ; page += 1) {
+        const result = await request<{ installations?: Array<{ id: number }> }>(
+          `/user/installations?per_page=100&page=${page}`,
+          { token: userToken }
+        );
+        const chunk = result.json?.installations ?? [];
+        if (chunk.some((installation) => installation.id === installationId)) return true;
+        if (chunk.length < 100) return false;
       }
     },
     async listInstallationRepositories(installationId: number): Promise<InstallationRepository[]> {

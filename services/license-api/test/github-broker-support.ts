@@ -22,6 +22,16 @@ import { RateLimiter } from "../src/service.ts";
 export const INSTALL_BASE_URL = "https://github.com/apps/neondiff-staging/installations/new";
 export const FIXED_NOW = new Date("2026-07-15T00:00:00.000Z");
 
+/**
+ * The install-time OAuth authorization code a legitimate identity would return
+ * for `installationId`. The fake treats this as proof of installation ownership;
+ * any other (or absent) code fails the callback identity check. Mirrors the real
+ * "OAuth-during-install code proves the user can access this installation".
+ */
+export function authorizationCodeFor(installationId: number): string {
+  return `oauth-code-${installationId}`;
+}
+
 /** A device identity mirroring the client: keypair + RFC 7638 thumbprint id. */
 export interface TestDevice {
   deviceId: string;
@@ -121,6 +131,11 @@ export function fakeGitHubClient(
         token: mintedToken,
         expires_at: new Date((overrides.mintedToken ? Date.now() : FIXED_NOW.getTime()) + 3_600_000).toISOString()
       };
+    },
+    async verifyInstallationForAuthorizationCode(installationId: number, code: string) {
+      // The code proves ownership of exactly this installation; a mismatched or
+      // absent code (a forged callback) is not authorized.
+      return code === authorizationCodeFor(installationId);
     }
   };
   return { client, calls, mintedToken };
@@ -222,7 +237,7 @@ export async function connectInstallation(
   const start = await post(url, "/github/connect/start", {}, bearer(await device.sign()));
   const state = start.json.state as string;
   const callback = await fetch(
-    `${url}/github/connect/callback?installation_id=${installationId}&state=${encodeURIComponent(state)}`,
+    `${url}/github/connect/callback?installation_id=${installationId}&state=${encodeURIComponent(state)}&code=${encodeURIComponent(authorizationCodeFor(installationId))}`,
     { redirect: "manual" }
   );
   const complete = await post(url, "/github/connect/complete", { state }, bearer(await device.sign()));

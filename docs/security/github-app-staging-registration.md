@@ -18,9 +18,17 @@ production identity is created only after the committed security review
 1. Under the owning org (or a personal account for early staging), create a new
    GitHub App named distinctly for staging, e.g. `NeonDiff (Staging)`.
 2. Homepage URL: the NeonDiff website or repository URL.
-3. Leave "Request user authorization (OAuth) during installation" unchecked for
-   the install/authorize broker flow (the broker binds via installation id +
-   one-shot state, not a user OAuth token).
+3. **[OWNER-GATED — BLOCKING for #614]** **Enable** "Request user authorization
+   (OAuth) during installation", set the callback/Setup URL to the broker's
+   `/github/connect/callback`, and provision the App's OAuth **client id** and
+   **client secret** as deployment secrets (`githubBroker.oauthClientId` /
+   `oauthClientSecret`). The broker binds a device to an installation ONLY after
+   exchanging the install-time authorization `code` and confirming the
+   authorizing user can access that installation (`GET /user/installations`).
+   Without this, a valid one-shot state alone lets a caller bind to an arbitrary
+   (victim) installation id — the install-binding forgery the #614 security
+   review flagged (P1). Until it is enabled, `connectCallback` fails closed with
+   `installation_authorization_unverified` and no binding is recorded.
 
 ## 2. Repository permissions
 

@@ -50,6 +50,9 @@ function mutableFake(config: {
     async createInstallationAccessToken(installationId: number, params: unknown) {
       calls.push({ op: "createInstallationAccessToken", installationId, params });
       return { token: "broker-test-mutable-token", expires_at: new Date(Date.now() + 3_600_000).toISOString() };
+    },
+    async verifyInstallationForAuthorizationCode(installationId: number, code: string) {
+      return code === `oauth-code-${installationId}`;
     }
   };
   return { client, calls, state };
@@ -237,7 +240,7 @@ describe("github broker adversarial and lifecycle coverage", () => {
       const pending = await post(harness.url, "/github/connect/complete", { state }, bearer(await device.sign()));
       assert.equal(pending.json.status, "pending");
 
-      await fetch(`${harness.url}/github/connect/callback?installation_id=${PUBLIC_INSTALL.id}&state=${encodeURIComponent(state)}`, { redirect: "manual" });
+      await fetch(`${harness.url}/github/connect/callback?installation_id=${PUBLIC_INSTALL.id}&state=${encodeURIComponent(state)}&code=oauth-code-${PUBLIC_INSTALL.id}`, { redirect: "manual" });
 
       const bound = await post(harness.url, "/github/connect/complete", { state }, bearer(await device.sign()));
       assert.equal(bound.status, 200, bound.text);

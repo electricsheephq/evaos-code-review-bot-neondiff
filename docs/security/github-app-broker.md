@@ -99,11 +99,20 @@ device id (the digest of the registered public key). The broker verifies the
 signature against the stored public key and rejects expired or wrong-subject
 tokens.
 
-The GitHub installation flow itself is the proof of repository authority: a device
-can only ever obtain tokens for installations whose callback it completed, because
-the one-shot state nonce binds the browser session GitHub authorized to the device
-that initiated the connect. Private-tier binding to an activation/entitlement
-record at the license service is #612/#614 work, layered at the same seam.
+The GitHub installation flow is the proof of repository authority, but the
+one-shot state nonce alone is NOT sufficient: it binds the returning browser
+session to the initiating device, yet it does not prove the returning identity
+actually owns the installation id in the callback. So the callback additionally
+requires an **install-time OAuth authorization code** and verifies, via the
+exchanged user identity (`GET /user/installations`), that the user can access the
+requested installation before recording any binding (#614, P1). A device
+therefore obtains tokens only for installations whose ownership it proved at
+callback time — a valid state plus an arbitrary victim installation id binds
+nothing. Enabling OAuth-during-install and provisioning the OAuth client
+credentials is OWNER-GATED (see the staging-registration spec); until then the
+callback fails closed with `installation_authorization_unverified`. Private-tier
+binding to an activation/entitlement record at the license service is #612/#614
+work, layered at the same seam.
 
 ## Return path (resolves design open question #1)
 
@@ -136,6 +145,10 @@ embedded key (see Rollback in issue #613).
   (discovered at issuance time; there are no webhooks in v1, so uninstall surfaces
   at the next token request or poll failure).
 - `installation_suspended` — the installation is suspended.
+- `installation_authorization_unverified` — the callback did not prove the
+  returning identity owns the installation (missing/invalid install-time OAuth
+  code, or OAuth-during-install not yet provisioned); fail closed, no binding
+  (HTTP 403, #614 P1).
 - `repo_outside_installation` — a requested repo is not in the installation's
   current selection (AC4).
 - `repo_renamed_or_transferred` — the installation repository list is re-fetched at
@@ -211,7 +224,10 @@ license linkage; the broker slice proves the binding against fixtures only.
 
 - **Spoofing.** Unauthenticated token minting is prevented by device-signed
   requests plus callback-time binding; the state nonce is one-shot with a 10-minute
-  expiry, so a stolen or replayed callback cannot bind a foreign device.
+  expiry, and the callback additionally requires proof (the install-time OAuth
+  code) that the returning identity owns the installation, so neither a stolen or
+  replayed callback nor a valid state paired with a guessed victim installation id
+  can bind a foreign installation (#614 P1).
 - **Tampering.** Minted tokens are narrowed by the `repositories` and `permissions`
   parameters, so a leaked token bounds blast radius to the user's own selected
   repos for <= 1 h.
@@ -249,8 +265,15 @@ bindings and states; uninstalled installations are pruned on discovery.
    redirect in #612 if desired.
 2. **Device-registration abuse economics (OPEN).** Bot farms registering devices
    on the free tier. Initial posture: registration rate limits plus GitHub-side
-   installation authority is the real gate (a device with no completed callback
-   can mint nothing). Revisit with abuse telemetry.
+   installation authority is the real gate — a device can mint nothing without a
+   binding, and a binding now requires proven installation ownership at callback
+   time (the install-time OAuth code exchange, #614 P1), not merely a completed
+   callback. This closes the install-binding forgery where a valid state plus a
+   guessed victim installation id could bind a foreign installation. **Blocking
+   owner-gated dependency:** the App must enable "Request user authorization
+   (OAuth) during installation" and provision its OAuth client id/secret (see
+   `docs/security/github-app-staging-registration.md`); until then the callback
+   fails closed. Revisit registration abuse with telemetry.
 3. **Token-response repo snapshot (RESOLVED).** `POST /github/token` returns only
    the token, its expiry, and the granted repositories/permissions. The app lists
    repositories client-side with the brokered token, keeping broker surfaces
