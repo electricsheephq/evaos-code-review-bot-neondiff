@@ -181,6 +181,86 @@ describe("desktop fixture release-artifact boundary", () => {
     });
   });
 
+  it("rejects an allowlisted basename outside a source-path string-table record", () => {
+    const artifacts = releaseArtifacts();
+    const dwarf = join(
+      artifacts.root,
+      "NeonDiffDesktop.xcarchive",
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(join(dwarf, ".."), { recursive: true });
+    writeFileSync(dwarf, "leaked DesktopEvaluationReadiness.swift\0");
+
+    const result = scan([join(artifacts.root, "NeonDiffDesktop.xcarchive")]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
+  it("rejects a fake nested dSYM path inside a release app resource", () => {
+    const artifacts = releaseArtifacts();
+    const payload = join(
+      artifacts.appBundle,
+      "Contents",
+      "Resources",
+      "payload.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "payload"
+    );
+    mkdirSync(join(payload, ".."), { recursive: true });
+    writeFileSync(
+      payload,
+      "/build/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift\0"
+    );
+
+    const result = scan([artifacts.appBundle]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
+  it("rejects a top-level dSYMs tree when the scan root is not an xcarchive", () => {
+    const artifacts = releaseArtifacts();
+    const dwarf = join(
+      artifacts.root,
+      "dSYMs",
+      "NeonDiffDesktop.app.dSYM",
+      "Contents",
+      "Resources",
+      "DWARF",
+      "NeonDiffDesktop"
+    );
+    mkdirSync(join(dwarf, ".."), { recursive: true });
+    writeFileSync(
+      dwarf,
+      "/build/Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift\0"
+    );
+
+    const result = scan([artifacts.root]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "DesktopEvaluationReadiness" })
+      ])
+    });
+  });
+
   it("scans only release fixture surfaces and all debug/release Core and AppCore secret surfaces", () => {
     const gate = readFileSync(".github/workflows/swift-desktop-gate.yml", "utf8");
 

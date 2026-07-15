@@ -42,15 +42,9 @@ const FORBIDDEN_PATH_MARKERS = [
 ];
 const ALLOWED_DSYM_DEBUG_SOURCE_FILENAMES = [
   "DesktopEvaluationDependencies.swift",
-  "DesktopEvaluationEvidenceManifest.swift",
-  "DesktopEvaluationFixture.swift",
-  "DesktopEvaluationFixtureCatalog.swift",
-  "DesktopEvaluationLaunchContext.swift",
-  "DesktopEvaluationLaunchOptions.swift",
   "DesktopEvaluationModelAdapter.swift",
   "DesktopEvaluationReadiness.swift",
   "DesktopResolvedEvaluationFixture.swift",
-  "RecordingDesktopDependencies.swift",
   "VisualProofDesktopDependencies.swift"
 ].map((filename) => Buffer.from(filename));
 
@@ -59,7 +53,12 @@ function maskAllowedDsymSourceFilenames(data) {
   for (const filename of ALLOWED_DSYM_DEBUG_SOURCE_FILENAMES) {
     let offset = 0;
     while ((offset = masked.indexOf(filename, offset)) >= 0) {
-      masked.fill(0, offset, offset + filename.length);
+      const precedingByte = offset === 0 ? 0 : masked[offset - 1];
+      const followingByte = masked[offset + filename.length];
+      const beginsPathComponent = precedingByte === 0 || precedingByte === 47 || precedingByte === 92;
+      if (beginsPathComponent && followingByte === 0) {
+        masked.fill(0, offset, offset + filename.length);
+      }
       offset += filename.length;
     }
   }
@@ -72,12 +71,13 @@ function collectFiles(inputPaths) {
     const path = resolve(inputPath);
     const stat = lstatSync(path);
     const root = realpathSync(stat.isDirectory() ? path : dirname(path));
-    return { path, root };
+    const isArchiveRoot = stat.isDirectory() && path.toLowerCase().endsWith(".xcarchive");
+    return { path, root, isArchiveRoot };
   });
   const visitedDirectories = new Set();
   const visitedFiles = new Set();
   while (pending.length > 0) {
-    const { path, root } = pending.pop();
+    const { path, root, isArchiveRoot } = pending.pop();
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) {
       const target = realpathSync(path);
@@ -85,14 +85,16 @@ function collectFiles(inputPaths) {
       if (targetRelativePath === ".." || targetRelativePath.startsWith(`..${sep}`) || isAbsolute(targetRelativePath)) {
         throw new Error(`symlink escapes artifact root: ${path}`);
       }
-      pending.push({ path: target, root });
+      pending.push({ path: target, root, isArchiveRoot });
       continue;
     }
     const realPath = realpathSync(path);
     if (stat.isDirectory()) {
       if (visitedDirectories.has(realPath)) continue;
       visitedDirectories.add(realPath);
-      for (const entry of readdirSync(realPath)) pending.push({ path: resolve(realPath, entry), root });
+      for (const entry of readdirSync(realPath)) {
+        pending.push({ path: resolve(realPath, entry), root, isArchiveRoot });
+      }
       continue;
     }
     if (!stat.isFile()) continue;
@@ -102,7 +104,8 @@ function collectFiles(inputPaths) {
     files.push({
       path: realPath,
       relativePath: `/${relative(root, realPath).split(sep).join("/")}`,
-      size: stat.size
+      size: stat.size,
+      isArchiveRoot
     });
     if (files.length > MAX_FILES) throw new Error("artifact file count exceeds scan bound");
   }
@@ -124,8 +127,9 @@ function scan(inputPaths) {
       }
     }
     const data = readFileSync(file.path);
-    const normalizedRealPath = file.path.split(sep).join("/").toLowerCase();
-    const content = normalizedRealPath.includes(".dsym/contents/resources/dwarf/")
+    const isArchiveDsymDwarf = file.isArchiveRoot
+      && /^\/dsyms\/[^/]+\.dsym\/contents\/resources\/dwarf\/[^/]+$/.test(normalizedPath);
+    const content = isArchiveDsymDwarf
       ? maskAllowedDsymSourceFilenames(data)
       : data;
     for (const rule of FORBIDDEN_CONTENT_MARKERS) {
