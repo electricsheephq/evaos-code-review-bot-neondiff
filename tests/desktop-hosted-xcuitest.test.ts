@@ -161,6 +161,10 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
 
   it("covers every sidebar destination in one minimum-size settled circuit", () => {
     const source = readFileSync(uiTestPath, "utf8");
+    const logs = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/LogsView.swift",
+      "utf8"
+    );
 
     expect(source).toContain(
       "testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize"
@@ -185,6 +189,10 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
       'let context = "\\(checkpoint.section)-\\(checkpoint.surfaceGeneration)-\\(sample.elapsedMilliseconds)ms"'
     );
     expect(source).toContain('"baseline=\\(region.frame) candidate=\\(candidate.frame)"');
+    expect(logs).toContain("ScrollView(.vertical)");
+    expect(logs).toContain('.accessibilityIdentifier("neondiff-logs-outer-scroll")');
+    expect(logs).toContain(".frame(height: 360)");
+    expect(logs).not.toContain(".frame(minHeight: 420)");
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
