@@ -35,34 +35,67 @@ export type IssuanceAuthorizationDecision =
 /**
  * THE single token-issuance decision point. Every mint path in the broker flows
  * through this function; there is no other code path that can authorize an
- * installation token (the gate-every-caller rule). #614 replaces the body of this
- * ONE function to add the repository-visibility + entitlement binding — callers
- * and the surrounding issuance flow do not change.
- *
- * Pre-#614 policy (fail closed): authorize ONLY when every requested repository is
- * verified public. Any private/internal repository denies with
- * `entitlement_gate_not_implemented`; unknown visibility denies with
- * `visibility_unknown` (never assume public). Callers resolve each requested
+ * installation token (the gate-every-caller rule). Callers resolve each requested
  * repository against the installation's current selection before calling this, so
  * a repo outside the installation never reaches the seam.
+ *
+ * #614 policy (fail closed), evaluated in order:
+ *   1. an empty request is `invalid_request`.
+ *   2. any repository whose visibility the App could not authoritatively
+ *      determine denies with `visibility_unknown` — never assume public (AC1/AC3).
+ *   3. an all-public request is authorized with NO Activation Key required
+ *      (the public-free layer-3 policy); the entitlement snapshot is not consulted.
+ *   4. otherwise (at least one private/internal repository) an active,
+ *      private-covering entitlement is required; every other entitlement state
+ *      denies with its own distinct fail-closed reason code (AC3/AC4/AC5). The
+ *      snapshot is resolved from the license authority before this runs, so the
+ *      decision function stays pure; an omitted snapshot fails closed as `none`.
  */
 export function authorizeTokenIssuance(input: {
   requestedRepositories: RequestedRepository[];
   entitlement?: EntitlementSnapshot;
 }): IssuanceAuthorizationDecision {
-  if (input.requestedRepositories.length === 0) {
+  const repositories = input.requestedRepositories;
+  if (repositories.length === 0) {
     return { decision: "deny", reason: "invalid_request" };
   }
-  for (const repository of input.requestedRepositories) {
-    if (repository.visibility === "unknown") {
-      return { decision: "deny", reason: "visibility_unknown" };
-    }
-    if (repository.visibility !== "public") {
-      return { decision: "deny", reason: "entitlement_gate_not_implemented" };
-    }
+  if (repositories.some((repository) => repository.visibility === "unknown")) {
+    return { decision: "deny", reason: "visibility_unknown" };
   }
-  return {
+  const allow: IssuanceAuthorizationDecision = {
     decision: "allow",
-    repositories: input.requestedRepositories.map((repository) => repository.fullName)
+    repositories: repositories.map((repository) => repository.fullName)
   };
+  if (repositories.every((repository) => repository.visibility === "public")) {
+    return allow;
+  }
+  const denial = entitlementDenialReason(input.entitlement ?? { status: "none" });
+  return denial ? { decision: "deny", reason: denial } : allow;
+}
+
+/**
+ * Map a non-public request's entitlement snapshot to its fail-closed reason code,
+ * or `undefined` when the entitlement authorizes private/internal work. The only
+ * authorizing state is an active license whose scope covers private repositories;
+ * a provider key is never an input here, so it can never unlock private (AC5).
+ */
+function entitlementDenialReason(entitlement: EntitlementSnapshot): BrokerReason | undefined {
+  switch (entitlement.status) {
+    case "active":
+      return entitlement.privateRepoAllowed ? undefined : "entitlement_scope_insufficient";
+    case "expired":
+      return "entitlement_expired";
+    case "revoked":
+      return "entitlement_revoked";
+    case "invalid":
+      return "entitlement_invalid";
+    case "seat_exhausted":
+      return "entitlement_seat_exhausted";
+    case "replay_conflict":
+      return "entitlement_replay_conflict";
+    case "service_unavailable":
+      return "entitlement_service_unavailable";
+    case "none":
+      return "entitlement_missing";
+  }
 }

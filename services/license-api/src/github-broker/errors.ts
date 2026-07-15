@@ -18,7 +18,6 @@ export type BrokerReason =
   | "repo_outside_installation"
   | "repo_renamed_or_transferred"
   | "visibility_unknown"
-  | "entitlement_gate_not_implemented"
   | "entitlement_missing"
   | "entitlement_expired"
   | "entitlement_revoked"
@@ -44,7 +43,6 @@ const REASON_STATUS: Record<BrokerReason, number> = {
   repo_outside_installation: 403,
   repo_renamed_or_transferred: 409,
   visibility_unknown: 403,
-  entitlement_gate_not_implemented: 403,
   entitlement_missing: 403,
   entitlement_expired: 403,
   entitlement_revoked: 403,

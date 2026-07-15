@@ -286,7 +286,7 @@ describe("github broker adversarial and lifecycle coverage", () => {
       await registerDevice(denyHarness.url, device);
       await connectInstallation(denyHarness.url, device, PUBLIC_INSTALL.id);
       const deny = await post(denyHarness.url, "/github/token", { installationId: PUBLIC_INSTALL.id, repositories: ["octo/private"] }, bearer(await device.sign()));
-      assert.equal(deny.json.reason, "entitlement_gate_not_implemented");
+      assert.equal(deny.json.reason, "entitlement_missing");
       // A denied request must never reach the mint call.
       assert.equal(denyFake.calls.filter((call) => call.op === "createInstallationAccessToken").length, 0);
     } finally {
@@ -324,7 +324,7 @@ describe("github broker adversarial and lifecycle coverage", () => {
 
       const rows = store.listDecisions(device.deviceId);
       const reasons = rows.map((row) => `${row.decision}:${row.reason_code}`);
-      assert.ok(reasons.includes("deny:entitlement_gate_not_implemented"), JSON.stringify(reasons));
+      assert.ok(reasons.includes("deny:entitlement_missing"), JSON.stringify(reasons));
       assert.ok(reasons.includes("allow:issued"), JSON.stringify(reasons));
       const serialized = JSON.stringify(rows);
       assert.ok(!serialized.includes(harness.mintedToken), "no minted token in the ledger");
