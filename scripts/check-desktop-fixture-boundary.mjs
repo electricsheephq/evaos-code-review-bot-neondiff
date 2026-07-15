@@ -28,6 +28,18 @@ const FORBIDDEN_MARKERS = [
   "VisualProofDesktopDependencies",
   "VisualProofSecretStore"
 ];
+const FORBIDDEN_CONTENT_MARKERS = [
+  ...FORBIDDEN_MARKERS.map((marker) => ({ marker, bytes: Buffer.from(marker) })),
+  { marker: "content:tab-overview", bytes: Buffer.from('"tab-overview"') }
+];
+const FORBIDDEN_PATH_MARKERS = [
+  { marker: "path:fixtures/ui", matches: (path) => path.includes("/fixtures/ui/") },
+  { marker: "path:tab-overview.json", matches: (path) => path.endsWith("/tab-overview.json") },
+  {
+    marker: "path:NeonDiffDesktopFixtureResolve",
+    matches: (path) => path.includes("/neondiffdesktopfixtureresolve")
+  }
+];
 
 function collectFiles(inputPaths) {
   const files = [];
@@ -62,7 +74,11 @@ function collectFiles(inputPaths) {
     if (visitedFiles.has(realPath)) continue;
     visitedFiles.add(realPath);
     if (stat.size > MAX_FILE_BYTES) throw new Error(`artifact file exceeds scan bound: ${path}`);
-    files.push({ path: realPath, size: stat.size });
+    files.push({
+      path: realPath,
+      relativePath: `/${relative(root, realPath).split(sep).join("/")}`,
+      size: stat.size
+    });
     if (files.length > MAX_FILES) throw new Error("artifact file count exceeds scan bound");
   }
   return files.sort((left, right) => left.path.localeCompare(right.path));
@@ -76,9 +92,15 @@ function scan(inputPaths) {
   for (const file of files) {
     scannedBytes += file.size;
     if (scannedBytes > MAX_TOTAL_BYTES) throw new Error("artifact bytes exceed scan bound");
+    const normalizedPath = file.relativePath.toLowerCase();
+    for (const rule of FORBIDDEN_PATH_MARKERS) {
+      if (rule.matches(normalizedPath)) {
+        violations.push({ path: file.path, marker: rule.marker });
+      }
+    }
     const data = readFileSync(file.path);
-    for (const marker of FORBIDDEN_MARKERS) {
-      if (data.includes(Buffer.from(marker))) violations.push({ path: file.path, marker });
+    for (const rule of FORBIDDEN_CONTENT_MARKERS) {
+      if (data.includes(rule.bytes)) violations.push({ path: file.path, marker: rule.marker });
     }
   }
   return {

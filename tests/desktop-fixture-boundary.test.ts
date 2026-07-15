@@ -95,6 +95,37 @@ describe("desktop fixture release-artifact boundary", () => {
     expect(result.stderr).toMatch(/symlink escapes artifact root/);
   });
 
+  it("rejects the canonical fixture at an archive-like resource path", () => {
+    const artifacts = releaseArtifacts();
+    const fixturePath = join(
+      artifacts.root,
+      "NeonDiffDesktop.xcarchive",
+      "Products",
+      "Applications",
+      "NeonDiffDesktop.app",
+      "Contents",
+      "Resources",
+      "fixtures",
+      "ui",
+      "tab-overview.json"
+    );
+    mkdirSync(join(fixturePath, ".."), { recursive: true });
+    writeFileSync(
+      fixturePath,
+      readFileSync("apps/neondiff-desktop/fixtures/ui/tab-overview.json")
+    );
+
+    const result = scan([join(artifacts.root, "NeonDiffDesktop.xcarchive")]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ marker: "path:fixtures/ui" }),
+        expect.objectContaining({ marker: "content:tab-overview" })
+      ])
+    });
+  });
+
   it("scans only release fixture surfaces and all debug/release Core and AppCore secret surfaces", () => {
     const gate = readFileSync(".github/workflows/swift-desktop-gate.yml", "utf8");
 
@@ -104,7 +135,11 @@ describe("desktop fixture release-artifact boundary", () => {
     expect(gate).toContain('"$release_bin/Modules/NeonDiffDesktopCore.swiftmodule"');
     expect(gate).toContain('"$release_bin/Modules/NeonDiffDesktopAppCore.swiftmodule"');
     expect(gate).toContain('"apps/neondiff-desktop/dist-release/NeonDiffDesktop.app"');
+    expect(gate).toContain('"$RELEASE_ARCHIVE"');
     expect(gate).not.toMatch(/npm run check:desktop-fixture-boundary --[\s\S]*?"\$debug_bin\/NeonDiffDesktop/);
+    expect(gate).toMatch(
+      /Archive Release fixture boundary[\s\S]*?npm run check:secret-corpus-boundary --[\s\S]*?"\$RELEASE_ARCHIVE"/
+    );
 
     for (const target of [
       '"$debug_bin/NeonDiffDesktop"',

@@ -234,20 +234,42 @@ jobs:
         working-directory: apps/neondiff-desktop
         run: script/build_and_run.sh bundle-check
 
+      - name: Archive Release fixture boundary
+        shell: bash
+        env:
+          PROOF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RELEASE_ARCHIVE: ${{ runner.temp }}/NeonDiffDesktop-release.xcarchive
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PROOF_SHA"
+          rm -rf "$RELEASE_ARCHIVE"
+          xcodebuild archive \
+            -project apps/neondiff-desktop/NeonDiffDesktop.xcodeproj \
+            -scheme NeonDiffDesktopHosted \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$RELEASE_ARCHIVE"
+          test -d "$RELEASE_ARCHIVE"
+
       - name: Evaluation fixture production-artifact boundary
         shell: bash
+        env:
+          RELEASE_ARCHIVE: ${{ runner.temp }}/NeonDiffDesktop-release.xcarchive
         run: |
           set -euo pipefail
           NEONDIFF_DESKTOP_DIST_DIR="$PWD/apps/neondiff-desktop/dist-release" \
             apps/neondiff-desktop/script/build_and_run.sh release-bundle-check
           release_bin="$(cd apps/neondiff-desktop && swift build -c release --show-bin-path)"
+          npm run check:secret-corpus-boundary -- \
+            "$RELEASE_ARCHIVE" \
+            "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app"
           npm run check:desktop-fixture-boundary -- \
             "$release_bin/NeonDiffDesktop" \
             "$release_bin/NeonDiffDesktopCore.build" \
             "$release_bin/NeonDiffDesktopAppCore.build" \
             "$release_bin/Modules/NeonDiffDesktopCore.swiftmodule" \
             "$release_bin/Modules/NeonDiffDesktopAppCore.swiftmodule" \
-            "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app"
+            "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app" \
+            "$RELEASE_ARCHIVE"
 
   swift-desktop-gate:
     name: Swift desktop gate

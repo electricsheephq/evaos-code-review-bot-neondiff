@@ -40,12 +40,34 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(plan.testTargets[0].target.name).toBe("NeonDiffDesktopUITests");
   });
 
-  it("launches only a deterministic in-memory fixture and finds the native root", () => {
+  it("launches the strict deterministic fixture contract and finds its native root", () => {
+    const project = readFileSync(projectPath, "utf8");
     const source = readFileSync(uiTestPath, "utf8");
-    expect(source).toContain('NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE');
-    expect(source).toContain('provider-verification');
-    expect(source).toContain('neondiff.desktop.root');
+    const scheme = readFileSync(schemePath, "utf8");
+    expect(project).toContain("NeonDiffDesktopFixtureResolve");
+    expect(project).toContain("NeonDiffDesktopEvaluationSupport in Frameworks");
+    expect(project).toContain("$(CONTENTS_FOLDER_PATH)/Helpers");
+    expect(project).toContain('$CONFIGURATION\\" != \\"Debug');
+    expect(project).toContain("alwaysOutOfDate = 1;");
+    expect(project.match(/SKIP_INSTALL = YES;/g)).toHaveLength(2);
+    expect(project).toContain("tab-overview.json in Resources");
+    expect(source).toContain('"--ui-testing"');
+    expect(source).toContain('"--ui-fixture"');
+    expect(source).toContain('"--content-size"');
+    expect(source).toContain('"1040x680"');
+    expect(source).toContain('"--disable-animations"');
+    expect(source).toContain('"tab-overview"');
+    expect(source).toContain('"neondiff.fixture.tab-overview"');
+    expect(source).not.toContain("createDirectory");
+    expect(source).not.toContain("setAttributes");
+    expect(source).not.toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
+    expect(scheme).toContain('parallelizeBuildables = "NO"');
+    expect(scheme).toMatch(
+      /buildForArchiving = "NO"[\s\S]{0,700}BlueprintIdentifier = "A10000000000000000000012"/
+    );
+    expect(project).not.toContain("remoteInfo = NeonDiffDesktopFixtureResolve");
     expect(source).toContain("XCUIApplication()");
+    expect(source).not.toContain('NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE');
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
@@ -73,6 +95,9 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
       'neondiff-desktop-xcresult-${{ github.event.pull_request.head.sha || github.sha }}'
     );
     expect(workflow).toContain("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
+    expect(workflow).toContain("xcodebuild archive");
+    expect(workflow).toContain('RELEASE_ARCHIVE: ${{ runner.temp }}/NeonDiffDesktop-release.xcarchive');
+    expect(workflow).toContain('"$RELEASE_ARCHIVE"');
     expect(workflow).not.toMatch(/CODE_SIGNING_ALLOWED\s*=\s*["']?NO["']?/i);
 
     const routing = JSON.parse(execFileSync(
