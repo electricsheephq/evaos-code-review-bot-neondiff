@@ -106,6 +106,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Setup Node.js
@@ -136,6 +137,10 @@ jobs:
         timeout-minutes: 3
         run: npm test -- --run tests/desktop-settled-geometry-capture.test.ts
 
+      - name: Desktop hosted XCTest project contracts
+        timeout-minutes: 3
+        run: npm test -- --run tests/desktop-hosted-xcuitest.test.ts
+
       - name: Build Swift Keychain checks target
         working-directory: apps/neondiff-desktop
         run: swift build --target NeonDiffDesktopKeychainChecks
@@ -155,6 +160,45 @@ jobs:
           swift run NeonDiffDesktopFixtureChecks
           scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests
           scripts/run-required-swift-test-suite.sh NeonDiffDesktopEvaluationSupportTests
+
+      - name: Hosted XCUITest smoke
+        timeout-minutes: 15
+        env:
+          PROOF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DERIVED_DATA: ${{ runner.temp }}/neondiff-desktop-derived-data
+          RESULT_BUNDLE: ${{ runner.temp }}/NeonDiffDesktop-${{ github.event.pull_request.head.sha || github.sha }}.xcresult
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PROOF_SHA"
+          rm -rf "$DERIVED_DATA" "$RESULT_BUNDLE"
+          xcodebuild test \
+            -project apps/neondiff-desktop/NeonDiffDesktop.xcodeproj \
+            -scheme NeonDiffDesktopHosted \
+            -testPlan NeonDiffDesktop \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath "$RESULT_BUNDLE"
+
+      - name: Package hosted XCTest result
+        if: always()
+        env:
+          RESULT_BUNDLE: ${{ runner.temp }}/NeonDiffDesktop-${{ github.event.pull_request.head.sha || github.sha }}.xcresult
+          RESULT_ARCHIVE: ${{ runner.temp }}/NeonDiffDesktop-${{ github.event.pull_request.head.sha || github.sha }}.xcresult.zip
+        run: |
+          set -euo pipefail
+          test -d "$RESULT_BUNDLE"
+          rm -f "$RESULT_ARCHIVE"
+          ditto -c -k --sequesterRsrc --keepParent "$RESULT_BUNDLE" "$RESULT_ARCHIVE"
+          shasum -a 256 "$RESULT_ARCHIVE" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload hosted XCTest result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: neondiff-desktop-xcresult-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/NeonDiffDesktop-${{ github.event.pull_request.head.sha || github.sha }}.xcresult.zip
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Secret corpus production-artifact boundary
         shell: bash

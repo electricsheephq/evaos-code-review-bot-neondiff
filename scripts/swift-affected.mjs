@@ -7,6 +7,8 @@ const SWIFT_PATH_PREFIXES = [
   "apps/neondiff-desktop/Sources/",
   "apps/neondiff-desktop/Checks/",
   "apps/neondiff-desktop/Tests/",
+  "apps/neondiff-desktop/UITests/",
+  "apps/neondiff-desktop/NeonDiffDesktop.xcodeproj/",
   "apps/neondiff-desktop/script/",
   "apps/neondiff-desktop/scripts/",
   "apps/neondiff-desktop/fixtures/ui/"
@@ -17,6 +19,7 @@ const SWIFT_ROOT_FILES = new Set([
   "Package.resolved",
   "apps/neondiff-desktop/Package.swift",
   "apps/neondiff-desktop/Package.resolved",
+  "apps/neondiff-desktop/NeonDiffDesktop.xctestplan",
   "apps/neondiff-desktop/script/build_and_run.sh",
   "shared/canonical-secret-rules.json",
   "scripts/generate-secret-rules.mjs",
@@ -27,6 +30,7 @@ const SWIFT_ROOT_FILES = new Set([
   "tests/desktop-evaluation-boundary.test.ts",
   "tests/desktop-repos-reachability-capture.test.ts",
   "tests/desktop-settled-geometry-capture.test.ts",
+  "tests/desktop-hosted-xcuitest.test.ts",
   "scripts/secret-rule-foundation-runner.swift"
 ]);
 

@@ -1,0 +1,28 @@
+{
+  "configurations" : [
+    {
+      "id" : "A1000000-0000-0000-0000-000000000101",
+      "name" : "Default",
+      "options" : {
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:NeonDiffDesktop.xcodeproj",
+      "identifier" : "A10000000000000000000010",
+      "name" : "NeonDiffDesktopHostedApp"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "target" : {
+        "containerPath" : "container:NeonDiffDesktop.xcodeproj",
+        "identifier" : "A10000000000000000000011",
+        "name" : "NeonDiffDesktopUITests"
+      }
+    }
+  ],
+  "version" : 1
+}
