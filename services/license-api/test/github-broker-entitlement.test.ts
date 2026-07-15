@@ -27,7 +27,8 @@ const INSTALL: FakeInstallation = {
   repositories: [
     { id: 81, full_name: "octo/site", visibility: "public" },
     { id: 82, full_name: "octo/private", visibility: "private" },
-    { id: 83, full_name: "octo/internal", visibility: "internal" }
+    { id: 83, full_name: "octo/internal", visibility: "internal" },
+    { id: 84, full_name: "octo/mystery", visibility: "unknown" }
   ]
 };
 
@@ -125,6 +126,53 @@ describe("github broker entitlement binding at the mint path (#614)", () => {
     }
   });
 
+  it("does NOT consult the entitlement authority when a requested repo has unknown visibility", async () => {
+    // The seam denies unknown visibility (visibility_unknown) before entitlement
+    // matters; performing a license-service lookup for such a request would violate
+    // decide-before-side-effects. Assert zero resolver calls and zero mint.
+    const fake = fakeGitHubClient([INSTALL]);
+    const resolver = recordingResolver(ACTIVE_PRIVATE, fake.calls);
+    const harness = await startBroker({ fake, resolveEntitlement: resolver.resolveEntitlement });
+    try {
+      const device = await boundDevice(harness.url);
+      fake.calls.length = 0;
+      const response = await post(
+        harness.url,
+        "/github/token",
+        { installationId: INSTALL.id, repositories: ["octo/mystery"] },
+        bearer(await device.sign())
+      );
+      assert.equal(response.status, 403, response.text);
+      assert.equal(response.json.reason, "visibility_unknown");
+      assert.equal(resolver.contexts.length, 0, "no license-service lookup for an unknown-visibility request");
+      assert.equal(fake.calls.filter((call) => call.op === "createInstallationAccessToken").length, 0);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("does NOT consult the authority for a mixed private+unknown request (unknown short-circuits)", async () => {
+    const fake = fakeGitHubClient([INSTALL]);
+    const resolver = recordingResolver(ACTIVE_PRIVATE, fake.calls);
+    const harness = await startBroker({ fake, resolveEntitlement: resolver.resolveEntitlement });
+    try {
+      const device = await boundDevice(harness.url);
+      fake.calls.length = 0;
+      const response = await post(
+        harness.url,
+        "/github/token",
+        { installationId: INSTALL.id, repositories: ["octo/private", "octo/mystery"] },
+        bearer(await device.sign())
+      );
+      assert.equal(response.status, 403, response.text);
+      assert.equal(response.json.reason, "visibility_unknown");
+      assert.equal(resolver.contexts.length, 0, "an unknown repo short-circuits the license-service lookup");
+      assert.equal(fake.calls.filter((call) => call.op === "createInstallationAccessToken").length, 0);
+    } finally {
+      harness.close();
+    }
+  });
+
   it("resolves entitlement for the mixed public+private set and mints both on allow", async () => {
     const fake = fakeGitHubClient([INSTALL]);
     const resolver = recordingResolver(ACTIVE_PRIVATE, fake.calls);
@@ -154,7 +202,11 @@ describe("github broker entitlement binding at the mint path (#614)", () => {
     { name: "invalid", snapshot: { status: "invalid" }, status: 403, reason: "entitlement_invalid" },
     { name: "over seat", snapshot: { status: "seat_exhausted" }, status: 409, reason: "entitlement_seat_exhausted" },
     { name: "replay conflict", snapshot: { status: "replay_conflict" }, status: 409, reason: "entitlement_replay_conflict" },
-    { name: "license service outage (resolver throws)", snapshot: "throws", status: 503, reason: "entitlement_service_unavailable" }
+    { name: "license service outage (resolver throws)", snapshot: "throws", status: 503, reason: "entitlement_service_unavailable" },
+    // Fail-closed coverage of unexpected snapshots reaching the mint path.
+    { name: "active snapshot missing its covered array (drift)", snapshot: { status: "active" } as unknown as EntitlementSnapshot, status: 403, reason: "entitlement_scope_insufficient" },
+    { name: "active snapshot with an empty covered set", snapshot: { status: "active", coveredPrivateRepositories: [] }, status: 403, reason: "entitlement_scope_insufficient" },
+    { name: "unrecognized entitlement status (drift)", snapshot: { status: "some_future_state" } as unknown as EntitlementSnapshot, status: 403, reason: "entitlement_invalid" }
   ];
 
   for (const testCase of denyCases) {

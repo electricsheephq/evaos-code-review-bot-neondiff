@@ -353,6 +353,11 @@ export class GitHubBrokerService {
    * Returns the public-free default (`none`) without touching the authority when
    * every requested repository is public. A resolver throw is a service outage and
    * fails closed as `service_unavailable` (never an allow).
+   *
+   * Decide before side effects: if ANY requested repo has unknown visibility, the
+   * seam denies (`visibility_unknown`) regardless of entitlement, so no
+   * license-service lookup is performed for it — an undecidable request egresses
+   * nothing, not even to the license authority.
    */
   private async resolveEntitlementForRequest(
     deviceId: string,
@@ -360,6 +365,9 @@ export class GitHubBrokerService {
     accountLogin: string | undefined,
     requested: RequestedRepository[]
   ): Promise<EntitlementSnapshot> {
+    if (requested.some((repository) => repository.visibility === "unknown")) {
+      return { status: "none" };
+    }
     const privateRepositories = requested
       .filter((repository) => repository.visibility !== "public")
       .map((repository) => repository.fullName);

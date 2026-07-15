@@ -48,6 +48,13 @@ describe("issuance seam hardening (#620 security review)", () => {
     assert.equal(decision.decision === "deny" ? decision.reason : undefined, "entitlement_scope_insufficient");
   });
 
+  it("denies a private request when the active entitlement covers an empty set", () => {
+    const empty: EntitlementSnapshot = { status: "active", coveredPrivateRepositories: [] };
+    const decision = authorizeTokenIssuance({ requestedRepositories: [PRIV_A], entitlement: empty });
+    assert.equal(decision.decision, "deny", JSON.stringify(decision));
+    assert.equal(decision.decision === "deny" ? decision.reason : undefined, "entitlement_scope_insufficient");
+  });
+
   // ---- P3: per-repository coverage ----
   it("allows only when every requested private repo is covered by the active entitlement", () => {
     const covered: EntitlementSnapshot = { status: "active", coveredPrivateRepositories: ["octo/a", "octo/b"] };
