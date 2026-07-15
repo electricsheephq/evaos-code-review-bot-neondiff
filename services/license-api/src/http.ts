@@ -36,6 +36,12 @@ import {
   SubscriptionLifecycleTransientError,
   SubscriptionLifecycleUnsupportedCommandError
 } from "./store.js";
+import {
+  createGitHubBrokerService,
+  handleGitHubBrokerRequest,
+  isGitHubBrokerPath,
+  type GitHubBrokerDeps
+} from "./github-broker/index.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -52,6 +58,8 @@ export interface LicenseHttpOptions {
   trustFlyProxyHeaders?: boolean;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;
+  /** Managed GitHub App authorization broker (#613). Omitted → broker routes 503. */
+  githubBroker?: GitHubBrokerDeps;
 }
 
 type Handler = (store: LicenseStore, req: LicenseRequest, now: Date) => ServiceResult;
@@ -76,12 +84,22 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
   const subscriptionLifecycleRateLimiter =
     options.subscriptionLifecycleRateLimiter ??
     new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
+  // Build the broker service once (it owns a persistent store), mirroring the
+  // license store's per-listener lifecycle.
+  const githubBrokerService = options.githubBroker
+    ? createGitHubBrokerService(options.githubBroker)
+    : undefined;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method === "GET" && req.url === "/healthz") {
       return writeJson(res, 200, { status: "ok" });
     }
     const path = req.url?.split("?")[0];
+    if (isGitHubBrokerPath(path)) {
+      if (!githubBrokerService) return writeJson(res, 503, { status: "unavailable" });
+      const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
+      return handleGitHubBrokerRequest(githubBrokerService, req, res, { sourceAddress });
+    }
     if (req.method === "POST" && path === "/v1/admin/licenses/issue") {
       return handleIssuanceRequest(options, req, res);
     }
