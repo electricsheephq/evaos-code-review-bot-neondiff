@@ -57,7 +57,7 @@ struct NeonDiffDesktopApp: App {
 
     var body: some Scene {
         WindowGroup("NeonDiff Desktop") {
-            contentView
+            evaluationTextSizedContentView
                 .frame(
                     minWidth: CGFloat(minimumContentSize.width),
                     minHeight: CGFloat(minimumContentSize.height)
@@ -111,6 +111,19 @@ struct NeonDiffDesktopApp: App {
             .preferredColorScheme(preferredColorScheme)
             .frame(width: 560)
         }
+    }
+
+    @ViewBuilder
+    private var evaluationTextSizedContentView: some View {
+#if DEBUG
+        if evaluationContext?.textSizeMode == .accessibility3 {
+            contentView.dynamicTypeSize(.accessibility3)
+        } else {
+            contentView
+        }
+#else
+        contentView
+#endif
     }
 
     private var contentView: ContentView {
@@ -230,8 +243,14 @@ struct NeonDiffDesktopApp: App {
 
     private var rootAccessibilityIdentifier: String {
 #if DEBUG
-        evaluationContext.map { "neondiff.fixture.\($0.fixture.id)" }
-            ?? "neondiff.desktop.root"
+        guard let evaluationContext else { return "neondiff.desktop.root" }
+        let fixtureId = evaluationContext.fixture.id
+        switch evaluationContext.textSizeMode {
+        case .runnerDefault:
+            return "neondiff.fixture.\(fixtureId)"
+        case .accessibility3:
+            return "neondiff.fixture.\(fixtureId).text-size.accessibility3"
+        }
 #else
         "neondiff.desktop.root"
 #endif
