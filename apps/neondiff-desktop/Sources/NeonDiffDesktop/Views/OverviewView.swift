@@ -6,32 +6,37 @@ import NeonDiffDesktopCore
 // (docs/design/live-site-design-source.md) as native translation — tokenized
 // colors for both appearances, mono uppercase section labels, status rows with
 // glyph + text (never color alone), one bracket primary action, and a
-// corner-ticked readiness console. Behavior, bindings, accessibility
-// identifiers, and the #517 geometry sentinel (neondiff-overview-start-dashboard)
-// are preserved; structural Home redesign remains owned by #521.
+// corner-ticked readiness console. Colors resolve from the SwiftUI
+// `\.colorScheme` (NDPalette) so light mode actually renders light. Behavior,
+// bindings, accessibility identifiers, and the #517 geometry sentinel
+// (neondiff-overview-start-dashboard) are preserved; structural Home redesign
+// remains owned by #521.
 struct OverviewView: View {
     @ObservedObject var model: NeonDiffDesktopModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let nd = NDPalette(scheme: colorScheme)
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 NDConsolePanel {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Readiness // Overview").ndSectionLabel()
-                        StatusRow(title: "Runtime", value: model.status.healthState)
-                        StatusRow(title: "Repos", value: "\(model.status.monitoredRepos.count)")
-                        StatusRow(title: "Keys", value: model.providers.providerKeyStored ? "stored" : "missing")
+                        Text("Readiness // Overview").ndSectionLabel(nd)
+                        StatusRow(title: "Runtime", value: model.status.healthState, palette: nd)
+                        StatusRow(title: "Repos", value: "\(model.status.monitoredRepos.count)", palette: nd)
+                        StatusRow(title: "Keys", value: model.providers.providerKeyStored ? "stored" : "missing", palette: nd)
                         StatusRow(
                             title: "Dashboard",
-                            value: model.dashboardProcessIdentifier == nil ? model.dashboardLaunchStatus : "launched"
+                            value: model.dashboardProcessIdentifier == nil ? model.dashboardLaunchStatus : "launched",
+                            palette: nd
                         )
                     }
                 }
 
-                OverviewSection(title: "Local Dashboard Launcher // Operator") {
+                OverviewSection(title: "Local Dashboard Launcher // Operator", palette: nd) {
                     Text("The Mac app stays in control on launch. Start the local dashboard service here, then open the browser dashboard only when you choose to inspect the full HTML setup surface.")
                         .font(.body)
-                        .foregroundStyle(NDColor.textSecondary)
+                        .foregroundStyle(nd.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
 
                     HStack(spacing: 10) {
@@ -102,19 +107,19 @@ struct OverviewView: View {
                 if let lastError = model.lastError, !lastError.isEmpty {
                     HStack(alignment: .top, spacing: 8) {
                         Text("◆")
-                            .foregroundStyle(NDColor.danger)
+                            .foregroundStyle(nd.danger)
                             .accessibilityHidden(true)
                         Text(lastError)
-                            .foregroundStyle(NDColor.danger)
+                            .foregroundStyle(nd.danger)
                             .font(.callout)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
-                    .background(Rectangle().fill(NDColor.surface))
-                    .overlay(Rectangle().stroke(NDColor.danger.opacity(0.5), lineWidth: 1))
+                    .background(Rectangle().fill(nd.surface))
+                    .overlay(Rectangle().stroke(nd.danger.opacity(0.5), lineWidth: 1))
                 }
 
-                OverviewSection(title: "Last Command // Log") {
+                OverviewSection(title: "Last Command // Log", palette: nd) {
                     OperatorCommandText(text: model.lastCommandLine, lineLimit: 4)
                 }
             }
@@ -123,7 +128,7 @@ struct OverviewView: View {
                 PageBottomSentinel(section: "overview")
             }
         }
-        .background(NDColor.background)
+        .background(nd.background)
         .accessibilityIdentifier("neondiff-overview-outer-scroll")
         .scrollContentBackground(.hidden)
     }
@@ -133,17 +138,18 @@ struct OverviewView: View {
 /// surface. Local to the reference screen; the shared component system is #520.
 private struct OverviewSection<Content: View>: View {
     let title: String
+    let palette: NDPalette
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title).ndSectionLabel()
+            Text(title).ndSectionLabel(palette)
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(Rectangle().fill(NDColor.surface))
-        .overlay(Rectangle().stroke(NDColor.borderInput, lineWidth: 1))
+        .background(Rectangle().fill(palette.surface))
+        .overlay(Rectangle().stroke(palette.borderInput, lineWidth: 1))
     }
 }
 
@@ -152,6 +158,7 @@ private struct OverviewSection<Content: View>: View {
 private struct StatusRow: View {
     var title: String
     var value: String
+    var palette: NDPalette
 
     var body: some View {
         LabeledContent {
@@ -167,7 +174,7 @@ private struct StatusRow: View {
                     .minimumScaleFactor(0.7)
             }
         } label: {
-            Text(title).ndSectionLabel()
+            Text(title).ndSectionLabel(palette)
         }
     }
 
@@ -188,8 +195,8 @@ private struct StatusRow: View {
     }
 
     private var color: Color {
-        if isHealthy { return NDColor.accentPrimary }
-        if isAttention { return NDColor.warning }
-        return NDColor.textSecondary
+        if isHealthy { return palette.accentPrimary }
+        if isAttention { return palette.warning }
+        return palette.textSecondary
     }
 }

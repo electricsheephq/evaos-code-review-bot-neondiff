@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 import NeonDiffDesktopAppCore
 
@@ -11,26 +10,29 @@ import NeonDiffDesktopAppCore
 // See docs/design/live-site-design-source.md. This is additive translation, not
 // a rewrite of the existing NeonDiffTheme operator styling.
 
-/// Appearance-resolving SwiftUI colors for the ten semantic roles.
-enum NDColor {
-    static let background = dynamic(NDDesignTokens.background)
-    static let surface = dynamic(NDDesignTokens.surface)
-    static let textPrimary = dynamic(NDDesignTokens.textPrimary)
-    static let textSecondary = dynamic(NDDesignTokens.textSecondary)
-    static let accentPrimary = dynamic(NDDesignTokens.accentPrimary)
-    static let accentMagenta = dynamic(NDDesignTokens.accentMagenta)
-    static let warning = dynamic(NDDesignTokens.warning)
-    static let danger = dynamic(NDDesignTokens.danger)
-    static let borderPrimary = dynamic(NDDesignTokens.borderPrimary)
-    static let borderInput = dynamic(NDDesignTokens.borderInput)
+/// Resolves the ten semantic roles into plain SwiftUI colors for a given
+/// appearance. Built from SwiftUI's `\.colorScheme` (NOT an NSColor dynamic
+/// provider) so it follows `.preferredColorScheme` and the evaluation fixture's
+/// appearance override — an NSColor dynamic provider resolves against the
+/// window/system appearance and silently ignores the SwiftUI scheme.
+struct NDPalette {
+    var scheme: ColorScheme
 
-    static func dynamic(_ token: NDSemanticColor) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            let value = isDark ? token.dark : token.light
-            return NSColor(srgbRed: value.red, green: value.green, blue: value.blue, alpha: value.opacity)
-        })
+    private func resolve(_ token: NDSemanticColor) -> Color {
+        let value = scheme == .dark ? token.dark : token.light
+        return Color(.sRGB, red: value.red, green: value.green, blue: value.blue, opacity: value.opacity)
     }
+
+    var background: Color { resolve(NDDesignTokens.background) }
+    var surface: Color { resolve(NDDesignTokens.surface) }
+    var textPrimary: Color { resolve(NDDesignTokens.textPrimary) }
+    var textSecondary: Color { resolve(NDDesignTokens.textSecondary) }
+    var accentPrimary: Color { resolve(NDDesignTokens.accentPrimary) }
+    var accentMagenta: Color { resolve(NDDesignTokens.accentMagenta) }
+    var warning: Color { resolve(NDDesignTokens.warning) }
+    var danger: Color { resolve(NDDesignTokens.danger) }
+    var borderPrimary: Color { resolve(NDDesignTokens.borderPrimary) }
+    var borderInput: Color { resolve(NDDesignTokens.borderInput) }
 }
 
 /// The mono label/console type system — the strongest carry-over identity
@@ -44,11 +46,11 @@ enum NDFont {
 
 extension View {
     /// `SECTION // LABEL`-style uppercase mono header in working screens.
-    func ndSectionLabel() -> some View {
+    func ndSectionLabel(_ palette: NDPalette) -> some View {
         self.font(NDFont.label)
             .tracking(1.8)
             .textCase(.uppercase)
-            .foregroundStyle(NDColor.textSecondary)
+            .foregroundStyle(palette.textSecondary)
     }
 }
 
@@ -62,10 +64,12 @@ struct NDBracketButtonStyle: ButtonStyle {
 
     private struct NDBracketButtonBody: View {
         let configuration: ButtonStyleConfiguration
+        @Environment(\.colorScheme) private var colorScheme
         @Environment(\.colorSchemeContrast) private var contrast
         @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
+            let palette = NDPalette(scheme: colorScheme)
             let increased = contrast == .increased
             let borderAlpha = increased ? 1.0 : (configuration.isPressed ? 0.7 : 0.4)
             let fillAlpha = configuration.isPressed ? 0.12 : 0.06
@@ -78,11 +82,11 @@ struct NDBracketButtonStyle: ButtonStyle {
                     .tracking(1.8)
                 Text("]").font(NDFont.label)
             }
-            .foregroundStyle(NDColor.accentPrimary.opacity(isEnabled ? 1 : 0.45))
+            .foregroundStyle(palette.accentPrimary.opacity(isEnabled ? 1 : 0.45))
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(Rectangle().fill(NDColor.accentPrimary.opacity(isEnabled ? fillAlpha : 0.03)))
-            .overlay(Rectangle().stroke(NDColor.accentPrimary.opacity(isEnabled ? borderAlpha : 0.25), lineWidth: 1))
+            .background(Rectangle().fill(palette.accentPrimary.opacity(isEnabled ? fillAlpha : 0.03)))
+            .overlay(Rectangle().stroke(palette.accentPrimary.opacity(isEnabled ? borderAlpha : 0.25), lineWidth: 1))
             .contentShape(Rectangle())
         }
     }
@@ -102,6 +106,7 @@ struct NDConsolePanel<Content: View>: View {
     }
 
     private struct NDConsolePanelBody<Inner: View>: View {
+        @Environment(\.colorScheme) private var colorScheme
         @Environment(\.colorSchemeContrast) private var contrast
         private let inner: Inner
 
@@ -110,15 +115,16 @@ struct NDConsolePanel<Content: View>: View {
         }
 
         var body: some View {
+            let palette = NDPalette(scheme: colorScheme)
             let increased = contrast == .increased
             inner
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
-                .background(Rectangle().fill(NDColor.surface))
+                .background(Rectangle().fill(palette.surface))
                 .overlay(
-                    Rectangle().stroke(increased ? NDColor.accentPrimary : NDColor.borderPrimary, lineWidth: 1)
+                    Rectangle().stroke(increased ? palette.accentPrimary : palette.borderPrimary, lineWidth: 1)
                 )
-                .overlay(NDConsoleCornerTicks(color: NDColor.accentPrimary.opacity(increased ? 1 : 0.7)))
+                .overlay(NDConsoleCornerTicks(color: palette.accentPrimary.opacity(increased ? 1 : 0.7)))
         }
     }
 }
