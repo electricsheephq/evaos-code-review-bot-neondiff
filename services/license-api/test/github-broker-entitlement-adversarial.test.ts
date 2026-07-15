@@ -149,7 +149,7 @@ describe("github broker #614 adversarial entitlement boundary", () => {
 
   it("mints for the same server-private repo once an active private-covering entitlement exists", async () => {
     const fake = mutableFake({ installationId: INSTALL_ID, repositories: baseRepositories });
-    const resolver = countingResolver({ status: "active", privateRepoAllowed: true });
+    const resolver = countingResolver({ status: "active", coveredPrivateRepositories: ["octo/private"] });
     const harness = await startBroker({ fake: { client: fake.client, calls: fake.calls, mintedToken: "x" } as never, resolveEntitlement: resolver.resolveEntitlement });
     try {
       const device = await makeDevice();
@@ -172,7 +172,7 @@ describe("github broker #614 adversarial entitlement boundary", () => {
 
   it("repo rename/transfer at issuance fails typed and never reaches the entitlement authority or a mint", async () => {
     const fake = mutableFake({ installationId: INSTALL_ID, repositories: baseRepositories });
-    const resolver = countingResolver({ status: "active", privateRepoAllowed: true });
+    const resolver = countingResolver({ status: "active", coveredPrivateRepositories: ["octo/private"] });
     const harness = await startBroker({ fake: { client: fake.client, calls: fake.calls, mintedToken: "x" } as never, resolveEntitlement: resolver.resolveEntitlement });
     try {
       const device = await makeDevice();
@@ -197,7 +197,7 @@ describe("github broker #614 adversarial entitlement boundary", () => {
 
   it("install swap: a private repo outside the installation selection is refused before the seam", async () => {
     const fake = mutableFake({ installationId: INSTALL_ID, repositories: baseRepositories });
-    const resolver = countingResolver({ status: "active", privateRepoAllowed: true });
+    const resolver = countingResolver({ status: "active", coveredPrivateRepositories: ["octo/private"] });
     const harness = await startBroker({ fake: { client: fake.client, calls: fake.calls, mintedToken: "x" } as never, resolveEntitlement: resolver.resolveEntitlement });
     try {
       const device = await makeDevice();
@@ -221,7 +221,7 @@ describe("github broker #614 adversarial entitlement boundary", () => {
 
   it("direct call skipping the connect/binding flow cannot reach the entitlement seam or a mint", async () => {
     const fake = mutableFake({ installationId: INSTALL_ID, repositories: baseRepositories });
-    const resolver = countingResolver({ status: "active", privateRepoAllowed: true });
+    const resolver = countingResolver({ status: "active", coveredPrivateRepositories: ["octo/private"] });
     const harness = await startBroker({ fake: { client: fake.client, calls: fake.calls, mintedToken: "x" } as never, resolveEntitlement: resolver.resolveEntitlement });
     try {
       const device = await makeDevice();

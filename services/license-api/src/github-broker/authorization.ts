@@ -12,14 +12,19 @@ export interface RequestedRepository {
  * The entitlement snapshot the seam binds a private/internal request against.
  * It is derived from the production entitlement contract (the license-api
  * `Entitlement`, merged #574) BEFORE the seam runs, so the decision function
- * stays pure and table-testable. `active` carries whether the live license
- * covers private repositories; every terminal state maps to a distinct
- * fail-closed reason code. `none` is the public-free default — no NeonDiff
+ * stays pure and table-testable. `none` is the public-free default — no NeonDiff
  * Activation Key was presented. The broker never derives entitlement from a
- * provider key; only an active, private-covering entitlement unlocks private.
+ * provider key; only an active entitlement whose coverage names a repository
+ * unlocks that repository.
+ *
+ * `active` authorizes ONLY the repositories in `coveredPrivateRepositories`
+ * (matched by `owner/name`). This is per-repository, not a single global
+ * boolean: a request spanning several private repos is authorized only when
+ * every one of them is covered (the resolver enumerates the covered set from the
+ * account/license scope). A public-only license covers none (empty set).
  */
 export type EntitlementSnapshot =
-  | { status: "active"; privateRepoAllowed: boolean }
+  | { status: "active"; coveredPrivateRepositories: string[] }
   | { status: "expired" }
   | { status: "revoked" }
   | { status: "invalid" }
@@ -45,11 +50,17 @@ export type IssuanceAuthorizationDecision =
  *      determine denies with `visibility_unknown` — never assume public (AC1/AC3).
  *   3. an all-public request is authorized with NO Activation Key required
  *      (the public-free layer-3 policy); the entitlement snapshot is not consulted.
- *   4. otherwise (at least one private/internal repository) an active,
- *      private-covering entitlement is required; every other entitlement state
- *      denies with its own distinct fail-closed reason code (AC3/AC4/AC5). The
- *      snapshot is resolved from the license authority before this runs, so the
- *      decision function stays pure; an omitted snapshot fails closed as `none`.
+ *   4. otherwise (at least one private/internal repository) an active entitlement
+ *      that covers EVERY requested private repository is required; any other
+ *      state — or any private repo the active entitlement does not cover — denies
+ *      with a distinct fail-closed reason code (AC3/AC4/AC5). The snapshot is
+ *      resolved from the license authority before this runs, so the decision
+ *      function stays pure; an omitted snapshot fails closed as `none`.
+ *
+ * The ONLY path that returns `allow` for a non-public request is an explicit,
+ * per-repository coverage match; every other input — including an entitlement
+ * status outside the known union (contract drift) — falls through to a
+ * fail-closed deny (never an implicit allow).
  */
 export function authorizeTokenIssuance(input: {
   requestedRepositories: RequestedRepository[];
@@ -66,23 +77,34 @@ export function authorizeTokenIssuance(input: {
     decision: "allow",
     repositories: repositories.map((repository) => repository.fullName)
   };
-  if (repositories.every((repository) => repository.visibility === "public")) {
+  const nonPublic = repositories.filter((repository) => repository.visibility !== "public");
+  if (nonPublic.length === 0) {
     return allow;
   }
-  const denial = entitlementDenialReason(input.entitlement ?? { status: "none" });
-  return denial ? { decision: "deny", reason: denial } : allow;
+  const entitlement = input.entitlement ?? { status: "none" };
+  // Fail closed by construction: the sole authorizing branch is an active
+  // entitlement whose covered set names every requested private repository.
+  if (entitlement.status === "active" && Array.isArray(entitlement.coveredPrivateRepositories)) {
+    const covered = new Set(entitlement.coveredPrivateRepositories);
+    if (nonPublic.every((repository) => covered.has(repository.fullName))) {
+      return allow;
+    }
+    return { decision: "deny", reason: "entitlement_scope_insufficient" };
+  }
+  return { decision: "deny", reason: entitlementDenialReason(entitlement) };
 }
 
 /**
- * Map a non-public request's entitlement snapshot to its fail-closed reason code,
- * or `undefined` when the entitlement authorizes private/internal work. The only
- * authorizing state is an active license whose scope covers private repositories;
- * a provider key is never an input here, so it can never unlock private (AC5).
+ * Map a non-authorizing entitlement snapshot to its fail-closed reason code. The
+ * `default` is load-bearing: any status outside the known union (contract drift,
+ * a future license state, a malformed snapshot) denies as `entitlement_invalid`
+ * rather than falling through — the seam never mints on an unrecognized state.
  */
-function entitlementDenialReason(entitlement: EntitlementSnapshot): BrokerReason | undefined {
+function entitlementDenialReason(entitlement: EntitlementSnapshot): BrokerReason {
   switch (entitlement.status) {
     case "active":
-      return entitlement.privateRepoAllowed ? undefined : "entitlement_scope_insufficient";
+      // An active snapshot without a usable covered set covers nothing.
+      return "entitlement_scope_insufficient";
     case "expired":
       return "entitlement_expired";
     case "revoked":
@@ -97,5 +119,7 @@ function entitlementDenialReason(entitlement: EntitlementSnapshot): BrokerReason
       return "entitlement_service_unavailable";
     case "none":
       return "entitlement_missing";
+    default:
+      return "entitlement_invalid";
   }
 }

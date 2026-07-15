@@ -26,8 +26,11 @@ const PRIVATE = repo("octo/secret", "private", 12);
 const INTERNAL = repo("octo/internal", "internal", 13);
 const UNKNOWN = repo("octo/mystery", "unknown", 14);
 
-const ACTIVE_PRIVATE: EntitlementSnapshot = { status: "active", privateRepoAllowed: true };
-const ACTIVE_PUBLIC_ONLY: EntitlementSnapshot = { status: "active", privateRepoAllowed: false };
+const ACTIVE_PRIVATE: EntitlementSnapshot = {
+  status: "active",
+  coveredPrivateRepositories: ["octo/secret", "octo/internal"]
+};
+const ACTIVE_PUBLIC_ONLY: EntitlementSnapshot = { status: "active", coveredPrivateRepositories: [] };
 
 interface Row {
   name: string;

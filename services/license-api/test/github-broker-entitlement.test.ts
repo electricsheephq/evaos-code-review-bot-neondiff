@@ -31,7 +31,10 @@ const INSTALL: FakeInstallation = {
   ]
 };
 
-const ACTIVE_PRIVATE: EntitlementSnapshot = { status: "active", privateRepoAllowed: true };
+const ACTIVE_PRIVATE: EntitlementSnapshot = {
+  status: "active",
+  coveredPrivateRepositories: ["octo/private", "octo/internal"]
+};
 
 interface RecordingResolver {
   resolveEntitlement: (context: EntitlementResolutionContext) => EntitlementSnapshot;
@@ -145,7 +148,7 @@ describe("github broker entitlement binding at the mint path (#614)", () => {
   });
 
   const denyCases: Array<{ name: string; snapshot: EntitlementSnapshot | "throws"; status: number; reason: string }> = [
-    { name: "public-only active license", snapshot: { status: "active", privateRepoAllowed: false }, status: 403, reason: "entitlement_scope_insufficient" },
+    { name: "public-only active license", snapshot: { status: "active", coveredPrivateRepositories: [] }, status: 403, reason: "entitlement_scope_insufficient" },
     { name: "expired", snapshot: { status: "expired" }, status: 403, reason: "entitlement_expired" },
     { name: "revoked", snapshot: { status: "revoked" }, status: 403, reason: "entitlement_revoked" },
     { name: "invalid", snapshot: { status: "invalid" }, status: 403, reason: "entitlement_invalid" },
