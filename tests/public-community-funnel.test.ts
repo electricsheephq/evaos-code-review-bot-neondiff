@@ -23,7 +23,8 @@ describe("NeonDiff public community funnel", () => {
       /docs\/pricing\.md/i,
       /docs\/providers\.md/i,
       /docs\/known-limitations-and-provider-status\.md/i,
-      /API-backed activation is required.*every repository/i,
+      /public open-source repositor(?:y|ies) (?:are|is) free/i,
+      /API-backed activation is required for private, internal, and commercial/i,
       /v1\.0\.4 verification notice/i,
       /v1\.0\.4 is the first package intended to enforce\s*>?\s*mandatory API-backed activation/i,
       /v1\.0\.3 and\s*>?\s*earlier do not enforce this boundary/i,
@@ -96,13 +97,13 @@ describe("NeonDiff public community funnel", () => {
       "docs/neondiff-config.md",
       "docs/teams-marketplace-plan.md"
     ].map(read).join("\n");
-    for (const retiredClaim of [
-      /public(?: open-source)? repositor(?:y|ies) (?:are|is) free/i,
-      /free (?:for|on) public repositor(?:y|ies)/i,
-      /public repos? with no license (?:may )?(?:pass|run|review)/i
-    ]) {
-      expect(currentPublicSurfaces).not.toMatch(retiredClaim);
-    }
+    // Owner ruling (reversing the #532 "activate every repository" pivot): public
+    // open-source repositories are FREE with no Activation Key, so the former
+    // "retired free-use claim" guards are removed. The correct layer-3 claim is now
+    // asserted positively (README required-claims above + check-public-claims.mjs):
+    // public free; private/internal/commercial require active API-backed entitlement.
+    expect(currentPublicSurfaces).toMatch(/public open-source repositor(?:y|ies) (?:are|is) free/i);
+    expect(currentPublicSurfaces).toMatch(/API-backed activation is required for private, internal, and commercial/i);
   });
 
   it("pricing doc records support tiers, BYOK costs, and no hosted model credit bundle", () => {
