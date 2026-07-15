@@ -111,8 +111,9 @@ substitute `./dist/src/cli.js` anywhere this guide calls `neondiff`.
 
 ## Set Up
 
-Follow [docs/SETUP.md](docs/SETUP.md) for the full first-run path. The short
-version is:
+Follow [docs/SETUP.md](docs/SETUP.md) for the CLI-first setup path (the
+first-run path on non-Mac platforms and the operator/advanced path on Mac). The
+short version is:
 
 ```bash
 neondiff init --config config.local.json
@@ -126,9 +127,12 @@ neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
-The local HTML dashboard is the first-run setup surface. It shows license status,
-GitHub App status, daemon status, and provider readiness, and its provider card
-includes a `Verify API Key` control that reports redacted pass/fail output.
+For the Mac customer journey, the native macOS app (`apps/neondiff-desktop`) is
+the human first-run surface. The local HTML dashboard is an operator/diagnostic
+surface for CLI-first and non-Mac setups, not the product UI. It shows license
+status, GitHub App status, daemon status, and provider readiness, and its
+provider card includes a `Verify API Key` control that reports redacted
+pass/fail output.
 The native Providers pane reads and edits the saved `providers` registry, not
 the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview, and
 Apply the exact selected provider before Verify is enabled; verification pins

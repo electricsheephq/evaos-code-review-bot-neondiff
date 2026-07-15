@@ -1,4 +1,201 @@
 import SwiftUI
+import NeonDiffDesktopAppCore
+
+// MARK: - NeonDiff design contract (#611)
+//
+// Semantic token + type + component layer derived from the live production
+// website (https://neondiff.com, captured 2026-07-15). Values live as pure
+// sRGB in NeonDiffDesktopAppCore.NDDesignTokens (unit-tested for existence and
+// WCAG contrast); this layer resolves them into SwiftUI for both appearances.
+// See docs/design/live-site-design-source.md. This is additive translation, not
+// a rewrite of the existing NeonDiffTheme operator styling.
+
+/// Resolves the ten semantic roles into plain SwiftUI colors for a given
+/// appearance. Built from SwiftUI's `\.colorScheme` (NOT an NSColor dynamic
+/// provider) so it follows `.preferredColorScheme` and the evaluation fixture's
+/// appearance override — an NSColor dynamic provider resolves against the
+/// window/system appearance and silently ignores the SwiftUI scheme.
+struct NDPalette {
+    var scheme: ColorScheme
+
+    private func resolve(_ token: NDSemanticColor) -> Color {
+        let value = scheme == .dark ? token.dark : token.light
+        return Color(.sRGB, red: value.red, green: value.green, blue: value.blue, opacity: value.opacity)
+    }
+
+    var background: Color { resolve(NDDesignTokens.background) }
+    var surface: Color { resolve(NDDesignTokens.surface) }
+    var textPrimary: Color { resolve(NDDesignTokens.textPrimary) }
+    var textSecondary: Color { resolve(NDDesignTokens.textSecondary) }
+    var accentPrimary: Color { resolve(NDDesignTokens.accentPrimary) }
+    var accentMagenta: Color { resolve(NDDesignTokens.accentMagenta) }
+    var warning: Color { resolve(NDDesignTokens.warning) }
+    var danger: Color { resolve(NDDesignTokens.danger) }
+    var borderPrimary: Color { resolve(NDDesignTokens.borderPrimary) }
+    var borderInput: Color { resolve(NDDesignTokens.borderInput) }
+}
+
+/// The mono label/console type system — the strongest carry-over identity
+/// element. Relative text styles so everything scales with Dynamic Type.
+enum NDFont {
+    /// Section labels, status chips, stat-row labels. Apply with `ndSectionLabel()`.
+    static let label = Font.system(.caption, design: .monospaced).weight(.semibold)
+    /// Console/key-value values.
+    static let mono = Font.system(.footnote, design: .monospaced)
+}
+
+extension View {
+    /// `SECTION // LABEL`-style uppercase mono header in working screens.
+    func ndSectionLabel(_ palette: NDPalette) -> some View {
+        self.font(NDFont.label)
+            .tracking(1.8)
+            .textCase(.uppercase)
+            .foregroundStyle(palette.textSecondary)
+    }
+}
+
+/// `[ TITLE ]` bracket CTA for the ONE primary action per screen. Square
+/// corners, accentPrimary @6% fill, primary border @40% stepping to full alpha
+/// under Increase Contrast, disabled/pressed states. Keyboard focus preserved.
+struct NDBracketButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        NDBracketButtonBody(configuration: configuration)
+    }
+
+    private struct NDBracketButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.colorSchemeContrast) private var contrast
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let palette = NDPalette(scheme: colorScheme)
+            let increased = contrast == .increased
+            let borderAlpha = increased ? 1.0 : (configuration.isPressed ? 0.7 : 0.4)
+            let fillAlpha = configuration.isPressed ? 0.12 : 0.06
+
+            HStack(spacing: 6) {
+                Text("[").font(NDFont.label)
+                configuration.label
+                    .font(NDFont.label)
+                    .textCase(.uppercase)
+                    .tracking(1.8)
+                Text("]").font(NDFont.label)
+            }
+            .foregroundStyle(palette.accentPrimary.opacity(isEnabled ? 1 : 0.45))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Rectangle().fill(palette.accentPrimary.opacity(isEnabled ? fillAlpha : 0.03)))
+            .overlay(Rectangle().stroke(palette.accentPrimary.opacity(isEnabled ? borderAlpha : 0.25), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+    }
+}
+
+/// Secondary/tertiary actions on tokenized surfaces. Legible in both
+/// appearances (textPrimary label, 1px borderInput outline, square corners per
+/// the contract — the angled/bracket treatment is reserved for the ONE primary
+/// action per screen). Not neon, so the bracket primary stays unambiguous.
+struct NDSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        NDSecondaryButtonBody(configuration: configuration)
+    }
+
+    private struct NDSecondaryButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.colorSchemeContrast) private var contrast
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let palette = NDPalette(scheme: colorScheme)
+            let increased = contrast == .increased
+            let borderColor = increased ? palette.accentPrimary : palette.borderInput
+            configuration.label
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .foregroundStyle(palette.textPrimary.opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.4))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(Rectangle().fill(palette.surface.opacity(configuration.isPressed ? 0.6 : 1)))
+                .overlay(Rectangle().stroke(borderColor, lineWidth: 1))
+                .contentShape(Rectangle())
+        }
+    }
+}
+
+/// Console/evidence surface: surface background, 1px primary border, corner
+/// ticks. Border steps to full-alpha accent under Increase Contrast. The
+/// corner-tick flourish is the one decorative brand treatment a screen may
+/// spend (neon budget), so it is reserved for evidence/log/review surfaces
+/// where it is the sole treatment — the Overview reference screen spends its
+/// budget on the bracket CTA instead. Downstream adoption is #520-owned.
+struct NDConsolePanel<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        NDConsolePanelBody { content }
+    }
+
+    private struct NDConsolePanelBody<Inner: View>: View {
+        @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.colorSchemeContrast) private var contrast
+        private let inner: Inner
+
+        init(@ViewBuilder inner: () -> Inner) {
+            self.inner = inner()
+        }
+
+        var body: some View {
+            let palette = NDPalette(scheme: colorScheme)
+            let increased = contrast == .increased
+            inner
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(Rectangle().fill(palette.surface))
+                .overlay(
+                    Rectangle().stroke(increased ? palette.accentPrimary : palette.borderPrimary, lineWidth: 1)
+                )
+                .overlay(NDConsoleCornerTicks(color: palette.accentPrimary.opacity(increased ? 1 : 0.7)))
+        }
+    }
+}
+
+private struct NDConsoleCornerTicks: View {
+    var color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            let length: CGFloat = 14
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: length))
+                path.addLine(to: .zero)
+                path.addLine(to: CGPoint(x: length, y: 0))
+
+                path.move(to: CGPoint(x: width - length, y: 0))
+                path.addLine(to: CGPoint(x: width, y: 0))
+                path.addLine(to: CGPoint(x: width, y: length))
+
+                path.move(to: CGPoint(x: width, y: height - length))
+                path.addLine(to: CGPoint(x: width, y: height))
+                path.addLine(to: CGPoint(x: width - length, y: height))
+
+                path.move(to: CGPoint(x: length, y: height))
+                path.addLine(to: CGPoint(x: 0, y: height))
+                path.addLine(to: CGPoint(x: 0, y: height - length))
+            }
+            .stroke(color, lineWidth: 1)
+        }
+        .allowsHitTesting(false)
+    }
+}
 
 enum NeonDiffTheme {
     static let shell = Color(red: 0.020, green: 0.024, blue: 0.031)
@@ -209,11 +406,15 @@ struct OperatorTextField: View {
 struct OperatorCommandText: View {
     var text: String
     var lineLimit: Int? = 3
+    /// When set, the command text resolves `textSecondary` from the #611 token
+    /// palette so it stays legible on tokenized light-mode surfaces. Legacy
+    /// callers keep the dark operator color.
+    var palette: NDPalette? = nil
 
     var body: some View {
         Text(text)
             .font(NeonDiffTheme.commandFont)
-            .foregroundStyle(NeonDiffTheme.textSecondary)
+            .foregroundStyle(palette?.textSecondary ?? NeonDiffTheme.textSecondary)
             .textSelection(.enabled)
             .lineLimit(lineLimit)
             .frame(maxWidth: .infinity, alignment: .leading)

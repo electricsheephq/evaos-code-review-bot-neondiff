@@ -1,8 +1,12 @@
 # NeonDiff Setup
 
-This guide is the first-run path for the current source-available release. The
-recommended path installs the `neondiff` npm package; source checkout remains a
-fallback for contributors and reviewers who want to inspect or build locally. See
+This guide is the CLI-first setup path for the current source-available release,
+and the first-run path on non-Mac platforms. On macOS the native app
+(`apps/neondiff-desktop`) is the human first-run surface; until the native
+broker/launchd proof lands (see the native-broker note below) it hands off to
+this operator/advanced path for setup actions it cannot yet complete natively.
+The recommended path installs the `neondiff` npm package; source checkout remains
+a fallback for contributors and reviewers who want to inspect or build locally. See
 [LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
 for the public/private repo license boundary, and [docs/pricing.md](pricing.md)
 for the support-tier pricing contract.
@@ -220,9 +224,13 @@ neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
-The local HTML dashboard is the human first-run surface. It shows license
-status, GitHub App status, daemon status, and provider readiness with redacted
-output. Use the provider card's `Verify API Key` button before launch/use; the
+This SETUP guide is the operator/advanced CLI-first path, and the first-run path
+on non-Mac platforms. The local HTML dashboard is the operator/diagnostic surface
+it drives. On Mac, the native macOS app is the human first-run product surface —
+the customer starts there; until the native broker/launchd proof lands (see the
+native-broker note above) the app hands off to this operator path for the setup
+actions it cannot yet complete natively. The dashboard shows license status,
+GitHub App status, daemon status, and provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing
 the submitted key.
 
