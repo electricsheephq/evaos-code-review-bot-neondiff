@@ -113,7 +113,7 @@ public protocol ActivationLicenseClienting: Sendable {
     func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome
 }
 
-public struct CLIActivationLicenseClient: ActivationLicenseClienting {
+public final class CLIActivationLicenseClient: ActivationLicenseClienting, @unchecked Sendable {
     private let cli: any NeonDiffCLIClienting
     private let configPath: String
     private let timeout: TimeInterval
@@ -158,7 +158,8 @@ public struct CLIActivationLicenseClient: ActivationLicenseClienting {
     }
 
     /// Parse the CLI's redacted `LicenseStatusResult` JSON into an outcome.
-    static func classify(stdout: String) -> ActivationClientOutcome {
+    /// Shared by the AppCore CLI adapter so both paths classify identically.
+    public static func classify(stdout: String) -> ActivationClientOutcome {
         guard let data = stdout.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let status = root["status"] as? String

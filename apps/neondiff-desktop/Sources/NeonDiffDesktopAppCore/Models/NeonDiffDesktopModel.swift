@@ -1192,6 +1192,29 @@ package final class NeonDiffDesktopModel: ObservableObject {
         applyActivationEvent(.renew)
     }
 
+    /// Single entry the UI calls for the one recovery action a state advertises.
+    package func performActivationRecovery() async {
+        guard let event = activationPresentation.recovery?.event else { return }
+        switch event {
+        case .beginCheckout, .checkoutUnavailable:
+            beginActivationCheckout()
+        case .provideExistingKey:
+            provideExistingActivationKey()
+        case .submitActivation:
+            await submitActivation()
+        case .checkoutCancelled:
+            cancelActivationCheckout()
+        case .reenterKey:
+            reenterActivationKey()
+        case .renew:
+            renewActivation()
+        case .retry:
+            await retryActivation()
+        default:
+            applyActivationEvent(event)
+        }
+    }
+
     package func requestActivationNotifyWhenCheckoutReopens() {
         logText = "You'll be notified when \(ActivationTerminology.activationKey) checkout reopens. Existing keys still activate now."
     }

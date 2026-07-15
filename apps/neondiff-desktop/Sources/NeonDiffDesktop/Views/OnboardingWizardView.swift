@@ -229,7 +229,18 @@ struct OnboardingWizardView: View {
         }
     }
 
+    @ViewBuilder
     private var licenseStep: some View {
+        if model.activationHandoffEnabled {
+            VStack(alignment: .leading, spacing: 16) {
+                ActivationStateView(model: model)
+            }
+        } else {
+            legacyLicenseStep
+        }
+    }
+
+    private var legacyLicenseStep: some View {
         VStack(alignment: .leading, spacing: 16) {
             OperatorSection("License") {
                 OperatorTextField(title: "License Key", text: $model.pendingLicenseKey, secure: true)
