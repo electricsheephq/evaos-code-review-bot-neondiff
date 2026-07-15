@@ -40,12 +40,25 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(plan.testTargets[0].target.name).toBe("NeonDiffDesktopUITests");
   });
 
-  it("launches only a deterministic in-memory fixture and finds the native root", () => {
+  it("launches the strict deterministic fixture contract and finds its native root", () => {
+    const project = readFileSync(projectPath, "utf8");
     const source = readFileSync(uiTestPath, "utf8");
-    expect(source).toContain('NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE');
-    expect(source).toContain('provider-verification');
-    expect(source).toContain('neondiff.desktop.root');
+    expect(project).toContain("NeonDiffDesktopFixtureResolve");
+    expect(project).toContain("NeonDiffDesktopEvaluationSupport in Frameworks");
+    expect(project).toContain("$(CONTENTS_FOLDER_PATH)/Helpers");
+    expect(project).toContain('$CONFIGURATION\\" != \\"Debug');
+    expect(project.match(/SKIP_INSTALL = YES;/g)).toHaveLength(2);
+    expect(project).toContain("tab-overview.json in Resources");
+    expect(source).toContain('"--ui-testing"');
+    expect(source).toContain('"--ui-fixture"');
+    expect(source).toContain('"--content-size"');
+    expect(source).toContain('"1040x680"');
+    expect(source).toContain('"--disable-animations"');
+    expect(source).toContain('"tab-overview"');
+    expect(source).toContain('"neondiff.fixture.tab-overview"');
+    expect(source).toContain(".posixPermissions: 0o700");
     expect(source).toContain("XCUIApplication()");
+    expect(source).not.toContain('NEONDIFF_DESKTOP_VISUAL_PROOF_FIXTURE');
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {

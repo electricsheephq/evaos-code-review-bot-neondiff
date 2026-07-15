@@ -10,7 +10,11 @@ let package = Package(
         .executable(name: "NeonDiffDesktop", targets: ["NeonDiffDesktop"]),
         .executable(name: "NeonDiffDesktopCoreSmoke", targets: ["NeonDiffDesktopCoreSmoke"]),
         .library(name: "NeonDiffDesktopCore", targets: ["NeonDiffDesktopCore"]),
-        .library(name: "NeonDiffDesktopAppCore", targets: ["NeonDiffDesktopAppCore"])
+        .library(name: "NeonDiffDesktopAppCore", targets: ["NeonDiffDesktopAppCore"]),
+        .library(
+            name: "NeonDiffDesktopEvaluationSupport",
+            targets: ["NeonDiffDesktopEvaluationSupport"]
+        )
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0")
