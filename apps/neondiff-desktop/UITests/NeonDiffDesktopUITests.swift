@@ -43,7 +43,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 fixtureId: "tab-overview",
                 requestedContentSize: requestedContentSize,
                 semanticTextIdentifier: "neondiff-section-title",
-                expectedLabel: "Overview",
+                expectedSemanticValue: "Overview",
                 coordinateSpace: "xcui-screen",
                 sampleIntervalMilliseconds: 100,
                 tolerancePoints: 1,
@@ -501,9 +501,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         guard title.waitForExistence(timeout: 2) else {
             throw HostedRenderedTextScaleError.missingElement("neondiff-section-title")
         }
-        guard title.label == "Overview" else {
-            throw HostedRenderedTextScaleError.unexpectedLabel(title.label)
-        }
+        _ = try semanticStaticTextValue(title)
         let samples = try captureStableVisibleTextSamples(
             title,
             visibleContainer: app.windows.firstMatch,
@@ -546,10 +544,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             guard visibleContainerFrame.isFiniteAndNonempty else {
                 throw HostedRenderedTextScaleError.invalidVisibleContainerFrame(context)
             }
-            let label = element.label
-            guard label == "Overview" else {
-                throw HostedRenderedTextScaleError.unexpectedLabel(label)
-            }
+            let semanticValue = try semanticStaticTextValue(element)
             let fullyContainedInVisibleContainer = frame.isFullyContained(
                 in: visibleContainerFrame,
                 tolerance: 1
@@ -565,7 +560,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 HostedRenderedTextSample(
                     elapsedMilliseconds: Int(((sampleStart - start) * 1_000).rounded()),
                     frame: frame,
-                    label: label,
+                    semanticValue: semanticValue,
                     visibleContainerFrame: visibleContainerFrame,
                     fullyContainedInVisibleContainer: fullyContainedInVisibleContainer
                 )
@@ -595,11 +590,21 @@ final class NeonDiffDesktopUITests: XCTestCase {
                   ),
                   baseline.fullyContainedInVisibleContainer,
                   sample.fullyContainedInVisibleContainer,
-                  baseline.label == sample.label else {
+                  baseline.semanticValue == sample.semanticValue else {
                 throw HostedRenderedTextScaleError.unstableGeometry(context)
             }
         }
         return samples
+    }
+
+    private func semanticStaticTextValue(_ element: XCUIElement) throws -> String {
+        guard let semanticValue = element.value as? String,
+              semanticValue == "Overview" else {
+            throw HostedRenderedTextScaleError.unexpectedSemanticValue(
+                String(describing: element.value)
+            )
+        }
+        return semanticValue
     }
 
     private func captureCanonicalSizeScenario(
@@ -1566,7 +1571,7 @@ private struct HostedLargeTextMatrixTrace: Codable {
 private struct HostedRenderedTextSample: Codable, Equatable {
     let elapsedMilliseconds: Int
     let frame: HostedGeometryFrame
-    let label: String
+    let semanticValue: String
     let visibleContainerFrame: HostedGeometryFrame
     let fullyContainedInVisibleContainer: Bool
 }
@@ -1584,7 +1589,7 @@ private struct HostedRenderedTextScaleTrace: Codable {
     let fixtureId: String
     let requestedContentSize: HostedContentSize
     let semanticTextIdentifier: String
-    let expectedLabel: String
+    let expectedSemanticValue: String
     let coordinateSpace: String
     let sampleIntervalMilliseconds: Int
     let tolerancePoints: Double
@@ -1651,7 +1656,7 @@ private enum HostedRenderedTextScaleError: LocalizedError {
     case appNotForeground
     case missingElement(String)
     case invalidElementCount(identifier: String, count: Int)
-    case unexpectedLabel(String)
+    case unexpectedSemanticValue(String)
     case invalidFrame(String)
     case invalidVisibleContainerFrame(String)
     case textNotVisible(
@@ -1678,8 +1683,8 @@ private enum HostedRenderedTextScaleError: LocalizedError {
         case let .invalidElementCount(identifier, count):
             "Hosted rendered-text element count is not exactly one: "
                 + "identifier=\(identifier) count=\(count)"
-        case .unexpectedLabel(let label):
-            "Hosted rendered-text element has an unexpected label: \(label)"
+        case .unexpectedSemanticValue(let value):
+            "Hosted rendered-text element has an unexpected semantic value: \(value)"
         case .invalidFrame(let context):
             "Hosted rendered-text frame is invalid: \(context)"
         case .invalidVisibleContainerFrame(let context):

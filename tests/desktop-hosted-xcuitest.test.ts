@@ -538,6 +538,9 @@ private func target() {
     expect(source).toContain("visibleContainer: app.windows.firstMatch");
     expect(source).toContain("fullyContainedInVisibleContainer");
     expect(source).toContain("case textNotVisible(");
+    expect(source).toContain("element.value as? String");
+    expect(source).toContain("case unexpectedSemanticValue(String)");
+    expect(source).toContain('expectedSemanticValue: "Overview"');
     expect(source).toContain(
       'proofBoundary: "hosted-visible-production-section-title-rendered-scale-comparison-only-system-preference-excluded"'
     );
@@ -551,7 +554,6 @@ private func target() {
     expect(theme).toContain(
       '.accessibilityIdentifier("neondiff-section-title")'
     );
-    expect(theme).toContain(".accessibilityLabel(title)");
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
