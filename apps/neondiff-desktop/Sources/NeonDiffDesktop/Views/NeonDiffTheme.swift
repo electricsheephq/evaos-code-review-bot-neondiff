@@ -126,7 +126,11 @@ struct NDSecondaryButtonStyle: ButtonStyle {
 }
 
 /// Console/evidence surface: surface background, 1px primary border, corner
-/// ticks. Border steps to full-alpha accent under Increase Contrast.
+/// ticks. Border steps to full-alpha accent under Increase Contrast. The
+/// corner-tick flourish is the one decorative brand treatment a screen may
+/// spend (neon budget), so it is reserved for evidence/log/review surfaces
+/// where it is the sole treatment — the Overview reference screen spends its
+/// budget on the bracket CTA instead. Downstream adoption is #520-owned.
 struct NDConsolePanel<Content: View>: View {
     private let content: Content
 

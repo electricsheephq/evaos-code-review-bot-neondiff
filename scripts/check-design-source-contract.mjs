@@ -36,6 +36,14 @@ const requiredHeadings = [
   "Accessibility floors"
 ];
 
+// A required section counts only when it appears as a real Markdown heading
+// line (`^#{1,6} <text>`), not merely as a substring somewhere in prose — so a
+// section cannot be silently demoted to a sentence while keeping the gate green.
+function hasHeading(doc, heading) {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^#{1,6}[ \\t]+${escaped}[ \\t]*$`, "m").test(doc);
+}
+
 // Retired-direction language that must not reappear as an affirmative claim.
 // `exempt` (optional) matches negated/boundary phrasing on the same line that
 // is legitimate — e.g. "no WebView product UI" is a disclaimer of the rejected
@@ -69,7 +77,7 @@ export function collectViolations(root = process.cwd()) {
       }
     }
     for (const heading of requiredHeadings) {
-      if (!doc.includes(heading)) {
+      if (!hasHeading(doc, heading)) {
         violations.push(`${designDoc}: missing required section "${heading}"`);
       }
     }

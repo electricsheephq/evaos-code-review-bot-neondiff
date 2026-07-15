@@ -94,10 +94,13 @@ status glyph language — not via neon-on-black.
   #D9FFE6 ≈ 19.4:1; accentPrimary #39FF88 ≈ 15.8:1; textSecondary #6D8A75 ≈ 5.5:1; accentMagenta
   #FF2BD6 ≈ 6.6:1. Measured (light, on #FAFAF8): textPrimary #1A211C ≈ 15.7:1; accentPrimary #0F7A3D
   ≈ 5.2:1; textSecondary #5A6B5F ≈ 5.4:1.
-  Method: these ratios use the WCAG 2.x relative-luminance formula computed in
-  `apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests/NDDesignTokenContractTests.swift`, which fails
-  the build below the 4.5:1 floor for textPrimary/background and accentPrimary/background in both
-  appearances; the reference-screen run is recorded in the evidence `contrast.txt`.
+  Method: these ratios use the WCAG 2.x relative-luminance formula computed in-repo by
+  `apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests/NDDesignTokenContractTests.swift` — the
+  reproducible proof any reader can run (`cd apps/neondiff-desktop && swift test --filter NDDesignTokenContractTests`).
+  It fails the build below the 4.5:1 floor for textPrimary/background and accentPrimary/background in both
+  appearances, and runs in CI on every head (Swift Desktop Gate → "Swift core, AppCore, and evaluation-support
+  tests"). Rendered screenshot artifacts are held outside the repo per the evidence-retention/secret boundary and
+  are not required to verify these numbers.
 - Status is never conveyed by color alone (glyph + text always).
 - Full VoiceOver labels on all reference-screen controls; keyboard reachability preserved.
 - Respects Reduce Motion (no brand animation), Increase Contrast (borders step up to full alpha),
@@ -106,9 +109,12 @@ status glyph language — not via neon-on-black.
 ## Reference screen
 
 `OverviewView` (default landing tab) demonstrates this contract: tokenized colors/type, mono section
-labels, one bracket primary action, status rows with glyphs, corner-ticked readiness panel.
-Structural redesign of Home hierarchy remains owned by #521; onboarding by #519; the full component
-system by #520 (grounded in this document).
+labels, status rows with glyphs, and one bracket primary action as the screen's single decorative brand
+treatment (per the neon budget: the readiness panel is a plain tokenized surface, not corner-ticked, so
+it does not stack a second treatment against the bracket CTA). The corner-ticked console (`NDConsolePanel`)
+is reserved for evidence/log surfaces where it is the sole treatment. Structural redesign of Home
+hierarchy remains owned by #521; onboarding by #519; the full component system by #520 (grounded in this
+document).
 
 ## Contract enforcement
 

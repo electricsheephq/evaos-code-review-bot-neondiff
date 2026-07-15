@@ -5,8 +5,9 @@ import NeonDiffDesktopCore
 // Reference screen for issue #611: applies the live-site design contract
 // (docs/design/live-site-design-source.md) as native translation — tokenized
 // colors for both appearances, mono uppercase section labels, status rows with
-// glyph + text (never color alone), one bracket primary action, and a
-// corner-ticked readiness console. Colors resolve from the SwiftUI
+// glyph + text (never color alone), and one bracket primary action as the
+// screen's single decorative brand treatment (one-treatment neon budget: the
+// readiness panel is a plain tokenized surface, not corner-ticked). Colors resolve from the SwiftUI
 // `\.colorScheme` (NDPalette) so light mode actually renders light. Behavior,
 // bindings, accessibility identifiers, and the #517 geometry sentinel
 // (neondiff-overview-start-dashboard) are preserved; structural Home redesign
@@ -19,19 +20,26 @@ struct OverviewView: View {
         let nd = NDPalette(scheme: colorScheme)
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                NDConsolePanel {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Readiness // Overview").ndSectionLabel(nd)
-                        StatusRow(title: "Runtime", value: model.status.healthState, palette: nd)
-                        StatusRow(title: "Repos", value: "\(model.status.monitoredRepos.count)", palette: nd)
-                        StatusRow(title: "Keys", value: model.providers.providerKeyStored ? "stored" : "missing", palette: nd)
-                        StatusRow(
-                            title: "Dashboard",
-                            value: model.dashboardProcessIdentifier == nil ? model.dashboardLaunchStatus : "launched",
-                            palette: nd
-                        )
-                    }
+                // Readiness console: tokenized bordered surface with mono labels
+                // and glyph+text status rows. The corner-tick flourish
+                // (NDConsolePanel) is intentionally omitted here so the bracket
+                // CTA below is the screen's single decorative brand treatment,
+                // honoring the one-treatment neon budget (#611).
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Readiness // Overview").ndSectionLabel(nd)
+                    StatusRow(title: "Runtime", value: model.status.healthState, palette: nd)
+                    StatusRow(title: "Repos", value: "\(model.status.monitoredRepos.count)", palette: nd)
+                    StatusRow(title: "Keys", value: model.providers.providerKeyStored ? "stored" : "missing", palette: nd)
+                    StatusRow(
+                        title: "Dashboard",
+                        value: model.dashboardProcessIdentifier == nil ? model.dashboardLaunchStatus : "launched",
+                        palette: nd
+                    )
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(Rectangle().fill(nd.surface))
+                .overlay(Rectangle().stroke(nd.borderPrimary, lineWidth: 1))
 
                 OverviewSection(title: "Local Dashboard Launcher // Operator", palette: nd) {
                     Text("The Mac app stays in control on launch. Start the local dashboard service here, then open the browser dashboard only when you choose to inspect the full HTML setup surface.")

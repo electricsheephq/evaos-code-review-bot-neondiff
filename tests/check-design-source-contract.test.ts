@@ -73,6 +73,18 @@ describe("design-source contract gate", () => {
     expect(violations.some((v) => v.includes('missing required section "Light mode"'))).toBe(true);
   });
 
+  it("fails when a required heading appears only as prose, not a real heading", () => {
+    // The words are present, but only as inline prose — the section was removed.
+    // A substring match would false-pass this; the gate requires a real
+    // Markdown heading line (`^#{1,6} Light mode`).
+    const demoted = validDesignDoc.replace(
+      "## Light mode\n",
+      "We also cover Light mode inside the Accessibility floors section.\n"
+    );
+    const violations = collectViolations(writeFixture({ "docs/design/live-site-design-source.md": demoted }));
+    expect(violations.some((v) => v.includes('missing required section "Light mode"'))).toBe(true);
+  });
+
   it("fails when the rejected-direction statement is stripped", () => {
     const stripped = validDesignDoc.replace("The unshipped redesign is rejected.", "The unshipped redesign is retired.");
     const violations = collectViolations(writeFixture({ "docs/design/live-site-design-source.md": stripped }));
