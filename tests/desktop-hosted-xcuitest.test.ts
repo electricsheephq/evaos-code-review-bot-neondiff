@@ -219,9 +219,27 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(
       source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
     ).toHaveLength(1);
-    expect(source).not.toContain(".swipeUp(");
-    expect(source).not.toContain(".swipeDown(");
-    expect(source).not.toContain("coordinate(withNormalizedOffset:");
+    const checkpointStart = source.indexOf(
+      "private func capturePageBottomCheckpoint("
+    );
+    const checkpointEnd = source.indexOf(
+      "private func capturePageBottomSamples(",
+      checkpointStart
+    );
+    expect(checkpointStart).toBeGreaterThan(-1);
+    expect(checkpointEnd).toBeGreaterThan(checkpointStart);
+    const checkpointSource = source.slice(checkpointStart, checkpointEnd);
+    expect(checkpointSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
+    expect(checkpointSource).not.toMatch(
+      /\.(?:swipe\w*|tap|click|press|drag|coordinate)\s*\(/
+    );
+    expect(checkpointSource).not.toMatch(
+      /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
+    );
+    expect(checkpointSource).toContain("preActionSamples.allSatisfy");
+    expect(checkpointSource).toContain(
+      "for (sampleIndex, postActionSample) in postActionSamples.enumerated()"
+    );
     expect(source).toContain("try requireFullyContained(");
     expect(source).toContain('result: "returned"');
     expect(source).toContain("effectProven: true");

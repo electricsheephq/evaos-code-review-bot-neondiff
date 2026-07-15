@@ -322,11 +322,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
             detailRegion: detailRegion,
             context: "\(section)-pre"
         )
-        let preActionSample = try XCTUnwrap(preActionSamples.last)
         let didIssueScroll: Bool
         let postActionSamples: [HostedPageBottomSample]
-        if preActionSample.sentinelFullyContainedInOuterScroll
-            && preActionSample.sentinelFullyContainedInDetailRegion {
+        if preActionSamples.allSatisfy({
+            $0.sentinelFullyContainedInOuterScroll
+                && $0.sentinelFullyContainedInDetailRegion
+        }) {
             didIssueScroll = false
             postActionSamples = preActionSamples
         } else {
@@ -340,17 +341,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
 
-        let postActionSample = try XCTUnwrap(postActionSamples.last)
-        try requireFullyContained(
-            postActionSample.sentinelFrame,
-            in: postActionSample.outerScrollFrame,
-            context: "\(section) outer scroll"
-        )
-        try requireFullyContained(
-            postActionSample.sentinelFrame,
-            in: postActionSample.detailRegionFrame,
-            context: "\(section) detail region"
-        )
+        for (sampleIndex, postActionSample) in postActionSamples.enumerated() {
+            try requireFullyContained(
+                postActionSample.sentinelFrame,
+                in: postActionSample.outerScrollFrame,
+                context: "\(section) outer scroll sample \(sampleIndex)"
+            )
+            try requireFullyContained(
+                postActionSample.sentinelFrame,
+                in: postActionSample.detailRegionFrame,
+                context: "\(section) detail region sample \(sampleIndex)"
+            )
+        }
         let scrollAction = didIssueScroll
             ? HostedPageScrollAction(
                 controlIdentifier: outerScrollIdentifier,
