@@ -92,6 +92,39 @@ struct NDBracketButtonStyle: ButtonStyle {
     }
 }
 
+/// Secondary/tertiary actions on tokenized surfaces. Legible in both
+/// appearances (textPrimary label, 1px borderInput outline, square corners per
+/// the contract — the angled/bracket treatment is reserved for the ONE primary
+/// action per screen). Not neon, so the bracket primary stays unambiguous.
+struct NDSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        NDSecondaryButtonBody(configuration: configuration)
+    }
+
+    private struct NDSecondaryButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.colorSchemeContrast) private var contrast
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let palette = NDPalette(scheme: colorScheme)
+            let increased = contrast == .increased
+            let borderColor = increased ? palette.accentPrimary : palette.borderInput
+            configuration.label
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .foregroundStyle(palette.textPrimary.opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.4))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(Rectangle().fill(palette.surface.opacity(configuration.isPressed ? 0.6 : 1)))
+                .overlay(Rectangle().stroke(borderColor, lineWidth: 1))
+                .contentShape(Rectangle())
+        }
+    }
+}
+
 /// Console/evidence surface: surface background, 1px primary border, corner
 /// ticks. Border steps to full-alpha accent under Increase Contrast.
 struct NDConsolePanel<Content: View>: View {
@@ -369,11 +402,15 @@ struct OperatorTextField: View {
 struct OperatorCommandText: View {
     var text: String
     var lineLimit: Int? = 3
+    /// When set, the command text resolves `textSecondary` from the #611 token
+    /// palette so it stays legible on tokenized light-mode surfaces. Legacy
+    /// callers keep the dark operator color.
+    var palette: NDPalette? = nil
 
     var body: some View {
         Text(text)
             .font(NeonDiffTheme.commandFont)
-            .foregroundStyle(NeonDiffTheme.textSecondary)
+            .foregroundStyle(palette?.textSecondary ?? NeonDiffTheme.textSecondary)
             .textSelection(.enabled)
             .lineLimit(lineLimit)
             .frame(maxWidth: .infinity, alignment: .leading)

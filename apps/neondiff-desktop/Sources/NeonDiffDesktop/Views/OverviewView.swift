@@ -50,15 +50,17 @@ struct OverviewView: View {
                         Button { model.openDashboard() } label: {
                             Label("Open Browser Dashboard", systemImage: "safari")
                         }
+                        .buttonStyle(NDSecondaryButtonStyle())
                         .accessibilityIdentifier("neondiff-open-browser-dashboard")
 
                         Button { model.copyCommand(model.dashboardCommand) } label: {
                             Label("Copy Dashboard Command", systemImage: "doc.on.doc")
                         }
+                        .buttonStyle(NDSecondaryButtonStyle())
                         .accessibilityIdentifier("neondiff-copy-dashboard-command")
                     }
 
-                    OperatorCommandText(text: model.dashboardCommand.commandLine, lineLimit: 3)
+                    OperatorCommandText(text: model.dashboardCommand.commandLine, lineLimit: 3, palette: nd)
                 }
 
                 CommandPanel(commands: [
@@ -120,7 +122,7 @@ struct OverviewView: View {
                 }
 
                 OverviewSection(title: "Last Command // Log", palette: nd) {
-                    OperatorCommandText(text: model.lastCommandLine, lineLimit: 4)
+                    OperatorCommandText(text: model.lastCommandLine, lineLimit: 4, palette: nd)
                 }
             }
             .padding(24)
