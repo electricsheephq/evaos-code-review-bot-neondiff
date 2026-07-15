@@ -426,37 +426,43 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func assertStableAcrossTransitions(_ checkpoints: [HostedGeometryCheckpoint]) {
-        let samples = checkpoints.flatMap(\.samples)
-        guard let baseline = samples.first else {
+        guard let baseline = checkpoints.first?.samples.first else {
             XCTFail("Missing hosted geometry checkpoints")
             return
         }
-        for sample in samples.dropFirst() {
-            XCTAssertFalse(
-                baseline.windowFrame.differs(from: sample.windowFrame, byMoreThan: 1),
-                "Window drift exceeded one point across transitions"
-            )
-            XCTAssertFalse(
-                baseline.contentFrame.differs(from: sample.contentFrame, byMoreThan: 1),
-                "Content drift exceeded one point across transitions"
-            )
-            XCTAssertEqual(
-                baseline.backingScale,
-                sample.backingScale,
-                accuracy: 0.01,
-                "Backing scale drifted across transitions"
-            )
-            for region in baseline.regions {
-                guard let candidate = sample.regions.first(where: {
-                    $0.identifier == region.identifier
-                }) else {
-                    XCTFail("Missing \(region.identifier) across transitions")
-                    continue
-                }
+        for checkpoint in checkpoints {
+            for sample in checkpoint.samples {
+                let context = "\(checkpoint.section)-\(checkpoint.surfaceGeneration)-\(sample.elapsedMilliseconds)ms"
                 XCTAssertFalse(
-                    region.frame.differs(from: candidate.frame, byMoreThan: 1),
-                    "\(region.identifier) drift exceeded one point across transitions"
+                    baseline.windowFrame.differs(from: sample.windowFrame, byMoreThan: 1),
+                    "Window drift exceeded one point across transitions at \(context): "
+                        + "baseline=\(baseline.windowFrame) candidate=\(sample.windowFrame)"
                 )
+                XCTAssertFalse(
+                    baseline.contentFrame.differs(from: sample.contentFrame, byMoreThan: 1),
+                    "Content drift exceeded one point across transitions at \(context): "
+                        + "baseline=\(baseline.contentFrame) candidate=\(sample.contentFrame)"
+                )
+                XCTAssertEqual(
+                    baseline.backingScale,
+                    sample.backingScale,
+                    accuracy: 0.01,
+                    "Backing scale drifted across transitions at \(context): "
+                        + "baseline=\(baseline.backingScale) candidate=\(sample.backingScale)"
+                )
+                for region in baseline.regions {
+                    guard let candidate = sample.regions.first(where: {
+                        $0.identifier == region.identifier
+                    }) else {
+                        XCTFail("Missing \(region.identifier) across transitions at \(context)")
+                        continue
+                    }
+                    XCTAssertFalse(
+                        region.frame.differs(from: candidate.frame, byMoreThan: 1),
+                        "\(region.identifier) drift exceeded one point across transitions at \(context): "
+                            + "baseline=\(region.frame) candidate=\(candidate.frame)"
+                    )
+                }
             }
         }
     }

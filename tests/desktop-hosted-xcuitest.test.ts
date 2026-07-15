@@ -181,6 +181,10 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain('HostedSidebarRouteStep(section: "overview", generation: 7)');
     expect(source).toContain("XCTAssertEqual(checkpoints.count, 8)");
     expect(source).toContain("XCTAssertEqual(navigationActions.count, 7)");
+    expect(source).toContain(
+      'let context = "\\(checkpoint.section)-\\(checkpoint.surfaceGeneration)-\\(sample.elapsedMilliseconds)ms"'
+    );
+    expect(source).toContain('"baseline=\\(region.frame) candidate=\\(candidate.frame)"');
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
