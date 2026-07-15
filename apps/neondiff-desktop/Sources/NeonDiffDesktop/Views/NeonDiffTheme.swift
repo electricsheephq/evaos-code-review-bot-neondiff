@@ -1,4 +1,158 @@
+import AppKit
 import SwiftUI
+import NeonDiffDesktopAppCore
+
+// MARK: - NeonDiff design contract (#611)
+//
+// Semantic token + type + component layer derived from the live production
+// website (https://neondiff.com, captured 2026-07-15). Values live as pure
+// sRGB in NeonDiffDesktopAppCore.NDDesignTokens (unit-tested for existence and
+// WCAG contrast); this layer resolves them into SwiftUI for both appearances.
+// See docs/design/live-site-design-source.md. This is additive translation, not
+// a rewrite of the existing NeonDiffTheme operator styling.
+
+/// Appearance-resolving SwiftUI colors for the ten semantic roles.
+enum NDColor {
+    static let background = dynamic(NDDesignTokens.background)
+    static let surface = dynamic(NDDesignTokens.surface)
+    static let textPrimary = dynamic(NDDesignTokens.textPrimary)
+    static let textSecondary = dynamic(NDDesignTokens.textSecondary)
+    static let accentPrimary = dynamic(NDDesignTokens.accentPrimary)
+    static let accentMagenta = dynamic(NDDesignTokens.accentMagenta)
+    static let warning = dynamic(NDDesignTokens.warning)
+    static let danger = dynamic(NDDesignTokens.danger)
+    static let borderPrimary = dynamic(NDDesignTokens.borderPrimary)
+    static let borderInput = dynamic(NDDesignTokens.borderInput)
+
+    static func dynamic(_ token: NDSemanticColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let value = isDark ? token.dark : token.light
+            return NSColor(srgbRed: value.red, green: value.green, blue: value.blue, alpha: value.opacity)
+        })
+    }
+}
+
+/// The mono label/console type system — the strongest carry-over identity
+/// element. Relative text styles so everything scales with Dynamic Type.
+enum NDFont {
+    /// Section labels, status chips, stat-row labels. Apply with `ndSectionLabel()`.
+    static let label = Font.system(.caption, design: .monospaced).weight(.semibold)
+    /// Console/key-value values.
+    static let mono = Font.system(.footnote, design: .monospaced)
+}
+
+extension View {
+    /// `SECTION // LABEL`-style uppercase mono header in working screens.
+    func ndSectionLabel() -> some View {
+        self.font(NDFont.label)
+            .tracking(1.8)
+            .textCase(.uppercase)
+            .foregroundStyle(NDColor.textSecondary)
+    }
+}
+
+/// `[ TITLE ]` bracket CTA for the ONE primary action per screen. Square
+/// corners, accentPrimary @6% fill, primary border @40% stepping to full alpha
+/// under Increase Contrast, disabled/pressed states. Keyboard focus preserved.
+struct NDBracketButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        NDBracketButtonBody(configuration: configuration)
+    }
+
+    private struct NDBracketButtonBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.colorSchemeContrast) private var contrast
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let increased = contrast == .increased
+            let borderAlpha = increased ? 1.0 : (configuration.isPressed ? 0.7 : 0.4)
+            let fillAlpha = configuration.isPressed ? 0.12 : 0.06
+
+            HStack(spacing: 6) {
+                Text("[").font(NDFont.label)
+                configuration.label
+                    .font(NDFont.label)
+                    .textCase(.uppercase)
+                    .tracking(1.8)
+                Text("]").font(NDFont.label)
+            }
+            .foregroundStyle(NDColor.accentPrimary.opacity(isEnabled ? 1 : 0.45))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Rectangle().fill(NDColor.accentPrimary.opacity(isEnabled ? fillAlpha : 0.03)))
+            .overlay(Rectangle().stroke(NDColor.accentPrimary.opacity(isEnabled ? borderAlpha : 0.25), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+    }
+}
+
+/// Console/evidence surface: surface background, 1px primary border, corner
+/// ticks. Border steps to full-alpha accent under Increase Contrast.
+struct NDConsolePanel<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        NDConsolePanelBody { content }
+    }
+
+    private struct NDConsolePanelBody<Inner: View>: View {
+        @Environment(\.colorSchemeContrast) private var contrast
+        private let inner: Inner
+
+        init(@ViewBuilder inner: () -> Inner) {
+            self.inner = inner()
+        }
+
+        var body: some View {
+            let increased = contrast == .increased
+            inner
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(Rectangle().fill(NDColor.surface))
+                .overlay(
+                    Rectangle().stroke(increased ? NDColor.accentPrimary : NDColor.borderPrimary, lineWidth: 1)
+                )
+                .overlay(NDConsoleCornerTicks(color: NDColor.accentPrimary.opacity(increased ? 1 : 0.7)))
+        }
+    }
+}
+
+private struct NDConsoleCornerTicks: View {
+    var color: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            let length: CGFloat = 14
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: length))
+                path.addLine(to: .zero)
+                path.addLine(to: CGPoint(x: length, y: 0))
+
+                path.move(to: CGPoint(x: width - length, y: 0))
+                path.addLine(to: CGPoint(x: width, y: 0))
+                path.addLine(to: CGPoint(x: width, y: length))
+
+                path.move(to: CGPoint(x: width, y: height - length))
+                path.addLine(to: CGPoint(x: width, y: height))
+                path.addLine(to: CGPoint(x: width - length, y: height))
+
+                path.move(to: CGPoint(x: length, y: height))
+                path.addLine(to: CGPoint(x: 0, y: height))
+                path.addLine(to: CGPoint(x: 0, y: height - length))
+            }
+            .stroke(color, lineWidth: 1)
+        }
+        .allowsHitTesting(false)
+    }
+}
 
 enum NeonDiffTheme {
     static let shell = Color(red: 0.020, green: 0.024, blue: 0.031)

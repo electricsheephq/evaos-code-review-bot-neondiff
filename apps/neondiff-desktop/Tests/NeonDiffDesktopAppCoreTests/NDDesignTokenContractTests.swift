@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import NeonDiffDesktopAppCore
 
@@ -49,6 +50,11 @@ import Testing
         let darkAccent = contrastRatio(NDDesignTokens.accentPrimary.dark, NDDesignTokens.background.dark)
         let lightText = contrastRatio(NDDesignTokens.textPrimary.light, NDDesignTokens.background.light)
         let lightAccent = contrastRatio(NDDesignTokens.accentPrimary.light, NDDesignTokens.background.light)
+
+        print(String(format: "NDContrast textPrimary/background dark  = %.2f:1", darkText))
+        print(String(format: "NDContrast accentPrimary/background dark = %.2f:1", darkAccent))
+        print(String(format: "NDContrast textPrimary/background light = %.2f:1", lightText))
+        print(String(format: "NDContrast accentPrimary/background light= %.2f:1", lightAccent))
 
         #expect(darkText >= floor, "textPrimary-on-background (dark) = \(darkText)")
         #expect(darkAccent >= floor, "accentPrimary-on-background (dark) = \(darkAccent)")
