@@ -15,9 +15,16 @@ const paths = [
   "docs/releases/v1.0.0.md"
 ];
 
+// Layer-3 licensing policy (owner ruling, reversing the #532 "activate every
+// repository" pivot; enforced at the #614 authorization boundary): public
+// open-source repositories are FREE with no Activation Key; private, internal,
+// commercial, and unknown-visibility work require active API-backed entitlement
+// (unknown fails closed). Public-facing website copy migration is owned by
+// website issue #52. These required claims now guard the CORRECT policy.
 const required = [
   /source-available/i,
-  /API-backed activation is required/i,
+  /public open-source repositor(?:y|ies) (?:are|is) free/i,
+  /API-backed activation is required for (?:supported )?private/i,
   /private.*commercial.*paid|paid.*private.*commercial/i,
   /\$100\/(?:year|yr)/i,
   /7-day trial/i,
@@ -38,13 +45,6 @@ const forbiddenClaims = [
   /\benterprise-ready\b/i,
   /\bCodeRabbit parity\b/i,
   /\bpublic launch is complete\b/i
-];
-
-const retiredFreeClaims = [
-  /public(?: open-source)? repositor(?:y|ies) (?:are|is) free/i,
-  /free (?:for|on) public repositor(?:y|ies)/i,
-  /public repos? with no license (?:may )?(?:pass|run|review)/i,
-  /PUBLIC · FREE/
 ];
 
 let failed = false;
@@ -70,16 +70,6 @@ for (const path of paths) {
         console.error(`${path}: forbidden public claims phrase outside boundary language: ${match}`);
         failed = true;
       }
-    }
-  }
-}
-
-for (const path of paths.filter((path) => !path.startsWith("docs/releases/"))) {
-  const text = readFileSync(path, "utf8");
-  for (const pattern of retiredFreeClaims) {
-    if (pattern.test(text)) {
-      console.error(`${path}: retired public-free claim remains: ${pattern}`);
-      failed = true;
     }
   }
 }

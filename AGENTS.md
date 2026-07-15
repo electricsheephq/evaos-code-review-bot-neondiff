@@ -28,7 +28,13 @@ If you are a coding agent working in this repository:
 ## Source-Available Product Boundary
 
 - NeonDiff is source-available beta software.
-- API-backed activation is required for supported public, private, internal, and unknown repository work.
+- Public open-source repositories are free and require no NeonDiff Activation Key
+  (owner ruling; the #532 "activate every repository" pivot is reversed).
+- API-backed activation is required for supported private, internal, and
+  commercial repository work; unknown visibility fails closed. GitHub-authoritative
+  visibility decides the tier, and provider verification is still required for all
+  tiers. Enforced at the #614 authorization boundary; public-facing website copy
+  migration is owned by website #52.
 - Active individual, organization, trial, or legacy entitlements govern supported use and update access.
 - License keys support paid/private usage and update entitlement.
 - Exact license text, public/private grants, and commercial terms are governed
