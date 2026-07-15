@@ -9,6 +9,86 @@ const testPlanPath = "apps/neondiff-desktop/NeonDiffDesktop.xctestplan";
 const uiTestPath = "apps/neondiff-desktop/UITests/NeonDiffDesktopUITests.swift";
 const workflowPath = ".github/workflows/swift-desktop-gate.yml";
 
+function extractBalancedSwiftDeclaration(
+  source: string,
+  declaration: string
+): string {
+  const declarationStart = source.indexOf(declaration);
+  if (declarationStart < 0) {
+    throw new Error(`Missing Swift declaration: ${declaration}`);
+  }
+
+  const bodyStart = source.indexOf("{", declarationStart);
+  if (bodyStart < 0) {
+    throw new Error(`Missing Swift declaration body: ${declaration}`);
+  }
+
+  let depth = 0;
+  let blockCommentDepth = 0;
+  let inLineComment = false;
+  let inString = false;
+  let inMultilineString = false;
+  let escaping = false;
+
+  for (let index = bodyStart; index < source.length; index += 1) {
+    const current = source[index];
+    const next = source[index + 1];
+    const nextTwo = source.slice(index, index + 3);
+
+    if (inLineComment) {
+      if (current === "\n") inLineComment = false;
+      continue;
+    }
+    if (blockCommentDepth > 0) {
+      if (current === "/" && next === "*") {
+        blockCommentDepth += 1;
+        index += 1;
+      } else if (current === "*" && next === "/") {
+        blockCommentDepth -= 1;
+        index += 1;
+      }
+      continue;
+    }
+    if (inMultilineString) {
+      if (nextTwo === '\"\"\"') {
+        inMultilineString = false;
+        index += 2;
+      }
+      continue;
+    }
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (current === "\\") {
+        escaping = true;
+      } else if (current === '\"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (current === "/" && next === "/") {
+      inLineComment = true;
+      index += 1;
+    } else if (current === "/" && next === "*") {
+      blockCommentDepth = 1;
+      index += 1;
+    } else if (nextTwo === '\"\"\"') {
+      inMultilineString = true;
+      index += 2;
+    } else if (current === '\"') {
+      inString = true;
+    } else if (current === "{") {
+      depth += 1;
+    } else if (current === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(declarationStart, index + 1);
+    }
+  }
+
+  throw new Error(`Unbalanced Swift declaration body: ${declaration}`);
+}
+
 describe("hosted NeonDiff desktop XCTest foundation", () => {
   it("checks in a shared app/UI-test project and test plan", () => {
     expect(existsSync(projectPath)).toBe(true);
@@ -195,7 +275,7 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(logs).not.toContain(".frame(minHeight: 420)");
   });
 
-  it("proves each sidebar page outer scroll reaches its bottom sentinel", () => {
+  it("encodes the hosted contract for each sidebar page outer-scroll bottom reachability", () => {
     const source = readFileSync(uiTestPath, "utf8");
     const pageSources = [
       ["overview", "OverviewView.swift"],
@@ -219,16 +299,10 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(
       source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
     ).toHaveLength(1);
-    const checkpointStart = source.indexOf(
+    const checkpointSource = extractBalancedSwiftDeclaration(
+      source,
       "private func capturePageBottomCheckpoint("
     );
-    const checkpointEnd = source.indexOf(
-      "private func capturePageBottomSamples(",
-      checkpointStart
-    );
-    expect(checkpointStart).toBeGreaterThan(-1);
-    expect(checkpointEnd).toBeGreaterThan(checkpointStart);
-    const checkpointSource = source.slice(checkpointStart, checkpointEnd);
     expect(checkpointSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
     expect(checkpointSource).not.toMatch(
       /\.(?:swipe\w*|tap|click|press|drag|coordinate)\s*\(/
