@@ -34,6 +34,7 @@ struct OnboardingWizardView: View {
                     .padding(.bottom, 22)
             }
         }
+        .hostedOnboardingEvaluationRegion("neondiff-onboarding-wizard")
     }
 
     private var header: some View {
@@ -49,6 +50,9 @@ struct OnboardingWizardView: View {
                 Text(model.onboardingFlow.currentStep.title)
                     .font(NeonDiffTheme.badgeFont)
                     .foregroundStyle(NeonDiffTheme.textSecondary)
+                    .accessibilityIdentifier(
+                        "neondiff-onboarding-current-step-\(model.onboardingFlow.currentStep.rawValue)"
+                    )
             }
 
             Spacer()
@@ -59,6 +63,7 @@ struct OnboardingWizardView: View {
             )
         }
         .operatorPanel(active: true)
+        .hostedOnboardingEvaluationRegion("neondiff-onboarding-header")
     }
 
     private var stepList: some View {
@@ -83,22 +88,26 @@ struct OnboardingWizardView: View {
 
             Spacer()
         }
+        .hostedOnboardingEvaluationRegion("neondiff-onboarding-step-list")
     }
 
     @ViewBuilder
     private var stepContent: some View {
-        switch model.onboardingFlow.currentStep {
-        case .welcome:
-            welcomeStep
-        case .provider:
-            providerStep
-        case .daemon:
-            daemonStep
-        case .license:
-            licenseStep
-        case .done:
-            doneStep
+        Group {
+            switch model.onboardingFlow.currentStep {
+            case .welcome:
+                welcomeStep
+            case .provider:
+                providerStep
+            case .daemon:
+                daemonStep
+            case .license:
+                licenseStep
+            case .done:
+                doneStep
+            }
         }
+        .hostedOnboardingEvaluationRegion("neondiff-onboarding-step-content")
     }
 
     private var welcomeStep: some View {
@@ -303,5 +312,18 @@ struct OnboardingWizardView: View {
             .buttonStyle(OperatorButtonStyle(solid: true))
             .disabled(!model.onboardingFlow.canAdvance)
         }
+        .hostedOnboardingEvaluationRegion("neondiff-onboarding-footer")
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func hostedOnboardingEvaluationRegion(_ identifier: String) -> some View {
+#if DEBUG
+        accessibilityElement(children: .contain)
+            .accessibilityIdentifier(identifier)
+#else
+        self
+#endif
     }
 }
