@@ -56,6 +56,10 @@ let package = Package(
             dependencies: ["NeonDiffDesktopCore", "NeonDiffDesktopEvaluationSupport"]
         ),
         .executableTarget(
+            name: "NeonDiffDesktopSettledGeometryCapture",
+            dependencies: ["NeonDiffDesktopEvaluationSupport"]
+        ),
+        .executableTarget(
             name: "NeonDiffDesktopReachabilityChecks",
             dependencies: ["NeonDiffDesktopEvaluationSupport"]
         ),

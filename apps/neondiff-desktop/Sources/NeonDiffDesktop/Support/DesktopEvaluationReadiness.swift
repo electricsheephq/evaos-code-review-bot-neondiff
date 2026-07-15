@@ -1,10 +1,12 @@
 #if DEBUG
 import AppKit
 import Foundation
+import NeonDiffDesktopCore
 
 struct DesktopEvaluationReadinessRequest {
     let fixtureId: String
     let outputURL: URL
+    let surfaceStateURL: URL
     let renderLatch: DesktopEvaluationRenderLatch
 
     init(
@@ -33,6 +35,7 @@ struct DesktopEvaluationReadinessRequest {
         }
         self.fixtureId = fixtureId
         self.outputURL = url
+        self.surfaceStateURL = parent.appendingPathComponent("surface-state.json")
         self.renderLatch = renderLatch
     }
 }
@@ -108,6 +111,52 @@ enum DesktopEvaluationReadinessWriter {
         ]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: request.outputURL, options: [.atomic])
+    }
+
+    private static func frame(_ rect: NSRect) -> [String: Double] {
+        [
+            "x": rect.origin.x,
+            "y": rect.origin.y,
+            "width": rect.size.width,
+            "height": rect.size.height
+        ]
+    }
+}
+
+enum DesktopEvaluationSurfaceStateWriter {
+    static func sample(window: NSWindow) -> DesktopEvaluationGeometrySample {
+        DesktopEvaluationReadinessWriter.sample(window: window)
+    }
+
+    static func write(
+        request: DesktopEvaluationReadinessRequest,
+        window: NSWindow,
+        sample: DesktopEvaluationGeometrySample,
+        section: DesktopSection,
+        surfaceGeneration: Int
+    ) throws {
+        guard surfaceGeneration >= 0,
+              sample.windowFrame.width > 0,
+              sample.windowFrame.height > 0,
+              sample.contentFrame.width > 0,
+              sample.contentFrame.height > 0,
+              sample.backingScale > 0 else {
+            throw DesktopEvaluationReadinessError.invalidGeometry
+        }
+        let payload: [String: Any] = [
+            "schemaVersion": 1,
+            "fixtureId": request.fixtureId,
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "windowNumber": window.windowNumber,
+            "section": section.rawValue,
+            "surfaceGeneration": surfaceGeneration,
+            "windowFrame": frame(sample.windowFrame),
+            "contentFrame": frame(sample.contentFrame),
+            "backingScale": sample.backingScale,
+            "quiescent": true
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: request.surfaceStateURL, options: [.atomic])
     }
 
     private static func frame(_ rect: NSRect) -> [String: Double] {

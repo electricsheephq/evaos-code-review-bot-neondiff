@@ -48,6 +48,10 @@ import Testing
             at: sourceBoundaryPackageRoot()
                 .appendingPathComponent("Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift")
         )
+        let sidebar = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktop/Views/SidebarView.swift")
+        )
 
         for identifier in ["neondiff-chrome", "neondiff-sidebar", "neondiff-detail"] {
             #expect(source.contains("\"\(identifier)\""))
@@ -60,5 +64,61 @@ import Testing
         #expect(source.contains("DetailView("))
         #expect(app.contains("enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled"))
         #expect(app.contains("evaluationContext != nil"))
+        #expect(sidebar.contains(#"neondiff-sidebar-section-\(section.rawValue)"#))
+    }
+
+    @Test func settledGeometryCaptureUsesOnlyTwoLedgeredPublicSamePIDPresses() throws {
+        let source = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktopSettledGeometryCapture/main.swift")
+        )
+
+        #expect(source.components(separatedBy: "AXUIElementPerformAction(").count - 1 == 1)
+        #expect(source.contains("attemptCount: 1"))
+        #expect(source.contains("AXUIElementCopyActionNames"))
+        #expect(source.contains("AXUIElementGetPid"))
+        #expect(source.contains("CGWindowListCopyWindowInfo"))
+        #expect(source.contains("ready.windowNumber <= Int(CGWindowID.max)"))
+        #expect(source.contains("state.surfaceGeneration == expectedGeneration"))
+        #expect(source.contains("state.section == expectedSection"))
+        #expect(source.contains("state.quiescent"))
+        #expect(source.contains(#"neondiff-sidebar-section-\(to.rawValue)"#))
+        #expect(!source.contains("AXUIElementSetAttributeValue"))
+        #expect(!source.contains("AXUIElementPostKeyboardEvent"))
+        #expect(!source.contains("CGEventPost"))
+        #expect(!source.contains("kAXTrustedCheckOptionPrompt"))
+        #expect(!source.contains("CGRequestScreenCaptureAccess"))
+    }
+
+    @Test func debugSurfaceStateRearmsPerSectionWithFreshAppKitGeometry() throws {
+        let configurator = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktop/Support/NeonWindowConfigurator.swift")
+        )
+        let readiness = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift")
+        )
+
+        #expect(configurator.contains("evaluationSection"))
+        #expect(configurator.contains("surfaceGeneration"))
+        #expect(configurator.contains("sampleSurfaceState"))
+        #expect(configurator.contains("DesktopEvaluationSurfaceStateWriter.sample(window: window)"))
+        #expect(readiness.contains("surface-state.json"))
+        #expect(readiness.contains("quiescent"))
+    }
+
+    @Test func settledGeometryRunnerUsesTheReadinessApprovedPrivateWorkspacePrefix() throws {
+        let runner = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("scripts/capture-settled-geometry.sh")
+        )
+        let readiness = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktop/Support/DesktopEvaluationReadiness.swift")
+        )
+
+        #expect(runner.contains(#"/tmp/neondiff-desktop-evaluation.XXXXXXXX"#))
+        #expect(readiness.contains(#"^neondiff-desktop-evaluation\.[A-Za-z0-9]{8}$"#))
     }
 }

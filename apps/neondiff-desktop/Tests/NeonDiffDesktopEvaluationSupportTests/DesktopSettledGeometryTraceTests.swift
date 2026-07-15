@@ -13,18 +13,111 @@ struct DesktopSettledGeometryTraceTests {
         #expect(DesktopSettledGeometryCheckResult.stable.ok)
     }
 
+    @Test func acceptsStableOffscreenScrollSentinelsWithoutClaimingVisibility() throws {
+        let offscreenOverview = samples(section: .overview).map {
+            $0.replacing(
+                .overviewSentinel,
+                frame: .init(x: 255, y: 1_156, width: 180, height: 30)
+            )
+        }
+        let offscreenRepos = samples(section: .repos).map {
+            $0.replacing(
+                .reposBottomSentinel,
+                frame: .init(x: 279, y: 1_251, width: 713, height: 16)
+            )
+        }
+        var checkpoints = makeCheckpoints()
+        checkpoints[0] = checkpoint(index: 0, section: .overview, samples: offscreenOverview)
+        checkpoints[1] = checkpoint(index: 1, section: .repos, samples: offscreenRepos)
+        checkpoints[2] = checkpoint(index: 2, section: .overview, samples: offscreenOverview)
+
+        #expect(try DesktopSettledGeometryValidator.validate(
+            makeTrace(checkpoints: checkpoints)
+        ) == .stable)
+    }
+
     @Test func bindsEveryRegionToOneUniquePublicAccessibilityIdentifier() {
         let identifiers = DesktopSettledGeometryRegion.allCases.map(\.accessibilityIdentifier)
 
         #expect(Set(identifiers).count == DesktopSettledGeometryRegion.allCases.count)
         #expect(DesktopSettledGeometryRegion.chrome.accessibilityIdentifier == "neondiff-chrome")
+        #expect(DesktopSettledGeometryRegion.overviewSentinel.accessibilityIdentifier == "neondiff-overview-start-dashboard")
         #expect(DesktopSettledGeometryRegion.reposBottomSentinel.accessibilityIdentifier == "neondiff-repos-boundary")
+    }
+
+    @Test func requiresExactTwoPressNavigationLedger() {
+        var actions = makeNavigationActions()
+        actions[0] = .init(
+            index: 0,
+            fromSection: .overview,
+            toSection: .repos,
+            controlIdentifier: "neondiff-sidebar-section-repos",
+            actionAdvertised: true,
+            attemptCount: 2,
+            performResult: .success
+        )
+        #expect(throws: DesktopSettledGeometryValidationError.invalidNavigationAction(index: 0)) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(navigationActions: actions))
+        }
+
+        actions = Array(makeNavigationActions().prefix(1))
+        #expect(throws: DesktopSettledGeometryValidationError.invalidNavigationAction(index: 1)) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(navigationActions: actions))
+        }
+    }
+
+    @Test func normalizesAppKitContentFrameIntoAXGlobalTopLeftCoordinates() throws {
+        let normalized = try DesktopSettledGeometryCoordinateNormalizer.normalizeContentFrame(
+            appKitWindowFrame: .init(x: 100, y: 50, width: 1040, height: 710),
+            appKitContentFrame: .init(x: 100, y: 50, width: 1040, height: 680),
+            axWindowFrame: .init(x: 100, y: 200, width: 1040, height: 710),
+            tolerancePoints: 1
+        )
+        #expect(normalized == .init(x: 100, y: 230, width: 1040, height: 680))
+
+        #expect(throws: DesktopSettledGeometryCoordinateNormalizationError.windowSizeMismatch) {
+            try DesktopSettledGeometryCoordinateNormalizer.normalizeContentFrame(
+                appKitWindowFrame: windowFrame,
+                appKitContentFrame: contentFrame,
+                axWindowFrame: .init(x: 0, y: 0, width: 1000, height: 710),
+                tolerancePoints: 1
+            )
+        }
+        #expect(throws: DesktopSettledGeometryCoordinateNormalizationError.contentOutsideWindow) {
+            try DesktopSettledGeometryCoordinateNormalizer.normalizeContentFrame(
+                appKitWindowFrame: windowFrame,
+                appKitContentFrame: .init(x: 0, y: -40, width: 1040, height: 680),
+                axWindowFrame: windowFrame,
+                tolerancePoints: 1
+            )
+        }
+        #expect(throws: DesktopSettledGeometryCoordinateNormalizationError.invalidFrame) {
+            try DesktopSettledGeometryCoordinateNormalizer.normalizeContentFrame(
+                appKitWindowFrame: .init(
+                    x: Double.greatestFiniteMagnitude,
+                    y: 0,
+                    width: Double.greatestFiniteMagnitude,
+                    height: 710
+                ),
+                appKitContentFrame: contentFrame,
+                axWindowFrame: windowFrame,
+                tolerancePoints: 1
+            )
+        }
     }
 
     @Test func decoderRejectsUnknownFieldsAtEveryLevel() throws {
         let encoded = try JSONEncoder().encode(makeTrace())
         var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         root["unexpected"] = true
+        #expect(throws: DesktopSettledGeometryValidationError.invalidContract) {
+            try DesktopSettledGeometryTrace.decode(data: JSONSerialization.data(withJSONObject: root))
+        }
+
+        root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var actions = try #require(root["navigationActions"] as? [[String: Any]])
+        actions[0]["unexpected"] = true
+        root["navigationActions"] = actions
         #expect(throws: DesktopSettledGeometryValidationError.invalidContract) {
             try DesktopSettledGeometryTrace.decode(data: JSONSerialization.data(withJSONObject: root))
         }
@@ -64,6 +157,12 @@ struct DesktopSettledGeometryTraceTests {
 
         var checkpoints = makeCheckpoints()
         checkpoints[1] = checkpoint(index: 1, section: .providers)
+        #expect(throws: DesktopSettledGeometryValidationError.invalidSequence(index: 1)) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
+        }
+
+        checkpoints = makeCheckpoints()
+        checkpoints[1] = checkpoint(index: 1, section: .repos, surfaceGeneration: 0)
         #expect(throws: DesktopSettledGeometryValidationError.invalidSequence(index: 1)) {
             try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
         }
@@ -169,6 +268,7 @@ struct DesktopSettledGeometryTraceTests {
             DesktopSettledGeometryCheckpoint(
                 index: checkpoint.index,
                 section: checkpoint.section,
+                surfaceGeneration: checkpoint.surfaceGeneration,
                 ready: checkpoint.ready,
                 quiescent: checkpoint.quiescent,
                 acquisitionMilliseconds: checkpoint.acquisitionMilliseconds,
@@ -204,6 +304,25 @@ struct DesktopSettledGeometryTraceTests {
             checkpoint: 0,
             sample: 0,
             region: .chrome
+        )) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
+        }
+
+        var sentinelOutsideDetailWidth = samples(section: .overview)
+        sentinelOutsideDetailWidth[0] = sentinelOutsideDetailWidth[0].replacing(
+            .overviewSentinel,
+            frame: .init(x: -10, y: 900, width: 180, height: 30)
+        )
+        checkpoints = makeCheckpoints()
+        checkpoints[0] = checkpoint(
+            index: 0,
+            section: .overview,
+            samples: sentinelOutsideDetailWidth
+        )
+        #expect(throws: DesktopSettledGeometryValidationError.regionOutsideWindow(
+            checkpoint: 0,
+            sample: 0,
+            region: .overviewSentinel
         )) {
             try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
         }
@@ -295,6 +414,21 @@ struct DesktopSettledGeometryTraceTests {
         )) {
             try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
         }
+
+        let shiftedReturn = samples(section: .overview).map {
+            $0.replacing(
+                .overviewSentinel,
+                frame: .init(x: overviewSentinelFrame.x, y: overviewSentinelFrame.y + 1.01, width: overviewSentinelFrame.width, height: overviewSentinelFrame.height)
+            )
+        }
+        checkpoints = makeCheckpoints()
+        checkpoints[2] = checkpoint(index: 2, section: .overview, samples: shiftedReturn)
+        #expect(throws: DesktopSettledGeometryValidationError.unstableTransition(
+            checkpoint: 2,
+            region: .overviewSentinel
+        )) {
+            try DesktopSettledGeometryValidator.validate(makeTrace(checkpoints: checkpoints))
+        }
     }
 
     @Test func scenarioCoordinatorIsStrictFailClosedAndSingleUse() throws {
@@ -333,6 +467,7 @@ private let contentFrame = DesktopSettledGeometryFrame(x: 0, y: 0, width: 1040, 
 private let chromeFrame = DesktopSettledGeometryFrame(x: 0, y: 0, width: 1040, height: 82)
 private let sidebarFrame = DesktopSettledGeometryFrame(x: 0, y: 82, width: 230, height: 598)
 private let detailFrame = DesktopSettledGeometryFrame(x: 231, y: 82, width: 809, height: 598)
+private let overviewSentinelFrame = DesktopSettledGeometryFrame(x: 255, y: 120, width: 180, height: 30)
 private let reposScrollFrame = DesktopSettledGeometryFrame(x: 255, y: 120, width: 761, height: 520)
 private let sentinelFrame = DesktopSettledGeometryFrame(x: 279, y: 770, width: 713, height: 16)
 
@@ -342,6 +477,7 @@ private func makeTrace(
     pid: Int32 = 42,
     windowNumber: Int = 7,
     requestedContentSize: DesktopEvaluationContentSize = .init(width: 1040, height: 680),
+    navigationActions: [DesktopSettledGeometryNavigationAction] = makeNavigationActions(),
     checkpoints: [DesktopSettledGeometryCheckpoint] = makeCheckpoints()
 ) -> DesktopSettledGeometryTrace {
     .init(
@@ -354,8 +490,32 @@ private func makeTrace(
         requestedContentSize: requestedContentSize,
         tolerancePoints: 1,
         sampleIntervalMilliseconds: 100,
+        navigationActions: navigationActions,
         checkpoints: checkpoints
     )
+}
+
+private func makeNavigationActions() -> [DesktopSettledGeometryNavigationAction] {
+    [
+        .init(
+            index: 0,
+            fromSection: .overview,
+            toSection: .repos,
+            controlIdentifier: "neondiff-sidebar-section-repos",
+            actionAdvertised: true,
+            attemptCount: 1,
+            performResult: .success
+        ),
+        .init(
+            index: 1,
+            fromSection: .repos,
+            toSection: .overview,
+            controlIdentifier: "neondiff-sidebar-section-overview",
+            actionAdvertised: true,
+            attemptCount: 1,
+            performResult: .success
+        )
+    ]
 }
 
 private extension Dictionary where Key == String, Value == Any {
@@ -375,12 +535,14 @@ private func makeCheckpoints() -> [DesktopSettledGeometryCheckpoint] {
 private func checkpoint(
     index: Int,
     section: DesktopSection,
+    surfaceGeneration: Int? = nil,
     quiescent: Bool = true,
     samples providedSamples: [DesktopSettledGeometrySample]? = nil
 ) -> DesktopSettledGeometryCheckpoint {
     .init(
         index: index,
         section: section,
+        surfaceGeneration: surfaceGeneration ?? index,
         ready: true,
         quiescent: quiescent,
         acquisitionMilliseconds: 250,
@@ -407,7 +569,9 @@ private func sample(
         .init(id: .sidebar, frame: sidebar),
         .init(id: .detail, frame: detail)
     ]
-    if section == .repos {
+    if section == .overview {
+        regions.append(.init(id: .overviewSentinel, frame: overviewSentinelFrame))
+    } else if section == .repos {
         regions.append(.init(id: .reposOuterScroll, frame: reposScroll))
         regions.append(.init(id: .reposBottomSentinel, frame: sentinel))
     }
