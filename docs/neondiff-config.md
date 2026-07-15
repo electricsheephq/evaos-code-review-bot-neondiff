@@ -12,8 +12,9 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
 - Keep provider credentials out of committed repo config.
 - Keep issue enrichment separate from PR review policy.
 - Keep public confidence uncalibrated until evaluation evidence exists; no percentages are displayed in this draft.
-- Preserve the current NeonDiff public boundary: source-available beta with
-  mandatory API-backed activation for public, private, internal, and unknown
+- Preserve the current NeonDiff public boundary: source-available beta where
+  public open-source repository review is free (no NeonDiff Activation Key) and
+  mandatory API-backed activation applies to private, internal, and unknown
   repository work.
 
 The v1.0.4 package-allowlisted schema retains the compatibility label

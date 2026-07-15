@@ -4,8 +4,9 @@ Issue: #428
 
 This packet is retained only as a superseded planning record. The free-use
 listing strategy is retired: the supported NeonDiff distribution requires
-API-backed activation for public, private, internal, and unknown repository
-work. No Marketplace billing or listing is shipped by this packet.
+API-backed activation for private, internal, and unknown-visibility repository
+work, while public open-source repository review is free and requires no
+Activation Key. No Marketplace billing or listing is shipped by this packet.
 
 Do not publish the former free-listing copy or imply that installing the GitHub
 App grants review entitlement. A future Marketplace listing must represent the

@@ -1,8 +1,9 @@
 # NeonDiff Pricing
 
-NeonDiff is a local-first, source-available beta. API-backed activation is
-required for supported review work on public, private, internal, and unknown
-repository visibilities.
+NeonDiff is a local-first, source-available beta. Public open-source repository
+review is free and requires no NeonDiff Activation Key. API-backed activation is
+required for supported private, internal, and commercial review work; unknown
+repository visibility fails closed.
 
 NeonDiff pricing is for the software/support entitlement only. Users bring
 their own provider key or local model. NeonDiff does not include hosted model

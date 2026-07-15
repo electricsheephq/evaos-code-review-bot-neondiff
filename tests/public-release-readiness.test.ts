@@ -802,7 +802,8 @@ describe("NeonDiff public release readiness", () => {
     expect(docs).toMatch(/neondiff dashboard --config config\.local\.json/i);
     expect(docs).toMatch(/Verify API Key/i);
     expect(docs).toMatch(/license\s+status,\s+GitHub App status,\s+daemon status,\s+and provider readiness/i);
-    expect(docs).toMatch(/API-backed activation is required for supported (?:public, private, internal, and unknown repository review|review work)/i);
+    expect(docs).toMatch(/public open-source repositor(?:y|ies) (?:are|is) free/i);
+    expect(docs).toMatch(/API-backed activation is required for (?:supported )?private, internal, and commercial/i);
     expect(docs).toMatch(/active NeonDiff entitlement before\s+>\s*worktree prep, provider calls, or GitHub review posting/i);
     expect(docs).toMatch(/curl -fsSL https:\/\/www\.neondiff\.com\/install/i);
     expect(docs).toContain("git clone https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git");
@@ -846,7 +847,8 @@ describe("NeonDiff public release readiness", () => {
     expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/creating-apps-for-github-marketplace/requirements-for-listing-an-app");
     expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/selling-your-app-on-github-marketplace/pricing-plans-for-github-marketplace-apps");
     expect(listing).toContain("https://docs.github.com/en/apps/github-marketplace/listing-an-app-on-github-marketplace");
-    expect(listing).toMatch(/requires\s+API-backed activation for public, private, internal, and unknown repository\s+work/i);
+    expect(listing).toMatch(/requires\s+API-backed activation for private, internal, and unknown-visibility repository\s+work/i);
+    expect(listing).toMatch(/public open-source repository review is free/i);
     expect(listing).toMatch(/provider\/model costs stay external/i);
     expect(listing).toMatch(/support@electricsheephq\.com/);
     expect(listing).toMatch(/SECURITY\.md/);
