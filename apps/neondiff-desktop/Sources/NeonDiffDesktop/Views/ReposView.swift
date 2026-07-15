@@ -272,6 +272,9 @@ struct ReposView: View {
             }
         }
         .padding(24)
+        .overlay(alignment: .bottom) {
+            PageBottomSentinel(section: "repos")
+        }
         .disabled(!model.canEditProviderConfiguration)
     }
 }

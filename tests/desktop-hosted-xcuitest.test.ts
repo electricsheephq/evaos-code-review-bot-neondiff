@@ -9,7 +9,191 @@ const testPlanPath = "apps/neondiff-desktop/NeonDiffDesktop.xctestplan";
 const uiTestPath = "apps/neondiff-desktop/UITests/NeonDiffDesktopUITests.swift";
 const workflowPath = ".github/workflows/swift-desktop-gate.yml";
 
+function extractBalancedSwiftDeclaration(
+  source: string,
+  declaration: string
+): string {
+  const code = maskSwiftCommentsAndLiterals(source);
+  const declarationStart = code.indexOf(declaration);
+  if (declarationStart < 0) {
+    throw new Error(`Missing Swift declaration: ${declaration}`);
+  }
+  if (code.indexOf(declaration, declarationStart + declaration.length) >= 0) {
+    throw new Error(`Ambiguous Swift declaration: ${declaration}`);
+  }
+
+  const bodyStart = code.indexOf("{", declarationStart);
+  if (bodyStart < 0) {
+    throw new Error(`Missing Swift declaration body: ${declaration}`);
+  }
+
+  let depth = 0;
+  for (let index = bodyStart; index < code.length; index += 1) {
+    if (code[index] === "{") {
+      depth += 1;
+    } else if (code[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(declarationStart, index + 1);
+    }
+  }
+
+  throw new Error(`Unbalanced Swift declaration body: ${declaration}`);
+}
+
+function maskSwiftCommentsAndLiterals(source: string): string {
+  const masked = [...source];
+  let index = 0;
+
+  while (index < source.length) {
+    if (source.startsWith("//", index)) {
+      const end = source.indexOf("\n", index + 2);
+      index = maskSwiftRange(masked, index, end < 0 ? source.length : end);
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      let end = index + 2;
+      let depth = 1;
+      while (end < source.length && depth > 0) {
+        if (source.startsWith("/*", end)) {
+          depth += 1;
+          end += 2;
+        } else if (source.startsWith("*/", end)) {
+          depth -= 1;
+          end += 2;
+        } else {
+          end += 1;
+        }
+      }
+      if (depth !== 0) throw new Error("Unterminated Swift block comment");
+      index = maskSwiftRange(masked, index, end);
+      continue;
+    }
+
+    const poundCount = countLeadingPounds(source, index);
+    const literalStart = index + poundCount;
+    const quoteCount = source.startsWith('\"\"\"', literalStart)
+      ? 3
+      : source[literalStart] === '\"'
+        ? 1
+        : 0;
+    if (quoteCount > 0) {
+      const closing = '\"'.repeat(quoteCount) + "#".repeat(poundCount);
+      let end = literalStart + quoteCount;
+      let closed = false;
+      while (end < source.length) {
+        if (poundCount === 0 && source[end] === "\\") {
+          end += 2;
+        } else if (source.startsWith(closing, end)) {
+          end += closing.length;
+          closed = true;
+          break;
+        } else {
+          end += 1;
+        }
+      }
+      if (!closed) throw new Error("Unterminated Swift string literal");
+      index = maskSwiftRange(masked, index, end);
+      continue;
+    }
+
+    if (poundCount > 0 && source[literalStart] === "/") {
+      const end = findSwiftRegexEnd(
+        source,
+        literalStart + 1,
+        "/" + "#".repeat(poundCount)
+      );
+      index = maskSwiftRange(masked, index, end);
+      continue;
+    }
+    if (
+      source[index] === "/" &&
+      source[index + 1] !== "/" &&
+      source[index + 1] !== "*" &&
+      isSwiftBareRegexStart(masked, index)
+    ) {
+      const end = findSwiftRegexEnd(source, index + 1, "/");
+      index = maskSwiftRange(masked, index, end);
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return masked.join("");
+}
+
+function countLeadingPounds(source: string, start: number): number {
+  let count = 0;
+  while (source[start + count] === "#") count += 1;
+  return count;
+}
+
+function maskSwiftRange(masked: string[], start: number, end: number): number {
+  for (let index = start; index < end; index += 1) {
+    if (masked[index] !== "\n") masked[index] = " ";
+  }
+  return end;
+}
+
+function isSwiftBareRegexStart(masked: string[], index: number): boolean {
+  let previousIndex = index - 1;
+  while (previousIndex >= 0 && /\s/.test(masked[previousIndex])) {
+    previousIndex -= 1;
+  }
+  if (previousIndex < 0) return true;
+  return "=([{,:;!&|?+-*%^~<>".includes(masked[previousIndex]);
+}
+
+function findSwiftRegexEnd(
+  source: string,
+  contentStart: number,
+  closing: string
+): number {
+  let inCharacterClass = false;
+  let escaping = false;
+  for (let index = contentStart; index < source.length; index += 1) {
+    const current = source[index];
+    if (escaping) {
+      escaping = false;
+    } else if (current === "\\") {
+      escaping = true;
+    } else if (current === "[") {
+      inCharacterClass = true;
+    } else if (current === "]") {
+      inCharacterClass = false;
+    } else if (!inCharacterClass && source.startsWith(closing, index)) {
+      return index + closing.length;
+    }
+  }
+  throw new Error("Unterminated Swift regex literal");
+}
+
 describe("hosted NeonDiff desktop XCTest foundation", () => {
+  it("extracts a Swift declaration without literal or comment decoys", () => {
+    const source = `
+let decoy = #"private func target() { decoy() }"#
+/* private func target() { commentDecoy() } */
+private func target() {
+  let raw = #"quote \" and brace } stay literal"#
+  let multiline = ##"""
+  quote " and brace } stay literal
+  """##
+  let pattern = /[}]/
+  let extendedPattern = #/[}]/#
+  expected()
+}
+`;
+
+    expect(extractBalancedSwiftDeclaration(source, "private func target()"))
+      .toContain("expected()");
+    expect(() =>
+      extractBalancedSwiftDeclaration(
+        `${source}\nprivate func target() { duplicate() }`,
+        "private func target()"
+      )
+    ).toThrow(/Ambiguous Swift declaration/);
+  });
+
   it("checks in a shared app/UI-test project and test plan", () => {
     expect(existsSync(projectPath)).toBe(true);
     expect(existsSync(schemePath)).toBe(true);
@@ -193,6 +377,91 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(logs).toContain('.accessibilityIdentifier("neondiff-logs-outer-scroll")');
     expect(logs).toContain(".frame(height: 360)");
     expect(logs).not.toContain(".frame(minHeight: 420)");
+  });
+
+  it("encodes the hosted contract for each sidebar page outer-scroll bottom reachability", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const pageSources = [
+      ["overview", "OverviewView.swift"],
+      ["repos", "ReposView.swift"],
+      ["providers", "ProviderSettingsView.swift"],
+      ["license", "LicenseView.swift"],
+      ["logs", "LogsView.swift"],
+      ["policy", "PolicyView.swift"],
+      ["settings", "SettingsPane.swift"]
+    ] as const;
+
+    expect(source).toContain(
+      "testStrictFixtureReachesEverySidebarPageBottomAtMinimumSize"
+    );
+    expect(source).toContain(
+      'scenario: "every-sidebar-page-bottom-at-minimum-size"'
+    );
+    expect(source).toContain(
+      'proofBoundary: "hosted-outer-page-bottom-reachability-only-inner-scroll-exhaustion-excluded"'
+    );
+    expect(
+      source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
+    ).toHaveLength(1);
+    expect(source.match(/\.scroll\s*\(/g)).toHaveLength(1);
+    const checkpointSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func capturePageBottomCheckpoint("
+    );
+    expect(checkpointSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
+    expect(checkpointSource).not.toMatch(
+      /\.(?:swipe\w*|tap|click|press|drag|coordinate)\s*\(/
+    );
+    expect(checkpointSource).not.toMatch(
+      /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
+    );
+    expect(checkpointSource).not.toContain("bottomSentinel.isHittable");
+    expect(source).not.toContain("case hittableSentinel");
+    expect(checkpointSource).toContain("preActionSamples.allSatisfy");
+    expect(checkpointSource).toContain(
+      "for (sampleIndex, postActionSample) in postActionSamples.enumerated()"
+    );
+    expect(source).toContain("try requireFullyContained(");
+    expect(source).toContain('result: "returned"');
+    expect(source).toContain("effectProven: true");
+    expect(source).toContain("throw HostedPageBottomTraceError");
+    expect(source).toContain("testRun?.failureCount");
+    expect(source).toContain("priorValidationFailure");
+    expect(source).toContain("minimumSampleIntervalMilliseconds: 100");
+    expect(source).toContain("samplingDeadlineMilliseconds: 5_000");
+    expect(source).toContain("neondiff-hosted-page-bottom-reachability.json");
+
+    for (const [section, fileName] of pageSources) {
+      const page = readFileSync(
+        `apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/${fileName}`,
+        "utf8"
+      );
+      expect(page).toContain(
+        `.accessibilityIdentifier("neondiff-${section}-outer-scroll")`
+      );
+      expect(page).toContain(`PageBottomSentinel(section: "${section}")`);
+      expect(source).toContain(`"neondiff-${section}-page-bottom"`);
+    }
+
+    const theme = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/NeonDiffTheme.swift",
+      "utf8"
+    );
+    expect(theme).toContain("HostedEvaluationAccessibility.isActive");
+    expect(theme).toContain('arguments.contains("--ui-testing")');
+    const sentinelStart = theme.indexOf("struct PageBottomSentinel: View");
+    const sentinelEnd = theme.indexOf(
+      "private enum HostedEvaluationAccessibility",
+      sentinelStart
+    );
+    expect(sentinelStart).toBeGreaterThan(-1);
+    expect(sentinelEnd).toBeGreaterThan(sentinelStart);
+    const sentinelSource = theme.slice(sentinelStart, sentinelEnd);
+    expect(sentinelSource).toContain("#if DEBUG");
+    expect(sentinelSource).toContain(".allowsHitTesting(false)");
+    expect(sentinelSource).toContain(
+      ".accessibilityRespondsToUserInteraction(false)"
+    );
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {

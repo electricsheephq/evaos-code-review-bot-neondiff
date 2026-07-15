@@ -184,8 +184,12 @@ struct PolicyView: View {
                 .foregroundStyle(NeonDiffTheme.textSecondary)
             }
             .padding(24)
+            .overlay(alignment: .bottom) {
+                PageBottomSentinel(section: "policy")
+            }
             .disabled(!model.canEditProviderConfiguration)
         }
+        .accessibilityIdentifier("neondiff-policy-outer-scroll")
         .scrollContentBackground(.hidden)
     }
 }

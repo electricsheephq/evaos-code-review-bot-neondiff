@@ -69,7 +69,11 @@ struct SettingsPane: View {
                 }
             }
             .padding(24)
+            .overlay(alignment: .bottom) {
+                PageBottomSentinel(section: "settings")
+            }
         }
+        .accessibilityIdentifier("neondiff-settings-outer-scroll")
         .scrollContentBackground(.hidden)
     }
 }

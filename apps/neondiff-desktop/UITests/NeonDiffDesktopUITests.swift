@@ -166,6 +166,324 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
     }
 
+    func testStrictFixtureReachesEverySidebarPageBottomAtMinimumSize() throws {
+        let requestedContentSize = HostedContentSize(width: 1040, height: 680)
+        let route = [
+            HostedPageBottomRouteStep(
+                section: "overview",
+                generation: 0,
+                outerScrollIdentifier: "neondiff-overview-outer-scroll",
+                sentinelIdentifier: "neondiff-overview-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "repos",
+                generation: 1,
+                outerScrollIdentifier: "neondiff-repos-outer-scroll",
+                sentinelIdentifier: "neondiff-repos-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "providers",
+                generation: 2,
+                outerScrollIdentifier: "neondiff-providers-outer-scroll",
+                sentinelIdentifier: "neondiff-providers-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "license",
+                generation: 3,
+                outerScrollIdentifier: "neondiff-license-outer-scroll",
+                sentinelIdentifier: "neondiff-license-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "logs",
+                generation: 4,
+                outerScrollIdentifier: "neondiff-logs-outer-scroll",
+                sentinelIdentifier: "neondiff-logs-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "policy",
+                generation: 5,
+                outerScrollIdentifier: "neondiff-policy-outer-scroll",
+                sentinelIdentifier: "neondiff-policy-page-bottom"
+            ),
+            HostedPageBottomRouteStep(
+                section: "settings",
+                generation: 6,
+                outerScrollIdentifier: "neondiff-settings-outer-scroll",
+                sentinelIdentifier: "neondiff-settings-page-bottom"
+            )
+        ]
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "tab-overview", withExtension: "json")
+        )
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "1040x680",
+            "--disable-animations"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["neondiff.fixture.tab-overview"]
+                .waitForExistence(timeout: 10)
+        )
+        XCTAssertEqual(app.state, .runningForeground)
+
+        var checkpoints: [HostedPageBottomCheckpoint] = []
+        var navigationActions: [HostedNavigationAction] = []
+        for (routeIndex, step) in route.enumerated() {
+            if routeIndex > 0 {
+                let previous = route[routeIndex - 1]
+                navigationActions.append(
+                    try clickNavigation(
+                        app: app,
+                        index: routeIndex - 1,
+                        fromSection: previous.section,
+                        toSection: step.section,
+                        identifier: "neondiff-sidebar-section-\(step.section)"
+                    )
+                )
+            }
+
+            let markerIdentifier =
+                "neondiff.evaluation.surface.\(step.section).\(step.generation).quiescent"
+            _ = try captureCheckpoint(
+                app: app,
+                section: step.section,
+                generation: step.generation,
+                markerIdentifier: markerIdentifier,
+                requestedContentSize: requestedContentSize
+            )
+            checkpoints.append(
+                try capturePageBottomCheckpoint(
+                    app: app,
+                    section: step.section,
+                    generation: step.generation,
+                    markerIdentifier: markerIdentifier,
+                    outerScrollIdentifier: step.outerScrollIdentifier,
+                    sentinelIdentifier: step.sentinelIdentifier
+                )
+            )
+        }
+
+        XCTAssertEqual(checkpoints.count, 7)
+        XCTAssertEqual(navigationActions.count, 6)
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedPageBottomTraceError.priorValidationFailure
+        }
+        try attach(
+            HostedPageBottomReachabilityTrace(
+                schemaVersion: 1,
+                scenario: "every-sidebar-page-bottom-at-minimum-size",
+                fixtureId: "tab-overview",
+                requestedContentSize: requestedContentSize,
+                textSizeMode: "runner-default-no-test-override",
+                coordinateSpace: "xcui-screen",
+                minimumSampleIntervalMilliseconds: 100,
+                samplingDeadlineMilliseconds: 5_000,
+                tolerancePoints: 1,
+                navigationActions: navigationActions,
+                checkpoints: checkpoints,
+                proofBoundary: "hosted-outer-page-bottom-reachability-only-inner-scroll-exhaustion-excluded"
+            )
+        )
+    }
+
+    private func capturePageBottomCheckpoint(
+        app: XCUIApplication,
+        section: String,
+        generation: Int,
+        markerIdentifier: String,
+        outerScrollIdentifier: String,
+        sentinelIdentifier: String
+    ) throws -> HostedPageBottomCheckpoint {
+        let outerPageScroll = app.descendants(matching: .any)[outerScrollIdentifier]
+        let bottomSentinel = app.descendants(matching: .any)[sentinelIdentifier]
+        let detailRegion = app.descendants(matching: .any)["neondiff-detail"]
+        guard outerPageScroll.waitForExistence(timeout: 2) else {
+            throw HostedPageBottomTraceError.missingElement(outerScrollIdentifier)
+        }
+        guard bottomSentinel.waitForExistence(timeout: 2) else {
+            throw HostedPageBottomTraceError.missingElement(sentinelIdentifier)
+        }
+        guard detailRegion.waitForExistence(timeout: 2) else {
+            throw HostedPageBottomTraceError.missingElement("neondiff-detail")
+        }
+        let preActionSamples = try capturePageBottomSamples(
+            outerPageScroll: outerPageScroll,
+            bottomSentinel: bottomSentinel,
+            detailRegion: detailRegion,
+            context: "\(section)-pre"
+        )
+        let didIssueScroll: Bool
+        let postActionSamples: [HostedPageBottomSample]
+        if preActionSamples.allSatisfy({
+            $0.sentinelFullyContainedInOuterScroll
+                && $0.sentinelFullyContainedInDetailRegion
+        }) {
+            didIssueScroll = false
+            postActionSamples = preActionSamples
+        } else {
+            outerPageScroll.scroll(byDeltaX: 0, deltaY: -10_000)
+            didIssueScroll = true
+            postActionSamples = try capturePageBottomSamples(
+                outerPageScroll: outerPageScroll,
+                bottomSentinel: bottomSentinel,
+                detailRegion: detailRegion,
+                context: "\(section)-post"
+            )
+        }
+
+        for (sampleIndex, postActionSample) in postActionSamples.enumerated() {
+            try requireFullyContained(
+                postActionSample.sentinelFrame,
+                in: postActionSample.outerScrollFrame,
+                context: "\(section) outer scroll sample \(sampleIndex)"
+            )
+            try requireFullyContained(
+                postActionSample.sentinelFrame,
+                in: postActionSample.detailRegionFrame,
+                context: "\(section) detail region sample \(sampleIndex)"
+            )
+        }
+        let scrollAction = didIssueScroll
+            ? HostedPageScrollAction(
+                controlIdentifier: outerScrollIdentifier,
+                deltaX: 0,
+                deltaY: -10_000,
+                attemptCount: 1,
+                result: "returned",
+                effectProven: true
+            )
+            : nil
+        return HostedPageBottomCheckpoint(
+            section: section,
+            surfaceGeneration: generation,
+            quiescenceMarkerIdentifier: markerIdentifier,
+            outerScrollIdentifier: outerScrollIdentifier,
+            sentinelIdentifier: sentinelIdentifier,
+            preActionSamples: preActionSamples,
+            scrollAction: scrollAction,
+            postActionSamples: postActionSamples
+        )
+    }
+
+    private func capturePageBottomSamples(
+        outerPageScroll: XCUIElement,
+        bottomSentinel: XCUIElement,
+        detailRegion: XCUIElement,
+        context: String
+    ) throws -> [HostedPageBottomSample] {
+        let start = ProcessInfo.processInfo.systemUptime
+        var samples: [HostedPageBottomSample] = []
+        var previousSampleStart: TimeInterval?
+        for index in 0..<3 {
+            if index > 0, let previousSampleStart {
+                let elapsedSincePrevious =
+                    ProcessInfo.processInfo.systemUptime - previousSampleStart
+                let remainingDelay = max(0, 0.1 - elapsedSincePrevious)
+                if remainingDelay > 0 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(remainingDelay))
+                }
+            }
+            let sampleStart = ProcessInfo.processInfo.systemUptime
+            previousSampleStart = sampleStart
+            let elapsedMilliseconds = Int(((sampleStart - start) * 1_000).rounded())
+            let outerScrollFrame = HostedGeometryFrame(outerPageScroll.frame)
+            let sentinelFrame = HostedGeometryFrame(bottomSentinel.frame)
+            let detailRegionFrame = HostedGeometryFrame(detailRegion.frame)
+            guard outerScrollFrame.isFiniteAndNonempty else {
+                throw HostedPageBottomTraceError.invalidFrame("\(context) outer scroll")
+            }
+            guard sentinelFrame.isFiniteAndNonempty else {
+                throw HostedPageBottomTraceError.invalidFrame("\(context) sentinel")
+            }
+            guard detailRegionFrame.isFiniteAndNonempty else {
+                throw HostedPageBottomTraceError.invalidFrame("\(context) detail")
+            }
+            samples.append(
+                HostedPageBottomSample(
+                    elapsedMilliseconds: elapsedMilliseconds,
+                    outerScrollFrame: outerScrollFrame,
+                    sentinelFrame: sentinelFrame,
+                    detailRegionFrame: detailRegionFrame,
+                    sentinelFullyContainedInOuterScroll: sentinelFrame.isFullyContained(
+                        in: outerScrollFrame,
+                        tolerance: 1
+                    ),
+                    sentinelFullyContainedInDetailRegion: sentinelFrame.isFullyContained(
+                        in: detailRegionFrame,
+                        tolerance: 1
+                    )
+                )
+            )
+        }
+        try validatePageBottomCadence(samples, context: context)
+        try validateStablePageBottomSamples(samples, context: context)
+        return samples
+    }
+
+    private func validatePageBottomCadence(
+        _ samples: [HostedPageBottomSample],
+        context: String
+    ) throws {
+        guard samples.count == 3 else {
+            throw HostedPageBottomTraceError.invalidCadence(context)
+        }
+        guard samples[0].elapsedMilliseconds >= 0,
+              samples[0].elapsedMilliseconds <= 25,
+              let finalElapsed = samples.last?.elapsedMilliseconds,
+              finalElapsed <= 5_000 else {
+            throw HostedPageBottomTraceError.invalidCadence(context)
+        }
+        for (lhs, rhs) in zip(samples, samples.dropFirst()) {
+            let interval = rhs.elapsedMilliseconds - lhs.elapsedMilliseconds
+            guard interval >= 90 else {
+                throw HostedPageBottomTraceError.invalidCadence(context)
+            }
+        }
+    }
+
+    private func validateStablePageBottomSamples(
+        _ samples: [HostedPageBottomSample],
+        context: String
+    ) throws {
+        guard let baseline = samples.first else {
+            throw HostedPageBottomTraceError.missingSamples(context)
+        }
+        for sample in samples.dropFirst() {
+            guard !baseline.outerScrollFrame.differs(
+                from: sample.outerScrollFrame,
+                byMoreThan: 1
+            ), !baseline.sentinelFrame.differs(
+                from: sample.sentinelFrame,
+                byMoreThan: 1
+            ), !baseline.detailRegionFrame.differs(
+                from: sample.detailRegionFrame,
+                byMoreThan: 1
+            ) else {
+                throw HostedPageBottomTraceError.unstableGeometry(context)
+            }
+        }
+    }
+
+    private func requireFullyContained(
+        _ frame: HostedGeometryFrame,
+        in container: HostedGeometryFrame,
+        context: String
+    ) throws {
+        guard frame.isFullyContained(in: container, tolerance: 1) else {
+            throw HostedPageBottomTraceError.sentinelNotContained(
+                context: context,
+                sentinel: frame,
+                container: container
+            )
+        }
+    }
+
     private func captureCheckpoint(
         app: XCUIApplication,
         section: String,
@@ -479,6 +797,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
         add(attachment)
     }
 
+    private func attach(_ trace: HostedPageBottomReachabilityTrace) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let attachment = XCTAttachment(
+            data: try encoder.encode(trace),
+            uniformTypeIdentifier: "public.json"
+        )
+        attachment.name = "neondiff-hosted-page-bottom-reachability.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func attachTransportDiagnostic(_ diagnostic: HostedTransportDiagnostic) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -502,6 +832,13 @@ private struct HostedContentSize: Codable {
 private struct HostedSidebarRouteStep {
     let section: String
     let generation: Int
+}
+
+private struct HostedPageBottomRouteStep {
+    let section: String
+    let generation: Int
+    let outerScrollIdentifier: String
+    let sentinelIdentifier: String
 }
 
 private struct HostedGeometryFrame: Codable, Equatable {
@@ -535,6 +872,13 @@ private struct HostedGeometryFrame: Codable, Equatable {
             || abs(y - other.y) > tolerance
             || abs(width - other.width) > tolerance
             || abs(height - other.height) > tolerance
+    }
+
+    func isFullyContained(in container: Self, tolerance: Double) -> Bool {
+        x >= container.x - tolerance
+            && y >= container.y - tolerance
+            && x + width <= container.x + container.width + tolerance
+            && y + height <= container.y + container.height + tolerance
     }
 }
 
@@ -644,6 +988,50 @@ private struct HostedSettledGeometryTrace: Codable {
     let proofBoundary: String
 }
 
+private struct HostedPageBottomSample: Codable, Equatable {
+    let elapsedMilliseconds: Int
+    let outerScrollFrame: HostedGeometryFrame
+    let sentinelFrame: HostedGeometryFrame
+    let detailRegionFrame: HostedGeometryFrame
+    let sentinelFullyContainedInOuterScroll: Bool
+    let sentinelFullyContainedInDetailRegion: Bool
+}
+
+private struct HostedPageScrollAction: Codable, Equatable {
+    let controlIdentifier: String
+    let deltaX: Double
+    let deltaY: Double
+    let attemptCount: Int
+    let result: String
+    let effectProven: Bool
+}
+
+private struct HostedPageBottomCheckpoint: Codable, Equatable {
+    let section: String
+    let surfaceGeneration: Int
+    let quiescenceMarkerIdentifier: String
+    let outerScrollIdentifier: String
+    let sentinelIdentifier: String
+    let preActionSamples: [HostedPageBottomSample]
+    let scrollAction: HostedPageScrollAction?
+    let postActionSamples: [HostedPageBottomSample]
+}
+
+private struct HostedPageBottomReachabilityTrace: Codable {
+    let schemaVersion: Int
+    let scenario: String
+    let fixtureId: String
+    let requestedContentSize: HostedContentSize
+    let textSizeMode: String
+    let coordinateSpace: String
+    let minimumSampleIntervalMilliseconds: Int
+    let samplingDeadlineMilliseconds: Int
+    let tolerancePoints: Double
+    let navigationActions: [HostedNavigationAction]
+    let checkpoints: [HostedPageBottomCheckpoint]
+    let proofBoundary: String
+}
+
 private struct HostedGeometryCoordinateSpaces: Codable {
     let windowAndContent: String
     let regions: String
@@ -657,6 +1045,40 @@ private struct HostedTransportDiagnostic: Codable {
     let expectedPrefixMatched: Bool?
     let base64DecodedByteCount: Int?
     let equalsUnavailableSentinel: Bool
+}
+
+private enum HostedPageBottomTraceError: LocalizedError {
+    case priorValidationFailure
+    case missingElement(String)
+    case invalidFrame(String)
+    case missingSamples(String)
+    case invalidCadence(String)
+    case unstableGeometry(String)
+    case sentinelNotContained(
+        context: String,
+        sentinel: HostedGeometryFrame,
+        container: HostedGeometryFrame
+    )
+
+    var errorDescription: String? {
+        switch self {
+        case .priorValidationFailure:
+            "Hosted page-bottom trace withheld after an earlier validation failure"
+        case .missingElement(let identifier):
+            "Missing hosted page-bottom element: \(identifier)"
+        case .invalidFrame(let context):
+            "Invalid hosted page-bottom frame: \(context)"
+        case .missingSamples(let context):
+            "Missing hosted page-bottom samples: \(context)"
+        case .invalidCadence(let context):
+            "Invalid hosted page-bottom sample cadence: \(context)"
+        case .unstableGeometry(let context):
+            "Hosted page-bottom geometry drift exceeded one point: \(context)"
+        case let .sentinelNotContained(context, sentinel, container):
+            "Hosted page-bottom sentinel is not fully contained in \(context): "
+                + "sentinel=\(sentinel) container=\(container)"
+        }
+    }
 }
 
 private enum HostedGeometryTraceError: LocalizedError {

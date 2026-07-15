@@ -98,7 +98,11 @@ struct OverviewView: View {
                 }
             }
             .padding(24)
+            .overlay(alignment: .bottom) {
+                PageBottomSentinel(section: "overview")
+            }
         }
+        .accessibilityIdentifier("neondiff-overview-outer-scroll")
         .scrollContentBackground(.hidden)
     }
 }
