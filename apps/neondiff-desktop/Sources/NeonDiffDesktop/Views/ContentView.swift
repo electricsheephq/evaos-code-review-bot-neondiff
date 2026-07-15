@@ -290,13 +290,13 @@ private struct DetailView: View {
                     case .settings: SettingsPane(model: model, updateController: updateController)
                     }
                 }
+                .onAppear { onSurfaceReady?(model.selectedSection) }
                 .modifier(
                     SurfaceIdentityModifier(
                         section: model.selectedSection,
                         enabled: onSurfaceReady != nil
                     )
                 )
-                .onAppear { onSurfaceReady?(model.selectedSection) }
             }
         }
     }

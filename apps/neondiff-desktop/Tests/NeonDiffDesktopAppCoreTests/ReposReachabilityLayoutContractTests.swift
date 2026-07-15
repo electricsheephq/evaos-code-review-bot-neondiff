@@ -67,6 +67,21 @@ import Testing
         #expect(app.contains("enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled"))
         #expect(app.contains("evaluationContext != nil"))
         #expect(sidebar.contains(#"neondiff-sidebar-section-\(section.rawValue)"#))
+
+        let detailView = try #require(source.range(of: "private struct DetailView"))
+        let keyedAppearance = try #require(
+            source.range(
+                of: ".onAppear { onSurfaceReady?(model.selectedSection) }",
+                range: detailView.upperBound..<source.endIndex
+            )
+        )
+        let surfaceIdentity = try #require(
+            source.range(
+                of: ".modifier(\n                    SurfaceIdentityModifier(",
+                range: detailView.upperBound..<source.endIndex
+            )
+        )
+        #expect(keyedAppearance.lowerBound < surfaceIdentity.lowerBound)
     }
 
     @Test func settledGeometryCaptureUsesOnlyTwoLedgeredPublicSamePIDPresses() throws {
