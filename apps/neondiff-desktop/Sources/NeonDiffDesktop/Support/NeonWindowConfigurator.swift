@@ -151,8 +151,9 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         var readinessAttemptCount = 0
         var surfaceSection: DesktopSection?
         var surfaceSamplingToken = 0
-        var surfaceLastSample: DesktopEvaluationGeometrySample?
-        var surfaceStableSampleCount = 0
+        var surfaceLastSample: DesktopHostedGeometrySample?
+        var surfaceSamples: [DesktopHostedGeometrySample] = []
+        var surfaceSamplingStartedAt: TimeInterval?
         var surfaceAttemptCount = 0
 #endif
     }
@@ -219,7 +220,8 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         let generation = surfaceStatus.begin(section: evaluationSection)
         coordinator.surfaceSamplingToken += 1
         coordinator.surfaceLastSample = nil
-        coordinator.surfaceStableSampleCount = 0
+        coordinator.surfaceSamples = []
+        coordinator.surfaceSamplingStartedAt = nil
         coordinator.surfaceAttemptCount = 0
         let token = coordinator.surfaceSamplingToken
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
@@ -262,19 +264,47 @@ struct NeonWindowConfigurator: NSViewRepresentable {
             }
             return
         }
-        let sample = DesktopEvaluationSurfaceStateWriter.sample(window: window)
-        if let previous = coordinator.surfaceLastSample,
-           sample.approximatelyEquals(previous) {
-            coordinator.surfaceStableSampleCount += 1
-        } else {
-            coordinator.surfaceStableSampleCount = 1
+        let windowSample = DesktopEvaluationSurfaceStateWriter.sample(window: window)
+        let sampledAt = ProcessInfo.processInfo.systemUptime
+        guard let rawSample = surfaceStatus.hostedGeometrySample(
+            windowSample: windowSample,
+            elapsedMilliseconds: 0
+        ) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                sampleSurfaceState(
+                    window: window,
+                    section: section,
+                    generation: generation,
+                    token: token,
+                    coordinator: coordinator
+                )
+            }
+            return
         }
-        coordinator.surfaceLastSample = sample
-        if coordinator.surfaceStableSampleCount >= 3 {
+        if let previous = coordinator.surfaceLastSample,
+           let startedAt = coordinator.surfaceSamplingStartedAt,
+           rawSample.approximatelyEquals(previous) {
+            let elapsed = Int(((sampledAt - startedAt) * 1_000).rounded())
+            let priorElapsed = coordinator.surfaceSamples.last?.elapsedMilliseconds ?? 0
+            let interval = elapsed - priorElapsed
+            if interval >= 90, interval <= 150 {
+                coordinator.surfaceSamples.append(
+                    rawSample.withElapsedMilliseconds(elapsed)
+                )
+            } else {
+                coordinator.surfaceSamplingStartedAt = sampledAt
+                coordinator.surfaceSamples = [rawSample.withElapsedMilliseconds(0)]
+            }
+        } else {
+            coordinator.surfaceSamplingStartedAt = sampledAt
+            coordinator.surfaceSamples = [rawSample.withElapsedMilliseconds(0)]
+        }
+        coordinator.surfaceLastSample = rawSample
+        if coordinator.surfaceSamples.count >= 3 {
             guard surfaceStatus.markQuiescent(
                 section: section,
                 generation: generation,
-                sample: sample
+                samples: Array(coordinator.surfaceSamples.suffix(3))
             ) else {
                 return
             }
@@ -283,7 +313,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
                 try DesktopEvaluationSurfaceStateWriter.write(
                     request: readinessRequest,
                     window: window,
-                    sample: sample,
+                    sample: windowSample,
                     section: section,
                     surfaceGeneration: generation
                 )

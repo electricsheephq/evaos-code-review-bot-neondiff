@@ -100,9 +100,13 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).toContain('"neondiff-detail"');
     expect(source).toContain("sampleIntervalMilliseconds: 100");
     expect(source).toContain("tolerancePoints: 1");
+    expect(source).toContain('windowAndContent: "appkit-screen"');
+    expect(source).toContain('regions: "swiftui-global"');
     expect(source).toContain("observedContentGeometry:");
     expect(source).toContain("assertObservedContentSize(");
     expect(source).toContain("marker.value");
+    expect(source).toContain("parseAppAuthoredGeometrySamples(marker.value)");
+    expect(source).not.toContain("Thread.sleep");
     expect(source).toContain("XCTAttachment");
     expect(source).toContain("neondiff-hosted-settled-geometry.json");
     expect(source).toContain(".keepAlways");
@@ -113,10 +117,14 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(readiness).toContain("func markQuiescent(");
     expect(readiness).toContain("contentFrame:");
     expect(readiness).toContain("geometryAccessibilityValue");
+    expect(readiness).toContain("DesktopHostedGeometrySample");
+    expect(readiness).toContain("updateRegionFrames(");
     expect(configurator).toContain("surfaceStatus.isRendered(");
     expect(configurator).toContain("surfaceStatus.markQuiescent(");
+    expect(configurator).toContain("surfaceStatus.hostedGeometrySample(");
     expect(content).toContain("EvaluationSurfaceAccessibilityMarker");
     expect(content).toContain(".accessibilityValue(status.geometryAccessibilityValue)");
+    expect(content).toContain("EvaluationRegionFramesPreferenceKey");
     expect(app).toContain("evaluationSurfaceStatus");
     expect(source).not.toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
     expect(source).not.toContain("createDirectory");

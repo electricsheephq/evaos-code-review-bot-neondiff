@@ -50,6 +50,16 @@ struct ContentView: View {
 #endif
 
     var body: some View {
+#if DEBUG
+        content.onPreferenceChange(EvaluationRegionFramesPreferenceKey.self) { frames in
+            evaluationSurfaceStatus?.updateRegionFrames(frames)
+        }
+#else
+        content
+#endif
+    }
+
+    private var content: some View {
         ZStack(alignment: .top) {
             OperatorBackdrop()
             EvaluationRootAccessibilityMarker(identifier: rootAccessibilityIdentifier)
@@ -118,11 +128,34 @@ private extension View {
         if enabled {
             accessibilityElement(children: .contain)
                 .accessibilityIdentifier(identifier)
+#if DEBUG
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: EvaluationRegionFramesPreferenceKey.self,
+                            value: [identifier: proxy.frame(in: .global)]
+                        )
+                    }
+                }
+#endif
         } else {
             self
         }
     }
 }
+
+#if DEBUG
+private struct EvaluationRegionFramesPreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(
+        value: inout [String: CGRect],
+        nextValue: () -> [String: CGRect]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+#endif
 
 private struct EvaluationRootAccessibilityMarker: View {
     let identifier: String

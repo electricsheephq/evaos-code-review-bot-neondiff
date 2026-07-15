@@ -72,6 +72,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 fixtureId: "tab-overview",
                 requestedContentSize: requestedContentSize,
                 textSizeMode: "runner-default-no-test-override",
+                coordinateSpaces: HostedGeometryCoordinateSpaces(
+                    windowAndContent: "appkit-screen",
+                    regions: "swiftui-global"
+                ),
                 sampleIntervalMilliseconds: 100,
                 tolerancePoints: 1,
                 navigationActions: [reposAction, overviewAction],
@@ -93,67 +97,70 @@ final class NeonDiffDesktopUITests: XCTestCase {
             marker.waitForExistence(timeout: 5),
             "Missing app-authored quiescence marker \(markerIdentifier)"
         )
-        let observedContentGeometry = try parseObservedContentGeometry(marker.value)
-        assertObservedContentSize(
-            observedContentGeometry,
-            requested: requestedContentSize,
-            context: "\(section)-\(generation)"
-        )
-
-        let started = ProcessInfo.processInfo.systemUptime
-        var samples: [HostedGeometrySample] = []
-        for index in 0..<3 {
-            let deadline = started + Double(index) * 0.1
-            let remaining = deadline - ProcessInfo.processInfo.systemUptime
-            if remaining > 0 {
-                Thread.sleep(forTimeInterval: remaining)
-            }
-            let elapsed = Int(
-                ((ProcessInfo.processInfo.systemUptime - started) * 1_000).rounded()
+        let samples = try parseAppAuthoredGeometrySamples(marker.value)
+        for identifier in HostedGeometryRegionFrame.requiredIdentifiers {
+            XCTAssertTrue(
+                app.descendants(matching: .any)[identifier].waitForExistence(timeout: 2),
+                "Missing hosted region \(identifier)"
             )
-            samples.append(try sample(app: app, elapsedMilliseconds: elapsed))
+        }
+        for sample in samples {
+            assertObservedContentSize(
+                HostedObservedContentGeometry(
+                    contentFrame: sample.contentFrame,
+                    backingScale: sample.backingScale
+                ),
+                requested: requestedContentSize,
+                context: "\(section)-\(generation)"
+            )
         }
         assertValidCadence(samples)
         assertStableSamples(samples, context: "\(section)-\(generation)")
+        let finalSample = try XCTUnwrap(samples.last)
         return HostedGeometryCheckpoint(
             section: section,
             surfaceGeneration: generation,
             quiescenceMarkerIdentifier: markerIdentifier,
-            observedContentGeometry: observedContentGeometry,
+            observedContentGeometry: HostedObservedContentGeometry(
+                contentFrame: finalSample.contentFrame,
+                backingScale: finalSample.backingScale
+            ),
             samples: samples
         )
     }
 
-    private func parseObservedContentGeometry(
+    private func parseAppAuthoredGeometrySamples(
         _ rawValue: Any?
-    ) throws -> HostedObservedContentGeometry {
-        let value = try XCTUnwrap(rawValue as? String, "Missing app-authored geometry value")
-        let fields = Dictionary(uniqueKeysWithValues: value.split(separator: ";").compactMap {
-            field -> (String, String)? in
-            let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
-            guard pair.count == 2 else { return nil }
-            return (pair[0], pair[1])
-        })
-        let frameValues = try XCTUnwrap(fields["contentFrame"])
-            .split(separator: ",")
-            .compactMap { Double($0) }
-        XCTAssertEqual(frameValues.count, 4, "Invalid app-authored content frame")
-        guard frameValues.count == 4 else {
-            throw HostedGeometryTraceError.invalidObservedContentGeometry
+    ) throws -> [HostedGeometrySample] {
+        let value = try XCTUnwrap(
+            rawValue as? String,
+            "Missing app-authored geometry trace"
+        )
+        let prefix = "neondiff-hosted-geometry-v1:"
+        guard value.hasPrefix(prefix),
+              let data = Data(base64Encoded: String(value.dropFirst(prefix.count))) else {
+            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
         }
-        let backingScale = try XCTUnwrap(
-            fields["backingScale"].flatMap(Double.init),
-            "Invalid app-authored backing scale"
+        let payload = try JSONDecoder().decode(
+            HostedAppAuthoredGeometryPayload.self,
+            from: data
         )
-        let frame = HostedGeometryFrame(
-            x: frameValues[0],
-            y: frameValues[1],
-            width: frameValues[2],
-            height: frameValues[3]
-        )
-        XCTAssertTrue(frame.isFiniteAndNonempty, "Invalid app-authored content frame")
-        XCTAssertTrue(backingScale.isFinite && backingScale > 0, "Invalid app-authored backing scale")
-        return HostedObservedContentGeometry(contentFrame: frame, backingScale: backingScale)
+        XCTAssertEqual(payload.schemaVersion, 1)
+        XCTAssertEqual(payload.samples.count, 3)
+        guard payload.schemaVersion == 1, payload.samples.count == 3 else {
+            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+        }
+        for sample in payload.samples {
+            XCTAssertTrue(sample.windowFrame.isFiniteAndNonempty)
+            XCTAssertTrue(sample.contentFrame.isFiniteAndNonempty)
+            XCTAssertTrue(sample.backingScale.isFinite && sample.backingScale > 0)
+            XCTAssertEqual(
+                Set(sample.regions.map(\.identifier)),
+                Set(HostedGeometryRegionFrame.requiredIdentifiers)
+            )
+            XCTAssertTrue(sample.regions.allSatisfy { $0.frame.isFiniteAndNonempty })
+        }
+        return payload.samples
     }
 
     private func assertObservedContentSize(
@@ -172,34 +179,6 @@ final class NeonDiffDesktopUITests: XCTestCase {
             Double(requested.height),
             accuracy: 1,
             "Observed content height does not match requested height for \(context)"
-        )
-    }
-
-    private func sample(
-        app: XCUIApplication,
-        elapsedMilliseconds: Int
-    ) throws -> HostedGeometrySample {
-        let window = app.windows.firstMatch
-        XCTAssertTrue(window.exists)
-        let regionIdentifiers = [
-            "neondiff-chrome",
-            "neondiff-sidebar",
-            "neondiff-detail"
-        ]
-        var regions: [HostedGeometryRegionFrame] = []
-        for identifier in regionIdentifiers {
-            let element = app.descendants(matching: .any)[identifier]
-            XCTAssertTrue(element.waitForExistence(timeout: 2), "Missing region \(identifier)")
-            let frame = HostedGeometryFrame(element.frame)
-            XCTAssertTrue(frame.isFiniteAndNonempty, "Invalid frame for \(identifier)")
-            regions.append(.init(identifier: identifier, frame: frame))
-        }
-        let windowFrame = HostedGeometryFrame(window.frame)
-        XCTAssertTrue(windowFrame.isFiniteAndNonempty, "Invalid hosted window frame")
-        return HostedGeometrySample(
-            elapsedMilliseconds: elapsedMilliseconds,
-            windowFrame: windowFrame,
-            regions: regions
         )
     }
 
@@ -249,6 +228,16 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 baseline.windowFrame.differs(from: sample.windowFrame, byMoreThan: 1),
                 "Window drift exceeded one point for \(context)"
             )
+            XCTAssertFalse(
+                baseline.contentFrame.differs(from: sample.contentFrame, byMoreThan: 1),
+                "Content drift exceeded one point for \(context)"
+            )
+            XCTAssertEqual(
+                baseline.backingScale,
+                sample.backingScale,
+                accuracy: 0.01,
+                "Backing scale drifted for \(context)"
+            )
             for region in baseline.regions {
                 guard let candidate = sample.regions.first(where: {
                     $0.identifier == region.identifier
@@ -274,6 +263,16 @@ final class NeonDiffDesktopUITests: XCTestCase {
             XCTAssertFalse(
                 baseline.windowFrame.differs(from: sample.windowFrame, byMoreThan: 1),
                 "Window drift exceeded one point across transitions"
+            )
+            XCTAssertFalse(
+                baseline.contentFrame.differs(from: sample.contentFrame, byMoreThan: 1),
+                "Content drift exceeded one point across transitions"
+            )
+            XCTAssertEqual(
+                baseline.backingScale,
+                sample.backingScale,
+                accuracy: 0.01,
+                "Backing scale drifted across transitions"
             )
             for region in baseline.regions {
                 guard let candidate = sample.regions.first(where: {
@@ -343,6 +342,12 @@ private struct HostedGeometryFrame: Codable, Equatable {
 }
 
 private struct HostedGeometryRegionFrame: Codable, Equatable {
+    static let requiredIdentifiers = [
+        "neondiff-chrome",
+        "neondiff-sidebar",
+        "neondiff-detail"
+    ]
+
     let identifier: String
     let frame: HostedGeometryFrame
 }
@@ -350,7 +355,14 @@ private struct HostedGeometryRegionFrame: Codable, Equatable {
 private struct HostedGeometrySample: Codable, Equatable {
     let elapsedMilliseconds: Int
     let windowFrame: HostedGeometryFrame
+    let contentFrame: HostedGeometryFrame
+    let backingScale: Double
     let regions: [HostedGeometryRegionFrame]
+}
+
+private struct HostedAppAuthoredGeometryPayload: Codable {
+    let schemaVersion: Int
+    let samples: [HostedGeometrySample]
 }
 
 private struct HostedGeometryCheckpoint: Codable, Equatable {
@@ -381,6 +393,7 @@ private struct HostedSettledGeometryTrace: Codable {
     let fixtureId: String
     let requestedContentSize: HostedContentSize
     let textSizeMode: String
+    let coordinateSpaces: HostedGeometryCoordinateSpaces
     let sampleIntervalMilliseconds: Int
     let tolerancePoints: Double
     let navigationActions: [HostedNavigationAction]
@@ -388,6 +401,11 @@ private struct HostedSettledGeometryTrace: Codable {
     let proofBoundary: String
 }
 
+private struct HostedGeometryCoordinateSpaces: Codable {
+    let windowAndContent: String
+    let regions: String
+}
+
 private enum HostedGeometryTraceError: Error {
-    case invalidObservedContentGeometry
+    case invalidAppAuthoredGeometryTrace
 }

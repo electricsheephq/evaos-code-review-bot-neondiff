@@ -54,11 +54,11 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
         let generation: Int
         let rendered: Bool
         let quiescent: Bool
-        let contentFrame: NSRect?
-        let backingScale: CGFloat?
+        let samples: [DesktopHostedGeometrySample]
     }
 
     @Published private(set) var snapshot: Snapshot?
+    private var regionFrames: [String: DesktopHostedGeometryFrame] = [:]
 
     var accessibilityIdentifier: String {
         guard let snapshot else {
@@ -71,17 +71,16 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
     var geometryAccessibilityValue: String {
         guard let snapshot,
               snapshot.quiescent,
-              let contentFrame = snapshot.contentFrame,
-              let backingScale = snapshot.backingScale else {
-            return "contentFrame=unavailable;backingScale=unavailable"
+              snapshot.samples.count == 3,
+              let data = try? JSONEncoder().encode(
+                  DesktopHostedGeometryAccessibilityPayload(
+                      schemaVersion: 1,
+                      samples: snapshot.samples
+                  )
+              ) else {
+            return "neondiff-hosted-geometry-unavailable"
         }
-        let frameValues = [
-            contentFrame.origin.x,
-            contentFrame.origin.y,
-            contentFrame.width,
-            contentFrame.height
-        ].map(Self.format)
-        return "contentFrame=\(frameValues.joined(separator: ","));backingScale=\(Self.format(backingScale))"
+        return "neondiff-hosted-geometry-v1:\(data.base64EncodedString())"
     }
 
     @discardableResult
@@ -95,8 +94,7 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             generation: generation,
             rendered: false,
             quiescent: false,
-            contentFrame: nil,
-            backingScale: nil
+            samples: []
         )
         return generation
     }
@@ -114,8 +112,7 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             generation: generation,
             rendered: true,
             quiescent: false,
-            contentFrame: nil,
-            backingScale: nil
+            samples: []
         )
     }
 
@@ -126,16 +123,47 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             && snapshot.rendered
     }
 
+    func updateRegionFrames(_ frames: [String: CGRect]) {
+        for identifier in DesktopHostedGeometryRegionFrame.requiredIdentifiers {
+            guard let frame = frames[identifier] else { continue }
+            let candidate = DesktopHostedGeometryFrame(frame)
+            guard candidate.isFiniteAndNonempty else { continue }
+            regionFrames[identifier] = candidate
+        }
+    }
+
+    func hostedGeometrySample(
+        windowSample: DesktopEvaluationGeometrySample,
+        elapsedMilliseconds: Int
+    ) -> DesktopHostedGeometrySample? {
+        let regions = DesktopHostedGeometryRegionFrame.requiredIdentifiers.compactMap {
+            identifier -> DesktopHostedGeometryRegionFrame? in
+            guard let frame = regionFrames[identifier] else { return nil }
+            return DesktopHostedGeometryRegionFrame(identifier: identifier, frame: frame)
+        }
+        guard regions.count == DesktopHostedGeometryRegionFrame.requiredIdentifiers.count else {
+            return nil
+        }
+        return DesktopHostedGeometrySample(
+            elapsedMilliseconds: elapsedMilliseconds,
+            windowFrame: DesktopHostedGeometryFrame(windowSample.windowFrame),
+            contentFrame: DesktopHostedGeometryFrame(windowSample.contentFrame),
+            backingScale: Double(windowSample.backingScale),
+            regions: regions
+        )
+    }
+
     @discardableResult
     func markQuiescent(
         section: DesktopSection,
         generation: Int,
-        sample: DesktopEvaluationGeometrySample
+        samples: [DesktopHostedGeometrySample]
     ) -> Bool {
         guard let snapshot,
               snapshot.section == section,
               snapshot.generation == generation,
-              snapshot.rendered else {
+              snapshot.rendered,
+              samples.count == 3 else {
             return false
         }
         guard !snapshot.quiescent else { return true }
@@ -144,18 +172,81 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
             generation: generation,
             rendered: true,
             quiescent: true,
-            contentFrame: sample.contentFrame,
-            backingScale: sample.backingScale
+            samples: samples
         )
         return true
     }
+}
 
-    private static func format(_ value: CGFloat) -> String {
-        String(
-            format: "%.3f",
-            locale: Locale(identifier: "en_US_POSIX"),
-            Double(value)
+private struct DesktopHostedGeometryAccessibilityPayload: Codable {
+    let schemaVersion: Int
+    let samples: [DesktopHostedGeometrySample]
+}
+
+struct DesktopHostedGeometryFrame: Codable, Equatable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+
+    init(_ frame: CGRect) {
+        x = frame.origin.x
+        y = frame.origin.y
+        width = frame.width
+        height = frame.height
+    }
+
+    var isFiniteAndNonempty: Bool {
+        [x, y, width, height, x + width, y + height].allSatisfy(\.isFinite)
+            && width > 0
+            && height > 0
+    }
+
+    func approximatelyEquals(_ other: Self) -> Bool {
+        abs(x - other.x) <= 0.5
+            && abs(y - other.y) <= 0.5
+            && abs(width - other.width) <= 0.5
+            && abs(height - other.height) <= 0.5
+    }
+}
+
+struct DesktopHostedGeometryRegionFrame: Codable, Equatable {
+    static let requiredIdentifiers = [
+        "neondiff-chrome",
+        "neondiff-sidebar",
+        "neondiff-detail"
+    ]
+
+    let identifier: String
+    let frame: DesktopHostedGeometryFrame
+}
+
+struct DesktopHostedGeometrySample: Codable, Equatable {
+    let elapsedMilliseconds: Int
+    let windowFrame: DesktopHostedGeometryFrame
+    let contentFrame: DesktopHostedGeometryFrame
+    let backingScale: Double
+    let regions: [DesktopHostedGeometryRegionFrame]
+
+    func withElapsedMilliseconds(_ value: Int) -> Self {
+        Self(
+            elapsedMilliseconds: value,
+            windowFrame: windowFrame,
+            contentFrame: contentFrame,
+            backingScale: backingScale,
+            regions: regions
         )
+    }
+
+    func approximatelyEquals(_ other: Self) -> Bool {
+        windowFrame.approximatelyEquals(other.windowFrame)
+            && contentFrame.approximatelyEquals(other.contentFrame)
+            && abs(backingScale - other.backingScale) <= 0.01
+            && regions.count == other.regions.count
+            && regions.allSatisfy { region in
+                other.regions.first(where: { $0.identifier == region.identifier })
+                    .map { region.frame.approximatelyEquals($0.frame) } == true
+            }
     }
 }
 
