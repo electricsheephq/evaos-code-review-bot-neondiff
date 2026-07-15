@@ -529,10 +529,15 @@ private func target() {
     );
     expect(source).toContain("captureStableVisibleTextSamples");
     expect(source).toContain("HostedRenderedTextScaleTrace(");
-    expect(source).toContain("renderedHeightGrowthPoints > 1");
+    expect(source).toContain("robustRenderedHeightGrowthPoints > 1");
+    expect(source).toContain("defaultScenario.samples.max");
+    expect(source).toContain("accessibility3Scenario.samples.min");
     expect(source).toContain("case insufficientRenderedScale(");
     expect(source).toContain("samples.count == 3");
     expect(source).toContain("finalElapsedMilliseconds <= 5_000");
+    expect(source).toContain("visibleContainer: app.windows.firstMatch");
+    expect(source).toContain("fullyContainedInVisibleContainer");
+    expect(source).toContain("case textNotVisible(");
     expect(source).toContain(
       'proofBoundary: "hosted-visible-production-section-title-rendered-scale-comparison-only-system-preference-excluded"'
     );

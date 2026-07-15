@@ -19,15 +19,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
             textSizeArgument: "accessibility3",
             rootIdentifier: "neondiff.fixture.tab-overview.text-size.accessibility3"
         )
-        let defaultFrame = try XCTUnwrap(defaultScenario.samples.last?.frame)
-        let accessibility3Frame = try XCTUnwrap(
-            accessibility3Scenario.samples.last?.frame
+        let defaultMaximumSample = try XCTUnwrap(
+            defaultScenario.samples.max { $0.frame.height < $1.frame.height }
         )
-        let renderedHeightGrowthPoints = accessibility3Frame.height - defaultFrame.height
-        guard renderedHeightGrowthPoints > 1 else {
+        let accessibility3MinimumSample = try XCTUnwrap(
+            accessibility3Scenario.samples.min { $0.frame.height < $1.frame.height }
+        )
+        let robustRenderedHeightGrowthPoints =
+            accessibility3MinimumSample.frame.height - defaultMaximumSample.frame.height
+        guard robustRenderedHeightGrowthPoints > 1 else {
             throw HostedRenderedTextScaleError.insufficientRenderedScale(
-                defaultFrame: defaultFrame,
-                accessibility3Frame: accessibility3Frame
+                defaultMaximumFrame: defaultMaximumSample.frame,
+                accessibility3MinimumFrame: accessibility3MinimumSample.frame
             )
         }
         guard (testRun?.failureCount ?? 0) == 0 else {
@@ -45,7 +48,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 sampleIntervalMilliseconds: 100,
                 tolerancePoints: 1,
                 minimumRequiredHeightGrowthPoints: 1,
-                renderedHeightGrowthPoints: renderedHeightGrowthPoints,
+                defaultMaximumHeightPoints: defaultMaximumSample.frame.height,
+                accessibility3MinimumHeightPoints: accessibility3MinimumSample.frame.height,
+                robustRenderedHeightGrowthPoints: robustRenderedHeightGrowthPoints,
                 defaultScenario: defaultScenario,
                 accessibility3Scenario: accessibility3Scenario,
                 proofBoundary: "hosted-visible-production-section-title-rendered-scale-comparison-only-system-preference-excluded"
@@ -501,6 +506,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         let samples = try captureStableVisibleTextSamples(
             title,
+            visibleContainer: app.windows.firstMatch,
             context: textSizeMode
         )
 
@@ -515,6 +521,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
 
     private func captureStableVisibleTextSamples(
         _ element: XCUIElement,
+        visibleContainer: XCUIElement,
         context: String
     ) throws -> [HostedRenderedTextSample] {
         let start = ProcessInfo.processInfo.systemUptime
@@ -532,18 +539,35 @@ final class NeonDiffDesktopUITests: XCTestCase {
             let sampleStart = ProcessInfo.processInfo.systemUptime
             previousSampleStart = sampleStart
             let frame = HostedGeometryFrame(element.frame)
+            let visibleContainerFrame = HostedGeometryFrame(visibleContainer.frame)
             guard frame.isFiniteAndNonempty else {
                 throw HostedRenderedTextScaleError.invalidFrame(context)
+            }
+            guard visibleContainerFrame.isFiniteAndNonempty else {
+                throw HostedRenderedTextScaleError.invalidVisibleContainerFrame(context)
             }
             let label = element.label
             guard label == "Overview" else {
                 throw HostedRenderedTextScaleError.unexpectedLabel(label)
             }
+            let fullyContainedInVisibleContainer = frame.isFullyContained(
+                in: visibleContainerFrame,
+                tolerance: 1
+            )
+            guard fullyContainedInVisibleContainer else {
+                throw HostedRenderedTextScaleError.textNotVisible(
+                    context: context,
+                    textFrame: frame,
+                    visibleContainerFrame: visibleContainerFrame
+                )
+            }
             samples.append(
                 HostedRenderedTextSample(
                     elapsedMilliseconds: Int(((sampleStart - start) * 1_000).rounded()),
                     frame: frame,
-                    label: label
+                    label: label,
+                    visibleContainerFrame: visibleContainerFrame,
+                    fullyContainedInVisibleContainer: fullyContainedInVisibleContainer
                 )
             )
         }
@@ -565,6 +589,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         for sample in samples.dropFirst() {
             guard !baseline.frame.differs(from: sample.frame, byMoreThan: 1),
+                  !baseline.visibleContainerFrame.differs(
+                      from: sample.visibleContainerFrame,
+                      byMoreThan: 1
+                  ),
+                  baseline.fullyContainedInVisibleContainer,
+                  sample.fullyContainedInVisibleContainer,
                   baseline.label == sample.label else {
                 throw HostedRenderedTextScaleError.unstableGeometry(context)
             }
@@ -1537,6 +1567,8 @@ private struct HostedRenderedTextSample: Codable, Equatable {
     let elapsedMilliseconds: Int
     let frame: HostedGeometryFrame
     let label: String
+    let visibleContainerFrame: HostedGeometryFrame
+    let fullyContainedInVisibleContainer: Bool
 }
 
 private struct HostedRenderedTextScaleScenario: Codable {
@@ -1557,7 +1589,9 @@ private struct HostedRenderedTextScaleTrace: Codable {
     let sampleIntervalMilliseconds: Int
     let tolerancePoints: Double
     let minimumRequiredHeightGrowthPoints: Double
-    let renderedHeightGrowthPoints: Double
+    let defaultMaximumHeightPoints: Double
+    let accessibility3MinimumHeightPoints: Double
+    let robustRenderedHeightGrowthPoints: Double
     let defaultScenario: HostedRenderedTextScaleScenario
     let accessibility3Scenario: HostedRenderedTextScaleScenario
     let proofBoundary: String
@@ -1619,12 +1653,18 @@ private enum HostedRenderedTextScaleError: LocalizedError {
     case invalidElementCount(identifier: String, count: Int)
     case unexpectedLabel(String)
     case invalidFrame(String)
+    case invalidVisibleContainerFrame(String)
+    case textNotVisible(
+        context: String,
+        textFrame: HostedGeometryFrame,
+        visibleContainerFrame: HostedGeometryFrame
+    )
     case missingSamples(String)
     case invalidCadence(String)
     case unstableGeometry(String)
     case insufficientRenderedScale(
-        defaultFrame: HostedGeometryFrame,
-        accessibility3Frame: HostedGeometryFrame
+        defaultMaximumFrame: HostedGeometryFrame,
+        accessibility3MinimumFrame: HostedGeometryFrame
     )
 
     var errorDescription: String? {
@@ -1642,15 +1682,25 @@ private enum HostedRenderedTextScaleError: LocalizedError {
             "Hosted rendered-text element has an unexpected label: \(label)"
         case .invalidFrame(let context):
             "Hosted rendered-text frame is invalid: \(context)"
+        case .invalidVisibleContainerFrame(let context):
+            "Hosted rendered-text visible-container frame is invalid: \(context)"
+        case let .textNotVisible(context, textFrame, visibleContainerFrame):
+            "Hosted rendered-text frame is not fully contained in the visible container: "
+                + "context=\(context) text=\(textFrame) "
+                + "container=\(visibleContainerFrame)"
         case .missingSamples(let context):
             "Hosted rendered-text samples are missing: \(context)"
         case .invalidCadence(let context):
             "Hosted rendered-text sample cadence is invalid: \(context)"
         case .unstableGeometry(let context):
             "Hosted rendered-text geometry drift exceeded one point: \(context)"
-        case let .insufficientRenderedScale(defaultFrame, accessibility3Frame):
+        case let .insufficientRenderedScale(
+            defaultMaximumFrame,
+            accessibility3MinimumFrame
+        ):
             "Accessibility3 did not increase visible production text height by more than "
-                + "one point: default=\(defaultFrame) accessibility3=\(accessibility3Frame)"
+                + "one point in the worst case: defaultMaximum=\(defaultMaximumFrame) "
+                + "accessibility3Minimum=\(accessibility3MinimumFrame)"
         }
     }
 }
