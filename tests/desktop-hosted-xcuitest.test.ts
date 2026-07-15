@@ -159,6 +159,30 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(source).not.toContain("createDirectory");
   });
 
+  it("covers every sidebar destination in one minimum-size settled circuit", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+
+    expect(source).toContain(
+      "testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize"
+    );
+    expect(source).toContain(
+      'scenario: "overview-repos-providers-license-logs-policy-settings-overview"'
+    );
+    expect(source).toContain(
+      'proofBoundary: "hosted-every-sidebar-destination-minimum-size-geometry-only"'
+    );
+    expect(source).toContain('HostedSidebarRouteStep(section: "overview", generation: 0)');
+    expect(source).toContain('HostedSidebarRouteStep(section: "repos", generation: 1)');
+    expect(source).toContain('HostedSidebarRouteStep(section: "providers", generation: 2)');
+    expect(source).toContain('HostedSidebarRouteStep(section: "license", generation: 3)');
+    expect(source).toContain('HostedSidebarRouteStep(section: "logs", generation: 4)');
+    expect(source).toContain('HostedSidebarRouteStep(section: "policy", generation: 5)');
+    expect(source).toContain('HostedSidebarRouteStep(section: "settings", generation: 6)');
+    expect(source).toContain('HostedSidebarRouteStep(section: "overview", generation: 7)');
+    expect(source).toContain("XCTAssertEqual(checkpoints.count, 8)");
+    expect(source).toContain("XCTAssertEqual(navigationActions.count, 7)");
+  });
+
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("Hosted XCUITest smoke");

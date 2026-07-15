@@ -85,6 +85,87 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
     }
 
+    func testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize() throws {
+        let requestedContentSize = HostedContentSize(width: 1040, height: 680)
+        let route = [
+            HostedSidebarRouteStep(section: "overview", generation: 0),
+            HostedSidebarRouteStep(section: "repos", generation: 1),
+            HostedSidebarRouteStep(section: "providers", generation: 2),
+            HostedSidebarRouteStep(section: "license", generation: 3),
+            HostedSidebarRouteStep(section: "logs", generation: 4),
+            HostedSidebarRouteStep(section: "policy", generation: 5),
+            HostedSidebarRouteStep(section: "settings", generation: 6),
+            HostedSidebarRouteStep(section: "overview", generation: 7)
+        ]
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "tab-overview", withExtension: "json")
+        )
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "1040x680",
+            "--disable-animations"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["neondiff.fixture.tab-overview"]
+                .waitForExistence(timeout: 10)
+        )
+        XCTAssertEqual(app.state, .runningForeground)
+
+        var checkpoints: [HostedGeometryCheckpoint] = []
+        var navigationActions: [HostedNavigationAction] = []
+        for (routeIndex, step) in route.enumerated() {
+            if routeIndex > 0 {
+                let previous = route[routeIndex - 1]
+                navigationActions.append(
+                    try clickNavigation(
+                        app: app,
+                        index: routeIndex - 1,
+                        fromSection: previous.section,
+                        toSection: step.section,
+                        identifier: "neondiff-sidebar-section-\(step.section)"
+                    )
+                )
+            }
+            checkpoints.append(
+                try captureCheckpoint(
+                    app: app,
+                    section: step.section,
+                    generation: step.generation,
+                    markerIdentifier: "neondiff.evaluation.surface.\(step.section).\(step.generation).quiescent",
+                    requestedContentSize: requestedContentSize
+                )
+            )
+        }
+
+        XCTAssertEqual(checkpoints.count, 8)
+        XCTAssertEqual(navigationActions.count, 7)
+        assertStableAcrossTransitions(checkpoints)
+        try attach(
+            HostedSettledGeometryTrace(
+                schemaVersion: 2,
+                scenario: "overview-repos-providers-license-logs-policy-settings-overview",
+                fixtureId: "tab-overview",
+                requestedContentSize: requestedContentSize,
+                textSizeMode: "runner-default-no-test-override",
+                coordinateSpaces: HostedGeometryCoordinateSpaces(
+                    windowAndContent: "appkit-screen",
+                    regions: "swiftui-global"
+                ),
+                sampleIntervalMilliseconds: 100,
+                tolerancePoints: 1,
+                navigationActions: navigationActions,
+                checkpoints: checkpoints,
+                proofBoundary: "hosted-every-sidebar-destination-minimum-size-geometry-only"
+            )
+        )
+    }
+
     private func captureCheckpoint(
         app: XCUIApplication,
         section: String,
@@ -410,6 +491,11 @@ final class NeonDiffDesktopUITests: XCTestCase {
 private struct HostedContentSize: Codable {
     let width: Int
     let height: Int
+}
+
+private struct HostedSidebarRouteStep {
+    let section: String
+    let generation: Int
 }
 
 private struct HostedGeometryFrame: Codable, Equatable {
