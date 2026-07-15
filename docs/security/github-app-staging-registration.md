@@ -40,16 +40,23 @@ Issues merely because the App reviews PRs.
 
 Organization permissions: none. Account permissions: none.
 
-## 3. Callback and setup URLs
+## 3. Setup URL (post-install redirect)
 
-- **Callback URL:** the broker callback route on the license-service host:
+Because OAuth-during-install is disabled (step 1), GitHub sends the post-install
+browser return to the App's **Setup URL**, not the user authorization callback URL
+(see https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url).
+Get this wrong and the broker never receives the install return, so the desktop
+poll pends until the state expires.
+
+- **Setup URL (required):** the broker return route on the license-service host:
   `https://<license-service-host>/github/connect/callback`
-  (GitHub appends `installation_id` and the `state` the broker issued). This is
-  the only redirect the broker consumes.
-- **Setup URL:** may be left unset, or point to the same callback; the broker
-  treats the install return purely via the callback route.
-- **"Redirect on update":** enabled, so re-configuring the installation returns
-  through the same callback.
+  After install, GitHub redirects here with `installation_id`, `setup_action`, and
+  the `state` the broker placed on the install link — exactly what
+  `GET /github/connect/callback` consumes.
+- **"Redirect on update":** enabled, so reconfiguring the installation returns
+  through the same route.
+- **User authorization callback URL:** unused in this flow (OAuth-on-install is
+  off); leave it blank or matching the Setup URL.
 
 ## 4. Webhook
 
@@ -83,9 +90,10 @@ depend on device flow; this setting is only for the existing desktop path until
 Place the following in the license-service deployment environment (Fly secrets for
 the shared `services/license-api` deployment). The broker reads the private key
 from this secret store at runtime and never persists, logs, or returns it. These
-names are the contract for the future production-wiring step in `server.ts`
-(currently the broker is omitted from `server.ts` until the App exists, so broker
-routes return 503):
+names are the contract for the future production-wiring step in `server.ts`.
+Until it provides `githubBroker`, the shared license request listener matches every
+broker path and returns a typed `{ "reason": "broker_unavailable" }` 503 — a
+deliberate fail-closed status, not an unrouted 404:
 
 | Secret                          | Purpose |
 |---------------------------------|---------|

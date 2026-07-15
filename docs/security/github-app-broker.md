@@ -57,7 +57,9 @@ the license store's strict schema verification is unaffected.
    or skins this step, so the user sees the official App identity and exact
    permissions on github.com (AC2).
 4. **Callback (GitHub to broker).** `GET /github/connect/callback?installation_id&state`.
-   The broker verifies the one-shot state (unconsumed, unexpired, CSRF-proof —
+   Because OAuth-during-install is disabled, this route is registered as the App's
+   **Setup URL** (GitHub's post-install redirect), not the user authorization
+   callback URL. The broker verifies the one-shot state (unconsumed, unexpired, CSRF-proof —
    mirrors website PR #48: one-shot fulfillment tokens + explicit owned return
    origins + framework CSRF), verifies the installation exists and belongs to the
    App (`GET /app/installations/{id}` with an App JWT), records the binding
@@ -72,10 +74,16 @@ the license store's strict schema verification is unaffected.
    installation is live and not suspended; every requested repository is present
    in the installation's current selection; **then** the seam decision
    (`authorizeTokenIssuance`, the #614 gate); and only on `allow` mints an
-   installation access token via App JWT, narrowed with the `repositories` and
-   `permissions` parameters to the minimum the worker needs. The token and its
-   expiry (GitHub TTL <= 1 h) are returned. The App private key never appears in
-   any response, log, or client artifact.
+   installation access token via App JWT, narrowed by the canonical
+   `repository_ids` (GitHub rejects `owner/name` here) and a **server-clamped**
+   permission set — at most the minimal review set (Metadata/Contents/Checks/
+   Actions read, Pull requests write), never the device-supplied permissions
+   verbatim, and never omitted (an omitted `permissions` field would make GitHub
+   grant all App permissions). The token and its expiry (GitHub TTL <= 1 h) are
+   returned. The App private key never appears in any response, log, or client
+   artifact. Reading the installation's repository list to make the visibility
+   decision uses a separate **metadata:read-only** installation token, so no
+   broad token is ever minted before the seam authorizes.
 7. **Local operation.** The local worker polls GitHub with the brokered token
    exactly as it does today with a locally minted one, and renews via step 6
    before expiry. Reviews post as the NeonDiff App installation identity (AC6),
