@@ -45,6 +45,7 @@
     "test:watch": "vitest",
     "doctor": "tsx src/cli.ts doctor",
     "dashboard:preview-smoke": "tsx src/cli.ts dashboard --config config.example.json --preview-smoke true --output-dir runtime/dashboard-preview-smoke",
+    "check:design-source": "node scripts/check-design-source-contract.mjs",
     "check:public-claims": "node scripts/check-public-claims.mjs",
     "check:secrets": "node scripts/check-secret-scan.mjs",
     "check:secret-rule-differential": "node scripts/generate-secret-rules.mjs --check && node scripts/check-secret-rule-differential.mjs --require-swift",
