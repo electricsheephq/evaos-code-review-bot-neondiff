@@ -213,6 +213,10 @@ if [ "\${FAKE_CAPTURE_OK:-true}" != true ]; then
   printf '%s\\n' '{"ok":false,"reasonCode":"action-failed","schemaVersion":1,"status":"failed"}' >&2
   exit 65
 fi
+if [ "\${FAKE_CAPTURE_HANG:-false}" = true ]; then
+  trap 'exit 0' HUP INT TERM
+  while :; do /bin/sleep 0.1; done
+fi
 jq --argjson pid "$pid" '.pid = $pid' "$FAKE_TRACE" >"$output.tmp"
 mv "$output.tmp" "$output"
 jq -n --argjson pid "$pid" '{schemaVersion:1,fixtureId:"tab-overview",pid:$pid,windowNumber:41,section:"overview",surfaceGeneration:2,windowFrame:{x:0,y:0,width:1040,height:710},contentFrame:{x:0,y:0,width:1040,height:680},backingScale:2,quiescent:true}' >"$(dirname "$ready")/surface-state.json"
@@ -300,6 +304,47 @@ describe("desktop settled geometry capture runner", () => {
       join(harness.output, "validation/settled-capture-status.json"),
       "utf8"
     ))).toMatchObject({ status: "incomplete", phase: "capture", reasonCode: "capture_failed" });
+    expect(existsSync(join(harness.output, "settled-geometry-proof.json"))).toBe(false);
+  });
+
+  it("fails closed without proof when readiness is unavailable", { timeout: 15_000 }, () => {
+    const harness = createHarness();
+    const noReadyApp = join(harness.root, "no-ready-app");
+    writeExecutable(noReadyApp, "#!/bin/sh\nexit 0\n");
+    const result = runHarness(harness, { FAKE_APP_TEMPLATE: noReadyApp });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tab-overview readiness was unavailable");
+    expect(JSON.parse(readFileSync(
+      join(harness.output, "validation/settled-capture-status.json"),
+      "utf8"
+    ))).toMatchObject({
+      status: "incomplete",
+      phase: "readiness",
+      reasonCode: "readiness_unavailable",
+      proof: "not_emitted"
+    });
+    expect(existsSync(join(harness.output, "settled-geometry-proof.json"))).toBe(false);
+  });
+
+  it("times out a hung helper without publishing proof", { timeout: 15_000 }, () => {
+    const harness = createHarness();
+    const result = runHarness(harness, {
+      FAKE_CAPTURE_HANG: "true",
+      NEONDIFF_DESKTOP_TEST_CAPTURE_ATTEMPTS: "1"
+    });
+
+    expect(result.status).toBe(124);
+    expect(result.stderr).toContain("settled geometry helper timed out");
+    expect(JSON.parse(readFileSync(
+      join(harness.output, "validation/settled-capture-status.json"),
+      "utf8"
+    ))).toMatchObject({
+      status: "incomplete",
+      phase: "capture",
+      reasonCode: "capture_timeout",
+      proof: "not_emitted"
+    });
     expect(existsSync(join(harness.output, "settled-geometry-proof.json"))).toBe(false);
   });
 
