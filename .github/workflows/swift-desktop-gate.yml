@@ -259,6 +259,9 @@ jobs:
           NEONDIFF_DESKTOP_DIST_DIR="$PWD/apps/neondiff-desktop/dist-release" \
             apps/neondiff-desktop/script/build_and_run.sh release-bundle-check
           release_bin="$(cd apps/neondiff-desktop && swift build -c release --show-bin-path)"
+          npm run check:secret-corpus-boundary -- \
+            "$RELEASE_ARCHIVE" \
+            "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app"
           npm run check:desktop-fixture-boundary -- \
             "$release_bin/NeonDiffDesktop" \
             "$release_bin/NeonDiffDesktopCore.build" \
