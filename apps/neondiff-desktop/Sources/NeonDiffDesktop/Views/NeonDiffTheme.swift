@@ -297,9 +297,28 @@ struct OperatorBackdrop: View {
 }
 
 struct OperatorSectionHeader: View {
-    @ScaledMetric(relativeTo: .headline) private var sectionTitleSize: CGFloat = 13
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var title: String
     var status: String
+
+    /// macOS does not scale `@ScaledMetric` from SwiftUI's dynamic-type override,
+    /// so resolve the shared title size directly from the environment.
+    private var sectionTitleSize: CGFloat {
+        switch dynamicTypeSize {
+        case .xSmall: 11
+        case .small: 12
+        case .medium, .large: 13
+        case .xLarge: 14
+        case .xxLarge: 15
+        case .xxxLarge: 16
+        case .accessibility1: 18
+        case .accessibility2: 20
+        case .accessibility3: 23
+        case .accessibility4: 26
+        case .accessibility5: 30
+        default: 13
+        }
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {

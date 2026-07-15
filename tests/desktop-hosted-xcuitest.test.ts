@@ -554,8 +554,12 @@ private func target() {
     expect(theme).toContain(
       '.accessibilityIdentifier("neondiff-section-title")'
     );
-    expect(theme).toContain("@ScaledMetric(relativeTo: .headline)");
-    expect(theme).toContain("private var sectionTitleSize: CGFloat = 13");
+    expect(theme).toContain(
+      "@Environment(\\.dynamicTypeSize) private var dynamicTypeSize"
+    );
+    expect(theme).toContain("private var sectionTitleSize: CGFloat");
+    expect(theme).toContain("case .accessibility3: 23");
+    expect(theme).toContain("case .accessibility5: 30");
     expect(theme).toContain(
       ".font(.system(size: sectionTitleSize, weight: .bold, design: .monospaced))"
     );
