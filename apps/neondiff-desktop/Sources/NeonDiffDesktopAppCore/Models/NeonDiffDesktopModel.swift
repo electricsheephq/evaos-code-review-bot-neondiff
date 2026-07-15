@@ -117,6 +117,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var onboardingFlow = OnboardingFlow()
     @Published package var isOnboardingPresented = false
 
+    // Issue #612 — native purchase-to-activation state. Restored from preferences
+    // (its raw value) so onboarding resumes exactly across relaunch / cancel /
+    // network loss (AC6). No Keychain read happens on the launch path; the
+    // activation key is read lazily only when the user activates.
+    @Published package var activationState: ActivationState = ActivationStateMachine.initialState
+    @Published package private(set) var activationKeyRedactedPrefix: String?
+    @Published package var pendingActivationKey = ""
+
     package var productionActivationBoundaryMessage: String {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
     }
@@ -126,6 +134,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private let dependencies: DesktopAppDependencies
+    private let activationLicenseClientOverride: (any ActivationLicenseClienting)?
     private var providerVerificationTask: Task<Void, Never>?
     private var providerVerificationRequestGeneration: UInt64 = 0
     private var providerVerificationContextGeneration: UInt64 = 0
@@ -147,8 +156,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var previewedProviderExpectedRevision: String?
     private var pendingProviderPatchProof: PendingProviderPatchProof?
 
-    package init(dependencies: DesktopAppDependencies) {
+    package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
+        self.activationLicenseClientOverride = activationLicenseClient
         self.configPath = dependencies.preferences.string(forKey: "neondiff.configPath") ?? "config.local.json"
         self.cliPath = dependencies.preferences.string(forKey: "neondiff.cliPath") ?? "neondiff"
         self.launchdLabel = dependencies.preferences.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
@@ -171,6 +181,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         self.github.authorizedUserLogin = nil
         self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
         self.isOnboardingPresented = !dependencies.preferences.bool(forKey: onboardingCompletedKey)
+        // Resume-exact: restore the persisted activation state (rawValue) without
+        // touching the Keychain on the launch path (v1.0.3 startup-stability rule).
+        if let rawActivationState = dependencies.preferences.string(forKey: activationStateKey),
+           let restored = ActivationState(rawValue: rawActivationState) {
+            self.activationState = restored
+        } else {
+            self.activationState = ActivationStateMachine.initialState
+        }
         self.lastCommandLine = statusCommand.commandLine
     }
 
@@ -1095,6 +1113,242 @@ package final class NeonDiffDesktopModel: ObservableObject {
         logText = "License activation is pending the hosted license service deployment."
     }
 
+    // MARK: - Native activation handoff (#612)
+
+    /// The new return/redeem surface is feature-flagged off by default; enabling
+    /// it is the rollback control per the issue AC. Existing validated licenses
+    /// are untouched either way.
+    package var activationHandoffEnabled: Bool {
+        dependencies.preferences.bool(forKey: activationHandoffEnabledKey)
+    }
+
+    /// Production checkout stays disabled pending #562 + website #46. Until then
+    /// the private route renders the honest `checkout_paused` state.
+    package var activationCheckoutEnabled: Bool {
+        dependencies.preferences.bool(forKey: activationCheckoutEnabledKey)
+    }
+
+    package var activationPresentation: ActivationStatePresentation {
+        ActivationStateMachine.presentation(for: activationState, redactedKeyPrefix: activationKeyRedactedPrefix)
+    }
+
+    private var activationLicenseClient: (any ActivationLicenseClienting)? {
+        if let activationLicenseClientOverride { return activationLicenseClientOverride }
+        // The real CLI adapter is withheld by default. The CLI's `license activate`
+        // persists the stdin key to `license.keyPath` under the default file backend
+        // (`src/license.ts` writeLicenseKey), which would create a SECOND raw copy on
+        // disk and break the Keychain-only promise. It is only used when explicitly
+        // enabled — production checkout is disabled anyway (#562 + website #46) —
+        // pending a no-file-persist stdin-validate CLI verb.
+        guard dependencies.preferences.bool(forKey: activationCliBackedEnabledKey) else { return nil }
+        return DesktopActivationLicenseClient(
+            cli: dependencies.cli,
+            executablePath: cliPath,
+            configPath: configPath
+        )
+    }
+
+    /// Tags each activation attempt so a slow in-flight result that lands after a
+    /// cancellation or a newer request is dropped (resume-exact race guard).
+    private var activationRequestGeneration: UInt64 = 0
+
+    package func applyActivationEvent(_ event: ActivationEvent) {
+        let next = ActivationStateMachine.reduce(activationState, on: event)
+        guard next != activationState else { return }
+        activationState = next
+        // Persist for resume-exact restore across relaunch / cancel / network loss.
+        dependencies.preferences.set(next.rawValue, forKey: activationStateKey)
+    }
+
+    /// Enter the activation branch from the chosen onboarding path. The public
+    /// path skips straight to a free, license-free state.
+    package func enterActivation(for mode: OnboardingMode) {
+        applyActivationEvent(mode == .publicReposOnly ? .choosePublicPath : .choosePrivatePath)
+    }
+
+    /// Align the activation entry state with the onboarding mode when the flow
+    /// first reaches activation, so choosing Public Repos actually skips the
+    /// license wall. Only flips between the two entry states — never disturbs a
+    /// mid-flow or resumed state (resume-exact).
+    package func syncActivationEntryFromOnboardingMode() {
+        switch activationState {
+        case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
+            applyActivationEvent(.choosePublicPath)
+        case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
+            applyActivationEvent(.choosePrivatePath)
+        default:
+            break
+        }
+    }
+
+    package func beginActivationCheckout() {
+        applyActivationEvent(activationCheckoutEnabled ? .beginCheckout : .checkoutUnavailable)
+    }
+
+    package func cancelActivationCheckout() {
+        // Invalidate any in-flight activation so its late result is ignored.
+        activationRequestGeneration &+= 1
+        applyActivationEvent(.checkoutCancelled)
+    }
+
+    /// Existing keys still activate while checkout is paused. The key is stored in
+    /// the Keychain only; only a redacted prefix is retained in memory for display.
+    package func provideExistingActivationKey() {
+        guard persistPendingActivationKey(requireNonEmpty: true) else { return }
+        lastError = nil
+        applyActivationEvent(.provideExistingKey)
+    }
+
+    /// Upsert the pasted key into the Keychain (single canonical item) and retain
+    /// only a redacted prefix in memory. Returns false when there is nothing to
+    /// store (or the store failed).
+    @discardableResult
+    private func persistPendingActivationKey(requireNonEmpty: Bool = false) -> Bool {
+        let material = ActivationKeyMaterial(pendingActivationKey)
+        guard !material.isEmpty else {
+            if requireNonEmpty {
+                lastError = "Enter your \(ActivationTerminology.activationKey) to continue."
+            }
+            return false
+        }
+        do {
+            try dependencies.secretStore.setSecret(pendingActivationKey, account: activationKeyAccount)
+            activationKeyRedactedPrefix = material.redactedPrefix
+            pendingActivationKey = ""
+            return true
+        } catch {
+            lastError = NeonDiffRedactor.redact(error.localizedDescription)
+            return false
+        }
+    }
+
+    package func reenterActivationKey() {
+        applyActivationEvent(.reenterKey)
+    }
+
+    package func renewActivation() {
+        applyActivationEvent(.renew)
+    }
+
+    /// Single entry the UI calls for the one recovery action a state advertises.
+    package func performActivationRecovery() async {
+        guard let event = activationPresentation.recovery?.event else { return }
+        switch event {
+        case .beginCheckout, .checkoutUnavailable:
+            beginActivationCheckout()
+        case .provideExistingKey:
+            provideExistingActivationKey()
+        case .submitActivation:
+            await submitActivation()
+        case .checkoutCancelled:
+            cancelActivationCheckout()
+        case .reenterKey:
+            reenterActivationKey()
+        case .renew:
+            renewActivation()
+        case .retry:
+            await retryActivation()
+        default:
+            applyActivationEvent(event)
+        }
+    }
+
+    package func requestActivationNotifyWhenCheckoutReopens() {
+        logText = "You'll be notified when \(ActivationTerminology.activationKey) checkout reopens. Existing keys still activate now."
+    }
+
+    package func submitActivation() async {
+        guard activationState == .keyReady else { return }
+        // A corrected/replacement key typed on the key-entry screen must be stored
+        // (and thus used) before we activate — otherwise the previous, rejected key
+        // would be retried.
+        if !pendingActivationKey.isEmpty {
+            guard persistPendingActivationKey() else { return }
+        }
+        applyActivationEvent(.submitActivation)
+        await performActivation()
+    }
+
+    package func retryActivation() async {
+        guard activationState == .offline || activationState == .serviceError else { return }
+        if !pendingActivationKey.isEmpty {
+            guard persistPendingActivationKey() else { return }
+        }
+        applyActivationEvent(.retry)
+        await performActivation()
+    }
+
+    /// Runs against `activation_pending`: read the key lazily from the Keychain
+    /// (off the launch path) and hand it to the license client over bounded stdin.
+    private func performActivation() async {
+        activationRequestGeneration &+= 1
+        let generation = activationRequestGeneration
+
+        guard let client = activationLicenseClient else {
+            // No CLI-backed validation available (default): never invoke the
+            // file-persisting CLI. Land in a retryable state instead.
+            applyActivationEvent(.activationServiceError)
+            lastError = activationPresentation.cause
+            return
+        }
+        let rawKey: String?
+        do {
+            rawKey = try dependencies.secretStore.readSecret(account: activationKeyAccount, allowUserInteraction: true)
+        } catch {
+            lastError = NeonDiffRedactor.redact(error.localizedDescription)
+            applyActivationEvent(.activationServiceError)
+            return
+        }
+        guard let rawKey, !rawKey.isEmpty else {
+            // Missing Keychain item mid-activation → back to key entry, not a dead
+            // Activating state (reenterKey now transitions from activationPending).
+            applyActivationEvent(.reenterKey)
+            lastError = "No stored \(ActivationTerminology.activationKey) to activate. Enter it again."
+            return
+        }
+        let outcome: ActivationClientOutcome
+        do {
+            outcome = try await client.activate(key: ActivationKeyMaterial(rawKey))
+        } catch {
+            outcome = .offline
+        }
+        // Drop stale results after a cancellation or a newer activation request.
+        guard generation == activationRequestGeneration else { return }
+        let resolved = resolveActivationOutcome(outcome)
+        applyActivationEvent(ActivationLicenseOutcomeMapping.event(for: resolved))
+        applyActivationOutcomeSideEffects(resolved)
+    }
+
+    /// A 200-`active` response can still be public-only or `privateRepoAllowed=false`,
+    /// which the server review gate rejects for private repos. Downgrade such a
+    /// scope-insufficient success to a scope conflict so the pane never reports
+    /// private review as unlocked when it is not.
+    private func resolveActivationOutcome(_ outcome: ActivationClientOutcome) -> ActivationClientOutcome {
+        if case let .active(summary) = outcome, !summary.coversPrivateRepos {
+            return .scopeConflict
+        }
+        return outcome
+    }
+
+    private func applyActivationOutcomeSideEffects(_ outcome: ActivationClientOutcome) {
+        switch outcome {
+        case .active(let summary):
+            lastError = nil
+            let scope = summary.repoVisibilityScope
+            let plan = summary.plan.map { " · \($0)" } ?? ""
+            license.entitlement = "active (\(scope)\(plan))"
+            logText = "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
+            // Let onboarding finish through the native handoff (Continue enables).
+            onboardingFlow.licenseActivation = .activated
+        case .scopeConflict:
+            lastError = "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
+        case .expired, .revoked, .invalid, .offline, .serviceError, .malformed:
+            // Cause copy comes from the typed state presentation — never a raw
+            // error string, and never any key material.
+            lastError = activationPresentation.cause
+        }
+    }
+
     package func advanceOnboarding() {
         onboardingFlow.providerKeyStored = providers.providerKeyStored
         if onboardingFlow.currentStep == .done {
@@ -1955,6 +2209,12 @@ private let githubTokenExpiresAtAccount = "github/user-token-expires-at"
 private let githubRefreshTokenExpiresAtAccount = "github/user-refresh-token-expires-at"
 private let githubUserLoginAccount = "github/user-login"
 private let onboardingCompletedKey = "neondiff.hasCompletedActivationOnboarding.v2"
+// Issue #612 — native activation handoff.
+private let activationKeyAccount = "activation-key/default"
+private let activationStateKey = "neondiff.activationState.v1"
+private let activationHandoffEnabledKey = "neondiff.activationHandoffEnabled"
+private let activationCheckoutEnabledKey = "neondiff.activationCheckoutEnabled"
+private let activationCliBackedEnabledKey = "neondiff.activationCliBackedValidation"
 
 private func isValidRepoName(_ value: String) -> Bool {
     let parts = value.split(separator: "/", omittingEmptySubsequences: false)
