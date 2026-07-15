@@ -22,13 +22,6 @@
 			remoteGlobalIDString = A10000000000000000000010;
 			remoteInfo = NeonDiffDesktopHostedApp;
 		};
-		A10000000000000000000042 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = A10000000000000000000001 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = A10000000000000000000012;
-			remoteInfo = NeonDiffDesktopFixtureResolve;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -121,7 +114,6 @@
 			buildRules = (
 			);
 			dependencies = (
-				A10000000000000000000043 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A10000000000000000000004 /* NeonDiffDesktop */,
@@ -274,11 +266,11 @@
 /* Begin PBXShellScriptBuildPhase section */
 		A10000000000000000000038 /* Embed Debug Fixture Resolver */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/NeonDiffDesktopFixtureResolve",
 			);
 			name = "Embed Debug Fixture Resolver";
 			outputPaths = (
@@ -286,7 +278,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\nhelpers_dir=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\nif [ \"$CONFIGURATION\" != \"Debug\" ]; then\n  rm -f \"$helpers_dir/NeonDiffDesktopFixtureResolve\"\n  exit 0\nfi\ninstall -d -m 0755 \"$helpers_dir\"\ninstall -m 0755 \"$SCRIPT_INPUT_FILE_0\" \"$SCRIPT_OUTPUT_FILE_0\"\n";
+			shellScript = "set -euo pipefail\nhelpers_dir=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\nif [ \"$CONFIGURATION\" != \"Debug\" ]; then\n  rm -f \"$helpers_dir/NeonDiffDesktopFixtureResolve\"\n  exit 0\nfi\nresolver=\"$BUILT_PRODUCTS_DIR/NeonDiffDesktopFixtureResolve\"\ntest -f \"$resolver\"\ntest ! -L \"$resolver\"\ntest -x \"$resolver\"\ninstall -d -m 0755 \"$helpers_dir\"\ninstall -m 0755 \"$resolver\" \"$SCRIPT_OUTPUT_FILE_0\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -295,11 +287,6 @@
 			isa = PBXTargetDependency;
 			target = A10000000000000000000010 /* NeonDiffDesktop */;
 			targetProxy = A10000000000000000000041 /* PBXContainerItemProxy */;
-		};
-		A10000000000000000000043 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = A10000000000000000000012 /* NeonDiffDesktopFixtureResolve */;
-			targetProxy = A10000000000000000000042 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
