@@ -12,6 +12,11 @@
 		A10000000000000000000062 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000052 /* Sparkle */; };
 		A10000000000000000000063 /* NeonDiffDesktopEvaluationSupport in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000053 /* NeonDiffDesktopEvaluationSupport */; };
 		A10000000000000000000064 /* tab-overview.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* tab-overview.json */; };
+		A10000000000000000000065 /* onboarding-welcome.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000024 /* onboarding-welcome.json */; };
+		A10000000000000000000066 /* onboarding-provider.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000025 /* onboarding-provider.json */; };
+		A10000000000000000000067 /* onboarding-daemon.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* onboarding-daemon.json */; };
+		A10000000000000000000068 /* onboarding-license.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000027 /* onboarding-license.json */; };
+		A10000000000000000000069 /* onboarding-done.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* onboarding-done.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -29,6 +34,11 @@
 		A10000000000000000000021 /* NeonDiffDesktopUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NeonDiffDesktopUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000022 /* NeonDiffDesktopFixtureResolve */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = NeonDiffDesktopFixtureResolve; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000023 /* tab-overview.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/tab-overview.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000024 /* onboarding-welcome.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-welcome.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000025 /* onboarding-provider.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-provider.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000026 /* onboarding-daemon.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-daemon.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000027 /* onboarding-license.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-license.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000028 /* onboarding-done.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-done.json; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -85,6 +95,11 @@
 				A10000000000000000000005 /* UITests */,
 				A10000000000000000000006 /* NeonDiffDesktopFixtureResolve */,
 				A10000000000000000000023 /* tab-overview.json */,
+				A10000000000000000000024 /* onboarding-welcome.json */,
+				A10000000000000000000025 /* onboarding-provider.json */,
+				A10000000000000000000026 /* onboarding-daemon.json */,
+				A10000000000000000000027 /* onboarding-license.json */,
+				A10000000000000000000028 /* onboarding-done.json */,
 				A10000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -234,6 +249,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000064 /* tab-overview.json in Resources */,
+				A10000000000000000000065 /* onboarding-welcome.json in Resources */,
+				A10000000000000000000066 /* onboarding-provider.json in Resources */,
+				A10000000000000000000067 /* onboarding-daemon.json in Resources */,
+				A10000000000000000000068 /* onboarding-license.json in Resources */,
+				A10000000000000000000069 /* onboarding-done.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

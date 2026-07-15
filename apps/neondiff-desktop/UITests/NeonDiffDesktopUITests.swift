@@ -5,6 +5,59 @@ final class NeonDiffDesktopUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testAccessibility3OverrideScalesVisibleProductionSectionTitle() throws {
+        let requestedContentSize = HostedContentSize(width: 1040, height: 680)
+        let defaultScenario = try captureRenderedTextScaleScenario(
+            requestedContentSize: requestedContentSize,
+            textSizeMode: "runner-default-no-test-override",
+            textSizeArgument: nil,
+            rootIdentifier: "neondiff.fixture.tab-overview"
+        )
+        let accessibility3Scenario = try captureRenderedTextScaleScenario(
+            requestedContentSize: requestedContentSize,
+            textSizeMode: "swiftui-dynamic-type-accessibility3-test-override",
+            textSizeArgument: "accessibility3",
+            rootIdentifier: "neondiff.fixture.tab-overview.text-size.accessibility3"
+        )
+        let defaultMaximumSample = try XCTUnwrap(
+            defaultScenario.samples.max { $0.frame.height < $1.frame.height }
+        )
+        let accessibility3MinimumSample = try XCTUnwrap(
+            accessibility3Scenario.samples.min { $0.frame.height < $1.frame.height }
+        )
+        let robustRenderedHeightGrowthPoints =
+            accessibility3MinimumSample.frame.height - defaultMaximumSample.frame.height
+        guard robustRenderedHeightGrowthPoints > 1 else {
+            throw HostedRenderedTextScaleError.insufficientRenderedScale(
+                defaultMaximumFrame: defaultMaximumSample.frame,
+                accessibility3MinimumFrame: accessibility3MinimumSample.frame
+            )
+        }
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedRenderedTextScaleError.priorValidationFailure
+        }
+
+        try attach(
+            HostedRenderedTextScaleTrace(
+                schemaVersion: 1,
+                fixtureId: "tab-overview",
+                requestedContentSize: requestedContentSize,
+                semanticTextIdentifier: "neondiff-section-title",
+                expectedSemanticValue: "Overview",
+                coordinateSpace: "xcui-screen",
+                sampleIntervalMilliseconds: 100,
+                tolerancePoints: 1,
+                minimumRequiredHeightGrowthPoints: 1,
+                defaultMaximumHeightPoints: defaultMaximumSample.frame.height,
+                accessibility3MinimumHeightPoints: accessibility3MinimumSample.frame.height,
+                robustRenderedHeightGrowthPoints: robustRenderedHeightGrowthPoints,
+                defaultScenario: defaultScenario,
+                accessibility3Scenario: accessibility3Scenario,
+                proofBoundary: "hosted-visible-production-section-title-rendered-scale-comparison-only-system-preference-excluded"
+            )
+        )
+    }
+
     func testStrictFixtureSettlesAcrossOverviewReposOverview() throws {
         let requestedContentSize = HostedContentSize(width: 1040, height: 680)
         let fixtureURL = try XCTUnwrap(
@@ -393,6 +446,489 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 proofBoundary: "hosted-accessibility3-minimum-size-outer-geometry-and-page-bottom-only-inner-scroll-exhaustion-excluded"
             )
         )
+    }
+
+    func testStrictFixtureSettlesAcrossEveryOnboardingStepAtCanonicalSize() throws {
+        let requestedContentSize = HostedContentSize(width: 760, height: 560)
+        let fixtureSteps = [
+            HostedOnboardingFixtureStep(fixtureId: "onboarding-welcome", onboardingStep: "welcome", section: "overview"),
+            HostedOnboardingFixtureStep(fixtureId: "onboarding-provider", onboardingStep: "provider", section: "providers"),
+            HostedOnboardingFixtureStep(fixtureId: "onboarding-daemon", onboardingStep: "daemon", section: "overview"),
+            HostedOnboardingFixtureStep(fixtureId: "onboarding-license", onboardingStep: "license", section: "license"),
+            HostedOnboardingFixtureStep(fixtureId: "onboarding-done", onboardingStep: "done", section: "overview")
+        ]
+        var scenarios: [HostedOnboardingScenario] = []
+        for fixtureStep in fixtureSteps {
+            scenarios.append(
+                try captureOnboardingScenario(
+                    fixtureStep,
+                    requestedContentSize: requestedContentSize
+                )
+            )
+        }
+
+        XCTAssertEqual(scenarios.count, 5)
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedOnboardingTraceError.priorValidationFailure
+        }
+        try attach(
+            HostedOnboardingMatrixTrace(
+                schemaVersion: 1,
+                requestedContentSize: requestedContentSize,
+                coordinateSpace: "xcui-screen",
+                sampleIntervalMilliseconds: 100,
+                samplingDeadlineMilliseconds: 5_000,
+                tolerancePoints: 1,
+                scenarios: scenarios,
+                proofBoundary: "hosted-five-onboarding-fixtures-760x560-settled-geometry-only-actions-scroll-large-text-manual-excluded"
+            )
+        )
+    }
+
+    private func captureOnboardingScenario(
+        _ fixtureStep: HostedOnboardingFixtureStep,
+        requestedContentSize: HostedContentSize
+    ) throws -> HostedOnboardingScenario {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(
+                forResource: fixtureStep.fixtureId,
+                withExtension: "json"
+            )
+        )
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "\(requestedContentSize.width)x\(requestedContentSize.height)",
+            "--disable-animations"
+        ]
+        app.launch()
+
+        guard app.windows.firstMatch.waitForExistence(timeout: 10) else {
+            throw HostedOnboardingTraceError.missingElement("window")
+        }
+        let fixtureRootIdentifier = "neondiff.fixture.\(fixtureStep.fixtureId)"
+        let fixtureRoot = app.descendants(matching: .any)[fixtureRootIdentifier]
+        guard fixtureRoot.waitForExistence(timeout: 10) else {
+            throw HostedOnboardingTraceError.missingElement(fixtureRootIdentifier)
+        }
+        guard app.state == .runningForeground else {
+            throw HostedOnboardingTraceError.appNotForeground
+        }
+
+        let markerIdentifier =
+            "neondiff.evaluation.surface.\(fixtureStep.section).0.quiescent"
+        let marker = app.descendants(matching: .any)[markerIdentifier]
+        guard marker.waitForExistence(timeout: 10) else {
+            throw HostedOnboardingTraceError.missingElement(markerIdentifier)
+        }
+        guard !marker.isHittable else {
+            throw HostedOnboardingTraceError.interactiveQuiescenceMarker(markerIdentifier)
+        }
+
+        let currentStepIdentifier =
+            "neondiff-onboarding-current-step-\(fixtureStep.onboardingStep)"
+        _ = try uniqueOnboardingElement(
+            app: app,
+            identifier: currentStepIdentifier
+        )
+        let wizard = try uniqueOnboardingElement(
+            app: app,
+            identifier: "neondiff-onboarding-wizard"
+        )
+        let regions = try [
+            "neondiff-onboarding-header",
+            "neondiff-onboarding-step-list",
+            "neondiff-onboarding-step-content",
+            "neondiff-onboarding-footer"
+        ].map {
+            ($0, try uniqueOnboardingElement(app: app, identifier: $0))
+        }
+        let samples = try captureStableOnboardingSamples(
+            app: app,
+            wizard: wizard,
+            regions: regions,
+            requestedContentSize: requestedContentSize,
+            context: fixtureStep.fixtureId
+        )
+
+        return HostedOnboardingScenario(
+            fixtureId: fixtureStep.fixtureId,
+            onboardingStep: fixtureStep.onboardingStep,
+            section: fixtureStep.section,
+            fixtureRootIdentifier: fixtureRootIdentifier,
+            currentStepIdentifier: currentStepIdentifier,
+            quiescenceMarkerIdentifier: markerIdentifier,
+            samples: samples
+        )
+    }
+
+    private func uniqueOnboardingElement(
+        app: XCUIApplication,
+        identifier: String
+    ) throws -> XCUIElement {
+        let query = app.descendants(matching: .any).matching(identifier: identifier)
+        let element = query.firstMatch
+        guard element.waitForExistence(timeout: 5) else {
+            throw HostedOnboardingTraceError.missingElement(identifier)
+        }
+        guard query.count == 1 else {
+            throw HostedOnboardingTraceError.invalidElementCount(
+                identifier: identifier,
+                count: query.count
+            )
+        }
+        return element
+    }
+
+    private func captureStableOnboardingSamples(
+        app: XCUIApplication,
+        wizard: XCUIElement,
+        regions: [(String, XCUIElement)],
+        requestedContentSize: HostedContentSize,
+        context: String
+    ) throws -> [HostedOnboardingSample] {
+        let start = ProcessInfo.processInfo.systemUptime
+        var previousSampleStart: TimeInterval?
+        var samples: [HostedOnboardingSample] = []
+        for index in 0..<3 {
+            if index > 0, let previousSampleStart {
+                let elapsedSincePrevious =
+                    ProcessInfo.processInfo.systemUptime - previousSampleStart
+                let remainingDelay = max(0, 0.1 - elapsedSincePrevious)
+                if remainingDelay > 0 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(remainingDelay))
+                }
+            }
+            let sampleStart = ProcessInfo.processInfo.systemUptime
+            previousSampleStart = sampleStart
+            let wizardFrame = HostedGeometryFrame(wizard.frame)
+            guard wizardFrame.isFiniteAndNonempty else {
+                throw HostedOnboardingTraceError.invalidFrame("\(context) wizard")
+            }
+            guard wizardFrame.matches(requestedContentSize, tolerance: 1) else {
+                throw HostedOnboardingTraceError.unexpectedContentSize(
+                    context: context,
+                    requested: requestedContentSize,
+                    observed: wizardFrame
+                )
+            }
+            let windowFrame = try smallestContainingWindowFrame(
+                app: app,
+                frame: wizardFrame,
+                context: context
+            )
+            let fullyContainedInWindow = wizardFrame.isFullyContained(
+                in: windowFrame,
+                tolerance: 1
+            )
+            guard fullyContainedInWindow else {
+                throw HostedOnboardingTraceError.wizardNotContained(
+                    context: context,
+                    wizard: wizardFrame,
+                    window: windowFrame
+                )
+            }
+            let regionFrames = try regions.map { identifier, element in
+                let frame = HostedGeometryFrame(element.frame)
+                guard frame.isFiniteAndNonempty else {
+                    throw HostedOnboardingTraceError.invalidFrame(
+                        "\(context) \(identifier)"
+                    )
+                }
+                let fullyContainedInWizard = frame.isFullyContained(
+                    in: wizardFrame,
+                    tolerance: 1
+                )
+                guard fullyContainedInWizard else {
+                    throw HostedOnboardingTraceError.regionNotContained(
+                        context: context,
+                        identifier: identifier,
+                        region: frame,
+                        wizard: wizardFrame
+                    )
+                }
+                return HostedOnboardingRegionFrame(
+                    identifier: identifier,
+                    frame: frame,
+                    fullyContainedInWizard: fullyContainedInWizard
+                )
+            }
+            let sample = HostedOnboardingSample(
+                elapsedMilliseconds: Int(((sampleStart - start) * 1_000).rounded()),
+                completionElapsedMilliseconds: Int(
+                    ((ProcessInfo.processInfo.systemUptime - start) * 1_000).rounded()
+                ),
+                windowFrame: windowFrame,
+                wizardFrame: wizardFrame,
+                fullyContainedInWindow: fullyContainedInWindow,
+                regions: regionFrames
+            )
+            try validateOnboardingRegionLayout(sample, context: context)
+            samples.append(sample)
+        }
+
+        guard samples.count == 3,
+              samples[0].elapsedMilliseconds >= 0,
+              samples[0].elapsedMilliseconds <= 25,
+              let finalCompletionElapsedMilliseconds =
+                  samples.last?.completionElapsedMilliseconds,
+              finalCompletionElapsedMilliseconds <= 5_000,
+              samples.allSatisfy({
+                  $0.completionElapsedMilliseconds >= $0.elapsedMilliseconds
+              }) else {
+            throw HostedOnboardingTraceError.invalidCadence(context)
+        }
+        for (lhs, rhs) in zip(samples, samples.dropFirst()) {
+            guard rhs.elapsedMilliseconds - lhs.elapsedMilliseconds >= 90 else {
+                throw HostedOnboardingTraceError.invalidCadence(context)
+            }
+        }
+        try validateStableOnboardingSamples(samples, context: context)
+        return samples
+    }
+
+    private func smallestContainingWindowFrame(
+        app: XCUIApplication,
+        frame: HostedGeometryFrame,
+        context: String
+    ) throws -> HostedGeometryFrame {
+        let candidates = (0..<app.windows.count)
+            .map { HostedGeometryFrame(app.windows.element(boundBy: $0).frame) }
+            .filter {
+                $0.isFiniteAndNonempty
+                    && frame.isFullyContained(in: $0, tolerance: 1)
+            }
+            .sorted { $0.area < $1.area }
+        guard let windowFrame = candidates.first else {
+            throw HostedOnboardingTraceError.missingContainingWindow(context)
+        }
+        return windowFrame
+    }
+
+    private func validateStableOnboardingSamples(
+        _ samples: [HostedOnboardingSample],
+        context: String
+    ) throws {
+        guard let baseline = samples.first else {
+            throw HostedOnboardingTraceError.missingSamples(context)
+        }
+        for sample in samples.dropFirst() {
+            guard !baseline.windowFrame.differs(
+                from: sample.windowFrame,
+                byMoreThan: 1
+            ), !baseline.wizardFrame.differs(
+                from: sample.wizardFrame,
+                byMoreThan: 1
+            ), baseline.fullyContainedInWindow,
+               sample.fullyContainedInWindow,
+               baseline.regions.count == sample.regions.count else {
+                throw HostedOnboardingTraceError.unstableGeometry(context)
+            }
+            for region in baseline.regions {
+                guard let candidate = sample.regions.first(where: {
+                    $0.identifier == region.identifier
+                }), !region.frame.differs(
+                    from: candidate.frame,
+                    byMoreThan: 1
+                ), region.fullyContainedInWizard,
+                   candidate.fullyContainedInWizard else {
+                    throw HostedOnboardingTraceError.unstableGeometry(
+                        "\(context) \(region.identifier)"
+                    )
+                }
+            }
+        }
+    }
+
+    private func validateOnboardingRegionLayout(
+        _ sample: HostedOnboardingSample,
+        context: String
+    ) throws {
+        let expectedIdentifiers = Set([
+            "neondiff-onboarding-header",
+            "neondiff-onboarding-step-list",
+            "neondiff-onboarding-step-content",
+            "neondiff-onboarding-footer"
+        ])
+        guard Set(sample.regions.map(\.identifier)) == expectedIdentifiers,
+              let header = sample.regions.first(where: {
+                  $0.identifier == "neondiff-onboarding-header"
+              })?.frame,
+              let stepList = sample.regions.first(where: {
+                  $0.identifier == "neondiff-onboarding-step-list"
+              })?.frame,
+              let stepContent = sample.regions.first(where: {
+                  $0.identifier == "neondiff-onboarding-step-content"
+              })?.frame,
+              let footer = sample.regions.first(where: {
+                  $0.identifier == "neondiff-onboarding-footer"
+              })?.frame,
+              header.maxY <= min(stepList.y, stepContent.y) + 1,
+              stepList.maxX <= stepContent.x + 1,
+              max(stepList.maxY, stepContent.maxY) <= footer.y + 1 else {
+            throw HostedOnboardingTraceError.invalidRegionLayout(context)
+        }
+    }
+
+    private func captureRenderedTextScaleScenario(
+        requestedContentSize: HostedContentSize,
+        textSizeMode: String,
+        textSizeArgument: String?,
+        rootIdentifier: String
+    ) throws -> HostedRenderedTextScaleScenario {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "tab-overview", withExtension: "json")
+        )
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "1040x680",
+            "--disable-animations"
+        ]
+        if let textSizeArgument {
+            app.launchArguments.append(contentsOf: ["--text-size", textSizeArgument])
+        }
+        app.launch()
+
+        guard app.windows.firstMatch.waitForExistence(timeout: 10) else {
+            throw HostedRenderedTextScaleError.missingElement("window")
+        }
+        let root = app.descendants(matching: .any)[rootIdentifier]
+        guard root.waitForExistence(timeout: 10) else {
+            throw HostedRenderedTextScaleError.missingElement(rootIdentifier)
+        }
+        guard app.state == .runningForeground else {
+            throw HostedRenderedTextScaleError.appNotForeground
+        }
+
+        let markerIdentifier = "neondiff.evaluation.surface.overview.0.quiescent"
+        _ = try captureCheckpoint(
+            app: app,
+            section: "overview",
+            generation: 0,
+            markerIdentifier: markerIdentifier,
+            requestedContentSize: requestedContentSize
+        )
+
+        let titleQuery = app.staticTexts.matching(identifier: "neondiff-section-title")
+        guard titleQuery.count == 1 else {
+            throw HostedRenderedTextScaleError.invalidElementCount(
+                identifier: "neondiff-section-title",
+                count: titleQuery.count
+            )
+        }
+        let title = titleQuery.element(boundBy: 0)
+        guard title.waitForExistence(timeout: 2) else {
+            throw HostedRenderedTextScaleError.missingElement("neondiff-section-title")
+        }
+        _ = try semanticStaticTextValue(title)
+        let samples = try captureStableVisibleTextSamples(
+            title,
+            visibleContainer: app.windows.firstMatch,
+            context: textSizeMode
+        )
+
+        return HostedRenderedTextScaleScenario(
+            textSizeMode: textSizeMode,
+            launchTextSizeArgument: textSizeArgument,
+            rootIdentifier: rootIdentifier,
+            quiescenceMarkerIdentifier: markerIdentifier,
+            samples: samples
+        )
+    }
+
+    private func captureStableVisibleTextSamples(
+        _ element: XCUIElement,
+        visibleContainer: XCUIElement,
+        context: String
+    ) throws -> [HostedRenderedTextSample] {
+        let start = ProcessInfo.processInfo.systemUptime
+        var previousSampleStart: TimeInterval?
+        var samples: [HostedRenderedTextSample] = []
+        for index in 0..<3 {
+            if index > 0, let previousSampleStart {
+                let elapsedSincePrevious =
+                    ProcessInfo.processInfo.systemUptime - previousSampleStart
+                let remainingDelay = max(0, 0.1 - elapsedSincePrevious)
+                if remainingDelay > 0 {
+                    RunLoop.current.run(until: Date().addingTimeInterval(remainingDelay))
+                }
+            }
+            let sampleStart = ProcessInfo.processInfo.systemUptime
+            previousSampleStart = sampleStart
+            let frame = HostedGeometryFrame(element.frame)
+            let visibleContainerFrame = HostedGeometryFrame(visibleContainer.frame)
+            guard frame.isFiniteAndNonempty else {
+                throw HostedRenderedTextScaleError.invalidFrame(context)
+            }
+            guard visibleContainerFrame.isFiniteAndNonempty else {
+                throw HostedRenderedTextScaleError.invalidVisibleContainerFrame(context)
+            }
+            let semanticValue = try semanticStaticTextValue(element)
+            let fullyContainedInVisibleContainer = frame.isFullyContained(
+                in: visibleContainerFrame,
+                tolerance: 1
+            )
+            guard fullyContainedInVisibleContainer else {
+                throw HostedRenderedTextScaleError.textNotVisible(
+                    context: context,
+                    textFrame: frame,
+                    visibleContainerFrame: visibleContainerFrame
+                )
+            }
+            samples.append(
+                HostedRenderedTextSample(
+                    elapsedMilliseconds: Int(((sampleStart - start) * 1_000).rounded()),
+                    frame: frame,
+                    semanticValue: semanticValue,
+                    visibleContainerFrame: visibleContainerFrame,
+                    fullyContainedInVisibleContainer: fullyContainedInVisibleContainer
+                )
+            )
+        }
+
+        guard samples.count == 3,
+              samples[0].elapsedMilliseconds >= 0,
+              samples[0].elapsedMilliseconds <= 25,
+              let finalElapsedMilliseconds = samples.last?.elapsedMilliseconds,
+              finalElapsedMilliseconds <= 5_000 else {
+            throw HostedRenderedTextScaleError.invalidCadence(context)
+        }
+        for (lhs, rhs) in zip(samples, samples.dropFirst()) {
+            guard rhs.elapsedMilliseconds - lhs.elapsedMilliseconds >= 90 else {
+                throw HostedRenderedTextScaleError.invalidCadence(context)
+            }
+        }
+        guard let baseline = samples.first else {
+            throw HostedRenderedTextScaleError.missingSamples(context)
+        }
+        for sample in samples.dropFirst() {
+            guard !baseline.frame.differs(from: sample.frame, byMoreThan: 1),
+                  !baseline.visibleContainerFrame.differs(
+                      from: sample.visibleContainerFrame,
+                      byMoreThan: 1
+                  ),
+                  baseline.fullyContainedInVisibleContainer,
+                  sample.fullyContainedInVisibleContainer,
+                  baseline.semanticValue == sample.semanticValue else {
+                throw HostedRenderedTextScaleError.unstableGeometry(context)
+            }
+        }
+        return samples
+    }
+
+    private func semanticStaticTextValue(_ element: XCUIElement) throws -> String {
+        guard let semanticValue = element.value as? String,
+              semanticValue == "Overview" else {
+            throw HostedRenderedTextScaleError.unexpectedSemanticValue(
+                String(describing: element.value)
+            )
+        }
+        return semanticValue
     }
 
     private func captureCanonicalSizeScenario(
@@ -1091,6 +1627,30 @@ final class NeonDiffDesktopUITests: XCTestCase {
         add(attachment)
     }
 
+    private func attach(_ trace: HostedRenderedTextScaleTrace) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let attachment = XCTAttachment(
+            data: try encoder.encode(trace),
+            uniformTypeIdentifier: "public.json"
+        )
+        attachment.name = "neondiff-hosted-rendered-text-scale.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func attach(_ trace: HostedOnboardingMatrixTrace) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let attachment = XCTAttachment(
+            data: try encoder.encode(trace),
+            uniformTypeIdentifier: "public.json"
+        )
+        attachment.name = "neondiff-hosted-onboarding-matrix.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func attachTransportDiagnostic(_ diagnostic: HostedTransportDiagnostic) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1126,6 +1686,12 @@ private struct HostedPageBottomRouteStep {
 private struct HostedCanonicalSizeRequest {
     let requestedContentSize: HostedContentSize
     let contentSizeArgument: String
+}
+
+private struct HostedOnboardingFixtureStep {
+    let fixtureId: String
+    let onboardingStep: String
+    let section: String
 }
 
 private struct HostedGeometryFrame: Codable, Equatable {
@@ -1167,6 +1733,15 @@ private struct HostedGeometryFrame: Codable, Equatable {
             && x + width <= container.x + container.width + tolerance
             && y + height <= container.y + container.height + tolerance
     }
+
+    func matches(_ size: HostedContentSize, tolerance: Double) -> Bool {
+        abs(width - Double(size.width)) <= tolerance
+            && abs(height - Double(size.height)) <= tolerance
+    }
+
+    var maxX: Double { x + width }
+    var maxY: Double { y + height }
+    var area: Double { width * height }
 }
 
 private struct HostedGeometryRegionFrame: Codable, Equatable {
@@ -1344,6 +1919,76 @@ private struct HostedLargeTextMatrixTrace: Codable {
     let proofBoundary: String
 }
 
+private struct HostedRenderedTextSample: Codable, Equatable {
+    let elapsedMilliseconds: Int
+    let frame: HostedGeometryFrame
+    let semanticValue: String
+    let visibleContainerFrame: HostedGeometryFrame
+    let fullyContainedInVisibleContainer: Bool
+}
+
+private struct HostedRenderedTextScaleScenario: Codable {
+    let textSizeMode: String
+    let launchTextSizeArgument: String?
+    let rootIdentifier: String
+    let quiescenceMarkerIdentifier: String
+    let samples: [HostedRenderedTextSample]
+}
+
+private struct HostedRenderedTextScaleTrace: Codable {
+    let schemaVersion: Int
+    let fixtureId: String
+    let requestedContentSize: HostedContentSize
+    let semanticTextIdentifier: String
+    let expectedSemanticValue: String
+    let coordinateSpace: String
+    let sampleIntervalMilliseconds: Int
+    let tolerancePoints: Double
+    let minimumRequiredHeightGrowthPoints: Double
+    let defaultMaximumHeightPoints: Double
+    let accessibility3MinimumHeightPoints: Double
+    let robustRenderedHeightGrowthPoints: Double
+    let defaultScenario: HostedRenderedTextScaleScenario
+    let accessibility3Scenario: HostedRenderedTextScaleScenario
+    let proofBoundary: String
+}
+
+private struct HostedOnboardingRegionFrame: Codable, Equatable {
+    let identifier: String
+    let frame: HostedGeometryFrame
+    let fullyContainedInWizard: Bool
+}
+
+private struct HostedOnboardingSample: Codable, Equatable {
+    let elapsedMilliseconds: Int
+    let completionElapsedMilliseconds: Int
+    let windowFrame: HostedGeometryFrame
+    let wizardFrame: HostedGeometryFrame
+    let fullyContainedInWindow: Bool
+    let regions: [HostedOnboardingRegionFrame]
+}
+
+private struct HostedOnboardingScenario: Codable {
+    let fixtureId: String
+    let onboardingStep: String
+    let section: String
+    let fixtureRootIdentifier: String
+    let currentStepIdentifier: String
+    let quiescenceMarkerIdentifier: String
+    let samples: [HostedOnboardingSample]
+}
+
+private struct HostedOnboardingMatrixTrace: Codable {
+    let schemaVersion: Int
+    let requestedContentSize: HostedContentSize
+    let coordinateSpace: String
+    let sampleIntervalMilliseconds: Int
+    let samplingDeadlineMilliseconds: Int
+    let tolerancePoints: Double
+    let scenarios: [HostedOnboardingScenario]
+    let proofBoundary: String
+}
+
 private struct HostedGeometryCoordinateSpaces: Codable {
     let windowAndContent: String
     let regions: String
@@ -1389,6 +2034,134 @@ private enum HostedPageBottomTraceError: LocalizedError {
         case let .sentinelNotContained(context, sentinel, container):
             "Hosted page-bottom sentinel is not fully contained in \(context): "
                 + "sentinel=\(sentinel) container=\(container)"
+        }
+    }
+}
+
+private enum HostedRenderedTextScaleError: LocalizedError {
+    case priorValidationFailure
+    case appNotForeground
+    case missingElement(String)
+    case invalidElementCount(identifier: String, count: Int)
+    case unexpectedSemanticValue(String)
+    case invalidFrame(String)
+    case invalidVisibleContainerFrame(String)
+    case textNotVisible(
+        context: String,
+        textFrame: HostedGeometryFrame,
+        visibleContainerFrame: HostedGeometryFrame
+    )
+    case missingSamples(String)
+    case invalidCadence(String)
+    case unstableGeometry(String)
+    case insufficientRenderedScale(
+        defaultMaximumFrame: HostedGeometryFrame,
+        accessibility3MinimumFrame: HostedGeometryFrame
+    )
+
+    var errorDescription: String? {
+        switch self {
+        case .priorValidationFailure:
+            "Hosted rendered-text trace withheld after an earlier validation failure"
+        case .appNotForeground:
+            "Hosted rendered-text fixture is not running in the foreground"
+        case .missingElement(let identifier):
+            "Missing hosted rendered-text element: \(identifier)"
+        case let .invalidElementCount(identifier, count):
+            "Hosted rendered-text element count is not exactly one: "
+                + "identifier=\(identifier) count=\(count)"
+        case .unexpectedSemanticValue(let value):
+            "Hosted rendered-text element has an unexpected semantic value: \(value)"
+        case .invalidFrame(let context):
+            "Hosted rendered-text frame is invalid: \(context)"
+        case .invalidVisibleContainerFrame(let context):
+            "Hosted rendered-text visible-container frame is invalid: \(context)"
+        case let .textNotVisible(context, textFrame, visibleContainerFrame):
+            "Hosted rendered-text frame is not fully contained in the visible container: "
+                + "context=\(context) text=\(textFrame) "
+                + "container=\(visibleContainerFrame)"
+        case .missingSamples(let context):
+            "Hosted rendered-text samples are missing: \(context)"
+        case .invalidCadence(let context):
+            "Hosted rendered-text sample cadence is invalid: \(context)"
+        case .unstableGeometry(let context):
+            "Hosted rendered-text geometry drift exceeded one point: \(context)"
+        case let .insufficientRenderedScale(
+            defaultMaximumFrame,
+            accessibility3MinimumFrame
+        ):
+            "Accessibility3 did not increase visible production text height by more than "
+                + "one point in the worst case: defaultMaximum=\(defaultMaximumFrame) "
+                + "accessibility3Minimum=\(accessibility3MinimumFrame)"
+        }
+    }
+}
+
+private enum HostedOnboardingTraceError: LocalizedError {
+    case priorValidationFailure
+    case appNotForeground
+    case missingElement(String)
+    case invalidElementCount(identifier: String, count: Int)
+    case interactiveQuiescenceMarker(String)
+    case invalidFrame(String)
+    case unexpectedContentSize(
+        context: String,
+        requested: HostedContentSize,
+        observed: HostedGeometryFrame
+    )
+    case missingContainingWindow(String)
+    case wizardNotContained(
+        context: String,
+        wizard: HostedGeometryFrame,
+        window: HostedGeometryFrame
+    )
+    case regionNotContained(
+        context: String,
+        identifier: String,
+        region: HostedGeometryFrame,
+        wizard: HostedGeometryFrame
+    )
+    case missingSamples(String)
+    case invalidCadence(String)
+    case unstableGeometry(String)
+    case invalidRegionLayout(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .priorValidationFailure:
+            "Hosted onboarding trace withheld after an earlier validation failure"
+        case .appNotForeground:
+            "Hosted onboarding fixture is not running in the foreground"
+        case .missingElement(let identifier):
+            "Missing hosted onboarding element: \(identifier)"
+        case let .invalidElementCount(identifier, count):
+            "Hosted onboarding element count is not exactly one: "
+                + "identifier=\(identifier) count=\(count)"
+        case .interactiveQuiescenceMarker(let identifier):
+            "Hosted onboarding quiescence marker is unexpectedly interactive: \(identifier)"
+        case .invalidFrame(let context):
+            "Invalid hosted onboarding frame: \(context)"
+        case let .unexpectedContentSize(context, requested, observed):
+            "Hosted onboarding content size does not match the request: "
+                + "context=\(context) requested=\(requested.width)x\(requested.height) "
+                + "observed=\(observed)"
+        case .missingContainingWindow(let context):
+            "Hosted onboarding wizard has no containing app window: \(context)"
+        case let .wizardNotContained(context, wizard, window):
+            "Hosted onboarding wizard is not fully contained: "
+                + "context=\(context) wizard=\(wizard) window=\(window)"
+        case let .regionNotContained(context, identifier, region, wizard):
+            "Hosted onboarding region is not fully contained: "
+                + "context=\(context) identifier=\(identifier) "
+                + "region=\(region) wizard=\(wizard)"
+        case .missingSamples(let context):
+            "Missing hosted onboarding samples: \(context)"
+        case .invalidCadence(let context):
+            "Invalid hosted onboarding sample cadence: \(context)"
+        case .unstableGeometry(let context):
+            "Hosted onboarding geometry drift exceeded one point: \(context)"
+        case .invalidRegionLayout(let context):
+            "Hosted onboarding regions overlap or are ordered incorrectly: \(context)"
         }
     }
 }
