@@ -126,6 +126,9 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(content).toContain("EvaluationSurfaceAccessibilityMarker");
     expect(content).toContain(".accessibilityValue(status.geometryAccessibilityValue)");
     expect(content).toContain("EvaluationRegionFramesPreferenceKey");
+    expect(content).toContain("EvaluationRegionFrameCollector");
+    expect(content).toContain("@ObservedObject var status: DesktopEvaluationSurfaceStatus");
+    expect(content).toContain("content(status.snapshot?.generation)");
     expect(app).toContain("evaluationSurfaceStatus");
     expect(source).not.toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
     expect(source).not.toContain("createDirectory");

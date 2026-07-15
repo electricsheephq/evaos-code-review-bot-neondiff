@@ -51,27 +51,19 @@ struct ContentView: View {
 
     var body: some View {
 #if DEBUG
-        content.onPreferenceChange(EvaluationRegionFramesPreferenceKey.self) { frames in
-            guard let evaluationSurfaceStatus,
-                  let generation = evaluationSurfaceStatus.snapshot?.generation else {
-                return
+        if let evaluationSurfaceStatus {
+            EvaluationRegionFrameCollector(status: evaluationSurfaceStatus) { generation in
+                content(evaluationSurfaceGeneration: generation)
             }
-            let generations = Set(frames.values.map(\.generation))
-            guard generations == Set([generation]) else {
-                evaluationSurfaceStatus.updateRegionFrames([:], generation: generation)
-                return
-            }
-            evaluationSurfaceStatus.updateRegionFrames(
-                frames.mapValues(\.frame),
-                generation: generation
-            )
+        } else {
+            content(evaluationSurfaceGeneration: nil)
         }
 #else
-        content
+        content(evaluationSurfaceGeneration: nil)
 #endif
     }
 
-    private var content: some View {
+    private func content(evaluationSurfaceGeneration: Int?) -> some View {
         ZStack(alignment: .top) {
             OperatorBackdrop()
             EvaluationRootAccessibilityMarker(identifier: rootAccessibilityIdentifier)
@@ -135,14 +127,6 @@ struct ContentView: View {
                 .onAppear { onSurfaceReady?(model.selectedSection) }
         }
     }
-
-    private var evaluationSurfaceGeneration: Int? {
-#if DEBUG
-        evaluationSurfaceStatus?.snapshot?.generation
-#else
-        nil
-#endif
-    }
 }
 
 private extension View {
@@ -179,6 +163,37 @@ private extension View {
 }
 
 #if DEBUG
+private struct EvaluationRegionFrameCollector<Content: View>: View {
+    @ObservedObject var status: DesktopEvaluationSurfaceStatus
+    let content: (Int?) -> Content
+
+    init(
+        status: DesktopEvaluationSurfaceStatus,
+        @ViewBuilder content: @escaping (Int?) -> Content
+    ) {
+        self.status = status
+        self.content = content
+    }
+
+    var body: some View {
+        content(status.snapshot?.generation)
+            .onPreferenceChange(EvaluationRegionFramesPreferenceKey.self) { frames in
+                guard let generation = status.snapshot?.generation else {
+                    return
+                }
+                let generations = Set(frames.values.map(\.generation))
+                guard generations == Set([generation]) else {
+                    status.updateRegionFrames([:], generation: generation)
+                    return
+                }
+                status.updateRegionFrames(
+                    frames.mapValues(\.frame),
+                    generation: generation
+                )
+            }
+    }
+}
+
 private struct EvaluationRegionFramesPreferenceKey: PreferenceKey {
     static let defaultValue: [String: EvaluationRegionFramePreference] = [:]
 
