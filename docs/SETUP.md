@@ -220,7 +220,9 @@ neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
-The local HTML dashboard is the human first-run surface. It shows license
+This SETUP guide is the operator/advanced CLI-first path. The local HTML
+dashboard is the operator/diagnostic surface it drives; on Mac, the native
+macOS app is the human first-run product surface. The dashboard shows license
 status, GitHub App status, daemon status, and provider readiness with redacted
 output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing
