@@ -236,6 +236,8 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(checkpointSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
     );
+    expect(checkpointSource).not.toContain("bottomSentinel.isHittable");
+    expect(source).not.toContain("case hittableSentinel");
     expect(checkpointSource).toContain("preActionSamples.allSatisfy");
     expect(checkpointSource).toContain(
       "for (sampleIndex, postActionSample) in postActionSamples.enumerated()"

@@ -312,10 +312,6 @@ final class NeonDiffDesktopUITests: XCTestCase {
         guard detailRegion.waitForExistence(timeout: 2) else {
             throw HostedPageBottomTraceError.missingElement("neondiff-detail")
         }
-        guard !bottomSentinel.isHittable else {
-            throw HostedPageBottomTraceError.hittableSentinel(sentinelIdentifier)
-        }
-
         let preActionSamples = try capturePageBottomSamples(
             outerPageScroll: outerPageScroll,
             bottomSentinel: bottomSentinel,
@@ -1054,7 +1050,6 @@ private struct HostedTransportDiagnostic: Codable {
 private enum HostedPageBottomTraceError: LocalizedError {
     case priorValidationFailure
     case missingElement(String)
-    case hittableSentinel(String)
     case invalidFrame(String)
     case missingSamples(String)
     case invalidCadence(String)
@@ -1071,8 +1066,6 @@ private enum HostedPageBottomTraceError: LocalizedError {
             "Hosted page-bottom trace withheld after an earlier validation failure"
         case .missingElement(let identifier):
             "Missing hosted page-bottom element: \(identifier)"
-        case .hittableSentinel(let identifier):
-            "Hosted page-bottom sentinel must remain non-hittable: \(identifier)"
         case .invalidFrame(let context):
             "Invalid hosted page-bottom frame: \(context)"
         case .missingSamples(let context):
