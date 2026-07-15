@@ -195,6 +195,44 @@ describe("hosted NeonDiff desktop XCTest foundation", () => {
     expect(logs).not.toContain(".frame(minHeight: 420)");
   });
 
+  it("proves each sidebar page outer scroll reaches its bottom sentinel", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const pageSources = [
+      ["overview", "OverviewView.swift"],
+      ["repos", "ReposView.swift"],
+      ["providers", "ProviderSettingsView.swift"],
+      ["license", "LicenseView.swift"],
+      ["logs", "LogsView.swift"],
+      ["policy", "PolicyView.swift"],
+      ["settings", "SettingsPane.swift"]
+    ] as const;
+
+    expect(source).toContain(
+      "testStrictFixtureReachesEverySidebarPageBottomAtMinimumSize"
+    );
+    expect(source).toContain(
+      'scenario: "every-sidebar-page-bottom-at-minimum-size"'
+    );
+    expect(source).toContain(
+      'proofBoundary: "hosted-outer-page-bottom-reachability-only-inner-scroll-exhaustion-excluded"'
+    );
+    expect(source).toContain("outerPageScroll.scroll(byDeltaX: 0, deltaY: -10_000)");
+    expect(source).toContain("assertFullyContained(");
+    expect(source).toContain("neondiff-hosted-page-bottom-reachability.json");
+
+    for (const [section, fileName] of pageSources) {
+      const page = readFileSync(
+        `apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/${fileName}`,
+        "utf8"
+      );
+      expect(page).toContain(
+        `.accessibilityIdentifier("neondiff-${section}-outer-scroll")`
+      );
+      expect(page).toContain(`PageBottomSentinel(section: "${section}")`);
+      expect(source).toContain(`"neondiff-${section}-page-bottom"`);
+    }
+  });
+
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("Hosted XCUITest smoke");

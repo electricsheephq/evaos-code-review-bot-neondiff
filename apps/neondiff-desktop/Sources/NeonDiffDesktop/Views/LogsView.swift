@@ -52,5 +52,8 @@ struct LogsView: View {
             }
         }
         .padding(24)
+        .overlay(alignment: .bottom) {
+            PageBottomSentinel(section: "logs")
+        }
     }
 }

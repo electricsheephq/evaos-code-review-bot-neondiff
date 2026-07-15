@@ -33,7 +33,11 @@ struct LicenseView: View {
                 }
             }
             .padding(24)
+            .overlay(alignment: .bottom) {
+                PageBottomSentinel(section: "license")
+            }
         }
+        .accessibilityIdentifier("neondiff-license-outer-scroll")
         .scrollContentBackground(.hidden)
     }
 }

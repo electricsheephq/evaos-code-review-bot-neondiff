@@ -220,6 +220,20 @@ struct OperatorCommandText: View {
     }
 }
 
+struct PageBottomSentinel: View {
+    let section: String
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Bottom of \(section) page")
+            .accessibilityIdentifier("neondiff-\(section)-page-bottom")
+            .allowsHitTesting(false)
+    }
+}
+
 struct OperatorButtonStyle: ButtonStyle {
     var solid = false
 

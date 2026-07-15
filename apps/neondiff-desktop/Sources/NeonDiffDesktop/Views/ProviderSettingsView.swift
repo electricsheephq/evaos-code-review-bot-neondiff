@@ -94,7 +94,11 @@ struct ProviderSettingsView: View {
                 .disabled(!model.canEditProviderConfiguration)
             }
             .padding(24)
+            .overlay(alignment: .bottom) {
+                PageBottomSentinel(section: "providers")
+            }
         }
+        .accessibilityIdentifier("neondiff-providers-outer-scroll")
         .scrollContentBackground(.hidden)
     }
 }
