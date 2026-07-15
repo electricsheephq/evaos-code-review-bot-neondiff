@@ -9,6 +9,10 @@ const testPlanPath = "apps/neondiff-desktop/NeonDiffDesktop.xctestplan";
 const uiTestPath = "apps/neondiff-desktop/UITests/NeonDiffDesktopUITests.swift";
 const themePath =
   "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/NeonDiffTheme.swift";
+const appPath =
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift";
+const settingsPath =
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/SettingsPane.swift";
 const workflowPath = ".github/workflows/swift-desktop-gate.yml";
 
 function extractBalancedSwiftDeclaration(
@@ -415,7 +419,6 @@ private func target() {
     expect(
       source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
     ).toHaveLength(1);
-    expect(source.match(/\.scroll\s*\(/g)).toHaveLength(1);
     const checkpointSource = extractBalancedSwiftDeclaration(
       source,
       "private func capturePageBottomCheckpoint("
@@ -667,6 +670,58 @@ private func target() {
     expect(theme).toContain(
       ".font(.system(size: sectionTitleSize, weight: .bold, design: .monospaced))"
     );
+  });
+
+  it("pins the separate Settings scene canonical geometry contract", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const app = readFileSync(appPath, "utf8");
+    const settings = readFileSync(settingsPath, "utf8");
+
+    expect(source).toContain(
+      "testSeparateSettingsSceneSettlesAtCanonicalSizeAndReachesPageBottom"
+    );
+    expect(source).toContain("HostedContentSize(width: 560, height: 700)");
+    expect(source).toContain(
+      'HostedSettingsTextSizeRequest(textSizeMode: "runner-default-no-test-override", textSizeArgument: nil)'
+    );
+    expect(source).toContain(
+      'HostedSettingsTextSizeRequest(textSizeMode: "swiftui-dynamic-type-accessibility3-test-override", textSizeArgument: "accessibility3")'
+    );
+    expect(source).toContain('app.typeKey(",", modifierFlags: [.command])');
+    expect(source).toContain('"neondiff-settings-window-content"');
+    expect(source).toContain('"neondiff.evaluation.settings.quiescent"');
+    expect(source).toContain('"neondiff-settings-outer-scroll"');
+    expect(source).toContain('"neondiff-settings-page-bottom"');
+    expect(source).toContain("captureStableSettingsSceneSamples");
+    expect(source).toContain("samples.count == 3");
+    expect(source).toContain("finalCompletionElapsedMilliseconds <= 5_000");
+    expect(source).toContain("settingsContentFrame.matches(requestedContentSize");
+    expect(source).toContain("sentinelFullyContainedInOuterScroll");
+    expect(source).toContain("effectProven: true");
+    expect(source).toContain("scrollHadNoEffect");
+    expect(source).toContain("HostedSettingsSceneTrace(");
+    expect(source).toContain("neondiff-hosted-settings-scene.json");
+    expect(source).toContain(
+      'proofBoundary: "hosted-separate-settings-scene-560x700-default-and-accessibility3-outer-geometry-and-page-bottom-only-system-preference-inner-scroll-manual-excluded"'
+    );
+    const settingsScenarioSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func captureSettingsSceneScenario("
+    );
+    expect(settingsScenarioSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
+    expect(settingsScenarioSource).not.toMatch(
+      /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
+    );
+
+    expect(app).toContain("evaluationTextSizedSettingsScene");
+    expect(app).toContain(".frame(width: 560, height: 700)");
+    expect(app).toContain(".dynamicTypeSize(.accessibility3)");
+    expect(app).toContain("hostedSettingsEvaluationContent");
+    expect(settings).toContain("HostedSettingsWindowConfigurator");
+    expect(settings).toContain("HostedSettingsEvaluationStatus");
+    expect(settings).toContain('"neondiff.evaluation.settings.quiescent"');
+    expect(settings).toContain('"neondiff-settings-window-content"');
+    expect(settings).toContain("#if DEBUG");
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {

@@ -13,6 +13,7 @@ struct NeonDiffDesktopApp: App {
     private let evaluationReadinessRequest: DesktopEvaluationReadinessRequest?
     private let evaluationRenderLatch: DesktopEvaluationRenderLatch?
     private let evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus?
+    @StateObject private var settingsEvaluationStatus = HostedSettingsEvaluationStatus()
 #endif
 
     init() {
@@ -102,15 +103,43 @@ struct NeonDiffDesktopApp: App {
         }
 
         Settings {
-            ZStack {
-                OperatorBackdrop()
-                SettingsPane(model: model, updateController: updateController)
-            }
-            .buttonStyle(OperatorButtonStyle())
-            .tint(NeonDiffTheme.accent)
-            .preferredColorScheme(preferredColorScheme)
-            .frame(width: 560)
+            evaluationTextSizedSettingsScene
         }
+    }
+
+    @ViewBuilder
+    private var evaluationTextSizedSettingsScene: some View {
+#if DEBUG
+        if evaluationContext?.textSizeMode == .accessibility3 {
+            settingsScene
+                .dynamicTypeSize(.accessibility3)
+                .hostedSettingsEvaluationContent(
+                    enabled: true,
+                    status: settingsEvaluationStatus
+                )
+        } else if evaluationContext != nil {
+            settingsScene
+                .hostedSettingsEvaluationContent(
+                    enabled: true,
+                    status: settingsEvaluationStatus
+                )
+        } else {
+            settingsScene
+        }
+#else
+        settingsScene
+#endif
+    }
+
+    private var settingsScene: some View {
+        ZStack {
+            OperatorBackdrop()
+            SettingsPane(model: model, updateController: updateController)
+        }
+        .buttonStyle(OperatorButtonStyle())
+        .tint(NeonDiffTheme.accent)
+        .preferredColorScheme(preferredColorScheme)
+        .frame(width: 560, height: 700)
     }
 
     @ViewBuilder
