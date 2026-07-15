@@ -99,8 +99,12 @@ describe("NeonDiff public community funnel", () => {
     ].map(read).join("\n");
     // No public surface may reintroduce the retired #532 "activation required for
     // public repositories" claim (owner ruling: public open-source repos are FREE).
-    expect(currentPublicSurfaces).not.toMatch(
-      /API-backed activation is required for (?:supported )?(?:public|every|all)[^.\n]*(?:repositor|repo)/i
+    // Normalize whitespace first so a line-WRAPPED occurrence cannot slip past the
+    // guard: the raw blob let `docs/SETUP.md` evade this by wrapping "...public,
+    // private, internal, and\nunknown repository review" across a newline.
+    const normalizedPublicSurfaces = currentPublicSurfaces.replace(/\s+/g, " ");
+    expect(normalizedPublicSurfaces).not.toMatch(
+      /API-backed activation is required for (?:supported )?(?:public|every|all)[^.]*(?:repositor|repo)/i
     );
     // Guard the correct layer-3 claim on the SPECIFIC canonical surfaces that carry
     // it (not the joined blob) so reverting either file's policy line fails here:
