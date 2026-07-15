@@ -156,10 +156,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var previewedProviderExpectedRevision: String?
     private var pendingProviderPatchProof: PendingProviderPatchProof?
 
-    package init(
-        dependencies: DesktopAppDependencies,
-        activationLicenseClient: (any ActivationLicenseClienting)? = nil
-    ) {
+    package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
         self.activationLicenseClientOverride = activationLicenseClient
         self.configPath = dependencies.preferences.string(forKey: "neondiff.configPath") ?? "config.local.json"
