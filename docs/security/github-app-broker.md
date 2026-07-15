@@ -282,18 +282,22 @@ license linkage; the broker slice proves the binding against fixtures only.
   bound to the requesting device, and refuses repositories outside the
   installation's selection (AC4). #614 refuses private repos without entitlement —
   all at the same seam, so no caller path can skip a gate.
-  - **Known limitation — installation-level, not per-repo, identity (OPEN, owner/#559).**
-    The callback proves the OAuth identity can access the *installation*
-    (`GET /user/installations`), not each *repository* in it. In an org
-    installation whose selection spans repos the OAuth user can only partially
-    access, the device binds to the whole installation, and token issuance is then
-    gated by entitlement + installation selection but not by that user's per-repo
-    GitHub access. The installation's repo selection (org-admin-controlled at
-    install) is the v1 access boundary GitHub itself enforces on installation
-    tokens; tightening to per-repo OAuth-user access requires storing the user's
-    accessible-repo set per binding (or re-checking with a user token at mint
-    time), which the device-bound v1 model does not carry. Deferred to the
-    OAuth-wiring lane (#559) where the live identity model is finalized.
+  - **Per-repo access is enforced at bind time (#614 P1).** The callback proves the
+    OAuth identity can access the installation AND enumerates the exact repositories
+    that user can reach (`GET /user/installations/{id}/repositories`); the binding is
+    scoped to that set, and token issuance refuses any repo outside it
+    (`repo_outside_authorization`). So in an org installation whose selection spans
+    repos the OAuth user can only partially access, the device can mint only for the
+    repos that user could actually reach — not the whole installation.
+  - **Known limitation — the authorized set is a bind-time snapshot (OPEN, future).**
+    The user OAuth token is deliberately not persisted, so the per-repo set is
+    captured once at connect and not re-verified on every `POST /github/token`. A
+    repository-access revocation on GitHub therefore takes effect for the broker on
+    the user's *next* connect/bind, not mid-session — acceptable because minted
+    installation tokens are short-lived (<= 1 h) and re-connecting refreshes the set
+    atomically. A periodic bind-refresh (re-running the user-token repo check on a
+    cadence or at token renewal) is a possible future tightening if near-real-time
+    revocation is required.
 
 ## Retention
 
@@ -313,12 +317,15 @@ bindings and states; uninstalled installations are pruned on discovery.
    uses the device-poll `complete` endpoint. See "Return path". Layer a scheme
    redirect in #612 if desired.
 2. **Device-registration abuse economics (OPEN).** Bot farms registering devices
-   on the free tier. Initial posture: registration rate limits plus GitHub-side
-   installation authority is the real gate — a device can mint nothing without a
-   binding, and a binding now requires proven installation ownership at callback
-   time (the install-time OAuth code exchange, #614 P1), not merely a completed
-   callback. This closes the install-binding forgery where a valid state plus a
-   guessed victim installation id could bind a foreign installation. **Blocking
+   on the free tier. Initial posture: the real gate is **proven per-repo GitHub
+   access at callback time** — a binding now requires the install-time OAuth code
+   exchange (#614 P1) and is scoped to the exact repositories that user can reach
+   (`GET /user/installations/{id}/repositories`), so a device can mint nothing
+   without it; installation membership + registration rate limits are the base
+   layer beneath that proof, not the primary control. This closes the
+   install-binding forgery where a valid state plus a guessed victim installation
+   id could bind a foreign installation, and prevents an entitled-but-unauthorized
+   user from reaching a private repo they cannot access. **Blocking
    owner-gated dependency:** the App must enable "Request user authorization
    (OAuth) during installation" and provision its OAuth client id/secret (see
    `docs/security/github-app-staging-registration.md`); until then the callback
