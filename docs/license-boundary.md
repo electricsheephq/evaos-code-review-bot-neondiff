@@ -14,7 +14,8 @@ activation, and unknown repository visibility fails closed. Proprietary,
 hosted, marketplace, binary redistribution, and auto-updates remain inside the
 paid entitlement boundary.
 
-Repository review requires a paid NeonDiff support license: $1/month or $10/year for
+Private, internal, and commercial repository review requires a paid NeonDiff
+support license: $1/month or $10/year for
 individuals, or $100/year for organizations. Individual plans include a 7-day
 trial, organization plans include a 30-day trial, and legacy lifetime licenses
 remain honored for existing holders but are no longer sold. NeonDiff support
