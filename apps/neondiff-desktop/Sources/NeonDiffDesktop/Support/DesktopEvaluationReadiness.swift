@@ -70,17 +70,24 @@ final class DesktopEvaluationSurfaceStatus: ObservableObject {
     }
 
     var geometryAccessibilityValue: String {
+        guard geometryAccessibilityChunks.count == 4 else {
+            return "neondiff-hosted-geometry-unavailable"
+        }
+        return "ndg2-chunks:4"
+    }
+
+    var geometryAccessibilityChunks: [DesktopHostedGeometryAccessibilityChunk] {
         guard let snapshot,
               snapshot.quiescent,
               snapshot.samples.count == 3,
               let data = DesktopHostedGeometryCompactTransport.encode(snapshot.samples) else {
-            return "neondiff-hosted-geometry-unavailable"
+            return []
         }
-        let value = "neondiff-hosted-geometry-v2:\(data.base64EncodedString())"
-        guard value.utf8.count <= 512 else {
-            return "neondiff-hosted-geometry-unavailable"
-        }
-        return value
+        return DesktopHostedGeometryCompactTransport.chunks(
+            data,
+            section: snapshot.section,
+            generation: snapshot.generation
+        )
     }
 
     @discardableResult
@@ -196,6 +203,8 @@ private enum DesktopHostedGeometryCompactTransport {
     private static let sampleCount = 3
     private static let componentsPerSample = 21
     private static let encodedByteCount = 5 + sampleCount * (4 + componentsPerSample * 4)
+    private static let chunkCount = 4
+    private static let chunkByteCount = 68
 
     static func encode(_ samples: [DesktopHostedGeometrySample]) -> Data? {
         guard samples.count == sampleCount else { return nil }
@@ -230,6 +239,36 @@ private enum DesktopHostedGeometryCompactTransport {
         guard data.count == encodedByteCount else { return nil }
         return data
     }
+
+    static func chunks(
+        _ data: Data,
+        section: DesktopSection,
+        generation: Int
+    ) -> [DesktopHostedGeometryAccessibilityChunk] {
+        guard data.count == encodedByteCount else { return [] }
+        let chunks = (0..<chunkCount).compactMap { index
+            -> DesktopHostedGeometryAccessibilityChunk? in
+            let lowerBound = index * chunkByteCount
+            let upperBound = min(lowerBound + chunkByteCount, data.count)
+            guard lowerBound < upperBound else { return nil }
+            let encoded = data.subdata(in: lowerBound..<upperBound).base64EncodedString()
+            let value = "ndg2:\(index):\(chunkCount):\(encoded)"
+            guard value.utf8.count <= 128 else { return nil }
+            return DesktopHostedGeometryAccessibilityChunk(
+                identifier: "neondiff.evaluation.geometry.\(section.rawValue).\(generation).\(index)",
+                value: value
+            )
+        }
+        guard chunks.count == chunkCount else { return [] }
+        return chunks
+    }
+}
+
+struct DesktopHostedGeometryAccessibilityChunk: Identifiable, Equatable {
+    let identifier: String
+    let value: String
+
+    var id: String { identifier }
 }
 
 struct DesktopHostedGeometryFrame: Codable, Equatable {

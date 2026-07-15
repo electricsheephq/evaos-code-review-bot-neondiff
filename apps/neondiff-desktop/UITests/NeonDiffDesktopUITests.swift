@@ -101,7 +101,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
             marker.isHittable,
             "App-authored quiescence marker must remain non-hittable"
         )
-        let samples = try parseAppAuthoredGeometrySamples(marker.value)
+        let samples = try parseAppAuthoredGeometrySamples(
+            markerValue: marker.value,
+            app: app,
+            section: section,
+            generation: generation
+        )
         for identifier in HostedGeometryRegionFrame.requiredIdentifiers {
             XCTAssertTrue(
                 app.descendants(matching: .any)[identifier].waitForExistence(timeout: 2),
@@ -134,23 +139,84 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func parseAppAuthoredGeometrySamples(
-        _ rawValue: Any?
+        markerValue: Any?,
+        app: XCUIApplication,
+        section: String,
+        generation: Int
     ) throws -> [HostedGeometrySample] {
-        let value = try XCTUnwrap(
-            rawValue as? String,
-            "Missing app-authored geometry trace"
-        )
-        let prefix = "neondiff-hosted-geometry-v2:"
-        guard value.hasPrefix(prefix),
-              let data = Data(base64Encoded: String(value.dropFirst(prefix.count))),
-              data.count == CompactHostedGeometryCursor.encodedByteCount else {
-            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+        let manifest = markerValue as? String
+        guard manifest == "ndg2-chunks:4" else {
+            attachTransportDiagnostic(
+                HostedTransportDiagnostic(
+                    stage: "manifest",
+                    chunkIndex: nil,
+                    runtimeValueType: runtimeValueType(markerValue),
+                    utf8ByteCount: manifest?.utf8.count,
+                    expectedPrefixMatched: manifest?.hasPrefix("ndg2-chunks:") ?? false,
+                    base64DecodedByteCount: nil,
+                    equalsUnavailableSentinel: manifest == "neondiff-hosted-geometry-unavailable"
+                )
+            )
+            throw HostedGeometryTraceError.invalidTransportManifest
+        }
+        var data = Data()
+        for index in 0..<4 {
+            let identifier = "neondiff.evaluation.geometry.\(section).\(generation).\(index)"
+            let chunk = app.descendants(matching: .any)[identifier]
+            guard chunk.waitForExistence(timeout: 2) else {
+                attachTransportDiagnostic(
+                    HostedTransportDiagnostic(
+                        stage: "missing-chunk",
+                        chunkIndex: index,
+                        runtimeValueType: "missing",
+                        utf8ByteCount: nil,
+                        expectedPrefixMatched: nil,
+                        base64DecodedByteCount: nil,
+                        equalsUnavailableSentinel: false
+                    )
+                )
+                throw HostedGeometryTraceError.missingTransportChunk(index)
+            }
+            XCTAssertFalse(
+                chunk.isHittable,
+                "App-authored geometry chunk must remain non-hittable: \(index)"
+            )
+            let prefix = "ndg2:\(index):4:"
+            let expectedByteCount = min(
+                68,
+                CompactHostedGeometryCursor.encodedByteCount - index * 68
+            )
+            let rawChunkValue = chunk.value
+            let value = rawChunkValue as? String
+            let prefixMatched = value?.hasPrefix(prefix) ?? false
+            let decoded = prefixMatched
+                ? value.flatMap { Data(base64Encoded: String($0.dropFirst(prefix.count))) }
+                : nil
+            guard let decoded,
+                  decoded.count == expectedByteCount else {
+                attachTransportDiagnostic(
+                    HostedTransportDiagnostic(
+                        stage: "chunk",
+                        chunkIndex: index,
+                        runtimeValueType: runtimeValueType(rawChunkValue),
+                        utf8ByteCount: value?.utf8.count,
+                        expectedPrefixMatched: prefixMatched,
+                        base64DecodedByteCount: decoded?.count,
+                        equalsUnavailableSentinel: value == "neondiff-hosted-geometry-unavailable"
+                    )
+                )
+                throw HostedGeometryTraceError.invalidTransportChunk(index)
+            }
+            data.append(decoded)
+        }
+        guard data.count == CompactHostedGeometryCursor.encodedByteCount else {
+            throw HostedGeometryTraceError.invalidTransportPayloadLength(data.count)
         }
         var cursor = CompactHostedGeometryCursor(data: data)
         try cursor.validateHeader()
         let sampleCount = Int(try cursor.readByte())
         guard sampleCount == 3 else {
-            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+            throw HostedGeometryTraceError.invalidCompactPayload
         }
         var samples: [HostedGeometrySample] = []
         samples.reserveCapacity(sampleCount)
@@ -173,7 +239,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
         guard cursor.isAtEnd else {
-            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+            throw HostedGeometryTraceError.invalidCompactPayload
         }
         for sample in samples {
             XCTAssertTrue(sample.windowFrame.isFiniteAndNonempty)
@@ -325,6 +391,20 @@ final class NeonDiffDesktopUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+
+    private func attachTransportDiagnostic(_ diagnostic: HostedTransportDiagnostic) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(diagnostic) else { return }
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+        attachment.name = "neondiff-hosted-transport-diagnostic.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func runtimeValueType(_ value: Any?) -> String {
+        value.map { String(reflecting: type(of: $0)) } ?? "nil"
+    }
 }
 
 private struct HostedContentSize: Codable {
@@ -403,13 +483,13 @@ private struct CompactHostedGeometryCursor {
     mutating func validateHeader() throws {
         let header = try (0..<Self.magic.count).map { _ in try readByte() }
         guard header == Self.magic else {
-            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+            throw HostedGeometryTraceError.invalidCompactPayload
         }
     }
 
     mutating func readByte() throws -> UInt8 {
         guard index < data.count else {
-            throw HostedGeometryTraceError.invalidAppAuthoredGeometryTrace
+            throw HostedGeometryTraceError.invalidCompactPayload
         }
         defer { index += 1 }
         return data[index]
@@ -477,6 +557,35 @@ private struct HostedGeometryCoordinateSpaces: Codable {
     let regions: String
 }
 
-private enum HostedGeometryTraceError: Error {
-    case invalidAppAuthoredGeometryTrace
+private struct HostedTransportDiagnostic: Codable {
+    let stage: String
+    let chunkIndex: Int?
+    let runtimeValueType: String
+    let utf8ByteCount: Int?
+    let expectedPrefixMatched: Bool?
+    let base64DecodedByteCount: Int?
+    let equalsUnavailableSentinel: Bool
+}
+
+private enum HostedGeometryTraceError: LocalizedError {
+    case invalidTransportManifest
+    case missingTransportChunk(Int)
+    case invalidTransportChunk(Int)
+    case invalidTransportPayloadLength(Int)
+    case invalidCompactPayload
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidTransportManifest:
+            "Invalid app-authored geometry transport manifest"
+        case .missingTransportChunk(let index):
+            "Missing app-authored geometry transport chunk \(index)"
+        case .invalidTransportChunk(let index):
+            "Invalid app-authored geometry transport chunk \(index)"
+        case .invalidTransportPayloadLength(let byteCount):
+            "Invalid app-authored geometry payload length: \(byteCount) bytes"
+        case .invalidCompactPayload:
+            "Invalid app-authored compact geometry payload"
+        }
+    }
 }

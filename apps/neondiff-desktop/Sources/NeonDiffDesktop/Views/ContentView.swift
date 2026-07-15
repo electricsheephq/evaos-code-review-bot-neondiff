@@ -229,12 +229,33 @@ private struct EvaluationSurfaceAccessibilityMarker: View {
     @ObservedObject var status: DesktopEvaluationSurfaceStatus
 
     var body: some View {
+        ZStack {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("NeonDiff Desktop evaluation surface state")
+                .accessibilityIdentifier(status.accessibilityIdentifier)
+                .accessibilityValue(status.geometryAccessibilityValue)
+                .allowsHitTesting(false)
+            ForEach(status.geometryAccessibilityChunks) { chunk in
+                EvaluationSurfaceGeometryChunkMarker(chunk: chunk)
+            }
+        }
+        .frame(width: 1, height: 1)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct EvaluationSurfaceGeometryChunkMarker: View {
+    let chunk: DesktopHostedGeometryAccessibilityChunk
+
+    var body: some View {
         Color.clear
             .frame(width: 1, height: 1)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("NeonDiff Desktop evaluation surface state")
-            .accessibilityIdentifier(status.accessibilityIdentifier)
-            .accessibilityValue(status.geometryAccessibilityValue)
+            .accessibilityLabel("NeonDiff Desktop evaluation geometry chunk")
+            .accessibilityIdentifier(chunk.identifier)
+            .accessibilityValue(chunk.value)
             .allowsHitTesting(false)
     }
 }
