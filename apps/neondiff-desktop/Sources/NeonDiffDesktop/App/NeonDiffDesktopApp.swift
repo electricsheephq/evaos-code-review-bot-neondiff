@@ -139,7 +139,12 @@ struct NeonDiffDesktopApp: App {
         .buttonStyle(OperatorButtonStyle())
         .tint(NeonDiffTheme.accent)
         .preferredColorScheme(preferredColorScheme)
-        .frame(width: 560, height: 700)
+        .frame(
+            width: SettingsWindowLayout.preferredContentWidth,
+            height: SettingsWindowLayout.fittedContentHeight(
+                visibleScreenHeight: NSScreen.main?.visibleFrame.height
+            )
+        )
     }
 
     @ViewBuilder
@@ -304,6 +309,34 @@ struct NeonDiffDesktopApp: App {
 #else
         nil
 #endif
+    }
+}
+
+private enum SettingsWindowLayout {
+    static let preferredContentWidth: CGFloat = 560
+    static let preferredContentHeight: CGFloat = 700
+
+    static func fittedContentHeight(visibleScreenHeight: CGFloat?) -> CGFloat {
+        guard let visibleScreenHeight,
+              visibleScreenHeight.isFinite,
+              visibleScreenHeight > 0 else {
+            return preferredContentHeight
+        }
+        let contentRect = NSRect(
+            x: 0,
+            y: 0,
+            width: preferredContentWidth,
+            height: preferredContentHeight
+        )
+        let frameRect = NSWindow.frameRect(
+            forContentRect: contentRect,
+            styleMask: [.titled, .closable]
+        )
+        let chromeHeight = max(0, frameRect.height - contentRect.height)
+        return max(
+            1,
+            min(preferredContentHeight, floor(visibleScreenHeight - chromeHeight))
+        )
     }
 }
 

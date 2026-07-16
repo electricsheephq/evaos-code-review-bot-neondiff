@@ -448,7 +448,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
     }
 
-    func testSeparateSettingsSceneSettlesAtCanonicalSizeAndReachesPageBottom() throws {
+    func testSeparateSettingsSceneFitsVisibleScreenAndReachesPageBottom() throws {
         let requestedContentSize = HostedContentSize(width: 560, height: 700)
         let requests = [
             HostedSettingsTextSizeRequest(textSizeMode: "runner-default-no-test-override", textSizeArgument: nil),
@@ -478,7 +478,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 samplingDeadlineMilliseconds: 5_000,
                 tolerancePoints: 1,
                 scenarios: scenarios,
-                proofBoundary: "hosted-separate-settings-root-and-appkit-content-layout-560x700-default-and-observed-accessibility3-title-edge-and-outer-page-bottom-only-host-visible-screen-full-containment-system-preference-inner-scroll-manual-excluded"
+                proofBoundary: "hosted-separate-settings-preferred-560x700-visible-screen-fitted-root-and-appkit-content-layout-default-and-observed-accessibility3-window-contained-outer-page-bottom-only-system-preference-inner-scroll-manual-excluded"
             )
         )
     }
@@ -594,6 +594,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             requestedContentSize: requestedContentSize,
             context: request.textSizeMode
         )
+        let observedContentSize = try XCTUnwrap(
+            appKitGeometry.samples.first?.contentLayoutScreenRect.roundedContentSize
+        )
         let outerScroll = app.descendants(matching: .any)[
             "neondiff-settings-outer-scroll"
         ]
@@ -616,7 +619,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             settingsContent: settingsContent,
             outerScroll: outerScroll,
             bottomSentinel: bottomSentinel,
-            requestedContentSize: requestedContentSize,
+            requestedContentSize: observedContentSize,
             context: "\(request.textSizeMode)-pre"
         )
         let scrollAction: HostedSettingsScrollAction?
@@ -631,7 +634,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 settingsContent: settingsContent,
                 outerScroll: outerScroll,
                 bottomSentinel: bottomSentinel,
-                requestedContentSize: requestedContentSize,
+                requestedContentSize: observedContentSize,
                 context: "\(request.textSizeMode)-post"
             )
             guard let preActionSentinelFrame = preActionSamples.last?.sentinelFrame,
@@ -661,6 +664,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             textSizeMode: request.textSizeMode,
             launchTextSizeArgument: request.textSizeArgument,
             observedSettingsTextSize: observedTextSize,
+            observedContentSize: observedContentSize,
             fixtureRootIdentifier: rootIdentifier,
             quiescenceMarkerIdentifier: markerIdentifier,
             openAction: openAction,
@@ -729,12 +733,16 @@ final class NeonDiffDesktopUITests: XCTestCase {
                   sample.contentLayoutRect.isFiniteAndNonempty,
                   sample.contentLayoutScreenRect.isFiniteAndNonempty,
                   sample.visibleScreenFrame.isFiniteAndNonempty,
-                  sample.contentLayoutRect.matches(
-                      requestedContentSize,
+                  sample.contentLayoutRect.matchesFittedSettingsContent(
+                      preferredContentSize: requestedContentSize,
+                      windowFrame: sample.windowFrame,
+                      visibleScreenFrame: sample.visibleScreenFrame,
                       tolerance: 1
                   ),
-                  sample.contentLayoutScreenRect.matches(
-                      requestedContentSize,
+                  sample.contentLayoutScreenRect.matchesFittedSettingsContent(
+                      preferredContentSize: requestedContentSize,
+                      windowFrame: sample.windowFrame,
+                      visibleScreenFrame: sample.visibleScreenFrame,
                       tolerance: 1
                   ),
                   sample.contentLayoutRect.isFullyContainedInWindowBounds(
@@ -745,7 +753,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                       in: sample.windowFrame,
                       tolerance: 1
                   ),
-                  sample.windowFrame.hasAccessibleTopEdge(
+                  sample.windowFrame.isFullyContained(
                       in: sample.visibleScreenFrame,
                       tolerance: 1
                   ) else {
@@ -2492,6 +2500,7 @@ private struct HostedSettingsSceneScenario: Codable {
     let textSizeMode: String
     let launchTextSizeArgument: String?
     let observedSettingsTextSize: String
+    let observedContentSize: HostedContentSize
     let fixtureRootIdentifier: String
     let quiescenceMarkerIdentifier: String
     let openAction: HostedSettingsOpenAction
@@ -2537,6 +2546,35 @@ private struct HostedSettingsAppKitFrame: Codable {
             && abs(height - Double(size.height)) <= tolerance
     }
 
+    var roundedContentSize: HostedContentSize {
+        HostedContentSize(
+            width: Int(width.rounded()),
+            height: Int(height.rounded())
+        )
+    }
+
+    func matchesFittedSettingsContent(
+        preferredContentSize: HostedContentSize,
+        windowFrame: Self,
+        visibleScreenFrame: Self,
+        tolerance: Double
+    ) -> Bool {
+        let chromeHeight = windowFrame.height - height
+        let availableContentHeight = visibleScreenFrame.height - chromeHeight
+        guard chromeHeight.isFinite,
+              chromeHeight >= -tolerance,
+              availableContentHeight.isFinite,
+              availableContentHeight > 0 else {
+            return false
+        }
+        let expectedHeight = min(
+            Double(preferredContentSize.height),
+            floor(availableContentHeight)
+        )
+        return abs(width - Double(preferredContentSize.width)) <= tolerance
+            && abs(height - expectedHeight) <= tolerance
+    }
+
     func isFullyContained(in container: Self, tolerance: Double) -> Bool {
         x >= container.x - tolerance
             && y >= container.y - tolerance
@@ -2552,16 +2590,6 @@ private struct HostedSettingsAppKitFrame: Codable {
             && y >= -tolerance
             && x + width <= windowFrame.width + tolerance
             && y + height <= windowFrame.height + tolerance
-    }
-
-    func hasAccessibleTopEdge(in visibleScreen: Self, tolerance: Double) -> Bool {
-        // Canonical fixture sizes intentionally remain independent of the
-        // hosted runner's Dock-reduced visible height. Keep the title edge and
-        // full window width accessible without claiming whole-screen fit.
-        x >= visibleScreen.x - tolerance
-            && x + width <= visibleScreen.x + visibleScreen.width + tolerance
-            && y + height >= visibleScreen.y - tolerance
-            && y + height <= visibleScreen.y + visibleScreen.height + tolerance
     }
 
     func differs(from other: Self, byMoreThan tolerance: Double) -> Bool {

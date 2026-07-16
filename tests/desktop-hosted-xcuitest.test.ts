@@ -678,7 +678,7 @@ private func target() {
     const settings = readFileSync(settingsPath, "utf8");
 
     expect(source).toContain(
-      "testSeparateSettingsSceneSettlesAtCanonicalSizeAndReachesPageBottom"
+      "testSeparateSettingsSceneFitsVisibleScreenAndReachesPageBottom"
     );
     expect(source).toContain("HostedContentSize(width: 560, height: 700)");
     expect(source).toContain(
@@ -708,11 +708,16 @@ private func target() {
       'envelope.coordinateSpaces.contentLayoutScreenRect == "appkit-screen"'
     );
     expect(source).toContain("envelope.samples.count == 3");
-    expect(source).toContain("sample.contentLayoutRect.matches(");
-    expect(source).toContain("sample.contentLayoutScreenRect.matches(");
+    expect(source).toContain(
+      "sample.contentLayoutRect.matchesFittedSettingsContent("
+    );
+    expect(source).toContain(
+      "sample.contentLayoutScreenRect.matchesFittedSettingsContent("
+    );
     expect(source).toContain("isFullyContainedInWindowBounds(");
     expect(source).toContain("sample.contentLayoutScreenRect.isFullyContained(");
-    expect(source).toContain("sample.windowFrame.hasAccessibleTopEdge(");
+    expect(source).toContain("sample.windowFrame.isFullyContained(");
+    expect(source).toContain("observedContentSize: observedContentSize");
     expect(source).toContain('"neondiff-settings-outer-scroll"');
     expect(source).toContain('"neondiff-settings-page-bottom"');
     expect(source).toContain("captureStableSettingsSceneSamples");
@@ -725,7 +730,7 @@ private func target() {
     expect(source).toContain("HostedSettingsSceneTrace(");
     expect(source).toContain("neondiff-hosted-settings-scene.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-separate-settings-root-and-appkit-content-layout-560x700-default-and-observed-accessibility3-title-edge-and-outer-page-bottom-only-host-visible-screen-full-containment-system-preference-inner-scroll-manual-excluded"'
+      'proofBoundary: "hosted-separate-settings-preferred-560x700-visible-screen-fitted-root-and-appkit-content-layout-default-and-observed-accessibility3-window-contained-outer-page-bottom-only-system-preference-inner-scroll-manual-excluded"'
     );
     const settingsScenarioSource = extractBalancedSwiftDeclaration(
       source,
@@ -737,7 +742,12 @@ private func target() {
     );
 
     expect(app).toContain("evaluationTextSizedSettingsScene");
-    expect(app).toContain(".frame(width: 560, height: 700)");
+    expect(app).toContain("SettingsWindowLayout.preferredContentWidth");
+    expect(app).toContain("SettingsWindowLayout.fittedContentHeight(");
+    expect(app).toContain("NSScreen.main?.visibleFrame.height");
+    expect(app).toContain("static let preferredContentWidth: CGFloat = 560");
+    expect(app).toContain("static let preferredContentHeight: CGFloat = 700");
+    expect(app).toContain("floor(visibleScreenHeight - chromeHeight)");
     expect(app).toContain(".dynamicTypeSize(.accessibility3)");
     expect(app).toContain("hostedSettingsEvaluationContent");
     const settingsSceneSource = extractBalancedSwiftDeclaration(
