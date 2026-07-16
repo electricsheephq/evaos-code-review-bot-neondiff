@@ -375,91 +375,133 @@ private struct SettingsWindowFitView: NSViewRepresentable {
         private weak var window: NSWindow?
         private var contentHeight: Binding<CGFloat>?
         private var pendingHeight: CGFloat?
+        private var attachmentGeneration = 0
 
         func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>) {
             self.contentHeight = contentHeight
             guard self.window !== window else {
-                fitWindow()
+                fitWindow(clampOrigin: true)
                 return
             }
             detachObservers()
+            attachmentGeneration += 1
             self.window = window
             guard let window else { return }
             let center = NotificationCenter.default
             center.addObserver(
                 self,
-                selector: #selector(windowGeometryDidChange),
+                selector: #selector(windowScreenDidChange),
                 name: NSWindow.didChangeScreenNotification,
                 object: window
             )
             center.addObserver(
                 self,
-                selector: #selector(windowGeometryDidChange),
+                selector: #selector(windowDidMove),
                 name: NSWindow.didMoveNotification,
                 object: window
             )
             center.addObserver(
                 self,
-                selector: #selector(windowGeometryDidChange),
+                selector: #selector(screenParametersDidChange),
                 name: NSApplication.didChangeScreenParametersNotification,
                 object: nil
             )
-            fitWindow()
+            fitWindow(clampOrigin: true)
         }
 
         func detach() {
             detachObservers()
+            attachmentGeneration += 1
             window = nil
             contentHeight = nil
             pendingHeight = nil
         }
 
-        @objc private func windowGeometryDidChange(_ notification: Notification) {
-            fitWindow()
+        @objc private func windowScreenDidChange(_ notification: Notification) {
+            fitWindow(clampOrigin: true)
         }
 
-        private func fitWindow() {
+        @objc private func windowDidMove(_ notification: Notification) {
+            // Do not clamp during a live drag: the window must be allowed to cross
+            // the boundary far enough for AppKit to select its destination screen.
+            fitWindow(clampOrigin: false)
+        }
+
+        @objc private func screenParametersDidChange(_ notification: Notification) {
+            fitWindow(clampOrigin: true)
+        }
+
+        private func fitWindow(clampOrigin: Bool) {
             guard let window,
                   let contentHeight,
                   let visibleFrame = window.screen?.visibleFrame else {
                 return
             }
-            let chromeHeight = max(
-                0,
-                window.frame.height - window.contentLayoutRect.height
-            )
+            let windowFrame = window.frame
+            let contentLayoutRect = window.contentLayoutRect
+            let currentContentHeight = contentHeight.wrappedValue
+            guard Self.isFiniteNonempty(windowFrame),
+                  Self.isFiniteNonempty(contentLayoutRect),
+                  Self.isFiniteNonempty(visibleFrame),
+                  currentContentHeight.isFinite,
+                  currentContentHeight > 0 else {
+                return
+            }
+            let chromeHeight = windowFrame.height - contentLayoutRect.height
             guard let targetHeight = SettingsWindowLayout.fittedContentHeight(
                 visibleScreenHeight: visibleFrame.height,
                 chromeHeight: chromeHeight
             ) else {
                 return
             }
-            if abs(contentHeight.wrappedValue - targetHeight) > 0.5 {
+            if abs(currentContentHeight - targetHeight) > 0.5 {
                 guard pendingHeight != targetHeight else { return }
                 pendingHeight = targetHeight
+                let generation = attachmentGeneration
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, let contentHeight = self.contentHeight else { return }
+                    guard let self,
+                          self.window === window,
+                          self.attachmentGeneration == generation,
+                          self.pendingHeight == targetHeight,
+                          let contentHeight = self.contentHeight else {
+                        return
+                    }
                     contentHeight.wrappedValue = targetHeight
                     self.pendingHeight = nil
                     DispatchQueue.main.async { [weak self] in
-                        self?.fitWindow()
+                        guard let self,
+                              self.window === window,
+                              self.attachmentGeneration == generation else {
+                            return
+                        }
+                        self.fitWindow(clampOrigin: clampOrigin)
                     }
                 }
                 return
             }
-            var origin = window.frame.origin
+            guard clampOrigin else { return }
+            var origin = windowFrame.origin
             origin.x = min(
                 max(origin.x, visibleFrame.minX),
-                max(visibleFrame.minX, visibleFrame.maxX - window.frame.width)
+                max(visibleFrame.minX, visibleFrame.maxX - windowFrame.width)
             )
             origin.y = min(
                 max(origin.y, visibleFrame.minY),
-                max(visibleFrame.minY, visibleFrame.maxY - window.frame.height)
+                max(visibleFrame.minY, visibleFrame.maxY - windowFrame.height)
             )
-            if abs(origin.x - window.frame.origin.x) > 0.5
-                || abs(origin.y - window.frame.origin.y) > 0.5 {
+            if abs(origin.x - windowFrame.origin.x) > 0.5
+                || abs(origin.y - windowFrame.origin.y) > 0.5 {
                 window.setFrameOrigin(origin)
             }
+        }
+
+        private static func isFiniteNonempty(_ rect: CGRect) -> Bool {
+            rect.origin.x.isFinite
+                && rect.origin.y.isFinite
+                && rect.width.isFinite
+                && rect.height.isFinite
+                && rect.width > 0
+                && rect.height > 0
         }
 
         private func detachObservers() {
