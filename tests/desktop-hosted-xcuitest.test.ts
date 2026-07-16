@@ -827,14 +827,14 @@ releaseTabbedAlternative()
     expect(source).toContain("HostedNativeInnerScrollTrace(");
     expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-public-xcui-scrollbar-thumb-drag-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-without-exposed-hittable-thumb-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
     );
 
     const scenarioSource = extractBalancedSwiftDeclaration(
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 12");
+    expect(scenarioSource).toContain("schemaVersion: 13");
     expect(scenarioSource).toContain(
       "let reposGeometry = try captureCheckpoint("
     );
@@ -1164,13 +1164,19 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("scrollContainer.scrollBars");
     expect(helperSource).not.toContain("control.scrollBars");
     expect(helperSource.match(/scrollContainer\.scroll\s*\(/g) ?? []).toHaveLength(0);
-    expect(helperSource.match(/nativeScrollBarBottomDragTarget\s*\(/g)).toHaveLength(3);
+    expect(helperSource.match(/nativeScrollBarBottomDragTarget\s*\(/g) ?? []).toHaveLength(0);
+    expect(helperSource.match(/prepareNativeScrollBarThumbForDrag\s*\(/g)).toHaveLength(2);
+    expect(helperSource.match(/\.hover\(\)/g) ?? []).toHaveLength(0);
     expect(helperSource.match(/\.click\(\s*forDuration: 0\.1,\s*thenDragTo:/g)).toHaveLength(2);
     expect(helperSource.match(/\.press\(\s*forDuration:/g) ?? []).toHaveLength(0);
     expect(helperSource).toContain("firstDragTarget.sourceCoordinate.click(");
     expect(helperSource).toContain("thenDragTo: firstDragTarget.destinationCoordinate");
     expect(helperSource).toContain("repeatDragTarget.sourceCoordinate.click(");
     expect(helperSource).toContain("thenDragTo: repeatDragTarget.destinationCoordinate");
+    expect(helperSource).toContain("firstHoverPreparation: firstHoverPreparation");
+    expect(helperSource).toContain("repeatHoverPreparation: repeatHoverPreparation");
+    expect(helperSource).toContain("firstHoverPreparation.observedSamples");
+    expect(helperSource).toContain("repeatHoverPreparation.observedSamples");
     expect(helperSource).not.toContain("adjust(toNormalizedSliderPosition:");
     expect(helperSource).toContain("normalizedScrollValue");
     expect(helperSource).toContain(
@@ -1203,7 +1209,10 @@ releaseTabbedAlternative()
     );
     expect(helperSource).toContain("for candidate in repeatTerminalObservedSamples");
     expect(helperSource).toContain(
-      "let postActionObservedSamples =\n            terminalWindow.observedSamples + repeatTerminalWindow.observedSamples"
+      "firstHoverPreparation.observedSamples.map(\\.innerScrollSample)"
+    );
+    expect(helperSource).toContain(
+      "repeatHoverPreparation.observedSamples.map(\\.innerScrollSample)"
     );
     expect(helperSource).toContain("effectObserved: true");
     expect(helperSource).toContain("effectObserved: false");
@@ -1296,15 +1305,23 @@ releaseTabbedAlternative()
       source,
       "private func nativeScrollBarBottomDragTarget("
     );
-    expect(scrollBarDragTargetSource).toContain(
+    const reboundScrollBarChainSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func reboundNativeScrollBarChain("
+    );
+    expect(reboundScrollBarChainSource).toContain(
       "verticalScrollBar.descendants(matching: .valueIndicator)"
     );
-    expect(scrollBarDragTargetSource).toContain("thumbQuery.count == 1");
-    expect(scrollBarDragTargetSource).toContain("thumb.waitForExistence(timeout: 2)");
-    expect(scrollBarDragTargetSource).toContain("thumb.isEnabled, thumb.isHittable");
-    expect(scrollBarDragTargetSource).toContain("thumbFrame.isFiniteAndNonempty");
-    expect(scrollBarDragTargetSource).toContain(
+    expect(reboundScrollBarChainSource).toContain("thumbQuery.count == 1");
+    expect(reboundScrollBarChainSource).toContain("thumb.exists, thumbQuery.count == 1");
+    expect(reboundScrollBarChainSource).toContain("thumbFrame.isFiniteAndNonempty");
+    expect(reboundScrollBarChainSource).toContain(
       "thumbFrame.isFullyContained(in: scrollBarFrame, tolerance: tolerance)"
+    );
+    expect(reboundScrollBarChainSource).toContain("thumbEnabled: thumb.isEnabled");
+    expect(reboundScrollBarChainSource).toContain("thumbHittable: thumb.isHittable");
+    expect(scrollBarDragTargetSource).toContain(
+      "guard chain.thumbEnabled, chain.thumbHittable"
     );
     expect(scrollBarDragTargetSource).toContain(
       "thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))"
@@ -1316,6 +1333,43 @@ releaseTabbedAlternative()
       "requestedDisplacementY >= minimumDisplacement"
     );
     expect(scrollBarDragTargetSource).not.toContain("adjust(");
+    const hoverPreparationSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func prepareNativeScrollBarThumbForDrag("
+    );
+    expect(hoverPreparationSource).toContain("hoverTarget.coordinate.hover()");
+    expect(hoverPreparationSource.match(/\.hover\(\)/g)).toHaveLength(1);
+    expect(hoverPreparationSource).toContain(
+      'mechanism: "public-xcui-coordinate-hover"'
+    );
+    expect(hoverPreparationSource).toContain("for _ in 0..<maximumSampleAttempts");
+    expect(hoverPreparationSource).toContain("observedSamples.append(sample)");
+    expect(hoverPreparationSource).toContain("if samples.count == 3 { break }");
+    expect(hoverPreparationSource).toContain("reboundNativeScrollBarChain(");
+    expect(hoverPreparationSource).toContain(
+      "reboundChain.thumbEnabled, reboundChain.thumbHittable"
+    );
+    expect(hoverPreparationSource).toContain(
+      "nativeInnerScrollSamplesMatch(baselineSample, innerScrollSample)"
+    );
+    expect(hoverPreparationSource).toContain(
+      "let actionStartedAt = ProcessInfo.processInfo.systemUptime"
+    );
+    expect(hoverPreparationSource).not.toContain("scroll(byDeltaX:");
+    expect(hoverPreparationSource).not.toContain("adjust(");
+    expect(hoverPreparationSource).not.toContain("click(");
+    const hoverPreparationTraceSource = extractBalancedSwiftDeclaration(
+      source,
+      "private struct HostedNativeScrollBarHoverPreparation:"
+    );
+    for (const field of [
+      "action",
+      "observedSamples",
+      "samples",
+      "durationMilliseconds",
+    ]) {
+      expect(hoverPreparationTraceSource).toContain(`let ${field}:`);
+    }
     const nativeInnerActionSource = extractBalancedSwiftDeclaration(
       source,
       "private struct HostedNativeInnerScrollAction:"
@@ -1325,8 +1379,13 @@ releaseTabbedAlternative()
       "sourcePoint",
       "normalizedTargetValue",
       "guardScrollBarFrame",
+      "guardScrollBarFrameAfter",
       "guardThumbFrameBefore",
       "guardThumbFrameAfter",
+      "normalizedValueBefore",
+      "normalizedValueAfter",
+      "guardThumbHittableBefore",
+      "guardThumbHittableAfter",
     ]) {
       expect(nativeInnerActionSource).toContain(`let ${field}:`);
     }

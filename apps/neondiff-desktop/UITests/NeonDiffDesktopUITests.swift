@@ -415,7 +415,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 12,
+                schemaVersion: 13,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
@@ -430,7 +430,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 innerScrollCheckpoints: [reposInner, logsInner],
                 navigationActions: [logsNavigation],
                 outerPageBottomCheckpoints: [reposOuter, logsOuter],
-                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-public-xcui-scrollbar-thumb-drag-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-without-exposed-hittable-thumb-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
+                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
             )
         )
     }
@@ -2059,11 +2059,28 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
 
-        let firstDragTarget = try nativeScrollBarBottomDragTarget(
-            scrollContainer: scrollContainer,
+        let firstPreparedDrag = try prepareNativeScrollBarThumbForDrag(
+            app: app,
             controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            baselineSample: preSample,
+            captureTerminalContent: false,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+            terminalRowElementType: terminalRowElementType,
+            samplingStartedAt: samplingStart,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
             tolerance: 1
         )
+        let firstHoverPreparation = firstPreparedDrag.preparation
+        let firstDragTarget = firstPreparedDrag.dragTarget
         let firstActionStartedAt = ProcessInfo.processInfo.systemUptime
         let firstActionElapsedMilliseconds = Int(
             ((firstActionStartedAt - samplingStart) * 1_000).rounded()
@@ -2092,9 +2109,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             minimumAcceptedSampleIntervalMilliseconds:
                 minimumAcceptedSampleIntervalMilliseconds,
             samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
-            control: control,
-            scrollContainer: scrollContainer,
-            verticalScrollBar: verticalScrollBar,
+            control: firstPreparedDrag.chain.control,
+            scrollContainer: firstPreparedDrag.chain.scrollContainer,
+            verticalScrollBar: firstPreparedDrag.chain.verticalScrollBar,
             outerScroll: outerScroll,
             outerSentinel: outerSentinel,
             captureTerminalContent: true,
@@ -2118,11 +2135,28 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
 
-        let repeatDragTarget = try nativeScrollBarBottomDragTarget(
-            scrollContainer: scrollContainer,
+        let repeatPreparedDrag = try prepareNativeScrollBarThumbForDrag(
+            app: app,
             controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            baselineSample: terminalSample,
+            captureTerminalContent: true,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+            terminalRowElementType: terminalRowElementType,
+            samplingStartedAt: samplingStart,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
             tolerance: 1
         )
+        let repeatHoverPreparation = repeatPreparedDrag.preparation
+        let repeatDragTarget = repeatPreparedDrag.dragTarget
         let firstObservedThumbTranslationY =
             repeatDragTarget.thumbFrame.y - firstDragTarget.thumbFrame.y
         guard firstObservedThumbTranslationY > 0.5,
@@ -2151,9 +2185,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             minimumAcceptedSampleIntervalMilliseconds:
                 minimumAcceptedSampleIntervalMilliseconds,
             samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
-            control: control,
-            scrollContainer: scrollContainer,
-            verticalScrollBar: verticalScrollBar,
+            control: repeatPreparedDrag.chain.control,
+            scrollContainer: repeatPreparedDrag.chain.scrollContainer,
+            verticalScrollBar: repeatPreparedDrag.chain.verticalScrollBar,
             outerScroll: outerScroll,
             outerSentinel: outerSentinel,
             captureTerminalContent: true,
@@ -2184,15 +2218,17 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 )
             }
         }
-        let postRepeatDragTarget = try nativeScrollBarBottomDragTarget(
-            scrollContainer: scrollContainer,
+        let postRepeatChain = try reboundNativeScrollBarChain(
+            app: app,
             controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
             tolerance: 1
         )
         let repeatObservedThumbTranslationY =
-            postRepeatDragTarget.thumbFrame.y - repeatDragTarget.thumbFrame.y
+            postRepeatChain.thumbFrame.y - repeatDragTarget.thumbFrame.y
         guard abs(repeatObservedThumbTranslationY) <= 1,
-              !postRepeatDragTarget.scrollBarFrame.differs(
+              !postRepeatChain.scrollBarFrame.differs(
                   from: repeatDragTarget.scrollBarFrame,
                   byMoreThan: 1
               ) else {
@@ -2203,7 +2239,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
 
         let postActionSamples = terminalSamples + repeatTerminalSamples
         let postActionObservedSamples =
-            terminalWindow.observedSamples + repeatTerminalWindow.observedSamples
+            firstHoverPreparation.observedSamples.map(\.innerScrollSample)
+                + terminalWindow.observedSamples
+                + repeatHoverPreparation.observedSamples.map(\.innerScrollSample)
+                + repeatTerminalWindow.observedSamples
         for candidate in postActionObservedSamples {
             guard !preSample.outerSentinelFrame.differs(
                 from: candidate.outerSentinelFrame,
@@ -2283,6 +2322,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 repeatTerminalWindow.durationMilliseconds,
             terminalStateStable: true,
             outerIsolationProven: true,
+            firstHoverPreparation: firstHoverPreparation,
+            repeatHoverPreparation: repeatHoverPreparation,
             firstTerminalAction: HostedNativeInnerScrollAction(
                 mechanism: "public-xcui-scrollbar-thumb-drag",
                 elapsedMilliseconds: firstActionElapsedMilliseconds,
@@ -2308,7 +2349,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 requestedDisplacementY: repeatDragTarget.requestedDisplacementY,
                 guardScrollBarFrame: repeatDragTarget.scrollBarFrame,
                 guardThumbFrameBefore: repeatDragTarget.thumbFrame,
-                guardThumbFrameAfter: postRepeatDragTarget.thumbFrame,
+                guardThumbFrameAfter: postRepeatChain.thumbFrame,
                 observedThumbTranslationY: repeatObservedThumbTranslationY,
                 attemptCount: 1,
                 effectObserved: false,
@@ -2323,11 +2364,49 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
     }
 
-    private func nativeScrollBarBottomDragTarget(
-        scrollContainer: XCUIElement,
+    private func reboundNativeScrollBarChain(
+        app: XCUIApplication,
         controlIdentifier: String,
+        controlElementType: XCUIElement.ElementType,
+        outerScrollIdentifier: String,
         tolerance: Double
-    ) throws -> HostedNativeScrollBarDragTarget {
+    ) throws -> HostedNativeScrollBarChain {
+        let controlQuery = app.descendants(matching: controlElementType)
+            .matching(identifier: controlIdentifier)
+        guard controlQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                identifier: controlIdentifier,
+                count: controlQuery.count
+            )
+        }
+        let control = controlQuery.element(boundBy: 0)
+        guard control.exists else {
+            throw HostedNativeInnerScrollTraceError.missingElement(controlIdentifier)
+        }
+        let outerScroll = app.descendants(matching: .any)[outerScrollIdentifier]
+        guard outerScroll.exists else {
+            throw HostedNativeInnerScrollTraceError.missingElement(outerScrollIdentifier)
+        }
+        let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
+        guard outerScrollFrame.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidFrame
+        }
+        let scrollContainers = app.descendants(matching: .scrollView)
+            .allElementsBoundByIndex.filter { candidate in
+                let frame = HostedGeometryFrame(candidate.frame)
+                return candidate.identifier != outerScrollIdentifier
+                    && frame.isFiniteAndNonempty
+                    && frame.differs(from: outerScrollFrame, byMoreThan: 1)
+                    && candidate.descendants(matching: controlElementType)
+                        .matching(identifier: controlIdentifier).count == 1
+            }
+        guard scrollContainers.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollContainerCount(
+                controlIdentifier: controlIdentifier,
+                count: scrollContainers.count
+            )
+        }
+        let scrollContainer = scrollContainers[0]
         let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
         guard scrollContainerFrame.isFiniteAndNonempty else {
             throw HostedNativeInnerScrollTraceError.invalidFrame
@@ -2355,15 +2434,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
         let thumb = thumbQuery.element(boundBy: 0)
-        guard thumb.waitForExistence(timeout: 2), thumbQuery.count == 1 else {
+        guard thumb.exists, thumbQuery.count == 1 else {
             throw HostedNativeInnerScrollTraceError.invalidScrollBarThumbCount(
                 controlIdentifier: controlIdentifier,
                 count: thumbQuery.count
-            )
-        }
-        guard thumb.isEnabled, thumb.isHittable else {
-            throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
-                controlIdentifier
             )
         }
         let thumbFrame = HostedGeometryFrame(thumb.frame)
@@ -2374,6 +2448,258 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 controlIdentifier
             )
         }
+        return HostedNativeScrollBarChain(
+            control: control,
+            scrollContainer: scrollContainer,
+            verticalScrollBar: verticalScrollBar,
+            thumb: thumb,
+            scrollBarFrame: scrollBarFrame,
+            thumbFrame: thumbFrame,
+            thumbEnabled: thumb.isEnabled,
+            thumbHittable: thumb.isHittable
+        )
+    }
+
+    private func nativeScrollBarHoverTarget(
+        chain: HostedNativeScrollBarChain,
+        controlIdentifier: String
+    ) throws -> HostedNativeScrollBarHoverTarget {
+        let point = HostedGeometryPoint(
+            x: chain.thumbFrame.x + (chain.thumbFrame.width / 2),
+            y: chain.thumbFrame.y + (chain.thumbFrame.height / 2)
+        )
+        let normalizedOffset = CGVector(
+            dx: (point.x - chain.scrollBarFrame.x) / chain.scrollBarFrame.width,
+            dy: (point.y - chain.scrollBarFrame.y) / chain.scrollBarFrame.height
+        )
+        guard normalizedOffset.dx.isFinite,
+              normalizedOffset.dy.isFinite,
+              normalizedOffset.dx >= 0,
+              normalizedOffset.dx <= 1,
+              normalizedOffset.dy >= 0,
+              normalizedOffset.dy <= 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarDragGeometry(
+                controlIdentifier
+            )
+        }
+        return HostedNativeScrollBarHoverTarget(
+            coordinate: chain.verticalScrollBar.coordinate(
+                withNormalizedOffset: normalizedOffset
+            ),
+            point: point,
+            chain: chain
+        )
+    }
+
+    private func prepareNativeScrollBarThumbForDrag(
+        app: XCUIApplication,
+        controlIdentifier: String,
+        controlElementType: XCUIElement.ElementType,
+        outerScrollIdentifier: String,
+        outerScroll: XCUIElement,
+        outerSentinel: XCUIElement,
+        baselineSample: HostedNativeInnerScrollSample,
+        captureTerminalContent: Bool,
+        terminalVisibleText: String?,
+        terminalValueToken: String?,
+        terminalVisibilityMarkerQuery: XCUIElementQuery?,
+        terminalRowElementType: XCUIElement.ElementType?,
+        samplingStartedAt: TimeInterval,
+        targetSampleIntervalMilliseconds: Int,
+        minimumAcceptedSampleIntervalMilliseconds: Int,
+        samplingDeadlineMilliseconds: Int,
+        tolerance: Double
+    ) throws -> HostedNativePreparedScrollBarDrag {
+        let preHoverChain = try reboundNativeScrollBarChain(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            tolerance: tolerance
+        )
+        let hoverTarget = try nativeScrollBarHoverTarget(
+            chain: preHoverChain,
+            controlIdentifier: controlIdentifier
+        )
+        let actionStartedAt = ProcessInfo.processInfo.systemUptime
+        let actionElapsedMilliseconds = Int(
+            ((actionStartedAt - samplingStartedAt) * 1_000).rounded()
+        )
+        hoverTarget.coordinate.hover()
+
+        let targetInterval = Double(targetSampleIntervalMilliseconds) / 1_000
+        let maximumSampleAttempts = max(
+            3,
+            samplingDeadlineMilliseconds / max(1, targetSampleIntervalMilliseconds)
+        )
+        var observedSamples: [HostedNativeScrollBarHoverSample] = []
+        var samples: [HostedNativeScrollBarHoverSample] = []
+        var finalChain: HostedNativeScrollBarChain?
+        var previousSampleStartedAt = actionStartedAt
+        for _ in 0..<maximumSampleAttempts {
+            let elapsedSincePrevious =
+                ProcessInfo.processInfo.systemUptime - previousSampleStartedAt
+            let remainingDelay = max(0, targetInterval - elapsedSincePrevious)
+            if remainingDelay > 0 {
+                RunLoop.current.run(until: Date().addingTimeInterval(remainingDelay))
+            }
+            let sampleStartedAt = ProcessInfo.processInfo.systemUptime
+            previousSampleStartedAt = sampleStartedAt
+            let reboundChain = try reboundNativeScrollBarChain(
+                app: app,
+                controlIdentifier: controlIdentifier,
+                controlElementType: controlElementType,
+                outerScrollIdentifier: outerScrollIdentifier,
+                tolerance: tolerance
+            )
+            if !captureTerminalContent,
+               let terminalVisibilityMarkerQuery,
+               terminalVisibilityMarkerQuery.count != 0 {
+                throw HostedNativeInnerScrollTraceError
+                    .terminalVisibilityMarkerPresentBeforeTerminal(
+                        "hover-preparation-\(controlIdentifier)"
+                    )
+            }
+            let innerScrollSample = try captureNativeInnerScrollSample(
+                app: app,
+                elapsedMilliseconds: Int(
+                    ((sampleStartedAt - samplingStartedAt) * 1_000).rounded()
+                ),
+                control: reboundChain.control,
+                scrollContainer: reboundChain.scrollContainer,
+                verticalScrollBar: reboundChain.verticalScrollBar,
+                outerScroll: outerScroll,
+                outerSentinel: outerSentinel,
+                captureTerminalContent: captureTerminalContent,
+                terminalVisibleText: terminalVisibleText,
+                terminalValueToken: terminalValueToken,
+                terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+                terminalRowElementType: terminalRowElementType
+            )
+            guard nativeInnerScrollSamplesMatch(baselineSample, innerScrollSample) else {
+                throw HostedNativeInnerScrollTraceError.hoverPreparationChangedState(
+                    controlIdentifier
+                )
+            }
+            let sample = HostedNativeScrollBarHoverSample(
+                innerScrollSample: innerScrollSample,
+                thumbFrame: reboundChain.thumbFrame,
+                thumbEnabled: reboundChain.thumbEnabled,
+                thumbHittable: reboundChain.thumbHittable
+            )
+            observedSamples.append(sample)
+            if reboundChain.thumbEnabled, reboundChain.thumbHittable {
+                if let baseline = samples.first,
+                   nativeScrollBarHoverSamplesMatch(baseline, sample) {
+                    samples.append(sample)
+                } else {
+                    samples = [sample]
+                }
+                finalChain = reboundChain
+            } else {
+                samples = []
+                finalChain = nil
+            }
+            if samples.count == 3 { break }
+            let elapsedSinceActionMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - actionStartedAt) * 1_000).rounded()
+            )
+            if elapsedSinceActionMilliseconds >= samplingDeadlineMilliseconds { break }
+        }
+
+        let samplingCompletedAt = ProcessInfo.processInfo.systemUptime
+        let durationMilliseconds = Int(
+            ((samplingCompletedAt - actionStartedAt) * 1_000).rounded()
+        )
+        guard samples.count == 3,
+              let first = samples.first,
+              let last = samples.last,
+              let finalChain,
+              first.innerScrollSample.elapsedMilliseconds - actionElapsedMilliseconds
+                  >= minimumAcceptedSampleIntervalMilliseconds,
+              durationMilliseconds <= samplingDeadlineMilliseconds else {
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
+                controlIdentifier
+            )
+        }
+        for (lhs, rhs) in zip(samples, samples.dropFirst()) {
+            guard rhs.innerScrollSample.elapsedMilliseconds
+                    - lhs.innerScrollSample.elapsedMilliseconds
+                    >= minimumAcceptedSampleIntervalMilliseconds,
+                  nativeScrollBarHoverSamplesMatch(lhs, rhs) else {
+                throw HostedNativeInnerScrollTraceError.invalidCadence(
+                    controlIdentifier: controlIdentifier,
+                    lhsElapsedMilliseconds: lhs.innerScrollSample.elapsedMilliseconds,
+                    rhsElapsedMilliseconds: rhs.innerScrollSample.elapsedMilliseconds
+                )
+            }
+        }
+        guard finalChain.thumbEnabled, finalChain.thumbHittable else {
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
+                controlIdentifier
+            )
+        }
+        let dragTarget = try nativeScrollBarBottomDragTarget(
+            chain: finalChain,
+            controlIdentifier: controlIdentifier,
+            tolerance: tolerance
+        )
+        let effectObserved = !preHoverChain.thumbHittable && finalChain.thumbHittable
+        let action = HostedNativeInnerScrollAction(
+            mechanism: "public-xcui-coordinate-hover",
+            elapsedMilliseconds: actionElapsedMilliseconds,
+            targetPoint: hoverTarget.point,
+            guardScrollBarFrame: preHoverChain.scrollBarFrame,
+            guardScrollBarFrameAfter: finalChain.scrollBarFrame,
+            guardThumbFrameBefore: preHoverChain.thumbFrame,
+            guardThumbFrameAfter: finalChain.thumbFrame,
+            normalizedValueBefore: baselineSample.normalizedScrollValue,
+            normalizedValueAfter: last.innerScrollSample.normalizedScrollValue,
+            guardThumbHittableBefore: preHoverChain.thumbHittable,
+            guardThumbHittableAfter: finalChain.thumbHittable,
+            attemptCount: 1,
+            effectObserved: effectObserved,
+            effectProven: true,
+            result: effectObserved
+                ? "returned-and-hittable-after-passive-settlement"
+                : "returned-and-hittability-confirmed-after-passive-settlement"
+        )
+        return HostedNativePreparedScrollBarDrag(
+            preparation: HostedNativeScrollBarHoverPreparation(
+                action: action,
+                observedSamples: observedSamples,
+                samples: samples,
+                durationMilliseconds: durationMilliseconds
+            ),
+            chain: finalChain,
+            dragTarget: dragTarget
+        )
+    }
+
+    private func nativeScrollBarHoverSamplesMatch(
+        _ lhs: HostedNativeScrollBarHoverSample,
+        _ rhs: HostedNativeScrollBarHoverSample
+    ) -> Bool {
+        nativeInnerScrollSamplesMatch(lhs.innerScrollSample, rhs.innerScrollSample)
+            && !lhs.thumbFrame.differs(from: rhs.thumbFrame, byMoreThan: 1)
+            && lhs.thumbEnabled == rhs.thumbEnabled
+            && lhs.thumbHittable == rhs.thumbHittable
+    }
+
+    private func nativeScrollBarBottomDragTarget(
+        chain: HostedNativeScrollBarChain,
+        controlIdentifier: String,
+        tolerance: Double
+    ) throws -> HostedNativeScrollBarDragTarget {
+        guard chain.thumbEnabled, chain.thumbHittable else {
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
+                controlIdentifier
+            )
+        }
+        let verticalScrollBar = chain.verticalScrollBar
+        let thumb = chain.thumb
+        let scrollBarFrame = chain.scrollBarFrame
+        let thumbFrame = chain.thumbFrame
 
         let sourcePoint = HostedGeometryPoint(
             x: thumbFrame.x + (thumbFrame.width / 2),
@@ -4076,6 +4402,43 @@ private struct HostedNativeScrollBarDragTarget {
     let requestedDisplacementY: Double
 }
 
+private struct HostedNativeScrollBarChain {
+    let control: XCUIElement
+    let scrollContainer: XCUIElement
+    let verticalScrollBar: XCUIElement
+    let thumb: XCUIElement
+    let scrollBarFrame: HostedGeometryFrame
+    let thumbFrame: HostedGeometryFrame
+    let thumbEnabled: Bool
+    let thumbHittable: Bool
+}
+
+private struct HostedNativeScrollBarHoverTarget {
+    let coordinate: XCUICoordinate
+    let point: HostedGeometryPoint
+    let chain: HostedNativeScrollBarChain
+}
+
+private struct HostedNativeScrollBarHoverSample: Codable, Equatable {
+    let innerScrollSample: HostedNativeInnerScrollSample
+    let thumbFrame: HostedGeometryFrame
+    let thumbEnabled: Bool
+    let thumbHittable: Bool
+}
+
+private struct HostedNativeScrollBarHoverPreparation: Codable, Equatable {
+    let action: HostedNativeInnerScrollAction
+    let observedSamples: [HostedNativeScrollBarHoverSample]
+    let samples: [HostedNativeScrollBarHoverSample]
+    let durationMilliseconds: Int
+}
+
+private struct HostedNativePreparedScrollBarDrag {
+    let preparation: HostedNativeScrollBarHoverPreparation
+    let chain: HostedNativeScrollBarChain
+    let dragTarget: HostedNativeScrollBarDragTarget
+}
+
 private struct HostedNativeInnerScrollAction: Codable, Equatable {
     let mechanism: String
     let elapsedMilliseconds: Int
@@ -4086,8 +4449,13 @@ private struct HostedNativeInnerScrollAction: Codable, Equatable {
     let normalizedTargetValue: Double?
     let requestedDisplacementY: Double?
     let guardScrollBarFrame: HostedGeometryFrame?
+    let guardScrollBarFrameAfter: HostedGeometryFrame?
     let guardThumbFrameBefore: HostedGeometryFrame?
     let guardThumbFrameAfter: HostedGeometryFrame?
+    let normalizedValueBefore: Double?
+    let normalizedValueAfter: Double?
+    let guardThumbHittableBefore: Bool?
+    let guardThumbHittableAfter: Bool?
     let observedThumbTranslationY: Double?
     let attemptCount: Int
     let effectObserved: Bool
@@ -4104,8 +4472,13 @@ private struct HostedNativeInnerScrollAction: Codable, Equatable {
         normalizedTargetValue: Double? = nil,
         requestedDisplacementY: Double? = nil,
         guardScrollBarFrame: HostedGeometryFrame? = nil,
+        guardScrollBarFrameAfter: HostedGeometryFrame? = nil,
         guardThumbFrameBefore: HostedGeometryFrame? = nil,
         guardThumbFrameAfter: HostedGeometryFrame? = nil,
+        normalizedValueBefore: Double? = nil,
+        normalizedValueAfter: Double? = nil,
+        guardThumbHittableBefore: Bool? = nil,
+        guardThumbHittableAfter: Bool? = nil,
         observedThumbTranslationY: Double? = nil,
         attemptCount: Int,
         effectObserved: Bool,
@@ -4121,8 +4494,13 @@ private struct HostedNativeInnerScrollAction: Codable, Equatable {
         self.normalizedTargetValue = normalizedTargetValue
         self.requestedDisplacementY = requestedDisplacementY
         self.guardScrollBarFrame = guardScrollBarFrame
+        self.guardScrollBarFrameAfter = guardScrollBarFrameAfter
         self.guardThumbFrameBefore = guardThumbFrameBefore
         self.guardThumbFrameAfter = guardThumbFrameAfter
+        self.normalizedValueBefore = normalizedValueBefore
+        self.normalizedValueAfter = normalizedValueAfter
+        self.guardThumbHittableBefore = guardThumbHittableBefore
+        self.guardThumbHittableAfter = guardThumbHittableAfter
         self.observedThumbTranslationY = observedThumbTranslationY
         self.attemptCount = attemptCount
         self.effectObserved = effectObserved
@@ -4184,6 +4562,8 @@ private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let repeatTerminalWindowDurationMilliseconds: Int
     let terminalStateStable: Bool
     let outerIsolationProven: Bool
+    let firstHoverPreparation: HostedNativeScrollBarHoverPreparation
+    let repeatHoverPreparation: HostedNativeScrollBarHoverPreparation
     let firstTerminalAction: HostedNativeInnerScrollAction
     let repeatTerminalAction: HostedNativeInnerScrollAction
     let preSample: HostedNativeInnerScrollSample
@@ -4490,6 +4870,7 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
     case invalidVerticalScrollBarCount(controlIdentifier: String, count: Int)
     case invalidScrollBarThumbCount(controlIdentifier: String, count: Int)
     case scrollBarThumbNotInteractable(String)
+    case hoverPreparationChangedState(String)
     case invalidScrollBarDragGeometry(String)
     case scrollBarThumbDidNotReachTerminal(String)
     case missingTerminalRowElementType(String)
@@ -4545,6 +4926,9 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
                 + "control=\(controlIdentifier) count=\(count)"
         case .scrollBarThumbNotInteractable(let controlIdentifier):
             "Hosted native vertical scrollbar thumb is not enabled and hittable: "
+                + "control=\(controlIdentifier)"
+        case .hoverPreparationChangedState(let controlIdentifier):
+            "Hosted native scrollbar hover preparation changed inner or outer state: "
                 + "control=\(controlIdentifier)"
         case .invalidScrollBarDragGeometry(let controlIdentifier):
             "Hosted native vertical scrollbar thumb has no safe bounded downward drag: "
