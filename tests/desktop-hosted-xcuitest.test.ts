@@ -344,7 +344,7 @@ const swiftXCUIActionMethodPattern =
   /\.\s*(?:`(adjust|click|doubleClick|rightClick|hover|tap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate)`|(adjust|click|doubleClick|rightClick|hover|tap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate))\s*(?=\(|[;,)\]\s]|$)/g;
 
 function swiftLiteralToken(literal: string): string {
-  return `__SWIFT_LITERAL_${Buffer.from(literal, "utf8").toString("base64url")}__`;
+  return `\u0000SWIFT_LITERAL_${Buffer.from(literal, "utf8").toString("base64url")}\u0000`;
 }
 
 function projectSwiftExecutableTokens(source: string): string {
@@ -478,19 +478,14 @@ function swiftXCUIActions(source: string): string[] {
 function extractBalancedSwiftCallTokens(source: string, callName: string): string[] {
   const executable = projectSwiftExecutableTokens(source);
   const calls: string[] = [];
-  let searchStart = 0;
-  const callPrefix = `${callName}(`;
+  const callPattern = new RegExp(`\\b${escapeRegExp(callName)}\\s*\\(`, "g");
 
-  while (searchStart < executable.length) {
-    const callStart = executable.indexOf(callPrefix, searchStart);
-    if (callStart < 0) break;
+  for (let match = callPattern.exec(executable); match; match = callPattern.exec(executable)) {
+    const callStart = match.index;
+    const openingParenthesis = callStart + match[0].lastIndexOf("(");
     let depth = 0;
     let callEnd = -1;
-    for (
-      let index = callStart + callName.length;
-      index < executable.length;
-      index += 1
-    ) {
+    for (let index = openingParenthesis; index < executable.length; index += 1) {
       if (executable[index] === "(") {
         depth += 1;
       } else if (executable[index] === ")") {
@@ -503,7 +498,7 @@ function extractBalancedSwiftCallTokens(source: string, callName: string): strin
     }
     if (callEnd < 0) throw new Error(`Unbalanced Swift call: ${callName}`);
     calls.push(executable.slice(callStart, callEnd));
-    searchStart = callEnd;
+    callPattern.lastIndex = callEnd;
   }
 
   return calls;
@@ -590,6 +585,20 @@ outerPreparationFailures.append("right")
     expect(executableProbe).not.toContain(
       `outerPreparationFailures.append(${swiftLiteralToken('"wrong"')})`
     );
+    expect(swiftLiteralToken('"right"')).toMatch(/^\u0000SWIFT_LITERAL_/);
+    expect(swiftLiteralToken('"right"')).not.toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+    expect(
+      extractBalancedSwiftCallTokens(
+        String.raw`
+FakeHostedNativeInnerScrollAction(mechanism: "decoy")
+HostedNativeInnerScrollAction /* trivia */ (mechanism: "first")
+HostedNativeInnerScrollAction(
+  mechanism: "second"
+)
+`,
+        "HostedNativeInnerScrollAction"
+      )
+    ).toHaveLength(2);
     expect(
       swiftXCUIActions(
         String.raw`let hiddenAction = "\(flag ? "safe" : element.click())"`
@@ -850,7 +859,9 @@ releaseTabbedAlternative()
     );
     expect(source).toContain('"baseline=\\(region.frame) candidate=\\(candidate.frame)"');
     expect(maskedLogs).toContain("ScrollView(.vertical)");
-    expect(logs).toContain('.accessibilityIdentifier("neondiff-logs-outer-scroll")');
+    expect(maskedLogs).toContain(
+      `.accessibilityIdentifier(${swiftLiteralToken('"neondiff-logs-outer-scroll"')})`
+    );
     expect(maskedLogs).toContain(".frame(height: 360)");
     expect(maskedLogs).not.toContain(".frame(minHeight: 420)");
   });
@@ -951,13 +962,15 @@ releaseTabbedAlternative()
     );
     const executableTheme = projectSwiftExecutableTokens(theme);
     expect(executableTheme).toContain("HostedEvaluationAccessibility.isActive");
-    expect(theme).toContain('arguments.contains("--ui-testing")');
+    expect(executableTheme).toContain(
+      `arguments.contains(${swiftLiteralToken('"--ui-testing"')})`
+    );
     const sentinelSource = extractBalancedSwiftDeclaration(
       theme,
       "struct PageBottomSentinel: View"
     );
     const maskedSentinelSource = maskSwiftCommentsAndLiterals(sentinelSource);
-    expect(sentinelSource).toContain("#if DEBUG");
+    expect(maskedSentinelSource).toContain("#if DEBUG");
     expect(maskedSentinelSource).toContain(".allowsHitTesting(false)");
     expect(maskedSentinelSource).toContain(
       ".accessibilityRespondsToUserInteraction(false)"
@@ -970,12 +983,14 @@ releaseTabbedAlternative()
     const repos = readFileSync(reposPath, "utf8");
     const logs = readFileSync(logsPath, "utf8");
     const maskedSource = maskSwiftCommentsAndLiterals(source);
-    const maskedLogs = maskSwiftCommentsAndLiterals(logs);
+    const executableRepos = projectSwiftExecutableTokens(repos);
+    const maskedLogs = projectSwiftExecutableTokens(logs);
     projectSwiftExecutableTokens(source);
     const textVisibility = readFileSync(
       "apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/DesktopTextVisibility.swift",
       "utf8"
     );
+    const executableTextVisibility = projectSwiftExecutableTokens(textVisibility);
 
     expect(existsSync(hostedInnerScrollFixturePath)).toBe(true);
 
@@ -1021,8 +1036,12 @@ releaseTabbedAlternative()
     expect(
       readFileSync("apps/neondiff-desktop/fixtures/ui/catalog.json", "utf8")
     ).not.toContain("hosted-inner-scroll-overflow");
-    expect(repos).toContain('.accessibilityIdentifier("neondiff-repos-table")');
-    expect(logs).toContain('.accessibilityIdentifier("neondiff-logs-text-editor")');
+    expect(executableRepos).toContain(
+      `.accessibilityIdentifier(${swiftLiteralToken('"neondiff-repos-table"')})`
+    );
+    expect(maskedLogs).toContain(
+      `.accessibilityIdentifier(${swiftLiteralToken('"neondiff-logs-text-editor"')})`
+    );
     expect(maskedLogs).toContain('import AppKit');
     expect(maskedLogs).toContain('LogsTextEditorVisibleRangeProbe(');
     expect(logs).toContain('"neondiff-logs-visible-tail"');
@@ -1048,10 +1067,14 @@ releaseTabbedAlternative()
     expect(maskedLogs).toContain('let chunkByteCount = 64');
     expect(maskedLogs).toContain('guard label.utf8.count <= 128');
     expect(logs).toContain('"neondiff-logs-visible-tail-chunk-\\(index)"');
-    expect(textVisibility).toContain('public enum DesktopTextVisibility');
+    expect(executableTextVisibility).toContain('public enum DesktopTextVisibility');
     expect(textVisibility).toMatch(/^import Foundation\n\n#if DEBUG\n/);
-    expect(textVisibility).toContain('tokenRange.location >= visibleRange.location');
-    expect(textVisibility).toContain('NSMaxRange(tokenRange) <= NSMaxRange(visibleRange)');
+    expect(executableTextVisibility).toContain(
+      'tokenRange.location >= visibleRange.location'
+    );
+    expect(executableTextVisibility).toContain(
+      'NSMaxRange(tokenRange) <= NSMaxRange(visibleRange)'
+    );
     const resolveVisibleTextSource = extractBalancedSwiftDeclaration(
       logs,
       "func resolveAndObserveTextView("
@@ -1914,7 +1937,7 @@ releaseTabbedAlternative()
       "utf8"
     );
     const workflow = readFileSync(workflowPath, "utf8");
-    const maskedOnboarding = maskSwiftCommentsAndLiterals(onboarding);
+    const maskedOnboarding = projectSwiftExecutableTokens(onboarding);
 
     expect(maskedSource).toContain(
       "testStrictFixtureSettlesAcrossEveryOnboardingStepAtCanonicalSize"
@@ -1978,14 +2001,16 @@ releaseTabbedAlternative()
       "neondiff-onboarding-step-content",
       "neondiff-onboarding-footer"
     ]) {
-      expect(onboarding).toContain(
-        `.hostedOnboardingEvaluationRegion("${identifier}")`
+      expect(maskedOnboarding).toContain(
+        `.hostedOnboardingEvaluationRegion(${swiftLiteralToken(`"${identifier}"`)})`
       );
     }
-    expect(onboarding).toContain(
-      '"neondiff-onboarding-current-step-\\(model.onboardingFlow.currentStep.rawValue)"'
+    expect(maskedOnboarding).toContain(
+      swiftLiteralToken(
+        String.raw`"neondiff-onboarding-current-step-\(model.onboardingFlow.currentStep.rawValue)"`
+      )
     );
-    expect(onboarding).toContain("#if DEBUG");
+    expect(maskSwiftCommentsAndLiterals(onboarding)).toContain("#if DEBUG");
     expect(maskedOnboarding).toContain("hostedOnboardingEvaluationRegion");
     expect(workflow).toMatch(
       /name: Hosted XCUITest smoke\s+timeout-minutes: 25/
@@ -1996,7 +2021,7 @@ releaseTabbedAlternative()
     const source = readFileSync(uiTestPath, "utf8");
     const theme = readFileSync(themePath, "utf8");
     const maskedSource = maskSwiftCommentsAndLiterals(source);
-    const maskedTheme = maskSwiftCommentsAndLiterals(theme);
+    const maskedTheme = projectSwiftExecutableTokens(theme);
 
     expect(maskedSource).toContain(
       "testAccessibility3OverrideScalesVisibleProductionSectionTitle"
@@ -2025,8 +2050,8 @@ releaseTabbedAlternative()
     expect(source).toContain(
       'textSizeMode: "swiftui-dynamic-type-accessibility3-test-override"'
     );
-    expect(theme).toContain(
-      '.accessibilityIdentifier("neondiff-section-title")'
+    expect(maskedTheme).toContain(
+      `.accessibilityIdentifier(${swiftLiteralToken('"neondiff-section-title"')})`
     );
     expect(maskedTheme).toContain(
       "@Environment(\\.dynamicTypeSize) private var dynamicTypeSize"
@@ -2226,8 +2251,10 @@ releaseTabbedAlternative()
     expect(maskedSettings).toContain("HostedSettingsGeometryAccessibilityChunk");
     expect(maskedSettings).toContain("geometryAccessibilityManifest");
     expect(maskedSettings).toContain("geometryAccessibilityChunks");
-    expect(settings).toContain('let chunkByteCount = 64');
-    expect(settings).toContain('let label = "ndsg1:');
+    expect(maskedSettings).toContain('let chunkByteCount = 64');
+    expect(projectSwiftExecutableTokens(settings)).toContain(
+      `let label = ${swiftLiteralToken(String.raw`"ndsg1:\(index):\(chunkCount):\(encoded)"`)}`
+    );
     expect(maskedSettings).toContain("guard label.utf8.count <= 128");
     expect(maskedSettings).not.toContain(".accessibilityValue(");
     expect(maskedSettings).toContain("visibleScreenFrame: visibleScreenFrame");
