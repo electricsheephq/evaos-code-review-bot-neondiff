@@ -15,16 +15,18 @@ const paths = [
   "docs/releases/v1.0.0.md"
 ];
 
-// Layer-3 licensing policy (owner ruling, reversing the #532 "activate every
-// repository" pivot; enforced at the #614 authorization boundary): public
-// open-source repositories are FREE with no Activation Key; private, internal,
-// commercial, and unknown-visibility work require active API-backed entitlement
-// (unknown fails closed). Public-facing website copy migration is owned by
-// website issue #52. These required claims now guard the CORRECT policy.
+// Licensing framing (owner ruling; technical-merit resolution 2026-07-16). The
+// SHIPPED CLI (v1.0.x) requires API-backed activation for EVERY repository — a
+// local publicReposFree flag would trust the client's own visibility claim, the
+// exact bypass the #614 server-side broker exists to stop. So public-free is the
+// TARGET, gated on the native app + managed GitHub App broker (#614), and must be
+// announced as upcoming — never asserted as current CLI behavior. Website copy
+// migration is owned by website issue #52. These required claims guard that the
+// docs state current CLI truth AND mark the public-free target correctly.
 const required = [
   /source-available/i,
-  /public open-source repositor(?:y|ies) (?:are|is) free/i,
-  /API-backed activation is required for (?:supported )?private/i,
+  /public open-source repositor(?:y|ies) will be free/i,
+  /requires (?:live |active |mandatory )?API-backed activation for every repository/i,
   /private.*commercial.*paid|paid.*private.*commercial/i,
   /\$100\/(?:year|yr)/i,
   /7-day trial/i,

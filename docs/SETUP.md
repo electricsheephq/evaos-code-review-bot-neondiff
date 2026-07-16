@@ -22,13 +22,17 @@ for the support-tier pricing contract.
 - npm
 - GitHub App credentials for the repos you want to review
 - a provider/model path available on the machine running the worker
-- NeonDiff license key for private, internal, or commercial review (public
-  open-source review is free)
+- NeonDiff license key for repository review (the current CLI requires
+  activation for every repository; public open-source review will be free in the
+  native app)
 
-Public open-source repositories are free and require no NeonDiff Activation Key.
-API-backed activation is required for private, internal, and commercial
-repository work; unknown visibility fails closed, and GitHub-authoritative
-visibility (public, private, internal, and unknown) decides the tier. Support
+The current CLI (v1.0.x) requires API-backed activation for every repository
+(public, private, internal, and unknown); unknown visibility fails closed, and
+GitHub-authoritative visibility (public, private, internal, and unknown) decides
+the tier. Coming with the native app: public open-source repositories will be
+free with no NeonDiff Activation Key, while private, internal, and commercial
+repositories will require an active entitlement (managed GitHub App broker #614;
+not enforced by the current CLI). Support
 licenses cost $1/month or $10/year for
 individuals, or $100/year for organizations. Individual plans include a 7-day
 trial, organization plans include a 30-day trial, and legacy lifetime licenses

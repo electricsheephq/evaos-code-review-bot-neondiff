@@ -28,8 +28,10 @@ If you are a coding agent working in this repository:
 ## Source-Available Product Boundary
 
 - NeonDiff is source-available beta software.
-- Public open-source repositories are free and require no NeonDiff Activation Key
-  (owner ruling; the #532 "activate every repository" pivot is reversed).
+- The current CLI (v1.0.x) requires API-backed activation for every repository;
+  public open-source repositories will be free with no NeonDiff Activation Key in
+  the native app (managed GitHub App broker #614), not the current CLI, since a
+  local visibility flag would trust the client's own claim.
 - API-backed activation is required for supported private, internal, and
   commercial repository work; unknown visibility fails closed. GitHub-authoritative
   visibility decides the tier, and provider verification is still required for all

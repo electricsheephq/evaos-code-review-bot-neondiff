@@ -106,8 +106,11 @@ Agents should read [AGENTS.md](AGENTS.md) before editing this repository.
 - Preserve source-available beta wording unless #104 is updated with approved license text.
 - Preserve mandatory API-backed activation for private, internal, and commercial
   repository work, and fail closed on unknown visibility; the "no free-use bypass"
-  rule protects the PRIVATE-entitlement boundary. Public open-source repositories
-  are intentionally free (owner ruling — policy, not a bypass). Keep
+  rule protects the PRIVATE-entitlement boundary. Public open-source review will
+  be free with no Activation Key in the native app (managed GitHub App broker
+  #614; owner ruling — policy, not a bypass); the current CLI still requires
+  activation for every repository, since a local visibility flag would trust the
+  client's own claim. Keep
   GitHub-authoritative visibility with unknown failing closed; provider
   verification remains required for all tiers. Public-facing website copy migration
   is owned by website #52.

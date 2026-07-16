@@ -40,7 +40,7 @@ provider registry.
 | GitHub App review posting | Live posting is gated by configured repos, current-head checks, duplicate suppression, provider readiness, and dry-run evidence. NeonDiff does not approve PRs, merge, push repairs, or silently expand permissions. |
 | Daemon supervision | The live beta operator path is macOS launchd-oriented. Linux systemd, Docker, and CI-runner assets are packaged and guarded by an Ubuntu smoke workflow, but provider-specific Linux review quality and every distribution shape are not claimed. |
 | Desktop app | macOS dev MVP only. No signed/notarized/appcast/TCC/customer-control readiness is claimed. |
-| License activation | Supported review/provider work requires live API-backed activation for every repository visibility. v1.0.4 grants no offline cache authority. The file backend is the supported CLI path; Desktop useful actions remain blocked until a native broker is proven. |
+| License activation | The current CLI (v1.0.x) requires live API-backed activation for every repository visibility; public open-source review becomes free (no Activation Key) only in the native app via the managed GitHub App broker (#614), which verifies visibility server-side. v1.0.4 grants no offline cache authority. The file backend is the supported CLI path; Desktop useful actions remain blocked until a native broker is proven. |
 | Security | Security policy exists, but this is not an enterprise/customer-ready security certification. Use private GitHub vulnerability reporting for secrets or private data. |
 | Support alias | `support@electricsheephq.com` is listed as a launch support contact that requires owner verification before public launch. This repo has no evidence that the alias is monitored. |
 
