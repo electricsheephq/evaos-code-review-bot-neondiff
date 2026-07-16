@@ -219,203 +219,294 @@ function projectSwiftReleaseSource(source: string): string {
 
 function maskSwiftCommentsAndLiterals(source: string): string {
   const masked = [...source];
-  let index = 0;
+  const scanCode = (start: number, stopAtInterpolationClose: boolean): number => {
+    let index = start;
+    let parenthesisDepth = stopAtInterpolationClose ? 1 : 0;
 
-  while (index < source.length) {
-    if (source.startsWith("//", index)) {
-      const end = source.indexOf("\n", index + 2);
-      index = maskSwiftRange(masked, index, end < 0 ? source.length : end);
-      continue;
-    }
-    if (source.startsWith("/*", index)) {
-      let end = index + 2;
-      let depth = 1;
-      while (end < source.length && depth > 0) {
-        if (source.startsWith("/*", end)) {
-          depth += 1;
-          end += 2;
-        } else if (source.startsWith("*/", end)) {
-          depth -= 1;
-          end += 2;
-        } else {
-          end += 1;
+    while (index < source.length) {
+      if (source.startsWith("//", index)) {
+        const end = source.indexOf("\n", index + 2);
+        index = maskSwiftRange(masked, index, end < 0 ? source.length : end);
+        continue;
+      }
+      if (source.startsWith("/*", index)) {
+        let end = index + 2;
+        let commentDepth = 1;
+        while (end < source.length && commentDepth > 0) {
+          if (source.startsWith("/*", end)) {
+            commentDepth += 1;
+            end += 2;
+          } else if (source.startsWith("*/", end)) {
+            commentDepth -= 1;
+            end += 2;
+          } else {
+            end += 1;
+          }
+        }
+        if (commentDepth !== 0) throw new Error("Unterminated Swift block comment");
+        index = maskSwiftRange(masked, index, end);
+        continue;
+      }
+
+      const poundCount = countLeadingPounds(source, index);
+      const literalStart = index + poundCount;
+      const quoteCount = source.startsWith('\"\"\"', literalStart)
+        ? 3
+        : source[literalStart] === '\"'
+          ? 1
+          : 0;
+      if (quoteCount > 0) {
+        const closing = '\"'.repeat(quoteCount) + "#".repeat(poundCount);
+        const interpolationPrefix = `\\${"#".repeat(poundCount)}(`;
+        let literalIndex = maskSwiftRange(
+          masked,
+          index,
+          literalStart + quoteCount
+        );
+        let closed = false;
+        while (literalIndex < source.length) {
+          if (source.startsWith(interpolationPrefix, literalIndex)) {
+            literalIndex = maskSwiftRange(
+              masked,
+              literalIndex,
+              literalIndex + interpolationPrefix.length
+            );
+            literalIndex = scanCode(literalIndex, true);
+          } else if (source.startsWith(closing, literalIndex)) {
+            literalIndex = maskSwiftRange(
+              masked,
+              literalIndex,
+              literalIndex + closing.length
+            );
+            closed = true;
+            break;
+          } else if (poundCount === 0 && source[literalIndex] === "\\") {
+            literalIndex = maskSwiftRange(masked, literalIndex, literalIndex + 2);
+          } else {
+            literalIndex = maskSwiftRange(masked, literalIndex, literalIndex + 1);
+          }
+        }
+        if (!closed) throw new Error("Unterminated Swift string literal");
+        index = literalIndex;
+        continue;
+      }
+
+      if (poundCount > 0 && source[literalStart] === "/") {
+        index = maskSwiftRange(
+          masked,
+          index,
+          findSwiftRegexEnd(
+            source,
+            literalStart + 1,
+            "/" + "#".repeat(poundCount)
+          )
+        );
+        continue;
+      }
+      if (
+        source[index] === "/" &&
+        source[index + 1] !== "/" &&
+        source[index + 1] !== "*" &&
+        isSwiftBareRegexStart(masked, index)
+      ) {
+        index = maskSwiftRange(
+          masked,
+          index,
+          findSwiftRegexEnd(source, index + 1, "/")
+        );
+        continue;
+      }
+
+      const current = source[index];
+      index += 1;
+      if (stopAtInterpolationClose) {
+        if (current === "(") {
+          parenthesisDepth += 1;
+        } else if (current === ")") {
+          parenthesisDepth -= 1;
+          if (parenthesisDepth === 0) return index;
         }
       }
-      if (depth !== 0) throw new Error("Unterminated Swift block comment");
-      index = maskSwiftRange(masked, index, end);
-      continue;
     }
 
-    const poundCount = countLeadingPounds(source, index);
-    const literalStart = index + poundCount;
-    const quoteCount = source.startsWith('\"\"\"', literalStart)
-      ? 3
-      : source[literalStart] === '\"'
-        ? 1
-        : 0;
-    if (quoteCount > 0) {
-      const closing = '\"'.repeat(quoteCount) + "#".repeat(poundCount);
-      let end = literalStart + quoteCount;
-      let closed = false;
-      while (end < source.length) {
-        if (poundCount === 0 && source[end] === "\\") {
-          end += 2;
-        } else if (source.startsWith(closing, end)) {
-          end += closing.length;
-          closed = true;
-          break;
-        } else {
-          end += 1;
-        }
-      }
-      if (!closed) throw new Error("Unterminated Swift string literal");
-      index = maskSwiftRange(masked, index, end);
-      continue;
+    if (stopAtInterpolationClose) {
+      throw new Error("Unterminated Swift string interpolation");
     }
+    return index;
+  };
 
-    if (poundCount > 0 && source[literalStart] === "/") {
-      const end = findSwiftRegexEnd(
-        source,
-        literalStart + 1,
-        "/" + "#".repeat(poundCount)
-      );
-      index = maskSwiftRange(masked, index, end);
-      continue;
-    }
-    if (
-      source[index] === "/" &&
-      source[index + 1] !== "/" &&
-      source[index + 1] !== "*" &&
-      isSwiftBareRegexStart(masked, index)
-    ) {
-      const end = findSwiftRegexEnd(source, index + 1, "/");
-      index = maskSwiftRange(masked, index, end);
-      continue;
-    }
-
-    index += 1;
-  }
+  scanCode(0, false);
 
   return masked.join("");
 }
 
 const swiftXCUIActionMethodPattern =
-  /\.(adjust|click|doubleClick|rightClick|hover|tap|twoFingerTap|press|typeKey|typeText|scroll|swipe\w*|drag\w*|perform\w*|pinch|rotate)\s*\(/g;
+  /\.\s*(?:`(adjust|click|doubleClick|rightClick|hover|tap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate)`|(adjust|click|doubleClick|rightClick|hover|tap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate))\s*(?=\(|[;,)\]\s]|$)/g;
 
 function swiftLiteralToken(literal: string): string {
   return `__SWIFT_LITERAL_${Buffer.from(literal, "utf8").toString("base64url")}__`;
 }
 
 function projectSwiftExecutableTokens(source: string): string {
-  let projected = "";
-  let cursor = 0;
-  let index = 0;
+  const scanCode = (
+    start: number,
+    stopAtInterpolationClose: boolean
+  ): { output: string; end: number } => {
+    let output = "";
+    let index = start;
+    let parenthesisDepth = stopAtInterpolationClose ? 1 : 0;
 
-  const replaceRange = (start: number, end: number, replacement: string) => {
-    projected += source.slice(cursor, start) + replacement;
-    cursor = end;
-    index = end;
-  };
-
-  while (index < source.length) {
-    if (source.startsWith("//", index)) {
-      const end = source.indexOf("\n", index + 2);
-      replaceRange(index, end < 0 ? source.length : end, " ");
-      continue;
-    }
-    if (source.startsWith("/*", index)) {
-      let end = index + 2;
-      let depth = 1;
-      while (end < source.length && depth > 0) {
-        if (source.startsWith("/*", end)) {
-          depth += 1;
-          end += 2;
-        } else if (source.startsWith("*/", end)) {
-          depth -= 1;
-          end += 2;
-        } else {
-          end += 1;
-        }
-      }
-      if (depth !== 0) throw new Error("Unterminated Swift block comment");
-      replaceRange(
-        index,
-        end,
-        "\n".repeat(source.slice(index, end).match(/\n/g)?.length ?? 0)
-      );
-      continue;
-    }
-
-    const poundCount = countLeadingPounds(source, index);
-    const literalStart = index + poundCount;
-    const quoteCount = source.startsWith('\"\"\"', literalStart)
-      ? 3
-      : source[literalStart] === '\"'
-        ? 1
-        : 0;
-    if (quoteCount > 0) {
-      const closing = '\"'.repeat(quoteCount) + "#".repeat(poundCount);
-      let end = literalStart + quoteCount;
-      let closed = false;
-      while (end < source.length) {
-        if (poundCount === 0 && source[end] === "\\") {
-          end += 2;
-        } else if (source.startsWith(closing, end)) {
-          end += closing.length;
-          closed = true;
-          break;
-        } else {
-          end += 1;
-        }
-      }
-      if (!closed) throw new Error("Unterminated Swift string literal");
-      const literal = source.slice(index, end);
-      const interpolationPrefix = `\\${"#".repeat(poundCount)}(`;
-      if (literal.includes(interpolationPrefix)) {
-        swiftXCUIActionMethodPattern.lastIndex = 0;
-        if (swiftXCUIActionMethodPattern.test(literal)) {
-          throw new Error("XCUI action inside Swift string interpolation is forbidden");
-        }
-      }
-      replaceRange(index, end, swiftLiteralToken(literal));
-      continue;
-    }
-
-    if (poundCount > 0 && source[literalStart] === "/") {
-      const end = findSwiftRegexEnd(
-        source,
-        literalStart + 1,
-        "/" + "#".repeat(poundCount)
-      );
-      replaceRange(index, end, swiftLiteralToken(source.slice(index, end)));
-      continue;
-    }
-    if (
-      source[index] === "/" &&
-      source[index + 1] !== "/" &&
-      source[index + 1] !== "*"
-    ) {
-      const prefix = projected + source.slice(cursor, index);
-      if (isSwiftBareRegexStart([...prefix], prefix.length)) {
-        const end = findSwiftRegexEnd(source, index + 1, "/");
-        replaceRange(index, end, swiftLiteralToken(source.slice(index, end)));
+    while (index < source.length) {
+      if (source.startsWith("//", index)) {
+        const end = source.indexOf("\n", index + 2);
+        index = end < 0 ? source.length : end;
+        output += " ";
         continue;
       }
+      if (source.startsWith("/*", index)) {
+        let end = index + 2;
+        let commentDepth = 1;
+        while (end < source.length && commentDepth > 0) {
+          if (source.startsWith("/*", end)) {
+            commentDepth += 1;
+            end += 2;
+          } else if (source.startsWith("*/", end)) {
+            commentDepth -= 1;
+            end += 2;
+          } else {
+            end += 1;
+          }
+        }
+        if (commentDepth !== 0) throw new Error("Unterminated Swift block comment");
+        output += "\n".repeat(source.slice(index, end).match(/\n/g)?.length ?? 0);
+        index = end;
+        continue;
+      }
+
+      const poundCount = countLeadingPounds(source, index);
+      const literalStart = index + poundCount;
+      const quoteCount = source.startsWith('\"\"\"', literalStart)
+        ? 3
+        : source[literalStart] === '\"'
+          ? 1
+          : 0;
+      if (quoteCount > 0) {
+        const closing = '\"'.repeat(quoteCount) + "#".repeat(poundCount);
+        const interpolationPrefix = `\\${"#".repeat(poundCount)}(`;
+        let literalIndex = literalStart + quoteCount;
+        let interpolationOutput = "";
+        let closed = false;
+        while (literalIndex < source.length) {
+          if (source.startsWith(interpolationPrefix, literalIndex)) {
+            const interpolation = scanCode(
+              literalIndex + interpolationPrefix.length,
+              true
+            );
+            interpolationOutput += ` __SWIFT_INTERPOLATION__(${interpolation.output})`;
+            literalIndex = interpolation.end;
+          } else if (source.startsWith(closing, literalIndex)) {
+            literalIndex += closing.length;
+            closed = true;
+            break;
+          } else if (poundCount === 0 && source[literalIndex] === "\\") {
+            literalIndex += 2;
+          } else {
+            literalIndex += 1;
+          }
+        }
+        if (!closed) throw new Error("Unterminated Swift string literal");
+        output += swiftLiteralToken(source.slice(index, literalIndex));
+        output += interpolationOutput;
+        index = literalIndex;
+        continue;
+      }
+
+      if (poundCount > 0 && source[literalStart] === "/") {
+        const end = findSwiftRegexEnd(
+          source,
+          literalStart + 1,
+          "/" + "#".repeat(poundCount)
+        );
+        output += swiftLiteralToken(source.slice(index, end));
+        index = end;
+        continue;
+      }
+      if (
+        source[index] === "/" &&
+        source[index + 1] !== "/" &&
+        source[index + 1] !== "*" &&
+        isSwiftBareRegexStart([...output], output.length)
+      ) {
+        const end = findSwiftRegexEnd(source, index + 1, "/");
+        output += swiftLiteralToken(source.slice(index, end));
+        index = end;
+        continue;
+      }
+
+      const current = source[index];
+      output += current;
+      index += 1;
+      if (stopAtInterpolationClose) {
+        if (current === "(") {
+          parenthesisDepth += 1;
+        } else if (current === ")") {
+          parenthesisDepth -= 1;
+          if (parenthesisDepth === 0) {
+            return { output: output.slice(0, -1), end: index };
+          }
+        }
+      }
     }
 
-    index += 1;
-  }
+    if (stopAtInterpolationClose) {
+      throw new Error("Unterminated Swift string interpolation");
+    }
+    return { output, end: index };
+  };
 
-  projected += source.slice(cursor);
-  return projected;
+  return scanCode(0, false).output;
 }
 
 function swiftXCUIActions(source: string): string[] {
   const executable = projectSwiftExecutableTokens(source);
   swiftXCUIActionMethodPattern.lastIndex = 0;
   return [...executable.matchAll(swiftXCUIActionMethodPattern)].map(
-    (match) => match[1]
+    (match) => match[1] ?? match[2]
   );
+}
+
+function extractBalancedSwiftCallTokens(source: string, callName: string): string[] {
+  const executable = projectSwiftExecutableTokens(source);
+  const calls: string[] = [];
+  let searchStart = 0;
+  const callPrefix = `${callName}(`;
+
+  while (searchStart < executable.length) {
+    const callStart = executable.indexOf(callPrefix, searchStart);
+    if (callStart < 0) break;
+    let depth = 0;
+    let callEnd = -1;
+    for (
+      let index = callStart + callName.length;
+      index < executable.length;
+      index += 1
+    ) {
+      if (executable[index] === "(") {
+        depth += 1;
+      } else if (executable[index] === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          callEnd = index + 1;
+          break;
+        }
+      }
+    }
+    if (callEnd < 0) throw new Error(`Unbalanced Swift call: ${callName}`);
+    calls.push(executable.slice(callStart, callEnd));
+    searchStart = callEnd;
+  }
+
+  return calls;
 }
 
 function countLeadingPounds(source: string, start: number): number {
@@ -499,11 +590,26 @@ outerPreparationFailures.append("right")
     expect(executableProbe).not.toContain(
       `outerPreparationFailures.append(${swiftLiteralToken('"wrong"')})`
     );
-    expect(() =>
-      projectSwiftExecutableTokens(
-        String.raw`let hiddenAction = "\(element.swipeUp())"`
+    expect(
+      swiftXCUIActions(
+        String.raw`let hiddenAction = "\(flag ? "safe" : element.click())"`
       )
-    ).toThrow(/XCUI action inside Swift string interpolation/);
+    ).toEqual(["click"]);
+    expect(
+      swiftXCUIActions(
+        String.raw`let hiddenAction = "\(element.swipeUp/* comment */())"`
+      )
+    ).toEqual(["swipeUp"]);
+    expect(swiftXCUIActions("let alias = element.swipeUp; alias()"))
+      .toEqual(["swipeUp"]);
+    expect(swiftXCUIActions("element.`click`()")).toEqual(["click"]);
+    expect(
+      projectSwiftExecutableTokens(
+        String.raw`let hiddenLedger = "\(outerPreparationFailures.append("extra"))"`
+      )
+    ).toContain(
+      `outerPreparationFailures.append(${swiftLiteralToken('"extra"')})`
+    );
   });
 
   it("projects DEBUG branches out of release source without directive decoys", () => {
@@ -639,6 +745,11 @@ releaseTabbedAlternative()
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/SidebarView.swift",
       "utf8"
     );
+    const maskedReadiness = projectSwiftExecutableTokens(readiness);
+    const maskedConfigurator = projectSwiftExecutableTokens(configurator);
+    const maskedContent = projectSwiftExecutableTokens(content);
+    const maskedSidebar = projectSwiftExecutableTokens(sidebar);
+    const maskedApp = projectSwiftExecutableTokens(app);
 
     expect(maskedSource).toContain("testStrictFixtureSettlesAcrossOverviewReposOverview");
     expect(source).toContain('"neondiff.evaluation.surface.overview.0.quiescent"');
@@ -671,37 +782,37 @@ releaseTabbedAlternative()
     expect(source).toContain("neondiff-hosted-settled-geometry.json");
     expect(maskedSource).toContain(".keepAlways");
 
-    expect(readiness).toContain("final class DesktopEvaluationSurfaceStatus: ObservableObject");
-    expect(readiness).toContain("func begin(section:");
-    expect(readiness).toContain("func markRendered(section:");
-    expect(readiness).toContain("func markQuiescent(");
-    expect(readiness).toContain("contentFrame:");
-    expect(readiness).toContain("geometryAccessibilityManifest");
-    expect(readiness).toContain("geometryAccessibilityChunks");
+    expect(maskedReadiness).toContain("final class DesktopEvaluationSurfaceStatus: ObservableObject");
+    expect(maskedReadiness).toContain("func begin(section:");
+    expect(maskedReadiness).toContain("func markRendered(section:");
+    expect(maskedReadiness).toContain("func markQuiescent(");
+    expect(maskedReadiness).toContain("contentFrame:");
+    expect(maskedReadiness).toContain("geometryAccessibilityManifest");
+    expect(maskedReadiness).toContain("geometryAccessibilityChunks");
     expect(readiness).toContain('"rendered-regions-ready"');
     expect(readiness).toContain('"rendered-regions-missing"');
-    expect(readiness).toContain("DesktopHostedGeometryCompactTransport");
-    expect(readiness).toContain("chunkByteCount = 68");
-    expect(readiness).toContain("label.utf8.count <= 128");
-    expect(readiness).toContain("DesktopHostedGeometrySample");
-    expect(readiness).toContain("updateRegionFrames(");
-    expect(configurator).toContain("surfaceStatus.isRendered(");
-    expect(configurator).toContain("surfaceStatus.markQuiescent(");
-    expect(configurator).toContain("surfaceStatus.hostedGeometrySample(");
-    expect(content).toContain("EvaluationSurfaceAccessibilityMarker");
-    expect(content).toContain("EvaluationSurfaceGeometryChunkMarker");
-    expect(content).toContain(".accessibilityLabel(status.geometryAccessibilityManifest)");
-    expect(content).toContain(".accessibilityLabel(chunk.label)");
-    expect(content).not.toContain(".accessibilityValue(status.geometryAccessibilityValue)");
-    expect(content).toContain("EvaluationRegionFramesPreferenceKey");
-    expect(content).toContain("EvaluationRegionFrameCollector");
-    expect(content).toContain("@ObservedObject var status: DesktopEvaluationSurfaceStatus");
-    expect(content).toContain("content(status.snapshot?.generation)");
-    expect(content).toContain("GenerationBoundRegionFrameRouting.route(");
-    expect(sidebar).toMatch(
+    expect(maskedReadiness).toContain("DesktopHostedGeometryCompactTransport");
+    expect(maskedReadiness).toContain("chunkByteCount = 68");
+    expect(maskedReadiness).toContain("label.utf8.count <= 128");
+    expect(maskedReadiness).toContain("DesktopHostedGeometrySample");
+    expect(maskedReadiness).toContain("updateRegionFrames(");
+    expect(maskedConfigurator).toContain("surfaceStatus.isRendered(");
+    expect(maskedConfigurator).toContain("surfaceStatus.markQuiescent(");
+    expect(maskedConfigurator).toContain("surfaceStatus.hostedGeometrySample(");
+    expect(maskedContent).toContain("EvaluationSurfaceAccessibilityMarker");
+    expect(maskedContent).toContain("EvaluationSurfaceGeometryChunkMarker");
+    expect(maskedContent).toContain(".accessibilityLabel(status.geometryAccessibilityManifest)");
+    expect(maskedContent).toContain(".accessibilityLabel(chunk.label)");
+    expect(maskedContent).not.toContain(".accessibilityValue(status.geometryAccessibilityValue)");
+    expect(maskedContent).toContain("EvaluationRegionFramesPreferenceKey");
+    expect(maskedContent).toContain("EvaluationRegionFrameCollector");
+    expect(maskedContent).toContain("@ObservedObject var status: DesktopEvaluationSurfaceStatus");
+    expect(maskedContent).toContain("content(status.snapshot?.generation)");
+    expect(maskedContent).toContain("GenerationBoundRegionFrameRouting.route(");
+    expect(maskedSidebar).toMatch(
       /\.padding\(\.horizontal, 10\)\s*\.padding\(\.vertical, 9\)\s*\.contentShape\(Rectangle\(\)\)/
     );
-    expect(app).toContain("evaluationSurfaceStatus");
+    expect(maskedApp).toContain("evaluationSurfaceStatus");
     expect(maskedSource).not.toContain("NEONDIFF_DESKTOP_EVALUATION_READY_PATH");
     expect(maskedSource).not.toContain("createDirectory");
   });
@@ -713,6 +824,7 @@ releaseTabbedAlternative()
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/LogsView.swift",
       "utf8"
     );
+    const maskedLogs = projectSwiftExecutableTokens(logs);
 
     expect(maskedSource).toContain(
       "testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize"
@@ -737,10 +849,10 @@ releaseTabbedAlternative()
       'let context = "\\(checkpoint.section)-\\(checkpoint.surfaceGeneration)-\\(sample.elapsedMilliseconds)ms"'
     );
     expect(source).toContain('"baseline=\\(region.frame) candidate=\\(candidate.frame)"');
-    expect(logs).toContain("ScrollView(.vertical)");
+    expect(maskedLogs).toContain("ScrollView(.vertical)");
     expect(logs).toContain('.accessibilityIdentifier("neondiff-logs-outer-scroll")');
-    expect(logs).toContain(".frame(height: 360)");
-    expect(logs).not.toContain(".frame(minHeight: 420)");
+    expect(maskedLogs).toContain(".frame(height: 360)");
+    expect(maskedLogs).not.toContain(".frame(minHeight: 420)");
   });
 
   it("encodes the hosted contract for each sidebar page outer-scroll bottom reachability", () => {
@@ -837,7 +949,8 @@ releaseTabbedAlternative()
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/NeonDiffTheme.swift",
       "utf8"
     );
-    expect(theme).toContain("HostedEvaluationAccessibility.isActive");
+    const executableTheme = projectSwiftExecutableTokens(theme);
+    expect(executableTheme).toContain("HostedEvaluationAccessibility.isActive");
     expect(theme).toContain('arguments.contains("--ui-testing")');
     const sentinelSource = extractBalancedSwiftDeclaration(
       theme,
@@ -943,7 +1056,7 @@ releaseTabbedAlternative()
       logs,
       "func resolveAndObserveTextView("
     );
-    const maskedResolveVisibleTextSource = maskSwiftCommentsAndLiterals(
+    const maskedResolveVisibleTextSource = projectSwiftExecutableTokens(
       resolveVisibleTextSource
     );
     expect(maskedResolveVisibleTextSource).toContain(
@@ -956,7 +1069,7 @@ releaseTabbedAlternative()
       logs,
       "private func updateVisibility("
     );
-    const maskedUpdateVisibleTextSource = maskSwiftCommentsAndLiterals(
+    const maskedUpdateVisibleTextSource = projectSwiftExecutableTokens(
       updateVisibleTextSource
     );
     expect(maskedUpdateVisibleTextSource).toContain(
@@ -1395,17 +1508,19 @@ releaseTabbedAlternative()
     expect(maskedHelperSource).toContain("effectObserved: true");
     expect(maskedHelperSource).toContain("effectObserved: false");
     expect(maskedHelperSource.match(/effectProven: true/g)).toHaveLength(3);
-    expect(executableHelperSource).toContain(
+    const innerScrollActionCalls = extractBalancedSwiftCallTokens(
+      helperSource,
+      "HostedNativeInnerScrollAction"
+    );
+    expect(innerScrollActionCalls).toHaveLength(3);
+    expect(innerScrollActionCalls[0]).toContain(
       `mechanism: ${swiftLiteralToken('"public-xcui-coordinate-scroll-delta"')}`
     );
-    expect(
-      executableHelperSource.split(
+    for (const actionCall of innerScrollActionCalls.slice(1)) {
+      expect(actionCall).toContain(
         `mechanism: ${swiftLiteralToken('"public-xcui-scrollbar-thumb-drag"')}`
-      ).length - 1
-    ).toBe(2);
-    expect(
-      maskedHelperSource.match(/HostedNativeInnerScrollAction\s*\(/g)
-    ).toHaveLength(3);
+      );
+    }
     expect(maskedHelperSource.match(/normalizedTargetValue: 1/g)).toHaveLength(2);
     expect(maskedHelperSource).toContain("sourcePoint: firstDragTarget.sourcePoint");
     expect(maskedHelperSource).toContain("targetPoint: firstDragTarget.destinationPoint");
@@ -1548,12 +1663,14 @@ releaseTabbedAlternative()
     expect(maskedHoverPreparationSource).toContain("hoverTarget.coordinate.hover()");
     expect(maskedHoverPreparationSource.match(/\.hover\(\)/g)).toHaveLength(1);
     expect(swiftXCUIActions(hoverPreparationSource)).toEqual(["hover"]);
-    expect(executableHoverPreparationSource).toContain(
+    const hoverActionCalls = extractBalancedSwiftCallTokens(
+      hoverPreparationSource,
+      "HostedNativeInnerScrollAction"
+    );
+    expect(hoverActionCalls).toHaveLength(1);
+    expect(hoverActionCalls[0]).toContain(
       `mechanism: ${swiftLiteralToken('"public-xcui-coordinate-hover"')}`
     );
-    expect(
-      maskedHoverPreparationSource.match(/HostedNativeInnerScrollAction\s*\(/g)
-    ).toHaveLength(1);
     expect(maskedHoverPreparationSource).toContain("for _ in 0..<maximumSampleAttempts");
     expect(maskedHoverPreparationSource).toContain("observedSamples.append(sample)");
     expect(maskedHoverPreparationSource).toContain("if samples.count == 3 { break }");
