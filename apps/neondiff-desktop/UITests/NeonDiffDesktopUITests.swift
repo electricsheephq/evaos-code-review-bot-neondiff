@@ -347,7 +347,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             generation: 0,
             markerIdentifier: reposMarker,
             outerScrollIdentifier: "neondiff-repos-outer-scroll",
-            sentinelIdentifier: "neondiff-repos-page-bottom"
+            sentinelIdentifier: "neondiff-repos-page-bottom",
+            nestedScrollControlIdentifier: "neondiff-repos-table",
+            nestedScrollControlElementType: .outline
         )
         let reposInner = try captureNativeInnerScrollExhaustion(
             app: app,
@@ -386,7 +388,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             generation: 1,
             markerIdentifier: logsMarker,
             outerScrollIdentifier: "neondiff-logs-outer-scroll",
-            sentinelIdentifier: "neondiff-logs-page-bottom"
+            sentinelIdentifier: "neondiff-logs-page-bottom",
+            nestedScrollControlIdentifier: "neondiff-logs-text-editor",
+            nestedScrollControlElementType: .textView
         )
         let logsInner = try captureNativeInnerScrollExhaustion(
             app: app,
@@ -409,7 +413,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 9,
+                schemaVersion: 10,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
@@ -2695,13 +2699,86 @@ final class NeonDiffDesktopUITests: XCTestCase {
             && abs(candidate.height - baseline.height) <= tolerance
     }
 
+    private func guardedOuterPageScrollTarget(
+        app: XCUIApplication,
+        outerScroll: XCUIElement,
+        outerScrollIdentifier: String,
+        controlIdentifier: String?,
+        controlElementType: XCUIElement.ElementType?
+    ) throws -> HostedPageBottomNestedScrollGuard? {
+        guard controlIdentifier != nil || controlElementType != nil else {
+            return nil
+        }
+        guard let controlIdentifier, let controlElementType else {
+            throw HostedPageBottomTraceError.invalidNestedScrollGuardConfiguration
+        }
+        let controlQuery = app.descendants(matching: controlElementType)
+            .matching(identifier: controlIdentifier)
+        guard controlQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                identifier: controlIdentifier,
+                count: controlQuery.count
+            )
+        }
+        let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
+        guard outerScrollFrame.isFiniteAndNonempty else {
+            throw HostedPageBottomTraceError.invalidFrame(outerScrollIdentifier)
+        }
+        let scrollContainers = app.descendants(matching: .scrollView)
+            .allElementsBoundByIndex.filter { candidate in
+                let frame = HostedGeometryFrame(candidate.frame)
+                return candidate.identifier != outerScrollIdentifier
+                    && frame.isFiniteAndNonempty
+                    && frame.differs(from: outerScrollFrame, byMoreThan: 1)
+                    && candidate.descendants(matching: controlElementType)
+                        .matching(identifier: controlIdentifier).count == 1
+            }
+        guard scrollContainers.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollContainerCount(
+                controlIdentifier: controlIdentifier,
+                count: scrollContainers.count
+            )
+        }
+        let scrollContainer = scrollContainers[0]
+        let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
+        let verticalScrollBars = scrollContainer.scrollBars.allElementsBoundByIndex.filter {
+            candidate in
+            let frame = HostedGeometryFrame(candidate.frame)
+            return frame.isFiniteAndNonempty
+                && frame.height > frame.width
+                && frame.isFullyContained(in: scrollContainerFrame, tolerance: 2)
+        }
+        guard verticalScrollBars.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidVerticalScrollBarCount(
+                controlIdentifier: controlIdentifier,
+                count: verticalScrollBars.count
+            )
+        }
+        let verticalScrollBar = verticalScrollBars[0]
+        let target = try outerRestagingCoordinate(
+            outerScroll: outerScroll,
+            outerScrollFrame: outerScrollFrame,
+            scrollContainerFrame: scrollContainerFrame,
+            tolerance: 1
+        )
+        return HostedPageBottomNestedScrollGuard(
+            controlIdentifier: controlIdentifier,
+            targetCoordinate: target.coordinate,
+            targetPoint: target.point,
+            verticalScrollBar: verticalScrollBar,
+            baselineValue: try normalizedScrollValue(verticalScrollBar.value)
+        )
+    }
+
     private func capturePageBottomCheckpoint(
         app: XCUIApplication,
         section: String,
         generation: Int,
         markerIdentifier: String,
         outerScrollIdentifier: String,
-        sentinelIdentifier: String
+        sentinelIdentifier: String,
+        nestedScrollControlIdentifier: String? = nil,
+        nestedScrollControlElementType: XCUIElement.ElementType? = nil
     ) throws -> HostedPageBottomCheckpoint {
         let outerPageScroll = app.descendants(matching: .any)[outerScrollIdentifier]
         let bottomSentinel = app.descendants(matching: .any)[sentinelIdentifier]
@@ -2722,6 +2799,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
             context: "\(section)-pre"
         )
         let preActionSamples = preActionWindow.samples
+        let nestedScrollGuard = try guardedOuterPageScrollTarget(
+            app: app,
+            outerScroll: outerPageScroll,
+            outerScrollIdentifier: outerScrollIdentifier,
+            controlIdentifier: nestedScrollControlIdentifier,
+            controlElementType: nestedScrollControlElementType
+        )
         let didIssueScroll: Bool
         let postActionWindow: HostedPageBottomSettledWindow
         if preActionSamples.allSatisfy({
@@ -2731,7 +2815,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             didIssueScroll = false
             postActionWindow = preActionWindow
         } else {
-            outerPageScroll.scroll(byDeltaX: 0, deltaY: -10_000)
+            let outerPageScrollTarget = nestedScrollGuard?.targetCoordinate
+                ?? defaultOuterPageScrollCoordinate(outerPageScroll)
+            outerPageScrollTarget.scroll(byDeltaX: 0, deltaY: -10_000)
             didIssueScroll = true
             postActionWindow = try capturePageBottomSamples(
                 outerPageScroll: outerPageScroll,
@@ -2741,6 +2827,20 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
         let postActionSamples = postActionWindow.samples
+        let nestedScrollValueAfter = try nestedScrollGuard.map {
+            try normalizedScrollValue($0.verticalScrollBar.value)
+        }
+        if didIssueScroll, let nestedScrollGuard {
+            guard let nestedScrollValueAfter,
+                  nestedScrollValueAfter == nestedScrollGuard.baselineValue else {
+                throw HostedPageBottomTraceError
+                    .nestedScrollValueChangedDuringOuterPreparation(
+                        controlIdentifier: nestedScrollGuard.controlIdentifier,
+                        before: nestedScrollGuard.baselineValue,
+                        after: nestedScrollValueAfter
+                    )
+            }
+        }
 
         for (sampleIndex, postActionSample) in postActionSamples.enumerated() {
             try requireFullyContained(
@@ -2761,7 +2861,11 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 deltaY: -10_000,
                 attemptCount: 1,
                 result: "returned",
-                effectProven: true
+                effectProven: true,
+                targetPoint: nestedScrollGuard?.targetPoint,
+                nestedScrollControlIdentifier: nestedScrollGuard?.controlIdentifier,
+                nestedScrollValueBefore: nestedScrollGuard?.baselineValue,
+                nestedScrollValueAfter: nestedScrollValueAfter
             )
             : nil
         return HostedPageBottomCheckpoint(
@@ -2776,6 +2880,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
             postActionSamples: postActionSamples,
             postActionSamplingDurationMilliseconds: postActionWindow.durationMilliseconds
         )
+    }
+
+    private func defaultOuterPageScrollCoordinate(
+        _ outerScroll: XCUIElement
+    ) -> XCUICoordinate {
+        outerScroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
     }
 
     private func capturePageBottomSamples(
@@ -3565,6 +3675,14 @@ private struct HostedPageBottomSettledWindow {
     let durationMilliseconds: Int
 }
 
+private struct HostedPageBottomNestedScrollGuard {
+    let controlIdentifier: String
+    let targetCoordinate: XCUICoordinate
+    let targetPoint: HostedGeometryPoint
+    let verticalScrollBar: XCUIElement
+    let baselineValue: Double
+}
+
 private struct HostedPageScrollAction: Codable, Equatable {
     let controlIdentifier: String
     let deltaX: Double
@@ -3572,6 +3690,96 @@ private struct HostedPageScrollAction: Codable, Equatable {
     let attemptCount: Int
     let result: String
     let effectProven: Bool
+    let targetPoint: HostedGeometryPoint?
+    let nestedScrollControlIdentifier: String?
+    let nestedScrollValueBefore: Double?
+    let nestedScrollValueAfter: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case controlIdentifier
+        case deltaX
+        case deltaY
+        case attemptCount
+        case result
+        case effectProven
+        case targetPoint
+        case nestedScrollControlIdentifier
+        case nestedScrollValueBefore
+        case nestedScrollValueAfter
+    }
+
+    init(
+        controlIdentifier: String,
+        deltaX: Double,
+        deltaY: Double,
+        attemptCount: Int,
+        result: String,
+        effectProven: Bool,
+        targetPoint: HostedGeometryPoint? = nil,
+        nestedScrollControlIdentifier: String? = nil,
+        nestedScrollValueBefore: Double? = nil,
+        nestedScrollValueAfter: Double? = nil
+    ) {
+        self.controlIdentifier = controlIdentifier
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.attemptCount = attemptCount
+        self.result = result
+        self.effectProven = effectProven
+        self.targetPoint = targetPoint
+        self.nestedScrollControlIdentifier = nestedScrollControlIdentifier
+        self.nestedScrollValueBefore = nestedScrollValueBefore
+        self.nestedScrollValueAfter = nestedScrollValueAfter
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        controlIdentifier = try container.decode(String.self, forKey: .controlIdentifier)
+        deltaX = try container.decode(Double.self, forKey: .deltaX)
+        deltaY = try container.decode(Double.self, forKey: .deltaY)
+        attemptCount = try container.decode(Int.self, forKey: .attemptCount)
+        result = try container.decode(String.self, forKey: .result)
+        effectProven = try container.decode(Bool.self, forKey: .effectProven)
+        targetPoint = try container.decodeIfPresent(
+            HostedGeometryPoint.self,
+            forKey: .targetPoint
+        )
+        nestedScrollControlIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .nestedScrollControlIdentifier
+        )
+        nestedScrollValueBefore = try container.decodeIfPresent(
+            Double.self,
+            forKey: .nestedScrollValueBefore
+        )
+        nestedScrollValueAfter = try container.decodeIfPresent(
+            Double.self,
+            forKey: .nestedScrollValueAfter
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(controlIdentifier, forKey: .controlIdentifier)
+        try container.encode(deltaX, forKey: .deltaX)
+        try container.encode(deltaY, forKey: .deltaY)
+        try container.encode(attemptCount, forKey: .attemptCount)
+        try container.encode(result, forKey: .result)
+        try container.encode(effectProven, forKey: .effectProven)
+        try container.encodeIfPresent(targetPoint, forKey: .targetPoint)
+        try container.encodeIfPresent(
+            nestedScrollControlIdentifier,
+            forKey: .nestedScrollControlIdentifier
+        )
+        try container.encodeIfPresent(
+            nestedScrollValueBefore,
+            forKey: .nestedScrollValueBefore
+        )
+        try container.encodeIfPresent(
+            nestedScrollValueAfter,
+            forKey: .nestedScrollValueAfter
+        )
+    }
 }
 
 private struct HostedPageBottomCheckpoint: Codable, Equatable {
@@ -4087,6 +4295,12 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
 private enum HostedPageBottomTraceError: LocalizedError {
     case priorValidationFailure
     case missingElement(String)
+    case invalidNestedScrollGuardConfiguration
+    case nestedScrollValueChangedDuringOuterPreparation(
+        controlIdentifier: String,
+        before: Double,
+        after: Double?
+    )
     case invalidFrame(String)
     case missingSamples(String)
     case invalidCadence(String)
@@ -4103,6 +4317,16 @@ private enum HostedPageBottomTraceError: LocalizedError {
             "Hosted page-bottom trace withheld after an earlier validation failure"
         case .missingElement(let identifier):
             "Missing hosted page-bottom element: \(identifier)"
+        case .invalidNestedScrollGuardConfiguration:
+            "Hosted page-bottom nested-scroll guard requires both identifier and element type"
+        case let .nestedScrollValueChangedDuringOuterPreparation(
+            controlIdentifier,
+            before,
+            after
+        ):
+            "Hosted outer page preparation changed a nested native scrollbar: "
+                + "control=\(controlIdentifier) before=\(before) "
+                + "after=\(String(describing: after))"
         case .invalidFrame(let context):
             "Invalid hosted page-bottom frame: \(context)"
         case .missingSamples(let context):
