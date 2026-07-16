@@ -915,70 +915,76 @@ releaseTabbedAlternative()
     const maskedPageBottomCheckpointSource = maskSwiftCommentsAndLiterals(
       pageBottomCheckpointSource
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "nestedScrollControlIdentifier: String? = nil"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "nestedScrollControlElementType: XCUIElement.ElementType? = nil"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "requiresGuardedScrollAction: Bool = false"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "let nestedScrollGuard = try guardedOuterPageScrollTarget("
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "let outerPageScrollTarget = nestedScrollGuard?.targetCoordinate"
     );
     expect(maskedPageBottomCheckpointSource).toContain(
       "outerPageScrollTarget.scroll(byDeltaX: 0, deltaY: -10_000)"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "let nestedScrollValueAfter = try nestedScrollGuard.map"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "nestedScrollValueAfter == nestedScrollGuard.baselineValue"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "nestedScrollValueChangedDuringOuterPreparation("
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "requiredGuardedScrollActionWasNotIssued("
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "targetPoint: nestedScrollGuard?.targetPoint"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "nestedScrollControlIdentifier: nestedScrollGuard?.controlIdentifier"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "nestedScrollValueBefore: nestedScrollGuard?.baselineValue"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "nestedScrollValueAfter: nestedScrollValueAfter"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "guardOuterScrollFrame: nestedScrollGuard?.outerScrollFrame"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "guardNestedScrollFrame: nestedScrollGuard?.nestedScrollFrame"
     );
     const guardedOuterTargetSource = extractBalancedSwiftDeclaration(
       source,
       "private func guardedOuterPageScrollTarget("
     );
-    expect(guardedOuterTargetSource).toContain(
+    const maskedGuardedOuterTargetSource = maskSwiftCommentsAndLiterals(
+      guardedOuterTargetSource
+    );
+    expect(maskedGuardedOuterTargetSource).toContain(
       "let target = try outerRestagingCoordinate("
     );
-    expect(guardedOuterTargetSource).toContain(
+    expect(maskedGuardedOuterTargetSource).toContain(
       "candidate.descendants(matching: controlElementType)"
     );
-    expect(guardedOuterTargetSource).toContain(
+    expect(maskedGuardedOuterTargetSource).toContain(
       "normalizedScrollValue(verticalScrollBar.value)"
     );
     const pageScrollActionSource = extractBalancedSwiftDeclaration(
       source,
       "private struct HostedPageScrollAction:"
+    );
+    const maskedPageScrollActionSource = maskSwiftCommentsAndLiterals(
+      pageScrollActionSource
     );
     for (const field of [
       "targetPoint",
@@ -988,42 +994,48 @@ releaseTabbedAlternative()
       "guardOuterScrollFrame",
       "guardNestedScrollFrame",
     ]) {
-      expect(pageScrollActionSource).toContain(`let ${field}:`);
-      expect(pageScrollActionSource).toContain(
+      expect(maskedPageScrollActionSource).toContain(`let ${field}:`);
+      expect(maskedPageScrollActionSource).toContain(
         `forKey: .${field}`
       );
     }
-    expect(pageScrollActionSource.match(/encodeIfPresent\s*\(/g)).toHaveLength(6);
+    expect(maskedPageScrollActionSource.match(/encodeIfPresent\s*\(/g)).toHaveLength(6);
     const pageBottomSamplesSource = extractBalancedSwiftDeclaration(
       source,
       "private func capturePageBottomSamples("
     );
-    expect(pageBottomSamplesSource).toContain(
+    const maskedPageBottomSamplesSource = maskSwiftCommentsAndLiterals(
+      pageBottomSamplesSource
+    );
+    expect(maskedPageBottomSamplesSource).toContain(
       "samplingDeadlineMilliseconds: Int = hostedPageBottomSamplingDeadlineMilliseconds"
     );
-    expect(pageBottomSamplesSource).toContain(
+    expect(maskedPageBottomSamplesSource).toContain(
       "let samplingCompletedAt = ProcessInfo.processInfo.systemUptime"
     );
-    expect(pageBottomSamplesSource).toContain(
+    expect(maskedPageBottomSamplesSource).toContain(
       "samplingCompletedAt - start"
     );
-    expect(pageBottomSamplesSource).toContain(
+    expect(maskedPageBottomSamplesSource).toContain(
       "durationMilliseconds: durationMilliseconds"
     );
-    expect(pageBottomSamplesSource).toContain(
+    expect(maskedPageBottomSamplesSource).toContain(
       "samplingDeadlineMilliseconds: samplingDeadlineMilliseconds"
     );
     const pageBottomCadenceSource = extractBalancedSwiftDeclaration(
       source,
       "private func validatePageBottomCadence("
     );
-    expect(pageBottomCadenceSource).toContain(
+    const maskedPageBottomCadenceSource = maskSwiftCommentsAndLiterals(
+      pageBottomCadenceSource
+    );
+    expect(maskedPageBottomCadenceSource).toContain(
       "samplingDeadlineMilliseconds: Int"
     );
-    expect(pageBottomCadenceSource).toContain(
+    expect(maskedPageBottomCadenceSource).toContain(
       "durationMilliseconds <= samplingDeadlineMilliseconds"
     );
-    expect(pageBottomCadenceSource).not.toContain("finalElapsed");
+    expect(maskedPageBottomCadenceSource).not.toContain("finalElapsed");
     const helperSource = extractBalancedSwiftDeclaration(
       source,
       "private func captureNativeInnerScrollExhaustion("
@@ -1280,29 +1292,32 @@ releaseTabbedAlternative()
       source,
       "private func captureStableNativeInnerScrollSamples("
     );
-    expect(settledHelperSource).toContain(
+    const maskedSettledHelperSource = maskSwiftCommentsAndLiterals(
+      settledHelperSource
+    );
+    expect(maskedSettledHelperSource).toContain(
       "let maximumSampleAttempts = max("
     );
-    expect(settledHelperSource).toContain(
+    expect(maskedSettledHelperSource).toContain(
       "for _ in 0..<maximumSampleAttempts"
     );
-    expect(settledHelperSource).toContain(
+    expect(maskedSettledHelperSource).toContain(
       "if let baseline = samples.first,"
     );
-    expect(settledHelperSource).toContain("samples = [sample]");
-    expect(settledHelperSource).toContain("if samples.count == 3 { break }");
-    expect(settledHelperSource).toContain("observedSamples.append(sample)");
-    expect(settledHelperSource).toContain("observedSamples: observedSamples");
-    expect(settledHelperSource).toContain(">= minimumAcceptedSampleIntervalMilliseconds");
-    expect(settledHelperSource).toContain("<= samplingDeadlineMilliseconds");
-    expect(settledHelperSource).toContain("nativeInnerScrollSamplesMatch");
-    expect(settledHelperSource).toContain(
+    expect(maskedSettledHelperSource).toContain("samples = [sample]");
+    expect(maskedSettledHelperSource).toContain("if samples.count == 3 { break }");
+    expect(maskedSettledHelperSource).toContain("observedSamples.append(sample)");
+    expect(maskedSettledHelperSource).toContain("observedSamples: observedSamples");
+    expect(maskedSettledHelperSource).toContain(">= minimumAcceptedSampleIntervalMilliseconds");
+    expect(maskedSettledHelperSource).toContain("<= samplingDeadlineMilliseconds");
+    expect(maskedSettledHelperSource).toContain("nativeInnerScrollSamplesMatch");
+    expect(maskedSettledHelperSource).toContain(
       "let samplingCompletedAt = ProcessInfo.processInfo.systemUptime"
     );
-    expect(settledHelperSource).toContain(
+    expect(maskedSettledHelperSource).toContain(
       "samplingCompletedAt - actionStartedAt"
     );
-    expect(settledHelperSource).not.toContain(
+    expect(maskedSettledHelperSource).not.toContain(
       "last.elapsedMilliseconds - actionElapsedMilliseconds"
     );
     expect(maskedHelperSource).toContain("outerSentinelFrame");
@@ -1501,24 +1516,30 @@ releaseTabbedAlternative()
       source,
       "private func nativeVisibilityProvesTerminalToken("
     );
+    const maskedNativeVisibilityValidatorSource = maskSwiftCommentsAndLiterals(
+      nativeVisibilityValidatorSource
+    );
     expect(nativeVisibilityValidatorSource).toContain(
       'coordinateSpace == "appkit-text-view-local"'
     );
-    expect(nativeVisibilityValidatorSource).toContain(
+    expect(maskedNativeVisibilityValidatorSource).toContain(
       "terminalGlyphBounds.isFullyContained("
     );
     const rigidTranslationSource = extractBalancedSwiftDeclaration(
       source,
       "private func frameMatchesRigidVerticalTranslation("
     );
-    expect(rigidTranslationSource).toContain("abs(candidate.x - baseline.x) <= tolerance");
-    expect(rigidTranslationSource).toContain(
+    const maskedRigidTranslationSource = maskSwiftCommentsAndLiterals(
+      rigidTranslationSource
+    );
+    expect(maskedRigidTranslationSource).toContain("abs(candidate.x - baseline.x) <= tolerance");
+    expect(maskedRigidTranslationSource).toContain(
       "abs(candidate.y - (baseline.y + translationY)) <= tolerance"
     );
-    expect(rigidTranslationSource).toContain(
+    expect(maskedRigidTranslationSource).toContain(
       "abs(candidate.width - baseline.width) <= tolerance"
     );
-    expect(rigidTranslationSource).toContain(
+    expect(maskedRigidTranslationSource).toContain(
       "abs(candidate.height - baseline.height) <= tolerance"
     );
   });
