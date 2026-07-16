@@ -112,11 +112,11 @@ struct NeonDiffDesktopApp: App {
 #if DEBUG
         if evaluationContext?.textSizeMode == .accessibility3 {
             settingsScene
-                .dynamicTypeSize(.accessibility3)
                 .hostedSettingsEvaluationContent(
                     enabled: true,
                     status: settingsEvaluationStatus
                 )
+                .dynamicTypeSize(.accessibility3)
         } else if evaluationContext != nil {
             settingsScene
                 .hostedSettingsEvaluationContent(

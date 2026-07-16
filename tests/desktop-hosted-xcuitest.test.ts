@@ -735,6 +735,18 @@ private func target() {
     expect(app).toContain(".frame(width: 560, height: 700)");
     expect(app).toContain(".dynamicTypeSize(.accessibility3)");
     expect(app).toContain("hostedSettingsEvaluationContent");
+    const settingsSceneSource = extractBalancedSwiftDeclaration(
+      app,
+      "private var evaluationTextSizedSettingsScene"
+    );
+    const hostedWrapperIndex = settingsSceneSource.indexOf(
+      ".hostedSettingsEvaluationContent("
+    );
+    const accessibilityOverrideIndex = settingsSceneSource.indexOf(
+      ".dynamicTypeSize(.accessibility3)"
+    );
+    expect(hostedWrapperIndex).toBeGreaterThan(-1);
+    expect(accessibilityOverrideIndex).toBeGreaterThan(hostedWrapperIndex);
     expect(settings).toContain("HostedSettingsWindowConfigurator");
     expect(settings).toContain("HostedSettingsEvaluationStatus");
     expect(settings).toContain('"neondiff.evaluation.settings.quiescent"');
