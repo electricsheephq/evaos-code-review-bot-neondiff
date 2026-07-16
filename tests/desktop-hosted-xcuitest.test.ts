@@ -718,6 +718,7 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("elapsedMilliseconds:");
     expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
     expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds = 90");
+    expect(helperSource).toContain("samplingDeadlineMilliseconds = 5_000");
     expect(helperSource.match(/captureStableNativeInnerScrollSamples\s*\(/g)).toHaveLength(2);
     expect(helperSource).toContain("terminalSamples");
     expect(helperSource).toContain("repeatTerminalSamples");
@@ -732,6 +733,7 @@ releaseTabbedAlternative()
     );
     expect(settledHelperSource).toContain("for _ in 0..<3");
     expect(settledHelperSource).toContain(">= minimumAcceptedSampleIntervalMilliseconds");
+    expect(settledHelperSource).toContain("<= samplingDeadlineMilliseconds");
     expect(settledHelperSource).toContain("nativeInnerScrollSamplesMatch");
     expect(helperSource).toContain("outerSentinelFrame");
     expect(helperSource).not.toMatch(
