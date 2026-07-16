@@ -714,6 +714,10 @@ releaseTabbedAlternative()
     const source = readFileSync(uiTestPath, "utf8");
     const repos = readFileSync(reposPath, "utf8");
     const logs = readFileSync(logsPath, "utf8");
+    const textVisibility = readFileSync(
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/DesktopTextVisibility.swift",
+      "utf8"
+    );
 
     expect(existsSync(hostedInnerScrollFixturePath)).toBe(true);
     if (!existsSync(hostedInnerScrollFixturePath)) return;
@@ -762,6 +766,51 @@ releaseTabbedAlternative()
     ).not.toContain("hosted-inner-scroll-overflow");
     expect(repos).toContain('.accessibilityIdentifier("neondiff-repos-table")');
     expect(logs).toContain('.accessibilityIdentifier("neondiff-logs-text-editor")');
+    expect(logs).toContain('import AppKit');
+    expect(logs).toContain('LogsTextEditorVisibleRangeProbe(');
+    expect(logs).toContain('"neondiff-logs-visible-tail"');
+    expect(logs).toContain('HostedLogsVisibleRangeEvaluation.isActive');
+    expect(logs).toContain('!NSWorkspace.shared.isVoiceOverEnabled');
+    expect(logs).toContain('!NSWorkspace.shared.isSwitchControlEnabled');
+    expect(logs).toContain('static var isActive: Bool');
+    expect(logs).not.toContain('static let isActive: Bool');
+    expect(logs).toContain('observe(\\.isVoiceOverEnabled');
+    expect(logs).toContain('observe(\\.isSwitchControlEnabled');
+    expect(logs).toContain('deactivateForAssistiveTechnology()');
+    expect(logs).toContain('options: [.initial, .new]');
+    expect(logs).toContain('hosted-inner-scroll-overflow.json');
+    expect(logs).toContain('NSView.boundsDidChangeNotification');
+    expect(logs).toContain('DesktopTextVisibility.visibleRange(');
+    expect(logs).toContain('layoutManager.boundingRect(');
+    expect(logs).toContain('visibleTextContainerRect');
+    expect(logs).toContain('terminalGlyphBoundsAreFullyVisible');
+    expect(logs).toContain('HostedLogsTerminalVisibilityPayload(');
+    expect(logs).toContain('coordinateSpace: "appkit-text-view-local"');
+    expect(logs).toContain('"ndlv1:"');
+    expect(textVisibility).toContain('public enum DesktopTextVisibility');
+    expect(textVisibility).toMatch(/^import Foundation\n\n#if DEBUG\n/);
+    expect(textVisibility).toContain('tokenRange.location >= visibleRange.location');
+    expect(textVisibility).toContain('NSMaxRange(tokenRange) <= NSMaxRange(visibleRange)');
+    const resolveVisibleTextSource = extractBalancedSwiftDeclaration(
+      logs,
+      "func resolveAndObserveTextView("
+    );
+    expect(resolveVisibleTextSource).toContain(
+      "guard !NSWorkspace.shared.isVoiceOverEnabled"
+    );
+    expect(resolveVisibleTextSource).toContain(
+      "!NSWorkspace.shared.isSwitchControlEnabled"
+    );
+    const updateVisibleTextSource = extractBalancedSwiftDeclaration(
+      logs,
+      "private func updateVisibility("
+    );
+    expect(updateVisibleTextSource).toContain(
+      "guard !NSWorkspace.shared.isVoiceOverEnabled"
+    );
+    expect(updateVisibleTextSource).toContain(
+      "!NSWorkspace.shared.isSwitchControlEnabled"
+    );
 
     expect(source).toContain("testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage");
     expect(source).toContain('scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680"');
@@ -773,22 +822,49 @@ releaseTabbedAlternative()
     expect(source).toContain("HostedNativeInnerScrollTrace(");
     expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
     );
 
     const scenarioSource = extractBalancedSwiftDeclaration(
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 6");
+    expect(scenarioSource).toContain("schemaVersion: 8");
+    expect(scenarioSource).toContain(
+      "let reposGeometry = try captureCheckpoint("
+    );
+    expect(scenarioSource).toContain(
+      "let logsGeometry = try captureCheckpoint("
+    );
+    expect(scenarioSource).toContain(
+      "observedGeometryCheckpoints: [reposGeometry, logsGeometry]"
+    );
+    expect(scenarioSource).toContain(
+      "coordinateSpaces: HostedNativeInnerScrollCoordinateSpaces("
+    );
+    expect(scenarioSource).toContain('xcuiGeometry: "xcui-screen"');
+    expect(scenarioSource).toContain(
+      'observedWindowAndContent: "appkit-screen"'
+    );
+    expect(scenarioSource).toContain('observedRegions: "swiftui-global"');
+    expect(scenarioSource).toContain(
+      'terminalNativeVisibility: "per-payload-appkit-text-view-local"'
+    );
+    expect(scenarioSource).not.toContain('coordinateSpace: "xcui-screen"');
     expect(scenarioSource).toContain("controlElementType: .outline");
     expect(scenarioSource).toContain('controlElementTypeName: "outline"');
     expect(scenarioSource).toContain("terminalRowElementType: .outlineRow");
+    expect(scenarioSource).toContain('terminalRowElementTypeName: "outline-row"');
     expect(scenarioSource).toContain("outerPreparationCheckpoint: reposOuter");
+    expect(scenarioSource).toContain("terminalVisibilityMarkerIdentifier: nil");
     expect(scenarioSource).toContain("controlElementType: .textView");
     expect(scenarioSource).toContain('controlElementTypeName: "text-view"');
     expect(scenarioSource).toContain("terminalRowElementType: nil");
+    expect(scenarioSource).toContain("terminalRowElementTypeName: nil");
     expect(scenarioSource).toContain("outerPreparationCheckpoint: logsOuter");
+    expect(scenarioSource).toContain(
+      'terminalVisibilityMarkerIdentifier: "neondiff-logs-visible-tail"'
+    );
     expect(scenarioSource.match(/captureNativeInnerScrollExhaustion\s*\(/g)).toHaveLength(2);
     expect(scenarioSource.match(/capturePageBottomCheckpoint\s*\(/g)).toHaveLength(2);
     const reposOuterPosition = scenarioSource.indexOf(
@@ -899,8 +975,15 @@ releaseTabbedAlternative()
       "let restagingDeltaY = try outerRestagingDeltaY("
     );
     expect(helperSource).toContain(
+      "let target = try outerRestagingCoordinate("
+    );
+    expect(helperSource).toContain(
+      "target.coordinate.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))"
+    );
+    expect(helperSource).not.toContain(
       "outerScroll.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))"
     );
+    expect(helperSource).toContain("targetPoint: outerRestagingTargetPoint");
     expect(helperSource).toContain(
       "outerRestagingSamples.allSatisfy"
     );
@@ -976,9 +1059,32 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("terminalRowFrame");
     expect(helperSource).toContain("terminalRowFullyContained");
     expect(helperSource).toContain("terminalRowElementType");
+    expect(helperSource).toContain("terminalVisibilityMarkerQuery.count != 0");
+    expect(helperSource).toContain(
+      "terminalVisibilityMarkerPresentBeforeTerminal("
+    );
+    expect(helperSource).toContain("marker.waitForExistence(timeout: 2)");
+    expect(helperSource).toContain("terminalVisibilityMarkerFrame != nil");
+    expect(helperSource).toContain(
+      "terminalVisibilityMarkerFullyContained == true"
+    );
+    expect(helperSource).toContain("terminalNativeVisibility != nil");
+    expect(helperSource).toContain("nativeVisibilityProvesTerminalToken(");
     expect(helperSource).toContain("scrollContainerFrame");
     expect(helperSource).toContain('scrollContainerElementType: "scroll-view"');
     expect(helperSource).toContain("scrollContainerCount: scrollContainers.count");
+    expect(helperSource).toContain(
+      "terminalVisibilityMarkerIdentifier: terminalVisibilityMarkerIdentifier"
+    );
+    expect(helperSource).toContain(
+      "terminalVisibleText: terminalVisibleText"
+    );
+    expect(helperSource).toContain(
+      "terminalValueToken: terminalValueToken"
+    );
+    expect(helperSource).toContain(
+      "terminalRowElementType: terminalRowElementTypeName"
+    );
     expect(helperSource).toContain(
       "terminalWindowDurationMilliseconds: terminalWindow.durationMilliseconds"
     );
@@ -1005,6 +1111,35 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("outerSentinelFrame");
     expect(helperSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
+    );
+    const restagingCoordinateSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func outerRestagingCoordinate("
+    );
+    expect(restagingCoordinateSource).toContain(
+      "pointIsOutsideInner"
+    );
+    expect(restagingCoordinateSource).toContain(
+      "outerScroll.coordinate(withNormalizedOffset: normalizedOffset)"
+    );
+    expect(restagingCoordinateSource).toContain(
+      "throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate"
+    );
+    const nativeVisibilityParserSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func decodeTerminalNativeVisibility("
+    );
+    expect(nativeVisibilityParserSource).toContain('label.hasPrefix("ndlv1:")');
+    expect(nativeVisibilityParserSource).toContain("Data(base64Encoded:");
+    const nativeVisibilityValidatorSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func nativeVisibilityProvesTerminalToken("
+    );
+    expect(nativeVisibilityValidatorSource).toContain(
+      'coordinateSpace == "appkit-text-view-local"'
+    );
+    expect(nativeVisibilityValidatorSource).toContain(
+      "terminalGlyphBounds.isFullyContained("
     );
     const rigidTranslationSource = extractBalancedSwiftDeclaration(
       source,

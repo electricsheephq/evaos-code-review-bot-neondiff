@@ -334,7 +334,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
 
         let reposMarker = "neondiff.evaluation.surface.repos.0.quiescent"
-        _ = try captureCheckpoint(
+        let reposGeometry = try captureCheckpoint(
             app: app,
             section: "repos",
             generation: 0,
@@ -356,11 +356,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
             controlElementType: .outline,
             controlElementTypeName: "outline",
             terminalRowElementType: .outlineRow,
+            terminalRowElementTypeName: "outline-row",
             outerScrollIdentifier: "neondiff-repos-outer-scroll",
             outerSentinelIdentifier: "neondiff-repos-page-bottom",
             outerPreparationCheckpoint: reposOuter,
             terminalVisibleText: "synthetic-org/repo-040",
-            terminalValueToken: nil
+            terminalValueToken: nil,
+            terminalVisibilityMarkerIdentifier: nil
         )
 
         let logsNavigation = try clickNavigation(
@@ -371,7 +373,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             identifier: "neondiff-sidebar-section-logs"
         )
         let logsMarker = "neondiff.evaluation.surface.logs.1.quiescent"
-        _ = try captureCheckpoint(
+        let logsGeometry = try captureCheckpoint(
             app: app,
             section: "logs",
             generation: 1,
@@ -393,11 +395,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
             controlElementType: .textView,
             controlElementTypeName: "text-view",
             terminalRowElementType: nil,
+            terminalRowElementTypeName: nil,
             outerScrollIdentifier: "neondiff-logs-outer-scroll",
             outerSentinelIdentifier: "neondiff-logs-page-bottom",
             outerPreparationCheckpoint: logsOuter,
             terminalVisibleText: nil,
-            terminalValueToken: "HOSTED_INNER_SCROLL_SAFE_TAIL_070"
+            terminalValueToken: "HOSTED_INNER_SCROLL_SAFE_TAIL_070",
+            terminalVisibilityMarkerIdentifier: "neondiff-logs-visible-tail"
         )
 
         guard (testRun?.failureCount ?? 0) == 0 else {
@@ -405,16 +409,22 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 6,
+                schemaVersion: 8,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
-                coordinateSpace: "xcui-screen",
+                coordinateSpaces: HostedNativeInnerScrollCoordinateSpaces(
+                    xcuiGeometry: "xcui-screen",
+                    observedWindowAndContent: "appkit-screen",
+                    observedRegions: "swiftui-global",
+                    terminalNativeVisibility: "per-payload-appkit-text-view-local"
+                ),
                 tolerancePoints: 1,
+                observedGeometryCheckpoints: [reposGeometry, logsGeometry],
                 innerScrollCheckpoints: [reposInner, logsInner],
                 navigationActions: [logsNavigation],
                 outerPageBottomCheckpoints: [reposOuter, logsOuter],
-                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
+                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
             )
         )
     }
@@ -1715,11 +1725,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
         controlElementType: XCUIElement.ElementType,
         controlElementTypeName: String,
         terminalRowElementType: XCUIElement.ElementType?,
+        terminalRowElementTypeName: String?,
         outerScrollIdentifier: String,
         outerSentinelIdentifier: String,
         outerPreparationCheckpoint: HostedPageBottomCheckpoint,
         terminalVisibleText: String?,
-        terminalValueToken: String?
+        terminalValueToken: String?,
+        terminalVisibilityMarkerIdentifier: String?
     ) throws -> HostedNativeInnerScrollCheckpoint {
         let targetSampleIntervalMilliseconds = 100
         let minimumAcceptedSampleIntervalMilliseconds = 90
@@ -1744,6 +1756,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         guard outerSentinel.waitForExistence(timeout: 2) else {
             throw HostedNativeInnerScrollTraceError.missingElement(outerSentinelIdentifier)
+        }
+        let terminalVisibilityMarkerQuery = terminalVisibilityMarkerIdentifier.map {
+            app.descendants(matching: .any).matching(identifier: $0)
         }
 
         let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
@@ -1793,6 +1808,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             captureTerminalContent: false,
             terminalVisibleText: terminalVisibleText,
             terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
             terminalRowElementType: terminalRowElementType
         )
         var outerPreparationFailures: [String] = []
@@ -1861,8 +1877,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let restagingActionElapsedMilliseconds = Int(
             ((restagingActionStartedAt - samplingStart) * 1_000).rounded()
         )
+        let outerRestagingTargetPoint: HostedGeometryPoint?
         if restagingDeltaY != 0 {
-            outerScroll.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))
+            let target = try outerRestagingCoordinate(
+                outerScroll: outerScroll,
+                outerScrollFrame: outerPreparationSample.outerScrollFrame,
+                scrollContainerFrame: outerPreparationSample.scrollContainerFrame,
+                tolerance: 1
+            )
+            outerRestagingTargetPoint = target.point
+            target.coordinate.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))
+        } else {
+            outerRestagingTargetPoint = nil
         }
         let restagingWindow = try captureStableNativeInnerScrollSamples(
             controlIdentifier: controlIdentifier,
@@ -1880,6 +1906,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             captureTerminalContent: false,
             terminalVisibleText: terminalVisibleText,
             terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
             terminalRowElementType: terminalRowElementType
         )
         let outerRestagingSamples = restagingWindow.samples
@@ -1956,6 +1983,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 elapsedMilliseconds: restagingActionElapsedMilliseconds,
                 deltaX: 0,
                 deltaY: restagingDeltaY,
+                targetPoint: outerRestagingTargetPoint,
                 attemptCount: 1,
                 effectObserved: restagingEffectObserved,
                 effectProven: true,
@@ -1969,12 +1997,29 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 value: preTerminalValue
             )
         }
+        if let terminalVisibilityMarkerQuery,
+           terminalVisibilityMarkerQuery.count != 0 {
+            throw HostedNativeInnerScrollTraceError.terminalVisibilityMarkerPresentBeforeTerminal(
+                terminalVisibilityMarkerIdentifier ?? "unknown"
+            )
+        }
 
         let firstActionStartedAt = ProcessInfo.processInfo.systemUptime
         let firstActionElapsedMilliseconds = Int(
             ((firstActionStartedAt - samplingStart) * 1_000).rounded()
         )
         scrollContainer.scroll(byDeltaX: 0, deltaY: -10_000)
+        if let terminalVisibilityMarkerQuery,
+           let terminalVisibilityMarkerIdentifier {
+            let marker = terminalVisibilityMarkerQuery.element(boundBy: 0)
+            guard marker.waitForExistence(timeout: 2),
+                  terminalVisibilityMarkerQuery.count == 1 else {
+                throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                    identifier: terminalVisibilityMarkerIdentifier,
+                    count: terminalVisibilityMarkerQuery.count
+                )
+            }
+        }
         let terminalWindow = try captureStableNativeInnerScrollSamples(
             controlIdentifier: controlIdentifier,
             samplingStartedAt: samplingStart,
@@ -1991,6 +2036,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             captureTerminalContent: true,
             terminalVisibleText: terminalVisibleText,
             terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
             terminalRowElementType: terminalRowElementType
         )
         let terminalSamples = terminalWindow.samples
@@ -2028,6 +2074,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             captureTerminalContent: true,
             terminalVisibleText: terminalVisibleText,
             terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
             terminalRowElementType: terminalRowElementType
         )
         let repeatTerminalSamples = repeatTerminalWindow.samples
@@ -2079,6 +2126,26 @@ final class NeonDiffDesktopUITests: XCTestCase {
            }) {
             throw HostedNativeInnerScrollTraceError.missingTerminalContent(section)
         }
+        if terminalVisibilityMarkerIdentifier != nil,
+           let terminalValueToken {
+            let terminalControlValue = String(describing: control.value ?? "")
+            guard postActionSamples.allSatisfy({ sample in
+                sample.terminalVisibilityMarkerFrame != nil
+                    && sample.terminalVisibilityMarkerFullyContained == true
+                    && sample.terminalNativeVisibility != nil
+                    && sample.terminalNativeVisibility.map {
+                        nativeVisibilityProvesTerminalToken(
+                            $0,
+                            controlValue: terminalControlValue,
+                            expectedToken: terminalValueToken
+                        )
+                    } == true
+            }) else {
+                throw HostedNativeInnerScrollTraceError.missingTerminalContent(section)
+            }
+        } else if terminalVisibilityMarkerIdentifier != nil {
+            throw HostedNativeInnerScrollTraceError.missingTerminalContent(section)
+        }
 
         return HostedNativeInnerScrollCheckpoint(
             section: section,
@@ -2087,6 +2154,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
             scrollContainerElementType: "scroll-view",
             scrollContainerCount: scrollContainers.count,
             verticalScrollBarCount: verticalScrollBars.count,
+            terminalVisibilityMarkerIdentifier: terminalVisibilityMarkerIdentifier,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalRowElementType: terminalRowElementTypeName,
             outerPreparationCheckpoint: outerPreparationCheckpoint,
             outerPreparationResult: "verified-page-bottom-then-inner-viewport-restaged-before-isolation-baseline",
             outerPreparationSample: outerPreparationSample,
@@ -2109,6 +2180,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 elapsedMilliseconds: firstActionElapsedMilliseconds,
                 deltaX: 0,
                 deltaY: -10_000,
+                targetPoint: nil,
                 attemptCount: 1,
                 effectObserved: true,
                 effectProven: true,
@@ -2118,6 +2190,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 elapsedMilliseconds: repeatActionElapsedMilliseconds,
                 deltaX: 0,
                 deltaY: -10_000,
+                targetPoint: nil,
                 attemptCount: 1,
                 effectObserved: false,
                 effectProven: true,
@@ -2144,6 +2217,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         captureTerminalContent: Bool,
         terminalVisibleText: String?,
         terminalValueToken: String?,
+        terminalVisibilityMarkerQuery: XCUIElementQuery?,
         terminalRowElementType: XCUIElement.ElementType?
     ) throws -> HostedNativeInnerScrollSettledWindow {
         let targetInterval = Double(targetSampleIntervalMilliseconds) / 1_000
@@ -2171,6 +2245,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                     captureTerminalContent: captureTerminalContent,
                     terminalVisibleText: terminalVisibleText,
                     terminalValueToken: terminalValueToken,
+                    terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
                     terminalRowElementType: terminalRowElementType
                 )
             )
@@ -2240,6 +2315,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
             && lhs.terminalRowFullyContained == rhs.terminalRowFullyContained
             && lhs.controlValueContainsTerminalToken
                 == rhs.controlValueContainsTerminalToken
+            && optionalNativeInnerFramesMatch(
+                lhs.terminalVisibilityMarkerFrame,
+                rhs.terminalVisibilityMarkerFrame
+            )
+            && lhs.terminalVisibilityMarkerFullyContained
+                == rhs.terminalVisibilityMarkerFullyContained
+            && lhs.terminalNativeVisibility == rhs.terminalNativeVisibility
     }
 
     private func optionalNativeInnerFramesMatch(
@@ -2266,6 +2348,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         captureTerminalContent: Bool,
         terminalVisibleText: String?,
         terminalValueToken: String?,
+        terminalVisibilityMarkerQuery: XCUIElementQuery?,
         terminalRowElementType: XCUIElement.ElementType?
     ) throws -> HostedNativeInnerScrollSample {
         let controlFrame = HostedGeometryFrame(control.frame)
@@ -2326,11 +2409,28 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 )
             }
         }
+        let controlValue = String(describing: control.value ?? "")
         let controlValueContainsTerminalToken = captureTerminalContent
             ? terminalValueToken.map { token in
-                String(describing: control.value ?? "").contains(token)
+                controlValue.contains(token)
             }
             : nil
+        var terminalVisibilityMarkerFrame: HostedGeometryFrame?
+        var terminalNativeVisibility: HostedTerminalNativeVisibility?
+        if captureTerminalContent, let terminalVisibilityMarkerQuery {
+            guard terminalVisibilityMarkerQuery.count == 1 else {
+                throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                    identifier: "terminal-visibility-marker",
+                    count: terminalVisibilityMarkerQuery.count
+                )
+            }
+            let marker = terminalVisibilityMarkerQuery.element(boundBy: 0)
+            terminalVisibilityMarkerFrame = HostedGeometryFrame(marker.frame)
+            guard terminalVisibilityMarkerFrame?.isFiniteAndNonempty == true else {
+                throw HostedNativeInnerScrollTraceError.invalidFrame
+            }
+            terminalNativeVisibility = try decodeTerminalNativeVisibility(marker.label)
+        }
         return HostedNativeInnerScrollSample(
             elapsedMilliseconds: elapsedMilliseconds,
             normalizedScrollValue: try normalizedScrollValue(verticalScrollBar.value),
@@ -2352,8 +2452,70 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalRowFullyContained: terminalRowFrame.map {
                 $0.isFullyContained(in: scrollContainerFrame, tolerance: 1)
             },
-            controlValueContainsTerminalToken: controlValueContainsTerminalToken
+            controlValueContainsTerminalToken: controlValueContainsTerminalToken,
+            terminalVisibilityMarkerFrame: terminalVisibilityMarkerFrame,
+            terminalVisibilityMarkerFullyContained: terminalVisibilityMarkerFrame.map {
+                $0.isFullyContained(in: scrollContainerFrame, tolerance: 1)
+            },
+            terminalNativeVisibility: terminalNativeVisibility
         )
+    }
+
+    private func decodeTerminalNativeVisibility(
+        _ label: String
+    ) throws -> HostedTerminalNativeVisibility {
+        guard label.hasPrefix("ndlv1:") else {
+            throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+        }
+        let encoded = String(label.dropFirst("ndlv1:".count))
+        guard let data = Data(base64Encoded: encoded),
+              let payload = try? JSONDecoder().decode(
+                  HostedTerminalNativeVisibility.self,
+                  from: data
+              ),
+              payload.schemaVersion == 1,
+              payload.textUTF16Length >= 0,
+              payload.terminalTokenRange.isValid,
+              payload.visibleCharacterRange.isValid,
+              payload.visibleRect.isFiniteAndNonempty,
+              payload.terminalGlyphBounds.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+        }
+        return payload
+    }
+
+    private func nativeVisibilityProvesTerminalToken(
+        _ payload: HostedTerminalNativeVisibility,
+        controlValue: String,
+        expectedToken: String
+    ) -> Bool {
+        let utf16Value = controlValue as NSString
+        let expectedRange = utf16Value.range(of: expectedToken)
+        guard payload.coordinateSpace == "appkit-text-view-local",
+              payload.terminalToken == expectedToken,
+              payload.textUTF16Length == utf16Value.length,
+              expectedRange.location != NSNotFound,
+              payload.terminalTokenRange == HostedTextRange(expectedRange),
+              payload.visibleCharacterRange.location
+                  + payload.visibleCharacterRange.length <= utf16Value.length,
+              payload.visibleCharacterRange.fullyContains(
+                  payload.terminalTokenRange
+              ),
+              payload.terminalTokenFullyVisible,
+              payload.terminalGlyphBounds.isFullyContained(
+                  in: payload.visibleRect,
+                  tolerance: 0
+              ) else {
+            return false
+        }
+        let remainingLocation = NSMaxRange(expectedRange)
+        guard remainingLocation <= utf16Value.length else { return false }
+        let remainingRange = NSRange(
+            location: remainingLocation,
+            length: utf16Value.length - remainingLocation
+        )
+        return utf16Value.range(of: expectedToken, options: [], range: remainingRange).location
+            == NSNotFound
     }
 
     private func normalizedScrollValue(_ rawValue: Any?) throws -> Double {
@@ -2400,6 +2562,65 @@ final class NeonDiffDesktopUITests: XCTestCase {
             return maximumContainedY - scrollContainerMaximumY
         }
         return 0
+    }
+
+    private func outerRestagingCoordinate(
+        outerScroll: XCUIElement,
+        outerScrollFrame: HostedGeometryFrame,
+        scrollContainerFrame: HostedGeometryFrame,
+        tolerance: Double
+    ) throws -> (coordinate: XCUICoordinate, point: HostedGeometryPoint) {
+        let corridorInset = max(4, tolerance + 1)
+        let minimumOuterX = outerScrollFrame.x + corridorInset
+        let maximumOuterX = outerScrollFrame.maxX - corridorInset
+        let leftCorridorMaximumX = scrollContainerFrame.x - corridorInset
+        let rightCorridorMinimumX = scrollContainerFrame.maxX + corridorInset
+
+        let targetX: Double
+        if leftCorridorMaximumX > minimumOuterX {
+            targetX = (minimumOuterX + leftCorridorMaximumX) / 2
+        } else if maximumOuterX > rightCorridorMinimumX {
+            targetX = (rightCorridorMinimumX + maximumOuterX) / 2
+        } else {
+            throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
+        }
+
+        let targetY = min(
+            max(
+                scrollContainerFrame.y + (scrollContainerFrame.height / 2),
+                outerScrollFrame.y + corridorInset
+            ),
+            outerScrollFrame.maxY - corridorInset
+        )
+        let point = HostedGeometryPoint(x: targetX, y: targetY)
+        let pointIsInsideOuter = targetX >= outerScrollFrame.x + tolerance
+            && targetX <= outerScrollFrame.maxX - tolerance
+            && targetY >= outerScrollFrame.y + tolerance
+            && targetY <= outerScrollFrame.maxY - tolerance
+        let pointIsOutsideInner = targetX < scrollContainerFrame.x - tolerance
+            || targetX > scrollContainerFrame.maxX + tolerance
+            || targetY < scrollContainerFrame.y - tolerance
+            || targetY > scrollContainerFrame.maxY + tolerance
+        guard pointIsInsideOuter, pointIsOutsideInner else {
+            throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
+        }
+
+        let normalizedOffset = CGVector(
+            dx: (targetX - outerScrollFrame.x) / outerScrollFrame.width,
+            dy: (targetY - outerScrollFrame.y) / outerScrollFrame.height
+        )
+        guard normalizedOffset.dx.isFinite,
+              normalizedOffset.dy.isFinite,
+              normalizedOffset.dx > 0,
+              normalizedOffset.dx < 1,
+              normalizedOffset.dy > 0,
+              normalizedOffset.dy < 1 else {
+            throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
+        }
+        return (
+            outerScroll.coordinate(withNormalizedOffset: normalizedOffset),
+            point
+        )
     }
 
     private func frameMatchesRigidVerticalTranslation(
@@ -3127,6 +3348,43 @@ private struct HostedGeometryFrame: Codable, Equatable {
     var area: Double { width * height }
 }
 
+private struct HostedGeometryPoint: Codable, Equatable {
+    let x: Double
+    let y: Double
+}
+
+private struct HostedTextRange: Codable, Equatable {
+    let location: Int
+    let length: Int
+
+    init(_ range: NSRange) {
+        location = range.location
+        length = range.length
+    }
+
+    var isValid: Bool {
+        location >= 0 && length >= 0 && location <= Int.max - length
+    }
+
+    func fullyContains(_ other: Self) -> Bool {
+        isValid && other.isValid
+            && other.location >= location
+            && other.location + other.length <= location + length
+    }
+}
+
+private struct HostedTerminalNativeVisibility: Codable, Equatable {
+    let schemaVersion: Int
+    let coordinateSpace: String
+    let terminalToken: String
+    let textUTF16Length: Int
+    let terminalTokenRange: HostedTextRange
+    let visibleCharacterRange: HostedTextRange
+    let visibleRect: HostedGeometryFrame
+    let terminalGlyphBounds: HostedGeometryFrame
+    let terminalTokenFullyVisible: Bool
+}
+
 private struct HostedGeometryRegionFrame: Codable, Equatable {
     static let requiredIdentifiers = [
         "neondiff-chrome",
@@ -3288,6 +3546,7 @@ private struct HostedNativeInnerScrollAction: Codable, Equatable {
     let elapsedMilliseconds: Int
     let deltaX: Double
     let deltaY: Double
+    let targetPoint: HostedGeometryPoint?
     let attemptCount: Int
     let effectObserved: Bool
     let effectProven: Bool
@@ -3308,6 +3567,9 @@ private struct HostedNativeInnerScrollSample: Codable, Equatable {
     let terminalElementFullyContainedInRow: Bool?
     let terminalRowFullyContained: Bool?
     let controlValueContainsTerminalToken: Bool?
+    let terminalVisibilityMarkerFrame: HostedGeometryFrame?
+    let terminalVisibilityMarkerFullyContained: Bool?
+    let terminalNativeVisibility: HostedTerminalNativeVisibility?
 }
 
 private struct HostedNativeInnerScrollSettledWindow {
@@ -3322,6 +3584,10 @@ private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let scrollContainerElementType: String
     let scrollContainerCount: Int
     let verticalScrollBarCount: Int
+    let terminalVisibilityMarkerIdentifier: String?
+    let terminalVisibleText: String?
+    let terminalValueToken: String?
+    let terminalRowElementType: String?
     let outerPreparationCheckpoint: HostedPageBottomCheckpoint
     let outerPreparationResult: String
     let outerPreparationSample: HostedNativeInnerScrollSample
@@ -3350,12 +3616,20 @@ private struct HostedNativeInnerScrollTrace: Codable {
     let scenario: String
     let fixtureId: String
     let requestedContentSize: HostedContentSize
-    let coordinateSpace: String
+    let coordinateSpaces: HostedNativeInnerScrollCoordinateSpaces
     let tolerancePoints: Double
+    let observedGeometryCheckpoints: [HostedGeometryCheckpoint]
     let innerScrollCheckpoints: [HostedNativeInnerScrollCheckpoint]
     let navigationActions: [HostedNavigationAction]
     let outerPageBottomCheckpoints: [HostedPageBottomCheckpoint]
     let proofBoundary: String
+}
+
+private struct HostedNativeInnerScrollCoordinateSpaces: Codable {
+    let xcuiGeometry: String
+    let observedWindowAndContent: String
+    let observedRegions: String
+    let terminalNativeVisibility: String
 }
 
 private struct HostedCanonicalSizeScenario: Codable {
@@ -3655,10 +3929,13 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
     case invalidSettledWindow(String)
     case invalidFrame
     case innerViewportExceedsOuterViewport
+    case noSafeOuterRestagingCoordinate
     case outerPreparationNotEstablished(section: String, failedChecks: [String])
     case outerRestagingNotEstablished(section: String, failedChecks: [String])
     case outerPageMoved(String)
     case missingTerminalContent(String)
+    case terminalVisibilityMarkerPresentBeforeTerminal(String)
+    case invalidTerminalNativeVisibility
 
     var errorDescription: String? {
         switch self {
@@ -3722,6 +3999,8 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
             "Hosted native inner-scroll geometry contains an invalid frame"
         case .innerViewportExceedsOuterViewport:
             "Hosted native inner-scroll viewport cannot fit inside its outer page viewport"
+        case .noSafeOuterRestagingCoordinate:
+            "Hosted native inner-scroll trace could not bind an outer-only restaging coordinate"
         case .outerPreparationNotEstablished(let section, let failedChecks):
             "Hosted native inner-scroll outer page was not prepared at page bottom: "
                 + "section=\(section) failedChecks=\(failedChecks.joined(separator: ","))"
@@ -3732,6 +4011,11 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
             "Hosted outer page moved while scrolling its native inner control: \(section)"
         case .missingTerminalContent(let section):
             "Hosted native inner control did not expose its terminal content: \(section)"
+        case .terminalVisibilityMarkerPresentBeforeTerminal(let identifier):
+            "Hosted native terminal visibility marker existed before terminal scroll: "
+                + "identifier=\(identifier)"
+        case .invalidTerminalNativeVisibility:
+            "Hosted native terminal visibility payload was missing or invalid"
         }
     }
 }
