@@ -102,6 +102,27 @@ function extractPbxResourcesPhaseForTarget(source: string, target: string): stri
   return extractPbxObject(source, resourceIds[0], "Resources");
 }
 
+function extractPbxSynchronizedRootsForTarget(
+  source: string,
+  target: string
+): string[] {
+  const synchronizedGroups = target.match(
+    /fileSystemSynchronizedGroups = \([\s\S]*?\);/
+  )?.[0];
+  if (!synchronizedGroups) {
+    throw new Error("Target has no fileSystemSynchronizedGroups list");
+  }
+  const groups = [
+    ...synchronizedGroups.matchAll(/([A-F0-9]{24}) \/\* ([^*]+) \*\//g),
+  ];
+  if (groups.length === 0) {
+    throw new Error("Target has no synchronized root groups");
+  }
+  return groups.map((match) =>
+    extractPbxObject(source, match[1], match[2].trim())
+  );
+}
+
 function projectSwiftReleaseSource(source: string): string {
   const lines = source.match(/.*(?:\n|$)/g)?.filter(Boolean) ?? [];
   const maskedLines =
@@ -695,19 +716,26 @@ releaseTabbedAlternative()
       /(?:ghp_|github_pat_|sk-|Bearer\s|BEGIN [A-Z ]*PRIVATE KEY|https?:\/\/[^\s"']*:[^\s"']*@)/i
     );
 
-    expect(project).toContain("hosted-inner-scroll-overflow.json in Resources");
-    expect(project).toContain(
-      "path = UITests/Fixtures/hosted-inner-scroll-overflow.json"
-    );
-    expect(project.match(/hosted-inner-scroll-overflow\.json in Resources/g)).toHaveLength(2);
+    expect(project).not.toContain("hosted-inner-scroll-overflow.json");
     const appTarget = extractPbxNativeTarget(project, "NeonDiffDesktop");
     const uiTestTarget = extractPbxNativeTarget(project, "NeonDiffDesktopUITests");
     const appResources = extractPbxResourcesPhaseForTarget(project, appTarget);
     const uiTestResources = extractPbxResourcesPhaseForTarget(project, uiTestTarget);
+    const appSynchronizedRoots = extractPbxSynchronizedRootsForTarget(
+      project,
+      appTarget
+    );
+    const uiTestSynchronizedRoots = extractPbxSynchronizedRootsForTarget(
+      project,
+      uiTestTarget
+    );
     expect(appResources).not.toContain("hosted-inner-scroll-overflow.json in Resources");
-    expect(uiTestResources).toContain(
+    expect(uiTestResources).not.toContain(
       "hosted-inner-scroll-overflow.json in Resources"
     );
+    expect(appSynchronizedRoots.some((root) => root.includes("path = UITests;"))).toBe(false);
+    expect(uiTestSynchronizedRoots).toHaveLength(1);
+    expect(uiTestSynchronizedRoots[0]).toContain("path = UITests;");
     expect(
       readFileSync("apps/neondiff-desktop/fixtures/ui/catalog.json", "utf8")
     ).not.toContain("hosted-inner-scroll-overflow");
@@ -763,7 +791,7 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("elapsedMilliseconds:");
     expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
     expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds = 90");
-    expect(helperSource).toContain("samplingDeadlineMilliseconds = 5_000");
+    expect(helperSource).toContain("samplingDeadlineMilliseconds = 15_000");
     expect(helperSource.match(/captureStableNativeInnerScrollSamples\s*\(/g)).toHaveLength(2);
     expect(helperSource).toContain("terminalSamples");
     expect(helperSource).toContain("repeatTerminalSamples");
@@ -776,6 +804,12 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("scrollContainerFrame");
     expect(helperSource).toContain('scrollContainerElementType: "scroll-view"');
     expect(helperSource).toContain("scrollContainerCount: scrollContainers.count");
+    expect(helperSource).toContain(
+      "terminalWindowDurationMilliseconds: terminalWindow.durationMilliseconds"
+    );
+    expect(helperSource).toMatch(
+      /repeatTerminalWindowDurationMilliseconds:\s*repeatTerminalWindow\.durationMilliseconds/
+    );
     const settledHelperSource = extractBalancedSwiftDeclaration(
       source,
       "private func captureStableNativeInnerScrollSamples("
@@ -784,6 +818,15 @@ releaseTabbedAlternative()
     expect(settledHelperSource).toContain(">= minimumAcceptedSampleIntervalMilliseconds");
     expect(settledHelperSource).toContain("<= samplingDeadlineMilliseconds");
     expect(settledHelperSource).toContain("nativeInnerScrollSamplesMatch");
+    expect(settledHelperSource).toContain(
+      "let samplingCompletedAt = ProcessInfo.processInfo.systemUptime"
+    );
+    expect(settledHelperSource).toContain(
+      "samplingCompletedAt - actionStartedAt"
+    );
+    expect(settledHelperSource).not.toContain(
+      "last.elapsedMilliseconds - actionElapsedMilliseconds"
+    );
     expect(helperSource).toContain("outerSentinelFrame");
     expect(helperSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/

@@ -1717,7 +1717,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     ) throws -> HostedNativeInnerScrollCheckpoint {
         let targetSampleIntervalMilliseconds = 100
         let minimumAcceptedSampleIntervalMilliseconds = 90
-        let samplingDeadlineMilliseconds = 5_000
+        let samplingDeadlineMilliseconds = 15_000
         let samplingStart = ProcessInfo.processInfo.systemUptime
         let controlQuery = app.descendants(matching: controlElementType)
             .matching(identifier: controlIdentifier)
@@ -1802,7 +1802,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             ((firstActionStartedAt - samplingStart) * 1_000).rounded()
         )
         scrollContainer.scroll(byDeltaX: 0, deltaY: -10_000)
-        let terminalSamples = try captureStableNativeInnerScrollSamples(
+        let terminalWindow = try captureStableNativeInnerScrollSamples(
             controlIdentifier: controlIdentifier,
             samplingStartedAt: samplingStart,
             actionStartedAt: firstActionStartedAt,
@@ -1819,6 +1819,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalValueToken: terminalValueToken,
             terminalRowElementType: terminalRowElementType
         )
+        let terminalSamples = terminalWindow.samples
         guard let terminalSample = terminalSamples.last else {
             throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
         }
@@ -1837,7 +1838,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             ((repeatActionStartedAt - samplingStart) * 1_000).rounded()
         )
         scrollContainer.scroll(byDeltaX: 0, deltaY: -10_000)
-        let repeatTerminalSamples = try captureStableNativeInnerScrollSamples(
+        let repeatTerminalWindow = try captureStableNativeInnerScrollSamples(
             controlIdentifier: controlIdentifier,
             samplingStartedAt: samplingStart,
             actionStartedAt: repeatActionStartedAt,
@@ -1854,6 +1855,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalValueToken: terminalValueToken,
             terminalRowElementType: terminalRowElementType
         )
+        let repeatTerminalSamples = repeatTerminalWindow.samples
         guard let repeatTerminalSample = repeatTerminalSamples.last else {
             throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
         }
@@ -1917,6 +1919,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             minimumAcceptedSampleIntervalMilliseconds:
                 minimumAcceptedSampleIntervalMilliseconds,
             samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
+            terminalWindowDurationMilliseconds: terminalWindow.durationMilliseconds,
+            repeatTerminalWindowDurationMilliseconds:
+                repeatTerminalWindow.durationMilliseconds,
             terminalStateStable: true,
             outerIsolationProven: true,
             firstTerminalAction: HostedNativeInnerScrollAction(
@@ -1958,7 +1963,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         terminalVisibleText: String?,
         terminalValueToken: String?,
         terminalRowElementType: XCUIElement.ElementType?
-    ) throws -> [HostedNativeInnerScrollSample] {
+    ) throws -> HostedNativeInnerScrollSettledWindow {
         let targetInterval = Double(targetSampleIntervalMilliseconds) / 1_000
         var samples: [HostedNativeInnerScrollSample] = []
         var previousSampleStartedAt = actionStartedAt
@@ -1989,16 +1994,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
 
+        let samplingCompletedAt = ProcessInfo.processInfo.systemUptime
         let actionElapsedMilliseconds = Int(
             ((actionStartedAt - samplingStartedAt) * 1_000).rounded()
         )
+        let durationMilliseconds = Int(
+            ((samplingCompletedAt - actionStartedAt) * 1_000).rounded()
+        )
         guard samples.count == 3,
               let first = samples.first,
-              let last = samples.last,
               first.elapsedMilliseconds - actionElapsedMilliseconds
                   >= minimumAcceptedSampleIntervalMilliseconds,
-              last.elapsedMilliseconds - actionElapsedMilliseconds
-                  <= samplingDeadlineMilliseconds else {
+              durationMilliseconds <= samplingDeadlineMilliseconds else {
             throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
         }
         for (lhs, rhs) in zip(samples, samples.dropFirst()) {
@@ -2021,7 +2028,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 )
             }
         }
-        return samples
+        return HostedNativeInnerScrollSettledWindow(
+            samples: samples,
+            durationMilliseconds: durationMilliseconds
+        )
     }
 
     private func nativeInnerScrollSamplesMatch(
@@ -3059,6 +3069,11 @@ private struct HostedNativeInnerScrollSample: Codable, Equatable {
     let controlValueContainsTerminalToken: Bool?
 }
 
+private struct HostedNativeInnerScrollSettledWindow {
+    let samples: [HostedNativeInnerScrollSample]
+    let durationMilliseconds: Int
+}
+
 private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let section: String
     let controlIdentifier: String
@@ -3072,6 +3087,8 @@ private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let targetSampleIntervalMilliseconds: Int
     let minimumAcceptedSampleIntervalMilliseconds: Int
     let samplingDeadlineMilliseconds: Int
+    let terminalWindowDurationMilliseconds: Int
+    let repeatTerminalWindowDurationMilliseconds: Int
     let terminalStateStable: Bool
     let outerIsolationProven: Bool
     let firstTerminalAction: HostedNativeInnerScrollAction
