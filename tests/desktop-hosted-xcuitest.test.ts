@@ -419,6 +419,7 @@ private func target() {
     expect(
       source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
     ).toHaveLength(1);
+    expect(source.match(/\.scroll\s*\(/g)).toHaveLength(2);
     const checkpointSource = extractBalancedSwiftDeclaration(
       source,
       "private func capturePageBottomCheckpoint("
@@ -753,6 +754,13 @@ private func target() {
     expect(app).toContain("static let preferredContentHeight: CGFloat = 700");
     expect(app).toContain("floor(visibleScreenHeight - chromeHeight)");
     expect(app).not.toContain("NSScreen.main?.visibleFrame.height");
+    const fittedHeightSource = extractBalancedSwiftDeclaration(
+      app,
+      "static func fittedContentHeight("
+    );
+    expect(fittedHeightSource).toContain("chromeHeight.isFinite");
+    expect(fittedHeightSource).toContain("chromeHeight >= 0");
+    expect(fittedHeightSource).toContain("visibleScreenHeight > chromeHeight");
     const fitWindowSource = extractBalancedSwiftDeclaration(
       app,
       "private func fitWindow()"
@@ -763,7 +771,6 @@ private func target() {
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(windowFrame)");
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(contentLayoutRect)");
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(visibleFrame)");
-    expect(fitWindowSource).not.toMatch(/let chromeHeight\s*=\s*max\s*\(/);
     expect(fitWindowSource.match(/pendingHeight = nil/g)).toHaveLength(2);
     const attachSource = extractBalancedSwiftDeclaration(
       app,
