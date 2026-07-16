@@ -834,17 +834,18 @@ releaseTabbedAlternative()
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 13");
-    expect(scenarioSource).toContain(
+    const maskedScenarioSource = maskSwiftCommentsAndLiterals(scenarioSource);
+    expect(maskedScenarioSource).toContain("schemaVersion: 13");
+    expect(maskedScenarioSource).toContain(
       "let reposGeometry = try captureCheckpoint("
     );
-    expect(scenarioSource).toContain(
+    expect(maskedScenarioSource).toContain(
       "let logsGeometry = try captureCheckpoint("
     );
-    expect(scenarioSource).toContain(
+    expect(maskedScenarioSource).toContain(
       "observedGeometryCheckpoints: [reposGeometry, logsGeometry]"
     );
-    expect(scenarioSource).toContain(
+    expect(maskedScenarioSource).toContain(
       "coordinateSpaces: HostedNativeInnerScrollCoordinateSpaces("
     );
     expect(scenarioSource).toContain('xcuiGeometry: "xcui-screen"');
@@ -855,56 +856,56 @@ releaseTabbedAlternative()
     expect(scenarioSource).toContain(
       'terminalNativeVisibility: "per-payload-appkit-text-view-local"'
     );
-    expect(scenarioSource).not.toContain('coordinateSpace: "xcui-screen"');
-    expect(scenarioSource).toContain("controlElementType: .outline");
+    expect(maskedScenarioSource).not.toContain("coordinateSpace:");
+    expect(maskedScenarioSource).toContain("controlElementType: .outline");
     expect(scenarioSource).toContain('controlElementTypeName: "outline"');
-    expect(scenarioSource).toContain("terminalRowElementType: .outlineRow");
+    expect(maskedScenarioSource).toContain("terminalRowElementType: .outlineRow");
     expect(scenarioSource).toContain('terminalRowElementTypeName: "outline-row"');
-    expect(scenarioSource).toContain("outerPreparationCheckpoint: reposOuter");
+    expect(maskedScenarioSource).toContain("outerPreparationCheckpoint: reposOuter");
     expect(scenarioSource).toContain(
       'nestedScrollControlIdentifier: "neondiff-repos-table"'
     );
-    expect(scenarioSource).toContain(
+    expect(maskedScenarioSource).toContain(
       "nestedScrollControlElementType: .outline"
     );
-    expect(scenarioSource).toContain("requiresGuardedScrollAction: true");
-    expect(scenarioSource).toContain("terminalVisibilityMarkerIdentifier: nil");
-    expect(scenarioSource).toContain("controlElementType: .textView");
+    expect(maskedScenarioSource).toContain("requiresGuardedScrollAction: true");
+    expect(maskedScenarioSource).toContain("terminalVisibilityMarkerIdentifier: nil");
+    expect(maskedScenarioSource).toContain("controlElementType: .textView");
     expect(scenarioSource).toContain('controlElementTypeName: "text-view"');
-    expect(scenarioSource).toContain("terminalRowElementType: nil");
-    expect(scenarioSource).toContain("terminalRowElementTypeName: nil");
-    expect(scenarioSource).toContain("outerPreparationCheckpoint: logsOuter");
+    expect(maskedScenarioSource).toContain("terminalRowElementType: nil");
+    expect(maskedScenarioSource).toContain("terminalRowElementTypeName: nil");
+    expect(maskedScenarioSource).toContain("outerPreparationCheckpoint: logsOuter");
     expect(scenarioSource).toContain(
       'nestedScrollControlIdentifier: "neondiff-logs-text-editor"'
     );
-    expect(scenarioSource).toContain(
+    expect(maskedScenarioSource).toContain(
       "nestedScrollControlElementType: .textView"
     );
     expect(
-      scenarioSource.match(/requiresGuardedScrollAction: true/g)
+      maskedScenarioSource.match(/requiresGuardedScrollAction: true/g)
     ).toHaveLength(2);
     expect(scenarioSource).toContain(
       'terminalVisibilityMarkerIdentifier: "neondiff-logs-visible-tail"'
     );
-    expect(scenarioSource.match(/captureNativeInnerScrollExhaustion\s*\(/g)).toHaveLength(2);
-    expect(scenarioSource.match(/capturePageBottomCheckpoint\s*\(/g)).toHaveLength(2);
-    const reposOuterPosition = scenarioSource.indexOf(
+    expect(maskedScenarioSource.match(/captureNativeInnerScrollExhaustion\s*\(/g)).toHaveLength(2);
+    expect(maskedScenarioSource.match(/capturePageBottomCheckpoint\s*\(/g)).toHaveLength(2);
+    const reposOuterPosition = maskedScenarioSource.indexOf(
       "let reposOuter = try capturePageBottomCheckpoint("
     );
-    const reposInnerPosition = scenarioSource.indexOf(
+    const reposInnerPosition = maskedScenarioSource.indexOf(
       "let reposInner = try captureNativeInnerScrollExhaustion("
     );
-    const logsOuterPosition = scenarioSource.indexOf(
+    const logsOuterPosition = maskedScenarioSource.indexOf(
       "let logsOuter = try capturePageBottomCheckpoint("
     );
-    const logsInnerPosition = scenarioSource.indexOf(
+    const logsInnerPosition = maskedScenarioSource.indexOf(
       "let logsInner = try captureNativeInnerScrollExhaustion("
     );
     expect(reposOuterPosition).toBeGreaterThan(-1);
     expect(reposInnerPosition).toBeGreaterThan(reposOuterPosition);
     expect(logsOuterPosition).toBeGreaterThan(-1);
     expect(logsInnerPosition).toBeGreaterThan(logsOuterPosition);
-    expect(scenarioSource).toContain(
+    expect(maskedScenarioSource).toContain(
       "outerPageBottomCheckpoints: [reposOuter, logsOuter]"
     );
     const pageBottomCheckpointSource = extractBalancedSwiftDeclaration(
@@ -1027,10 +1028,11 @@ releaseTabbedAlternative()
       source,
       "private func captureNativeInnerScrollExhaustion("
     );
-    expect(helperSource).toContain(
+    const maskedHelperSource = maskSwiftCommentsAndLiterals(helperSource);
+    expect(maskedHelperSource).toContain(
       "outerPreparationCheckpoint: HostedPageBottomCheckpoint"
     );
-    expect(helperSource).toContain("var outerPreparationFailures: [String] = []");
+    expect(maskedHelperSource).toContain("var outerPreparationFailures: [String] = []");
     for (const category of [
       "section-mismatch",
       "outer-scroll-identifier-mismatch",
@@ -1078,200 +1080,200 @@ releaseTabbedAlternative()
     expect(helperSource).toContain(
       'outerRestagingFailures.append("outer-restaging-translation-mismatch")'
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "outerPreparationNotEstablished(section: section, failedChecks: outerPreparationFailures)"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "let outerPreparationSample = try captureNativeInnerScrollSample("
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "let restagingDeltaY = try outerRestagingDeltaY("
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "let requiresOuterRestaging = abs(restagingDeltaY) > 0.5"
     );
-    expect(helperSource.match(/requiresOuterRestaging/g)).toHaveLength(6);
-    expect(helperSource.match(/abs\(restagingDeltaY\)/g)).toHaveLength(1);
-    expect(helperSource).toContain("if requiresOuterRestaging {");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource.match(/requiresOuterRestaging/g)).toHaveLength(6);
+    expect(maskedHelperSource.match(/abs\(restagingDeltaY\)/g)).toHaveLength(1);
+    expect(maskedHelperSource).toContain("if requiresOuterRestaging {");
+    expect(maskedHelperSource).toContain(
       "if requiresOuterRestaging, !restagingEffectObserved {"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "if !requiresOuterRestaging, restagingEffectObserved {"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "if requiresOuterRestaging,\n           restagingDeltaY * scrollContainerTranslation <= 0 {"
     );
-    expect(helperSource).toContain("if !requiresOuterRestaging {");
-    expect(helperSource).not.toContain("restagingDeltaY != 0");
-    expect(helperSource).not.toContain("restagingDeltaY == 0");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain("if !requiresOuterRestaging {");
+    expect(maskedHelperSource).not.toContain("restagingDeltaY != 0");
+    expect(maskedHelperSource).not.toContain("restagingDeltaY == 0");
+    expect(maskedHelperSource).toContain(
       "let target = try outerRestagingCoordinate("
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "target.coordinate.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))"
     );
-    expect(helperSource).not.toContain(
+    expect(maskedHelperSource).not.toContain(
       "outerScroll.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))"
     );
-    expect(helperSource).toContain("targetPoint: outerRestagingTargetPoint");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain("targetPoint: outerRestagingTargetPoint");
+    expect(maskedHelperSource).toContain(
       "outerRestagingSamples.allSatisfy"
     );
-    expect(helperSource).not.toContain(
+    expect(maskedHelperSource).not.toContain(
       "outerRestagingSamples = [outerPreparationSample]"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "outerRestagingWindowDurationMilliseconds: restagingWindow.durationMilliseconds"
     );
     expect(
-      helperSource.match(/frameMatchesRigidVerticalTranslation\s*\(/g)
+      maskedHelperSource.match(/frameMatchesRigidVerticalTranslation\s*\(/g)
     ).toHaveLength(4);
-    expect(helperSource).toContain("outerRestagingAction:");
-    expect(helperSource).toContain("outerRestagingSamples:");
-    expect(helperSource).toContain("outerPreparationSample:");
+    expect(maskedHelperSource).toContain("outerRestagingAction:");
+    expect(maskedHelperSource).toContain("outerRestagingSamples:");
+    expect(maskedHelperSource).toContain("outerPreparationSample:");
     expect(helperSource).toContain(
       'outerPreparationResult: "verified-page-bottom-then-inner-viewport-restaged-before-isolation-baseline"'
     );
-    expect(helperSource).not.toContain("outerPreparationNotEstablished(section)");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).not.toContain("outerPreparationNotEstablished(section)");
+    expect(maskedHelperSource).toContain(
       "sample.scrollContainerFrame.isFullyContained("
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "outerPreparationCheckpoint.section != section"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "outerPreparationCheckpoint.outerScrollIdentifier != outerScrollIdentifier"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "outerPreparationCheckpoint.sentinelIdentifier != outerSentinelIdentifier"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "if let preparedSample = outerPreparationCheckpoint.postActionSamples.last"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "preparedSample.outerScrollFrame.differs("
     );
-    expect(helperSource).toContain("preparedSample.sentinelFrame.differs(");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain("preparedSample.sentinelFrame.differs(");
+    expect(maskedHelperSource).toContain(
       "outerPreparationCheckpoint: outerPreparationCheckpoint"
     );
-    expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
-    expect(helperSource).toContain("app.descendants(matching: .scrollView)");
-    expect(helperSource).toContain("scrollContainer.scrollBars");
-    expect(helperSource).not.toContain("control.scrollBars");
-    expect(helperSource.match(/scrollContainer\.scroll\s*\(/g) ?? []).toHaveLength(0);
-    expect(helperSource.match(/nativeScrollBarBottomDragTarget\s*\(/g) ?? []).toHaveLength(0);
-    expect(helperSource.match(/prepareNativeScrollBarThumbForDrag\s*\(/g)).toHaveLength(2);
-    expect(helperSource.match(/\.hover\(\)/g) ?? []).toHaveLength(0);
-    expect(helperSource.match(/\.click\(\s*forDuration: 0\.1,\s*thenDragTo:/g)).toHaveLength(2);
-    expect(helperSource.match(/\.press\(\s*forDuration:/g) ?? []).toHaveLength(0);
-    expect(helperSource).toContain("firstDragTarget.sourceCoordinate.click(");
-    expect(helperSource).toContain("thenDragTo: firstDragTarget.destinationCoordinate");
-    expect(helperSource).toContain("repeatDragTarget.sourceCoordinate.click(");
-    expect(helperSource).toContain("thenDragTo: repeatDragTarget.destinationCoordinate");
-    expect(helperSource).toContain("firstHoverPreparation: firstHoverPreparation");
-    expect(helperSource).toContain("repeatHoverPreparation: repeatHoverPreparation");
-    expect(helperSource).toContain("firstHoverPreparation.observedSamples");
-    expect(helperSource).toContain("repeatHoverPreparation.observedSamples");
-    expect(helperSource).not.toContain("adjust(toNormalizedSliderPosition:");
-    expect(helperSource).toContain("normalizedScrollValue");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
+    expect(maskedHelperSource).toContain("app.descendants(matching: .scrollView)");
+    expect(maskedHelperSource).toContain("scrollContainer.scrollBars");
+    expect(maskedHelperSource).not.toContain("control.scrollBars");
+    expect(maskedHelperSource.match(/scrollContainer\.scroll\s*\(/g) ?? []).toHaveLength(0);
+    expect(maskedHelperSource.match(/nativeScrollBarBottomDragTarget\s*\(/g) ?? []).toHaveLength(0);
+    expect(maskedHelperSource.match(/prepareNativeScrollBarThumbForDrag\s*\(/g)).toHaveLength(2);
+    expect(maskedHelperSource.match(/\.hover\(\)/g) ?? []).toHaveLength(0);
+    expect(maskedHelperSource.match(/\.click\(\s*forDuration: 0\.1,\s*thenDragTo:/g)).toHaveLength(2);
+    expect(maskedHelperSource.match(/\.press\(\s*forDuration:/g) ?? []).toHaveLength(0);
+    expect(maskedHelperSource).toContain("firstDragTarget.sourceCoordinate.click(");
+    expect(maskedHelperSource).toContain("thenDragTo: firstDragTarget.destinationCoordinate");
+    expect(maskedHelperSource).toContain("repeatDragTarget.sourceCoordinate.click(");
+    expect(maskedHelperSource).toContain("thenDragTo: repeatDragTarget.destinationCoordinate");
+    expect(maskedHelperSource).toContain("firstHoverPreparation: firstHoverPreparation");
+    expect(maskedHelperSource).toContain("repeatHoverPreparation: repeatHoverPreparation");
+    expect(maskedHelperSource).toContain("firstHoverPreparation.observedSamples");
+    expect(maskedHelperSource).toContain("repeatHoverPreparation.observedSamples");
+    expect(maskedHelperSource).not.toContain("adjust(toNormalizedSliderPosition:");
+    expect(maskedHelperSource).toContain("normalizedScrollValue");
+    expect(maskedHelperSource).toContain(
       "let preTerminalValue = preSample.normalizedScrollValue"
     );
-    expect(helperSource).toContain("preTerminalValue < 1");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain("preTerminalValue < 1");
+    expect(maskedHelperSource).toContain(
       "terminalSamples.allSatisfy({ $0.normalizedScrollValue == 1 })"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "repeatTerminalObservedSamples.allSatisfy({"
     );
-    expect(helperSource).toContain("elapsedMilliseconds:");
-    expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
-    expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds = 90");
+    expect(maskedHelperSource).toContain("elapsedMilliseconds:");
+    expect(maskedHelperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
+    expect(maskedHelperSource).toContain("minimumAcceptedSampleIntervalMilliseconds = 90");
     expect(source).toContain(
       "private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 30_000"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "samplingDeadlineMilliseconds = hostedNativeInnerScrollSamplingDeadlineMilliseconds"
     );
-    expect(helperSource.match(/captureStableNativeInnerScrollSamples\s*\(/g)).toHaveLength(3);
-    expect(helperSource).toContain("terminalSamples");
-    expect(helperSource).toContain("repeatTerminalSamples");
-    expect(helperSource).toContain("outerRestagingObservedSamples:");
-    expect(helperSource).toContain("terminalObservedSamples:");
-    expect(helperSource).toContain("repeatTerminalObservedSamples:");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource.match(/captureStableNativeInnerScrollSamples\s*\(/g)).toHaveLength(3);
+    expect(maskedHelperSource).toContain("terminalSamples");
+    expect(maskedHelperSource).toContain("repeatTerminalSamples");
+    expect(maskedHelperSource).toContain("outerRestagingObservedSamples:");
+    expect(maskedHelperSource).toContain("terminalObservedSamples:");
+    expect(maskedHelperSource).toContain("repeatTerminalObservedSamples:");
+    expect(maskedHelperSource).toContain(
       "let repeatTerminalObservedSamples = repeatTerminalWindow.observedSamples"
     );
-    expect(helperSource).toContain("for candidate in repeatTerminalObservedSamples");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain("for candidate in repeatTerminalObservedSamples");
+    expect(maskedHelperSource).toContain(
       "firstHoverPreparation.observedSamples.map(\\.innerScrollSample)"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "repeatHoverPreparation.observedSamples.map(\\.innerScrollSample)"
     );
-    expect(helperSource).toContain("effectObserved: true");
-    expect(helperSource).toContain("effectObserved: false");
-    expect(helperSource.match(/effectProven: true/g)).toHaveLength(3);
+    expect(maskedHelperSource).toContain("effectObserved: true");
+    expect(maskedHelperSource).toContain("effectObserved: false");
+    expect(maskedHelperSource.match(/effectProven: true/g)).toHaveLength(3);
     expect(helperSource).toContain(
       'mechanism: "public-xcui-coordinate-scroll-delta"'
     );
     expect(helperSource.match(/mechanism: "public-xcui-scrollbar-thumb-drag"/g)).toHaveLength(2);
-    expect(helperSource.match(/normalizedTargetValue: 1/g)).toHaveLength(2);
-    expect(helperSource).toContain("sourcePoint: firstDragTarget.sourcePoint");
-    expect(helperSource).toContain("targetPoint: firstDragTarget.destinationPoint");
-    expect(helperSource).toContain("guardScrollBarFrame: firstDragTarget.scrollBarFrame");
-    expect(helperSource).toContain("guardThumbFrameBefore: firstDragTarget.thumbFrame");
-    expect(helperSource).toContain("guardThumbFrameAfter: postFirstDragChain.thumbFrame");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource.match(/normalizedTargetValue: 1/g)).toHaveLength(2);
+    expect(maskedHelperSource).toContain("sourcePoint: firstDragTarget.sourcePoint");
+    expect(maskedHelperSource).toContain("targetPoint: firstDragTarget.destinationPoint");
+    expect(maskedHelperSource).toContain("guardScrollBarFrame: firstDragTarget.scrollBarFrame");
+    expect(maskedHelperSource).toContain("guardThumbFrameBefore: firstDragTarget.thumbFrame");
+    expect(maskedHelperSource).toContain("guardThumbFrameAfter: postFirstDragChain.thumbFrame");
+    expect(maskedHelperSource).toContain(
       "postFirstDragChain.thumbFrame.y - firstDragTarget.thumbFrame.y"
     );
-    expect(helperSource.indexOf("let postFirstDragChain = try")).toBeLessThan(
-      helperSource.indexOf("let repeatPreparedDrag = try")
+    expect(maskedHelperSource.indexOf("let postFirstDragChain = try")).toBeLessThan(
+      maskedHelperSource.indexOf("let repeatPreparedDrag = try")
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "requestedDisplacementY: firstDragTarget.requestedDisplacementY"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "observedThumbTranslationY: firstObservedThumbTranslationY"
     );
-    expect(helperSource).toContain("terminalRowFrame");
-    expect(helperSource).toContain("terminalRowFullyContained");
-    expect(helperSource).toContain("terminalRowElementType");
-    expect(helperSource).toContain("terminalVisibilityMarkerQuery.count != 0");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain("terminalRowFrame");
+    expect(maskedHelperSource).toContain("terminalRowFullyContained");
+    expect(maskedHelperSource).toContain("terminalRowElementType");
+    expect(maskedHelperSource).toContain("terminalVisibilityMarkerQuery.count != 0");
+    expect(maskedHelperSource).toContain(
       "terminalVisibilityMarkerPresentBeforeTerminal("
     );
-    expect(helperSource).toContain("marker.waitForExistence(timeout: 2)");
-    expect(helperSource).toContain("terminalVisibilityMarkerFrame != nil");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain("marker.waitForExistence(timeout: 2)");
+    expect(maskedHelperSource).toContain("terminalVisibilityMarkerFrame != nil");
+    expect(maskedHelperSource).toContain(
       "terminalVisibilityMarkerFullyContained == true"
     );
-    expect(helperSource).toContain("terminalNativeVisibility != nil");
-    expect(helperSource).toContain("nativeVisibilityProvesTerminalToken(");
-    expect(helperSource).toContain("scrollContainerFrame");
+    expect(maskedHelperSource).toContain("terminalNativeVisibility != nil");
+    expect(maskedHelperSource).toContain("nativeVisibilityProvesTerminalToken(");
+    expect(maskedHelperSource).toContain("scrollContainerFrame");
     expect(helperSource).toContain('scrollContainerElementType: "scroll-view"');
-    expect(helperSource).toContain("scrollContainerCount: scrollContainers.count");
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain("scrollContainerCount: scrollContainers.count");
+    expect(maskedHelperSource).toContain(
       "terminalVisibilityMarkerIdentifier: terminalVisibilityMarkerIdentifier"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "terminalVisibleText: terminalVisibleText"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "terminalValueToken: terminalValueToken"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "terminalRowElementType: terminalRowElementTypeName"
     );
-    expect(helperSource).toContain(
+    expect(maskedHelperSource).toContain(
       "terminalWindowDurationMilliseconds: terminalWindow.durationMilliseconds"
     );
-    expect(helperSource).toMatch(
+    expect(maskedHelperSource).toMatch(
       /repeatTerminalWindowDurationMilliseconds:\s*repeatTerminalWindow\.durationMilliseconds/
     );
     const settledHelperSource = extractBalancedSwiftDeclaration(
@@ -1303,8 +1305,8 @@ releaseTabbedAlternative()
     expect(settledHelperSource).not.toContain(
       "last.elapsedMilliseconds - actionElapsedMilliseconds"
     );
-    expect(helperSource).toContain("outerSentinelFrame");
-    expect(helperSource).not.toMatch(
+    expect(maskedHelperSource).toContain("outerSentinelFrame");
+    expect(maskedHelperSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
     );
     const scrollBarDragTargetSource = extractBalancedSwiftDeclaration(
@@ -1315,58 +1317,70 @@ releaseTabbedAlternative()
       source,
       "private func reboundNativeScrollBarChain("
     );
-    expect(reboundScrollBarChainSource).toContain(
+    const maskedScrollBarDragTargetSource = maskSwiftCommentsAndLiterals(
+      scrollBarDragTargetSource
+    );
+    const maskedReboundScrollBarChainSource = maskSwiftCommentsAndLiterals(
+      reboundScrollBarChainSource
+    );
+    expect(maskedReboundScrollBarChainSource).toContain(
       "verticalScrollBar.descendants(matching: .valueIndicator)"
     );
-    expect(reboundScrollBarChainSource).toContain("thumbQuery.count == 1");
-    expect(reboundScrollBarChainSource).toContain("thumb.exists, thumbQuery.count == 1");
-    expect(reboundScrollBarChainSource).toContain("thumbFrame.isFiniteAndNonempty");
-    expect(reboundScrollBarChainSource).toContain(
+    expect(maskedReboundScrollBarChainSource).toContain("thumbQuery.count == 1");
+    expect(maskedReboundScrollBarChainSource).toContain("thumb.exists, thumbQuery.count == 1");
+    expect(maskedReboundScrollBarChainSource).toContain("thumbFrame.isFiniteAndNonempty");
+    expect(maskedReboundScrollBarChainSource).toContain(
       "thumbFrame.isFullyContained(in: scrollBarFrame, tolerance: tolerance)"
     );
-    expect(reboundScrollBarChainSource).toContain("thumbEnabled: thumb.isEnabled");
-    expect(reboundScrollBarChainSource).toContain("thumbHittable: thumb.isHittable");
-    expect(scrollBarDragTargetSource).toContain(
+    expect(maskedReboundScrollBarChainSource).toContain("thumbEnabled: thumb.isEnabled");
+    expect(maskedReboundScrollBarChainSource).toContain("thumbHittable: thumb.isHittable");
+    expect(maskedScrollBarDragTargetSource).toContain(
       "guard chain.thumbEnabled, chain.thumbHittable"
     );
-    expect(scrollBarDragTargetSource).toContain(
+    expect(maskedScrollBarDragTargetSource).toContain(
       "thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))"
     );
-    expect(scrollBarDragTargetSource).toContain(
+    expect(maskedScrollBarDragTargetSource).toContain(
       "verticalScrollBar.coordinate(withNormalizedOffset: normalizedDestination)"
     );
-    expect(scrollBarDragTargetSource).toContain(
+    expect(maskedScrollBarDragTargetSource).toContain(
       "requestedDisplacementY >= minimumDisplacement"
     );
-    expect(scrollBarDragTargetSource).not.toContain("adjust(");
+    expect(maskedScrollBarDragTargetSource).not.toContain("adjust(");
     const hoverPreparationSource = extractBalancedSwiftDeclaration(
       source,
       "private func prepareNativeScrollBarThumbForDrag("
     );
-    expect(hoverPreparationSource).toContain("hoverTarget.coordinate.hover()");
-    expect(hoverPreparationSource.match(/\.hover\(\)/g)).toHaveLength(1);
+    const maskedHoverPreparationSource = maskSwiftCommentsAndLiterals(
+      hoverPreparationSource
+    );
+    expect(maskedHoverPreparationSource).toContain("hoverTarget.coordinate.hover()");
+    expect(maskedHoverPreparationSource.match(/\.hover\(\)/g)).toHaveLength(1);
     expect(hoverPreparationSource).toContain(
       'mechanism: "public-xcui-coordinate-hover"'
     );
-    expect(hoverPreparationSource).toContain("for _ in 0..<maximumSampleAttempts");
-    expect(hoverPreparationSource).toContain("observedSamples.append(sample)");
-    expect(hoverPreparationSource).toContain("if samples.count == 3 { break }");
-    expect(hoverPreparationSource).toContain("reboundNativeScrollBarChain(");
-    expect(hoverPreparationSource).toContain(
+    expect(maskedHoverPreparationSource).toContain("for _ in 0..<maximumSampleAttempts");
+    expect(maskedHoverPreparationSource).toContain("observedSamples.append(sample)");
+    expect(maskedHoverPreparationSource).toContain("if samples.count == 3 { break }");
+    expect(maskedHoverPreparationSource).toContain("reboundNativeScrollBarChain(");
+    expect(maskedHoverPreparationSource).toContain(
       "reboundChain.thumbEnabled, reboundChain.thumbHittable"
     );
-    expect(hoverPreparationSource).toContain(
+    expect(maskedHoverPreparationSource).toContain(
       "nativeInnerScrollSamplesMatch(baselineSample, innerScrollSample)"
     );
-    expect(hoverPreparationSource).toContain(
+    expect(maskedHoverPreparationSource).toContain(
       "let actionStartedAt = ProcessInfo.processInfo.systemUptime"
     );
-    expect(hoverPreparationSource).not.toContain("scroll(byDeltaX:");
-    expect(hoverPreparationSource).not.toContain("adjust(");
-    expect(hoverPreparationSource).not.toContain("click(");
+    expect(maskedHoverPreparationSource).not.toContain("scroll(byDeltaX:");
+    expect(maskedHoverPreparationSource).not.toContain("adjust(");
+    expect(maskedHoverPreparationSource).not.toContain("click(");
     const hoverPreparationTraceSource = extractBalancedSwiftDeclaration(
       source,
       "private struct HostedNativeScrollBarHoverPreparation:"
+    );
+    const maskedHoverPreparationTraceSource = maskSwiftCommentsAndLiterals(
+      hoverPreparationTraceSource
     );
     for (const field of [
       "action",
@@ -1374,11 +1388,14 @@ releaseTabbedAlternative()
       "samples",
       "durationMilliseconds",
     ]) {
-      expect(hoverPreparationTraceSource).toContain(`let ${field}:`);
+      expect(maskedHoverPreparationTraceSource).toContain(`let ${field}:`);
     }
     const nativeInnerActionSource = extractBalancedSwiftDeclaration(
       source,
       "private struct HostedNativeInnerScrollAction:"
+    );
+    const maskedNativeInnerActionSource = maskSwiftCommentsAndLiterals(
+      nativeInnerActionSource
     );
     for (const field of [
       "mechanism",
@@ -1393,10 +1410,10 @@ releaseTabbedAlternative()
       "guardThumbHittableBefore",
       "guardThumbHittableAfter",
     ]) {
-      expect(nativeInnerActionSource).toContain(`let ${field}:`);
+      expect(maskedNativeInnerActionSource).toContain(`let ${field}:`);
     }
-    expect(nativeInnerActionSource).toContain("let deltaX: Double?");
-    expect(nativeInnerActionSource).toContain("let deltaY: Double?");
+    expect(maskedNativeInnerActionSource).toContain("let deltaX: Double?");
+    expect(maskedNativeInnerActionSource).toContain("let deltaY: Double?");
     const restagingCoordinateSource = extractBalancedSwiftDeclaration(
       source,
       "private func outerRestagingCoordinate("
