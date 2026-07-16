@@ -132,12 +132,10 @@ registry target; it never puts that key in GitHub App settings or config.
 For public/private entitlement proof, keep the GitHub doctor JSON and the review
 evidence path together. The proof packet should show `visibility_result`,
 `visibility_source`, `license_gate_decision`, and `pre_checkout_gate_result`.
-Public open-source repos pass the license gate with no NeonDiff Activation Key
-(public review is free; provider verification still applies), while private
-repos without an active private entitlement, expired or revoked entitlements,
-and unknown visibility fail closed. Every denial must happen before checkout,
-provider calls, or GitHub review posting. A provider API key alone is not
-private repository entitlement evidence.
+Public repos with no license fail this gate, as do private repos without an
+active private entitlement, expired or revoked entitlements, and unknown
+visibility. Every denial must happen before checkout, provider calls, or GitHub
+review posting. A provider API key alone is not repository entitlement evidence.
 
 ## First Review Path
 
@@ -162,13 +160,17 @@ and fix App credentials before continuing.
 
 ## License Boundary
 
-The supported distribution requires live API-backed activation before private,
-internal, or unknown-visibility repository work; public open-source repository
-review is free and requires no NeonDiff Activation Key, though provider
-verification still applies. Legacy `publicReposFree` and
-`privateReposRequireEntitlement` config values are migration inputs only; the
-production policy is GitHub-authoritative and fails closed on unknown
-visibility.
+The supported distribution requires live API-backed activation before public,
+private, internal, or unknown repository work. Legacy `publicReposFree` and
+`privateReposRequireEntitlement` values are migration inputs only and cannot
+weaken the production policy — a local visibility flag would trust the client's
+own claim.
+
+Coming with the native app: public open-source repository review will be free
+with no NeonDiff Activation Key, while private/commercial review will require an
+active entitlement. This managed public-free/private-paid model ships with the
+native NeonDiff app and the server-side GitHub App broker (#614), which verifies
+repository visibility; it is not enforced by the current CLI.
 
 Private repo data stays local to the worker and GitHub App installation. Do not
 send private repository names, diffs, logs, private keys, provider keys, license

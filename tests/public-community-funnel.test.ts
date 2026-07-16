@@ -23,8 +23,8 @@ describe("NeonDiff public community funnel", () => {
       /docs\/pricing\.md/i,
       /docs\/providers\.md/i,
       /docs\/known-limitations-and-provider-status\.md/i,
-      /public open-source repositor(?:y|ies) (?:are|is) free/i,
-      /API-backed activation is required for private, internal, and commercial/i,
+      /public open-source repositor(?:y|ies) will be free/i,
+      /current npm CLI \(v1\.0\.x\) requires API-backed activation for every repository/i,
       /v1\.0\.4 verification notice/i,
       /v1\.0\.4 is the first package intended to enforce\s*>?\s*mandatory API-backed activation/i,
       /v1\.0\.3 and\s*>?\s*earlier do not enforce this boundary/i,
@@ -111,9 +111,9 @@ describe("NeonDiff public community funnel", () => {
     // public free; private/internal/commercial require active API-backed entitlement.
     const readmePolicy = read("README.md");
     const contributingPolicy = read("CONTRIBUTING.md");
-    expect(readmePolicy).toMatch(/public open-source repositor(?:y|ies) (?:are|is) free/i);
-    expect(readmePolicy).toMatch(/API-backed activation is required for private, internal, and commercial/i);
-    expect(contributingPolicy).toMatch(/public open-source repositor(?:y|ies)\s+are (?:intentionally )?free/i);
+    expect(readmePolicy).toMatch(/public open-source repositor(?:y|ies) will be free/i);
+    expect(readmePolicy).toMatch(/current npm CLI \(v1\.0\.x\) requires API-backed activation for every repository/i);
+    expect(contributingPolicy).toMatch(/public open-source review will\s+be free/i);
     expect(contributingPolicy).toMatch(/API-backed activation for private, internal, and commercial/i);
   });
 
@@ -215,8 +215,8 @@ describe("NeonDiff public community funnel", () => {
       /dry-run true/i,
       /App bot, not the human user token/i,
       /License Boundary/i,
-      /requires live API-backed activation before private/i,
-      /public open-source repository\s+review is free/i,
+      /requires live API-backed activation before public/i,
+      /public open-source repository\s+review will be free/i,
       /Legacy `publicReposFree`/i,
       /Private repo data stays local/i,
       /Uninstall/i,

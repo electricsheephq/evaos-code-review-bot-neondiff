@@ -7,9 +7,11 @@ This document states what NeonDiff is for, the system design that serves that
 purpose, the invariants that protect it, and what NeonDiff deliberately does
 not do. It exists so contributors, operators, and agents can align with the
 product direction without reconstructing it from issue history. The worker
-runs locally with a GitHub App scoped to explicit repositories; public
-repositories are free by default, while private repository review requires an
-active private entitlement.
+runs locally with a GitHub App scoped to explicit repositories. In the native
+NeonDiff app (managed GitHub App broker, #614), public repositories are free by
+default while private repository review requires an active private entitlement;
+the current CLI (v1.0.x) requires activation for every repository, since a local
+visibility flag would trust the client's own claim.
 
 ## The Problem
 
