@@ -8,6 +8,8 @@ struct NeonDiffDesktopApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model: NeonDiffDesktopModel
     @StateObject private var updateController: NeonUpdateController
+    @State private var settingsContentHeight =
+        SettingsWindowLayout.preferredContentHeight
 #if DEBUG
     private let evaluationContext: DesktopResolvedEvaluationLaunchContext?
     private let evaluationReadinessRequest: DesktopEvaluationReadinessRequest?
@@ -141,9 +143,11 @@ struct NeonDiffDesktopApp: App {
         .preferredColorScheme(preferredColorScheme)
         .frame(
             width: SettingsWindowLayout.preferredContentWidth,
-            height: SettingsWindowLayout.fittedContentHeight(
-                visibleScreenHeight: NSScreen.main?.visibleFrame.height
-            )
+            height: settingsContentHeight
+        )
+        .background(
+            SettingsWindowFitView(contentHeight: $settingsContentHeight)
+                .allowsHitTesting(false)
         )
     }
 
@@ -316,27 +320,155 @@ private enum SettingsWindowLayout {
     static let preferredContentWidth: CGFloat = 560
     static let preferredContentHeight: CGFloat = 700
 
-    static func fittedContentHeight(visibleScreenHeight: CGFloat?) -> CGFloat {
-        guard let visibleScreenHeight,
-              visibleScreenHeight.isFinite,
-              visibleScreenHeight > 0 else {
-            return preferredContentHeight
+    static func fittedContentHeight(
+        visibleScreenHeight: CGFloat,
+        chromeHeight: CGFloat
+    ) -> CGFloat? {
+        guard visibleScreenHeight.isFinite,
+              visibleScreenHeight > 0,
+              chromeHeight.isFinite,
+              chromeHeight >= 0,
+              visibleScreenHeight > chromeHeight else {
+            return nil
         }
-        let contentRect = NSRect(
-            x: 0,
-            y: 0,
-            width: preferredContentWidth,
-            height: preferredContentHeight
-        )
-        let frameRect = NSWindow.frameRect(
-            forContentRect: contentRect,
-            styleMask: [.titled, .closable]
-        )
-        let chromeHeight = max(0, frameRect.height - contentRect.height)
         return max(
             1,
             min(preferredContentHeight, floor(visibleScreenHeight - chromeHeight))
         )
+    }
+}
+
+private struct SettingsWindowFitView: NSViewRepresentable {
+    @Binding var contentHeight: CGFloat
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.isHidden = true
+        DispatchQueue.main.async {
+            context.coordinator.attach(
+                to: view.window,
+                contentHeight: $contentHeight
+            )
+        }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            context.coordinator.attach(
+                to: view.window,
+                contentHeight: $contentHeight
+            )
+        }
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private weak var window: NSWindow?
+        private var contentHeight: Binding<CGFloat>?
+        private var pendingHeight: CGFloat?
+
+        func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>) {
+            self.contentHeight = contentHeight
+            guard self.window !== window else {
+                fitWindow()
+                return
+            }
+            detachObservers()
+            self.window = window
+            guard let window else { return }
+            let center = NotificationCenter.default
+            center.addObserver(
+                self,
+                selector: #selector(windowGeometryDidChange),
+                name: NSWindow.didChangeScreenNotification,
+                object: window
+            )
+            center.addObserver(
+                self,
+                selector: #selector(windowGeometryDidChange),
+                name: NSWindow.didMoveNotification,
+                object: window
+            )
+            center.addObserver(
+                self,
+                selector: #selector(windowGeometryDidChange),
+                name: NSApplication.didChangeScreenParametersNotification,
+                object: nil
+            )
+            fitWindow()
+        }
+
+        func detach() {
+            detachObservers()
+            window = nil
+            contentHeight = nil
+            pendingHeight = nil
+        }
+
+        @objc private func windowGeometryDidChange(_ notification: Notification) {
+            fitWindow()
+        }
+
+        private func fitWindow() {
+            guard let window,
+                  let contentHeight,
+                  let visibleFrame = window.screen?.visibleFrame else {
+                return
+            }
+            let chromeHeight = max(
+                0,
+                window.frame.height - window.contentLayoutRect.height
+            )
+            guard let targetHeight = SettingsWindowLayout.fittedContentHeight(
+                visibleScreenHeight: visibleFrame.height,
+                chromeHeight: chromeHeight
+            ) else {
+                return
+            }
+            if abs(contentHeight.wrappedValue - targetHeight) > 0.5 {
+                guard pendingHeight != targetHeight else { return }
+                pendingHeight = targetHeight
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let contentHeight = self.contentHeight else { return }
+                    contentHeight.wrappedValue = targetHeight
+                    self.pendingHeight = nil
+                    DispatchQueue.main.async { [weak self] in
+                        self?.fitWindow()
+                    }
+                }
+                return
+            }
+            var origin = window.frame.origin
+            origin.x = min(
+                max(origin.x, visibleFrame.minX),
+                max(visibleFrame.minX, visibleFrame.maxX - window.frame.width)
+            )
+            origin.y = min(
+                max(origin.y, visibleFrame.minY),
+                max(visibleFrame.minY, visibleFrame.maxY - window.frame.height)
+            )
+            if abs(origin.x - window.frame.origin.x) > 0.5
+                || abs(origin.y - window.frame.origin.y) > 0.5 {
+                window.setFrameOrigin(origin)
+            }
+        }
+
+        private func detachObservers() {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
     }
 }
 

@@ -744,10 +744,17 @@ private func target() {
     expect(app).toContain("evaluationTextSizedSettingsScene");
     expect(app).toContain("SettingsWindowLayout.preferredContentWidth");
     expect(app).toContain("SettingsWindowLayout.fittedContentHeight(");
-    expect(app).toContain("NSScreen.main?.visibleFrame.height");
+    expect(app).toContain("SettingsWindowFitView(contentHeight:");
+    expect(app).toContain("window.screen?.visibleFrame");
+    expect(app).toContain(
+      "window.frame.height - window.contentLayoutRect.height"
+    );
+    expect(app).toContain("NSWindow.didChangeScreenNotification");
+    expect(app).toContain("NSApplication.didChangeScreenParametersNotification");
     expect(app).toContain("static let preferredContentWidth: CGFloat = 560");
     expect(app).toContain("static let preferredContentHeight: CGFloat = 700");
     expect(app).toContain("floor(visibleScreenHeight - chromeHeight)");
+    expect(app).not.toContain("NSScreen.main?.visibleFrame.height");
     expect(app).toContain(".dynamicTypeSize(.accessibility3)");
     expect(app).toContain("hostedSettingsEvaluationContent");
     const settingsSceneSource = extractBalancedSwiftDeclaration(
