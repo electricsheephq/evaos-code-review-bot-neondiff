@@ -1280,6 +1280,9 @@ releaseTabbedAlternative()
       "outerScroll.coordinate(withNormalizedOffset: normalizedOffset)"
     );
     expect(restagingCoordinateSource).toContain(
+      "let targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)"
+    );
+    expect(restagingCoordinateSource).toContain(
       "throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate"
     );
     const nativeVisibilityParserSource = extractBalancedSwiftDeclaration(

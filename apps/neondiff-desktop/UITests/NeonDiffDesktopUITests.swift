@@ -2696,13 +2696,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
         }
 
-        let targetY = min(
-            max(
-                scrollContainerFrame.y + (scrollContainerFrame.height / 2),
-                outerScrollFrame.y + corridorInset
-            ),
-            outerScrollFrame.maxY - corridorInset
-        )
+        let targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
         let point = HostedGeometryPoint(x: targetX, y: targetY)
         let pointIsInsideOuter = targetX >= outerScrollFrame.x + tolerance
             && targetX <= outerScrollFrame.maxX - tolerance
