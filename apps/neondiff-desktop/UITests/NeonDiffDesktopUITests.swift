@@ -430,7 +430,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 innerScrollCheckpoints: [reposInner, logsInner],
                 navigationActions: [logsNavigation],
                 outerPageBottomCheckpoints: [reposOuter, logsOuter],
-                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
+                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
             )
         )
     }
@@ -2134,6 +2134,24 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 terminalValue: terminalValue
             )
         }
+        let postFirstDragChain = try reboundNativeScrollBarChain(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            tolerance: 1
+        )
+        let firstObservedThumbTranslationY =
+            postFirstDragChain.thumbFrame.y - firstDragTarget.thumbFrame.y
+        guard firstObservedThumbTranslationY > 0.5,
+              !postFirstDragChain.scrollBarFrame.differs(
+                  from: firstDragTarget.scrollBarFrame,
+                  byMoreThan: 1
+              ) else {
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbDidNotReachTerminal(
+                controlIdentifier
+            )
+        }
 
         let repeatPreparedDrag = try prepareNativeScrollBarThumbForDrag(
             app: app,
@@ -2157,17 +2175,6 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
         let repeatHoverPreparation = repeatPreparedDrag.preparation
         let repeatDragTarget = repeatPreparedDrag.dragTarget
-        let firstObservedThumbTranslationY =
-            repeatDragTarget.thumbFrame.y - firstDragTarget.thumbFrame.y
-        guard firstObservedThumbTranslationY > 0.5,
-              !repeatDragTarget.scrollBarFrame.differs(
-                  from: firstDragTarget.scrollBarFrame,
-                  byMoreThan: 1
-              ) else {
-            throw HostedNativeInnerScrollTraceError.scrollBarThumbDidNotReachTerminal(
-                controlIdentifier
-            )
-        }
         let repeatActionStartedAt = ProcessInfo.processInfo.systemUptime
         let repeatActionElapsedMilliseconds = Int(
             ((repeatActionStartedAt - samplingStart) * 1_000).rounded()
@@ -2333,7 +2340,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 requestedDisplacementY: firstDragTarget.requestedDisplacementY,
                 guardScrollBarFrame: firstDragTarget.scrollBarFrame,
                 guardThumbFrameBefore: firstDragTarget.thumbFrame,
-                guardThumbFrameAfter: repeatDragTarget.thumbFrame,
+                guardThumbFrameAfter: postFirstDragChain.thumbFrame,
                 observedThumbTranslationY: firstObservedThumbTranslationY,
                 attemptCount: 1,
                 effectObserved: true,

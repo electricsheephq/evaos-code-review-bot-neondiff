@@ -827,7 +827,7 @@ releaseTabbedAlternative()
     expect(source).toContain("HostedNativeInnerScrollTrace(");
     expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
     );
 
     const scenarioSource = extractBalancedSwiftDeclaration(
@@ -1226,7 +1226,13 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("targetPoint: firstDragTarget.destinationPoint");
     expect(helperSource).toContain("guardScrollBarFrame: firstDragTarget.scrollBarFrame");
     expect(helperSource).toContain("guardThumbFrameBefore: firstDragTarget.thumbFrame");
-    expect(helperSource).toContain("guardThumbFrameAfter: repeatDragTarget.thumbFrame");
+    expect(helperSource).toContain("guardThumbFrameAfter: postFirstDragChain.thumbFrame");
+    expect(helperSource).toContain(
+      "postFirstDragChain.thumbFrame.y - firstDragTarget.thumbFrame.y"
+    );
+    expect(helperSource.indexOf("let postFirstDragChain = try")).toBeLessThan(
+      helperSource.indexOf("let repeatPreparedDrag = try")
+    );
     expect(helperSource).toContain(
       "requestedDisplacementY: firstDragTarget.requestedDisplacementY"
     );
