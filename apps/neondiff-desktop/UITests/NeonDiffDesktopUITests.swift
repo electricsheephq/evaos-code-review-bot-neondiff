@@ -2564,10 +2564,11 @@ final class NeonDiffDesktopUITests: XCTestCase {
         for index in 0..<chunkCount {
             let identifier = "neondiff-logs-visible-tail-chunk-\(index)"
             let query = app.descendants(matching: .any).matching(identifier: identifier)
-            guard query.count == 1 else {
+            let chunk = query.element(boundBy: 0)
+            guard chunk.waitForExistence(timeout: 2) else {
                 throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
             }
-            let label = query.element(boundBy: 0).label
+            let label = chunk.label
             let prefix = "ndlv1:\(index):\(chunkCount):"
             guard label.utf8.count <= 128,
                   label.hasPrefix(prefix),

@@ -606,6 +606,7 @@ releaseTabbedAlternative()
 
   it("encodes the hosted contract for each sidebar page outer-scroll bottom reachability", () => {
     const source = readFileSync(uiTestPath, "utf8");
+    const maskedSource = maskSwiftCommentsAndLiterals(source);
     const pageSources = [
       ["overview", "OverviewView.swift"],
       ["repos", "ReposView.swift"],
@@ -626,17 +627,18 @@ releaseTabbedAlternative()
       'proofBoundary: "hosted-outer-page-bottom-reachability-only-inner-scroll-exhaustion-excluded"'
     );
     expect(
-      source.match(/outerPageScrollTarget\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
+      maskedSource.match(/outerPageScrollTarget\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
     ).toHaveLength(1);
     const checkpointSource = extractBalancedSwiftDeclaration(
       source,
       "private func capturePageBottomCheckpoint("
     );
-    expect(checkpointSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
-    expect(checkpointSource).not.toMatch(
+    const maskedCheckpointSource = maskSwiftCommentsAndLiterals(checkpointSource);
+    expect(maskedCheckpointSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
+    expect(maskedCheckpointSource).not.toMatch(
       /\.(?:swipe\w*|tap|click|press|drag|coordinate)\s*\(/
     );
-    expect(checkpointSource).not.toMatch(
+    expect(maskedCheckpointSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
     );
     expect(checkpointSource).not.toContain("bottomSentinel.isHittable");
@@ -910,6 +912,9 @@ releaseTabbedAlternative()
       source,
       "private func capturePageBottomCheckpoint("
     );
+    const maskedPageBottomCheckpointSource = maskSwiftCommentsAndLiterals(
+      pageBottomCheckpointSource
+    );
     expect(pageBottomCheckpointSource).toContain(
       "nestedScrollControlIdentifier: String? = nil"
     );
@@ -925,7 +930,7 @@ releaseTabbedAlternative()
     expect(pageBottomCheckpointSource).toContain(
       "let outerPageScrollTarget = nestedScrollGuard?.targetCoordinate"
     );
-    expect(pageBottomCheckpointSource).toContain(
+    expect(maskedPageBottomCheckpointSource).toContain(
       "outerPageScrollTarget.scroll(byDeltaX: 0, deltaY: -10_000)"
     );
     expect(pageBottomCheckpointSource).toContain(
@@ -1293,6 +1298,13 @@ releaseTabbedAlternative()
     expect(nativeVisibilityParserSource).toContain(
       "for index in 0..<chunkCount {"
     );
+    expect(nativeVisibilityParserSource).toContain(
+      "let chunk = query.element(boundBy: 0)"
+    );
+    expect(nativeVisibilityParserSource).toContain(
+      "guard chunk.waitForExistence(timeout: 2)"
+    );
+    expect(nativeVisibilityParserSource).not.toContain("query.count == 1");
     expect(nativeVisibilityParserSource).toContain(
       "guard label.utf8.count <= 128"
     );
