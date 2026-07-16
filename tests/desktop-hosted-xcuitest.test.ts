@@ -847,24 +847,47 @@ releaseTabbedAlternative()
     expect(helperSource).toContain(
       "outerPreparationCheckpoint: HostedPageBottomCheckpoint"
     );
+    expect(helperSource).toContain("var outerPreparationFailures: [String] = []");
+    for (const category of [
+      "section-mismatch",
+      "outer-scroll-identifier-mismatch",
+      "sentinel-identifier-mismatch",
+      "missing-scroll-action",
+      "scroll-action-control-mismatch",
+      "scroll-action-attempt-count",
+      "scroll-action-result",
+      "scroll-action-effect",
+      "missing-post-action-sample",
+      "post-sentinel-outside-outer",
+      "post-sentinel-outside-detail",
+      "outer-frame-drift",
+      "sentinel-frame-drift",
+      "inner-scroll-outside-outer",
+      "current-sentinel-outside-outer",
+    ]) {
+      expect(helperSource).toContain(`outerPreparationFailures.append("${category}")`);
+    }
+    expect(helperSource).toContain(
+      "outerPreparationNotEstablished(section: section, failedChecks: outerPreparationFailures)"
+    );
     expect(helperSource).toContain(
       'outerPreparationResult: "verified-page-bottom-before-inner-isolation-baseline"'
     );
-    expect(helperSource).toContain("outerPreparationNotEstablished(section)");
+    expect(helperSource).not.toContain("outerPreparationNotEstablished(section)");
     expect(helperSource).toContain(
       "preSample.scrollContainerFrame.isFullyContained("
     );
     expect(helperSource).toContain(
-      "outerPreparationCheckpoint.section == section"
+      "outerPreparationCheckpoint.section != section"
     );
     expect(helperSource).toContain(
-      "outerPreparationCheckpoint.outerScrollIdentifier == outerScrollIdentifier"
+      "outerPreparationCheckpoint.outerScrollIdentifier != outerScrollIdentifier"
     );
     expect(helperSource).toContain(
-      "outerPreparationCheckpoint.sentinelIdentifier == outerSentinelIdentifier"
+      "outerPreparationCheckpoint.sentinelIdentifier != outerSentinelIdentifier"
     );
     expect(helperSource).toContain(
-      "let preparedSample = outerPreparationCheckpoint.postActionSamples.last"
+      "if let preparedSample = outerPreparationCheckpoint.postActionSamples.last"
     );
     expect(helperSource).toContain(
       "preparedSample.outerScrollFrame.differs("

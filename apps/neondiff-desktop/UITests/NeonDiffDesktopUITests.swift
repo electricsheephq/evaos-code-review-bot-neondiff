@@ -1795,33 +1795,68 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalRowElementType: terminalRowElementType
         )
         let preTerminalValue = preSample.normalizedScrollValue
-        guard outerPreparationCheckpoint.section == section,
-              outerPreparationCheckpoint.outerScrollIdentifier == outerScrollIdentifier,
-              outerPreparationCheckpoint.sentinelIdentifier == outerSentinelIdentifier,
-              let outerPreparationAction = outerPreparationCheckpoint.scrollAction,
-              outerPreparationAction.controlIdentifier == outerScrollIdentifier,
-              outerPreparationAction.attemptCount == 1,
-              outerPreparationAction.result == "returned",
-              outerPreparationAction.effectProven,
-              let preparedSample = outerPreparationCheckpoint.postActionSamples.last,
-              preparedSample.sentinelFullyContainedInOuterScroll,
-              preparedSample.sentinelFullyContainedInDetailRegion,
-              !preparedSample.outerScrollFrame.differs(
-                  from: preSample.outerScrollFrame,
-                  byMoreThan: 1
-              ),
-              !preparedSample.sentinelFrame.differs(
-                  from: preSample.outerSentinelFrame,
-                  byMoreThan: 1
-              ),
-              preSample.scrollContainerFrame.isFullyContained(
+        var outerPreparationFailures: [String] = []
+        if outerPreparationCheckpoint.section != section {
+            outerPreparationFailures.append("section-mismatch")
+        }
+        if outerPreparationCheckpoint.outerScrollIdentifier != outerScrollIdentifier {
+            outerPreparationFailures.append("outer-scroll-identifier-mismatch")
+        }
+        if outerPreparationCheckpoint.sentinelIdentifier != outerSentinelIdentifier {
+            outerPreparationFailures.append("sentinel-identifier-mismatch")
+        }
+        if let outerPreparationAction = outerPreparationCheckpoint.scrollAction {
+            if outerPreparationAction.controlIdentifier != outerScrollIdentifier {
+                outerPreparationFailures.append("scroll-action-control-mismatch")
+            }
+            if outerPreparationAction.attemptCount != 1 {
+                outerPreparationFailures.append("scroll-action-attempt-count")
+            }
+            if outerPreparationAction.result != "returned" {
+                outerPreparationFailures.append("scroll-action-result")
+            }
+            if !outerPreparationAction.effectProven {
+                outerPreparationFailures.append("scroll-action-effect")
+            }
+        } else {
+            outerPreparationFailures.append("missing-scroll-action")
+        }
+        if let preparedSample = outerPreparationCheckpoint.postActionSamples.last {
+            if !preparedSample.sentinelFullyContainedInOuterScroll {
+                outerPreparationFailures.append("post-sentinel-outside-outer")
+            }
+            if !preparedSample.sentinelFullyContainedInDetailRegion {
+                outerPreparationFailures.append("post-sentinel-outside-detail")
+            }
+            if preparedSample.outerScrollFrame.differs(
+                from: preSample.outerScrollFrame,
+                byMoreThan: 1
+            ) {
+                outerPreparationFailures.append("outer-frame-drift")
+            }
+            if preparedSample.sentinelFrame.differs(
+                from: preSample.outerSentinelFrame,
+                byMoreThan: 1
+            ) {
+                outerPreparationFailures.append("sentinel-frame-drift")
+            }
+        } else {
+            outerPreparationFailures.append("missing-post-action-sample")
+        }
+        if !preSample.scrollContainerFrame.isFullyContained(
             in: preSample.outerScrollFrame,
             tolerance: 1
-        ), preSample.outerSentinelFrame.isFullyContained(
+        ) {
+            outerPreparationFailures.append("inner-scroll-outside-outer")
+        }
+        if !preSample.outerSentinelFrame.isFullyContained(
             in: preSample.outerScrollFrame,
             tolerance: 1
-        ) else {
-            throw HostedNativeInnerScrollTraceError.outerPreparationNotEstablished(section)
+        ) {
+            outerPreparationFailures.append("current-sentinel-outside-outer")
+        }
+        guard outerPreparationFailures.isEmpty else {
+            throw HostedNativeInnerScrollTraceError.outerPreparationNotEstablished(section: section, failedChecks: outerPreparationFailures)
         }
         guard preTerminalValue < 1 else {
             throw HostedNativeInnerScrollTraceError.invalidPreTerminalValue(
@@ -3469,7 +3504,7 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
     )
     case invalidSettledWindow(String)
     case invalidFrame
-    case outerPreparationNotEstablished(String)
+    case outerPreparationNotEstablished(section: String, failedChecks: [String])
     case outerPageMoved(String)
     case missingTerminalContent(String)
 
@@ -3533,8 +3568,9 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
                 + "control=\(controlIdentifier)"
         case .invalidFrame:
             "Hosted native inner-scroll geometry contains an invalid frame"
-        case .outerPreparationNotEstablished(let section):
-            "Hosted native inner-scroll outer page was not prepared at page bottom: \(section)"
+        case .outerPreparationNotEstablished(let section, let failedChecks):
+            "Hosted native inner-scroll outer page was not prepared at page bottom: "
+                + "section=\(section) failedChecks=\(failedChecks.joined(separator: ","))"
         case .outerPageMoved(let section):
             "Hosted outer page moved while scrolling its native inner control: \(section)"
         case .missingTerminalContent(let section):
