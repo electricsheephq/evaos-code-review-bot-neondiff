@@ -341,7 +341,7 @@ function maskSwiftCommentsAndLiterals(source: string): string {
 }
 
 const swiftXCUIActionMethodPattern =
-  /\.\s*(?:`(activate|launch|terminate|open|adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate)`|(activate|launch|terminate|open|adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate))\s*(?=\(|[;,)\]\s]|$)/g;
+  /\.\s*(?:`(activate|launch|terminate|open|resetAuthorizationStatus|adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate)`|(activate|launch|terminate|open|resetAuthorizationStatus|adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate))\s*(?=\(|[;,)\]\s]|$)/g;
 
 function swiftLiteralToken(literal: string): string {
   return `\u0000SWIFT_LITERAL_${Buffer.from(literal, "utf8").toString("base64url")}\u0000`;
@@ -483,13 +483,12 @@ function extractBalancedSwiftCallTokens(source: string, callName: string): strin
 
   for (const match of executable.matchAll(callPattern)) {
     const callStart = match.index;
-    const previous = callStart > 0 ? executable[callStart - 1] : "";
+    const previous = callStart > 0
+      ? Array.from(executable.slice(0, callStart)).at(-1) ?? ""
+      : "";
     if (
       previous &&
-      (/[A-Za-z0-9_$]/.test(previous) ||
-        (previous.charCodeAt(0) > 127 &&
-          !/\s/u.test(previous) &&
-          !/[()[\]{}.,:;=+*/%<>!&|^~?@#'"\\-]/u.test(previous)))
+      /[A-Za-z0-9_$]|\p{ID_Continue}|\p{Emoji_Presentation}/u.test(previous)
     ) {
       continue;
     }
@@ -512,6 +511,63 @@ function extractBalancedSwiftCallTokens(source: string, callName: string): strin
   }
 
   return calls;
+}
+
+function findSwiftConstructorIndirections(
+  source: string,
+  callNames: string[]
+): string[] {
+  const executable = projectSwiftExecutableTokens(source);
+  const findings: string[] = [];
+  if (/\btypealias\b/u.test(executable)) findings.push("typealias");
+
+  for (const callName of callNames) {
+    const escapedName = escapeRegExp(callName);
+    const name = "(?:`" + escapedName + "`|" + escapedName + ")";
+    if (new RegExp(`${name}\\s*\\.\\s*(?:\`init\`|init)\\b`, "gu").test(executable)) {
+      findings.push(`${callName}.init`);
+    }
+    if (new RegExp(`${name}\\s*\\.\\s*self\\b`, "gu").test(executable)) {
+      findings.push(`${callName}.self`);
+    }
+    if (new RegExp(`\\(\\s*${name}\\s*\\)\\s*\\(`, "gu").test(executable)) {
+      findings.push(`(${callName})(`);
+    }
+  }
+
+  return findings;
+}
+
+function swiftMemberAccesses(source: string, receiver: string): string[] {
+  const executable = projectSwiftExecutableTokens(source);
+  const pattern = new RegExp(
+    "\\b" + escapeRegExp(receiver) +
+      "\\s*\\.\\s*(?:`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*))",
+    "gu"
+  );
+  return [...executable.matchAll(pattern)].map((match) => match[1] ?? match[2]);
+}
+
+function swiftDirectMutations(source: string, receiver: string): string[] {
+  const executable = projectSwiftExecutableTokens(source);
+  const pattern = new RegExp(
+    `\\b${escapeRegExp(receiver)}\\s*(?:\\[[^\\]]*\\]\\s*)?(?:[+\\-*/%&|^]?=|<<=|>>=)`,
+    "gu"
+  );
+  return [...executable.matchAll(pattern)].map((match) => match[0]);
+}
+
+function swiftAssignmentValues(
+  source: string,
+  receiver: string,
+  member: string
+): string[] {
+  const executable = projectSwiftExecutableTokens(source);
+  const pattern = new RegExp(
+    `\\b${escapeRegExp(receiver)}\\s*\\.\\s*${escapeRegExp(member)}\\s*=\\s*([^;\\n]+)`,
+    "gu"
+  );
+  return [...executable.matchAll(pattern)].map((match) => match[1].trim());
 }
 
 function extractSwiftTopLevelArgumentValues(
@@ -640,6 +696,8 @@ outerPreparationFailures.append("right")
         [
           'FakeHostedNativeInnerScrollAction(mechanism: "decoy")',
           'ΩHostedNativeInnerScrollAction(mechanism: "unicode-decoy")',
+          '🧪HostedNativeInnerScrollAction(mechanism: "emoji-decoy")',
+          '±HostedNativeInnerScrollAction(mechanism: "operator-call")',
           'HostedNativeInnerScrollAction /* trivia */ (mechanism: "first")',
           'HostedNativeInnerScrollAction(mechanism: "second")',
           '`HostedNativeInnerScrollAction`(mechanism: "backticked")',
@@ -650,7 +708,22 @@ outerPreparationFailures.append("right")
         ].join("\n"),
         "HostedNativeInnerScrollAction"
       )
-    ).toHaveLength(5);
+    ).toHaveLength(6);
+    expect(
+      findSwiftConstructorIndirections(
+        "let make = HostedNativeInnerScrollAction.init; make()",
+        ["HostedNativeInnerScrollAction"]
+      )
+    ).toEqual(["HostedNativeInnerScrollAction.init"]);
+    expect(
+      findSwiftConstructorIndirections(
+        "let make = HostedNativeInnerScrollAction.self; (HostedNativeInnerScrollAction)()",
+        ["HostedNativeInnerScrollAction"]
+      )
+    ).toEqual([
+      "HostedNativeInnerScrollAction.self",
+      "(HostedNativeInnerScrollAction)(",
+    ]);
     const nestedArgumentProbe = extractBalancedSwiftCallTokens(
       String.raw`HostedNativeInnerScrollAction(
   nested: (mechanism: "decoy"),
@@ -677,6 +750,8 @@ outerPreparationFailures.append("right")
     expect(swiftXCUIActions("element.doubleTap()")).toEqual(["doubleTap"]);
     expect(swiftXCUIActions("app.activate(); app.launch(); app.terminate()"))
       .toEqual(["activate", "launch", "terminate"]);
+    expect(swiftXCUIActions("app.resetAuthorizationStatus(for: .camera)"))
+      .toEqual(["resetAuthorizationStatus"]);
     expect(
       projectSwiftExecutableTokens(
         String.raw`let hiddenLedger = "\(outerPreparationFailures.append("extra"))"`
@@ -900,6 +975,17 @@ releaseTabbedAlternative()
     );
     const maskedLogs = projectSwiftExecutableTokens(logs);
 
+    expect(
+      findSwiftConstructorIndirections(source, [
+        "HostedSettledGeometryTrace",
+        "HostedSidebarRouteStep",
+        "HostedNativeInnerScrollTrace",
+        "HostedNativeInnerScrollAction",
+        "HostedSettingsTextSizeRequest",
+        "HostedSettingsSceneTrace",
+      ])
+    ).toEqual([]);
+
     expect(maskedSource).toContain(
       "testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize"
     );
@@ -947,6 +1033,20 @@ releaseTabbedAlternative()
         String(generation),
       ]);
     }
+    const settledGeometryAttachSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func attach(_ trace: HostedSettledGeometryTrace)"
+    );
+    expect(swiftAssignmentValues(
+      settledGeometryAttachSource,
+      "attachment",
+      "name"
+    )).toEqual([swiftLiteralToken('"neondiff-hosted-settled-geometry.json"')]);
+    expect(
+      projectSwiftExecutableTokens(settledGeometryAttachSource).match(
+        /\badd\s*\(\s*attachment\s*\)/g
+      )
+    ).toHaveLength(1);
     expect(maskedSource).toContain("XCTAssertEqual(checkpoints.count, 8)");
     expect(maskedSource).toContain("XCTAssertEqual(navigationActions.count, 7)");
     expect(source).toContain(
@@ -1228,9 +1328,16 @@ releaseTabbedAlternative()
       source,
       "private func attach(_ trace: HostedNativeInnerScrollTrace)"
     );
-    expect(projectSwiftExecutableTokens(nativeTraceAttachSource)).toContain(
-      `attachment.name = ${swiftLiteralToken('"neondiff-hosted-native-inner-scroll.json"')}`
-    );
+    expect(swiftAssignmentValues(
+      nativeTraceAttachSource,
+      "attachment",
+      "name"
+    )).toEqual([swiftLiteralToken('"neondiff-hosted-native-inner-scroll.json"')]);
+    expect(
+      projectSwiftExecutableTokens(nativeTraceAttachSource).match(
+        /\badd\s*\(\s*attachment\s*\)/g
+      )
+    ).toHaveLength(1);
     expect(maskedScenarioSource).toContain("schemaVersion: 13");
     expect(maskedScenarioSource).toContain(
       "let reposGeometry = try captureCheckpoint("
@@ -1448,8 +1555,9 @@ releaseTabbedAlternative()
     );
     const maskedHelperSource = maskSwiftCommentsAndLiterals(helperSource);
     const executableHelperSource = projectSwiftExecutableTokens(helperSource);
-    expect(executableHelperSource).not.toMatch(/\.\s*(?:`init`|init)\s*\(/);
-    expect(executableHelperSource).not.toMatch(/\btypealias\b/);
+    expect(findSwiftConstructorIndirections(helperSource, [
+      "HostedNativeInnerScrollAction",
+    ])).toEqual([]);
     expect(maskedHelperSource).toContain(
       "outerPreparationCheckpoint: HostedPageBottomCheckpoint"
     );
@@ -1509,6 +1617,19 @@ releaseTabbedAlternative()
     expect(
       maskedHelperSource.match(/outerRestagingFailures\.(?:`append`|append)\s*\(\s*\)/g)
     ).toHaveLength(6);
+    expect(swiftMemberAccesses(helperSource, "outerPreparationFailures")).toEqual([
+      ...Array(22).fill("append"),
+      "isEmpty",
+    ]);
+    expect(swiftMemberAccesses(helperSource, "outerRestagingFailures")).toEqual([
+      ...Array(6).fill("append"),
+      "isEmpty",
+    ]);
+    expect(swiftDirectMutations(helperSource, "outerPreparationFailures")).toEqual([]);
+    expect(swiftDirectMutations(helperSource, "outerRestagingFailures")).toEqual([]);
+    expect(executableHelperSource).not.toMatch(
+      /&\s*(?:outerPreparationFailures|outerRestagingFailures)\b/
+    );
     expect(maskedHelperSource).toContain(
       "outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)"
     );
@@ -1664,25 +1785,61 @@ releaseTabbedAlternative()
     expect(
       extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "targetPoint")
     ).toEqual(["outerRestagingTargetPoint"]);
+    expect(
+      extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "elapsedMilliseconds")
+    ).toEqual(["restagingActionElapsedMilliseconds"]);
+    expect(
+      extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "attemptCount")
+    ).toEqual(["1"]);
+    expect(
+      extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "effectObserved")
+    ).toEqual(["restagingEffectObserved"]);
+    expect(
+      extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "effectProven")
+    ).toEqual(["true"]);
+    expect(
+      extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "result")
+    ).toEqual([
+      swiftLiteralToken(
+        '"returned-and-inner-viewport-contained-with-outer-translation-proven"'
+      ),
+    ]);
     for (const actionCall of innerScrollActionCalls.slice(1)) {
       expect(extractSwiftTopLevelArgumentValues(actionCall, "mechanism")).toEqual([
         swiftLiteralToken('"public-xcui-scrollbar-thumb-drag"'),
       ]);
     }
-    for (const [actionCall, prefix, postChain, observedTranslation] of [
+    for (const [
+      actionCall,
+      prefix,
+      postChain,
+      observedTranslation,
+      elapsedMilliseconds,
+      effectObserved,
+      result,
+    ] of [
       [
         innerScrollActionCalls[1],
         "firstDragTarget",
         "postFirstDragChain",
         "firstObservedThumbTranslationY",
+        "firstActionElapsedMilliseconds",
+        "true",
+        '"returned-and-terminal-value-proven"',
       ],
       [
         innerScrollActionCalls[2],
         "repeatDragTarget",
         "postRepeatChain",
         "repeatObservedThumbTranslationY",
+        "repeatActionElapsedMilliseconds",
+        "false",
+        '"returned-with-no-value-effect"',
       ],
     ] as const) {
+      expect(
+        extractSwiftTopLevelArgumentValues(actionCall, "elapsedMilliseconds")
+      ).toEqual([elapsedMilliseconds]);
       expect(extractSwiftTopLevelArgumentValues(actionCall, "sourcePoint")).toEqual([
         `${prefix}.sourcePoint`,
       ]);
@@ -1704,6 +1861,17 @@ releaseTabbedAlternative()
       expect(
         extractSwiftTopLevelArgumentValues(actionCall, "observedThumbTranslationY")
       ).toEqual([observedTranslation]);
+      expect(
+        extractSwiftTopLevelArgumentValues(actionCall, "normalizedTargetValue")
+      ).toEqual(["1"]);
+      expect(extractSwiftTopLevelArgumentValues(actionCall, "attemptCount"))
+        .toEqual(["1"]);
+      expect(extractSwiftTopLevelArgumentValues(actionCall, "effectObserved"))
+        .toEqual([effectObserved]);
+      expect(extractSwiftTopLevelArgumentValues(actionCall, "effectProven"))
+        .toEqual(["true"]);
+      expect(extractSwiftTopLevelArgumentValues(actionCall, "result"))
+        .toEqual([swiftLiteralToken(result)]);
     }
     expect(maskedHelperSource.match(/normalizedTargetValue: 1/g)).toHaveLength(2);
     expect(maskedHelperSource).toContain("sourcePoint: firstDragTarget.sourcePoint");
@@ -1855,6 +2023,28 @@ releaseTabbedAlternative()
     expect(
       extractSwiftTopLevelArgumentValues(hoverActionCalls[0], "mechanism")
     ).toEqual([swiftLiteralToken('"public-xcui-coordinate-hover"')]);
+    for (const [field, value] of [
+      ["elapsedMilliseconds", "actionElapsedMilliseconds"],
+      ["targetPoint", "hoverTarget.point"],
+      ["guardScrollBarFrame", "preHoverChain.scrollBarFrame"],
+      ["guardScrollBarFrameAfter", "finalChain.scrollBarFrame"],
+      ["guardThumbFrameBefore", "preHoverChain.thumbFrame"],
+      ["guardThumbFrameAfter", "finalChain.thumbFrame"],
+      ["normalizedValueBefore", "baselineSample.normalizedScrollValue"],
+      ["normalizedValueAfter", "last.innerScrollSample.normalizedScrollValue"],
+      ["guardThumbHittableBefore", "preHoverChain.thumbHittable"],
+      ["guardThumbHittableAfter", "finalChain.thumbHittable"],
+      ["attemptCount", "1"],
+      ["effectObserved", "effectObserved"],
+      ["effectProven", "true"],
+    ] as const) {
+      expect(extractSwiftTopLevelArgumentValues(hoverActionCalls[0], field))
+        .toEqual([value]);
+    }
+    expect(extractSwiftTopLevelArgumentValues(hoverActionCalls[0], "result"))
+      .toEqual([
+        `effectObserved\n                ? ${swiftLiteralToken('"returned-and-hittable-after-passive-settlement"')}\n                : ${swiftLiteralToken('"returned-and-hittability-confirmed-after-passive-settlement"')}`,
+      ]);
     expect(maskedHoverPreparationSource).toContain("for _ in 0..<maximumSampleAttempts");
     expect(maskedHoverPreparationSource).toContain("observedSamples.append(sample)");
     expect(maskedHoverPreparationSource).toContain("if samples.count == 3 { break }");
@@ -2277,9 +2467,16 @@ releaseTabbedAlternative()
       source,
       "private func attach(_ trace: HostedSettingsSceneTrace)"
     );
-    expect(projectSwiftExecutableTokens(settingsTraceAttachSource)).toContain(
-      `attachment.name = ${swiftLiteralToken('"neondiff-hosted-settings-scene.json"')}`
-    );
+    expect(swiftAssignmentValues(
+      settingsTraceAttachSource,
+      "attachment",
+      "name"
+    )).toEqual([swiftLiteralToken('"neondiff-hosted-settings-scene.json"')]);
+    expect(
+      projectSwiftExecutableTokens(settingsTraceAttachSource).match(
+        /\badd\s*\(\s*attachment\s*\)/g
+      )
+    ).toHaveLength(1);
     expect(settingsTextSizeCalls).toHaveLength(2);
     expect(
       extractSwiftTopLevelArgumentValues(settingsTextSizeCalls[0], "textSizeMode")
