@@ -675,7 +675,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
             throw HostedSettingsSceneTraceError.invalidAppKitGeometryPayload(context)
         }
         guard envelope.schemaVersion == 1,
-              envelope.coordinateSpace == "appkit-screen",
+              envelope.coordinateSpaces.windowFrame == "appkit-screen",
+              envelope.coordinateSpaces.contentLayoutRect == "appkit-window",
+              envelope.coordinateSpaces.contentLayoutScreenRect == "appkit-screen",
+              envelope.coordinateSpaces.visibleScreenFrame == "appkit-screen",
               envelope.samples.count == 3,
               let baseline = envelope.samples.first else {
             throw HostedSettingsSceneTraceError.invalidAppKitGeometryPayload(context)
@@ -2458,8 +2461,15 @@ private struct HostedSettingsSceneScenario: Codable {
 
 private struct HostedSettingsAppKitGeometryEnvelope: Codable {
     let schemaVersion: Int
-    let coordinateSpace: String
+    let coordinateSpaces: HostedSettingsAppKitCoordinateSpaces
     let samples: [HostedSettingsAppKitSample]
+}
+
+private struct HostedSettingsAppKitCoordinateSpaces: Codable {
+    let windowFrame: String
+    let contentLayoutRect: String
+    let contentLayoutScreenRect: String
+    let visibleScreenFrame: String
 }
 
 private struct HostedSettingsAppKitSample: Codable {

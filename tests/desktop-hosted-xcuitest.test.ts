@@ -696,7 +696,12 @@ private func target() {
       '"neondiff.evaluation.settings.appkit-geometry"'
     );
     expect(source).toContain("decodeAndValidateSettingsAppKitGeometry");
-    expect(source).toContain('envelope.coordinateSpace == "appkit-screen"');
+    expect(source).toContain(
+      'envelope.coordinateSpaces.contentLayoutRect == "appkit-window"'
+    );
+    expect(source).toContain(
+      'envelope.coordinateSpaces.contentLayoutScreenRect == "appkit-screen"'
+    );
     expect(source).toContain("envelope.samples.count == 3");
     expect(source).toContain("sample.contentLayoutRect.matches(");
     expect(source).toContain("sample.contentLayoutScreenRect.matches(");

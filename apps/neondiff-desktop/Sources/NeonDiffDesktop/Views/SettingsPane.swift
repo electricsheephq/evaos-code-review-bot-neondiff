@@ -94,7 +94,12 @@ final class HostedSettingsEvaluationStatus: ObservableObject {
     fileprivate func markQuiescent(samples: [HostedSettingsWindowSample]) {
         let envelope = HostedSettingsWindowGeometryEnvelope(
             schemaVersion: 1,
-            coordinateSpace: "appkit-screen",
+            coordinateSpaces: HostedSettingsWindowCoordinateSpaces(
+                windowFrame: "appkit-screen",
+                contentLayoutRect: "appkit-window",
+                contentLayoutScreenRect: "appkit-screen",
+                visibleScreenFrame: "appkit-screen"
+            ),
             samples: samples
         )
         guard let data = try? JSONEncoder().encode(envelope) else {
@@ -244,8 +249,15 @@ struct HostedSettingsWindowConfigurator: NSViewRepresentable {
 
 fileprivate struct HostedSettingsWindowGeometryEnvelope: Codable {
     let schemaVersion: Int
-    let coordinateSpace: String
+    let coordinateSpaces: HostedSettingsWindowCoordinateSpaces
     let samples: [HostedSettingsWindowSample]
+}
+
+fileprivate struct HostedSettingsWindowCoordinateSpaces: Codable {
+    let windowFrame: String
+    let contentLayoutRect: String
+    let contentLayoutScreenRect: String
+    let visibleScreenFrame: String
 }
 
 fileprivate struct HostedSettingsWindowSample: Codable {
