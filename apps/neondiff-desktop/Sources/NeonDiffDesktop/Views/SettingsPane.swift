@@ -84,12 +84,24 @@ struct SettingsPane: View {
 final class HostedSettingsEvaluationStatus: ObservableObject {
     @Published private(set) var accessibilityIdentifier =
         "neondiff.evaluation.settings.rendering"
+    @Published private(set) var geometryPayload = "unavailable"
 
     func reset() {
         accessibilityIdentifier = "neondiff.evaluation.settings.rendering"
+        geometryPayload = "unavailable"
     }
 
-    func markQuiescent() {
+    fileprivate func markQuiescent(samples: [HostedSettingsWindowSample]) {
+        let envelope = HostedSettingsWindowGeometryEnvelope(
+            schemaVersion: 1,
+            coordinateSpace: "appkit-screen",
+            samples: samples
+        )
+        guard let data = try? JSONEncoder().encode(envelope) else {
+            geometryPayload = "encoding-failed"
+            return
+        }
+        geometryPayload = data.base64EncodedString()
         accessibilityIdentifier = "neondiff.evaluation.settings.quiescent"
     }
 }
@@ -118,14 +130,31 @@ extension View {
 
 private struct HostedSettingsEvaluationMarker: View {
     @ObservedObject var status: HostedSettingsEvaluationStatus
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        Color.clear
-            .frame(width: 1, height: 1)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("NeonDiff Settings evaluation state")
-            .accessibilityIdentifier(status.accessibilityIdentifier)
-            .allowsHitTesting(false)
+        ZStack {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("NeonDiff Settings evaluation state")
+                .accessibilityIdentifier(status.accessibilityIdentifier)
+
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("NeonDiff Settings observed text size")
+                .accessibilityIdentifier("neondiff.evaluation.settings.text-size")
+                .accessibilityValue(dynamicTypeSize.evaluationIdentifier)
+
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("NeonDiff Settings AppKit geometry")
+                .accessibilityIdentifier("neondiff.evaluation.settings.appkit-geometry")
+                .accessibilityValue(status.geometryPayload)
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -174,14 +203,16 @@ struct HostedSettingsWindowConfigurator: NSViewRepresentable {
                 var stableSamples: [HostedSettingsWindowSample] = []
                 while !Task.isCancelled,
                       ProcessInfo.processInfo.systemUptime <= deadline {
-                    guard let window = view?.window else {
+                    guard let window = view?.window,
+                          let visibleScreenFrame = window.screen?.visibleFrame else {
                         try? await Task.sleep(for: .milliseconds(20))
                         continue
                     }
                     window.contentView?.layoutSubtreeIfNeeded()
                     let sample = HostedSettingsWindowSample(
                         windowFrame: window.frame,
-                        contentLayoutRect: window.contentLayoutRect
+                        contentLayoutRect: window.contentLayoutRect,
+                        visibleScreenFrame: visibleScreenFrame
                     )
                     if let previous = stableSamples.last,
                        previous.differs(from: sample, byMoreThan: 1) {
@@ -191,7 +222,7 @@ struct HostedSettingsWindowConfigurator: NSViewRepresentable {
                     }
                     if stableSamples.count == 3 {
                         completed = true
-                        status.markQuiescent()
+                        status.markQuiescent(samples: stableSamples)
                         monitorTask = nil
                         return
                     }
@@ -208,9 +239,22 @@ struct HostedSettingsWindowConfigurator: NSViewRepresentable {
     }
 }
 
-private struct HostedSettingsWindowSample {
-    let windowFrame: CGRect
-    let contentLayoutRect: CGRect
+fileprivate struct HostedSettingsWindowGeometryEnvelope: Codable {
+    let schemaVersion: Int
+    let coordinateSpace: String
+    let samples: [HostedSettingsWindowSample]
+}
+
+fileprivate struct HostedSettingsWindowSample: Codable {
+    let windowFrame: HostedSettingsAppKitFrame
+    let contentLayoutRect: HostedSettingsAppKitFrame
+    let visibleScreenFrame: HostedSettingsAppKitFrame
+
+    init(windowFrame: CGRect, contentLayoutRect: CGRect, visibleScreenFrame: CGRect) {
+        self.windowFrame = HostedSettingsAppKitFrame(windowFrame)
+        self.contentLayoutRect = HostedSettingsAppKitFrame(contentLayoutRect)
+        self.visibleScreenFrame = HostedSettingsAppKitFrame(visibleScreenFrame)
+    }
 
     func differs(from other: Self, byMoreThan tolerance: CGFloat) -> Bool {
         windowFrame.differs(from: other.windowFrame, byMoreThan: tolerance)
@@ -218,15 +262,51 @@ private struct HostedSettingsWindowSample {
                 from: other.contentLayoutRect,
                 byMoreThan: tolerance
             )
+            || visibleScreenFrame.differs(
+                from: other.visibleScreenFrame,
+                byMoreThan: tolerance
+            )
     }
 }
 
-private extension CGRect {
-    func differs(from other: CGRect, byMoreThan tolerance: CGFloat) -> Bool {
-        abs(origin.x - other.origin.x) > tolerance
-            || abs(origin.y - other.origin.y) > tolerance
+fileprivate struct HostedSettingsAppKitFrame: Codable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+
+    init(_ rect: CGRect) {
+        x = rect.origin.x
+        y = rect.origin.y
+        width = rect.width
+        height = rect.height
+    }
+
+    func differs(from other: Self, byMoreThan tolerance: CGFloat) -> Bool {
+        abs(x - other.x) > tolerance
+            || abs(y - other.y) > tolerance
             || abs(width - other.width) > tolerance
             || abs(height - other.height) > tolerance
+    }
+}
+
+private extension DynamicTypeSize {
+    var evaluationIdentifier: String {
+        switch self {
+        case .xSmall: "x-small"
+        case .small: "small"
+        case .medium: "medium"
+        case .large: "large"
+        case .xLarge: "x-large"
+        case .xxLarge: "xx-large"
+        case .xxxLarge: "xxx-large"
+        case .accessibility1: "accessibility1"
+        case .accessibility2: "accessibility2"
+        case .accessibility3: "accessibility3"
+        case .accessibility4: "accessibility4"
+        case .accessibility5: "accessibility5"
+        @unknown default: "unknown"
+        }
     }
 }
 #endif

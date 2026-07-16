@@ -478,7 +478,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 samplingDeadlineMilliseconds: 5_000,
                 tolerancePoints: 1,
                 scenarios: scenarios,
-                proofBoundary: "hosted-separate-settings-scene-560x700-default-and-accessibility3-outer-geometry-and-page-bottom-only-system-preference-inner-scroll-manual-excluded"
+                proofBoundary: "hosted-separate-settings-root-and-appkit-content-layout-560x700-default-and-observed-accessibility3-visible-screen-outer-page-bottom-only-system-preference-inner-scroll-manual-excluded"
             )
         )
     }
@@ -551,6 +551,37 @@ final class NeonDiffDesktopUITests: XCTestCase {
         guard !marker.isHittable else {
             throw HostedSettingsSceneTraceError.interactiveQuiescenceMarker
         }
+        let textSizeMarker = app.descendants(matching: .any)[
+            "neondiff.evaluation.settings.text-size"
+        ]
+        guard textSizeMarker.waitForExistence(timeout: 2),
+              let observedTextSize = textSizeMarker.value as? String,
+              !observedTextSize.isEmpty,
+              observedTextSize != "unknown" else {
+            throw HostedSettingsSceneTraceError.invalidObservedTextSize(
+                request.textSizeMode
+            )
+        }
+        if request.textSizeArgument == "accessibility3",
+           observedTextSize != "accessibility3" {
+            throw HostedSettingsSceneTraceError.unexpectedObservedTextSize(
+                expected: "accessibility3",
+                observed: observedTextSize
+            )
+        }
+        let geometryMarker = app.descendants(matching: .any)[
+            "neondiff.evaluation.settings.appkit-geometry"
+        ]
+        guard geometryMarker.waitForExistence(timeout: 2) else {
+            throw HostedSettingsSceneTraceError.missingElement(
+                "neondiff.evaluation.settings.appkit-geometry"
+            )
+        }
+        let appKitGeometry = try decodeAndValidateSettingsAppKitGeometry(
+            marker: geometryMarker,
+            requestedContentSize: requestedContentSize,
+            context: request.textSizeMode
+        )
         let outerScroll = app.descendants(matching: .any)[
             "neondiff-settings-outer-scroll"
         ]
@@ -617,13 +648,74 @@ final class NeonDiffDesktopUITests: XCTestCase {
         return HostedSettingsSceneScenario(
             textSizeMode: request.textSizeMode,
             launchTextSizeArgument: request.textSizeArgument,
+            observedSettingsTextSize: observedTextSize,
             fixtureRootIdentifier: rootIdentifier,
             quiescenceMarkerIdentifier: markerIdentifier,
             openAction: openAction,
+            appKitGeometry: appKitGeometry,
             preActionSamples: preActionSamples,
             scrollAction: scrollAction,
             postActionSamples: postActionSamples
         )
+    }
+
+    private func decodeAndValidateSettingsAppKitGeometry(
+        marker: XCUIElement,
+        requestedContentSize: HostedContentSize,
+        context: String
+    ) throws -> HostedSettingsAppKitGeometryEnvelope {
+        guard let encodedPayload = marker.value as? String,
+              encodedPayload != "unavailable",
+              encodedPayload != "encoding-failed",
+              let data = Data(base64Encoded: encodedPayload),
+              let envelope = try? JSONDecoder().decode(
+                  HostedSettingsAppKitGeometryEnvelope.self,
+                  from: data
+              ) else {
+            throw HostedSettingsSceneTraceError.invalidAppKitGeometryPayload(context)
+        }
+        guard envelope.schemaVersion == 1,
+              envelope.coordinateSpace == "appkit-screen",
+              envelope.samples.count == 3,
+              let baseline = envelope.samples.first else {
+            throw HostedSettingsSceneTraceError.invalidAppKitGeometryPayload(context)
+        }
+        for sample in envelope.samples {
+            guard sample.windowFrame.isFiniteAndNonempty,
+                  sample.contentLayoutRect.isFiniteAndNonempty,
+                  sample.visibleScreenFrame.isFiniteAndNonempty,
+                  sample.contentLayoutRect.matches(
+                      requestedContentSize,
+                      tolerance: 1
+                  ),
+                  sample.contentLayoutRect.isFullyContained(
+                      in: sample.windowFrame,
+                      tolerance: 1
+                  ),
+                  sample.windowFrame.isFullyContained(
+                      in: sample.visibleScreenFrame,
+                      tolerance: 1
+                  ) else {
+                throw HostedSettingsSceneTraceError.invalidAppKitGeometry(context)
+            }
+        }
+        for sample in envelope.samples.dropFirst() {
+            guard !baseline.windowFrame.differs(
+                      from: sample.windowFrame,
+                      byMoreThan: 1
+                  ),
+                  !baseline.contentLayoutRect.differs(
+                      from: sample.contentLayoutRect,
+                      byMoreThan: 1
+                  ),
+                  !baseline.visibleScreenFrame.differs(
+                      from: sample.visibleScreenFrame,
+                      byMoreThan: 1
+                  ) else {
+                throw HostedSettingsSceneTraceError.unstableAppKitGeometry(context)
+            }
+        }
+        return envelope
     }
 
     private func captureStableSettingsSceneSamples(
@@ -2342,12 +2434,57 @@ private struct HostedSettingsSceneSample: Codable, Equatable {
 private struct HostedSettingsSceneScenario: Codable {
     let textSizeMode: String
     let launchTextSizeArgument: String?
+    let observedSettingsTextSize: String
     let fixtureRootIdentifier: String
     let quiescenceMarkerIdentifier: String
     let openAction: HostedSettingsOpenAction
+    let appKitGeometry: HostedSettingsAppKitGeometryEnvelope
     let preActionSamples: [HostedSettingsSceneSample]
     let scrollAction: HostedSettingsScrollAction?
     let postActionSamples: [HostedSettingsSceneSample]
+}
+
+private struct HostedSettingsAppKitGeometryEnvelope: Codable {
+    let schemaVersion: Int
+    let coordinateSpace: String
+    let samples: [HostedSettingsAppKitSample]
+}
+
+private struct HostedSettingsAppKitSample: Codable {
+    let windowFrame: HostedSettingsAppKitFrame
+    let contentLayoutRect: HostedSettingsAppKitFrame
+    let visibleScreenFrame: HostedSettingsAppKitFrame
+}
+
+private struct HostedSettingsAppKitFrame: Codable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+
+    var isFiniteAndNonempty: Bool {
+        x.isFinite && y.isFinite && width.isFinite && height.isFinite
+            && width > 0 && height > 0
+    }
+
+    func matches(_ size: HostedContentSize, tolerance: Double) -> Bool {
+        abs(width - Double(size.width)) <= tolerance
+            && abs(height - Double(size.height)) <= tolerance
+    }
+
+    func isFullyContained(in container: Self, tolerance: Double) -> Bool {
+        x >= container.x - tolerance
+            && y >= container.y - tolerance
+            && x + width <= container.x + container.width + tolerance
+            && y + height <= container.y + container.height + tolerance
+    }
+
+    func differs(from other: Self, byMoreThan tolerance: Double) -> Bool {
+        abs(x - other.x) > tolerance
+            || abs(y - other.y) > tolerance
+            || abs(width - other.width) > tolerance
+            || abs(height - other.height) > tolerance
+    }
 }
 
 private struct HostedSettingsSceneTrace: Codable {
@@ -2544,6 +2681,11 @@ private enum HostedSettingsSceneTraceError: LocalizedError {
     case appNotForeground
     case missingElement(String)
     case interactiveQuiescenceMarker
+    case invalidObservedTextSize(String)
+    case unexpectedObservedTextSize(expected: String, observed: String)
+    case invalidAppKitGeometryPayload(String)
+    case invalidAppKitGeometry(String)
+    case unstableAppKitGeometry(String)
     case unexpectedWindowCount(before: Int, after: Int)
     case invalidFrame(String)
     case unexpectedContentSize(
@@ -2567,6 +2709,17 @@ private enum HostedSettingsSceneTraceError: LocalizedError {
             "Missing hosted Settings element: \(identifier)"
         case .interactiveQuiescenceMarker:
             "Hosted Settings quiescence marker is unexpectedly interactive"
+        case .invalidObservedTextSize(let context):
+            "Hosted Settings did not expose its observed text size: \(context)"
+        case let .unexpectedObservedTextSize(expected, observed):
+            "Hosted Settings observed text size does not match the override: "
+                + "expected=\(expected) observed=\(observed)"
+        case .invalidAppKitGeometryPayload(let context):
+            "Hosted Settings AppKit geometry payload is invalid: \(context)"
+        case .invalidAppKitGeometry(let context):
+            "Hosted Settings AppKit geometry is invalid or not contained: \(context)"
+        case .unstableAppKitGeometry(let context):
+            "Hosted Settings AppKit geometry drift exceeded one point: \(context)"
         case let .unexpectedWindowCount(before, after):
             "Hosted Settings command did not create exactly one window: "
                 + "before=\(before) after=\(after)"
