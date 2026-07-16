@@ -338,6 +338,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
             markerIdentifier: reposMarker,
             requestedContentSize: requestedContentSize
         )
+        let reposOuter = try capturePageBottomCheckpoint(
+            app: app,
+            section: "repos",
+            generation: 0,
+            markerIdentifier: reposMarker,
+            outerScrollIdentifier: "neondiff-repos-outer-scroll",
+            sentinelIdentifier: "neondiff-repos-page-bottom"
+        )
         let reposInner = try captureNativeInnerScrollExhaustion(
             app: app,
             section: "repos",
@@ -347,16 +355,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalRowElementType: .outlineRow,
             outerScrollIdentifier: "neondiff-repos-outer-scroll",
             outerSentinelIdentifier: "neondiff-repos-page-bottom",
+            outerPreparationCheckpoint: reposOuter,
             terminalVisibleText: "synthetic-org/repo-040",
             terminalValueToken: nil
-        )
-        let reposOuter = try capturePageBottomCheckpoint(
-            app: app,
-            section: "repos",
-            generation: 0,
-            markerIdentifier: reposMarker,
-            outerScrollIdentifier: "neondiff-repos-outer-scroll",
-            sentinelIdentifier: "neondiff-repos-page-bottom"
         )
 
         let logsNavigation = try clickNavigation(
@@ -374,6 +375,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
             markerIdentifier: logsMarker,
             requestedContentSize: requestedContentSize
         )
+        let logsOuter = try capturePageBottomCheckpoint(
+            app: app,
+            section: "logs",
+            generation: 1,
+            markerIdentifier: logsMarker,
+            outerScrollIdentifier: "neondiff-logs-outer-scroll",
+            sentinelIdentifier: "neondiff-logs-page-bottom"
+        )
         let logsInner = try captureNativeInnerScrollExhaustion(
             app: app,
             section: "logs",
@@ -383,16 +392,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalRowElementType: nil,
             outerScrollIdentifier: "neondiff-logs-outer-scroll",
             outerSentinelIdentifier: "neondiff-logs-page-bottom",
+            outerPreparationCheckpoint: logsOuter,
             terminalVisibleText: nil,
             terminalValueToken: "HOSTED_INNER_SCROLL_SAFE_TAIL_070"
-        )
-        let logsOuter = try capturePageBottomCheckpoint(
-            app: app,
-            section: "logs",
-            generation: 1,
-            markerIdentifier: logsMarker,
-            outerScrollIdentifier: "neondiff-logs-outer-scroll",
-            sentinelIdentifier: "neondiff-logs-page-bottom"
         )
 
         guard (testRun?.failureCount ?? 0) == 0 else {
@@ -400,7 +402,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 3,
+                schemaVersion: 4,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
@@ -409,7 +411,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 innerScrollCheckpoints: [reposInner, logsInner],
                 navigationActions: [logsNavigation],
                 outerPageBottomCheckpoints: [reposOuter, logsOuter],
-                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
+                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-outer-page-bottom-prepared-before-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
             )
         )
     }
@@ -1712,6 +1714,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         terminalRowElementType: XCUIElement.ElementType?,
         outerScrollIdentifier: String,
         outerSentinelIdentifier: String,
+        outerPreparationCheckpoint: HostedPageBottomCheckpoint,
         terminalVisibleText: String?,
         terminalValueToken: String?
     ) throws -> HostedNativeInnerScrollCheckpoint {
@@ -1790,6 +1793,34 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalRowElementType: terminalRowElementType
         )
         let preTerminalValue = preSample.normalizedScrollValue
+        guard outerPreparationCheckpoint.section == section,
+              outerPreparationCheckpoint.outerScrollIdentifier == outerScrollIdentifier,
+              outerPreparationCheckpoint.sentinelIdentifier == outerSentinelIdentifier,
+              let outerPreparationAction = outerPreparationCheckpoint.scrollAction,
+              outerPreparationAction.controlIdentifier == outerScrollIdentifier,
+              outerPreparationAction.attemptCount == 1,
+              outerPreparationAction.result == "returned",
+              outerPreparationAction.effectProven,
+              let preparedSample = outerPreparationCheckpoint.postActionSamples.last,
+              preparedSample.sentinelFullyContainedInOuterScroll,
+              preparedSample.sentinelFullyContainedInDetailRegion,
+              !preparedSample.outerScrollFrame.differs(
+                  from: preSample.outerScrollFrame,
+                  byMoreThan: 1
+              ),
+              !preparedSample.sentinelFrame.differs(
+                  from: preSample.outerSentinelFrame,
+                  byMoreThan: 1
+              ),
+              preSample.scrollContainerFrame.isFullyContained(
+            in: preSample.outerScrollFrame,
+            tolerance: 1
+        ), preSample.outerSentinelFrame.isFullyContained(
+            in: preSample.outerScrollFrame,
+            tolerance: 1
+        ) else {
+            throw HostedNativeInnerScrollTraceError.outerPreparationNotEstablished(section)
+        }
         guard preTerminalValue < 1 else {
             throw HostedNativeInnerScrollTraceError.invalidPreTerminalValue(
                 controlIdentifier: controlIdentifier,
@@ -1912,6 +1943,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
             scrollContainerElementType: "scroll-view",
             scrollContainerCount: scrollContainers.count,
             verticalScrollBarCount: verticalScrollBars.count,
+            outerPreparationCheckpoint: outerPreparationCheckpoint,
+            outerPreparationResult: "verified-page-bottom-before-inner-isolation-baseline",
             preTerminalValue: preTerminalValue,
             terminalValue: terminalValue,
             repeatTerminalValue: repeatTerminalValue,
@@ -3081,6 +3114,8 @@ private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let scrollContainerElementType: String
     let scrollContainerCount: Int
     let verticalScrollBarCount: Int
+    let outerPreparationCheckpoint: HostedPageBottomCheckpoint
+    let outerPreparationResult: String
     let preTerminalValue: Double
     let terminalValue: Double
     let repeatTerminalValue: Double
@@ -3407,6 +3442,7 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
     )
     case invalidSettledWindow(String)
     case invalidFrame
+    case outerPreparationNotEstablished(String)
     case outerPageMoved(String)
     case missingTerminalContent(String)
 
@@ -3470,6 +3506,8 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
                 + "control=\(controlIdentifier)"
         case .invalidFrame:
             "Hosted native inner-scroll geometry contains an invalid frame"
+        case .outerPreparationNotEstablished(let section):
+            "Hosted native inner-scroll outer page was not prepared at page bottom: \(section)"
         case .outerPageMoved(let section):
             "Hosted outer page moved while scrolling its native inner control: \(section)"
         case .missingTerminalContent(let section):

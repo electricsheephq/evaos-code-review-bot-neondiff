@@ -752,25 +752,75 @@ releaseTabbedAlternative()
     expect(source).toContain("HostedNativeInnerScrollTrace(");
     expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-outer-page-bottom-prepared-before-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
     );
 
     const scenarioSource = extractBalancedSwiftDeclaration(
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 3");
+    expect(scenarioSource).toContain("schemaVersion: 4");
     expect(scenarioSource).toContain("controlElementType: .outline");
     expect(scenarioSource).toContain('controlElementTypeName: "outline"');
     expect(scenarioSource).toContain("terminalRowElementType: .outlineRow");
+    expect(scenarioSource).toContain("outerPreparationCheckpoint: reposOuter");
     expect(scenarioSource).toContain("controlElementType: .textView");
     expect(scenarioSource).toContain('controlElementTypeName: "text-view"');
     expect(scenarioSource).toContain("terminalRowElementType: nil");
+    expect(scenarioSource).toContain("outerPreparationCheckpoint: logsOuter");
     expect(scenarioSource.match(/captureNativeInnerScrollExhaustion\s*\(/g)).toHaveLength(2);
     expect(scenarioSource.match(/capturePageBottomCheckpoint\s*\(/g)).toHaveLength(2);
+    const reposOuterPosition = scenarioSource.indexOf(
+      "let reposOuter = try capturePageBottomCheckpoint("
+    );
+    const reposInnerPosition = scenarioSource.indexOf(
+      "let reposInner = try captureNativeInnerScrollExhaustion("
+    );
+    const logsOuterPosition = scenarioSource.indexOf(
+      "let logsOuter = try capturePageBottomCheckpoint("
+    );
+    const logsInnerPosition = scenarioSource.indexOf(
+      "let logsInner = try captureNativeInnerScrollExhaustion("
+    );
+    expect(reposOuterPosition).toBeGreaterThan(-1);
+    expect(reposInnerPosition).toBeGreaterThan(reposOuterPosition);
+    expect(logsOuterPosition).toBeGreaterThan(-1);
+    expect(logsInnerPosition).toBeGreaterThan(logsOuterPosition);
+    expect(scenarioSource).toContain(
+      "outerPageBottomCheckpoints: [reposOuter, logsOuter]"
+    );
     const helperSource = extractBalancedSwiftDeclaration(
       source,
       "private func captureNativeInnerScrollExhaustion("
+    );
+    expect(helperSource).toContain(
+      "outerPreparationCheckpoint: HostedPageBottomCheckpoint"
+    );
+    expect(helperSource).toContain(
+      'outerPreparationResult: "verified-page-bottom-before-inner-isolation-baseline"'
+    );
+    expect(helperSource).toContain("outerPreparationNotEstablished(section)");
+    expect(helperSource).toContain(
+      "preSample.scrollContainerFrame.isFullyContained("
+    );
+    expect(helperSource).toContain(
+      "outerPreparationCheckpoint.section == section"
+    );
+    expect(helperSource).toContain(
+      "outerPreparationCheckpoint.outerScrollIdentifier == outerScrollIdentifier"
+    );
+    expect(helperSource).toContain(
+      "outerPreparationCheckpoint.sentinelIdentifier == outerSentinelIdentifier"
+    );
+    expect(helperSource).toContain(
+      "let preparedSample = outerPreparationCheckpoint.postActionSamples.last"
+    );
+    expect(helperSource).toContain(
+      "preparedSample.outerScrollFrame.differs("
+    );
+    expect(helperSource).toContain("preparedSample.sentinelFrame.differs(");
+    expect(helperSource).toContain(
+      "outerPreparationCheckpoint: outerPreparationCheckpoint"
     );
     expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(2);
     expect(helperSource).toContain("app.descendants(matching: .scrollView)");
