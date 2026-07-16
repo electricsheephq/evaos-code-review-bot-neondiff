@@ -3888,7 +3888,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
         attachment.name = "neondiff-hosted-settled-geometry.json"
         attachment.lifetime = .keepAlways
-        add(attachment)
+        self.add(attachment)
     }
 
     private func attach(_ trace: HostedPageBottomReachabilityTrace) throws {
@@ -3912,7 +3912,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
         attachment.name = "neondiff-hosted-native-inner-scroll.json"
         attachment.lifetime = .keepAlways
-        add(attachment)
+        self.add(attachment)
     }
 
     private func attach(_ trace: HostedCanonicalSizeMatrixTrace) throws {
@@ -3972,7 +3972,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
         attachment.name = "neondiff-hosted-settings-scene.json"
         attachment.lifetime = .keepAlways
-        add(attachment)
+        self.add(attachment)
     }
 
     private func attachTransportDiagnostic(_ diagnostic: HostedTransportDiagnostic) {

@@ -488,7 +488,7 @@ function extractBalancedSwiftCallTokens(source: string, callName: string): strin
       : "";
     if (
       previous &&
-      /[A-Za-z0-9_$]|\p{ID_Continue}|\p{Emoji_Presentation}/u.test(previous)
+      /[A-Za-z0-9_$]|\p{ID_Continue}/u.test(previous)
     ) {
       continue;
     }
@@ -520,17 +520,15 @@ function findSwiftConstructorIndirections(
   const executable = projectSwiftExecutableTokens(source);
   const findings: string[] = [];
   if (/\btypealias\b/u.test(executable)) findings.push("typealias");
+  if (/\.\s*(?:`init`|init)\b/u.test(executable)) findings.push(".init");
 
   for (const callName of callNames) {
     const escapedName = escapeRegExp(callName);
     const name = "(?:`" + escapedName + "`|" + escapedName + ")";
-    if (new RegExp(`${name}\\s*\\.\\s*(?:\`init\`|init)\\b`, "gu").test(executable)) {
-      findings.push(`${callName}.init`);
-    }
     if (new RegExp(`${name}\\s*\\.\\s*self\\b`, "gu").test(executable)) {
       findings.push(`${callName}.self`);
     }
-    if (new RegExp(`\\(\\s*${name}\\s*\\)\\s*\\(`, "gu").test(executable)) {
+    if (new RegExp(`(?:\\(\\s*)+${name}(?:\\s*\\))+\\s*\\(`, "gu").test(executable)) {
       findings.push(`(${callName})(`);
     }
   }
@@ -564,7 +562,7 @@ function swiftAssignmentValues(
 ): string[] {
   const executable = projectSwiftExecutableTokens(source);
   const pattern = new RegExp(
-    `\\b${escapeRegExp(receiver)}\\s*\\.\\s*${escapeRegExp(member)}\\s*=\\s*([^;\\n]+)`,
+    `\\b${escapeRegExp(receiver)}\\s*\\.\\s*(?:\`${escapeRegExp(member)}\`|${escapeRegExp(member)})\\s*=\\s*([^;\\n]+)`,
     "gu"
   );
   return [...executable.matchAll(pattern)].map((match) => match[1].trim());
@@ -696,7 +694,8 @@ outerPreparationFailures.append("right")
         [
           'FakeHostedNativeInnerScrollAction(mechanism: "decoy")',
           'ΩHostedNativeInnerScrollAction(mechanism: "unicode-decoy")',
-          '🧪HostedNativeInnerScrollAction(mechanism: "emoji-decoy")',
+          '🧪HostedNativeInnerScrollAction(mechanism: "conservative-emoji-prefix")',
+          '⏩HostedNativeInnerScrollAction(mechanism: "emoji-operator-call")',
           '±HostedNativeInnerScrollAction(mechanism: "operator-call")',
           'HostedNativeInnerScrollAction /* trivia */ (mechanism: "first")',
           'HostedNativeInnerScrollAction(mechanism: "second")',
@@ -708,16 +707,22 @@ outerPreparationFailures.append("right")
         ].join("\n"),
         "HostedNativeInnerScrollAction"
       )
-    ).toHaveLength(6);
+    ).toHaveLength(8);
     expect(
       findSwiftConstructorIndirections(
         "let make = HostedNativeInnerScrollAction.init; make()",
         ["HostedNativeInnerScrollAction"]
       )
-    ).toEqual(["HostedNativeInnerScrollAction.init"]);
+    ).toEqual([".init"]);
     expect(
       findSwiftConstructorIndirections(
-        "let make = HostedNativeInnerScrollAction.self; (HostedNativeInnerScrollAction)()",
+        "let value: HostedNativeInnerScrollAction = .init(mechanism: \"wrong\")",
+        ["HostedNativeInnerScrollAction"]
+      )
+    ).toEqual([".init"]);
+    expect(
+      findSwiftConstructorIndirections(
+        "let make = HostedNativeInnerScrollAction.self; ((HostedNativeInnerScrollAction))()",
         ["HostedNativeInnerScrollAction"]
       )
     ).toEqual([
@@ -759,6 +764,16 @@ outerPreparationFailures.append("right")
     ).toContain(
       `outerPreparationFailures.append(${swiftLiteralToken('"extra"')})`
     );
+    expect(
+      swiftAssignmentValues(
+        'attachment.name = "expected.json"\nattachment.`name` = "wrong.json"',
+        "attachment",
+        "name"
+      )
+    ).toEqual([
+      swiftLiteralToken('"expected.json"'),
+      swiftLiteralToken('"wrong.json"'),
+    ]);
   });
 
   it("projects DEBUG branches out of release source without directive decoys", () => {
@@ -1047,6 +1062,29 @@ releaseTabbedAlternative()
         /\badd\s*\(\s*attachment\s*\)/g
       )
     ).toHaveLength(1);
+    expect(
+      extractBalancedSwiftCallTokens(settledGeometryAttachSource, "add").map(
+        (call) => call.slice(call.indexOf("(") + 1, -1).trim()
+      )
+    ).toEqual(["attachment"]);
+    expect(projectSwiftExecutableTokens(settledGeometryAttachSource)).toMatch(
+      /\bself\s*\.\s*(?:`add`|add)\s*\(\s*attachment\s*\)/
+    );
+    expect(
+      projectSwiftExecutableTokens(settledGeometryAttachSource).match(
+        /(?:`add`|\badd\b)/g
+      )
+    ).toHaveLength(1);
+    expect(
+      projectSwiftExecutableTokens(settledGeometryAttachSource).match(
+        /\b(?:let|var)\s+attachment\b/g
+      )
+    ).toHaveLength(1);
+    expect(
+      projectSwiftExecutableTokens(settledGeometryAttachSource).match(
+        /\battachment\b/g
+      )
+    ).toHaveLength(4);
     expect(maskedSource).toContain("XCTAssertEqual(checkpoints.count, 8)");
     expect(maskedSource).toContain("XCTAssertEqual(navigationActions.count, 7)");
     expect(source).toContain(
@@ -1280,7 +1318,7 @@ releaseTabbedAlternative()
       resolveVisibleTextSource
     );
     expect(maskedResolveVisibleTextSource).toMatch(
-      /func\s+resolveAndObserveTextView\(\)\s*\{\s*resolutionScheduled\s*=\s*false\s*guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else\s*\{/
+      /func\s+resolveAndObserveTextView\(\)\s*\{\s*resolutionScheduled\s*=\s*false\s*guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else\s*\{\s*deactivateForAssistiveTechnology\(\)\s*return\s*\}/
     );
     const updateVisibleTextSource = extractBalancedSwiftDeclaration(
       logs,
@@ -1290,7 +1328,7 @@ releaseTabbedAlternative()
       updateVisibleTextSource
     );
     expect(maskedUpdateVisibleTextSource).toMatch(
-      /private\s+func\s+updateVisibility\(\)\s*\{\s*guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else\s*\{/
+      /private\s+func\s+updateVisibility\(\)\s*\{\s*guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else\s*\{\s*deactivateForAssistiveTechnology\(\)\s*return\s*\}/
     );
 
     expect(maskedSource).toContain("testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage");
@@ -1338,6 +1376,29 @@ releaseTabbedAlternative()
         /\badd\s*\(\s*attachment\s*\)/g
       )
     ).toHaveLength(1);
+    expect(
+      extractBalancedSwiftCallTokens(nativeTraceAttachSource, "add").map(
+        (call) => call.slice(call.indexOf("(") + 1, -1).trim()
+      )
+    ).toEqual(["attachment"]);
+    expect(projectSwiftExecutableTokens(nativeTraceAttachSource)).toMatch(
+      /\bself\s*\.\s*(?:`add`|add)\s*\(\s*attachment\s*\)/
+    );
+    expect(
+      projectSwiftExecutableTokens(nativeTraceAttachSource).match(
+        /(?:`add`|\badd\b)/g
+      )
+    ).toHaveLength(1);
+    expect(
+      projectSwiftExecutableTokens(nativeTraceAttachSource).match(
+        /\b(?:let|var)\s+attachment\b/g
+      )
+    ).toHaveLength(1);
+    expect(
+      projectSwiftExecutableTokens(nativeTraceAttachSource).match(
+        /\battachment\b/g
+      )
+    ).toHaveLength(4);
     expect(maskedScenarioSource).toContain("schemaVersion: 13");
     expect(maskedScenarioSource).toContain(
       "let reposGeometry = try captureCheckpoint("
@@ -1627,6 +1688,12 @@ releaseTabbedAlternative()
     ]);
     expect(swiftDirectMutations(helperSource, "outerPreparationFailures")).toEqual([]);
     expect(swiftDirectMutations(helperSource, "outerRestagingFailures")).toEqual([]);
+    expect(executableHelperSource.match(
+      /\b(?:let|var)\s+outerPreparationFailures\b/g
+    )).toHaveLength(1);
+    expect(executableHelperSource.match(
+      /\b(?:let|var)\s+outerRestagingFailures\b/g
+    )).toHaveLength(1);
     expect(executableHelperSource).not.toMatch(
       /&\s*(?:outerPreparationFailures|outerRestagingFailures)\b/
     );
@@ -2477,6 +2544,29 @@ releaseTabbedAlternative()
         /\badd\s*\(\s*attachment\s*\)/g
       )
     ).toHaveLength(1);
+    expect(
+      extractBalancedSwiftCallTokens(settingsTraceAttachSource, "add").map(
+        (call) => call.slice(call.indexOf("(") + 1, -1).trim()
+      )
+    ).toEqual(["attachment"]);
+    expect(projectSwiftExecutableTokens(settingsTraceAttachSource)).toMatch(
+      /\bself\s*\.\s*(?:`add`|add)\s*\(\s*attachment\s*\)/
+    );
+    expect(
+      projectSwiftExecutableTokens(settingsTraceAttachSource).match(
+        /(?:`add`|\badd\b)/g
+      )
+    ).toHaveLength(1);
+    expect(
+      projectSwiftExecutableTokens(settingsTraceAttachSource).match(
+        /\b(?:let|var)\s+attachment\b/g
+      )
+    ).toHaveLength(1);
+    expect(
+      projectSwiftExecutableTokens(settingsTraceAttachSource).match(
+        /\battachment\b/g
+      )
+    ).toHaveLength(4);
     expect(settingsTextSizeCalls).toHaveLength(2);
     expect(
       extractSwiftTopLevelArgumentValues(settingsTextSizeCalls[0], "textSizeMode")
