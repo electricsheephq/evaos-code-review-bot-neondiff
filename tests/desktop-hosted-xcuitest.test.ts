@@ -712,7 +712,7 @@ private func target() {
     expect(source).toContain("sample.contentLayoutScreenRect.matches(");
     expect(source).toContain("isFullyContainedInWindowBounds(");
     expect(source).toContain("sample.contentLayoutScreenRect.isFullyContained(");
-    expect(source).toContain("sample.windowFrame.isFullyContained(");
+    expect(source).toContain("sample.windowFrame.hasAccessibleTopEdge(");
     expect(source).toContain('"neondiff-settings-outer-scroll"');
     expect(source).toContain('"neondiff-settings-page-bottom"');
     expect(source).toContain("captureStableSettingsSceneSamples");
@@ -725,7 +725,7 @@ private func target() {
     expect(source).toContain("HostedSettingsSceneTrace(");
     expect(source).toContain("neondiff-hosted-settings-scene.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-separate-settings-root-and-appkit-content-layout-560x700-default-and-observed-accessibility3-visible-screen-outer-page-bottom-only-system-preference-inner-scroll-manual-excluded"'
+      'proofBoundary: "hosted-separate-settings-root-and-appkit-content-layout-560x700-default-and-observed-accessibility3-title-edge-and-outer-page-bottom-only-host-visible-screen-full-containment-system-preference-inner-scroll-manual-excluded"'
     );
     const settingsScenarioSource = extractBalancedSwiftDeclaration(
       source,
