@@ -8,11 +8,14 @@ struct NeonDiffDesktopApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model: NeonDiffDesktopModel
     @StateObject private var updateController: NeonUpdateController
+    @State private var settingsContentHeight =
+        SettingsWindowLayout.preferredContentHeight
 #if DEBUG
     private let evaluationContext: DesktopResolvedEvaluationLaunchContext?
     private let evaluationReadinessRequest: DesktopEvaluationReadinessRequest?
     private let evaluationRenderLatch: DesktopEvaluationRenderLatch?
     private let evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus?
+    @StateObject private var settingsEvaluationStatus = HostedSettingsEvaluationStatus()
 #endif
 
     init() {
@@ -102,15 +105,50 @@ struct NeonDiffDesktopApp: App {
         }
 
         Settings {
-            ZStack {
-                OperatorBackdrop()
-                SettingsPane(model: model, updateController: updateController)
-            }
-            .buttonStyle(OperatorButtonStyle())
-            .tint(NeonDiffTheme.accent)
-            .preferredColorScheme(preferredColorScheme)
-            .frame(width: 560)
+            evaluationTextSizedSettingsScene
         }
+    }
+
+    @ViewBuilder
+    private var evaluationTextSizedSettingsScene: some View {
+#if DEBUG
+        if evaluationContext?.textSizeMode == .accessibility3 {
+            settingsScene
+                .hostedSettingsEvaluationContent(
+                    enabled: true,
+                    status: settingsEvaluationStatus
+                )
+                .dynamicTypeSize(.accessibility3)
+        } else if evaluationContext != nil {
+            settingsScene
+                .hostedSettingsEvaluationContent(
+                    enabled: true,
+                    status: settingsEvaluationStatus
+                )
+        } else {
+            settingsScene
+        }
+#else
+        settingsScene
+#endif
+    }
+
+    private var settingsScene: some View {
+        ZStack {
+            OperatorBackdrop()
+            SettingsPane(model: model, updateController: updateController)
+        }
+        .buttonStyle(OperatorButtonStyle())
+        .tint(NeonDiffTheme.accent)
+        .preferredColorScheme(preferredColorScheme)
+        .frame(
+            width: SettingsWindowLayout.preferredContentWidth,
+            height: settingsContentHeight
+        )
+        .background(
+            SettingsWindowFitView(contentHeight: $settingsContentHeight)
+                .allowsHitTesting(false)
+        )
     }
 
     @ViewBuilder
@@ -275,6 +313,203 @@ struct NeonDiffDesktopApp: App {
 #else
         nil
 #endif
+    }
+}
+
+private enum SettingsWindowLayout {
+    static let preferredContentWidth: CGFloat = 560
+    static let preferredContentHeight: CGFloat = 700
+
+    static func fittedContentHeight(
+        visibleScreenHeight: CGFloat,
+        chromeHeight: CGFloat
+    ) -> CGFloat? {
+        guard visibleScreenHeight.isFinite,
+              visibleScreenHeight > 0,
+              chromeHeight.isFinite,
+              chromeHeight >= 0,
+              visibleScreenHeight > chromeHeight else {
+            return nil
+        }
+        return max(
+            1,
+            min(preferredContentHeight, floor(visibleScreenHeight - chromeHeight))
+        )
+    }
+}
+
+private struct SettingsWindowFitView: NSViewRepresentable {
+    @Binding var contentHeight: CGFloat
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.isHidden = true
+        DispatchQueue.main.async {
+            context.coordinator.attach(
+                to: view.window,
+                contentHeight: $contentHeight
+            )
+        }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            context.coordinator.attach(
+                to: view.window,
+                contentHeight: $contentHeight
+            )
+        }
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private weak var window: NSWindow?
+        private var contentHeight: Binding<CGFloat>?
+        private var pendingHeight: CGFloat?
+        private var pendingOriginContainment = false
+        private var attachmentGeneration = 0
+
+        func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>) {
+            self.contentHeight = contentHeight
+            guard self.window !== window else {
+                return
+            }
+            detachObservers()
+            attachmentGeneration += 1
+            pendingHeight = nil
+            pendingOriginContainment = false
+            self.window = window
+            guard let window else { return }
+            let center = NotificationCenter.default
+            center.addObserver(
+                self,
+                selector: #selector(windowScreenDidChange),
+                name: NSWindow.didChangeScreenNotification,
+                object: window
+            )
+            center.addObserver(
+                self,
+                selector: #selector(screenParametersDidChange),
+                name: NSApplication.didChangeScreenParametersNotification,
+                object: nil
+            )
+            fitWindow()
+        }
+
+        func detach() {
+            detachObservers()
+            attachmentGeneration += 1
+            window = nil
+            contentHeight = nil
+            pendingHeight = nil
+            pendingOriginContainment = false
+        }
+
+        @objc private func windowScreenDidChange(_ notification: Notification) {
+            fitWindow(containOrigin: false)
+        }
+
+        @objc private func screenParametersDidChange(_ notification: Notification) {
+            fitWindow()
+        }
+
+        private func fitWindow(containOrigin: Bool = true) {
+            guard let window,
+                  let contentHeight,
+                  let visibleFrame = window.screen?.visibleFrame else {
+                return
+            }
+            let windowFrame = window.frame
+            let contentLayoutRect = window.contentLayoutRect
+            let currentContentHeight = contentHeight.wrappedValue
+            guard Self.isFiniteNonempty(windowFrame),
+                  Self.isFiniteNonempty(contentLayoutRect),
+                  Self.isFiniteNonempty(visibleFrame),
+                  currentContentHeight.isFinite,
+                  currentContentHeight > 0 else {
+                return
+            }
+            let chromeHeight = windowFrame.height - contentLayoutRect.height
+            guard let targetHeight = SettingsWindowLayout.fittedContentHeight(
+                visibleScreenHeight: visibleFrame.height,
+                chromeHeight: chromeHeight
+            ) else {
+                return
+            }
+            if abs(currentContentHeight - targetHeight) > 0.5 {
+                if pendingHeight == targetHeight {
+                    pendingOriginContainment = pendingOriginContainment || containOrigin
+                    return
+                }
+                pendingHeight = targetHeight
+                pendingOriginContainment = containOrigin
+                let generation = attachmentGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          self.window === window,
+                          self.attachmentGeneration == generation,
+                          self.pendingHeight == targetHeight,
+                          let contentHeight = self.contentHeight else {
+                        return
+                    }
+                    let shouldContainOrigin = self.pendingOriginContainment
+                    contentHeight.wrappedValue = targetHeight
+                    self.pendingHeight = nil
+                    self.pendingOriginContainment = false
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self,
+                              self.window === window,
+                              self.attachmentGeneration == generation else {
+                            return
+                        }
+                        self.fitWindow(containOrigin: shouldContainOrigin)
+                    }
+                }
+                return
+            }
+            pendingHeight = nil
+            pendingOriginContainment = false
+            guard containOrigin else { return }
+            var origin = windowFrame.origin
+            origin.x = min(
+                max(origin.x, visibleFrame.minX),
+                max(visibleFrame.minX, visibleFrame.maxX - windowFrame.width)
+            )
+            origin.y = min(
+                max(origin.y, visibleFrame.minY),
+                max(visibleFrame.minY, visibleFrame.maxY - windowFrame.height)
+            )
+            if abs(origin.x - windowFrame.origin.x) > 0.5
+                || abs(origin.y - windowFrame.origin.y) > 0.5 {
+                window.setFrameOrigin(origin)
+            }
+        }
+
+        private static func isFiniteNonempty(_ rect: CGRect) -> Bool {
+            rect.origin.x.isFinite
+                && rect.origin.y.isFinite
+                && rect.width.isFinite
+                && rect.height.isFinite
+                && rect.width > 0
+                && rect.height > 0
+        }
+
+        private func detachObservers() {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
     }
 }
 

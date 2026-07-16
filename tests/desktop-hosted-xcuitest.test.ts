@@ -9,6 +9,10 @@ const testPlanPath = "apps/neondiff-desktop/NeonDiffDesktop.xctestplan";
 const uiTestPath = "apps/neondiff-desktop/UITests/NeonDiffDesktopUITests.swift";
 const themePath =
   "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/NeonDiffTheme.swift";
+const appPath =
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift";
+const settingsPath =
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/SettingsPane.swift";
 const workflowPath = ".github/workflows/swift-desktop-gate.yml";
 
 function extractBalancedSwiftDeclaration(
@@ -40,6 +44,99 @@ function extractBalancedSwiftDeclaration(
   }
 
   throw new Error(`Unbalanced Swift declaration body: ${declaration}`);
+}
+
+function projectSwiftReleaseSource(source: string): string {
+  const lines = source.match(/.*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const maskedLines =
+    maskSwiftCommentsAndLiterals(source).match(/.*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  if (maskedLines.length !== lines.length) {
+    throw new Error("Swift release projection line mismatch");
+  }
+  const frames: Array<{
+    kind: "debug" | "other";
+    parentIncluded: boolean;
+    debugBranchIncluded?: boolean;
+  }> = [];
+  const projected: string[] = [];
+  let included = true;
+
+  for (const [index, line] of lines.entries()) {
+    const directive = maskedLines[index].trim();
+    const ifMatch = directive.match(/^#if\s+(.+)$/);
+    if (ifMatch) {
+      const condition = ifMatch[1].trim();
+      if (condition === "DEBUG" || condition === "!DEBUG") {
+        const debugBranchIncluded = condition === "!DEBUG";
+        frames.push({
+          kind: "debug",
+          parentIncluded: included,
+          debugBranchIncluded,
+        });
+        included = included && debugBranchIncluded;
+        continue;
+      }
+      if (/\bDEBUG\b/.test(condition)) {
+        throw new Error(`Unsupported Swift DEBUG condition: ${directive}`);
+      }
+      frames.push({ kind: "other", parentIncluded: included });
+      if (included) projected.push(line);
+      continue;
+    }
+    if (directive.startsWith("#if")) {
+      throw new Error(`Unsupported Swift conditional directive: ${directive}`);
+    }
+    if (directive === "#else") {
+      const frame = frames.at(-1);
+      if (!frame) throw new Error("Unmatched Swift #else");
+      if (frame.kind === "debug") {
+        frame.debugBranchIncluded = !frame.debugBranchIncluded;
+        included = frame.parentIncluded && frame.debugBranchIncluded;
+      } else {
+        included = frame.parentIncluded;
+        if (included) projected.push(line);
+      }
+      continue;
+    }
+    const elseifMatch = directive.match(/^#elseif\s+(.+)$/);
+    if (elseifMatch) {
+      const frame = frames.at(-1);
+      if (!frame) throw new Error("Unmatched Swift #elseif");
+      const condition = elseifMatch[1].trim();
+      if (condition === "DEBUG") {
+        included = false;
+      } else if (condition === "!DEBUG") {
+        included = frame.parentIncluded;
+      } else {
+        if (/\bDEBUG\b/.test(condition)) {
+          throw new Error(`Unsupported Swift DEBUG condition: ${directive}`);
+        }
+        // Preserve every non-DEBUG alternative conservatively. This can make
+        // the contract false-fail, but cannot hide release-reachable symbols.
+        included = frame.parentIncluded;
+      }
+      if (frame.kind === "other" && included) {
+        projected.push(line);
+      }
+      continue;
+    }
+    if (directive.startsWith("#elseif")) {
+      throw new Error(`Unsupported Swift conditional directive: ${directive}`);
+    }
+    if (directive === "#endif") {
+      const frame = frames.pop();
+      if (!frame) throw new Error("Unmatched Swift #endif");
+      included = frame.parentIncluded;
+      if (frame.kind === "other" && included) projected.push(line);
+      continue;
+    }
+    if (included) projected.push(line);
+  }
+
+  if (frames.length !== 0) {
+    throw new Error("Unterminated Swift conditional compilation block");
+  }
+  return projected.join("");
 }
 
 function maskSwiftCommentsAndLiterals(source: string): string {
@@ -194,6 +291,45 @@ private func target() {
         "private func target()"
       )
     ).toThrow(/Ambiguous Swift declaration/);
+  });
+
+  it("projects DEBUG branches out of release source without directive decoys", () => {
+    const source = `
+let literalDecoy = """
+#if DEBUG
+#endif
+"""
+/*
+#if DEBUG
+#endif
+*/
+releaseBeforeConditional()
+#if DEBUG
+debugOnly()
+#elseif os(macOS)
+releaseAlternative()
+#else
+releaseFallback()
+#endif
+releaseAfterConditional()
+#if DEBUG
+debugTabOnly()
+#elseif\tos(macOS)
+releaseTabbedAlternative()
+#endif
+`;
+
+    const projected = projectSwiftReleaseSource(source);
+    expect(projected).toContain("releaseBeforeConditional()");
+    expect(projected).toContain("releaseAlternative()");
+    expect(projected).toContain("releaseFallback()");
+    expect(projected).toContain("releaseAfterConditional()");
+    expect(projected).toContain("releaseTabbedAlternative()");
+    expect(projected).not.toContain("debugOnly()");
+    expect(projected).not.toContain("debugTabOnly()");
+    expect(() =>
+      projectSwiftReleaseSource("#if DEBUG && os(macOS)\ndebugOnly()\n#endif\n")
+    ).toThrow(/Unsupported Swift DEBUG condition/);
   });
 
   it("checks in a shared app/UI-test project and test plan", () => {
@@ -415,7 +551,7 @@ private func target() {
     expect(
       source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
     ).toHaveLength(1);
-    expect(source.match(/\.scroll\s*\(/g)).toHaveLength(1);
+    expect(source.match(/\.scroll\s*\(/g)).toHaveLength(2);
     const checkpointSource = extractBalancedSwiftDeclaration(
       source,
       "private func capturePageBottomCheckpoint("
@@ -667,6 +803,206 @@ private func target() {
     expect(theme).toContain(
       ".font(.system(size: sectionTitleSize, weight: .bold, design: .monospaced))"
     );
+  });
+
+  it("pins the separate Settings scene canonical geometry contract", () => {
+    const source = readFileSync(uiTestPath, "utf8");
+    const app = readFileSync(appPath, "utf8");
+    const settings = readFileSync(settingsPath, "utf8");
+
+    expect(source).toContain(
+      "testSeparateSettingsSceneFitsVisibleScreenAndReachesPageBottom"
+    );
+    const settingsTestSource = extractBalancedSwiftDeclaration(
+      source,
+      "func testSeparateSettingsSceneFitsVisibleScreenAndReachesPageBottom()"
+    );
+    expect(settingsTestSource).toContain("schemaVersion: 2");
+    expect(source).toContain("HostedContentSize(width: 560, height: 700)");
+    expect(source).toContain(
+      'HostedSettingsTextSizeRequest(textSizeMode: "runner-default-no-test-override", textSizeArgument: nil)'
+    );
+    expect(source).toContain(
+      'HostedSettingsTextSizeRequest(textSizeMode: "swiftui-dynamic-type-accessibility3-test-override", textSizeArgument: "accessibility3")'
+    );
+    expect(source).toContain('app.typeKey(",", modifierFlags: [.command])');
+    expect(source).toContain('"neondiff-settings-evaluation-container"');
+    expect(source).toContain('"neondiff.evaluation.settings.quiescent"');
+    expect(source).toContain('"neondiff.evaluation.settings.text-size"');
+    expect(source).toContain('let textSizePrefix = "ndst1:"');
+    expect(source).toContain("let textSizeLabel = textSizeMarker.label");
+    expect(source).toContain('observedTextSize != "accessibility3"');
+    expect(source).toContain(
+      '"neondiff.evaluation.settings.appkit-geometry"'
+    );
+    expect(source).toContain("decodeAndValidateSettingsAppKitGeometry");
+    expect(source).toContain('let manifestPrefix = "ndsg1-chunks:"');
+    expect(source).toContain('let prefix = "ndsg1:\\(index):\\(chunkCount):"');
+    expect(source).toContain("let label = chunk.label");
+    expect(source).toContain(
+      'envelope.coordinateSpaces.contentLayoutRect == "appkit-window"'
+    );
+    expect(source).toContain(
+      'envelope.coordinateSpaces.contentLayoutScreenRect == "appkit-screen"'
+    );
+    expect(source).toContain("envelope.samples.count == 3");
+    expect(source).toContain(
+      "sample.contentLayoutRect.matchesFittedSettingsContent("
+    );
+    expect(source).toContain(
+      "sample.contentLayoutScreenRect.matchesFittedSettingsContent("
+    );
+    expect(source).toContain("isFullyContainedInWindowBounds(");
+    expect(source).toContain("sample.contentLayoutScreenRect.isFullyContained(");
+    expect(source).toContain("sample.windowFrame.isFullyContained(");
+    expect(source).toContain(
+      "observedAppKitContentLayoutSize: observedAppKitContentLayoutSize"
+    );
+    expect(source).toContain(
+      "observedAppKitWindowSize: observedAppKitWindowSize"
+    );
+    expect(source).toContain('"neondiff-settings-outer-scroll"');
+    expect(source).toContain('"neondiff-settings-page-bottom"');
+    expect(source).toContain("captureStableSettingsSceneSamples");
+    expect(source).toContain("samples.count == 3");
+    expect(source).toContain("finalCompletionElapsedMilliseconds <= 5_000");
+    expect(source).toContain("windowFrame.matches(expectedAppKitWindowSize");
+    expect(source).toContain("accessibilityContainerMatchesWindowFrame");
+    expect(source).toContain("projectedAppKitContentLayoutFrame");
+    expect(source).toContain(
+      "appKitContentLayoutScreenRect.x - appKitWindowFrame.x"
+    );
+    expect(source).toContain(
+      "appKitWindowFrame.maxY - appKitContentLayoutScreenRect.maxY"
+    );
+    expect(source).toContain(
+      "projectedAppKitContentLayoutFullyContainedInWindow"
+    );
+    expect(source).toContain(
+      "outerScrollFullyContainedInProjectedAppKitContentLayout"
+    );
+    expect(source).toContain("sentinelFullyContainedInOuterScroll");
+    expect(source).toContain("effectProven: true");
+    expect(source).toContain("scrollHadNoEffect");
+    expect(source).toContain("HostedSettingsSceneTrace(");
+    expect(source).toContain("neondiff-hosted-settings-scene.json");
+    expect(source).toContain(
+      'proofBoundary: "hosted-separate-settings-preferred-560x700-appkit-window-and-content-layout-fitted-to-observed-visible-screen-xcui-window-dimension-bridge-outer-scroll-contained-and-page-bottom-reachable-runner-default-and-swiftui-accessibility3-test-override-only-system-text-preference-inner-scroll-manual-voiceover-focus-control-hittability-localization-multidisplay-relocation-installed-release-excluded"'
+    );
+    const settingsScenarioSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func captureSettingsSceneScenario("
+    );
+    expect(settingsScenarioSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
+    expect(settingsScenarioSource).not.toMatch(
+      /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
+    );
+
+    expect(app).toContain("evaluationTextSizedSettingsScene");
+    expect(app).toContain("SettingsWindowLayout.preferredContentWidth");
+    expect(app).toContain("SettingsWindowLayout.fittedContentHeight(");
+    expect(app).toContain("SettingsWindowFitView(contentHeight:");
+    expect(app).toContain("window.screen?.visibleFrame");
+    expect(app).toContain("NSWindow.didChangeScreenNotification");
+    expect(app).toContain("NSApplication.didChangeScreenParametersNotification");
+    expect(app).not.toContain("NSWindow.didMoveNotification");
+    const screenChangeSource = extractBalancedSwiftDeclaration(
+      app,
+      "private func windowScreenDidChange("
+    );
+    expect(screenChangeSource).toContain("fitWindow(containOrigin: false)");
+    expect(app).toContain("static let preferredContentWidth: CGFloat = 560");
+    expect(app).toContain("static let preferredContentHeight: CGFloat = 700");
+    expect(app).toContain("floor(visibleScreenHeight - chromeHeight)");
+    expect(app).not.toContain("NSScreen.main?.visibleFrame.height");
+    const fittedHeightSource = extractBalancedSwiftDeclaration(
+      app,
+      "static func fittedContentHeight("
+    );
+    expect(fittedHeightSource).toContain("chromeHeight.isFinite");
+    expect(fittedHeightSource).toContain("chromeHeight >= 0");
+    expect(fittedHeightSource).toContain("visibleScreenHeight > chromeHeight");
+    const fitWindowSource = extractBalancedSwiftDeclaration(
+      app,
+      "private func fitWindow(containOrigin: Bool = true)"
+    );
+    expect(fitWindowSource).toContain(
+      "let chromeHeight = windowFrame.height - contentLayoutRect.height"
+    );
+    expect(fitWindowSource).toContain("Self.isFiniteNonempty(windowFrame)");
+    expect(fitWindowSource).toContain("Self.isFiniteNonempty(contentLayoutRect)");
+    expect(fitWindowSource).toContain("Self.isFiniteNonempty(visibleFrame)");
+    expect(fitWindowSource.match(/pendingHeight = nil/g)).toHaveLength(2);
+    expect(fitWindowSource).toContain("guard containOrigin else { return }");
+    expect(fitWindowSource).toContain(
+      "pendingOriginContainment = pendingOriginContainment || containOrigin"
+    );
+    expect(fitWindowSource).toContain(
+      "let shouldContainOrigin = self.pendingOriginContainment"
+    );
+    expect(fitWindowSource).toContain(
+      "self.fitWindow(containOrigin: shouldContainOrigin)"
+    );
+    const attachSource = extractBalancedSwiftDeclaration(
+      app,
+      "func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>)"
+    );
+    expect(attachSource).toMatch(
+      /attachmentGeneration \+= 1\s+pendingHeight = nil\s+pendingOriginContainment = false\s+self\.window = window/
+    );
+    expect(attachSource).toContain("pendingOriginContainment = false");
+    const detachSource = extractBalancedSwiftDeclaration(app, "func detach()");
+    expect(detachSource).toContain("pendingOriginContainment = false");
+    expect(app).toContain(".dynamicTypeSize(.accessibility3)");
+    expect(app).toContain("hostedSettingsEvaluationContent");
+    const settingsSceneSource = extractBalancedSwiftDeclaration(
+      app,
+      "private var evaluationTextSizedSettingsScene"
+    );
+    const hostedWrapperIndex = settingsSceneSource.indexOf(
+      ".hostedSettingsEvaluationContent("
+    );
+    const accessibilityOverrideIndex = settingsSceneSource.indexOf(
+      ".dynamicTypeSize(.accessibility3)"
+    );
+    expect(hostedWrapperIndex).toBeGreaterThan(-1);
+    expect(accessibilityOverrideIndex).toBeGreaterThan(hostedWrapperIndex);
+    expect(settings).toContain("HostedSettingsWindowConfigurator");
+    expect(settings).toContain("HostedSettingsEvaluationStatus");
+    expect(settings).toContain('"neondiff.evaluation.settings.quiescent"');
+    expect(settings).toContain('"neondiff-settings-evaluation-container"');
+    expect(settings).toContain('"neondiff.evaluation.settings.text-size"');
+    expect(settings).toContain('"neondiff.evaluation.settings.appkit-geometry"');
+    expect(settings).toContain("HostedSettingsGeometryAccessibilityChunk");
+    expect(settings).toContain("geometryAccessibilityManifest");
+    expect(settings).toContain("geometryAccessibilityChunks");
+    expect(settings).toContain('let chunkByteCount = 64');
+    expect(settings).toContain('let label = "ndsg1:');
+    expect(settings).toContain("guard label.utf8.count <= 128");
+    expect(settings).not.toContain(".accessibilityValue(");
+    expect(settings).toContain("visibleScreenFrame: visibleScreenFrame");
+    expect(settings).toContain("window.convertToScreen(");
+    expect(settings).toContain("status.markQuiescent(samples: stableSamples)");
+    expect(settings).toContain("if let baseline = stableSamples.first");
+    expect(settings).not.toContain("if let previous = stableSamples.last");
+    const releaseSettings = projectSwiftReleaseSource(settings);
+    for (const debugOnlySetting of [
+      "HostedSettingsWindowConfigurator",
+      "HostedSettingsEvaluationStatus",
+      "HostedSettingsGeometryAccessibilityChunk",
+      "neondiff.evaluation.settings.quiescent",
+      "neondiff-settings-evaluation-container",
+      "neondiff.evaluation.settings.text-size",
+      "neondiff.evaluation.settings.appkit-geometry",
+      "geometryAccessibilityManifest",
+      "geometryAccessibilityChunks",
+    ]) {
+      expect(releaseSettings).not.toContain(debugOnlySetting);
+    }
+    const releaseApp = projectSwiftReleaseSource(app);
+    expect(releaseApp).not.toContain("HostedSettingsEvaluationStatus");
+    expect(releaseApp).not.toContain("settingsEvaluationStatus");
+    expect(releaseApp).not.toContain(".hostedSettingsEvaluationContent(");
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {
