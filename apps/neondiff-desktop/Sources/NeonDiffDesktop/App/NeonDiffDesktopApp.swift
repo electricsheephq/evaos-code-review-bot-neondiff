@@ -380,11 +380,11 @@ private struct SettingsWindowFitView: NSViewRepresentable {
         func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>) {
             self.contentHeight = contentHeight
             guard self.window !== window else {
-                fitWindow(clampOrigin: true)
                 return
             }
             detachObservers()
             attachmentGeneration += 1
+            pendingHeight = nil
             self.window = window
             guard let window else { return }
             let center = NotificationCenter.default
@@ -396,17 +396,11 @@ private struct SettingsWindowFitView: NSViewRepresentable {
             )
             center.addObserver(
                 self,
-                selector: #selector(windowDidMove),
-                name: NSWindow.didMoveNotification,
-                object: window
-            )
-            center.addObserver(
-                self,
                 selector: #selector(screenParametersDidChange),
                 name: NSApplication.didChangeScreenParametersNotification,
                 object: nil
             )
-            fitWindow(clampOrigin: true)
+            fitWindow()
         }
 
         func detach() {
@@ -418,20 +412,14 @@ private struct SettingsWindowFitView: NSViewRepresentable {
         }
 
         @objc private func windowScreenDidChange(_ notification: Notification) {
-            fitWindow(clampOrigin: true)
-        }
-
-        @objc private func windowDidMove(_ notification: Notification) {
-            // Do not clamp during a live drag: the window must be allowed to cross
-            // the boundary far enough for AppKit to select its destination screen.
-            fitWindow(clampOrigin: false)
+            fitWindow()
         }
 
         @objc private func screenParametersDidChange(_ notification: Notification) {
-            fitWindow(clampOrigin: true)
+            fitWindow()
         }
 
-        private func fitWindow(clampOrigin: Bool) {
+        private func fitWindow() {
             guard let window,
                   let contentHeight,
                   let visibleFrame = window.screen?.visibleFrame else {
@@ -474,12 +462,12 @@ private struct SettingsWindowFitView: NSViewRepresentable {
                               self.attachmentGeneration == generation else {
                             return
                         }
-                        self.fitWindow(clampOrigin: clampOrigin)
+                        self.fitWindow()
                     }
                 }
                 return
             }
-            guard clampOrigin else { return }
+            pendingHeight = nil
             var origin = windowFrame.origin
             origin.x = min(
                 max(origin.x, visibleFrame.minX),

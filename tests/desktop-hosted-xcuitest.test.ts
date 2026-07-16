@@ -747,15 +747,15 @@ private func target() {
     expect(app).toContain("SettingsWindowFitView(contentHeight:");
     expect(app).toContain("window.screen?.visibleFrame");
     expect(app).toContain("NSWindow.didChangeScreenNotification");
-    expect(app).toContain("NSWindow.didMoveNotification");
     expect(app).toContain("NSApplication.didChangeScreenParametersNotification");
+    expect(app).not.toContain("NSWindow.didMoveNotification");
     expect(app).toContain("static let preferredContentWidth: CGFloat = 560");
     expect(app).toContain("static let preferredContentHeight: CGFloat = 700");
     expect(app).toContain("floor(visibleScreenHeight - chromeHeight)");
     expect(app).not.toContain("NSScreen.main?.visibleFrame.height");
     const fitWindowSource = extractBalancedSwiftDeclaration(
       app,
-      "private func fitWindow(clampOrigin: Bool)"
+      "private func fitWindow()"
     );
     expect(fitWindowSource).toContain(
       "let chromeHeight = windowFrame.height - contentLayoutRect.height"
@@ -763,13 +763,15 @@ private func target() {
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(windowFrame)");
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(contentLayoutRect)");
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(visibleFrame)");
-    expect(fitWindowSource).toContain("guard clampOrigin else { return }");
     expect(fitWindowSource).not.toMatch(/let chromeHeight\s*=\s*max\s*\(/);
-    const moveHandlerSource = extractBalancedSwiftDeclaration(
+    expect(fitWindowSource.match(/pendingHeight = nil/g)).toHaveLength(2);
+    const attachSource = extractBalancedSwiftDeclaration(
       app,
-      "@objc private func windowDidMove(_ notification: Notification)"
+      "func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>)"
     );
-    expect(moveHandlerSource).toContain("fitWindow(clampOrigin: false)");
+    expect(attachSource).toMatch(
+      /attachmentGeneration \+= 1\s+pendingHeight = nil\s+self\.window = window/
+    );
     expect(app).toContain(".dynamicTypeSize(.accessibility3)");
     expect(app).toContain("hostedSettingsEvaluationContent");
     const settingsSceneSource = extractBalancedSwiftDeclaration(
