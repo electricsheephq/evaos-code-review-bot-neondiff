@@ -342,8 +342,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             app: app,
             section: "repos",
             controlIdentifier: "neondiff-repos-table",
-            controlElementType: .table,
-            controlElementTypeName: "table",
+            controlElementType: .outline,
+            controlElementTypeName: "outline",
+            terminalRowElementType: .outlineRow,
             outerScrollIdentifier: "neondiff-repos-outer-scroll",
             outerSentinelIdentifier: "neondiff-repos-page-bottom",
             terminalVisibleText: "synthetic-org/repo-040",
@@ -379,6 +380,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             controlIdentifier: "neondiff-logs-text-editor",
             controlElementType: .textView,
             controlElementTypeName: "text-view",
+            terminalRowElementType: nil,
             outerScrollIdentifier: "neondiff-logs-outer-scroll",
             outerSentinelIdentifier: "neondiff-logs-page-bottom",
             terminalVisibleText: nil,
@@ -398,7 +400,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 2,
+                schemaVersion: 3,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
@@ -1707,6 +1709,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         controlIdentifier: String,
         controlElementType: XCUIElement.ElementType,
         controlElementTypeName: String,
+        terminalRowElementType: XCUIElement.ElementType?,
         outerScrollIdentifier: String,
         outerSentinelIdentifier: String,
         terminalVisibleText: String?,
@@ -1737,12 +1740,33 @@ final class NeonDiffDesktopUITests: XCTestCase {
             throw HostedNativeInnerScrollTraceError.missingElement(outerSentinelIdentifier)
         }
 
-        let controlFrame = HostedGeometryFrame(control.frame)
-        let verticalScrollBars = control.scrollBars.allElementsBoundByIndex.filter { candidate in
+        let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
+        guard outerScrollFrame.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidFrame
+        }
+        let scrollContainers = app.descendants(matching: .scrollView)
+            .allElementsBoundByIndex.filter { candidate in
+                let frame = HostedGeometryFrame(candidate.frame)
+                return candidate.identifier != outerScrollIdentifier
+                    && frame.isFiniteAndNonempty
+                    && frame.differs(from: outerScrollFrame, byMoreThan: 1)
+                    && candidate.descendants(matching: controlElementType)
+                        .matching(identifier: controlIdentifier).count == 1
+            }
+        guard scrollContainers.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollContainerCount(
+                controlIdentifier: controlIdentifier,
+                count: scrollContainers.count
+            )
+        }
+        let scrollContainer = scrollContainers[0]
+        let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
+        let verticalScrollBars = scrollContainer.scrollBars.allElementsBoundByIndex.filter {
+            candidate in
             let frame = HostedGeometryFrame(candidate.frame)
             return frame.isFiniteAndNonempty
                 && frame.height > frame.width
-                && frame.isFullyContained(in: controlFrame, tolerance: 2)
+                && frame.isFullyContained(in: scrollContainerFrame, tolerance: 2)
         }
         guard verticalScrollBars.count == 1 else {
             throw HostedNativeInnerScrollTraceError.invalidVerticalScrollBarCount(
@@ -1756,12 +1780,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 ((ProcessInfo.processInfo.systemUptime - samplingStart) * 1_000).rounded()
             ),
             control: control,
+            scrollContainer: scrollContainer,
             verticalScrollBar: verticalScrollBar,
             outerScroll: outerScroll,
             outerSentinel: outerSentinel,
             captureTerminalContent: false,
             terminalVisibleText: terminalVisibleText,
-            terminalValueToken: terminalValueToken
+            terminalValueToken: terminalValueToken,
+            terminalRowElementType: terminalRowElementType
         )
         let preTerminalValue = preSample.normalizedScrollValue
         guard preTerminalValue < 1 else {
@@ -1775,7 +1801,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let firstActionElapsedMilliseconds = Int(
             ((firstActionStartedAt - samplingStart) * 1_000).rounded()
         )
-        control.scroll(byDeltaX: 0, deltaY: -10_000)
+        scrollContainer.scroll(byDeltaX: 0, deltaY: -10_000)
         let terminalSamples = try captureStableNativeInnerScrollSamples(
             controlIdentifier: controlIdentifier,
             samplingStartedAt: samplingStart,
@@ -1785,11 +1811,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 minimumAcceptedSampleIntervalMilliseconds,
             samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
             control: control,
+            scrollContainer: scrollContainer,
             verticalScrollBar: verticalScrollBar,
             outerScroll: outerScroll,
             outerSentinel: outerSentinel,
             terminalVisibleText: terminalVisibleText,
-            terminalValueToken: terminalValueToken
+            terminalValueToken: terminalValueToken,
+            terminalRowElementType: terminalRowElementType
         )
         guard let terminalSample = terminalSamples.last else {
             throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
@@ -1808,7 +1836,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let repeatActionElapsedMilliseconds = Int(
             ((repeatActionStartedAt - samplingStart) * 1_000).rounded()
         )
-        control.scroll(byDeltaX: 0, deltaY: -10_000)
+        scrollContainer.scroll(byDeltaX: 0, deltaY: -10_000)
         let repeatTerminalSamples = try captureStableNativeInnerScrollSamples(
             controlIdentifier: controlIdentifier,
             samplingStartedAt: samplingStart,
@@ -1818,11 +1846,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 minimumAcceptedSampleIntervalMilliseconds,
             samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
             control: control,
+            scrollContainer: scrollContainer,
             verticalScrollBar: verticalScrollBar,
             outerScroll: outerScroll,
             outerSentinel: outerSentinel,
             terminalVisibleText: terminalVisibleText,
-            terminalValueToken: terminalValueToken
+            terminalValueToken: terminalValueToken,
+            terminalRowElementType: terminalRowElementType
         )
         guard let repeatTerminalSample = repeatTerminalSamples.last else {
             throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
@@ -1877,6 +1907,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
             section: section,
             controlIdentifier: controlIdentifier,
             controlElementType: controlElementTypeName,
+            scrollContainerElementType: "scroll-view",
+            scrollContainerCount: scrollContainers.count,
             verticalScrollBarCount: verticalScrollBars.count,
             preTerminalValue: preTerminalValue,
             terminalValue: terminalValue,
@@ -1919,11 +1951,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
         minimumAcceptedSampleIntervalMilliseconds: Int,
         samplingDeadlineMilliseconds: Int,
         control: XCUIElement,
+        scrollContainer: XCUIElement,
         verticalScrollBar: XCUIElement,
         outerScroll: XCUIElement,
         outerSentinel: XCUIElement,
         terminalVisibleText: String?,
-        terminalValueToken: String?
+        terminalValueToken: String?,
+        terminalRowElementType: XCUIElement.ElementType?
     ) throws -> [HostedNativeInnerScrollSample] {
         let targetInterval = Double(targetSampleIntervalMilliseconds) / 1_000
         var samples: [HostedNativeInnerScrollSample] = []
@@ -1943,12 +1977,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
                         ((sampleStartedAt - samplingStartedAt) * 1_000).rounded()
                     ),
                     control: control,
+                    scrollContainer: scrollContainer,
                     verticalScrollBar: verticalScrollBar,
                     outerScroll: outerScroll,
                     outerSentinel: outerSentinel,
                     captureTerminalContent: true,
                     terminalVisibleText: terminalVisibleText,
-                    terminalValueToken: terminalValueToken
+                    terminalValueToken: terminalValueToken,
+                    terminalRowElementType: terminalRowElementType
                 )
             )
         }
@@ -1994,6 +2030,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
     ) -> Bool {
         lhs.normalizedScrollValue == rhs.normalizedScrollValue
             && !lhs.controlFrame.differs(from: rhs.controlFrame, byMoreThan: 1)
+            && !lhs.scrollContainerFrame.differs(
+                from: rhs.scrollContainerFrame,
+                byMoreThan: 1
+            )
             && !lhs.scrollBarFrame.differs(from: rhs.scrollBarFrame, byMoreThan: 1)
             && !lhs.outerScrollFrame.differs(from: rhs.outerScrollFrame, byMoreThan: 1)
             && !lhs.outerSentinelFrame.differs(from: rhs.outerSentinelFrame, byMoreThan: 1)
@@ -2027,18 +2067,22 @@ final class NeonDiffDesktopUITests: XCTestCase {
     private func captureNativeInnerScrollSample(
         elapsedMilliseconds: Int,
         control: XCUIElement,
+        scrollContainer: XCUIElement,
         verticalScrollBar: XCUIElement,
         outerScroll: XCUIElement,
         outerSentinel: XCUIElement,
         captureTerminalContent: Bool,
         terminalVisibleText: String?,
-        terminalValueToken: String?
+        terminalValueToken: String?,
+        terminalRowElementType: XCUIElement.ElementType?
     ) throws -> HostedNativeInnerScrollSample {
         let controlFrame = HostedGeometryFrame(control.frame)
+        let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
         let scrollBarFrame = HostedGeometryFrame(verticalScrollBar.frame)
         let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
         let outerSentinelFrame = HostedGeometryFrame(outerSentinel.frame)
         guard controlFrame.isFiniteAndNonempty,
+              scrollContainerFrame.isFiniteAndNonempty,
               scrollBarFrame.isFiniteAndNonempty,
               outerScrollFrame.isFiniteAndNonempty,
               outerSentinelFrame.isFiniteAndNonempty else {
@@ -2059,7 +2103,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
                       terminalElementFrame.isFiniteAndNonempty else {
                     throw HostedNativeInnerScrollTraceError.invalidFrame
                 }
-                let containingRows = control.descendants(matching: .tableRow)
+                guard let terminalRowElementType else {
+                    throw HostedNativeInnerScrollTraceError.missingTerminalRowElementType(
+                        control.identifier
+                    )
+                }
+                let containingRows = control.descendants(matching: terminalRowElementType)
                     .allElementsBoundByIndex.compactMap { candidate -> HostedGeometryFrame? in
                         let candidateFrame = HostedGeometryFrame(candidate.frame)
                         guard candidateFrame.isFiniteAndNonempty,
@@ -2094,12 +2143,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
             elapsedMilliseconds: elapsedMilliseconds,
             normalizedScrollValue: try normalizedScrollValue(verticalScrollBar.value),
             controlFrame: controlFrame,
+            scrollContainerFrame: scrollContainerFrame,
             scrollBarFrame: scrollBarFrame,
             outerScrollFrame: outerScrollFrame,
             outerSentinelFrame: outerSentinelFrame,
             terminalElementFrame: terminalElementFrame,
             terminalElementFullyContained: terminalElementFrame.map {
-                $0.isFullyContained(in: controlFrame, tolerance: 1)
+                $0.isFullyContained(in: scrollContainerFrame, tolerance: 1)
             },
             terminalRowFrame: terminalRowFrame,
             terminalElementFullyContainedInRow: terminalElementFrame.flatMap { element in
@@ -2108,7 +2158,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 }
             },
             terminalRowFullyContained: terminalRowFrame.map {
-                $0.isFullyContained(in: controlFrame, tolerance: 1)
+                $0.isFullyContained(in: scrollContainerFrame, tolerance: 1)
             },
             controlValueContainsTerminalToken: controlValueContainsTerminalToken
         )
@@ -2997,6 +3047,7 @@ private struct HostedNativeInnerScrollSample: Codable, Equatable {
     let elapsedMilliseconds: Int
     let normalizedScrollValue: Double
     let controlFrame: HostedGeometryFrame
+    let scrollContainerFrame: HostedGeometryFrame
     let scrollBarFrame: HostedGeometryFrame
     let outerScrollFrame: HostedGeometryFrame
     let outerSentinelFrame: HostedGeometryFrame
@@ -3012,6 +3063,8 @@ private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let section: String
     let controlIdentifier: String
     let controlElementType: String
+    let scrollContainerElementType: String
+    let scrollContainerCount: Int
     let verticalScrollBarCount: Int
     let preTerminalValue: Double
     let terminalValue: Double
@@ -3313,7 +3366,9 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
     case appNotForeground
     case missingElement(String)
     case invalidElementCount(identifier: String, count: Int)
+    case invalidScrollContainerCount(controlIdentifier: String, count: Int)
     case invalidVerticalScrollBarCount(controlIdentifier: String, count: Int)
+    case missingTerminalRowElementType(String)
     case invalidTerminalRowCount(controlIdentifier: String, count: Int)
     case invalidNormalizedScrollValue(String)
     case invalidPreTerminalValue(controlIdentifier: String, value: Double)
@@ -3349,11 +3404,17 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
         case let .invalidElementCount(identifier, count):
             "Hosted native inner-scroll element count is not exactly one: "
                 + "identifier=\(identifier) count=\(count)"
+        case let .invalidScrollContainerCount(controlIdentifier, count):
+            "Hosted native control does not bind exactly one inner scroll container: "
+                + "control=\(controlIdentifier) count=\(count)"
         case let .invalidVerticalScrollBarCount(controlIdentifier, count):
             "Hosted native control does not have exactly one geometry-bound vertical scrollbar: "
                 + "control=\(controlIdentifier) count=\(count)"
+        case .missingTerminalRowElementType(let controlIdentifier):
+            "Hosted native terminal text requires a semantic row type: "
+                + "control=\(controlIdentifier)"
         case let .invalidTerminalRowCount(controlIdentifier, count):
-            "Hosted native terminal text does not bind exactly one table row: "
+            "Hosted native terminal text does not bind exactly one semantic row: "
                 + "control=\(controlIdentifier) count=\(count)"
         case .invalidNormalizedScrollValue(let runtimeType):
             "Hosted native scrollbar value is not normalized: runtimeType=\(runtimeType)"

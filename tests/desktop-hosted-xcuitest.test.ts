@@ -52,6 +52,56 @@ function extractBalancedSwiftDeclaration(
   throw new Error(`Unbalanced Swift declaration body: ${declaration}`);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractPbxObject(source: string, objectId: string, comment: string): string {
+  const pattern = new RegExp(
+    `^\\t\\t${escapeRegExp(objectId)} /\\* ${escapeRegExp(comment)} \\*/ = \\{[\\s\\S]*?^\\t\\t\\};$`,
+    "m"
+  );
+  const matches = source.match(new RegExp(pattern.source, "gm")) ?? [];
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one PBX object: id=${objectId} comment=${comment} count=${matches.length}`
+    );
+  }
+  return matches[0];
+}
+
+function extractPbxNativeTarget(source: string, targetComment: string): string {
+  const section = source.match(
+    /\/\* Begin PBXNativeTarget section \*\/[\s\S]*?\/\* End PBXNativeTarget section \*\//
+  )?.[0];
+  if (!section) throw new Error("Missing PBXNativeTarget section");
+  const targetPattern = new RegExp(
+    `^\\t\\t([A-F0-9]{24}) /\\* ${escapeRegExp(targetComment)} \\*/ = \\{`,
+    "gm"
+  );
+  const targetIds = [...section.matchAll(targetPattern)].map((match) => match[1]);
+  if (targetIds.length !== 1) {
+    throw new Error(
+      `Expected exactly one PBX native target: ${targetComment} count=${targetIds.length}`
+    );
+  }
+  return extractPbxObject(source, targetIds[0], targetComment);
+}
+
+function extractPbxResourcesPhaseForTarget(source: string, target: string): string {
+  const buildPhases = target.match(/buildPhases = \([\s\S]*?\);/)?.[0];
+  if (!buildPhases) throw new Error("Target has no buildPhases list");
+  const resourceIds = [
+    ...buildPhases.matchAll(/([A-F0-9]{24}) \/\* Resources \*\//g),
+  ].map((match) => match[1]);
+  if (resourceIds.length !== 1) {
+    throw new Error(
+      `Expected exactly one Resources phase for target, found ${resourceIds.length}`
+    );
+  }
+  return extractPbxObject(source, resourceIds[0], "Resources");
+}
+
 function projectSwiftReleaseSource(source: string): string {
   const lines = source.match(/.*(?:\n|$)/g)?.filter(Boolean) ?? [];
   const maskedLines =
@@ -650,27 +700,13 @@ releaseTabbedAlternative()
       "path = UITests/Fixtures/hosted-inner-scroll-overflow.json"
     );
     expect(project.match(/hosted-inner-scroll-overflow\.json in Resources/g)).toHaveLength(2);
-    const appResources = project.match(
-      /A10000000000000000000032 \/\* Resources \*\/ = \{[\s\S]*?\n\t\t\};/
-    )?.[0];
-    const uiTestResources = project.match(
-      /A10000000000000000000035 \/\* Resources \*\/ = \{[\s\S]*?\n\t\t\};/
-    )?.[0];
-    const appTarget = project.match(
-      /A10000000000000000000010 \/\* NeonDiffDesktop \*\/ = \{[\s\S]*?\n\t\t\};/
-    )?.[0];
-    const uiTestTarget = project.match(
-      /A10000000000000000000011 \/\* NeonDiffDesktopUITests \*\/ = \{[\s\S]*?\n\t\t\};/
-    )?.[0];
-    expect(appResources).toBeDefined();
-    expect(uiTestResources).toBeDefined();
-    expect(appTarget).toContain("A10000000000000000000032 /* Resources */");
-    expect(appTarget).not.toContain("A10000000000000000000035 /* Resources */");
-    expect(uiTestTarget).toContain("A10000000000000000000035 /* Resources */");
-    expect(uiTestTarget).not.toContain("A10000000000000000000032 /* Resources */");
+    const appTarget = extractPbxNativeTarget(project, "NeonDiffDesktop");
+    const uiTestTarget = extractPbxNativeTarget(project, "NeonDiffDesktopUITests");
+    const appResources = extractPbxResourcesPhaseForTarget(project, appTarget);
+    const uiTestResources = extractPbxResourcesPhaseForTarget(project, uiTestTarget);
     expect(appResources).not.toContain("hosted-inner-scroll-overflow.json in Resources");
     expect(uiTestResources).toContain(
-      "A1000000000000000000006A /* hosted-inner-scroll-overflow.json in Resources */"
+      "hosted-inner-scroll-overflow.json in Resources"
     );
     expect(
       readFileSync("apps/neondiff-desktop/fixtures/ui/catalog.json", "utf8")
@@ -695,7 +731,13 @@ releaseTabbedAlternative()
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 2");
+    expect(scenarioSource).toContain("schemaVersion: 3");
+    expect(scenarioSource).toContain("controlElementType: .outline");
+    expect(scenarioSource).toContain('controlElementTypeName: "outline"');
+    expect(scenarioSource).toContain("terminalRowElementType: .outlineRow");
+    expect(scenarioSource).toContain("controlElementType: .textView");
+    expect(scenarioSource).toContain('controlElementTypeName: "text-view"');
+    expect(scenarioSource).toContain("terminalRowElementType: nil");
     expect(scenarioSource.match(/captureNativeInnerScrollExhaustion\s*\(/g)).toHaveLength(2);
     expect(scenarioSource.match(/capturePageBottomCheckpoint\s*\(/g)).toHaveLength(2);
     const helperSource = extractBalancedSwiftDeclaration(
@@ -703,7 +745,10 @@ releaseTabbedAlternative()
       "private func captureNativeInnerScrollExhaustion("
     );
     expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(2);
-    expect(helperSource).toContain("scrollBars");
+    expect(helperSource).toContain("app.descendants(matching: .scrollView)");
+    expect(helperSource).toContain("scrollContainer.scrollBars");
+    expect(helperSource).not.toContain("control.scrollBars");
+    expect(helperSource.match(/scrollContainer\.scroll\s*\(/g)).toHaveLength(2);
     expect(helperSource).toContain("normalizedScrollValue");
     expect(helperSource).toContain(
       "let preTerminalValue = preSample.normalizedScrollValue"
@@ -727,6 +772,10 @@ releaseTabbedAlternative()
     expect(helperSource.match(/effectProven: true/g)).toHaveLength(2);
     expect(helperSource).toContain("terminalRowFrame");
     expect(helperSource).toContain("terminalRowFullyContained");
+    expect(helperSource).toContain("terminalRowElementType");
+    expect(helperSource).toContain("scrollContainerFrame");
+    expect(helperSource).toContain('scrollContainerElementType: "scroll-view"');
+    expect(helperSource).toContain("scrollContainerCount: scrollContainers.count");
     const settledHelperSource = extractBalancedSwiftDeclaration(
       source,
       "private func captureStableNativeInnerScrollSamples("
