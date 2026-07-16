@@ -641,10 +641,10 @@ releaseTabbedAlternative()
     expect(maskedCheckpointSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
     );
-    expect(checkpointSource).not.toContain("bottomSentinel.isHittable");
+    expect(maskedCheckpointSource).not.toContain("bottomSentinel.isHittable");
     expect(source).not.toContain("case hittableSentinel");
-    expect(checkpointSource).toContain("preActionSamples.allSatisfy");
-    expect(checkpointSource).toContain(
+    expect(maskedCheckpointSource).toContain("preActionSamples.allSatisfy");
+    expect(maskedCheckpointSource).toContain(
       "for (sampleIndex, postActionSample) in postActionSamples.enumerated()"
     );
     expect(source).toContain("try requireFullyContained(");
@@ -670,10 +670,10 @@ releaseTabbedAlternative()
     expect(source).not.toMatch(
       /HostedPageBottomReachabilityTrace\(\s*schemaVersion: 1,/
     );
-    expect(checkpointSource).toContain(
+    expect(maskedCheckpointSource).toContain(
       "preActionSamplingDurationMilliseconds: preActionWindow.durationMilliseconds"
     );
-    expect(checkpointSource).toContain(
+    expect(maskedCheckpointSource).toContain(
       "postActionSamplingDurationMilliseconds: postActionWindow.durationMilliseconds"
     );
     expect(source).toContain("neondiff-hosted-page-bottom-reachability.json");
@@ -800,20 +800,26 @@ releaseTabbedAlternative()
       logs,
       "func resolveAndObserveTextView("
     );
-    expect(resolveVisibleTextSource).toContain(
+    const maskedResolveVisibleTextSource = maskSwiftCommentsAndLiterals(
+      resolveVisibleTextSource
+    );
+    expect(maskedResolveVisibleTextSource).toContain(
       "guard !NSWorkspace.shared.isVoiceOverEnabled"
     );
-    expect(resolveVisibleTextSource).toContain(
+    expect(maskedResolveVisibleTextSource).toContain(
       "!NSWorkspace.shared.isSwitchControlEnabled"
     );
     const updateVisibleTextSource = extractBalancedSwiftDeclaration(
       logs,
       "private func updateVisibility("
     );
-    expect(updateVisibleTextSource).toContain(
+    const maskedUpdateVisibleTextSource = maskSwiftCommentsAndLiterals(
+      updateVisibleTextSource
+    );
+    expect(maskedUpdateVisibleTextSource).toContain(
       "guard !NSWorkspace.shared.isVoiceOverEnabled"
     );
-    expect(updateVisibleTextSource).toContain(
+    expect(maskedUpdateVisibleTextSource).toContain(
       "!NSWorkspace.shared.isSwitchControlEnabled"
     );
 
@@ -1069,29 +1075,25 @@ releaseTabbedAlternative()
       "sentinel-frame-drift",
       "current-sentinel-outside-outer",
     ]) {
-      expect(helperSource).toContain(`outerPreparationFailures.append("${category}")`);
+      expect(helperSource).toContain(`"${category}"`);
     }
-    expect(helperSource).not.toContain(
-      'outerPreparationFailures.append("missing-scroll-action")'
-    );
-    expect(helperSource).toContain(
-      'outerRestagingFailures.append("inner-scroll-outside-outer")'
-    );
-    expect(helperSource).toContain(
-      'outerRestagingFailures.append("inner-scroll-value-changed-during-outer-restaging")'
-    );
-    expect(helperSource).toContain(
-      'outerRestagingFailures.append("outer-restaging-no-effect")'
-    );
-    expect(helperSource).toContain(
-      'outerRestagingFailures.append("unexpected-outer-restaging-effect")'
-    );
-    expect(helperSource).toContain(
-      'outerRestagingFailures.append("outer-restaging-direction-mismatch")'
-    );
-    expect(helperSource).toContain(
-      'outerRestagingFailures.append("outer-restaging-translation-mismatch")'
-    );
+    expect(helperSource).not.toContain('"missing-scroll-action"');
+    for (const category of [
+      "inner-scroll-outside-outer",
+      "inner-scroll-value-changed-during-outer-restaging",
+      "outer-restaging-no-effect",
+      "unexpected-outer-restaging-effect",
+      "outer-restaging-direction-mismatch",
+      "outer-restaging-translation-mismatch",
+    ]) {
+      expect(helperSource).toContain(`"${category}"`);
+    }
+    expect(
+      maskedHelperSource.match(/outerPreparationFailures\.append\(\s*\)/g)
+    ).toHaveLength(22);
+    expect(
+      maskedHelperSource.match(/outerRestagingFailures\.append\(\s*\)/g)
+    ).toHaveLength(6);
     expect(maskedHelperSource).toContain(
       "outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)"
     );
@@ -1235,6 +1237,9 @@ releaseTabbedAlternative()
       'mechanism: "public-xcui-coordinate-scroll-delta"'
     );
     expect(helperSource.match(/mechanism: "public-xcui-scrollbar-thumb-drag"/g)).toHaveLength(2);
+    expect(
+      maskedHelperSource.match(/HostedNativeInnerScrollAction\s*\(/g)
+    ).toHaveLength(3);
     expect(maskedHelperSource.match(/normalizedTargetValue: 1/g)).toHaveLength(2);
     expect(maskedHelperSource).toContain("sourcePoint: firstDragTarget.sourcePoint");
     expect(maskedHelperSource).toContain("targetPoint: firstDragTarget.destinationPoint");
@@ -1374,6 +1379,9 @@ releaseTabbedAlternative()
     expect(hoverPreparationSource).toContain(
       'mechanism: "public-xcui-coordinate-hover"'
     );
+    expect(
+      maskedHoverPreparationSource.match(/HostedNativeInnerScrollAction\s*\(/g)
+    ).toHaveLength(1);
     expect(maskedHoverPreparationSource).toContain("for _ in 0..<maximumSampleAttempts");
     expect(maskedHoverPreparationSource).toContain("observedSamples.append(sample)");
     expect(maskedHoverPreparationSource).toContain("if samples.count == 3 { break }");
