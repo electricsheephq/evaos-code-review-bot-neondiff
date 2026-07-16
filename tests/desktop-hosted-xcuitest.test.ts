@@ -63,23 +63,28 @@ function projectSwiftReleaseSource(source: string): string {
 
   for (const [index, line] of lines.entries()) {
     const directive = maskedLines[index].trim();
-    if (directive === "#if DEBUG" || directive === "#if !DEBUG") {
-      const debugBranchIncluded = directive === "#if !DEBUG";
-      frames.push({
-        kind: "debug",
-        parentIncluded: included,
-        debugBranchIncluded,
-      });
-      included = included && debugBranchIncluded;
-      continue;
-    }
-    if (directive.startsWith("#if ")) {
-      if (/\bDEBUG\b/.test(directive)) {
+    const ifMatch = directive.match(/^#if\s+(.+)$/);
+    if (ifMatch) {
+      const condition = ifMatch[1].trim();
+      if (condition === "DEBUG" || condition === "!DEBUG") {
+        const debugBranchIncluded = condition === "!DEBUG";
+        frames.push({
+          kind: "debug",
+          parentIncluded: included,
+          debugBranchIncluded,
+        });
+        included = included && debugBranchIncluded;
+        continue;
+      }
+      if (/\bDEBUG\b/.test(condition)) {
         throw new Error(`Unsupported Swift DEBUG condition: ${directive}`);
       }
       frames.push({ kind: "other", parentIncluded: included });
       if (included) projected.push(line);
       continue;
+    }
+    if (directive.startsWith("#if")) {
+      throw new Error(`Unsupported Swift conditional directive: ${directive}`);
     }
     if (directive === "#else") {
       const frame = frames.at(-1);
@@ -93,15 +98,17 @@ function projectSwiftReleaseSource(source: string): string {
       }
       continue;
     }
-    if (directive.startsWith("#elseif ")) {
+    const elseifMatch = directive.match(/^#elseif\s+(.+)$/);
+    if (elseifMatch) {
       const frame = frames.at(-1);
       if (!frame) throw new Error("Unmatched Swift #elseif");
-      if (directive === "#elseif DEBUG") {
+      const condition = elseifMatch[1].trim();
+      if (condition === "DEBUG") {
         included = false;
-      } else if (directive === "#elseif !DEBUG") {
+      } else if (condition === "!DEBUG") {
         included = frame.parentIncluded;
       } else {
-        if (/\bDEBUG\b/.test(directive)) {
+        if (/\bDEBUG\b/.test(condition)) {
           throw new Error(`Unsupported Swift DEBUG condition: ${directive}`);
         }
         // Preserve every non-DEBUG alternative conservatively. This can make
@@ -112,6 +119,9 @@ function projectSwiftReleaseSource(source: string): string {
         projected.push(line);
       }
       continue;
+    }
+    if (directive.startsWith("#elseif")) {
+      throw new Error(`Unsupported Swift conditional directive: ${directive}`);
     }
     if (directive === "#endif") {
       const frame = frames.pop();
@@ -302,6 +312,11 @@ releaseAlternative()
 releaseFallback()
 #endif
 releaseAfterConditional()
+#if DEBUG
+debugTabOnly()
+#elseif\tos(macOS)
+releaseTabbedAlternative()
+#endif
 `;
 
     const projected = projectSwiftReleaseSource(source);
@@ -309,7 +324,9 @@ releaseAfterConditional()
     expect(projected).toContain("releaseAlternative()");
     expect(projected).toContain("releaseFallback()");
     expect(projected).toContain("releaseAfterConditional()");
+    expect(projected).toContain("releaseTabbedAlternative()");
     expect(projected).not.toContain("debugOnly()");
+    expect(projected).not.toContain("debugTabOnly()");
     expect(() =>
       projectSwiftReleaseSource("#if DEBUG && os(macOS)\ndebugOnly()\n#endif\n")
     ).toThrow(/Unsupported Swift DEBUG condition/);
@@ -916,15 +933,26 @@ releaseAfterConditional()
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(contentLayoutRect)");
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(visibleFrame)");
     expect(fitWindowSource.match(/pendingHeight = nil/g)).toHaveLength(2);
-    expect(fitWindowSource).toContain("self.fitWindow(containOrigin: containOrigin)");
     expect(fitWindowSource).toContain("guard containOrigin else { return }");
+    expect(fitWindowSource).toContain(
+      "pendingOriginContainment = pendingOriginContainment || containOrigin"
+    );
+    expect(fitWindowSource).toContain(
+      "let shouldContainOrigin = self.pendingOriginContainment"
+    );
+    expect(fitWindowSource).toContain(
+      "self.fitWindow(containOrigin: shouldContainOrigin)"
+    );
     const attachSource = extractBalancedSwiftDeclaration(
       app,
       "func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>)"
     );
     expect(attachSource).toMatch(
-      /attachmentGeneration \+= 1\s+pendingHeight = nil\s+self\.window = window/
+      /attachmentGeneration \+= 1\s+pendingHeight = nil\s+pendingOriginContainment = false\s+self\.window = window/
     );
+    expect(attachSource).toContain("pendingOriginContainment = false");
+    const detachSource = extractBalancedSwiftDeclaration(app, "func detach()");
+    expect(detachSource).toContain("pendingOriginContainment = false");
     expect(app).toContain(".dynamicTypeSize(.accessibility3)");
     expect(app).toContain("hostedSettingsEvaluationContent");
     const settingsSceneSource = extractBalancedSwiftDeclaration(

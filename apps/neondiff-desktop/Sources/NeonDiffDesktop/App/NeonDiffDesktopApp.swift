@@ -375,6 +375,7 @@ private struct SettingsWindowFitView: NSViewRepresentable {
         private weak var window: NSWindow?
         private var contentHeight: Binding<CGFloat>?
         private var pendingHeight: CGFloat?
+        private var pendingOriginContainment = false
         private var attachmentGeneration = 0
 
         func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>) {
@@ -385,6 +386,7 @@ private struct SettingsWindowFitView: NSViewRepresentable {
             detachObservers()
             attachmentGeneration += 1
             pendingHeight = nil
+            pendingOriginContainment = false
             self.window = window
             guard let window else { return }
             let center = NotificationCenter.default
@@ -409,6 +411,7 @@ private struct SettingsWindowFitView: NSViewRepresentable {
             window = nil
             contentHeight = nil
             pendingHeight = nil
+            pendingOriginContainment = false
         }
 
         @objc private func windowScreenDidChange(_ notification: Notification) {
@@ -443,8 +446,12 @@ private struct SettingsWindowFitView: NSViewRepresentable {
                 return
             }
             if abs(currentContentHeight - targetHeight) > 0.5 {
-                guard pendingHeight != targetHeight else { return }
+                if pendingHeight == targetHeight {
+                    pendingOriginContainment = pendingOriginContainment || containOrigin
+                    return
+                }
                 pendingHeight = targetHeight
+                pendingOriginContainment = containOrigin
                 let generation = attachmentGeneration
                 DispatchQueue.main.async { [weak self] in
                     guard let self,
@@ -454,20 +461,23 @@ private struct SettingsWindowFitView: NSViewRepresentable {
                           let contentHeight = self.contentHeight else {
                         return
                     }
+                    let shouldContainOrigin = self.pendingOriginContainment
                     contentHeight.wrappedValue = targetHeight
                     self.pendingHeight = nil
+                    self.pendingOriginContainment = false
                     DispatchQueue.main.async { [weak self] in
                         guard let self,
                               self.window === window,
                               self.attachmentGeneration == generation else {
                             return
                         }
-                        self.fitWindow(containOrigin: containOrigin)
+                        self.fitWindow(containOrigin: shouldContainOrigin)
                     }
                 }
                 return
             }
             pendingHeight = nil
+            pendingOriginContainment = false
             guard containOrigin else { return }
             var origin = windowFrame.origin
             origin.x = min(
