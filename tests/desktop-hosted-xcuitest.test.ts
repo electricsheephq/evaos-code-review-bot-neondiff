@@ -833,7 +833,7 @@ releaseTabbedAlternative()
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 10");
+    expect(scenarioSource).toContain("schemaVersion: 11");
     expect(scenarioSource).toContain(
       "let reposGeometry = try captureCheckpoint("
     );
@@ -866,6 +866,7 @@ releaseTabbedAlternative()
     expect(scenarioSource).toContain(
       "nestedScrollControlElementType: .outline"
     );
+    expect(scenarioSource).toContain("requiresGuardedScrollAction: true");
     expect(scenarioSource).toContain("terminalVisibilityMarkerIdentifier: nil");
     expect(scenarioSource).toContain("controlElementType: .textView");
     expect(scenarioSource).toContain('controlElementTypeName: "text-view"');
@@ -878,6 +879,9 @@ releaseTabbedAlternative()
     expect(scenarioSource).toContain(
       "nestedScrollControlElementType: .textView"
     );
+    expect(
+      scenarioSource.match(/requiresGuardedScrollAction: true/g)
+    ).toHaveLength(2);
     expect(scenarioSource).toContain(
       'terminalVisibilityMarkerIdentifier: "neondiff-logs-visible-tail"'
     );
@@ -913,6 +917,9 @@ releaseTabbedAlternative()
       "nestedScrollControlElementType: XCUIElement.ElementType? = nil"
     );
     expect(pageBottomCheckpointSource).toContain(
+      "requiresGuardedScrollAction: Bool = false"
+    );
+    expect(pageBottomCheckpointSource).toContain(
       "let nestedScrollGuard = try guardedOuterPageScrollTarget("
     );
     expect(pageBottomCheckpointSource).toContain(
@@ -931,6 +938,9 @@ releaseTabbedAlternative()
       "nestedScrollValueChangedDuringOuterPreparation("
     );
     expect(pageBottomCheckpointSource).toContain(
+      "requiredGuardedScrollActionWasNotIssued("
+    );
+    expect(pageBottomCheckpointSource).toContain(
       "targetPoint: nestedScrollGuard?.targetPoint"
     );
     expect(pageBottomCheckpointSource).toContain(
@@ -941,6 +951,12 @@ releaseTabbedAlternative()
     );
     expect(pageBottomCheckpointSource).toContain(
       "nestedScrollValueAfter: nestedScrollValueAfter"
+    );
+    expect(pageBottomCheckpointSource).toContain(
+      "guardOuterScrollFrame: nestedScrollGuard?.outerScrollFrame"
+    );
+    expect(pageBottomCheckpointSource).toContain(
+      "guardNestedScrollFrame: nestedScrollGuard?.nestedScrollFrame"
     );
     const guardedOuterTargetSource = extractBalancedSwiftDeclaration(
       source,
@@ -964,13 +980,15 @@ releaseTabbedAlternative()
       "nestedScrollControlIdentifier",
       "nestedScrollValueBefore",
       "nestedScrollValueAfter",
+      "guardOuterScrollFrame",
+      "guardNestedScrollFrame",
     ]) {
       expect(pageScrollActionSource).toContain(`let ${field}:`);
       expect(pageScrollActionSource).toContain(
         `forKey: .${field}`
       );
     }
-    expect(pageScrollActionSource.match(/encodeIfPresent\s*\(/g)).toHaveLength(4);
+    expect(pageScrollActionSource.match(/encodeIfPresent\s*\(/g)).toHaveLength(6);
     const pageBottomSamplesSource = extractBalancedSwiftDeclaration(
       source,
       "private func capturePageBottomSamples("
@@ -1017,6 +1035,15 @@ releaseTabbedAlternative()
       "scroll-action-attempt-count",
       "scroll-action-result",
       "scroll-action-effect",
+      "scroll-action-guard-target-missing",
+      "scroll-action-guard-frames-missing",
+      "scroll-action-guard-outer-frame-invalid",
+      "scroll-action-guard-nested-frame-invalid",
+      "scroll-action-guard-target-outside-outer",
+      "scroll-action-guard-target-inside-nested",
+      "scroll-action-nested-control-mismatch",
+      "scroll-action-nested-value-missing",
+      "scroll-action-nested-value-changed",
       "missing-post-action-sample",
       "post-sentinel-outside-outer",
       "post-sentinel-outside-detail",
