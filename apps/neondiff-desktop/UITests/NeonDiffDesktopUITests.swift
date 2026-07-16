@@ -2689,17 +2689,38 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let maximumOuterX = outerScrollFrame.maxX - corridorInset
         let leftCorridorMaximumX = scrollContainerFrame.x - corridorInset
         let rightCorridorMinimumX = scrollContainerFrame.maxX + corridorInset
+        let minimumOuterY = outerScrollFrame.y + corridorInset
+        let maximumOuterY = outerScrollFrame.maxY - corridorInset
+        let topCorridorMaximumY = min(
+            scrollContainerFrame.y - corridorInset,
+            maximumOuterY
+        )
+        let bottomCorridorMinimumY = max(
+            scrollContainerFrame.maxY + corridorInset,
+            minimumOuterY
+        )
+        let topCorridorHeight = max(0, topCorridorMaximumY - minimumOuterY)
+        let bottomCorridorHeight = max(0, maximumOuterY - bottomCorridorMinimumY)
 
         let targetX: Double
-        if leftCorridorMaximumX > minimumOuterX {
+        let targetY: Double
+        if max(topCorridorHeight, bottomCorridorHeight) > 0 {
+            targetX = outerScrollFrame.x + (outerScrollFrame.width / 2)
+            if topCorridorHeight >= bottomCorridorHeight {
+                targetY = (minimumOuterY + topCorridorMaximumY) / 2
+            } else {
+                targetY = (bottomCorridorMinimumY + maximumOuterY) / 2
+            }
+        } else if leftCorridorMaximumX > minimumOuterX {
             targetX = (minimumOuterX + leftCorridorMaximumX) / 2
+            targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
         } else if maximumOuterX > rightCorridorMinimumX {
             targetX = (rightCorridorMinimumX + maximumOuterX) / 2
+            targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
         } else {
             throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
         }
 
-        let targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
         let point = HostedGeometryPoint(x: targetX, y: targetY)
         let pointIsInsideOuter = targetX >= outerScrollFrame.x + tolerance
             && targetX <= outerScrollFrame.maxX - tolerance

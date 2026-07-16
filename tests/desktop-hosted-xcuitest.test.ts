@@ -1280,7 +1280,15 @@ releaseTabbedAlternative()
       "outerScroll.coordinate(withNormalizedOffset: normalizedOffset)"
     );
     expect(restagingCoordinateSource).toContain(
-      "let targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)"
+      "targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)"
+    );
+    expect(restagingCoordinateSource).toContain("let topCorridorHeight =");
+    expect(restagingCoordinateSource).toContain("let bottomCorridorHeight =");
+    expect(restagingCoordinateSource).toContain(
+      "if max(topCorridorHeight, bottomCorridorHeight) > 0"
+    );
+    expect(restagingCoordinateSource).toContain(
+      "targetX = outerScrollFrame.x + (outerScrollFrame.width / 2)"
     );
     expect(restagingCoordinateSource).toContain(
       "throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate"
