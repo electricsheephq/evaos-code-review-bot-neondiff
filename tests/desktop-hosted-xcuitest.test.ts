@@ -773,14 +773,14 @@ releaseTabbedAlternative()
     expect(source).toContain("HostedNativeInnerScrollTrace(");
     expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-outer-page-bottom-prepared-before-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
     );
 
     const scenarioSource = extractBalancedSwiftDeclaration(
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 5");
+    expect(scenarioSource).toContain("schemaVersion: 6");
     expect(scenarioSource).toContain("controlElementType: .outline");
     expect(scenarioSource).toContain('controlElementTypeName: "outline"');
     expect(scenarioSource).toContain("terminalRowElementType: .outlineRow");
@@ -852,7 +852,6 @@ releaseTabbedAlternative()
       "section-mismatch",
       "outer-scroll-identifier-mismatch",
       "sentinel-identifier-mismatch",
-      "missing-scroll-action",
       "scroll-action-control-mismatch",
       "scroll-action-attempt-count",
       "scroll-action-result",
@@ -862,20 +861,67 @@ releaseTabbedAlternative()
       "post-sentinel-outside-detail",
       "outer-frame-drift",
       "sentinel-frame-drift",
-      "inner-scroll-outside-outer",
       "current-sentinel-outside-outer",
     ]) {
       expect(helperSource).toContain(`outerPreparationFailures.append("${category}")`);
     }
+    expect(helperSource).not.toContain(
+      'outerPreparationFailures.append("missing-scroll-action")'
+    );
+    expect(helperSource).toContain(
+      'outerRestagingFailures.append("inner-scroll-outside-outer")'
+    );
+    expect(helperSource).toContain(
+      'outerRestagingFailures.append("inner-scroll-value-changed-during-outer-restaging")'
+    );
+    expect(helperSource).toContain(
+      'outerRestagingFailures.append("outer-restaging-no-effect")'
+    );
+    expect(helperSource).toContain(
+      'outerRestagingFailures.append("unexpected-outer-restaging-effect")'
+    );
+    expect(helperSource).toContain(
+      'outerRestagingFailures.append("outer-restaging-direction-mismatch")'
+    );
+    expect(helperSource).toContain(
+      'outerRestagingFailures.append("outer-restaging-translation-mismatch")'
+    );
+    expect(helperSource).toContain(
+      "outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)"
+    );
     expect(helperSource).toContain(
       "outerPreparationNotEstablished(section: section, failedChecks: outerPreparationFailures)"
     );
     expect(helperSource).toContain(
-      'outerPreparationResult: "verified-page-bottom-before-inner-isolation-baseline"'
+      "let outerPreparationSample = try captureNativeInnerScrollSample("
+    );
+    expect(helperSource).toContain(
+      "let restagingDeltaY = try outerRestagingDeltaY("
+    );
+    expect(helperSource).toContain(
+      "outerScroll.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))"
+    );
+    expect(helperSource).toContain(
+      "outerRestagingSamples.allSatisfy"
+    );
+    expect(helperSource).not.toContain(
+      "outerRestagingSamples = [outerPreparationSample]"
+    );
+    expect(helperSource).toContain(
+      "outerRestagingWindowDurationMilliseconds: restagingWindow.durationMilliseconds"
+    );
+    expect(
+      helperSource.match(/frameMatchesRigidVerticalTranslation\s*\(/g)
+    ).toHaveLength(4);
+    expect(helperSource).toContain("outerRestagingAction:");
+    expect(helperSource).toContain("outerRestagingSamples:");
+    expect(helperSource).toContain("outerPreparationSample:");
+    expect(helperSource).toContain(
+      'outerPreparationResult: "verified-page-bottom-then-inner-viewport-restaged-before-isolation-baseline"'
     );
     expect(helperSource).not.toContain("outerPreparationNotEstablished(section)");
     expect(helperSource).toContain(
-      "preSample.scrollContainerFrame.isFullyContained("
+      "sample.scrollContainerFrame.isFullyContained("
     );
     expect(helperSource).toContain(
       "outerPreparationCheckpoint.section != section"
@@ -896,7 +942,7 @@ releaseTabbedAlternative()
     expect(helperSource).toContain(
       "outerPreparationCheckpoint: outerPreparationCheckpoint"
     );
-    expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(2);
+    expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(3);
     expect(helperSource).toContain("app.descendants(matching: .scrollView)");
     expect(helperSource).toContain("scrollContainer.scrollBars");
     expect(helperSource).not.toContain("control.scrollBars");
@@ -915,13 +961,18 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("elapsedMilliseconds:");
     expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
     expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds = 90");
-    expect(helperSource).toContain("samplingDeadlineMilliseconds = 15_000");
-    expect(helperSource.match(/captureStableNativeInnerScrollSamples\s*\(/g)).toHaveLength(2);
+    expect(source).toContain(
+      "private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 15_000"
+    );
+    expect(helperSource).toContain(
+      "samplingDeadlineMilliseconds = hostedNativeInnerScrollSamplingDeadlineMilliseconds"
+    );
+    expect(helperSource.match(/captureStableNativeInnerScrollSamples\s*\(/g)).toHaveLength(3);
     expect(helperSource).toContain("terminalSamples");
     expect(helperSource).toContain("repeatTerminalSamples");
     expect(helperSource).toContain("effectObserved: true");
     expect(helperSource).toContain("effectObserved: false");
-    expect(helperSource.match(/effectProven: true/g)).toHaveLength(2);
+    expect(helperSource.match(/effectProven: true/g)).toHaveLength(3);
     expect(helperSource).toContain("terminalRowFrame");
     expect(helperSource).toContain("terminalRowFullyContained");
     expect(helperSource).toContain("terminalRowElementType");
@@ -954,6 +1005,20 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("outerSentinelFrame");
     expect(helperSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
+    );
+    const rigidTranslationSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func frameMatchesRigidVerticalTranslation("
+    );
+    expect(rigidTranslationSource).toContain("abs(candidate.x - baseline.x) <= tolerance");
+    expect(rigidTranslationSource).toContain(
+      "abs(candidate.y - (baseline.y + translationY)) <= tolerance"
+    );
+    expect(rigidTranslationSource).toContain(
+      "abs(candidate.width - baseline.width) <= tolerance"
+    );
+    expect(rigidTranslationSource).toContain(
+      "abs(candidate.height - baseline.height) <= tolerance"
     );
   });
 

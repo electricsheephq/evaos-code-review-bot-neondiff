@@ -1,6 +1,7 @@
 import XCTest
 
 private let hostedPageBottomSamplingDeadlineMilliseconds = 15_000
+private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 15_000
 
 final class NeonDiffDesktopUITests: XCTestCase {
     override func setUpWithError() throws {
@@ -404,7 +405,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 5,
+                schemaVersion: 6,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
@@ -413,7 +414,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 innerScrollCheckpoints: [reposInner, logsInner],
                 navigationActions: [logsNavigation],
                 outerPageBottomCheckpoints: [reposOuter, logsOuter],
-                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-outer-page-bottom-prepared-before-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
+                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
             )
         )
     }
@@ -1722,7 +1723,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     ) throws -> HostedNativeInnerScrollCheckpoint {
         let targetSampleIntervalMilliseconds = 100
         let minimumAcceptedSampleIntervalMilliseconds = 90
-        let samplingDeadlineMilliseconds = 15_000
+        let samplingDeadlineMilliseconds = hostedNativeInnerScrollSamplingDeadlineMilliseconds
         let samplingStart = ProcessInfo.processInfo.systemUptime
         let controlQuery = app.descendants(matching: controlElementType)
             .matching(identifier: controlIdentifier)
@@ -1780,7 +1781,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
         let verticalScrollBar = verticalScrollBars[0]
-        let preSample = try captureNativeInnerScrollSample(
+        let outerPreparationSample = try captureNativeInnerScrollSample(
             elapsedMilliseconds: Int(
                 ((ProcessInfo.processInfo.systemUptime - samplingStart) * 1_000).rounded()
             ),
@@ -1794,7 +1795,6 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalValueToken: terminalValueToken,
             terminalRowElementType: terminalRowElementType
         )
-        let preTerminalValue = preSample.normalizedScrollValue
         var outerPreparationFailures: [String] = []
         if outerPreparationCheckpoint.section != section {
             outerPreparationFailures.append("section-mismatch")
@@ -1818,8 +1818,6 @@ final class NeonDiffDesktopUITests: XCTestCase {
             if !outerPreparationAction.effectProven {
                 outerPreparationFailures.append("scroll-action-effect")
             }
-        } else {
-            outerPreparationFailures.append("missing-scroll-action")
         }
         if let preparedSample = outerPreparationCheckpoint.postActionSamples.last {
             if !preparedSample.sentinelFullyContainedInOuterScroll {
@@ -1829,13 +1827,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 outerPreparationFailures.append("post-sentinel-outside-detail")
             }
             if preparedSample.outerScrollFrame.differs(
-                from: preSample.outerScrollFrame,
+                from: outerPreparationSample.outerScrollFrame,
                 byMoreThan: 1
             ) {
                 outerPreparationFailures.append("outer-frame-drift")
             }
             if preparedSample.sentinelFrame.differs(
-                from: preSample.outerSentinelFrame,
+                from: outerPreparationSample.outerSentinelFrame,
                 byMoreThan: 1
             ) {
                 outerPreparationFailures.append("sentinel-frame-drift")
@@ -1843,14 +1841,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
         } else {
             outerPreparationFailures.append("missing-post-action-sample")
         }
-        if !preSample.scrollContainerFrame.isFullyContained(
-            in: preSample.outerScrollFrame,
-            tolerance: 1
-        ) {
-            outerPreparationFailures.append("inner-scroll-outside-outer")
-        }
-        if !preSample.outerSentinelFrame.isFullyContained(
-            in: preSample.outerScrollFrame,
+        if !outerPreparationSample.outerSentinelFrame.isFullyContained(
+            in: outerPreparationSample.outerScrollFrame,
             tolerance: 1
         ) {
             outerPreparationFailures.append("current-sentinel-outside-outer")
@@ -1858,6 +1850,119 @@ final class NeonDiffDesktopUITests: XCTestCase {
         guard outerPreparationFailures.isEmpty else {
             throw HostedNativeInnerScrollTraceError.outerPreparationNotEstablished(section: section, failedChecks: outerPreparationFailures)
         }
+
+        let restagingDeltaY = try outerRestagingDeltaY(
+            scrollContainerFrame: outerPreparationSample.scrollContainerFrame,
+            outerScrollFrame: outerPreparationSample.outerScrollFrame,
+            tolerance: 1
+        )
+        let outerRestagingAction: HostedNativeInnerScrollAction?
+        let restagingActionStartedAt = ProcessInfo.processInfo.systemUptime
+        let restagingActionElapsedMilliseconds = Int(
+            ((restagingActionStartedAt - samplingStart) * 1_000).rounded()
+        )
+        if restagingDeltaY != 0 {
+            outerScroll.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))
+        }
+        let restagingWindow = try captureStableNativeInnerScrollSamples(
+            controlIdentifier: controlIdentifier,
+            samplingStartedAt: samplingStart,
+            actionStartedAt: restagingActionStartedAt,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
+            control: control,
+            scrollContainer: scrollContainer,
+            verticalScrollBar: verticalScrollBar,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            captureTerminalContent: false,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalRowElementType: terminalRowElementType
+        )
+        let outerRestagingSamples = restagingWindow.samples
+        guard let preSample = outerRestagingSamples.last else {
+            throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
+        }
+        var outerRestagingFailures: [String] = []
+        if !outerRestagingSamples.allSatisfy({ sample in
+            sample.scrollContainerFrame.isFullyContained(
+                in: sample.outerScrollFrame,
+                tolerance: 1
+            )
+        }) {
+            outerRestagingFailures.append("inner-scroll-outside-outer")
+        }
+        if !outerRestagingSamples.allSatisfy({ sample in
+            sample.normalizedScrollValue == outerPreparationSample.normalizedScrollValue
+        }) {
+            outerRestagingFailures.append("inner-scroll-value-changed-during-outer-restaging")
+        }
+        let scrollContainerTranslation =
+            preSample.scrollContainerFrame.y
+                - outerPreparationSample.scrollContainerFrame.y
+        let restagingEffectObserved = abs(scrollContainerTranslation) > 0.5
+        if restagingDeltaY != 0, !restagingEffectObserved {
+            outerRestagingFailures.append("outer-restaging-no-effect")
+        }
+        if restagingDeltaY == 0, restagingEffectObserved {
+            outerRestagingFailures.append("unexpected-outer-restaging-effect")
+        }
+        if restagingDeltaY != 0,
+           restagingDeltaY * scrollContainerTranslation <= 0 {
+            outerRestagingFailures.append("outer-restaging-direction-mismatch")
+        }
+        if !outerRestagingSamples.allSatisfy({ sample in
+            !sample.outerScrollFrame.differs(
+                from: outerPreparationSample.outerScrollFrame,
+                byMoreThan: 1
+            )
+                && frameMatchesRigidVerticalTranslation(
+                    baseline: outerPreparationSample.controlFrame,
+                    candidate: sample.controlFrame,
+                    translationY: scrollContainerTranslation,
+                    tolerance: 1
+                )
+                && frameMatchesRigidVerticalTranslation(
+                    baseline: outerPreparationSample.scrollContainerFrame,
+                    candidate: sample.scrollContainerFrame,
+                    translationY: scrollContainerTranslation,
+                    tolerance: 1
+                )
+                && frameMatchesRigidVerticalTranslation(
+                    baseline: outerPreparationSample.scrollBarFrame,
+                    candidate: sample.scrollBarFrame,
+                    translationY: scrollContainerTranslation,
+                    tolerance: 1
+                )
+                && frameMatchesRigidVerticalTranslation(
+                    baseline: outerPreparationSample.outerSentinelFrame,
+                    candidate: sample.outerSentinelFrame,
+                    translationY: scrollContainerTranslation,
+                    tolerance: 1
+                )
+        }) {
+            outerRestagingFailures.append("outer-restaging-translation-mismatch")
+        }
+        guard outerRestagingFailures.isEmpty else {
+            throw HostedNativeInnerScrollTraceError.outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)
+        }
+        if restagingDeltaY == 0 {
+            outerRestagingAction = nil
+        } else {
+            outerRestagingAction = HostedNativeInnerScrollAction(
+                elapsedMilliseconds: restagingActionElapsedMilliseconds,
+                deltaX: 0,
+                deltaY: restagingDeltaY,
+                attemptCount: 1,
+                effectObserved: restagingEffectObserved,
+                effectProven: true,
+                result: "returned-and-inner-viewport-contained-with-outer-translation-proven"
+            )
+        }
+        let preTerminalValue = preSample.normalizedScrollValue
         guard preTerminalValue < 1 else {
             throw HostedNativeInnerScrollTraceError.invalidPreTerminalValue(
                 controlIdentifier: controlIdentifier,
@@ -1883,6 +1988,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             verticalScrollBar: verticalScrollBar,
             outerScroll: outerScroll,
             outerSentinel: outerSentinel,
+            captureTerminalContent: true,
             terminalVisibleText: terminalVisibleText,
             terminalValueToken: terminalValueToken,
             terminalRowElementType: terminalRowElementType
@@ -1919,6 +2025,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             verticalScrollBar: verticalScrollBar,
             outerScroll: outerScroll,
             outerSentinel: outerSentinel,
+            captureTerminalContent: true,
             terminalVisibleText: terminalVisibleText,
             terminalValueToken: terminalValueToken,
             terminalRowElementType: terminalRowElementType
@@ -1981,7 +2088,11 @@ final class NeonDiffDesktopUITests: XCTestCase {
             scrollContainerCount: scrollContainers.count,
             verticalScrollBarCount: verticalScrollBars.count,
             outerPreparationCheckpoint: outerPreparationCheckpoint,
-            outerPreparationResult: "verified-page-bottom-before-inner-isolation-baseline",
+            outerPreparationResult: "verified-page-bottom-then-inner-viewport-restaged-before-isolation-baseline",
+            outerPreparationSample: outerPreparationSample,
+            outerRestagingAction: outerRestagingAction,
+            outerRestagingSamples: outerRestagingSamples,
+            outerRestagingWindowDurationMilliseconds: restagingWindow.durationMilliseconds,
             preTerminalValue: preTerminalValue,
             terminalValue: terminalValue,
             repeatTerminalValue: repeatTerminalValue,
@@ -2030,6 +2141,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         verticalScrollBar: XCUIElement,
         outerScroll: XCUIElement,
         outerSentinel: XCUIElement,
+        captureTerminalContent: Bool,
         terminalVisibleText: String?,
         terminalValueToken: String?,
         terminalRowElementType: XCUIElement.ElementType?
@@ -2056,7 +2168,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                     verticalScrollBar: verticalScrollBar,
                     outerScroll: outerScroll,
                     outerSentinel: outerSentinel,
-                    captureTerminalContent: true,
+                    captureTerminalContent: captureTerminalContent,
                     terminalVisibleText: terminalVisibleText,
                     terminalValueToken: terminalValueToken,
                     terminalRowElementType: terminalRowElementType
@@ -2266,6 +2378,40 @@ final class NeonDiffDesktopUITests: XCTestCase {
         if abs(parsed - 1) <= 0.000_1 { return 1 }
         if abs(parsed) <= 0.000_1 { return 0 }
         return parsed
+    }
+
+    private func outerRestagingDeltaY(
+        scrollContainerFrame: HostedGeometryFrame,
+        outerScrollFrame: HostedGeometryFrame,
+        tolerance: Double
+    ) throws -> Double {
+        guard scrollContainerFrame.height + (tolerance * 2) <= outerScrollFrame.height else {
+            throw HostedNativeInnerScrollTraceError.innerViewportExceedsOuterViewport
+        }
+        let minimumContainedY = outerScrollFrame.y + tolerance
+        let maximumContainedY =
+            outerScrollFrame.y + outerScrollFrame.height - tolerance
+        if scrollContainerFrame.y < minimumContainedY {
+            return minimumContainedY - scrollContainerFrame.y
+        }
+        let scrollContainerMaximumY =
+            scrollContainerFrame.y + scrollContainerFrame.height
+        if scrollContainerMaximumY > maximumContainedY {
+            return maximumContainedY - scrollContainerMaximumY
+        }
+        return 0
+    }
+
+    private func frameMatchesRigidVerticalTranslation(
+        baseline: HostedGeometryFrame,
+        candidate: HostedGeometryFrame,
+        translationY: Double,
+        tolerance: Double
+    ) -> Bool {
+        abs(candidate.x - baseline.x) <= tolerance
+            && abs(candidate.y - (baseline.y + translationY)) <= tolerance
+            && abs(candidate.width - baseline.width) <= tolerance
+            && abs(candidate.height - baseline.height) <= tolerance
     }
 
     private func capturePageBottomCheckpoint(
@@ -3178,6 +3324,10 @@ private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let verticalScrollBarCount: Int
     let outerPreparationCheckpoint: HostedPageBottomCheckpoint
     let outerPreparationResult: String
+    let outerPreparationSample: HostedNativeInnerScrollSample
+    let outerRestagingAction: HostedNativeInnerScrollAction?
+    let outerRestagingSamples: [HostedNativeInnerScrollSample]
+    let outerRestagingWindowDurationMilliseconds: Int
     let preTerminalValue: Double
     let terminalValue: Double
     let repeatTerminalValue: Double
@@ -3504,7 +3654,9 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
     )
     case invalidSettledWindow(String)
     case invalidFrame
+    case innerViewportExceedsOuterViewport
     case outerPreparationNotEstablished(section: String, failedChecks: [String])
+    case outerRestagingNotEstablished(section: String, failedChecks: [String])
     case outerPageMoved(String)
     case missingTerminalContent(String)
 
@@ -3568,8 +3720,13 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
                 + "control=\(controlIdentifier)"
         case .invalidFrame:
             "Hosted native inner-scroll geometry contains an invalid frame"
+        case .innerViewportExceedsOuterViewport:
+            "Hosted native inner-scroll viewport cannot fit inside its outer page viewport"
         case .outerPreparationNotEstablished(let section, let failedChecks):
             "Hosted native inner-scroll outer page was not prepared at page bottom: "
+                + "section=\(section) failedChecks=\(failedChecks.joined(separator: ","))"
+        case .outerRestagingNotEstablished(let section, let failedChecks):
+            "Hosted native inner-scroll viewport was not restaged inside its outer page: "
                 + "section=\(section) failedChecks=\(failedChecks.joined(separator: ","))"
         case .outerPageMoved(let section):
             "Hosted outer page moved while scrolling its native inner control: \(section)"
