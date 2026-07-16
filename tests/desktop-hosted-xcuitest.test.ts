@@ -1336,44 +1336,50 @@ releaseTabbedAlternative()
       source,
       "private func outerRestagingCoordinate("
     );
-    expect(restagingCoordinateSource).toContain(
+    const maskedRestagingCoordinateSource = maskSwiftCommentsAndLiterals(
+      restagingCoordinateSource
+    );
+    expect(maskedRestagingCoordinateSource).toContain(
       "pointIsOutsideInner"
     );
-    expect(restagingCoordinateSource).toContain(
+    expect(maskedRestagingCoordinateSource).toContain(
       "outerScroll.coordinate(withNormalizedOffset: normalizedOffset)"
     );
-    expect(restagingCoordinateSource).toContain(
+    expect(maskedRestagingCoordinateSource).toContain(
       "targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)"
     );
-    expect(restagingCoordinateSource).toContain("let topCorridorHeight =");
-    expect(restagingCoordinateSource).toContain("let bottomCorridorHeight =");
-    expect(restagingCoordinateSource).toContain(
+    expect(maskedRestagingCoordinateSource).toContain("let topCorridorHeight =");
+    expect(maskedRestagingCoordinateSource).toContain("let bottomCorridorHeight =");
+    expect(maskedRestagingCoordinateSource).toContain(
       "if max(topCorridorHeight, bottomCorridorHeight) > 0"
     );
-    expect(restagingCoordinateSource).toContain(
+    expect(maskedRestagingCoordinateSource).toContain(
       "targetX = outerScrollFrame.x + (outerScrollFrame.width / 2)"
     );
-    expect(restagingCoordinateSource).toContain(
+    expect(maskedRestagingCoordinateSource).toContain(
       "targetX = leftCorridorMaximumX"
     );
-    expect(restagingCoordinateSource).toContain(
+    expect(maskedRestagingCoordinateSource).toContain(
       "targetX = rightCorridorMinimumX"
     );
     expect(
-      restagingCoordinateSource.indexOf(
+      maskedRestagingCoordinateSource.indexOf(
         "if leftCorridorMaximumX > minimumOuterX"
       )
     ).toBeLessThan(
-      restagingCoordinateSource.indexOf(
+      maskedRestagingCoordinateSource.indexOf(
         "else if max(topCorridorHeight, bottomCorridorHeight) > 0"
       )
     );
-    expect(restagingCoordinateSource).toContain(
+    expect(maskedRestagingCoordinateSource).toContain(
       "throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate"
     );
     const nativeVisibilityParserSource = extractBalancedSwiftDeclaration(
       source,
       "private func decodeTerminalNativeVisibility("
+    );
+    const maskedNativeVisibilityParserSource = maskSwiftCommentsAndLiterals(
+      nativeVisibilityParserSource
     );
     expect(nativeVisibilityParserSource).toContain(
       'manifest.hasPrefix("ndlv1-chunks:")'
@@ -1384,31 +1390,31 @@ releaseTabbedAlternative()
     expect(nativeVisibilityParserSource).toContain(
       'let prefix = "ndlv1:\\(index):\\(chunkCount):"'
     );
-    expect(nativeVisibilityParserSource).toContain(
+    expect(maskedNativeVisibilityParserSource).toContain(
       "for index in 0..<chunkCount {"
     );
-    expect(nativeVisibilityParserSource).toContain(
+    expect(maskedNativeVisibilityParserSource).toContain(
       "let chunk = query.element(boundBy: 0)"
     );
-    expect(nativeVisibilityParserSource).toContain(
+    expect(maskedNativeVisibilityParserSource).toContain(
       "guard chunk.waitForExistence(timeout: 2)"
     );
-    expect(nativeVisibilityParserSource).toContain("guard query.count == 1");
+    expect(maskedNativeVisibilityParserSource).toContain("guard query.count == 1");
     expect(
-      nativeVisibilityParserSource.indexOf("chunk.waitForExistence(timeout: 2)")
-    ).toBeLessThan(nativeVisibilityParserSource.indexOf("query.count == 1"));
-    expect(nativeVisibilityParserSource.indexOf("query.count == 1")).toBeLessThan(
-      nativeVisibilityParserSource.indexOf("let label = chunk.label")
+      maskedNativeVisibilityParserSource.indexOf("chunk.waitForExistence(timeout: 2)")
+    ).toBeLessThan(maskedNativeVisibilityParserSource.indexOf("query.count == 1"));
+    expect(maskedNativeVisibilityParserSource.indexOf("query.count == 1")).toBeLessThan(
+      maskedNativeVisibilityParserSource.indexOf("let label = chunk.label")
     );
-    expect(nativeVisibilityParserSource).toContain(
+    expect(maskedNativeVisibilityParserSource).toContain(
       "guard label.utf8.count <= 128"
     );
-    expect(nativeVisibilityParserSource).toContain(
+    expect(maskedNativeVisibilityParserSource).toContain(
       "(index == chunkCount - 1 || decoded.count == 64)"
     );
-    expect(nativeVisibilityParserSource).toContain("decoded.count <= 64");
-    expect(nativeVisibilityParserSource).toContain("data.append(decoded)");
-    expect(nativeVisibilityParserSource).toContain("Data(base64Encoded:");
+    expect(maskedNativeVisibilityParserSource).toContain("decoded.count <= 64");
+    expect(maskedNativeVisibilityParserSource).toContain("data.append(decoded)");
+    expect(maskedNativeVisibilityParserSource).toContain("Data(base64Encoded:");
     const nativeVisibilityValidatorSource = extractBalancedSwiftDeclaration(
       source,
       "private func nativeVisibilityProvesTerminalToken("
