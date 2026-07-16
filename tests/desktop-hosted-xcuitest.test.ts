@@ -1307,7 +1307,13 @@ releaseTabbedAlternative()
     expect(nativeVisibilityParserSource).toContain(
       "guard chunk.waitForExistence(timeout: 2)"
     );
-    expect(nativeVisibilityParserSource).not.toContain("query.count == 1");
+    expect(nativeVisibilityParserSource).toContain("guard query.count == 1");
+    expect(
+      nativeVisibilityParserSource.indexOf("chunk.waitForExistence(timeout: 2)")
+    ).toBeLessThan(nativeVisibilityParserSource.indexOf("query.count == 1"));
+    expect(nativeVisibilityParserSource.indexOf("query.count == 1")).toBeLessThan(
+      nativeVisibilityParserSource.indexOf("let label = chunk.label")
+    );
     expect(nativeVisibilityParserSource).toContain(
       "guard label.utf8.count <= 128"
     );

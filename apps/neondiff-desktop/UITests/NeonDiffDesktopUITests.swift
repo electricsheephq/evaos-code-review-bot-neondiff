@@ -2568,6 +2568,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             guard chunk.waitForExistence(timeout: 2) else {
                 throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
             }
+            guard query.count == 1 else {
+                throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+            }
             let label = chunk.label
             let prefix = "ndlv1:\(index):\(chunkCount):"
             guard label.utf8.count <= 128,
