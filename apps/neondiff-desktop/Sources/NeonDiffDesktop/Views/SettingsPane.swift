@@ -84,11 +84,16 @@ struct SettingsPane: View {
 final class HostedSettingsEvaluationStatus: ObservableObject {
     @Published private(set) var accessibilityIdentifier =
         "neondiff.evaluation.settings.rendering"
-    @Published private(set) var geometryPayload = "unavailable"
+    @Published private(set) var geometryAccessibilityManifest =
+        "neondiff-settings-appkit-geometry-unavailable"
+    @Published private(set) var geometryAccessibilityChunks:
+        [HostedSettingsGeometryAccessibilityChunk] = []
 
     func reset() {
         accessibilityIdentifier = "neondiff.evaluation.settings.rendering"
-        geometryPayload = "unavailable"
+        geometryAccessibilityManifest =
+            "neondiff-settings-appkit-geometry-unavailable"
+        geometryAccessibilityChunks = []
     }
 
     fileprivate func markQuiescent(samples: [HostedSettingsWindowSample]) {
@@ -103,10 +108,12 @@ final class HostedSettingsEvaluationStatus: ObservableObject {
             samples: samples
         )
         guard let data = try? JSONEncoder().encode(envelope) else {
-            geometryPayload = "encoding-failed"
             return
         }
-        geometryPayload = data.base64EncodedString()
+        let chunks = HostedSettingsGeometryAccessibilityChunk.chunks(data)
+        guard !chunks.isEmpty else { return }
+        geometryAccessibilityChunks = chunks
+        geometryAccessibilityManifest = "ndsg1-chunks:\(chunks.count)"
         accessibilityIdentifier = "neondiff.evaluation.settings.quiescent"
     }
 }
@@ -148,16 +155,24 @@ private struct HostedSettingsEvaluationMarker: View {
             Color.clear
                 .frame(width: 1, height: 1)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("NeonDiff Settings observed text size")
+                .accessibilityLabel(
+                    "ndst1:\(dynamicTypeSize.evaluationIdentifier)"
+                )
                 .accessibilityIdentifier("neondiff.evaluation.settings.text-size")
-                .accessibilityValue(dynamicTypeSize.evaluationIdentifier)
 
             Color.clear
                 .frame(width: 1, height: 1)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("NeonDiff Settings AppKit geometry")
+                .accessibilityLabel(status.geometryAccessibilityManifest)
                 .accessibilityIdentifier("neondiff.evaluation.settings.appkit-geometry")
-                .accessibilityValue(status.geometryPayload)
+
+            ForEach(status.geometryAccessibilityChunks) { chunk in
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(chunk.label)
+                    .accessibilityIdentifier(chunk.identifier)
+            }
         }
         .allowsHitTesting(false)
     }
@@ -258,6 +273,33 @@ fileprivate struct HostedSettingsWindowCoordinateSpaces: Codable {
     let contentLayoutRect: String
     let contentLayoutScreenRect: String
     let visibleScreenFrame: String
+}
+
+struct HostedSettingsGeometryAccessibilityChunk: Identifiable, Equatable {
+    let identifier: String
+    let label: String
+
+    var id: String { identifier }
+
+    static func chunks(_ data: Data) -> [Self] {
+        let chunkByteCount = 64
+        let chunkCount = (data.count + chunkByteCount - 1) / chunkByteCount
+        guard chunkCount > 0 else { return [] }
+        let chunks = (0..<chunkCount).compactMap { index -> Self? in
+            let lowerBound = index * chunkByteCount
+            let upperBound = min(lowerBound + chunkByteCount, data.count)
+            guard lowerBound < upperBound else { return nil }
+            let encoded = data.subdata(in: lowerBound..<upperBound)
+                .base64EncodedString()
+            let label = "ndsg1:\(index):\(chunkCount):\(encoded)"
+            guard label.utf8.count <= 128 else { return nil }
+            return Self(
+                identifier: "neondiff.evaluation.settings.appkit-geometry.\(index)",
+                label: label
+            )
+        }
+        return chunks.count == chunkCount ? chunks : []
+    }
 }
 
 fileprivate struct HostedSettingsWindowSample: Codable {

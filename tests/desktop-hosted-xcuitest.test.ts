@@ -691,11 +691,16 @@ private func target() {
     expect(source).toContain('"neondiff-settings-window-content"');
     expect(source).toContain('"neondiff.evaluation.settings.quiescent"');
     expect(source).toContain('"neondiff.evaluation.settings.text-size"');
+    expect(source).toContain('let textSizePrefix = "ndst1:"');
+    expect(source).toContain("let textSizeLabel = textSizeMarker.label");
     expect(source).toContain('observedTextSize != "accessibility3"');
     expect(source).toContain(
       '"neondiff.evaluation.settings.appkit-geometry"'
     );
     expect(source).toContain("decodeAndValidateSettingsAppKitGeometry");
+    expect(source).toContain('let manifestPrefix = "ndsg1-chunks:"');
+    expect(source).toContain('let prefix = "ndsg1:\\(index):\\(chunkCount):"');
+    expect(source).toContain("let label = chunk.label");
     expect(source).toContain(
       'envelope.coordinateSpaces.contentLayoutRect == "appkit-window"'
     );
@@ -753,6 +758,12 @@ private func target() {
     expect(settings).toContain('"neondiff-settings-window-content"');
     expect(settings).toContain('"neondiff.evaluation.settings.text-size"');
     expect(settings).toContain('"neondiff.evaluation.settings.appkit-geometry"');
+    expect(settings).toContain("HostedSettingsGeometryAccessibilityChunk");
+    expect(settings).toContain("geometryAccessibilityManifest");
+    expect(settings).toContain("geometryAccessibilityChunks");
+    expect(settings).toContain('let chunkByteCount = 64');
+    expect(settings).toContain('let label = "ndsg1:');
+    expect(settings).not.toContain(".accessibilityValue(");
     expect(settings).toContain("visibleScreenFrame: visibleScreenFrame");
     expect(settings).toContain("window.convertToScreen(");
     expect(settings).toContain("status.markQuiescent(samples: stableSamples)");

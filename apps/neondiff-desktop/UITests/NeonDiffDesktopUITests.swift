@@ -554,9 +554,20 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let textSizeMarker = app.descendants(matching: .any)[
             "neondiff.evaluation.settings.text-size"
         ]
-        guard textSizeMarker.waitForExistence(timeout: 2),
-              let observedTextSize = textSizeMarker.value as? String,
-              !observedTextSize.isEmpty,
+        let textSizePrefix = "ndst1:"
+        guard textSizeMarker.waitForExistence(timeout: 2) else {
+            throw HostedSettingsSceneTraceError.missingElement(
+                "neondiff.evaluation.settings.text-size"
+            )
+        }
+        let textSizeLabel = textSizeMarker.label
+        guard textSizeLabel.hasPrefix(textSizePrefix) else {
+            throw HostedSettingsSceneTraceError.invalidObservedTextSize(
+                request.textSizeMode
+            )
+        }
+        let observedTextSize = String(textSizeLabel.dropFirst(textSizePrefix.count))
+        guard !observedTextSize.isEmpty,
               observedTextSize != "unknown" else {
             throw HostedSettingsSceneTraceError.invalidObservedTextSize(
                 request.textSizeMode
@@ -578,6 +589,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
         let appKitGeometry = try decodeAndValidateSettingsAppKitGeometry(
+            app: app,
             marker: geometryMarker,
             requestedContentSize: requestedContentSize,
             context: request.textSizeMode
@@ -660,15 +672,44 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func decodeAndValidateSettingsAppKitGeometry(
+        app: XCUIApplication,
         marker: XCUIElement,
         requestedContentSize: HostedContentSize,
         context: String
     ) throws -> HostedSettingsAppKitGeometryEnvelope {
-        guard let encodedPayload = marker.value as? String,
-              encodedPayload != "unavailable",
-              encodedPayload != "encoding-failed",
-              let data = Data(base64Encoded: encodedPayload),
-              let envelope = try? JSONDecoder().decode(
+        let manifestPrefix = "ndsg1-chunks:"
+        let manifest = marker.label
+        guard manifest.hasPrefix(manifestPrefix),
+              let chunkCount = Int(manifest.dropFirst(manifestPrefix.count)),
+              chunkCount > 0,
+              chunkCount <= 64 else {
+            throw HostedSettingsSceneTraceError.invalidAppKitGeometryPayload(context)
+        }
+        var data = Data()
+        for index in 0..<chunkCount {
+            let chunk = app.descendants(matching: .any)[
+                "neondiff.evaluation.settings.appkit-geometry.\(index)"
+            ]
+            guard chunk.waitForExistence(timeout: 2) else {
+                throw HostedSettingsSceneTraceError.invalidAppKitGeometryPayload(context)
+            }
+            guard !chunk.isHittable else {
+                throw HostedSettingsSceneTraceError.interactiveGeometryChunk(index)
+            }
+            let prefix = "ndsg1:\(index):\(chunkCount):"
+            let label = chunk.label
+            guard label.hasPrefix(prefix),
+                  let decoded = Data(
+                      base64Encoded: String(label.dropFirst(prefix.count))
+                  ),
+                  !decoded.isEmpty,
+                  decoded.count <= 64,
+                  (index == chunkCount - 1 || decoded.count == 64) else {
+                throw HostedSettingsSceneTraceError.invalidAppKitGeometryPayload(context)
+            }
+            data.append(decoded)
+        }
+        guard let envelope = try? JSONDecoder().decode(
                   HostedSettingsAppKitGeometryEnvelope.self,
                   from: data
               ) else {
@@ -686,6 +727,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         for sample in envelope.samples {
             guard sample.windowFrame.isFiniteAndNonempty,
                   sample.contentLayoutRect.isFiniteAndNonempty,
+                  sample.contentLayoutScreenRect.isFiniteAndNonempty,
                   sample.visibleScreenFrame.isFiniteAndNonempty,
                   sample.contentLayoutRect.matches(
                       requestedContentSize,
@@ -2717,6 +2759,7 @@ private enum HostedSettingsSceneTraceError: LocalizedError {
     case invalidObservedTextSize(String)
     case unexpectedObservedTextSize(expected: String, observed: String)
     case invalidAppKitGeometryPayload(String)
+    case interactiveGeometryChunk(Int)
     case invalidAppKitGeometry(String)
     case unstableAppKitGeometry(String)
     case unexpectedWindowCount(before: Int, after: Int)
@@ -2749,6 +2792,8 @@ private enum HostedSettingsSceneTraceError: LocalizedError {
                 + "expected=\(expected) observed=\(observed)"
         case .invalidAppKitGeometryPayload(let context):
             "Hosted Settings AppKit geometry payload is invalid: \(context)"
+        case .interactiveGeometryChunk(let index):
+            "Hosted Settings AppKit geometry chunk is interactive: \(index)"
         case .invalidAppKitGeometry(let context):
             "Hosted Settings AppKit geometry is invalid or not contained: \(context)"
         case .unstableAppKitGeometry(let context):
