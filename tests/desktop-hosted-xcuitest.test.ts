@@ -827,14 +827,14 @@ releaseTabbedAlternative()
     expect(source).toContain("HostedNativeInnerScrollTrace(");
     expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-public-xcui-scrollbar-thumb-drag-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-without-exposed-hittable-thumb-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
     );
 
     const scenarioSource = extractBalancedSwiftDeclaration(
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 11");
+    expect(scenarioSource).toContain("schemaVersion: 12");
     expect(scenarioSource).toContain(
       "let reposGeometry = try captureCheckpoint("
     );
@@ -1159,11 +1159,19 @@ releaseTabbedAlternative()
     expect(helperSource).toContain(
       "outerPreparationCheckpoint: outerPreparationCheckpoint"
     );
-    expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(3);
+    expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
     expect(helperSource).toContain("app.descendants(matching: .scrollView)");
     expect(helperSource).toContain("scrollContainer.scrollBars");
     expect(helperSource).not.toContain("control.scrollBars");
-    expect(helperSource.match(/scrollContainer\.scroll\s*\(/g)).toHaveLength(2);
+    expect(helperSource.match(/scrollContainer\.scroll\s*\(/g) ?? []).toHaveLength(0);
+    expect(helperSource.match(/nativeScrollBarBottomDragTarget\s*\(/g)).toHaveLength(3);
+    expect(helperSource.match(/\.click\(\s*forDuration: 0\.1,\s*thenDragTo:/g)).toHaveLength(2);
+    expect(helperSource.match(/\.press\(\s*forDuration:/g) ?? []).toHaveLength(0);
+    expect(helperSource).toContain("firstDragTarget.sourceCoordinate.click(");
+    expect(helperSource).toContain("thenDragTo: firstDragTarget.destinationCoordinate");
+    expect(helperSource).toContain("repeatDragTarget.sourceCoordinate.click(");
+    expect(helperSource).toContain("thenDragTo: repeatDragTarget.destinationCoordinate");
+    expect(helperSource).not.toContain("adjust(toNormalizedSliderPosition:");
     expect(helperSource).toContain("normalizedScrollValue");
     expect(helperSource).toContain(
       "let preTerminalValue = preSample.normalizedScrollValue"
@@ -1200,6 +1208,22 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("effectObserved: true");
     expect(helperSource).toContain("effectObserved: false");
     expect(helperSource.match(/effectProven: true/g)).toHaveLength(3);
+    expect(helperSource).toContain(
+      'mechanism: "public-xcui-coordinate-scroll-delta"'
+    );
+    expect(helperSource.match(/mechanism: "public-xcui-scrollbar-thumb-drag"/g)).toHaveLength(2);
+    expect(helperSource.match(/normalizedTargetValue: 1/g)).toHaveLength(2);
+    expect(helperSource).toContain("sourcePoint: firstDragTarget.sourcePoint");
+    expect(helperSource).toContain("targetPoint: firstDragTarget.destinationPoint");
+    expect(helperSource).toContain("guardScrollBarFrame: firstDragTarget.scrollBarFrame");
+    expect(helperSource).toContain("guardThumbFrameBefore: firstDragTarget.thumbFrame");
+    expect(helperSource).toContain("guardThumbFrameAfter: repeatDragTarget.thumbFrame");
+    expect(helperSource).toContain(
+      "requestedDisplacementY: firstDragTarget.requestedDisplacementY"
+    );
+    expect(helperSource).toContain(
+      "observedThumbTranslationY: firstObservedThumbTranslationY"
+    );
     expect(helperSource).toContain("terminalRowFrame");
     expect(helperSource).toContain("terminalRowFullyContained");
     expect(helperSource).toContain("terminalRowElementType");
@@ -1268,6 +1292,46 @@ releaseTabbedAlternative()
     expect(helperSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
     );
+    const scrollBarDragTargetSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func nativeScrollBarBottomDragTarget("
+    );
+    expect(scrollBarDragTargetSource).toContain(
+      "verticalScrollBar.descendants(matching: .valueIndicator)"
+    );
+    expect(scrollBarDragTargetSource).toContain("thumbQuery.count == 1");
+    expect(scrollBarDragTargetSource).toContain("thumb.waitForExistence(timeout: 2)");
+    expect(scrollBarDragTargetSource).toContain("thumb.isEnabled, thumb.isHittable");
+    expect(scrollBarDragTargetSource).toContain("thumbFrame.isFiniteAndNonempty");
+    expect(scrollBarDragTargetSource).toContain(
+      "thumbFrame.isFullyContained(in: scrollBarFrame, tolerance: tolerance)"
+    );
+    expect(scrollBarDragTargetSource).toContain(
+      "thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))"
+    );
+    expect(scrollBarDragTargetSource).toContain(
+      "verticalScrollBar.coordinate(withNormalizedOffset: normalizedDestination)"
+    );
+    expect(scrollBarDragTargetSource).toContain(
+      "requestedDisplacementY >= minimumDisplacement"
+    );
+    expect(scrollBarDragTargetSource).not.toContain("adjust(");
+    const nativeInnerActionSource = extractBalancedSwiftDeclaration(
+      source,
+      "private struct HostedNativeInnerScrollAction:"
+    );
+    for (const field of [
+      "mechanism",
+      "sourcePoint",
+      "normalizedTargetValue",
+      "guardScrollBarFrame",
+      "guardThumbFrameBefore",
+      "guardThumbFrameAfter",
+    ]) {
+      expect(nativeInnerActionSource).toContain(`let ${field}:`);
+    }
+    expect(nativeInnerActionSource).toContain("let deltaX: Double?");
+    expect(nativeInnerActionSource).toContain("let deltaY: Double?");
     const restagingCoordinateSource = extractBalancedSwiftDeclaration(
       source,
       "private func outerRestagingCoordinate("

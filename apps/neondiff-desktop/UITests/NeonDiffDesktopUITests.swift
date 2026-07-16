@@ -415,7 +415,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 11,
+                schemaVersion: 12,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
@@ -430,7 +430,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 innerScrollCheckpoints: [reposInner, logsInner],
                 navigationActions: [logsNavigation],
                 outerPageBottomCheckpoints: [reposOuter, logsOuter],
-                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
+                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-before-public-xcui-scrollbar-thumb-drag-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-without-exposed-hittable-thumb-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
             )
         )
     }
@@ -2034,6 +2034,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             outerRestagingAction = nil
         } else {
             outerRestagingAction = HostedNativeInnerScrollAction(
+                mechanism: "public-xcui-coordinate-scroll-delta",
                 elapsedMilliseconds: restagingActionElapsedMilliseconds,
                 deltaX: 0,
                 deltaY: restagingDeltaY,
@@ -2058,11 +2059,19 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
 
+        let firstDragTarget = try nativeScrollBarBottomDragTarget(
+            scrollContainer: scrollContainer,
+            controlIdentifier: controlIdentifier,
+            tolerance: 1
+        )
         let firstActionStartedAt = ProcessInfo.processInfo.systemUptime
         let firstActionElapsedMilliseconds = Int(
             ((firstActionStartedAt - samplingStart) * 1_000).rounded()
         )
-        scrollContainer.scroll(byDeltaX: 0, deltaY: -10_000)
+        firstDragTarget.sourceCoordinate.click(
+            forDuration: 0.1,
+            thenDragTo: firstDragTarget.destinationCoordinate
+        )
         if let terminalVisibilityMarkerQuery,
            let terminalVisibilityMarkerIdentifier {
             let marker = terminalVisibilityMarkerQuery.element(boundBy: 0)
@@ -2109,11 +2118,30 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
 
+        let repeatDragTarget = try nativeScrollBarBottomDragTarget(
+            scrollContainer: scrollContainer,
+            controlIdentifier: controlIdentifier,
+            tolerance: 1
+        )
+        let firstObservedThumbTranslationY =
+            repeatDragTarget.thumbFrame.y - firstDragTarget.thumbFrame.y
+        guard firstObservedThumbTranslationY > 0.5,
+              !repeatDragTarget.scrollBarFrame.differs(
+                  from: firstDragTarget.scrollBarFrame,
+                  byMoreThan: 1
+              ) else {
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbDidNotReachTerminal(
+                controlIdentifier
+            )
+        }
         let repeatActionStartedAt = ProcessInfo.processInfo.systemUptime
         let repeatActionElapsedMilliseconds = Int(
             ((repeatActionStartedAt - samplingStart) * 1_000).rounded()
         )
-        scrollContainer.scroll(byDeltaX: 0, deltaY: -10_000)
+        repeatDragTarget.sourceCoordinate.click(
+            forDuration: 0.1,
+            thenDragTo: repeatDragTarget.destinationCoordinate
+        )
         let repeatTerminalWindow = try captureStableNativeInnerScrollSamples(
             app: app,
             controlIdentifier: controlIdentifier,
@@ -2155,6 +2183,22 @@ final class NeonDiffDesktopUITests: XCTestCase {
                     controlIdentifier
                 )
             }
+        }
+        let postRepeatDragTarget = try nativeScrollBarBottomDragTarget(
+            scrollContainer: scrollContainer,
+            controlIdentifier: controlIdentifier,
+            tolerance: 1
+        )
+        let repeatObservedThumbTranslationY =
+            postRepeatDragTarget.thumbFrame.y - repeatDragTarget.thumbFrame.y
+        guard abs(repeatObservedThumbTranslationY) <= 1,
+              !postRepeatDragTarget.scrollBarFrame.differs(
+                  from: repeatDragTarget.scrollBarFrame,
+                  byMoreThan: 1
+              ) else {
+            throw HostedNativeInnerScrollTraceError.repeatTerminalScrollChangedGeometry(
+                controlIdentifier
+            )
         }
 
         let postActionSamples = terminalSamples + repeatTerminalSamples
@@ -2240,20 +2284,32 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalStateStable: true,
             outerIsolationProven: true,
             firstTerminalAction: HostedNativeInnerScrollAction(
+                mechanism: "public-xcui-scrollbar-thumb-drag",
                 elapsedMilliseconds: firstActionElapsedMilliseconds,
-                deltaX: 0,
-                deltaY: -10_000,
-                targetPoint: nil,
+                sourcePoint: firstDragTarget.sourcePoint,
+                targetPoint: firstDragTarget.destinationPoint,
+                normalizedTargetValue: 1,
+                requestedDisplacementY: firstDragTarget.requestedDisplacementY,
+                guardScrollBarFrame: firstDragTarget.scrollBarFrame,
+                guardThumbFrameBefore: firstDragTarget.thumbFrame,
+                guardThumbFrameAfter: repeatDragTarget.thumbFrame,
+                observedThumbTranslationY: firstObservedThumbTranslationY,
                 attemptCount: 1,
                 effectObserved: true,
                 effectProven: true,
                 result: "returned-and-terminal-value-proven"
             ),
             repeatTerminalAction: HostedNativeInnerScrollAction(
+                mechanism: "public-xcui-scrollbar-thumb-drag",
                 elapsedMilliseconds: repeatActionElapsedMilliseconds,
-                deltaX: 0,
-                deltaY: -10_000,
-                targetPoint: nil,
+                sourcePoint: repeatDragTarget.sourcePoint,
+                targetPoint: repeatDragTarget.destinationPoint,
+                normalizedTargetValue: 1,
+                requestedDisplacementY: repeatDragTarget.requestedDisplacementY,
+                guardScrollBarFrame: repeatDragTarget.scrollBarFrame,
+                guardThumbFrameBefore: repeatDragTarget.thumbFrame,
+                guardThumbFrameAfter: postRepeatDragTarget.thumbFrame,
+                observedThumbTranslationY: repeatObservedThumbTranslationY,
                 attemptCount: 1,
                 effectObserved: false,
                 effectProven: true,
@@ -2264,6 +2320,103 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalSamples: terminalSamples,
             repeatTerminalObservedSamples: repeatTerminalObservedSamples,
             repeatTerminalSamples: repeatTerminalSamples
+        )
+    }
+
+    private func nativeScrollBarBottomDragTarget(
+        scrollContainer: XCUIElement,
+        controlIdentifier: String,
+        tolerance: Double
+    ) throws -> HostedNativeScrollBarDragTarget {
+        let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
+        guard scrollContainerFrame.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidFrame
+        }
+        let verticalScrollBars = scrollContainer.scrollBars.allElementsBoundByIndex.filter {
+            candidate in
+            let frame = HostedGeometryFrame(candidate.frame)
+            return frame.isFiniteAndNonempty
+                && frame.height > frame.width
+                && frame.isFullyContained(in: scrollContainerFrame, tolerance: 2)
+        }
+        guard verticalScrollBars.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidVerticalScrollBarCount(
+                controlIdentifier: controlIdentifier,
+                count: verticalScrollBars.count
+            )
+        }
+        let verticalScrollBar = verticalScrollBars[0]
+        let scrollBarFrame = HostedGeometryFrame(verticalScrollBar.frame)
+        let thumbQuery = verticalScrollBar.descendants(matching: .valueIndicator)
+        guard thumbQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarThumbCount(
+                controlIdentifier: controlIdentifier,
+                count: thumbQuery.count
+            )
+        }
+        let thumb = thumbQuery.element(boundBy: 0)
+        guard thumb.waitForExistence(timeout: 2), thumbQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarThumbCount(
+                controlIdentifier: controlIdentifier,
+                count: thumbQuery.count
+            )
+        }
+        guard thumb.isEnabled, thumb.isHittable else {
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
+                controlIdentifier
+            )
+        }
+        let thumbFrame = HostedGeometryFrame(thumb.frame)
+        guard scrollBarFrame.isFiniteAndNonempty,
+              thumbFrame.isFiniteAndNonempty,
+              thumbFrame.isFullyContained(in: scrollBarFrame, tolerance: tolerance) else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarDragGeometry(
+                controlIdentifier
+            )
+        }
+
+        let sourcePoint = HostedGeometryPoint(
+            x: thumbFrame.x + (thumbFrame.width / 2),
+            y: thumbFrame.y + (thumbFrame.height / 2)
+        )
+        let destinationPoint = HostedGeometryPoint(
+            x: sourcePoint.x,
+            y: scrollBarFrame.maxY - max(1, tolerance)
+        )
+        let requestedDisplacementY = destinationPoint.y - sourcePoint.y
+        let minimumDisplacement = max(2, tolerance + 1)
+        guard destinationPoint.x >= scrollBarFrame.x + tolerance,
+              destinationPoint.x <= scrollBarFrame.maxX - tolerance,
+              destinationPoint.y >= scrollBarFrame.y + tolerance,
+              destinationPoint.y <= scrollBarFrame.maxY - tolerance,
+              requestedDisplacementY >= minimumDisplacement,
+              requestedDisplacementY <= scrollBarFrame.height else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarDragGeometry(
+                controlIdentifier
+            )
+        }
+        let normalizedDestination = CGVector(
+            dx: (destinationPoint.x - scrollBarFrame.x) / scrollBarFrame.width,
+            dy: (destinationPoint.y - scrollBarFrame.y) / scrollBarFrame.height
+        )
+        guard normalizedDestination.dx.isFinite,
+              normalizedDestination.dy.isFinite,
+              normalizedDestination.dx >= 0,
+              normalizedDestination.dx <= 1,
+              normalizedDestination.dy >= 0,
+              normalizedDestination.dy <= 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarDragGeometry(
+                controlIdentifier
+            )
+        }
+        return HostedNativeScrollBarDragTarget(
+            sourceCoordinate: thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+            destinationCoordinate: verticalScrollBar.coordinate(withNormalizedOffset: normalizedDestination),
+            sourcePoint: sourcePoint,
+            destinationPoint: destinationPoint,
+            scrollBarFrame: scrollBarFrame,
+            thumbFrame: thumbFrame,
+            requestedDisplacementY: requestedDisplacementY
         )
     }
 
@@ -3913,15 +4066,69 @@ private struct HostedPageBottomReachabilityTrace: Codable {
     let proofBoundary: String
 }
 
+private struct HostedNativeScrollBarDragTarget {
+    let sourceCoordinate: XCUICoordinate
+    let destinationCoordinate: XCUICoordinate
+    let sourcePoint: HostedGeometryPoint
+    let destinationPoint: HostedGeometryPoint
+    let scrollBarFrame: HostedGeometryFrame
+    let thumbFrame: HostedGeometryFrame
+    let requestedDisplacementY: Double
+}
+
 private struct HostedNativeInnerScrollAction: Codable, Equatable {
+    let mechanism: String
     let elapsedMilliseconds: Int
-    let deltaX: Double
-    let deltaY: Double
+    let deltaX: Double?
+    let deltaY: Double?
+    let sourcePoint: HostedGeometryPoint?
     let targetPoint: HostedGeometryPoint?
+    let normalizedTargetValue: Double?
+    let requestedDisplacementY: Double?
+    let guardScrollBarFrame: HostedGeometryFrame?
+    let guardThumbFrameBefore: HostedGeometryFrame?
+    let guardThumbFrameAfter: HostedGeometryFrame?
+    let observedThumbTranslationY: Double?
     let attemptCount: Int
     let effectObserved: Bool
     let effectProven: Bool
     let result: String
+
+    init(
+        mechanism: String,
+        elapsedMilliseconds: Int,
+        deltaX: Double? = nil,
+        deltaY: Double? = nil,
+        sourcePoint: HostedGeometryPoint? = nil,
+        targetPoint: HostedGeometryPoint? = nil,
+        normalizedTargetValue: Double? = nil,
+        requestedDisplacementY: Double? = nil,
+        guardScrollBarFrame: HostedGeometryFrame? = nil,
+        guardThumbFrameBefore: HostedGeometryFrame? = nil,
+        guardThumbFrameAfter: HostedGeometryFrame? = nil,
+        observedThumbTranslationY: Double? = nil,
+        attemptCount: Int,
+        effectObserved: Bool,
+        effectProven: Bool,
+        result: String
+    ) {
+        self.mechanism = mechanism
+        self.elapsedMilliseconds = elapsedMilliseconds
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.sourcePoint = sourcePoint
+        self.targetPoint = targetPoint
+        self.normalizedTargetValue = normalizedTargetValue
+        self.requestedDisplacementY = requestedDisplacementY
+        self.guardScrollBarFrame = guardScrollBarFrame
+        self.guardThumbFrameBefore = guardThumbFrameBefore
+        self.guardThumbFrameAfter = guardThumbFrameAfter
+        self.observedThumbTranslationY = observedThumbTranslationY
+        self.attemptCount = attemptCount
+        self.effectObserved = effectObserved
+        self.effectProven = effectProven
+        self.result = result
+    }
 }
 
 private struct HostedNativeInnerScrollSample: Codable, Equatable {
@@ -4281,6 +4488,10 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
     case invalidElementCount(identifier: String, count: Int)
     case invalidScrollContainerCount(controlIdentifier: String, count: Int)
     case invalidVerticalScrollBarCount(controlIdentifier: String, count: Int)
+    case invalidScrollBarThumbCount(controlIdentifier: String, count: Int)
+    case scrollBarThumbNotInteractable(String)
+    case invalidScrollBarDragGeometry(String)
+    case scrollBarThumbDidNotReachTerminal(String)
     case missingTerminalRowElementType(String)
     case invalidTerminalRowCount(controlIdentifier: String, count: Int)
     case invalidNormalizedScrollValue(String)
@@ -4329,6 +4540,18 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
         case let .invalidVerticalScrollBarCount(controlIdentifier, count):
             "Hosted native control does not have exactly one geometry-bound vertical scrollbar: "
                 + "control=\(controlIdentifier) count=\(count)"
+        case let .invalidScrollBarThumbCount(controlIdentifier, count):
+            "Hosted native vertical scrollbar does not expose exactly one public value indicator: "
+                + "control=\(controlIdentifier) count=\(count)"
+        case .scrollBarThumbNotInteractable(let controlIdentifier):
+            "Hosted native vertical scrollbar thumb is not enabled and hittable: "
+                + "control=\(controlIdentifier)"
+        case .invalidScrollBarDragGeometry(let controlIdentifier):
+            "Hosted native vertical scrollbar thumb has no safe bounded downward drag: "
+                + "control=\(controlIdentifier)"
+        case .scrollBarThumbDidNotReachTerminal(let controlIdentifier):
+            "Hosted native vertical scrollbar thumb did not translate to terminal geometry: "
+                + "control=\(controlIdentifier)"
         case .missingTerminalRowElementType(let controlIdentifier):
             "Hosted native terminal text requires a semantic row type: "
                 + "control=\(controlIdentifier)"
