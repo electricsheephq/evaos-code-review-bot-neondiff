@@ -722,7 +722,6 @@ releaseTabbedAlternative()
     );
 
     expect(existsSync(hostedInnerScrollFixturePath)).toBe(true);
-    if (!existsSync(hostedInnerScrollFixturePath)) return;
 
     const fixtureSource = readFileSync(hostedInnerScrollFixturePath, "utf8");
     const fixture = JSON.parse(fixtureSource);
