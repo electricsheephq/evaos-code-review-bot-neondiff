@@ -763,6 +763,7 @@ private func target() {
     expect(settings).toContain("geometryAccessibilityChunks");
     expect(settings).toContain('let chunkByteCount = 64');
     expect(settings).toContain('let label = "ndsg1:');
+    expect(settings).toContain("guard label.utf8.count <= 128");
     expect(settings).not.toContain(".accessibilityValue(");
     expect(settings).toContain("visibleScreenFrame: visibleScreenFrame");
     expect(settings).toContain("window.convertToScreen(");
