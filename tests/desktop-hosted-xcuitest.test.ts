@@ -13,6 +13,12 @@ const appPath =
   "apps/neondiff-desktop/Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift";
 const settingsPath =
   "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/SettingsPane.swift";
+const reposPath =
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ReposView.swift";
+const logsPath =
+  "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/LogsView.swift";
+const hostedInnerScrollFixturePath =
+  "apps/neondiff-desktop/UITests/Fixtures/hosted-inner-scroll-overflow.json";
 const workflowPath = ".github/workflows/swift-desktop-gate.yml";
 
 function extractBalancedSwiftDeclaration(
@@ -551,7 +557,6 @@ releaseTabbedAlternative()
     expect(
       source.match(/outerPageScroll\.scroll\(byDeltaX: 0, deltaY: -10_000\)/g)
     ).toHaveLength(1);
-    expect(source.match(/\.scroll\s*\(/g)).toHaveLength(2);
     const checkpointSource = extractBalancedSwiftDeclaration(
       source,
       "private func capturePageBottomCheckpoint("
@@ -609,6 +614,81 @@ releaseTabbedAlternative()
     expect(sentinelSource).toContain(".allowsHitTesting(false)");
     expect(sentinelSource).toContain(
       ".accessibilityRespondsToUserInteraction(false)"
+    );
+  });
+
+  it("encodes hosted native Repos and Logs inner-scroll exhaustion without changing the production fixture catalog", () => {
+    const project = readFileSync(projectPath, "utf8");
+    const source = readFileSync(uiTestPath, "utf8");
+    const repos = readFileSync(reposPath, "utf8");
+    const logs = readFileSync(logsPath, "utf8");
+
+    expect(existsSync(hostedInnerScrollFixturePath)).toBe(true);
+    if (!existsSync(hostedInnerScrollFixturePath)) return;
+
+    const fixtureSource = readFileSync(hostedInnerScrollFixturePath, "utf8");
+    const fixture = JSON.parse(fixtureSource);
+    expect(fixture.schemaVersion).toBe(1);
+    expect(fixture.id).toBe("hosted-inner-scroll-overflow");
+    expect(fixture.surface).toEqual({ section: "repos", onboardingStep: null });
+    expect(fixture.environment).toMatchObject({
+      locale: "en_US_POSIX",
+      appearance: "dark",
+      disableAnimations: true,
+      contentSize: { width: 1040, height: 680 },
+    });
+    expect(fixture.state.repositories).toHaveLength(40);
+    expect(fixture.state.repositories.at(-1)?.name).toBe("synthetic-org/repo-040");
+    expect(fixture.state.logText.split("\n")).toHaveLength(70);
+    expect(fixture.state.logText.endsWith("HOSTED_INNER_SCROLL_SAFE_TAIL_070")).toBe(true);
+    expect(fixtureSource).not.toMatch(
+      /(?:ghp_|github_pat_|sk-|Bearer\s|BEGIN [A-Z ]*PRIVATE KEY|https?:\/\/[^\s"']*:[^\s"']*@)/i
+    );
+
+    expect(project).toContain("hosted-inner-scroll-overflow.json in Resources");
+    expect(project).toContain(
+      "path = UITests/Fixtures/hosted-inner-scroll-overflow.json"
+    );
+    expect(project.match(/hosted-inner-scroll-overflow\.json in Resources/g)).toHaveLength(2);
+    expect(
+      readFileSync("apps/neondiff-desktop/fixtures/ui/catalog.json", "utf8")
+    ).not.toContain("hosted-inner-scroll-overflow");
+    expect(repos).toContain('.accessibilityIdentifier("neondiff-repos-table")');
+    expect(logs).toContain('.accessibilityIdentifier("neondiff-logs-text-editor")');
+
+    expect(source).toContain("testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage");
+    expect(source).toContain('scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680"');
+    expect(source).toContain('fixtureId: "hosted-inner-scroll-overflow"');
+    expect(source).toContain('"neondiff-repos-table"');
+    expect(source).toContain('"neondiff-logs-text-editor"');
+    expect(source).toContain('"synthetic-org/repo-040"');
+    expect(source).toContain('"HOSTED_INNER_SCROLL_SAFE_TAIL_070"');
+    expect(source).toContain("HostedNativeInnerScrollTrace(");
+    expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
+    expect(source).toContain(
+      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+    );
+
+    const scenarioSource = extractBalancedSwiftDeclaration(
+      source,
+      "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
+    );
+    expect(scenarioSource.match(/captureNativeInnerScrollExhaustion\s*\(/g)).toHaveLength(2);
+    expect(scenarioSource.match(/capturePageBottomCheckpoint\s*\(/g)).toHaveLength(2);
+    const helperSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func captureNativeInnerScrollExhaustion("
+    );
+    expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(2);
+    expect(helperSource).toContain("scrollBars");
+    expect(helperSource).toContain("normalizedScrollValue");
+    expect(helperSource).toContain("preTerminalValue < 1");
+    expect(helperSource).toContain("terminalValue == 1");
+    expect(helperSource).toContain("repeatTerminalValue == terminalValue");
+    expect(helperSource).toContain("outerSentinelFrame");
+    expect(helperSource).toContain("try requireFullyContained(");
+    expect(helperSource).not.toMatch(
+      /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
     );
   });
 

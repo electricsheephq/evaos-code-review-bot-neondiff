@@ -204,6 +204,7 @@ struct ReposView: View {
                         .accessibilityIdentifier("neondiff-repo-remove-\(repo.name)")
                     }
                 }
+                .accessibilityIdentifier("neondiff-repos-table")
                 .scrollContentBackground(.hidden)
                 .frame(height: 360)
 

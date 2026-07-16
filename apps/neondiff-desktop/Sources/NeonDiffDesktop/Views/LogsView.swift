@@ -30,6 +30,7 @@ struct LogsView: View {
                     .foregroundStyle(NeonDiffTheme.accentSoft)
 
                 TextEditor(text: $model.logText)
+                    .accessibilityIdentifier("neondiff-logs-text-editor")
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                     .scrollContentBackground(.hidden)

@@ -17,6 +17,7 @@
 		A10000000000000000000067 /* onboarding-daemon.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* onboarding-daemon.json */; };
 		A10000000000000000000068 /* onboarding-license.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000027 /* onboarding-license.json */; };
 		A10000000000000000000069 /* onboarding-done.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* onboarding-done.json */; };
+		A1000000000000000000006A /* hosted-inner-scroll-overflow.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* hosted-inner-scroll-overflow.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -39,6 +40,7 @@
 		A10000000000000000000026 /* onboarding-daemon.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-daemon.json; sourceTree = SOURCE_ROOT; };
 		A10000000000000000000027 /* onboarding-license.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-license.json; sourceTree = SOURCE_ROOT; };
 		A10000000000000000000028 /* onboarding-done.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-done.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000029 /* hosted-inner-scroll-overflow.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = UITests/Fixtures/hosted-inner-scroll-overflow.json; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -100,6 +102,7 @@
 				A10000000000000000000026 /* onboarding-daemon.json */,
 				A10000000000000000000027 /* onboarding-license.json */,
 				A10000000000000000000028 /* onboarding-done.json */,
+				A10000000000000000000029 /* hosted-inner-scroll-overflow.json */,
 				A10000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -254,6 +257,7 @@
 				A10000000000000000000067 /* onboarding-daemon.json in Resources */,
 				A10000000000000000000068 /* onboarding-license.json in Resources */,
 				A10000000000000000000069 /* onboarding-done.json in Resources */,
+				A1000000000000000000006A /* hosted-inner-scroll-overflow.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
