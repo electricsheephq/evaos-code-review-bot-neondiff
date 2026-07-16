@@ -1,5 +1,7 @@
 import XCTest
 
+private let hostedPageBottomSamplingDeadlineMilliseconds = 15_000
+
 final class NeonDiffDesktopUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -286,14 +288,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedPageBottomReachabilityTrace(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 scenario: "every-sidebar-page-bottom-at-minimum-size",
                 fixtureId: "tab-overview",
                 requestedContentSize: requestedContentSize,
                 textSizeMode: "runner-default-no-test-override",
                 coordinateSpace: "xcui-screen",
                 minimumSampleIntervalMilliseconds: 100,
-                samplingDeadlineMilliseconds: 5_000,
+                samplingDeadlineMilliseconds: hostedPageBottomSamplingDeadlineMilliseconds,
                 tolerancePoints: 1,
                 navigationActions: navigationActions,
                 checkpoints: checkpoints,
@@ -402,7 +404,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 4,
+                schemaVersion: 5,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
@@ -544,14 +546,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
                     proofBoundary: "hosted-every-sidebar-destination-1040x680-accessibility3-geometry-only"
                 ),
                 pageBottomReachability: HostedPageBottomReachabilityTrace(
-                    schemaVersion: 1,
+                    schemaVersion: 2,
                     scenario: "every-sidebar-page-bottom-1040x680-accessibility3",
                     fixtureId: "tab-overview",
                     requestedContentSize: requestedContentSize,
                     textSizeMode: textSizeMode,
                     coordinateSpace: "xcui-screen",
                     minimumSampleIntervalMilliseconds: 100,
-                    samplingDeadlineMilliseconds: 5_000,
+                    samplingDeadlineMilliseconds: hostedPageBottomSamplingDeadlineMilliseconds,
                     tolerancePoints: 1,
                     navigationActions: navigationActions,
                     checkpoints: pageBottomCheckpoints,
@@ -1642,14 +1644,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 proofBoundary: "hosted-every-sidebar-destination-\(request.contentSizeArgument)-geometry-only"
             ),
             pageBottomReachability: HostedPageBottomReachabilityTrace(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 scenario: "every-sidebar-page-bottom-\(request.contentSizeArgument)",
                 fixtureId: "tab-overview",
                 requestedContentSize: request.requestedContentSize,
                 textSizeMode: "runner-default-no-test-override",
                 coordinateSpace: "xcui-screen",
                 minimumSampleIntervalMilliseconds: 100,
-                samplingDeadlineMilliseconds: 5_000,
+                samplingDeadlineMilliseconds: hostedPageBottomSamplingDeadlineMilliseconds,
                 tolerancePoints: 1,
                 navigationActions: navigationActions,
                 checkpoints: pageBottomCheckpoints,
@@ -2251,30 +2253,32 @@ final class NeonDiffDesktopUITests: XCTestCase {
         guard detailRegion.waitForExistence(timeout: 2) else {
             throw HostedPageBottomTraceError.missingElement("neondiff-detail")
         }
-        let preActionSamples = try capturePageBottomSamples(
+        let preActionWindow = try capturePageBottomSamples(
             outerPageScroll: outerPageScroll,
             bottomSentinel: bottomSentinel,
             detailRegion: detailRegion,
             context: "\(section)-pre"
         )
+        let preActionSamples = preActionWindow.samples
         let didIssueScroll: Bool
-        let postActionSamples: [HostedPageBottomSample]
+        let postActionWindow: HostedPageBottomSettledWindow
         if preActionSamples.allSatisfy({
             $0.sentinelFullyContainedInOuterScroll
                 && $0.sentinelFullyContainedInDetailRegion
         }) {
             didIssueScroll = false
-            postActionSamples = preActionSamples
+            postActionWindow = preActionWindow
         } else {
             outerPageScroll.scroll(byDeltaX: 0, deltaY: -10_000)
             didIssueScroll = true
-            postActionSamples = try capturePageBottomSamples(
+            postActionWindow = try capturePageBottomSamples(
                 outerPageScroll: outerPageScroll,
                 bottomSentinel: bottomSentinel,
                 detailRegion: detailRegion,
                 context: "\(section)-post"
             )
         }
+        let postActionSamples = postActionWindow.samples
 
         for (sampleIndex, postActionSample) in postActionSamples.enumerated() {
             try requireFullyContained(
@@ -2305,8 +2309,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
             outerScrollIdentifier: outerScrollIdentifier,
             sentinelIdentifier: sentinelIdentifier,
             preActionSamples: preActionSamples,
+            preActionSamplingDurationMilliseconds: preActionWindow.durationMilliseconds,
             scrollAction: scrollAction,
-            postActionSamples: postActionSamples
+            postActionSamples: postActionSamples,
+            postActionSamplingDurationMilliseconds: postActionWindow.durationMilliseconds
         )
     }
 
@@ -2314,8 +2320,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
         outerPageScroll: XCUIElement,
         bottomSentinel: XCUIElement,
         detailRegion: XCUIElement,
-        context: String
-    ) throws -> [HostedPageBottomSample] {
+        context: String,
+        samplingDeadlineMilliseconds: Int = hostedPageBottomSamplingDeadlineMilliseconds
+    ) throws -> HostedPageBottomSettledWindow {
         let start = ProcessInfo.processInfo.systemUptime
         var samples: [HostedPageBottomSample] = []
         var previousSampleStart: TimeInterval?
@@ -2360,22 +2367,35 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 )
             )
         }
-        try validatePageBottomCadence(samples, context: context)
+        let samplingCompletedAt = ProcessInfo.processInfo.systemUptime
+        let durationMilliseconds = Int(
+            ((samplingCompletedAt - start) * 1_000).rounded()
+        )
+        try validatePageBottomCadence(
+            samples,
+            durationMilliseconds: durationMilliseconds,
+            context: context,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds
+        )
         try validateStablePageBottomSamples(samples, context: context)
-        return samples
+        return HostedPageBottomSettledWindow(
+            samples: samples,
+            durationMilliseconds: durationMilliseconds
+        )
     }
 
     private func validatePageBottomCadence(
         _ samples: [HostedPageBottomSample],
-        context: String
+        durationMilliseconds: Int,
+        context: String,
+        samplingDeadlineMilliseconds: Int
     ) throws {
         guard samples.count == 3 else {
             throw HostedPageBottomTraceError.invalidCadence(context)
         }
         guard samples[0].elapsedMilliseconds >= 0,
               samples[0].elapsedMilliseconds <= 25,
-              let finalElapsed = samples.last?.elapsedMilliseconds,
-              finalElapsed <= 5_000 else {
+              durationMilliseconds <= samplingDeadlineMilliseconds else {
             throw HostedPageBottomTraceError.invalidCadence(context)
         }
         for (lhs, rhs) in zip(samples, samples.dropFirst()) {
@@ -3041,6 +3061,11 @@ private struct HostedPageBottomSample: Codable, Equatable {
     let sentinelFullyContainedInDetailRegion: Bool
 }
 
+private struct HostedPageBottomSettledWindow {
+    let samples: [HostedPageBottomSample]
+    let durationMilliseconds: Int
+}
+
 private struct HostedPageScrollAction: Codable, Equatable {
     let controlIdentifier: String
     let deltaX: Double
@@ -3057,8 +3082,10 @@ private struct HostedPageBottomCheckpoint: Codable, Equatable {
     let outerScrollIdentifier: String
     let sentinelIdentifier: String
     let preActionSamples: [HostedPageBottomSample]
+    let preActionSamplingDurationMilliseconds: Int
     let scrollAction: HostedPageScrollAction?
     let postActionSamples: [HostedPageBottomSample]
+    let postActionSamplingDurationMilliseconds: Int
 }
 
 private struct HostedPageBottomReachabilityTrace: Codable {

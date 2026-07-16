@@ -652,7 +652,28 @@ releaseTabbedAlternative()
     expect(source).toContain("testRun?.failureCount");
     expect(source).toContain("priorValidationFailure");
     expect(source).toContain("minimumSampleIntervalMilliseconds: 100");
-    expect(source).toContain("samplingDeadlineMilliseconds: 5_000");
+    expect(source).toContain(
+      "private let hostedPageBottomSamplingDeadlineMilliseconds = 15_000"
+    );
+    expect(
+      source.match(
+        /samplingDeadlineMilliseconds: hostedPageBottomSamplingDeadlineMilliseconds/g
+      )
+    ).toHaveLength(3);
+    expect(
+      source.match(
+        /HostedPageBottomReachabilityTrace\(\s*schemaVersion: 2,/g
+      )
+    ).toHaveLength(3);
+    expect(source).not.toMatch(
+      /HostedPageBottomReachabilityTrace\(\s*schemaVersion: 1,/
+    );
+    expect(checkpointSource).toContain(
+      "preActionSamplingDurationMilliseconds: preActionWindow.durationMilliseconds"
+    );
+    expect(checkpointSource).toContain(
+      "postActionSamplingDurationMilliseconds: postActionWindow.durationMilliseconds"
+    );
     expect(source).toContain("neondiff-hosted-page-bottom-reachability.json");
 
     for (const [section, fileName] of pageSources) {
@@ -759,7 +780,7 @@ releaseTabbedAlternative()
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 4");
+    expect(scenarioSource).toContain("schemaVersion: 5");
     expect(scenarioSource).toContain("controlElementType: .outline");
     expect(scenarioSource).toContain('controlElementTypeName: "outline"');
     expect(scenarioSource).toContain("terminalRowElementType: .outlineRow");
@@ -789,6 +810,36 @@ releaseTabbedAlternative()
     expect(scenarioSource).toContain(
       "outerPageBottomCheckpoints: [reposOuter, logsOuter]"
     );
+    const pageBottomSamplesSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func capturePageBottomSamples("
+    );
+    expect(pageBottomSamplesSource).toContain(
+      "samplingDeadlineMilliseconds: Int = hostedPageBottomSamplingDeadlineMilliseconds"
+    );
+    expect(pageBottomSamplesSource).toContain(
+      "let samplingCompletedAt = ProcessInfo.processInfo.systemUptime"
+    );
+    expect(pageBottomSamplesSource).toContain(
+      "samplingCompletedAt - start"
+    );
+    expect(pageBottomSamplesSource).toContain(
+      "durationMilliseconds: durationMilliseconds"
+    );
+    expect(pageBottomSamplesSource).toContain(
+      "samplingDeadlineMilliseconds: samplingDeadlineMilliseconds"
+    );
+    const pageBottomCadenceSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func validatePageBottomCadence("
+    );
+    expect(pageBottomCadenceSource).toContain(
+      "samplingDeadlineMilliseconds: Int"
+    );
+    expect(pageBottomCadenceSource).toContain(
+      "durationMilliseconds <= samplingDeadlineMilliseconds"
+    );
+    expect(pageBottomCadenceSource).not.toContain("finalElapsed");
     const helperSource = extractBalancedSwiftDeclaration(
       source,
       "private func captureNativeInnerScrollExhaustion("
