@@ -688,7 +688,15 @@ final class NeonDiffDesktopUITests: XCTestCase {
                       requestedContentSize,
                       tolerance: 1
                   ),
-                  sample.contentLayoutRect.isFullyContained(
+                  sample.contentLayoutScreenRect.matches(
+                      requestedContentSize,
+                      tolerance: 1
+                  ),
+                  sample.contentLayoutRect.isFullyContainedInWindowBounds(
+                      windowFrame: sample.windowFrame,
+                      tolerance: 1
+                  ),
+                  sample.contentLayoutScreenRect.isFullyContained(
                       in: sample.windowFrame,
                       tolerance: 1
                   ),
@@ -706,6 +714,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
                   ),
                   !baseline.contentLayoutRect.differs(
                       from: sample.contentLayoutRect,
+                      byMoreThan: 1
+                  ),
+                  !baseline.contentLayoutScreenRect.differs(
+                      from: sample.contentLayoutScreenRect,
                       byMoreThan: 1
                   ),
                   !baseline.visibleScreenFrame.differs(
@@ -2453,6 +2465,7 @@ private struct HostedSettingsAppKitGeometryEnvelope: Codable {
 private struct HostedSettingsAppKitSample: Codable {
     let windowFrame: HostedSettingsAppKitFrame
     let contentLayoutRect: HostedSettingsAppKitFrame
+    let contentLayoutScreenRect: HostedSettingsAppKitFrame
     let visibleScreenFrame: HostedSettingsAppKitFrame
 }
 
@@ -2477,6 +2490,16 @@ private struct HostedSettingsAppKitFrame: Codable {
             && y >= container.y - tolerance
             && x + width <= container.x + container.width + tolerance
             && y + height <= container.y + container.height + tolerance
+    }
+
+    func isFullyContainedInWindowBounds(
+        windowFrame: Self,
+        tolerance: Double
+    ) -> Bool {
+        x >= -tolerance
+            && y >= -tolerance
+            && x + width <= windowFrame.width + tolerance
+            && y + height <= windowFrame.height + tolerance
     }
 
     func differs(from other: Self, byMoreThan tolerance: Double) -> Bool {

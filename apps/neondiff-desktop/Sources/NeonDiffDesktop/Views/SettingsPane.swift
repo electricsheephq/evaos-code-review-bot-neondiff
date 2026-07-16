@@ -212,6 +212,9 @@ struct HostedSettingsWindowConfigurator: NSViewRepresentable {
                     let sample = HostedSettingsWindowSample(
                         windowFrame: window.frame,
                         contentLayoutRect: window.contentLayoutRect,
+                        contentLayoutScreenRect: window.convertToScreen(
+                            window.contentLayoutRect
+                        ),
                         visibleScreenFrame: visibleScreenFrame
                     )
                     if let previous = stableSamples.last,
@@ -248,11 +251,20 @@ fileprivate struct HostedSettingsWindowGeometryEnvelope: Codable {
 fileprivate struct HostedSettingsWindowSample: Codable {
     let windowFrame: HostedSettingsAppKitFrame
     let contentLayoutRect: HostedSettingsAppKitFrame
+    let contentLayoutScreenRect: HostedSettingsAppKitFrame
     let visibleScreenFrame: HostedSettingsAppKitFrame
 
-    init(windowFrame: CGRect, contentLayoutRect: CGRect, visibleScreenFrame: CGRect) {
+    init(
+        windowFrame: CGRect,
+        contentLayoutRect: CGRect,
+        contentLayoutScreenRect: CGRect,
+        visibleScreenFrame: CGRect
+    ) {
         self.windowFrame = HostedSettingsAppKitFrame(windowFrame)
         self.contentLayoutRect = HostedSettingsAppKitFrame(contentLayoutRect)
+        self.contentLayoutScreenRect = HostedSettingsAppKitFrame(
+            contentLayoutScreenRect
+        )
         self.visibleScreenFrame = HostedSettingsAppKitFrame(visibleScreenFrame)
     }
 
@@ -260,6 +272,10 @@ fileprivate struct HostedSettingsWindowSample: Codable {
         windowFrame.differs(from: other.windowFrame, byMoreThan: tolerance)
             || contentLayoutRect.differs(
                 from: other.contentLayoutRect,
+                byMoreThan: tolerance
+            )
+            || contentLayoutScreenRect.differs(
+                from: other.contentLayoutScreenRect,
                 byMoreThan: tolerance
             )
             || visibleScreenFrame.differs(

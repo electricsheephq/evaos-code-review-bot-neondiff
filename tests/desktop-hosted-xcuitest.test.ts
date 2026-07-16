@@ -699,6 +699,9 @@ private func target() {
     expect(source).toContain('envelope.coordinateSpace == "appkit-screen"');
     expect(source).toContain("envelope.samples.count == 3");
     expect(source).toContain("sample.contentLayoutRect.matches(");
+    expect(source).toContain("sample.contentLayoutScreenRect.matches(");
+    expect(source).toContain("isFullyContainedInWindowBounds(");
+    expect(source).toContain("sample.contentLayoutScreenRect.isFullyContained(");
     expect(source).toContain("sample.windowFrame.isFullyContained(");
     expect(source).toContain('"neondiff-settings-outer-scroll"');
     expect(source).toContain('"neondiff-settings-page-bottom"');
@@ -734,6 +737,7 @@ private func target() {
     expect(settings).toContain('"neondiff.evaluation.settings.text-size"');
     expect(settings).toContain('"neondiff.evaluation.settings.appkit-geometry"');
     expect(settings).toContain("visibleScreenFrame: visibleScreenFrame");
+    expect(settings).toContain("window.convertToScreen(");
     expect(settings).toContain("status.markQuiescent(samples: stableSamples)");
     expect(settings).toContain("#if DEBUG");
   });
