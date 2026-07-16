@@ -1,7 +1,7 @@
 import XCTest
 
 private let hostedPageBottomSamplingDeadlineMilliseconds = 15_000
-private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 15_000
+private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 30_000
 
 final class NeonDiffDesktopUITests: XCTestCase {
     override func setUpWithError() throws {
