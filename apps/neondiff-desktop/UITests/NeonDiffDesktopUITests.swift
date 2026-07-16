@@ -409,7 +409,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedNativeInnerScrollTrace(
-                schemaVersion: 8,
+                schemaVersion: 9,
                 scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
                 fixtureId: "hosted-inner-scroll-overflow",
                 requestedContentSize: requestedContentSize,
@@ -1797,6 +1797,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         let verticalScrollBar = verticalScrollBars[0]
         let outerPreparationSample = try captureNativeInnerScrollSample(
+            app: app,
             elapsedMilliseconds: Int(
                 ((ProcessInfo.processInfo.systemUptime - samplingStart) * 1_000).rounded()
             ),
@@ -1872,13 +1873,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
             outerScrollFrame: outerPreparationSample.outerScrollFrame,
             tolerance: 1
         )
+        let requiresOuterRestaging = abs(restagingDeltaY) > 0.5
         let outerRestagingAction: HostedNativeInnerScrollAction?
         let restagingActionStartedAt = ProcessInfo.processInfo.systemUptime
         let restagingActionElapsedMilliseconds = Int(
             ((restagingActionStartedAt - samplingStart) * 1_000).rounded()
         )
         let outerRestagingTargetPoint: HostedGeometryPoint?
-        if restagingDeltaY != 0 {
+        if requiresOuterRestaging {
             let target = try outerRestagingCoordinate(
                 outerScroll: outerScroll,
                 outerScrollFrame: outerPreparationSample.outerScrollFrame,
@@ -1891,6 +1893,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             outerRestagingTargetPoint = nil
         }
         let restagingWindow = try captureStableNativeInnerScrollSamples(
+            app: app,
             controlIdentifier: controlIdentifier,
             samplingStartedAt: samplingStart,
             actionStartedAt: restagingActionStartedAt,
@@ -1909,6 +1912,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
             terminalRowElementType: terminalRowElementType
         )
+        let outerRestagingObservedSamples = restagingWindow.observedSamples
         let outerRestagingSamples = restagingWindow.samples
         guard let preSample = outerRestagingSamples.last else {
             throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
@@ -1922,7 +1926,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }) {
             outerRestagingFailures.append("inner-scroll-outside-outer")
         }
-        if !outerRestagingSamples.allSatisfy({ sample in
+        if !outerRestagingObservedSamples.allSatisfy({ sample in
             sample.normalizedScrollValue == outerPreparationSample.normalizedScrollValue
         }) {
             outerRestagingFailures.append("inner-scroll-value-changed-during-outer-restaging")
@@ -1931,13 +1935,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
             preSample.scrollContainerFrame.y
                 - outerPreparationSample.scrollContainerFrame.y
         let restagingEffectObserved = abs(scrollContainerTranslation) > 0.5
-        if restagingDeltaY != 0, !restagingEffectObserved {
+        if requiresOuterRestaging, !restagingEffectObserved {
             outerRestagingFailures.append("outer-restaging-no-effect")
         }
-        if restagingDeltaY == 0, restagingEffectObserved {
+        if !requiresOuterRestaging, restagingEffectObserved {
             outerRestagingFailures.append("unexpected-outer-restaging-effect")
         }
-        if restagingDeltaY != 0,
+        if requiresOuterRestaging,
            restagingDeltaY * scrollContainerTranslation <= 0 {
             outerRestagingFailures.append("outer-restaging-direction-mismatch")
         }
@@ -1976,7 +1980,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         guard outerRestagingFailures.isEmpty else {
             throw HostedNativeInnerScrollTraceError.outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)
         }
-        if restagingDeltaY == 0 {
+        if !requiresOuterRestaging {
             outerRestagingAction = nil
         } else {
             outerRestagingAction = HostedNativeInnerScrollAction(
@@ -2021,6 +2025,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             }
         }
         let terminalWindow = try captureStableNativeInnerScrollSamples(
+            app: app,
             controlIdentifier: controlIdentifier,
             samplingStartedAt: samplingStart,
             actionStartedAt: firstActionStartedAt,
@@ -2039,6 +2044,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
             terminalRowElementType: terminalRowElementType
         )
+        let terminalObservedSamples = terminalWindow.observedSamples
         let terminalSamples = terminalWindow.samples
         guard let terminalSample = terminalSamples.last else {
             throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
@@ -2059,6 +2065,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
         scrollContainer.scroll(byDeltaX: 0, deltaY: -10_000)
         let repeatTerminalWindow = try captureStableNativeInnerScrollSamples(
+            app: app,
             controlIdentifier: controlIdentifier,
             samplingStartedAt: samplingStart,
             actionStartedAt: repeatActionStartedAt,
@@ -2077,19 +2084,22 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
             terminalRowElementType: terminalRowElementType
         )
+        let repeatTerminalObservedSamples = repeatTerminalWindow.observedSamples
         let repeatTerminalSamples = repeatTerminalWindow.samples
         guard let repeatTerminalSample = repeatTerminalSamples.last else {
             throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
         }
         let repeatTerminalValue = repeatTerminalSample.normalizedScrollValue
-        guard repeatTerminalSamples.allSatisfy({ $0.normalizedScrollValue == terminalValue }) else {
+        guard repeatTerminalObservedSamples.allSatisfy({
+            $0.normalizedScrollValue == terminalValue
+        }) else {
             throw HostedNativeInnerScrollTraceError.repeatTerminalScrollChangedValue(
                 controlIdentifier: controlIdentifier,
                 terminalValue: terminalValue,
                 repeatTerminalValue: repeatTerminalValue
             )
         }
-        for candidate in repeatTerminalSamples {
+        for candidate in repeatTerminalObservedSamples {
             guard nativeInnerScrollSamplesMatch(terminalSample, candidate) else {
                 throw HostedNativeInnerScrollTraceError.repeatTerminalScrollChangedGeometry(
                     controlIdentifier
@@ -2098,7 +2108,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
 
         let postActionSamples = terminalSamples + repeatTerminalSamples
-        for candidate in postActionSamples {
+        let postActionObservedSamples =
+            terminalWindow.observedSamples + repeatTerminalWindow.observedSamples
+        for candidate in postActionObservedSamples {
             guard !preSample.outerSentinelFrame.differs(
                 from: candidate.outerSentinelFrame,
                 byMoreThan: 1
@@ -2162,6 +2174,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             outerPreparationResult: "verified-page-bottom-then-inner-viewport-restaged-before-isolation-baseline",
             outerPreparationSample: outerPreparationSample,
             outerRestagingAction: outerRestagingAction,
+            outerRestagingObservedSamples: outerRestagingObservedSamples,
             outerRestagingSamples: outerRestagingSamples,
             outerRestagingWindowDurationMilliseconds: restagingWindow.durationMilliseconds,
             preTerminalValue: preTerminalValue,
@@ -2197,12 +2210,15 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 result: "returned-with-no-value-effect"
             ),
             preSample: preSample,
+            terminalObservedSamples: terminalObservedSamples,
             terminalSamples: terminalSamples,
+            repeatTerminalObservedSamples: repeatTerminalObservedSamples,
             repeatTerminalSamples: repeatTerminalSamples
         )
     }
 
     private func captureStableNativeInnerScrollSamples(
+        app: XCUIApplication,
         controlIdentifier: String,
         samplingStartedAt: TimeInterval,
         actionStartedAt: TimeInterval,
@@ -2221,9 +2237,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
         terminalRowElementType: XCUIElement.ElementType?
     ) throws -> HostedNativeInnerScrollSettledWindow {
         let targetInterval = Double(targetSampleIntervalMilliseconds) / 1_000
+        let maximumSampleAttempts = max(
+            3,
+            samplingDeadlineMilliseconds / max(1, targetSampleIntervalMilliseconds)
+        )
+        var observedSamples: [HostedNativeInnerScrollSample] = []
         var samples: [HostedNativeInnerScrollSample] = []
         var previousSampleStartedAt = actionStartedAt
-        for _ in 0..<3 {
+        for _ in 0..<maximumSampleAttempts {
             let elapsedSincePrevious =
                 ProcessInfo.processInfo.systemUptime - previousSampleStartedAt
             let remainingDelay = max(0, targetInterval - elapsedSincePrevious)
@@ -2232,23 +2253,34 @@ final class NeonDiffDesktopUITests: XCTestCase {
             }
             let sampleStartedAt = ProcessInfo.processInfo.systemUptime
             previousSampleStartedAt = sampleStartedAt
-            samples.append(
-                try captureNativeInnerScrollSample(
-                    elapsedMilliseconds: Int(
-                        ((sampleStartedAt - samplingStartedAt) * 1_000).rounded()
-                    ),
-                    control: control,
-                    scrollContainer: scrollContainer,
-                    verticalScrollBar: verticalScrollBar,
-                    outerScroll: outerScroll,
-                    outerSentinel: outerSentinel,
-                    captureTerminalContent: captureTerminalContent,
-                    terminalVisibleText: terminalVisibleText,
-                    terminalValueToken: terminalValueToken,
-                    terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
-                    terminalRowElementType: terminalRowElementType
-                )
+            let sample = try captureNativeInnerScrollSample(
+                app: app,
+                elapsedMilliseconds: Int(
+                    ((sampleStartedAt - samplingStartedAt) * 1_000).rounded()
+                ),
+                control: control,
+                scrollContainer: scrollContainer,
+                verticalScrollBar: verticalScrollBar,
+                outerScroll: outerScroll,
+                outerSentinel: outerSentinel,
+                captureTerminalContent: captureTerminalContent,
+                terminalVisibleText: terminalVisibleText,
+                terminalValueToken: terminalValueToken,
+                terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+                terminalRowElementType: terminalRowElementType
             )
+            observedSamples.append(sample)
+            if let baseline = samples.first,
+               nativeInnerScrollSamplesMatch(baseline, sample) {
+                samples.append(sample)
+            } else {
+                samples = [sample]
+            }
+            if samples.count == 3 { break }
+            let elapsedSinceActionMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - actionStartedAt) * 1_000).rounded()
+            )
+            if elapsedSinceActionMilliseconds >= samplingDeadlineMilliseconds { break }
         }
 
         let samplingCompletedAt = ProcessInfo.processInfo.systemUptime
@@ -2286,6 +2318,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             }
         }
         return HostedNativeInnerScrollSettledWindow(
+            observedSamples: observedSamples,
             samples: samples,
             durationMilliseconds: durationMilliseconds
         )
@@ -2339,6 +2372,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func captureNativeInnerScrollSample(
+        app: XCUIApplication,
         elapsedMilliseconds: Int,
         control: XCUIElement,
         scrollContainer: XCUIElement,
@@ -2429,7 +2463,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
             guard terminalVisibilityMarkerFrame?.isFiniteAndNonempty == true else {
                 throw HostedNativeInnerScrollTraceError.invalidFrame
             }
-            terminalNativeVisibility = try decodeTerminalNativeVisibility(marker.label)
+            terminalNativeVisibility = try decodeTerminalNativeVisibility(
+                app: app,
+                marker: marker
+            )
         }
         return HostedNativeInnerScrollSample(
             elapsedMilliseconds: elapsedMilliseconds,
@@ -2462,14 +2499,37 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func decodeTerminalNativeVisibility(
-        _ label: String
+        app: XCUIApplication,
+        marker: XCUIElement
     ) throws -> HostedTerminalNativeVisibility {
-        guard label.hasPrefix("ndlv1:") else {
+        let manifest = marker.label
+        let manifestPrefix = "ndlv1-chunks:"
+        guard manifest.hasPrefix("ndlv1-chunks:"),
+              let chunkCount = Int(manifest.dropFirst(manifestPrefix.count)),
+              chunkCount > 0,
+              chunkCount <= 64 else {
             throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
         }
-        let encoded = String(label.dropFirst("ndlv1:".count))
-        guard let data = Data(base64Encoded: encoded),
-              let payload = try? JSONDecoder().decode(
+        var data = Data()
+        for index in 0..<chunkCount {
+            let identifier = "neondiff-logs-visible-tail-chunk-\(index)"
+            let query = app.descendants(matching: .any).matching(identifier: identifier)
+            guard query.count == 1 else {
+                throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+            }
+            let label = query.element(boundBy: 0).label
+            let prefix = "ndlv1:\(index):\(chunkCount):"
+            guard label.utf8.count <= 128,
+                  label.hasPrefix(prefix),
+                  let decoded = Data(base64Encoded: String(label.dropFirst(prefix.count))),
+                  !decoded.isEmpty,
+                  decoded.count <= 64,
+                  (index == chunkCount - 1 || decoded.count == 64) else {
+                throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+            }
+            data.append(decoded)
+        }
+        guard let payload = try? JSONDecoder().decode(
                   HostedTerminalNativeVisibility.self,
                   from: data
               ),
@@ -3573,6 +3633,7 @@ private struct HostedNativeInnerScrollSample: Codable, Equatable {
 }
 
 private struct HostedNativeInnerScrollSettledWindow {
+    let observedSamples: [HostedNativeInnerScrollSample]
     let samples: [HostedNativeInnerScrollSample]
     let durationMilliseconds: Int
 }
@@ -3592,6 +3653,7 @@ private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let outerPreparationResult: String
     let outerPreparationSample: HostedNativeInnerScrollSample
     let outerRestagingAction: HostedNativeInnerScrollAction?
+    let outerRestagingObservedSamples: [HostedNativeInnerScrollSample]
     let outerRestagingSamples: [HostedNativeInnerScrollSample]
     let outerRestagingWindowDurationMilliseconds: Int
     let preTerminalValue: Double
@@ -3607,7 +3669,9 @@ private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
     let firstTerminalAction: HostedNativeInnerScrollAction
     let repeatTerminalAction: HostedNativeInnerScrollAction
     let preSample: HostedNativeInnerScrollSample
+    let terminalObservedSamples: [HostedNativeInnerScrollSample]
     let terminalSamples: [HostedNativeInnerScrollSample]
+    let repeatTerminalObservedSamples: [HostedNativeInnerScrollSample]
     let repeatTerminalSamples: [HostedNativeInnerScrollSample]
 }
 

@@ -787,6 +787,10 @@ releaseTabbedAlternative()
     expect(logs).toContain('HostedLogsTerminalVisibilityPayload(');
     expect(logs).toContain('coordinateSpace: "appkit-text-view-local"');
     expect(logs).toContain('"ndlv1:"');
+    expect(logs).toContain('"ndlv1-chunks:\\(chunks.count)"');
+    expect(logs).toContain('let chunkByteCount = 64');
+    expect(logs).toContain('guard label.utf8.count <= 128');
+    expect(logs).toContain('"neondiff-logs-visible-tail-chunk-\\(index)"');
     expect(textVisibility).toContain('public enum DesktopTextVisibility');
     expect(textVisibility).toMatch(/^import Foundation\n\n#if DEBUG\n/);
     expect(textVisibility).toContain('tokenRange.location >= visibleRange.location');
@@ -829,7 +833,7 @@ releaseTabbedAlternative()
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
-    expect(scenarioSource).toContain("schemaVersion: 8");
+    expect(scenarioSource).toContain("schemaVersion: 9");
     expect(scenarioSource).toContain(
       "let reposGeometry = try captureCheckpoint("
     );
@@ -975,6 +979,24 @@ releaseTabbedAlternative()
       "let restagingDeltaY = try outerRestagingDeltaY("
     );
     expect(helperSource).toContain(
+      "let requiresOuterRestaging = abs(restagingDeltaY) > 0.5"
+    );
+    expect(helperSource.match(/requiresOuterRestaging/g)).toHaveLength(6);
+    expect(helperSource.match(/abs\(restagingDeltaY\)/g)).toHaveLength(1);
+    expect(helperSource).toContain("if requiresOuterRestaging {");
+    expect(helperSource).toContain(
+      "if requiresOuterRestaging, !restagingEffectObserved {"
+    );
+    expect(helperSource).toContain(
+      "if !requiresOuterRestaging, restagingEffectObserved {"
+    );
+    expect(helperSource).toContain(
+      "if requiresOuterRestaging,\n           restagingDeltaY * scrollContainerTranslation <= 0 {"
+    );
+    expect(helperSource).toContain("if !requiresOuterRestaging {");
+    expect(helperSource).not.toContain("restagingDeltaY != 0");
+    expect(helperSource).not.toContain("restagingDeltaY == 0");
+    expect(helperSource).toContain(
       "let target = try outerRestagingCoordinate("
     );
     expect(helperSource).toContain(
@@ -1039,7 +1061,7 @@ releaseTabbedAlternative()
       "terminalSamples.allSatisfy({ $0.normalizedScrollValue == 1 })"
     );
     expect(helperSource).toContain(
-      "repeatTerminalSamples.allSatisfy({ $0.normalizedScrollValue == terminalValue })"
+      "repeatTerminalObservedSamples.allSatisfy({"
     );
     expect(helperSource).toContain("elapsedMilliseconds:");
     expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
@@ -1053,6 +1075,16 @@ releaseTabbedAlternative()
     expect(helperSource.match(/captureStableNativeInnerScrollSamples\s*\(/g)).toHaveLength(3);
     expect(helperSource).toContain("terminalSamples");
     expect(helperSource).toContain("repeatTerminalSamples");
+    expect(helperSource).toContain("outerRestagingObservedSamples:");
+    expect(helperSource).toContain("terminalObservedSamples:");
+    expect(helperSource).toContain("repeatTerminalObservedSamples:");
+    expect(helperSource).toContain(
+      "let repeatTerminalObservedSamples = repeatTerminalWindow.observedSamples"
+    );
+    expect(helperSource).toContain("for candidate in repeatTerminalObservedSamples");
+    expect(helperSource).toContain(
+      "let postActionObservedSamples =\n            terminalWindow.observedSamples + repeatTerminalWindow.observedSamples"
+    );
     expect(helperSource).toContain("effectObserved: true");
     expect(helperSource).toContain("effectObserved: false");
     expect(helperSource.match(/effectProven: true/g)).toHaveLength(3);
@@ -1095,7 +1127,19 @@ releaseTabbedAlternative()
       source,
       "private func captureStableNativeInnerScrollSamples("
     );
-    expect(settledHelperSource).toContain("for _ in 0..<3");
+    expect(settledHelperSource).toContain(
+      "let maximumSampleAttempts = max("
+    );
+    expect(settledHelperSource).toContain(
+      "for _ in 0..<maximumSampleAttempts"
+    );
+    expect(settledHelperSource).toContain(
+      "if let baseline = samples.first,"
+    );
+    expect(settledHelperSource).toContain("samples = [sample]");
+    expect(settledHelperSource).toContain("if samples.count == 3 { break }");
+    expect(settledHelperSource).toContain("observedSamples.append(sample)");
+    expect(settledHelperSource).toContain("observedSamples: observedSamples");
     expect(settledHelperSource).toContain(">= minimumAcceptedSampleIntervalMilliseconds");
     expect(settledHelperSource).toContain("<= samplingDeadlineMilliseconds");
     expect(settledHelperSource).toContain("nativeInnerScrollSamplesMatch");
@@ -1129,7 +1173,26 @@ releaseTabbedAlternative()
       source,
       "private func decodeTerminalNativeVisibility("
     );
-    expect(nativeVisibilityParserSource).toContain('label.hasPrefix("ndlv1:")');
+    expect(nativeVisibilityParserSource).toContain(
+      'manifest.hasPrefix("ndlv1-chunks:")'
+    );
+    expect(nativeVisibilityParserSource).toContain(
+      '"neondiff-logs-visible-tail-chunk-\\(index)"'
+    );
+    expect(nativeVisibilityParserSource).toContain(
+      'let prefix = "ndlv1:\\(index):\\(chunkCount):"'
+    );
+    expect(nativeVisibilityParserSource).toContain(
+      "for index in 0..<chunkCount {"
+    );
+    expect(nativeVisibilityParserSource).toContain(
+      "guard label.utf8.count <= 128"
+    );
+    expect(nativeVisibilityParserSource).toContain(
+      "(index == chunkCount - 1 || decoded.count == 64)"
+    );
+    expect(nativeVisibilityParserSource).toContain("decoded.count <= 64");
+    expect(nativeVisibilityParserSource).toContain("data.append(decoded)");
     expect(nativeVisibilityParserSource).toContain("Data(base64Encoded:");
     const nativeVisibilityValidatorSource = extractBalancedSwiftDeclaration(
       source,

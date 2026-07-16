@@ -54,13 +54,9 @@ struct LogsView: View {
                     .overlay(alignment: .bottomTrailing) {
                         if HostedLogsVisibleRangeEvaluation.isActive,
                            let hostedTerminalVisibilityPayload {
-                            Color.clear
-                                .frame(width: 1, height: 1)
-                                .accessibilityElement(children: .ignore)
-                                .accessibilityLabel(hostedTerminalVisibilityPayload)
-                                .accessibilityIdentifier("neondiff-logs-visible-tail")
-                                .accessibilityRespondsToUserInteraction(false)
-                                .allowsHitTesting(false)
+                            HostedLogsTerminalVisibilityTransportMarker(
+                                payload: hostedTerminalVisibilityPayload
+                            )
                         }
                     }
 #endif
@@ -102,6 +98,71 @@ private enum HostedLogsVisibleRangeEvaluation {
         }
         return URL(fileURLWithPath: arguments[fixtureFlagIndex + 1]).lastPathComponent
             == "hosted-inner-scroll-overflow.json"
+    }
+}
+
+private struct HostedLogsTerminalVisibilityTransportMarker: View {
+    let payload: String
+
+    var body: some View {
+        let chunks = HostedLogsTerminalVisibilityTransportChunk.chunks(payload)
+        ZStack {
+            if !chunks.isEmpty {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("ndlv1-chunks:\(chunks.count)")
+                    .accessibilityIdentifier("neondiff-logs-visible-tail")
+                    .accessibilityRespondsToUserInteraction(false)
+
+                ForEach(chunks) { chunk in
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(chunk.label)
+                        .accessibilityIdentifier(chunk.identifier)
+                        .accessibilityRespondsToUserInteraction(false)
+                }
+            }
+        }
+        .frame(width: 1, height: 1)
+        .allowsHitTesting(false)
+    }
+}
+
+private struct HostedLogsTerminalVisibilityTransportChunk: Identifiable {
+    let index: Int
+    let identifier: String
+    let label: String
+
+    var id: Int { index }
+
+    static func chunks(_ payload: String) -> [Self] {
+        let payloadPrefix = "ndlv1:"
+        guard payload.hasPrefix(payloadPrefix),
+              let data = Data(
+                  base64Encoded: String(payload.dropFirst(payloadPrefix.count))
+              ),
+              !data.isEmpty else {
+            return []
+        }
+        let chunkByteCount = 64
+        let chunkCount = (data.count + chunkByteCount - 1) / chunkByteCount
+        guard chunkCount > 0, chunkCount <= 64 else { return [] }
+        let chunks = (0..<chunkCount).compactMap { index -> Self? in
+            let lowerBound = index * chunkByteCount
+            let upperBound = min(lowerBound + chunkByteCount, data.count)
+            let encoded = data.subdata(in: lowerBound..<upperBound)
+                .base64EncodedString()
+            let label = "ndlv1:\(index):\(chunkCount):\(encoded)"
+            guard label.utf8.count <= 128 else { return nil }
+            return Self(
+                index: index,
+                identifier: "neondiff-logs-visible-tail-chunk-\(index)",
+                label: label
+            )
+        }
+        return chunks.count == chunkCount ? chunks : []
     }
 }
 
