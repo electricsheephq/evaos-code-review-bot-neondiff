@@ -341,7 +341,7 @@ function maskSwiftCommentsAndLiterals(source: string): string {
 }
 
 const swiftXCUIActionMethodPattern =
-  /\.\s*(?:`(adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate)`|(adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate))\s*(?=\(|[;,)\]\s]|$)/g;
+  /\.\s*(?:`(activate|launch|terminate|open|adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate)`|(activate|launch|terminate|open|adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate))\s*(?=\(|[;,)\]\s]|$)/g;
 
 function swiftLiteralToken(literal: string): string {
   return `\u0000SWIFT_LITERAL_${Buffer.from(literal, "utf8").toString("base64url")}\u0000`;
@@ -479,13 +479,20 @@ function extractBalancedSwiftCallTokens(source: string, callName: string): strin
   const executable = projectSwiftExecutableTokens(source);
   const calls: string[] = [];
   const escapedName = escapeRegExp(callName);
-  const callPattern = new RegExp(
-    `(?<![\\p{ID_Continue}$])(?:\`${escapedName}\`|${escapedName})\\s*\\(`,
-    "gu"
-  );
+  const callPattern = new RegExp(`(?:\`${escapedName}\`|${escapedName})\\s*\\(`, "gu");
 
   for (const match of executable.matchAll(callPattern)) {
     const callStart = match.index;
+    const previous = callStart > 0 ? executable[callStart - 1] : "";
+    if (
+      previous &&
+      (/[A-Za-z0-9_$]/.test(previous) ||
+        (previous.charCodeAt(0) > 127 &&
+          !/\s/u.test(previous) &&
+          !/[()[\]{}.,:;=+*/%<>!&|^~?@#'"\\-]/u.test(previous)))
+    ) {
+      continue;
+    }
     const openingParenthesis = callStart + match[0].lastIndexOf("(");
     let depth = 0;
     let callEnd = -1;
@@ -668,6 +675,8 @@ outerPreparationFailures.append("right")
       .toEqual(["swipeUp"]);
     expect(swiftXCUIActions("element.`click`()")).toEqual(["click"]);
     expect(swiftXCUIActions("element.doubleTap()")).toEqual(["doubleTap"]);
+    expect(swiftXCUIActions("app.activate(); app.launch(); app.terminate()"))
+      .toEqual(["activate", "launch", "terminate"]);
     expect(
       projectSwiftExecutableTokens(
         String.raw`let hiddenLedger = "\(outerPreparationFailures.append("extra"))"`
@@ -894,16 +903,27 @@ releaseTabbedAlternative()
     expect(maskedSource).toContain(
       "testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize"
     );
-    expect(source).toContain(
-      'scenario: "overview-repos-providers-license-logs-policy-settings-overview"'
-    );
-    expect(source).toContain(
-      'proofBoundary: "hosted-every-sidebar-destination-minimum-size-geometry-only"'
-    );
     const circuitSource = extractBalancedSwiftDeclaration(
       source,
       "func testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize("
     );
+    const circuitTraceCalls = extractBalancedSwiftCallTokens(
+      circuitSource,
+      "HostedSettledGeometryTrace"
+    );
+    expect(circuitTraceCalls).toHaveLength(1);
+    expect(
+      extractSwiftTopLevelArgumentValues(circuitTraceCalls[0], "scenario")
+    ).toEqual([
+      swiftLiteralToken(
+        '"overview-repos-providers-license-logs-policy-settings-overview"'
+      ),
+    ]);
+    expect(
+      extractSwiftTopLevelArgumentValues(circuitTraceCalls[0], "proofBoundary")
+    ).toEqual([
+      swiftLiteralToken('"hosted-every-sidebar-destination-minimum-size-geometry-only"'),
+    ]);
     const routeCalls = extractBalancedSwiftCallTokens(
       circuitSource,
       "HostedSidebarRouteStep"
@@ -1160,7 +1180,7 @@ releaseTabbedAlternative()
       resolveVisibleTextSource
     );
     expect(maskedResolveVisibleTextSource).toMatch(
-      /guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else/
+      /func\s+resolveAndObserveTextView\(\)\s*\{\s*resolutionScheduled\s*=\s*false\s*guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else\s*\{/
     );
     const updateVisibleTextSource = extractBalancedSwiftDeclaration(
       logs,
@@ -1170,7 +1190,7 @@ releaseTabbedAlternative()
       updateVisibleTextSource
     );
     expect(maskedUpdateVisibleTextSource).toMatch(
-      /guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else/
+      /private\s+func\s+updateVisibility\(\)\s*\{\s*guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else\s*\{/
     );
 
     expect(maskedSource).toContain("testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage");
@@ -1428,6 +1448,8 @@ releaseTabbedAlternative()
     );
     const maskedHelperSource = maskSwiftCommentsAndLiterals(helperSource);
     const executableHelperSource = projectSwiftExecutableTokens(helperSource);
+    expect(executableHelperSource).not.toMatch(/\.\s*(?:`init`|init)\s*\(/);
+    expect(executableHelperSource).not.toMatch(/\btypealias\b/);
     expect(maskedHelperSource).toContain(
       "outerPreparationCheckpoint: HostedPageBottomCheckpoint"
     );
@@ -1458,13 +1480,13 @@ releaseTabbedAlternative()
     ]) {
       expect(executableHelperSource).toMatch(
         new RegExp(
-          `outerPreparationFailures\\.append\\s*\\(\\s*${escapeRegExp(swiftLiteralToken(`"${category}"`))}\\s*\\)`
+          `outerPreparationFailures\\.(?:\`append\`|append)\\s*\\(\\s*${escapeRegExp(swiftLiteralToken(`"${category}"`))}\\s*\\)`
         )
       );
     }
     expect(executableHelperSource).not.toMatch(
       new RegExp(
-        `outerPreparationFailures\\.append\\s*\\(\\s*${escapeRegExp(swiftLiteralToken('"missing-scroll-action"'))}\\s*\\)`
+        `outerPreparationFailures\\.(?:\`append\`|append)\\s*\\(\\s*${escapeRegExp(swiftLiteralToken('"missing-scroll-action"'))}\\s*\\)`
       )
     );
     for (const category of [
@@ -1477,15 +1499,15 @@ releaseTabbedAlternative()
     ]) {
       expect(executableHelperSource).toMatch(
         new RegExp(
-          `outerRestagingFailures\\.append\\s*\\(\\s*${escapeRegExp(swiftLiteralToken(`"${category}"`))}\\s*\\)`
+          `outerRestagingFailures\\.(?:\`append\`|append)\\s*\\(\\s*${escapeRegExp(swiftLiteralToken(`"${category}"`))}\\s*\\)`
         )
       );
     }
     expect(
-      maskedHelperSource.match(/outerPreparationFailures\.append\s*\(\s*\)/g)
+      maskedHelperSource.match(/outerPreparationFailures\.(?:`append`|append)\s*\(\s*\)/g)
     ).toHaveLength(22);
     expect(
-      maskedHelperSource.match(/outerRestagingFailures\.append\s*\(\s*\)/g)
+      maskedHelperSource.match(/outerRestagingFailures\.(?:`append`|append)\s*\(\s*\)/g)
     ).toHaveLength(6);
     expect(maskedHelperSource).toContain(
       "outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)"
@@ -1635,10 +1657,53 @@ releaseTabbedAlternative()
     expect(
       extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "mechanism")
     ).toEqual([swiftLiteralToken('"public-xcui-coordinate-scroll-delta"')]);
+    expect(extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "deltaX"))
+      .toEqual(["0"]);
+    expect(extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "deltaY"))
+      .toEqual(["restagingDeltaY"]);
+    expect(
+      extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "targetPoint")
+    ).toEqual(["outerRestagingTargetPoint"]);
     for (const actionCall of innerScrollActionCalls.slice(1)) {
       expect(extractSwiftTopLevelArgumentValues(actionCall, "mechanism")).toEqual([
         swiftLiteralToken('"public-xcui-scrollbar-thumb-drag"'),
       ]);
+    }
+    for (const [actionCall, prefix, postChain, observedTranslation] of [
+      [
+        innerScrollActionCalls[1],
+        "firstDragTarget",
+        "postFirstDragChain",
+        "firstObservedThumbTranslationY",
+      ],
+      [
+        innerScrollActionCalls[2],
+        "repeatDragTarget",
+        "postRepeatChain",
+        "repeatObservedThumbTranslationY",
+      ],
+    ] as const) {
+      expect(extractSwiftTopLevelArgumentValues(actionCall, "sourcePoint")).toEqual([
+        `${prefix}.sourcePoint`,
+      ]);
+      expect(extractSwiftTopLevelArgumentValues(actionCall, "targetPoint")).toEqual([
+        `${prefix}.destinationPoint`,
+      ]);
+      expect(
+        extractSwiftTopLevelArgumentValues(actionCall, "requestedDisplacementY")
+      ).toEqual([`${prefix}.requestedDisplacementY`]);
+      expect(
+        extractSwiftTopLevelArgumentValues(actionCall, "guardScrollBarFrame")
+      ).toEqual([`${prefix}.scrollBarFrame`]);
+      expect(
+        extractSwiftTopLevelArgumentValues(actionCall, "guardThumbFrameBefore")
+      ).toEqual([`${prefix}.thumbFrame`]);
+      expect(
+        extractSwiftTopLevelArgumentValues(actionCall, "guardThumbFrameAfter")
+      ).toEqual([`${postChain}.thumbFrame`]);
+      expect(
+        extractSwiftTopLevelArgumentValues(actionCall, "observedThumbTranslationY")
+      ).toEqual([observedTranslation]);
     }
     expect(maskedHelperSource.match(/normalizedTargetValue: 1/g)).toHaveLength(2);
     expect(maskedHelperSource).toContain("sourcePoint: firstDragTarget.sourcePoint");
@@ -2182,6 +2247,39 @@ releaseTabbedAlternative()
       settingsTestSource,
       "HostedSettingsTextSizeRequest"
     );
+    const settingsScenarioSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func captureSettingsSceneScenario("
+    );
+    const executableSettingsScenarioSource = projectSwiftExecutableTokens(
+      settingsScenarioSource
+    );
+    const settingsGeometryDecoderSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func decodeAndValidateSettingsAppKitGeometry("
+    );
+    const executableSettingsGeometryDecoderSource = projectSwiftExecutableTokens(
+      settingsGeometryDecoderSource
+    );
+    const settingsTraceCalls = extractBalancedSwiftCallTokens(
+      settingsTestSource,
+      "HostedSettingsSceneTrace"
+    );
+    expect(settingsTraceCalls).toHaveLength(1);
+    expect(
+      extractSwiftTopLevelArgumentValues(settingsTraceCalls[0], "proofBoundary")
+    ).toEqual([
+      swiftLiteralToken(
+        '"hosted-separate-settings-preferred-560x700-appkit-window-and-content-layout-fitted-to-observed-visible-screen-xcui-window-dimension-bridge-outer-scroll-contained-and-page-bottom-reachable-runner-default-and-swiftui-accessibility3-test-override-only-system-text-preference-inner-scroll-manual-voiceover-focus-control-hittability-localization-multidisplay-relocation-installed-release-excluded"'
+      ),
+    ]);
+    const settingsTraceAttachSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func attach(_ trace: HostedSettingsSceneTrace)"
+    );
+    expect(projectSwiftExecutableTokens(settingsTraceAttachSource)).toContain(
+      `attachment.name = ${swiftLiteralToken('"neondiff-hosted-settings-scene.json"')}`
+    );
     expect(settingsTextSizeCalls).toHaveLength(2);
     expect(
       extractSwiftTopLevelArgumentValues(settingsTextSizeCalls[0], "textSizeMode")
@@ -2201,21 +2299,29 @@ releaseTabbedAlternative()
     expect(source).toContain('"neondiff-settings-evaluation-container"');
     expect(source).toContain('"neondiff.evaluation.settings.quiescent"');
     expect(source).toContain('"neondiff.evaluation.settings.text-size"');
-    expect(source).toContain('let textSizePrefix = "ndst1:"');
+    expect(executableSettingsScenarioSource).toContain(
+      `let textSizePrefix = ${swiftLiteralToken('"ndst1:"')}`
+    );
     expect(maskedSource).toContain("let textSizeLabel = textSizeMarker.label");
-    expect(source).toContain('observedTextSize != "accessibility3"');
+    expect(executableSettingsScenarioSource).toContain(
+      `observedTextSize != ${swiftLiteralToken('"accessibility3"')}`
+    );
     expect(source).toContain(
       '"neondiff.evaluation.settings.appkit-geometry"'
     );
     expect(maskedSource).toContain("decodeAndValidateSettingsAppKitGeometry");
-    expect(source).toContain('let manifestPrefix = "ndsg1-chunks:"');
-    expect(source).toContain('let prefix = "ndsg1:\\(index):\\(chunkCount):"');
-    expect(maskedSource).toContain("let label = chunk.label");
-    expect(source).toContain(
-      'envelope.coordinateSpaces.contentLayoutRect == "appkit-window"'
+    expect(executableSettingsGeometryDecoderSource).toContain(
+      `let manifestPrefix = ${swiftLiteralToken('"ndsg1-chunks:"')}`
     );
-    expect(source).toContain(
-      'envelope.coordinateSpaces.contentLayoutScreenRect == "appkit-screen"'
+    expect(executableSettingsGeometryDecoderSource).toContain(
+      `let prefix = ${swiftLiteralToken(String.raw`"ndsg1:\(index):\(chunkCount):"`)}`
+    );
+    expect(maskedSource).toContain("let label = chunk.label");
+    expect(executableSettingsGeometryDecoderSource).toContain(
+      `envelope.coordinateSpaces.contentLayoutRect == ${swiftLiteralToken('"appkit-window"')}`
+    );
+    expect(executableSettingsGeometryDecoderSource).toContain(
+      `envelope.coordinateSpaces.contentLayoutScreenRect == ${swiftLiteralToken('"appkit-screen"')}`
     );
     expect(maskedSource).toContain("envelope.samples.count == 3");
     expect(maskedSource).toContain(
@@ -2257,19 +2363,16 @@ releaseTabbedAlternative()
     expect(maskedSource).toContain("effectProven: true");
     expect(maskedSource).toContain("scrollHadNoEffect");
     expect(maskedSource).toContain("HostedSettingsSceneTrace(");
-    expect(source).toContain("neondiff-hosted-settings-scene.json");
-    expect(source).toContain(
-      'proofBoundary: "hosted-separate-settings-preferred-560x700-appkit-window-and-content-layout-fitted-to-observed-visible-screen-xcui-window-dimension-bridge-outer-scroll-contained-and-page-bottom-reachable-runner-default-and-swiftui-accessibility3-test-override-only-system-text-preference-inner-scroll-manual-voiceover-focus-control-hittability-localization-multidisplay-relocation-installed-release-excluded"'
-    );
-    const settingsScenarioSource = extractBalancedSwiftDeclaration(
-      source,
-      "private func captureSettingsSceneScenario("
-    );
     const maskedSettingsScenarioSource = maskSwiftCommentsAndLiterals(
       settingsScenarioSource
     );
     expect(maskedSettingsScenarioSource.match(/\.scroll\s*\(/g)).toHaveLength(1);
-    expect(swiftXCUIActions(settingsScenarioSource)).toEqual(["typeKey", "scroll"]);
+    expect(swiftXCUIActions(settingsScenarioSource)).toEqual([
+      "terminate",
+      "launch",
+      "typeKey",
+      "scroll",
+    ]);
     expect(maskedSettingsScenarioSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
     );
