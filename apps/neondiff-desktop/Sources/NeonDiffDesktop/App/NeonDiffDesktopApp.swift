@@ -412,14 +412,14 @@ private struct SettingsWindowFitView: NSViewRepresentable {
         }
 
         @objc private func windowScreenDidChange(_ notification: Notification) {
-            fitWindow()
+            fitWindow(containOrigin: false)
         }
 
         @objc private func screenParametersDidChange(_ notification: Notification) {
             fitWindow()
         }
 
-        private func fitWindow() {
+        private func fitWindow(containOrigin: Bool = true) {
             guard let window,
                   let contentHeight,
                   let visibleFrame = window.screen?.visibleFrame else {
@@ -462,12 +462,13 @@ private struct SettingsWindowFitView: NSViewRepresentable {
                               self.attachmentGeneration == generation else {
                             return
                         }
-                        self.fitWindow()
+                        self.fitWindow(containOrigin: containOrigin)
                     }
                 }
                 return
             }
             pendingHeight = nil
+            guard containOrigin else { return }
             var origin = windowFrame.origin
             origin.x = min(
                 max(origin.x, visibleFrame.minX),

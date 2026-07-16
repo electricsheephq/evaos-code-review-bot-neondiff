@@ -48,6 +48,11 @@ function extractBalancedSwiftDeclaration(
 
 function projectSwiftReleaseSource(source: string): string {
   const lines = source.match(/.*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const maskedLines =
+    maskSwiftCommentsAndLiterals(source).match(/.*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  if (maskedLines.length !== lines.length) {
+    throw new Error("Swift release projection line mismatch");
+  }
   const frames: Array<{
     kind: "debug" | "other";
     parentIncluded: boolean;
@@ -56,8 +61,8 @@ function projectSwiftReleaseSource(source: string): string {
   const projected: string[] = [];
   let included = true;
 
-  for (const line of lines) {
-    const directive = line.trim();
+  for (const [index, line] of lines.entries()) {
+    const directive = maskedLines[index].trim();
     if (directive === "#if DEBUG" || directive === "#if !DEBUG") {
       const debugBranchIncluded = directive === "#if !DEBUG";
       frames.push({
@@ -69,6 +74,9 @@ function projectSwiftReleaseSource(source: string): string {
       continue;
     }
     if (directive.startsWith("#if ")) {
+      if (/\bDEBUG\b/.test(directive)) {
+        throw new Error(`Unsupported Swift DEBUG condition: ${directive}`);
+      }
       frames.push({ kind: "other", parentIncluded: included });
       if (included) projected.push(line);
       continue;
@@ -88,11 +96,19 @@ function projectSwiftReleaseSource(source: string): string {
     if (directive.startsWith("#elseif ")) {
       const frame = frames.at(-1);
       if (!frame) throw new Error("Unmatched Swift #elseif");
-      if (frame.kind === "debug") {
-        const releaseBranch = directive === "#elseif !DEBUG";
-        frame.debugBranchIncluded = releaseBranch;
-        included = frame.parentIncluded && releaseBranch;
-      } else if (included) {
+      if (directive === "#elseif DEBUG") {
+        included = false;
+      } else if (directive === "#elseif !DEBUG") {
+        included = frame.parentIncluded;
+      } else {
+        if (/\bDEBUG\b/.test(directive)) {
+          throw new Error(`Unsupported Swift DEBUG condition: ${directive}`);
+        }
+        // Preserve every non-DEBUG alternative conservatively. This can make
+        // the contract false-fail, but cannot hide release-reachable symbols.
+        included = frame.parentIncluded;
+      }
+      if (frame.kind === "other" && included) {
         projected.push(line);
       }
       continue;
@@ -265,6 +281,38 @@ private func target() {
         "private func target()"
       )
     ).toThrow(/Ambiguous Swift declaration/);
+  });
+
+  it("projects DEBUG branches out of release source without directive decoys", () => {
+    const source = `
+let literalDecoy = """
+#if DEBUG
+#endif
+"""
+/*
+#if DEBUG
+#endif
+*/
+releaseBeforeConditional()
+#if DEBUG
+debugOnly()
+#elseif os(macOS)
+releaseAlternative()
+#else
+releaseFallback()
+#endif
+releaseAfterConditional()
+`;
+
+    const projected = projectSwiftReleaseSource(source);
+    expect(projected).toContain("releaseBeforeConditional()");
+    expect(projected).toContain("releaseAlternative()");
+    expect(projected).toContain("releaseFallback()");
+    expect(projected).toContain("releaseAfterConditional()");
+    expect(projected).not.toContain("debugOnly()");
+    expect(() =>
+      projectSwiftReleaseSource("#if DEBUG && os(macOS)\ndebugOnly()\n#endif\n")
+    ).toThrow(/Unsupported Swift DEBUG condition/);
   });
 
   it("checks in a shared app/UI-test project and test plan", () => {
@@ -841,6 +889,11 @@ private func target() {
     expect(app).toContain("NSWindow.didChangeScreenNotification");
     expect(app).toContain("NSApplication.didChangeScreenParametersNotification");
     expect(app).not.toContain("NSWindow.didMoveNotification");
+    const screenChangeSource = extractBalancedSwiftDeclaration(
+      app,
+      "private func windowScreenDidChange("
+    );
+    expect(screenChangeSource).toContain("fitWindow(containOrigin: false)");
     expect(app).toContain("static let preferredContentWidth: CGFloat = 560");
     expect(app).toContain("static let preferredContentHeight: CGFloat = 700");
     expect(app).toContain("floor(visibleScreenHeight - chromeHeight)");
@@ -854,7 +907,7 @@ private func target() {
     expect(fittedHeightSource).toContain("visibleScreenHeight > chromeHeight");
     const fitWindowSource = extractBalancedSwiftDeclaration(
       app,
-      "private func fitWindow()"
+      "private func fitWindow(containOrigin: Bool = true)"
     );
     expect(fitWindowSource).toContain(
       "let chromeHeight = windowFrame.height - contentLayoutRect.height"
@@ -863,6 +916,8 @@ private func target() {
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(contentLayoutRect)");
     expect(fitWindowSource).toContain("Self.isFiniteNonempty(visibleFrame)");
     expect(fitWindowSource.match(/pendingHeight = nil/g)).toHaveLength(2);
+    expect(fitWindowSource).toContain("self.fitWindow(containOrigin: containOrigin)");
+    expect(fitWindowSource).toContain("guard containOrigin else { return }");
     const attachSource = extractBalancedSwiftDeclaration(
       app,
       "func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>)"
