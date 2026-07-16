@@ -1750,13 +1750,6 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
         let verticalScrollBar = verticalScrollBars[0]
-        let preTerminalValue = try normalizedScrollValue(verticalScrollBar.value)
-        guard preTerminalValue < 1 else {
-            throw HostedNativeInnerScrollTraceError.invalidPreTerminalValue(
-                controlIdentifier: controlIdentifier,
-                value: preTerminalValue
-            )
-        }
         let preSample = try captureNativeInnerScrollSample(
             elapsedMilliseconds: Int(
                 ((ProcessInfo.processInfo.systemUptime - samplingStart) * 1_000).rounded()
@@ -1769,6 +1762,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
             terminalVisibleText: terminalVisibleText,
             terminalValueToken: terminalValueToken
         )
+        let preTerminalValue = preSample.normalizedScrollValue
+        guard preTerminalValue < 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidPreTerminalValue(
+                controlIdentifier: controlIdentifier,
+                value: preTerminalValue
+            )
+        }
 
         let firstActionStartedAt = ProcessInfo.processInfo.systemUptime
         let firstActionElapsedMilliseconds = Int(

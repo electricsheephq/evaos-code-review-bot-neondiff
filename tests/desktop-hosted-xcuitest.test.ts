@@ -705,6 +705,9 @@ releaseTabbedAlternative()
     expect(helperSource.match(/\.scroll\s*\(/g)).toHaveLength(2);
     expect(helperSource).toContain("scrollBars");
     expect(helperSource).toContain("normalizedScrollValue");
+    expect(helperSource).toContain(
+      "let preTerminalValue = preSample.normalizedScrollValue"
+    );
     expect(helperSource).toContain("preTerminalValue < 1");
     expect(helperSource).toContain(
       "terminalSamples.allSatisfy({ $0.normalizedScrollValue == 1 })"
