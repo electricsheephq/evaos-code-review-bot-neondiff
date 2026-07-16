@@ -681,6 +681,11 @@ private func target() {
     expect(source).toContain(
       "testSeparateSettingsSceneFitsVisibleScreenAndReachesPageBottom"
     );
+    const settingsTestSource = extractBalancedSwiftDeclaration(
+      source,
+      "func testSeparateSettingsSceneFitsVisibleScreenAndReachesPageBottom()"
+    );
+    expect(settingsTestSource).toContain("schemaVersion: 2");
     expect(source).toContain("HostedContentSize(width: 560, height: 700)");
     expect(source).toContain(
       'HostedSettingsTextSizeRequest(textSizeMode: "runner-default-no-test-override", textSizeArgument: nil)'
@@ -689,7 +694,7 @@ private func target() {
       'HostedSettingsTextSizeRequest(textSizeMode: "swiftui-dynamic-type-accessibility3-test-override", textSizeArgument: "accessibility3")'
     );
     expect(source).toContain('app.typeKey(",", modifierFlags: [.command])');
-    expect(source).toContain('"neondiff-settings-window-content"');
+    expect(source).toContain('"neondiff-settings-evaluation-container"');
     expect(source).toContain('"neondiff.evaluation.settings.quiescent"');
     expect(source).toContain('"neondiff.evaluation.settings.text-size"');
     expect(source).toContain('let textSizePrefix = "ndst1:"');
@@ -718,20 +723,39 @@ private func target() {
     expect(source).toContain("isFullyContainedInWindowBounds(");
     expect(source).toContain("sample.contentLayoutScreenRect.isFullyContained(");
     expect(source).toContain("sample.windowFrame.isFullyContained(");
-    expect(source).toContain("observedContentSize: observedContentSize");
+    expect(source).toContain(
+      "observedAppKitContentLayoutSize: observedAppKitContentLayoutSize"
+    );
+    expect(source).toContain(
+      "observedAppKitWindowSize: observedAppKitWindowSize"
+    );
     expect(source).toContain('"neondiff-settings-outer-scroll"');
     expect(source).toContain('"neondiff-settings-page-bottom"');
     expect(source).toContain("captureStableSettingsSceneSamples");
     expect(source).toContain("samples.count == 3");
     expect(source).toContain("finalCompletionElapsedMilliseconds <= 5_000");
-    expect(source).toContain("settingsContentFrame.matches(requestedContentSize");
+    expect(source).toContain("windowFrame.matches(expectedAppKitWindowSize");
+    expect(source).toContain("accessibilityContainerMatchesWindowFrame");
+    expect(source).toContain("projectedAppKitContentLayoutFrame");
+    expect(source).toContain(
+      "appKitContentLayoutScreenRect.x - appKitWindowFrame.x"
+    );
+    expect(source).toContain(
+      "appKitWindowFrame.maxY - appKitContentLayoutScreenRect.maxY"
+    );
+    expect(source).toContain(
+      "projectedAppKitContentLayoutFullyContainedInWindow"
+    );
+    expect(source).toContain(
+      "outerScrollFullyContainedInProjectedAppKitContentLayout"
+    );
     expect(source).toContain("sentinelFullyContainedInOuterScroll");
     expect(source).toContain("effectProven: true");
     expect(source).toContain("scrollHadNoEffect");
     expect(source).toContain("HostedSettingsSceneTrace(");
     expect(source).toContain("neondiff-hosted-settings-scene.json");
     expect(source).toContain(
-      'proofBoundary: "hosted-separate-settings-preferred-560x700-visible-screen-fitted-root-and-appkit-content-layout-default-and-observed-accessibility3-window-contained-outer-page-bottom-only-system-preference-inner-scroll-manual-excluded"'
+      'proofBoundary: "hosted-separate-settings-preferred-560x700-appkit-window-and-content-layout-fitted-to-observed-visible-screen-xcui-window-dimension-bridge-outer-scroll-contained-and-page-bottom-reachable-runner-default-and-swiftui-accessibility3-test-override-only-system-text-preference-inner-scroll-manual-voiceover-focus-control-hittability-localization-multidisplay-relocation-installed-release-excluded"'
     );
     const settingsScenarioSource = extractBalancedSwiftDeclaration(
       source,
@@ -796,7 +820,7 @@ private func target() {
     expect(settings).toContain("HostedSettingsWindowConfigurator");
     expect(settings).toContain("HostedSettingsEvaluationStatus");
     expect(settings).toContain('"neondiff.evaluation.settings.quiescent"');
-    expect(settings).toContain('"neondiff-settings-window-content"');
+    expect(settings).toContain('"neondiff-settings-evaluation-container"');
     expect(settings).toContain('"neondiff.evaluation.settings.text-size"');
     expect(settings).toContain('"neondiff.evaluation.settings.appkit-geometry"');
     expect(settings).toContain("HostedSettingsGeometryAccessibilityChunk");

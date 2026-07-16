@@ -470,7 +470,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedSettingsSceneTrace(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 fixtureId: "tab-overview",
                 requestedContentSize: requestedContentSize,
                 coordinateSpace: "xcui-screen",
@@ -478,7 +478,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 samplingDeadlineMilliseconds: 5_000,
                 tolerancePoints: 1,
                 scenarios: scenarios,
-                proofBoundary: "hosted-separate-settings-preferred-560x700-visible-screen-fitted-root-and-appkit-content-layout-default-and-observed-accessibility3-window-contained-outer-page-bottom-only-system-preference-inner-scroll-manual-excluded"
+                proofBoundary: "hosted-separate-settings-preferred-560x700-appkit-window-and-content-layout-fitted-to-observed-visible-screen-xcui-window-dimension-bridge-outer-scroll-contained-and-page-bottom-reachable-runner-default-and-swiftui-accessibility3-test-override-only-system-text-preference-inner-scroll-manual-voiceover-focus-control-hittability-localization-multidisplay-relocation-installed-release-excluded"
             )
         )
     }
@@ -518,18 +518,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
         let windowCountBeforeAction = app.windows.count
         let openActionStart = ProcessInfo.processInfo.systemUptime
         app.typeKey(",", modifierFlags: [.command])
-        let settingsContent = app.descendants(matching: .any)[
-            "neondiff-settings-window-content"
+        let settingsEvaluationContainer = app.descendants(matching: .any)[
+            "neondiff-settings-evaluation-container"
         ]
-        guard settingsContent.waitForExistence(timeout: 10) else {
+        guard settingsEvaluationContainer.waitForExistence(timeout: 10) else {
             throw HostedSettingsSceneTraceError.missingElement(
-                "neondiff-settings-window-content"
+                "neondiff-settings-evaluation-container"
             )
         }
         let openAction = HostedSettingsOpenAction(
             method: "automated-command-comma",
             attemptCount: 1,
-            result: "settings-window-content-observed",
+            result: "settings-evaluation-container-observed",
             elapsedMilliseconds: Int(
                 ((ProcessInfo.processInfo.systemUptime - openActionStart) * 1_000).rounded()
             ),
@@ -594,9 +594,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
             requestedContentSize: requestedContentSize,
             context: request.textSizeMode
         )
-        let observedContentSize = try XCTUnwrap(
-            appKitGeometry.samples.first?.contentLayoutScreenRect.roundedContentSize
-        )
+        let appKitBaseline = try XCTUnwrap(appKitGeometry.samples.first)
+        let observedAppKitContentLayoutSize =
+            appKitBaseline.contentLayoutScreenRect.roundedContentSize
+        let observedAppKitWindowSize = appKitBaseline.windowFrame.roundedContentSize
         let outerScroll = app.descendants(matching: .any)[
             "neondiff-settings-outer-scroll"
         ]
@@ -616,10 +617,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
 
         let preActionSamples = try captureStableSettingsSceneSamples(
             app: app,
-            settingsContent: settingsContent,
+            settingsEvaluationContainer: settingsEvaluationContainer,
             outerScroll: outerScroll,
             bottomSentinel: bottomSentinel,
-            requestedContentSize: observedContentSize,
+            expectedAppKitWindowSize: observedAppKitWindowSize,
+            appKitWindowFrame: appKitBaseline.windowFrame,
+            appKitContentLayoutScreenRect: appKitBaseline.contentLayoutScreenRect,
             context: "\(request.textSizeMode)-pre"
         )
         let scrollAction: HostedSettingsScrollAction?
@@ -631,10 +634,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
             outerScroll.scroll(byDeltaX: 0, deltaY: -10_000)
             postActionSamples = try captureStableSettingsSceneSamples(
                 app: app,
-                settingsContent: settingsContent,
+                settingsEvaluationContainer: settingsEvaluationContainer,
                 outerScroll: outerScroll,
                 bottomSentinel: bottomSentinel,
-                requestedContentSize: observedContentSize,
+                expectedAppKitWindowSize: observedAppKitWindowSize,
+                appKitWindowFrame: appKitBaseline.windowFrame,
+                appKitContentLayoutScreenRect: appKitBaseline.contentLayoutScreenRect,
                 context: "\(request.textSizeMode)-post"
             )
             guard let preActionSentinelFrame = preActionSamples.last?.sentinelFrame,
@@ -664,7 +669,8 @@ final class NeonDiffDesktopUITests: XCTestCase {
             textSizeMode: request.textSizeMode,
             launchTextSizeArgument: request.textSizeArgument,
             observedSettingsTextSize: observedTextSize,
-            observedContentSize: observedContentSize,
+            observedAppKitContentLayoutSize: observedAppKitContentLayoutSize,
+            observedAppKitWindowSize: observedAppKitWindowSize,
             fixtureRootIdentifier: rootIdentifier,
             quiescenceMarkerIdentifier: markerIdentifier,
             openAction: openAction,
@@ -785,10 +791,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
 
     private func captureStableSettingsSceneSamples(
         app: XCUIApplication,
-        settingsContent: XCUIElement,
+        settingsEvaluationContainer: XCUIElement,
         outerScroll: XCUIElement,
         bottomSentinel: XCUIElement,
-        requestedContentSize: HostedContentSize,
+        expectedAppKitWindowSize: HostedContentSize,
+        appKitWindowFrame: HostedSettingsAppKitFrame,
+        appKitContentLayoutScreenRect: HostedSettingsAppKitFrame,
         context: String
     ) throws -> [HostedSettingsSceneSample] {
         let start = ProcessInfo.processInfo.systemUptime
@@ -805,41 +813,69 @@ final class NeonDiffDesktopUITests: XCTestCase {
             }
             let sampleStart = ProcessInfo.processInfo.systemUptime
             previousSampleStart = sampleStart
-            let settingsContentFrame = HostedGeometryFrame(settingsContent.frame)
+            let accessibilityContainerFrame = HostedGeometryFrame(
+                settingsEvaluationContainer.frame
+            )
             let windowFrame = try settingsContainingWindowFrame(
                 app: app,
-                settingsContentFrame: settingsContentFrame,
+                accessibilityContainerFrame: accessibilityContainerFrame,
                 context: context
+            )
+            let projectedAppKitContentLayoutFrame = HostedGeometryFrame(
+                appKitContentLayoutScreenRect,
+                relativeTo: appKitWindowFrame,
+                in: windowFrame
             )
             let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
             let sentinelFrame = HostedGeometryFrame(bottomSentinel.frame)
-            guard settingsContentFrame.isFiniteAndNonempty,
+            guard accessibilityContainerFrame.isFiniteAndNonempty,
                   windowFrame.isFiniteAndNonempty,
+                  projectedAppKitContentLayoutFrame.isFiniteAndNonempty,
                   outerScrollFrame.isFiniteAndNonempty,
                   sentinelFrame.isFiniteAndNonempty else {
                 throw HostedSettingsSceneTraceError.invalidFrame(context)
             }
-            guard settingsContentFrame.matches(requestedContentSize, tolerance: 1) else {
-                throw HostedSettingsSceneTraceError.unexpectedContentSize(
-                    requested: requestedContentSize,
-                    observed: settingsContentFrame
+            guard windowFrame.matches(expectedAppKitWindowSize, tolerance: 1),
+                  accessibilityContainerFrame.matches(
+                      expectedAppKitWindowSize,
+                      tolerance: 1
+                  ) else {
+                throw HostedSettingsSceneTraceError.unexpectedWindowSize(
+                    expected: expectedAppKitWindowSize,
+                    observedWindow: windowFrame,
+                    observedAccessibilityContainer: accessibilityContainerFrame
                 )
             }
+            let accessibilityContainerMatchesWindowFrame =
+                !accessibilityContainerFrame.differs(
+                from: windowFrame,
+                byMoreThan: 1
+            )
             let sample = HostedSettingsSceneSample(
                 elapsedMilliseconds: Int(((sampleStart - start) * 1_000).rounded()),
                 completionElapsedMilliseconds: Int(
                     ((ProcessInfo.processInfo.systemUptime - start) * 1_000).rounded()
                 ),
                 windowFrame: windowFrame,
-                settingsContentFrame: settingsContentFrame,
+                accessibilityContainerFrame: accessibilityContainerFrame,
+                projectedAppKitContentLayoutFrame: projectedAppKitContentLayoutFrame,
                 outerScrollFrame: outerScrollFrame,
                 sentinelFrame: sentinelFrame,
-                settingsContentFullyContainedInWindow: settingsContentFrame.isFullyContained(
+                accessibilityContainerMatchesWindowFrame:
+                    accessibilityContainerMatchesWindowFrame,
+                accessibilityContainerFullyContainedInWindow:
+                    accessibilityContainerFrame.isFullyContained(
                     in: windowFrame,
                     tolerance: 1
                 ),
-                outerScrollFullyContainedInSettingsContent: outerScrollFrame.isFullyContained(
-                    in: settingsContentFrame,
+                projectedAppKitContentLayoutFullyContainedInWindow:
+                    projectedAppKitContentLayoutFrame.isFullyContained(
+                    in: windowFrame,
+                    tolerance: 1
+                ),
+                outerScrollFullyContainedInProjectedAppKitContentLayout:
+                    outerScrollFrame.isFullyContained(
+                    in: projectedAppKitContentLayoutFrame,
                     tolerance: 1
                 ),
                 sentinelFullyContainedInOuterScroll: sentinelFrame.isFullyContained(
@@ -847,8 +883,10 @@ final class NeonDiffDesktopUITests: XCTestCase {
                     tolerance: 1
                 )
             )
-            guard sample.settingsContentFullyContainedInWindow,
-                  sample.outerScrollFullyContainedInSettingsContent else {
+            guard sample.accessibilityContainerMatchesWindowFrame,
+                  sample.accessibilityContainerFullyContainedInWindow,
+                  sample.projectedAppKitContentLayoutFullyContainedInWindow,
+                  sample.outerScrollFullyContainedInProjectedAppKitContentLayout else {
                 throw HostedSettingsSceneTraceError.invalidContainment(context)
             }
             samples.append(sample)
@@ -872,8 +910,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         for sample in samples.dropFirst() {
             guard !baseline.windowFrame.differs(from: sample.windowFrame, byMoreThan: 1),
-                  !baseline.settingsContentFrame.differs(
-                      from: sample.settingsContentFrame,
+                  !baseline.accessibilityContainerFrame.differs(
+                      from: sample.accessibilityContainerFrame,
+                      byMoreThan: 1
+                  ),
+                  !baseline.projectedAppKitContentLayoutFrame.differs(
+                      from: sample.projectedAppKitContentLayoutFrame,
                       byMoreThan: 1
                   ),
                   !baseline.outerScrollFrame.differs(
@@ -892,14 +934,17 @@ final class NeonDiffDesktopUITests: XCTestCase {
 
     private func settingsContainingWindowFrame(
         app: XCUIApplication,
-        settingsContentFrame: HostedGeometryFrame,
+        accessibilityContainerFrame: HostedGeometryFrame,
         context: String
     ) throws -> HostedGeometryFrame {
         let candidates = (0..<app.windows.count)
             .map { HostedGeometryFrame(app.windows.element(boundBy: $0).frame) }
             .filter {
                 $0.isFiniteAndNonempty
-                    && settingsContentFrame.isFullyContained(in: $0, tolerance: 1)
+                    && accessibilityContainerFrame.isFullyContained(
+                        in: $0,
+                        tolerance: 1
+                    )
             }
             .sorted { $0.area < $1.area }
         guard let windowFrame = candidates.first else {
@@ -2186,6 +2231,19 @@ private struct HostedGeometryFrame: Codable, Equatable {
         self.height = height
     }
 
+    init(
+        _ appKitContentLayoutScreenRect: HostedSettingsAppKitFrame,
+        relativeTo appKitWindowFrame: HostedSettingsAppKitFrame,
+        in xcuiWindowFrame: Self
+    ) {
+        x = xcuiWindowFrame.x
+            + (appKitContentLayoutScreenRect.x - appKitWindowFrame.x)
+        y = xcuiWindowFrame.y
+            + (appKitWindowFrame.maxY - appKitContentLayoutScreenRect.maxY)
+        width = appKitContentLayoutScreenRect.width
+        height = appKitContentLayoutScreenRect.height
+    }
+
     var isFiniteAndNonempty: Bool {
         [x, y, width, height, x + width, y + height].allSatisfy(\.isFinite)
             && width > 0
@@ -2488,11 +2546,14 @@ private struct HostedSettingsSceneSample: Codable, Equatable {
     let elapsedMilliseconds: Int
     let completionElapsedMilliseconds: Int
     let windowFrame: HostedGeometryFrame
-    let settingsContentFrame: HostedGeometryFrame
+    let accessibilityContainerFrame: HostedGeometryFrame
+    let projectedAppKitContentLayoutFrame: HostedGeometryFrame
     let outerScrollFrame: HostedGeometryFrame
     let sentinelFrame: HostedGeometryFrame
-    let settingsContentFullyContainedInWindow: Bool
-    let outerScrollFullyContainedInSettingsContent: Bool
+    let accessibilityContainerMatchesWindowFrame: Bool
+    let accessibilityContainerFullyContainedInWindow: Bool
+    let projectedAppKitContentLayoutFullyContainedInWindow: Bool
+    let outerScrollFullyContainedInProjectedAppKitContentLayout: Bool
     let sentinelFullyContainedInOuterScroll: Bool
 }
 
@@ -2500,7 +2561,8 @@ private struct HostedSettingsSceneScenario: Codable {
     let textSizeMode: String
     let launchTextSizeArgument: String?
     let observedSettingsTextSize: String
-    let observedContentSize: HostedContentSize
+    let observedAppKitContentLayoutSize: HostedContentSize
+    let observedAppKitWindowSize: HostedContentSize
     let fixtureRootIdentifier: String
     let quiescenceMarkerIdentifier: String
     let openAction: HostedSettingsOpenAction
@@ -2552,6 +2614,8 @@ private struct HostedSettingsAppKitFrame: Codable {
             height: Int(height.rounded())
         )
     }
+
+    var maxY: Double { y + height }
 
     func matchesFittedSettingsContent(
         preferredContentSize: HostedContentSize,
@@ -2802,9 +2866,10 @@ private enum HostedSettingsSceneTraceError: LocalizedError {
     case unstableAppKitGeometry(String)
     case unexpectedWindowCount(before: Int, after: Int)
     case invalidFrame(String)
-    case unexpectedContentSize(
-        requested: HostedContentSize,
-        observed: HostedGeometryFrame
+    case unexpectedWindowSize(
+        expected: HostedContentSize,
+        observedWindow: HostedGeometryFrame,
+        observedAccessibilityContainer: HostedGeometryFrame
     )
     case missingContainingWindow(String)
     case invalidContainment(String)
@@ -2841,11 +2906,17 @@ private enum HostedSettingsSceneTraceError: LocalizedError {
                 + "before=\(before) after=\(after)"
         case .invalidFrame(let context):
             "Invalid hosted Settings frame: \(context)"
-        case let .unexpectedContentSize(requested, observed):
-            "Hosted Settings content size does not match the request: "
-                + "requested=\(requested.width)x\(requested.height) observed=\(observed)"
+        case let .unexpectedWindowSize(
+            expected,
+            observedWindow,
+            observedAccessibilityContainer
+        ):
+            "Hosted Settings AppKit/XCUI window dimensions do not match: "
+                + "expected=\(expected.width)x\(expected.height) "
+                + "window=\(observedWindow) "
+                + "accessibilityContainer=\(observedAccessibilityContainer)"
         case .missingContainingWindow(let context):
-            "Hosted Settings content has no containing app window: \(context)"
+            "Hosted Settings evaluation container has no containing app window: \(context)"
         case .invalidContainment(let context):
             "Hosted Settings containment failed: \(context)"
         case .invalidCadence(let context):

@@ -126,7 +126,7 @@ extension View {
     ) -> some View {
         if enabled {
             accessibilityElement(children: .contain)
-                .accessibilityIdentifier("neondiff-settings-window-content")
+                .accessibilityIdentifier("neondiff-settings-evaluation-container")
                 .overlay(alignment: .topLeading) {
                     HostedSettingsEvaluationMarker(status: status)
                 }
