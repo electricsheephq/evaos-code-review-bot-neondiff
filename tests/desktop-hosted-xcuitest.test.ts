@@ -341,7 +341,7 @@ function maskSwiftCommentsAndLiterals(source: string): string {
 }
 
 const swiftXCUIActionMethodPattern =
-  /\.\s*(?:`(adjust|click|doubleClick|rightClick|hover|tap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate)`|(adjust|click|doubleClick|rightClick|hover|tap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate))\s*(?=\(|[;,)\]\s]|$)/g;
+  /\.\s*(?:`(adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate)`|(adjust|click|doubleClick|rightClick|hover|tap|doubleTap|twoFingerTap|press|typeKey|typeText|scroll|swipe(?:Up|Down|Left|Right)|drag(?:To)?|perform(?:Action)?|pinch|rotate))\s*(?=\(|[;,)\]\s]|$)/g;
 
 function swiftLiteralToken(literal: string): string {
   return `\u0000SWIFT_LITERAL_${Buffer.from(literal, "utf8").toString("base64url")}\u0000`;
@@ -478,9 +478,13 @@ function swiftXCUIActions(source: string): string[] {
 function extractBalancedSwiftCallTokens(source: string, callName: string): string[] {
   const executable = projectSwiftExecutableTokens(source);
   const calls: string[] = [];
-  const callPattern = new RegExp(`\\b${escapeRegExp(callName)}\\s*\\(`, "g");
+  const escapedName = escapeRegExp(callName);
+  const callPattern = new RegExp(
+    `(?<![\\p{ID_Continue}$])(?:\`${escapedName}\`|${escapedName})\\s*\\(`,
+    "gu"
+  );
 
-  for (let match = callPattern.exec(executable); match; match = callPattern.exec(executable)) {
+  for (const match of executable.matchAll(callPattern)) {
     const callStart = match.index;
     const openingParenthesis = callStart + match[0].lastIndexOf("(");
     let depth = 0;
@@ -498,10 +502,47 @@ function extractBalancedSwiftCallTokens(source: string, callName: string): strin
     }
     if (callEnd < 0) throw new Error(`Unbalanced Swift call: ${callName}`);
     calls.push(executable.slice(callStart, callEnd));
-    callPattern.lastIndex = callEnd;
   }
 
   return calls;
+}
+
+function extractSwiftTopLevelArgumentValues(
+  call: string,
+  label: string
+): string[] {
+  const openingParenthesis = call.indexOf("(");
+  if (openingParenthesis < 0) throw new Error("Swift call has no argument list");
+  const segments: string[] = [];
+  let segmentStart = openingParenthesis + 1;
+  let parentheses = 1;
+  let brackets = 0;
+  let braces = 0;
+
+  for (let index = segmentStart; index < call.length; index += 1) {
+    const current = call[index];
+    if (current === "(") parentheses += 1;
+    else if (current === ")") parentheses -= 1;
+    else if (current === "[") brackets += 1;
+    else if (current === "]") brackets -= 1;
+    else if (current === "{") braces += 1;
+    else if (current === "}") braces -= 1;
+
+    if (
+      (current === "," && parentheses === 1 && brackets === 0 && braces === 0) ||
+      parentheses === 0
+    ) {
+      segments.push(call.slice(segmentStart, index).trim());
+      segmentStart = index + 1;
+      if (parentheses === 0) break;
+    }
+  }
+
+  const labelPattern = new RegExp(`^${escapeRegExp(label)}\\s*:\\s*([\\s\\S]*)$`);
+  return segments.flatMap((segment) => {
+    const match = segment.match(labelPattern);
+    return match ? [match[1].trim()] : [];
+  });
 }
 
 function countLeadingPounds(source: string, start: number): number {
@@ -589,16 +630,30 @@ outerPreparationFailures.append("right")
     expect(swiftLiteralToken('"right"')).not.toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
     expect(
       extractBalancedSwiftCallTokens(
-        String.raw`
-FakeHostedNativeInnerScrollAction(mechanism: "decoy")
-HostedNativeInnerScrollAction /* trivia */ (mechanism: "first")
-HostedNativeInnerScrollAction(
-  mechanism: "second"
-)
-`,
+        [
+          'FakeHostedNativeInnerScrollAction(mechanism: "decoy")',
+          'ΩHostedNativeInnerScrollAction(mechanism: "unicode-decoy")',
+          'HostedNativeInnerScrollAction /* trivia */ (mechanism: "first")',
+          'HostedNativeInnerScrollAction(mechanism: "second")',
+          '`HostedNativeInnerScrollAction`(mechanism: "backticked")',
+          'HostedNativeInnerScrollAction(',
+          '  nested: HostedNativeInnerScrollAction(mechanism: "nested"),',
+          '  mechanism: "outer"',
+          ')',
+        ].join("\n"),
         "HostedNativeInnerScrollAction"
       )
-    ).toHaveLength(2);
+    ).toHaveLength(5);
+    const nestedArgumentProbe = extractBalancedSwiftCallTokens(
+      String.raw`HostedNativeInnerScrollAction(
+  nested: (mechanism: "decoy"),
+  mechanism: "real"
+)`,
+      "HostedNativeInnerScrollAction"
+    )[0];
+    expect(
+      extractSwiftTopLevelArgumentValues(nestedArgumentProbe, "mechanism")
+    ).toEqual([swiftLiteralToken('"real"')]);
     expect(
       swiftXCUIActions(
         String.raw`let hiddenAction = "\(flag ? "safe" : element.click())"`
@@ -612,6 +667,7 @@ HostedNativeInnerScrollAction(
     expect(swiftXCUIActions("let alias = element.swipeUp; alias()"))
       .toEqual(["swipeUp"]);
     expect(swiftXCUIActions("element.`click`()")).toEqual(["click"]);
+    expect(swiftXCUIActions("element.doubleTap()")).toEqual(["doubleTap"]);
     expect(
       projectSwiftExecutableTokens(
         String.raw`let hiddenLedger = "\(outerPreparationFailures.append("extra"))"`
@@ -844,14 +900,33 @@ releaseTabbedAlternative()
     expect(source).toContain(
       'proofBoundary: "hosted-every-sidebar-destination-minimum-size-geometry-only"'
     );
-    expect(source).toContain('HostedSidebarRouteStep(section: "overview", generation: 0)');
-    expect(source).toContain('HostedSidebarRouteStep(section: "repos", generation: 1)');
-    expect(source).toContain('HostedSidebarRouteStep(section: "providers", generation: 2)');
-    expect(source).toContain('HostedSidebarRouteStep(section: "license", generation: 3)');
-    expect(source).toContain('HostedSidebarRouteStep(section: "logs", generation: 4)');
-    expect(source).toContain('HostedSidebarRouteStep(section: "policy", generation: 5)');
-    expect(source).toContain('HostedSidebarRouteStep(section: "settings", generation: 6)');
-    expect(source).toContain('HostedSidebarRouteStep(section: "overview", generation: 7)');
+    const circuitSource = extractBalancedSwiftDeclaration(
+      source,
+      "func testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize("
+    );
+    const routeCalls = extractBalancedSwiftCallTokens(
+      circuitSource,
+      "HostedSidebarRouteStep"
+    );
+    const expectedRouteSections = [
+      "overview",
+      "repos",
+      "providers",
+      "license",
+      "logs",
+      "policy",
+      "settings",
+      "overview",
+    ];
+    expect(routeCalls).toHaveLength(expectedRouteSections.length);
+    for (const [generation, call] of routeCalls.entries()) {
+      expect(extractSwiftTopLevelArgumentValues(call, "section")).toEqual([
+        swiftLiteralToken(`"${expectedRouteSections[generation]}"`),
+      ]);
+      expect(extractSwiftTopLevelArgumentValues(call, "generation")).toEqual([
+        String(generation),
+      ]);
+    }
     expect(maskedSource).toContain("XCTAssertEqual(checkpoints.count, 8)");
     expect(maskedSource).toContain("XCTAssertEqual(navigationActions.count, 7)");
     expect(source).toContain(
@@ -1061,7 +1136,9 @@ releaseTabbedAlternative()
     expect(maskedLogs).toContain('visibleTextContainerRect');
     expect(maskedLogs).toContain('terminalGlyphBoundsAreFullyVisible');
     expect(maskedLogs).toContain('HostedLogsTerminalVisibilityPayload(');
-    expect(logs).toContain('coordinateSpace: "appkit-text-view-local"');
+    expect(maskedLogs).toContain(
+      `coordinateSpace: ${swiftLiteralToken('"appkit-text-view-local"')}`
+    );
     expect(logs).toContain('"ndlv1:"');
     expect(logs).toContain('"ndlv1-chunks:\\(chunks.count)"');
     expect(maskedLogs).toContain('let chunkByteCount = 64');
@@ -1082,11 +1159,8 @@ releaseTabbedAlternative()
     const maskedResolveVisibleTextSource = projectSwiftExecutableTokens(
       resolveVisibleTextSource
     );
-    expect(maskedResolveVisibleTextSource).toContain(
-      "guard !NSWorkspace.shared.isVoiceOverEnabled"
-    );
-    expect(maskedResolveVisibleTextSource).toContain(
-      "!NSWorkspace.shared.isSwitchControlEnabled"
+    expect(maskedResolveVisibleTextSource).toMatch(
+      /guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else/
     );
     const updateVisibleTextSource = extractBalancedSwiftDeclaration(
       logs,
@@ -1095,25 +1169,16 @@ releaseTabbedAlternative()
     const maskedUpdateVisibleTextSource = projectSwiftExecutableTokens(
       updateVisibleTextSource
     );
-    expect(maskedUpdateVisibleTextSource).toContain(
-      "guard !NSWorkspace.shared.isVoiceOverEnabled"
-    );
-    expect(maskedUpdateVisibleTextSource).toContain(
-      "!NSWorkspace.shared.isSwitchControlEnabled"
+    expect(maskedUpdateVisibleTextSource).toMatch(
+      /guard\s+!NSWorkspace\.shared\.isVoiceOverEnabled\s*,\s*!NSWorkspace\.shared\.isSwitchControlEnabled\s+else/
     );
 
     expect(maskedSource).toContain("testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage");
-    expect(source).toContain('scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680"');
-    expect(source).toContain('fixtureId: "hosted-inner-scroll-overflow"');
     expect(source).toContain('"neondiff-repos-table"');
     expect(source).toContain('"neondiff-logs-text-editor"');
     expect(source).toContain('"synthetic-org/repo-040"');
     expect(source).toContain('"HOSTED_INNER_SCROLL_SAFE_TAIL_070"');
     expect(maskedSource).toContain("HostedNativeInnerScrollTrace(");
-    expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
-    expect(source).toContain(
-      'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
-    );
 
     const scenarioSource = extractBalancedSwiftDeclaration(
       source,
@@ -1121,6 +1186,31 @@ releaseTabbedAlternative()
     );
     const maskedScenarioSource = maskSwiftCommentsAndLiterals(scenarioSource);
     const executableScenarioSource = projectSwiftExecutableTokens(scenarioSource);
+    const traceCalls = extractBalancedSwiftCallTokens(
+      scenarioSource,
+      "HostedNativeInnerScrollTrace"
+    );
+    expect(traceCalls).toHaveLength(1);
+    expect(extractSwiftTopLevelArgumentValues(traceCalls[0], "scenario")).toEqual([
+      swiftLiteralToken('"repos-and-logs-native-inner-scroll-terminal-at-1040x680"'),
+    ]);
+    expect(extractSwiftTopLevelArgumentValues(traceCalls[0], "fixtureId")).toEqual([
+      swiftLiteralToken('"hosted-inner-scroll-overflow"'),
+    ]);
+    expect(
+      extractSwiftTopLevelArgumentValues(traceCalls[0], "proofBoundary")
+    ).toEqual([
+      swiftLiteralToken(
+        '"hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+      ),
+    ]);
+    const nativeTraceAttachSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func attach(_ trace: HostedNativeInnerScrollTrace)"
+    );
+    expect(projectSwiftExecutableTokens(nativeTraceAttachSource)).toContain(
+      `attachment.name = ${swiftLiteralToken('"neondiff-hosted-native-inner-scroll.json"')}`
+    );
     expect(maskedScenarioSource).toContain("schemaVersion: 13");
     expect(maskedScenarioSource).toContain(
       "let reposGeometry = try captureCheckpoint("
@@ -1366,12 +1456,16 @@ releaseTabbedAlternative()
       "sentinel-frame-drift",
       "current-sentinel-outside-outer",
     ]) {
-      expect(executableHelperSource).toContain(
-        `outerPreparationFailures.append(${swiftLiteralToken(`"${category}"`)})`
+      expect(executableHelperSource).toMatch(
+        new RegExp(
+          `outerPreparationFailures\\.append\\s*\\(\\s*${escapeRegExp(swiftLiteralToken(`"${category}"`))}\\s*\\)`
+        )
       );
     }
-    expect(executableHelperSource).not.toContain(
-      `outerPreparationFailures.append(${swiftLiteralToken('"missing-scroll-action"')})`
+    expect(executableHelperSource).not.toMatch(
+      new RegExp(
+        `outerPreparationFailures\\.append\\s*\\(\\s*${escapeRegExp(swiftLiteralToken('"missing-scroll-action"'))}\\s*\\)`
+      )
     );
     for (const category of [
       "inner-scroll-outside-outer",
@@ -1381,15 +1475,17 @@ releaseTabbedAlternative()
       "outer-restaging-direction-mismatch",
       "outer-restaging-translation-mismatch",
     ]) {
-      expect(executableHelperSource).toContain(
-        `outerRestagingFailures.append(${swiftLiteralToken(`"${category}"`)})`
+      expect(executableHelperSource).toMatch(
+        new RegExp(
+          `outerRestagingFailures\\.append\\s*\\(\\s*${escapeRegExp(swiftLiteralToken(`"${category}"`))}\\s*\\)`
+        )
       );
     }
     expect(
-      maskedHelperSource.match(/outerPreparationFailures\.append\(\s*\)/g)
+      maskedHelperSource.match(/outerPreparationFailures\.append\s*\(\s*\)/g)
     ).toHaveLength(22);
     expect(
-      maskedHelperSource.match(/outerRestagingFailures\.append\(\s*\)/g)
+      maskedHelperSource.match(/outerRestagingFailures\.append\s*\(\s*\)/g)
     ).toHaveLength(6);
     expect(maskedHelperSource).toContain(
       "outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)"
@@ -1506,7 +1602,7 @@ releaseTabbedAlternative()
     expect(maskedHelperSource).toContain("elapsedMilliseconds:");
     expect(maskedHelperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
     expect(maskedHelperSource).toContain("minimumAcceptedSampleIntervalMilliseconds = 90");
-    expect(source).toContain(
+    expect(maskedSource).toContain(
       "private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 30_000"
     );
     expect(maskedHelperSource).toContain(
@@ -1536,13 +1632,13 @@ releaseTabbedAlternative()
       "HostedNativeInnerScrollAction"
     );
     expect(innerScrollActionCalls).toHaveLength(3);
-    expect(innerScrollActionCalls[0]).toContain(
-      `mechanism: ${swiftLiteralToken('"public-xcui-coordinate-scroll-delta"')}`
-    );
+    expect(
+      extractSwiftTopLevelArgumentValues(innerScrollActionCalls[0], "mechanism")
+    ).toEqual([swiftLiteralToken('"public-xcui-coordinate-scroll-delta"')]);
     for (const actionCall of innerScrollActionCalls.slice(1)) {
-      expect(actionCall).toContain(
-        `mechanism: ${swiftLiteralToken('"public-xcui-scrollbar-thumb-drag"')}`
-      );
+      expect(extractSwiftTopLevelArgumentValues(actionCall, "mechanism")).toEqual([
+        swiftLiteralToken('"public-xcui-scrollbar-thumb-drag"'),
+      ]);
     }
     expect(maskedHelperSource.match(/normalizedTargetValue: 1/g)).toHaveLength(2);
     expect(maskedHelperSource).toContain("sourcePoint: firstDragTarget.sourcePoint");
@@ -1691,9 +1787,9 @@ releaseTabbedAlternative()
       "HostedNativeInnerScrollAction"
     );
     expect(hoverActionCalls).toHaveLength(1);
-    expect(hoverActionCalls[0]).toContain(
-      `mechanism: ${swiftLiteralToken('"public-xcui-coordinate-hover"')}`
-    );
+    expect(
+      extractSwiftTopLevelArgumentValues(hoverActionCalls[0], "mechanism")
+    ).toEqual([swiftLiteralToken('"public-xcui-coordinate-hover"')]);
     expect(maskedHoverPreparationSource).toContain("for _ in 0..<maximumSampleAttempts");
     expect(maskedHoverPreparationSource).toContain("observedSamples.append(sample)");
     expect(maskedHoverPreparationSource).toContain("if samples.count == 3 { break }");
@@ -2082,12 +2178,25 @@ releaseTabbedAlternative()
     const maskedSettingsTestSource = maskSwiftCommentsAndLiterals(settingsTestSource);
     expect(maskedSettingsTestSource).toContain("schemaVersion: 2");
     expect(maskedSource).toContain("HostedContentSize(width: 560, height: 700)");
-    expect(source).toContain(
-      'HostedSettingsTextSizeRequest(textSizeMode: "runner-default-no-test-override", textSizeArgument: nil)'
+    const settingsTextSizeCalls = extractBalancedSwiftCallTokens(
+      settingsTestSource,
+      "HostedSettingsTextSizeRequest"
     );
-    expect(source).toContain(
-      'HostedSettingsTextSizeRequest(textSizeMode: "swiftui-dynamic-type-accessibility3-test-override", textSizeArgument: "accessibility3")'
-    );
+    expect(settingsTextSizeCalls).toHaveLength(2);
+    expect(
+      extractSwiftTopLevelArgumentValues(settingsTextSizeCalls[0], "textSizeMode")
+    ).toEqual([swiftLiteralToken('"runner-default-no-test-override"')]);
+    expect(
+      extractSwiftTopLevelArgumentValues(settingsTextSizeCalls[0], "textSizeArgument")
+    ).toEqual(["nil"]);
+    expect(
+      extractSwiftTopLevelArgumentValues(settingsTextSizeCalls[1], "textSizeMode")
+    ).toEqual([
+      swiftLiteralToken('"swiftui-dynamic-type-accessibility3-test-override"'),
+    ]);
+    expect(
+      extractSwiftTopLevelArgumentValues(settingsTextSizeCalls[1], "textSizeArgument")
+    ).toEqual([swiftLiteralToken('"accessibility3"')]);
     expect(swiftXCUIActions(settingsTestSource)).toEqual([]);
     expect(source).toContain('"neondiff-settings-evaluation-container"');
     expect(source).toContain('"neondiff.evaluation.settings.quiescent"');
