@@ -650,6 +650,28 @@ releaseTabbedAlternative()
       "path = UITests/Fixtures/hosted-inner-scroll-overflow.json"
     );
     expect(project.match(/hosted-inner-scroll-overflow\.json in Resources/g)).toHaveLength(2);
+    const appResources = project.match(
+      /A10000000000000000000032 \/\* Resources \*\/ = \{[\s\S]*?\n\t\t\};/
+    )?.[0];
+    const uiTestResources = project.match(
+      /A10000000000000000000035 \/\* Resources \*\/ = \{[\s\S]*?\n\t\t\};/
+    )?.[0];
+    const appTarget = project.match(
+      /A10000000000000000000010 \/\* NeonDiffDesktop \*\/ = \{[\s\S]*?\n\t\t\};/
+    )?.[0];
+    const uiTestTarget = project.match(
+      /A10000000000000000000011 \/\* NeonDiffDesktopUITests \*\/ = \{[\s\S]*?\n\t\t\};/
+    )?.[0];
+    expect(appResources).toBeDefined();
+    expect(uiTestResources).toBeDefined();
+    expect(appTarget).toContain("A10000000000000000000032 /* Resources */");
+    expect(appTarget).not.toContain("A10000000000000000000035 /* Resources */");
+    expect(uiTestTarget).toContain("A10000000000000000000035 /* Resources */");
+    expect(uiTestTarget).not.toContain("A10000000000000000000032 /* Resources */");
+    expect(appResources).not.toContain("hosted-inner-scroll-overflow.json in Resources");
+    expect(uiTestResources).toContain(
+      "A1000000000000000000006A /* hosted-inner-scroll-overflow.json in Resources */"
+    );
     expect(
       readFileSync("apps/neondiff-desktop/fixtures/ui/catalog.json", "utf8")
     ).not.toContain("hosted-inner-scroll-overflow");
@@ -664,6 +686,7 @@ releaseTabbedAlternative()
     expect(source).toContain('"synthetic-org/repo-040"');
     expect(source).toContain('"HOSTED_INNER_SCROLL_SAFE_TAIL_070"');
     expect(source).toContain("HostedNativeInnerScrollTrace(");
+    expect(source).toContain("schemaVersion: 2");
     expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
     expect(source).toContain(
       'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
@@ -683,10 +706,31 @@ releaseTabbedAlternative()
     expect(helperSource).toContain("scrollBars");
     expect(helperSource).toContain("normalizedScrollValue");
     expect(helperSource).toContain("preTerminalValue < 1");
-    expect(helperSource).toContain("terminalValue == 1");
-    expect(helperSource).toContain("repeatTerminalValue == terminalValue");
+    expect(helperSource).toContain(
+      "terminalSamples.allSatisfy({ $0.normalizedScrollValue == 1 })"
+    );
+    expect(helperSource).toContain(
+      "repeatTerminalSamples.allSatisfy({ $0.normalizedScrollValue == terminalValue })"
+    );
+    expect(helperSource).toContain("elapsedMilliseconds:");
+    expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
+    expect(helperSource).toContain("minimumAcceptedSampleIntervalMilliseconds = 90");
+    expect(helperSource.match(/captureStableNativeInnerScrollSamples\s*\(/g)).toHaveLength(2);
+    expect(helperSource).toContain("terminalSamples");
+    expect(helperSource).toContain("repeatTerminalSamples");
+    expect(helperSource).toContain("effectObserved: true");
+    expect(helperSource).toContain("effectObserved: false");
+    expect(helperSource.match(/effectProven: true/g)).toHaveLength(2);
+    expect(helperSource).toContain("terminalRowFrame");
+    expect(helperSource).toContain("terminalRowFullyContained");
+    const settledHelperSource = extractBalancedSwiftDeclaration(
+      source,
+      "private func captureStableNativeInnerScrollSamples("
+    );
+    expect(settledHelperSource).toContain("for _ in 0..<3");
+    expect(settledHelperSource).toContain(">= minimumAcceptedSampleIntervalMilliseconds");
+    expect(settledHelperSource).toContain("nativeInnerScrollSamplesMatch");
     expect(helperSource).toContain("outerSentinelFrame");
-    expect(helperSource).toContain("try requireFullyContained(");
     expect(helperSource).not.toMatch(
       /AXUIElement|CGEvent|NSEvent|XCUIRemote|performAction|setAttributeValue/
     );
