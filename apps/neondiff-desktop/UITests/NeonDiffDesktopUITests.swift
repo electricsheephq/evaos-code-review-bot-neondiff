@@ -2704,19 +2704,19 @@ final class NeonDiffDesktopUITests: XCTestCase {
 
         let targetX: Double
         let targetY: Double
-        if max(topCorridorHeight, bottomCorridorHeight) > 0 {
+        if leftCorridorMaximumX > minimumOuterX {
+            targetX = leftCorridorMaximumX
+            targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
+        } else if maximumOuterX > rightCorridorMinimumX {
+            targetX = rightCorridorMinimumX
+            targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
+        } else if max(topCorridorHeight, bottomCorridorHeight) > 0 {
             targetX = outerScrollFrame.x + (outerScrollFrame.width / 2)
             if topCorridorHeight >= bottomCorridorHeight {
                 targetY = (minimumOuterY + topCorridorMaximumY) / 2
             } else {
                 targetY = (bottomCorridorMinimumY + maximumOuterY) / 2
             }
-        } else if leftCorridorMaximumX > minimumOuterX {
-            targetX = (minimumOuterX + leftCorridorMaximumX) / 2
-            targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
-        } else if maximumOuterX > rightCorridorMinimumX {
-            targetX = (rightCorridorMinimumX + maximumOuterX) / 2
-            targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
         } else {
             throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
         }

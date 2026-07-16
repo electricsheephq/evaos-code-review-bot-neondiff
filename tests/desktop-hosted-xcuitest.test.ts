@@ -1291,6 +1291,21 @@ releaseTabbedAlternative()
       "targetX = outerScrollFrame.x + (outerScrollFrame.width / 2)"
     );
     expect(restagingCoordinateSource).toContain(
+      "targetX = leftCorridorMaximumX"
+    );
+    expect(restagingCoordinateSource).toContain(
+      "targetX = rightCorridorMinimumX"
+    );
+    expect(
+      restagingCoordinateSource.indexOf(
+        "if leftCorridorMaximumX > minimumOuterX"
+      )
+    ).toBeLessThan(
+      restagingCoordinateSource.indexOf(
+        "else if max(topCorridorHeight, bottomCorridorHeight) > 0"
+      )
+    );
+    expect(restagingCoordinateSource).toContain(
       "throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate"
     );
     const nativeVisibilityParserSource = extractBalancedSwiftDeclaration(
