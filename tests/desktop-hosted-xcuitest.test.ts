@@ -686,7 +686,6 @@ releaseTabbedAlternative()
     expect(source).toContain('"synthetic-org/repo-040"');
     expect(source).toContain('"HOSTED_INNER_SCROLL_SAFE_TAIL_070"');
     expect(source).toContain("HostedNativeInnerScrollTrace(");
-    expect(source).toContain("schemaVersion: 2");
     expect(source).toContain("neondiff-hosted-native-inner-scroll.json");
     expect(source).toContain(
       'proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-native-inner-scroll-first-terminal-repeat-no-effect-and-outer-page-isolation-at-1040x680-only-manual-trackpad-keyboard-voiceover-focus-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
@@ -696,6 +695,7 @@ releaseTabbedAlternative()
       source,
       "func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage("
     );
+    expect(scenarioSource).toContain("schemaVersion: 2");
     expect(scenarioSource.match(/captureNativeInnerScrollExhaustion\s*\(/g)).toHaveLength(2);
     expect(scenarioSource.match(/capturePageBottomCheckpoint\s*\(/g)).toHaveLength(2);
     const helperSource = extractBalancedSwiftDeclaration(
