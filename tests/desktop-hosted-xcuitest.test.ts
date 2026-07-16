@@ -46,6 +46,73 @@ function extractBalancedSwiftDeclaration(
   throw new Error(`Unbalanced Swift declaration body: ${declaration}`);
 }
 
+function projectSwiftReleaseSource(source: string): string {
+  const lines = source.match(/.*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const frames: Array<{
+    kind: "debug" | "other";
+    parentIncluded: boolean;
+    debugBranchIncluded?: boolean;
+  }> = [];
+  const projected: string[] = [];
+  let included = true;
+
+  for (const line of lines) {
+    const directive = line.trim();
+    if (directive === "#if DEBUG" || directive === "#if !DEBUG") {
+      const debugBranchIncluded = directive === "#if !DEBUG";
+      frames.push({
+        kind: "debug",
+        parentIncluded: included,
+        debugBranchIncluded,
+      });
+      included = included && debugBranchIncluded;
+      continue;
+    }
+    if (directive.startsWith("#if ")) {
+      frames.push({ kind: "other", parentIncluded: included });
+      if (included) projected.push(line);
+      continue;
+    }
+    if (directive === "#else") {
+      const frame = frames.at(-1);
+      if (!frame) throw new Error("Unmatched Swift #else");
+      if (frame.kind === "debug") {
+        frame.debugBranchIncluded = !frame.debugBranchIncluded;
+        included = frame.parentIncluded && frame.debugBranchIncluded;
+      } else {
+        included = frame.parentIncluded;
+        if (included) projected.push(line);
+      }
+      continue;
+    }
+    if (directive.startsWith("#elseif ")) {
+      const frame = frames.at(-1);
+      if (!frame) throw new Error("Unmatched Swift #elseif");
+      if (frame.kind === "debug") {
+        const releaseBranch = directive === "#elseif !DEBUG";
+        frame.debugBranchIncluded = releaseBranch;
+        included = frame.parentIncluded && releaseBranch;
+      } else if (included) {
+        projected.push(line);
+      }
+      continue;
+    }
+    if (directive === "#endif") {
+      const frame = frames.pop();
+      if (!frame) throw new Error("Unmatched Swift #endif");
+      included = frame.parentIncluded;
+      if (frame.kind === "other" && included) projected.push(line);
+      continue;
+    }
+    if (included) projected.push(line);
+  }
+
+  if (frames.length !== 0) {
+    throw new Error("Unterminated Swift conditional compilation block");
+  }
+  return projected.join("");
+}
+
 function maskSwiftCommentsAndLiterals(source: string): string {
   const masked = [...source];
   let index = 0;
@@ -833,7 +900,26 @@ private func target() {
     expect(settings).toContain("visibleScreenFrame: visibleScreenFrame");
     expect(settings).toContain("window.convertToScreen(");
     expect(settings).toContain("status.markQuiescent(samples: stableSamples)");
-    expect(settings).toContain("#if DEBUG");
+    expect(settings).toContain("if let baseline = stableSamples.first");
+    expect(settings).not.toContain("if let previous = stableSamples.last");
+    const releaseSettings = projectSwiftReleaseSource(settings);
+    for (const debugOnlySetting of [
+      "HostedSettingsWindowConfigurator",
+      "HostedSettingsEvaluationStatus",
+      "HostedSettingsGeometryAccessibilityChunk",
+      "neondiff.evaluation.settings.quiescent",
+      "neondiff-settings-evaluation-container",
+      "neondiff.evaluation.settings.text-size",
+      "neondiff.evaluation.settings.appkit-geometry",
+      "geometryAccessibilityManifest",
+      "geometryAccessibilityChunks",
+    ]) {
+      expect(releaseSettings).not.toContain(debugOnlySetting);
+    }
+    const releaseApp = projectSwiftReleaseSource(app);
+    expect(releaseApp).not.toContain("HostedSettingsEvaluationStatus");
+    expect(releaseApp).not.toContain("settingsEvaluationStatus");
+    expect(releaseApp).not.toContain(".hostedSettingsEvaluationContent(");
   });
 
   it("runs xcodebuild at the exact head and always uploads the immutable xcresult", () => {

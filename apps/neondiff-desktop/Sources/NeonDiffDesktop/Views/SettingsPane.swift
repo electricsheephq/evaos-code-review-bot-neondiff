@@ -237,8 +237,8 @@ struct HostedSettingsWindowConfigurator: NSViewRepresentable {
                         ),
                         visibleScreenFrame: visibleScreenFrame
                     )
-                    if let previous = stableSamples.last,
-                       previous.differs(from: sample, byMoreThan: 1) {
+                    if let baseline = stableSamples.first,
+                       baseline.differs(from: sample, byMoreThan: 1) {
                         stableSamples = [sample]
                     } else {
                         stableSamples.append(sample)
