@@ -536,6 +536,31 @@ function findSwiftConstructorIndirections(
   return findings;
 }
 
+function findSwiftNameBindings(source: string, name: string): string[] {
+  const executable = projectSwiftExecutableTokens(source);
+  const escapedName = escapeRegExp(name);
+  const token = `(?:\`${escapedName}\`|${escapedName})`;
+  const patterns = [
+    new RegExp(
+      `\\b(?:class|struct|enum|actor|protocol|typealias|associatedtype|func|let|var)\\s+${token}\\b`,
+      "gu"
+    ),
+    new RegExp(
+      `\\b(?:let|var)\\s*\\([^)]*\\b${escapedName}\\b[^)]*\\)`,
+      "gu"
+    ),
+    new RegExp(
+      `\\b(?:case|if|guard|while|for)\\s+(?:(?:let|var)\\s+)?${token}\\b`,
+      "gu"
+    ),
+    new RegExp(`\\{\\s*${token}\\s+in\\b`, "gu"),
+    new RegExp(`(?:\\(|,)\\s*${token}\\s*:`, "gu"),
+  ];
+  return patterns.flatMap((pattern) =>
+    [...executable.matchAll(pattern)].map((match) => match[0])
+  );
+}
+
 function swiftMemberAccesses(source: string, receiver: string): string[] {
   const executable = projectSwiftExecutableTokens(source);
   const pattern = new RegExp(
@@ -573,11 +598,21 @@ function expectSwiftProofAttachmentEmission(
   expectedName: string
 ): void {
   const executable = projectSwiftExecutableTokens(source);
-  const encoderCalls = extractBalancedSwiftCallTokens(source, "JSONEncoder");
-  const attachmentCalls = extractBalancedSwiftCallTokens(source, "XCTAttachment");
+  const encoderCalls = extractBalancedSwiftCallTokens(
+    source,
+    "Foundation.JSONEncoder"
+  );
+  const attachmentCalls = extractBalancedSwiftCallTokens(
+    source,
+    "XCTAttachment"
+  );
 
   expect(encoderCalls).toHaveLength(1);
-  expect(executable.match(/\blet\s+encoder\s*=\s*JSONEncoder\s*\(\s*\)/g))
+  expect(
+    executable.match(
+      /\blet\s+encoder\s*=\s*Foundation\s*\.\s*JSONEncoder\s*\(\s*\)/g
+    )
+  )
     .toHaveLength(1);
   expect(swiftAssignmentValues(source, "encoder", "outputFormatting")).toEqual([
     "[.prettyPrinted, .sortedKeys]",
@@ -774,6 +809,18 @@ outerPreparationFailures.append("right")
       "HostedNativeInnerScrollAction.self",
       "(HostedNativeInnerScrollAction)(",
     ]);
+    expect(
+      findSwiftNameBindings(
+        "enum Foundation { static func JSONEncoder() {} }",
+        "Foundation"
+      )
+    ).not.toEqual([]);
+    expect(
+      findSwiftNameBindings(
+        "func XCTAttachment(data: Data) {}",
+        "XCTAttachment"
+      )
+    ).not.toEqual([]);
     const nestedArgumentProbe = extractBalancedSwiftCallTokens(
       String.raw`HostedNativeInnerScrollAction(
   nested: (mechanism: "decoy"),
@@ -1059,9 +1106,12 @@ releaseTabbedAlternative()
         "HostedNativeInnerScrollAction",
         "HostedSettingsTextSizeRequest",
         "HostedSettingsSceneTrace",
+        "Foundation.JSONEncoder",
         "XCTAttachment",
       ])
     ).toEqual([]);
+    expect(findSwiftNameBindings(source, "Foundation")).toEqual([]);
+    expect(findSwiftNameBindings(source, "XCTAttachment")).toEqual([]);
 
     expect(maskedSource).toContain(
       "testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize"

@@ -3880,7 +3880,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func attach(_ trace: HostedSettledGeometryTrace) throws {
-        let encoder = JSONEncoder()
+        let encoder = Foundation.JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let attachment = XCTAttachment(
             data: try encoder.encode(trace),
@@ -3904,7 +3904,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func attach(_ trace: HostedNativeInnerScrollTrace) throws {
-        let encoder = JSONEncoder()
+        let encoder = Foundation.JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let attachment = XCTAttachment(
             data: try encoder.encode(trace),
@@ -3964,7 +3964,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func attach(_ trace: HostedSettingsSceneTrace) throws {
-        let encoder = JSONEncoder()
+        let encoder = Foundation.JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let attachment = XCTAttachment(
             data: try encoder.encode(trace),
