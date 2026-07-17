@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { Buffer } from "node:buffer";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const projectPath = "apps/neondiff-desktop/NeonDiffDesktop.xcodeproj/project.pbxproj";
@@ -8,6 +8,7 @@ const schemePath =
   "apps/neondiff-desktop/NeonDiffDesktop.xcodeproj/xcshareddata/xcschemes/NeonDiffDesktopHosted.xcscheme";
 const testPlanPath = "apps/neondiff-desktop/NeonDiffDesktop.xctestplan";
 const uiTestPath = "apps/neondiff-desktop/UITests/NeonDiffDesktopUITests.swift";
+const uiTestRoot = "apps/neondiff-desktop/UITests";
 const themePath =
   "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/NeonDiffTheme.swift";
 const appPath =
@@ -55,6 +56,19 @@ function extractBalancedSwiftDeclaration(
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function readSwiftSourcesRecursively(
+  root: string
+): Array<{ path: string; source: string }> {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${root}/${entry.name}`;
+    if (entry.isDirectory()) return readSwiftSourcesRecursively(path);
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".swift")) {
+      return [];
+    }
+    return [{ path, source: readFileSync(path, "utf8") }];
+  });
 }
 
 function extractPbxObject(source: string, objectId: string, comment: string): string {
@@ -1092,6 +1106,7 @@ releaseTabbedAlternative()
 
   it("covers every sidebar destination in one minimum-size settled circuit", () => {
     const source = readFileSync(uiTestPath, "utf8");
+    const uiTestSwiftSources = readSwiftSourcesRecursively(uiTestRoot);
     const maskedSource = maskSwiftCommentsAndLiterals(source);
     const logs = readFileSync(
       "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/LogsView.swift",
@@ -1111,8 +1126,22 @@ releaseTabbedAlternative()
         "XCTAttachment",
       ])
     ).toEqual([]);
-    expect(findSwiftNameBindings(source, "Foundation")).toEqual([]);
-    expect(findSwiftNameBindings(source, "XCTAttachment")).toEqual([]);
+    expect(uiTestSwiftSources.map(({ path }) => path)).toEqual(
+      expect.arrayContaining([
+        "apps/neondiff-desktop/UITests/ActivationHandoffUITests.swift",
+        uiTestPath,
+      ])
+    );
+    for (const { path, source: uiTestSource } of uiTestSwiftSources) {
+      expect(
+        findSwiftNameBindings(uiTestSource, "Foundation"),
+        `Foundation shadow in ${path}`
+      ).toEqual([]);
+      expect(
+        findSwiftNameBindings(uiTestSource, "XCTAttachment"),
+        `XCTAttachment shadow in ${path}`
+      ).toEqual([]);
+    }
 
     expect(maskedSource).toContain(
       "testStrictFixtureSettlesAcrossEverySidebarSectionAtMinimumSize"
