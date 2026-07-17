@@ -1421,6 +1421,7 @@ releaseTabbedAlternative()
     expect(executableRepos).toContain(
       `.accessibilityIdentifier(${swiftLiteralToken('"neondiff-repos-table"')})`
     );
+    expect(executableRepos).toContain(".accessibilityLabel(repo.name)");
     expect(maskedLogs).toContain(
       `.accessibilityIdentifier(${swiftLiteralToken('"neondiff-logs-text-editor"')})`
     );

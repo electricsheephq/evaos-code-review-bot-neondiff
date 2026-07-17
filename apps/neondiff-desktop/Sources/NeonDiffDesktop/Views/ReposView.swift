@@ -169,6 +169,7 @@ struct ReposView: View {
                     TableColumn("Repository") { repo in
                         Text(repo.name)
                             .textSelection(.enabled)
+                            .accessibilityLabel(repo.name)
                     }
                     TableColumn("Enabled") { repo in
                         Button { model.toggleRepoAllowlist(repo) } label: {
