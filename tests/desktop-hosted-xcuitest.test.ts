@@ -1421,7 +1421,7 @@ releaseTabbedAlternative()
     expect(executableRepos).toContain(
       `.accessibilityIdentifier(${swiftLiteralToken('"neondiff-repos-table"')})`
     );
-    expect(executableRepos).toContain(".accessibilityLabel(repo.name)");
+    expect(executableRepos).toContain(".accessibilityIdentifier(repo.name)");
     expect(maskedLogs).toContain(
       `.accessibilityIdentifier(${swiftLiteralToken('"neondiff-logs-text-editor"')})`
     );
@@ -2115,6 +2115,10 @@ releaseTabbedAlternative()
     expect(maskedHelperSource).toContain("terminalRowFrame");
     expect(maskedHelperSource).toContain("terminalRowFullyContained");
     expect(maskedHelperSource).toContain("terminalRowElementType");
+    expect(maskedSource).toMatch(
+      /control\.staticTexts\.matching\(\s*identifier:\s*terminalVisibleText\s*\)/
+    );
+    expect(maskedSource).not.toContain("NSPredicate(format:");
     expect(maskedHelperSource).toContain("terminalVisibilityMarkerQuery.count != 0");
     expect(maskedHelperSource).toContain(
       "terminalVisibilityMarkerPresentBeforeTerminal("

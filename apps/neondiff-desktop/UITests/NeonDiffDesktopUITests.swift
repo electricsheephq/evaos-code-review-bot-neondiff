@@ -2932,7 +2932,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         var terminalRowFrame: HostedGeometryFrame?
         if captureTerminalContent, let terminalVisibleText {
             let terminalQuery = control.staticTexts.matching(
-                NSPredicate(format: "label == %@", terminalVisibleText)
+                identifier: terminalVisibleText
             )
             if terminalQuery.count == 1 {
                 terminalElementFrame = HostedGeometryFrame(
