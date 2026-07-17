@@ -568,6 +568,51 @@ function swiftAssignmentValues(
   return [...executable.matchAll(pattern)].map((match) => match[1].trim());
 }
 
+function expectSwiftProofAttachmentEmission(
+  source: string,
+  expectedName: string
+): void {
+  const executable = projectSwiftExecutableTokens(source);
+  const encoderCalls = extractBalancedSwiftCallTokens(source, "JSONEncoder");
+  const attachmentCalls = extractBalancedSwiftCallTokens(source, "XCTAttachment");
+
+  expect(encoderCalls).toHaveLength(1);
+  expect(executable.match(/\blet\s+encoder\s*=\s*JSONEncoder\s*\(\s*\)/g))
+    .toHaveLength(1);
+  expect(swiftAssignmentValues(source, "encoder", "outputFormatting")).toEqual([
+    "[.prettyPrinted, .sortedKeys]",
+  ]);
+  expect(executable.match(/\bencoder\b/g)).toHaveLength(3);
+
+  expect(attachmentCalls).toHaveLength(1);
+  expect(extractSwiftTopLevelArgumentValues(attachmentCalls[0], "data")).toEqual([
+    "try encoder.encode(trace)",
+  ]);
+  expect(
+    extractSwiftTopLevelArgumentValues(
+      attachmentCalls[0],
+      "uniformTypeIdentifier"
+    )
+  ).toEqual([swiftLiteralToken('"public.json"')]);
+  expect(swiftAssignmentValues(source, "attachment", "name")).toEqual([
+    swiftLiteralToken(`"${expectedName}"`),
+  ]);
+  expect(swiftAssignmentValues(source, "attachment", "lifetime")).toEqual([
+    ".keepAlways",
+  ]);
+  expect(
+    extractBalancedSwiftCallTokens(source, "add").map(
+      (call) => call.slice(call.indexOf("(") + 1, -1).trim()
+    )
+  ).toEqual(["attachment"]);
+  expect(executable).toMatch(
+    /\bself\s*\.\s*(?:`add`|add)\s*\(\s*attachment\s*\)/
+  );
+  expect(executable.match(/(?:`add`|\badd\b)/g)).toHaveLength(1);
+  expect(executable.match(/\b(?:let|var)\s+attachment\b/g)).toHaveLength(1);
+  expect(executable.match(/\battachment\b/g)).toHaveLength(4);
+}
+
 function extractSwiftTopLevelArgumentValues(
   call: string,
   label: string
@@ -774,6 +819,22 @@ outerPreparationFailures.append("right")
       swiftLiteralToken('"expected.json"'),
       swiftLiteralToken('"wrong.json"'),
     ]);
+    expect(() =>
+      expectSwiftProofAttachmentEmission(
+        `private func attach(_ trace: HostedNativeInnerScrollTrace) throws {
+  let encoder = JSONEncoder()
+  encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+  let attachment = XCTAttachment(
+    data: Data(),
+    uniformTypeIdentifier: "public.json"
+  )
+  attachment.name = "neondiff-hosted-native-inner-scroll.json"
+  attachment.lifetime = .keepAlways
+  self.add(attachment)
+}`,
+        "neondiff-hosted-native-inner-scroll.json"
+      )
+    ).toThrow();
   });
 
   it("projects DEBUG branches out of release source without directive decoys", () => {
@@ -998,6 +1059,7 @@ releaseTabbedAlternative()
         "HostedNativeInnerScrollAction",
         "HostedSettingsTextSizeRequest",
         "HostedSettingsSceneTrace",
+        "XCTAttachment",
       ])
     ).toEqual([]);
 
@@ -1051,6 +1113,10 @@ releaseTabbedAlternative()
     const settledGeometryAttachSource = extractBalancedSwiftDeclaration(
       source,
       "private func attach(_ trace: HostedSettledGeometryTrace)"
+    );
+    expectSwiftProofAttachmentEmission(
+      settledGeometryAttachSource,
+      "neondiff-hosted-settled-geometry.json"
     );
     expect(swiftAssignmentValues(
       settledGeometryAttachSource,
@@ -1365,6 +1431,10 @@ releaseTabbedAlternative()
     const nativeTraceAttachSource = extractBalancedSwiftDeclaration(
       source,
       "private func attach(_ trace: HostedNativeInnerScrollTrace)"
+    );
+    expectSwiftProofAttachmentEmission(
+      nativeTraceAttachSource,
+      "neondiff-hosted-native-inner-scroll.json"
     );
     expect(swiftAssignmentValues(
       nativeTraceAttachSource,
@@ -2533,6 +2603,10 @@ releaseTabbedAlternative()
     const settingsTraceAttachSource = extractBalancedSwiftDeclaration(
       source,
       "private func attach(_ trace: HostedSettingsSceneTrace)"
+    );
+    expectSwiftProofAttachmentEmission(
+      settingsTraceAttachSource,
+      "neondiff-hosted-settings-scene.json"
     );
     expect(swiftAssignmentValues(
       settingsTraceAttachSource,
