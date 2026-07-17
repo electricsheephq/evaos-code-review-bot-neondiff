@@ -29,6 +29,27 @@ struct DesktopEvaluationStateTests {
         ) == DesktopWindowContentSize(width: 760, height: 560))
     }
 
+    @Test func keepsEvaluationWindowTrailingEdgeOnTheHostedDisplay() {
+        #expect(DesktopWindowGeometryPolicy.evaluationWindowHorizontalOrigin(
+            visibleMinimumX: 0,
+            visibleMaximumX: 1024,
+            windowWidth: 1040,
+            preferredInset: 80
+        ) == -16)
+        #expect(DesktopWindowGeometryPolicy.evaluationWindowHorizontalOrigin(
+            visibleMinimumX: 0,
+            visibleMaximumX: 1440,
+            windowWidth: 1040,
+            preferredInset: 80
+        ) == 80)
+        #expect(DesktopWindowGeometryPolicy.evaluationWindowHorizontalOrigin(
+            visibleMinimumX: 1440,
+            visibleMaximumX: 2560,
+            windowWidth: 1040,
+            preferredInset: 80
+        ) == 1520)
+    }
+
     @Test func appliesASettledProviderFixtureWithoutLiveDependencies() {
         let dependencies = RecordingDesktopDependencies(
             root: fixtureURL("/fixture/evaluation", directory: true)

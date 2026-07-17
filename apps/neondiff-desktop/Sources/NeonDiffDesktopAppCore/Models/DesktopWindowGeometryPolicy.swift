@@ -26,6 +26,18 @@ public enum DesktopWindowGeometryPolicy {
         )
     }
 
+    public static func evaluationWindowHorizontalOrigin(
+        visibleMinimumX: Double,
+        visibleMaximumX: Double,
+        windowWidth: Double,
+        preferredInset: Double
+    ) -> Double {
+        Swift.min(
+            visibleMinimumX + preferredInset,
+            visibleMaximumX - windowWidth
+        )
+    }
+
     public static func shouldApply(
         current: DesktopWindowContentSize,
         requested: DesktopWindowContentSize,
