@@ -2620,7 +2620,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
               first.innerScrollSample.elapsedMilliseconds - actionElapsedMilliseconds
                   >= minimumAcceptedSampleIntervalMilliseconds,
               durationMilliseconds <= samplingDeadlineMilliseconds else {
-            throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbGeometryNotStable(
                 controlIdentifier
             )
         }
@@ -4870,7 +4870,7 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
     case invalidScrollContainerCount(controlIdentifier: String, count: Int)
     case invalidVerticalScrollBarCount(controlIdentifier: String, count: Int)
     case invalidScrollBarThumbCount(controlIdentifier: String, count: Int)
-    case scrollBarThumbNotInteractable(String)
+    case scrollBarThumbGeometryNotStable(String)
     case hoverPreparationChangedState(String)
     case invalidScrollBarDragGeometry(String)
     case scrollBarThumbDidNotReachTerminal(String)
@@ -4925,8 +4925,8 @@ private enum HostedNativeInnerScrollTraceError: LocalizedError {
         case let .invalidScrollBarThumbCount(controlIdentifier, count):
             "Hosted native vertical scrollbar does not expose exactly one public value indicator: "
                 + "control=\(controlIdentifier) count=\(count)"
-        case .scrollBarThumbNotInteractable(let controlIdentifier):
-            "Hosted native vertical scrollbar thumb is not enabled and hittable: "
+        case .scrollBarThumbGeometryNotStable(let controlIdentifier):
+            "Hosted native vertical scrollbar thumb geometry did not establish a stable sampled window: "
                 + "control=\(controlIdentifier)"
         case .hoverPreparationChangedState(let controlIdentifier):
             "Hosted native scrollbar hover preparation changed inner or outer state: "

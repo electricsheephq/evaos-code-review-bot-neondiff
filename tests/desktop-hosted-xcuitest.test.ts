@@ -2279,6 +2279,13 @@ releaseTabbedAlternative()
       "finalChain = reboundChain"
     );
     expect(maskedHoverPreparationSource).toContain(
+      "throw HostedNativeInnerScrollTraceError.scrollBarThumbGeometryNotStable"
+    );
+    expect(source).not.toContain("scrollBarThumbNotInteractable");
+    expect(source).toContain(
+      '"Hosted native vertical scrollbar thumb geometry did not establish a stable sampled window: "'
+    );
+    expect(maskedHoverPreparationSource).toContain(
       "nativeInnerScrollSamplesMatch(baselineSample, innerScrollSample)"
     );
     expect(maskedHoverPreparationSource).toContain(
