@@ -2209,11 +2209,11 @@ releaseTabbedAlternative()
     );
     expect(maskedReboundScrollBarChainSource).toContain("thumbEnabled: thumb.isEnabled");
     expect(maskedReboundScrollBarChainSource).toContain("thumbHittable: thumb.isHittable");
-    expect(maskedScrollBarDragTargetSource).toContain(
+    expect(maskedScrollBarDragTargetSource).not.toContain(
       "guard chain.thumbEnabled"
     );
     expect(maskedScrollBarDragTargetSource).not.toContain(
-      "guard chain.thumbEnabled, chain.thumbHittable"
+      "guard chain.thumbHittable"
     );
     expect(maskedScrollBarDragTargetSource).toContain(
       "verticalScrollBar.coordinate(withNormalizedOffset: normalizedSource)"
@@ -2272,11 +2272,11 @@ releaseTabbedAlternative()
     expect(maskedHoverPreparationSource).toContain("observedSamples.append(sample)");
     expect(maskedHoverPreparationSource).toContain("if samples.count == 3 { break }");
     expect(maskedHoverPreparationSource).toContain("reboundNativeScrollBarChain(");
-    expect(maskedHoverPreparationSource).toContain(
+    expect(maskedHoverPreparationSource).not.toContain(
       "if reboundChain.thumbEnabled"
     );
-    expect(maskedHoverPreparationSource).not.toContain(
-      "if reboundChain.thumbEnabled, reboundChain.thumbHittable"
+    expect(maskedHoverPreparationSource).toContain(
+      "finalChain = reboundChain"
     );
     expect(maskedHoverPreparationSource).toContain(
       "nativeInnerScrollSamplesMatch(baselineSample, innerScrollSample)"

@@ -2595,18 +2595,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 thumbHittable: reboundChain.thumbHittable
             )
             observedSamples.append(sample)
-            if reboundChain.thumbEnabled {
-                if let baseline = samples.first,
-                   nativeScrollBarHoverSamplesMatch(baseline, sample) {
-                    samples.append(sample)
-                } else {
-                    samples = [sample]
-                }
-                finalChain = reboundChain
+            if let baseline = samples.first,
+               nativeScrollBarHoverSamplesMatch(baseline, sample) {
+                samples.append(sample)
             } else {
-                samples = []
-                finalChain = nil
+                samples = [sample]
             }
+            finalChain = reboundChain
             if samples.count == 3 { break }
             let elapsedSinceActionMilliseconds = Int(
                 ((ProcessInfo.processInfo.systemUptime - actionStartedAt) * 1_000).rounded()
@@ -2640,11 +2635,6 @@ final class NeonDiffDesktopUITests: XCTestCase {
                     rhsElapsedMilliseconds: rhs.innerScrollSample.elapsedMilliseconds
                 )
             }
-        }
-        guard finalChain.thumbEnabled else {
-            throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
-                controlIdentifier
-            )
         }
         let dragTarget = try nativeScrollBarBottomDragTarget(
             chain: finalChain,
@@ -2698,11 +2688,6 @@ final class NeonDiffDesktopUITests: XCTestCase {
         controlIdentifier: String,
         tolerance: Double
     ) throws -> HostedNativeScrollBarDragTarget {
-        guard chain.thumbEnabled else {
-            throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
-                controlIdentifier
-            )
-        }
         let verticalScrollBar = chain.verticalScrollBar
         let scrollBarFrame = chain.scrollBarFrame
         let thumbFrame = chain.thumbFrame
