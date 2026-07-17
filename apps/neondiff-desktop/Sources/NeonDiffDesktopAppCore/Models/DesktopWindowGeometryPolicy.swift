@@ -32,8 +32,14 @@ public enum DesktopWindowGeometryPolicy {
         windowWidth: Double,
         preferredInset: Double
     ) -> Double {
-        Swift.min(
-            visibleMinimumX + preferredInset,
+        let preferredOrigin = visibleMinimumX + preferredInset
+        let visibleWidth = visibleMaximumX - visibleMinimumX
+        let overflow = windowWidth - visibleWidth
+        guard overflow <= preferredInset else {
+            return preferredOrigin
+        }
+        return Swift.min(
+            preferredOrigin,
             visibleMaximumX - windowWidth
         )
     }

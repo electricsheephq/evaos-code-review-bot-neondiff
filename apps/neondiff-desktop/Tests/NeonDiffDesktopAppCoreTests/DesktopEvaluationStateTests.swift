@@ -38,6 +38,12 @@ struct DesktopEvaluationStateTests {
         ) == -16)
         #expect(DesktopWindowGeometryPolicy.evaluationWindowHorizontalOrigin(
             visibleMinimumX: 0,
+            visibleMaximumX: 1024,
+            windowWidth: 1280,
+            preferredInset: 80
+        ) == 80)
+        #expect(DesktopWindowGeometryPolicy.evaluationWindowHorizontalOrigin(
+            visibleMinimumX: 0,
             visibleMaximumX: 1440,
             windowWidth: 1040,
             preferredInset: 80

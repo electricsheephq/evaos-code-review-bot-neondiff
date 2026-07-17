@@ -1966,7 +1966,7 @@ releaseTabbedAlternative()
     expect(maskedHelperSource).toContain("minimumAcceptedSampleIntervalMilliseconds");
     expect(maskedHelperSource).toContain("minimumAcceptedSampleIntervalMilliseconds = 90");
     expect(maskedSource).toContain(
-      "private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 30_000"
+      "private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 45_000"
     );
     expect(maskedHelperSource).toContain(
       "samplingDeadlineMilliseconds = hostedNativeInnerScrollSamplingDeadlineMilliseconds"
