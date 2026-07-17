@@ -63,6 +63,9 @@ function readSwiftSourcesRecursively(
 ): Array<{ path: string; source: string }> {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = `${root}/${entry.name}`;
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Symlink not allowed in synchronized UI-test root: ${path}`);
+    }
     if (entry.isDirectory()) return readSwiftSourcesRecursively(path);
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".swift")) {
       return [];
