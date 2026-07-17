@@ -540,17 +540,18 @@ function findSwiftNameBindings(source: string, name: string): string[] {
   const executable = projectSwiftExecutableTokens(source);
   const escapedName = escapeRegExp(name);
   const token = `(?:\`${escapedName}\`|${escapedName})`;
+  const tokenEnd = `(?![A-Za-z0-9_$]|\\p{ID_Continue})`;
   const patterns = [
     new RegExp(
-      `\\b(?:class|struct|enum|actor|protocol|typealias|associatedtype|func|let|var)\\s+${token}\\b`,
+      `\\b(?:class|struct|enum|actor|protocol|typealias|associatedtype|func|let|var)\\s+${token}${tokenEnd}`,
       "gu"
     ),
     new RegExp(
-      `\\b(?:let|var)\\s*\\([^)]*\\b${escapedName}\\b[^)]*\\)`,
+      `\\b(?:let|var)\\s*\\([^)]*${token}[^)]*\\)`,
       "gu"
     ),
     new RegExp(
-      `\\b(?:case|if|guard|while|for)\\s+(?:(?:let|var)\\s+)?${token}\\b`,
+      `\\b(?:case|if|guard|while|for)\\s+(?:(?:let|var)\\s+)?${token}${tokenEnd}`,
       "gu"
     ),
     new RegExp(`\\{\\s*${token}\\s+in\\b`, "gu"),
@@ -811,7 +812,7 @@ outerPreparationFailures.append("right")
     ]);
     expect(
       findSwiftNameBindings(
-        "enum Foundation { static func JSONEncoder() {} }",
+        "enum `Foundation` { static func JSONEncoder() {} }",
         "Foundation"
       )
     ).not.toEqual([]);
