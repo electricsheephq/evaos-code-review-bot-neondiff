@@ -1508,7 +1508,7 @@ releaseTabbedAlternative()
       extractSwiftTopLevelArgumentValues(traceCalls[0], "proofBoundary")
     ).toEqual([
       swiftLiteralToken(
-        '"hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
+        '"hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-coordinate-drags-from-stable-thumb-geometry-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"'
       ),
     ]);
     const nativeTraceAttachSource = extractBalancedSwiftDeclaration(
@@ -2210,10 +2210,13 @@ releaseTabbedAlternative()
     expect(maskedReboundScrollBarChainSource).toContain("thumbEnabled: thumb.isEnabled");
     expect(maskedReboundScrollBarChainSource).toContain("thumbHittable: thumb.isHittable");
     expect(maskedScrollBarDragTargetSource).toContain(
+      "guard chain.thumbEnabled"
+    );
+    expect(maskedScrollBarDragTargetSource).not.toContain(
       "guard chain.thumbEnabled, chain.thumbHittable"
     );
     expect(maskedScrollBarDragTargetSource).toContain(
-      "thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))"
+      "verticalScrollBar.coordinate(withNormalizedOffset: normalizedSource)"
     );
     expect(maskedScrollBarDragTargetSource).toContain(
       "verticalScrollBar.coordinate(withNormalizedOffset: normalizedDestination)"
@@ -2263,14 +2266,17 @@ releaseTabbedAlternative()
     }
     expect(extractSwiftTopLevelArgumentValues(hoverActionCalls[0], "result"))
       .toEqual([
-        `effectObserved\n                ? ${swiftLiteralToken('"returned-and-hittable-after-passive-settlement"')}\n                : ${swiftLiteralToken('"returned-and-hittability-confirmed-after-passive-settlement"')}`,
+        `effectObserved\n                ? ${swiftLiteralToken('"returned-and-hittable-after-passive-settlement"')}\n                : ${swiftLiteralToken('"returned-and-stable-geometry-confirmed-after-passive-settlement"')}`,
       ]);
     expect(maskedHoverPreparationSource).toContain("for _ in 0..<maximumSampleAttempts");
     expect(maskedHoverPreparationSource).toContain("observedSamples.append(sample)");
     expect(maskedHoverPreparationSource).toContain("if samples.count == 3 { break }");
     expect(maskedHoverPreparationSource).toContain("reboundNativeScrollBarChain(");
     expect(maskedHoverPreparationSource).toContain(
-      "reboundChain.thumbEnabled, reboundChain.thumbHittable"
+      "if reboundChain.thumbEnabled"
+    );
+    expect(maskedHoverPreparationSource).not.toContain(
+      "if reboundChain.thumbEnabled, reboundChain.thumbHittable"
     );
     expect(maskedHoverPreparationSource).toContain(
       "nativeInnerScrollSamplesMatch(baselineSample, innerScrollSample)"

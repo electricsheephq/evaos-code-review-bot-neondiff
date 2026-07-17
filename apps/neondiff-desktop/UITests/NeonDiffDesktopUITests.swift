@@ -430,7 +430,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 innerScrollCheckpoints: [reposInner, logsInner],
                 navigationActions: [logsNavigation],
                 outerPageBottomCheckpoints: [reposOuter, logsOuter],
-                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-thumb-drags-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
+                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-coordinate-drags-from-stable-thumb-geometry-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
             )
         )
     }
@@ -2595,7 +2595,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 thumbHittable: reboundChain.thumbHittable
             )
             observedSamples.append(sample)
-            if reboundChain.thumbEnabled, reboundChain.thumbHittable {
+            if reboundChain.thumbEnabled {
                 if let baseline = samples.first,
                    nativeScrollBarHoverSamplesMatch(baseline, sample) {
                     samples.append(sample)
@@ -2641,7 +2641,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 )
             }
         }
-        guard finalChain.thumbEnabled, finalChain.thumbHittable else {
+        guard finalChain.thumbEnabled else {
             throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
                 controlIdentifier
             )
@@ -2669,7 +2669,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             effectProven: true,
             result: effectObserved
                 ? "returned-and-hittable-after-passive-settlement"
-                : "returned-and-hittability-confirmed-after-passive-settlement"
+                : "returned-and-stable-geometry-confirmed-after-passive-settlement"
         )
         return HostedNativePreparedScrollBarDrag(
             preparation: HostedNativeScrollBarHoverPreparation(
@@ -2698,13 +2698,12 @@ final class NeonDiffDesktopUITests: XCTestCase {
         controlIdentifier: String,
         tolerance: Double
     ) throws -> HostedNativeScrollBarDragTarget {
-        guard chain.thumbEnabled, chain.thumbHittable else {
+        guard chain.thumbEnabled else {
             throw HostedNativeInnerScrollTraceError.scrollBarThumbNotInteractable(
                 controlIdentifier
             )
         }
         let verticalScrollBar = chain.verticalScrollBar
-        let thumb = chain.thumb
         let scrollBarFrame = chain.scrollBarFrame
         let thumbFrame = chain.thumbFrame
 
@@ -2728,11 +2727,21 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 controlIdentifier
             )
         }
+        let normalizedSource = CGVector(
+            dx: (sourcePoint.x - scrollBarFrame.x) / scrollBarFrame.width,
+            dy: (sourcePoint.y - scrollBarFrame.y) / scrollBarFrame.height
+        )
         let normalizedDestination = CGVector(
             dx: (destinationPoint.x - scrollBarFrame.x) / scrollBarFrame.width,
             dy: (destinationPoint.y - scrollBarFrame.y) / scrollBarFrame.height
         )
-        guard normalizedDestination.dx.isFinite,
+        guard normalizedSource.dx.isFinite,
+              normalizedSource.dy.isFinite,
+              normalizedSource.dx >= 0,
+              normalizedSource.dx <= 1,
+              normalizedSource.dy >= 0,
+              normalizedSource.dy <= 1,
+              normalizedDestination.dx.isFinite,
               normalizedDestination.dy.isFinite,
               normalizedDestination.dx >= 0,
               normalizedDestination.dx <= 1,
@@ -2743,7 +2752,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
             )
         }
         return HostedNativeScrollBarDragTarget(
-            sourceCoordinate: thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+            sourceCoordinate: verticalScrollBar.coordinate(withNormalizedOffset: normalizedSource),
             destinationCoordinate: verticalScrollBar.coordinate(withNormalizedOffset: normalizedDestination),
             sourcePoint: sourcePoint,
             destinationPoint: destinationPoint,
