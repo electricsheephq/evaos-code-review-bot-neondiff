@@ -143,39 +143,44 @@ describe("public NeonDiff CLI surface", () => {
       }
     })}\n`);
 
-    let failure: (Error & { code?: number; stdout?: string; stderr?: string }) | undefined;
-    try {
-      await runCliWithStdin([
-        "license",
-        "activate",
-        "--config",
-        configPath,
-        "--license-storage",
-        "keychain",
-        "--license-key-stdin",
-        "true",
-        "--persist-local-state",
-        "false",
-        "--license-machine-id",
-        "broker-device-cli-fixture-123",
-        "--repo",
-        "acme/private",
-        "--json"
-      ], `${key}\n`, { env: activatedLicenseTestEnv() });
-    } catch (error) {
-      failure = error as Error & { code?: number; stdout?: string; stderr?: string };
-    }
-    expect(failure?.code).toBe(1);
-    const output = JSON.parse(failure?.stdout ?? "{}");
+    for (const machineId of [
+      "broker-device-cli-fixture-123",
+      "--broker-device-cli-fixture-123"
+    ]) {
+      let failure: (Error & { code?: number; stdout?: string; stderr?: string }) | undefined;
+      try {
+        await runCliWithStdin([
+          "license",
+          "activate",
+          "--config",
+          configPath,
+          "--license-storage",
+          "keychain",
+          "--license-key-stdin",
+          "true",
+          "--persist-local-state",
+          "false",
+          "--license-machine-id",
+          machineId,
+          "--repo",
+          "acme/private",
+          "--json"
+        ], `${key}\n`, { env: activatedLicenseTestEnv() });
+      } catch (error) {
+        failure = error as Error & { code?: number; stdout?: string; stderr?: string };
+      }
+      expect(failure?.code).toBe(1);
+      const output = JSON.parse(failure?.stdout ?? "{}");
 
-    expect(output).toMatchObject({
-      ok: false,
-      status: "invalid",
-      source: "none",
-      detail: "no-local-state activation requires the matching native Keychain credential"
-    });
-    expect(failure?.stdout).not.toContain(key);
-    expect(failure?.stderr).not.toContain(key);
+      expect(output).toMatchObject({
+        ok: false,
+        status: "invalid",
+        source: "none",
+        detail: "no-local-state activation requires the matching native Keychain credential"
+      });
+      expect(failure?.stdout).not.toContain(key);
+      expect(failure?.stderr).not.toContain(key);
+    }
     expect(existsSync(keyPath)).toBe(false);
     expect(existsSync(cachePath)).toBe(false);
   });

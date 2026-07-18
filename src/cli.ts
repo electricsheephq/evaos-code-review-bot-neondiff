@@ -3631,7 +3631,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     const key = arg.slice(2);
     const next = argv[index + 1];
-    if (next && !next.startsWith("--")) {
+    // RFC 7638 base64url device thumbprints may legitimately begin with "--".
+    // This option is value-bearing, so consume its next token and let the
+    // dedicated validator reject missing or malformed values fail closed.
+    if (next && (!next.startsWith("--") || key === "license-machine-id")) {
       setParsedArg(parsed, key, next, repeatableArgs);
       index += 1;
     } else {
