@@ -20,9 +20,13 @@ primary_region = "iad"  # placeholder — set to wherever the fleet/owner is clo
   LITESTREAM_CONFIG = "/etc/litestream.yml"
   LITESTREAM_SYNC_INTERVAL = "1s"
   LICENSE_LITESTREAM_REQUIRED = "true"
+  GITHUB_BROKER_DB_PATH = "/data/github-broker.sqlite"
+  GITHUB_BROKER_LITESTREAM_CONFIG = "/etc/litestream-broker.yml"
   # LICENSE_REPLICA_URL is intentionally not committed here. The owner sets
   # the object-store replica URL and provider credentials via `flyctl secrets`
   # before production deploy; see docs/disaster-recovery.md.
+  # GITHUB_BROKER_REPLICA_URL is also owner-provisioned and is required before
+  # the separately provisioned GITHUB_BROKER_ENABLED flag may be set to true.
 
 # --- Storage -----------------------------------------------------------------
 # SQLite (node:sqlite, see src/store.ts) is a single-writer embedded file DB.

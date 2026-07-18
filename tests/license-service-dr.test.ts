@@ -1,5 +1,13 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -58,6 +66,11 @@ const legacySchema = `
 
 function readServiceFile(relativePath: string): string {
   return readFileSync(join(licenseApiDir, relativePath), "utf8");
+}
+
+function writeExecutable(path: string, contents: string): void {
+  writeFileSync(path, contents);
+  chmodSync(path, 0o755);
 }
 
 function licenseConfig(root: string, apiBaseUrl: string): LicenseConfig {
@@ -128,6 +141,7 @@ describe("license service disaster recovery wiring", () => {
   it("pins Litestream install, config, and entrypoint to the mounted license database without secrets", () => {
     const dockerfile = readServiceFile("Dockerfile");
     const litestreamConfig = readServiceFile("litestream.yml");
+    const brokerLitestreamConfig = readServiceFile("litestream-broker.yml");
     const entrypoint = readServiceFile("docker-entrypoint.sh");
     const flyConfig = readServiceFile("fly.toml");
 
@@ -135,6 +149,9 @@ describe("license service disaster recovery wiring", () => {
     expect(dockerfile).toContain(litestreamLinuxX64Sha);
     expect(dockerfile).toContain(litestreamLinuxArm64Sha);
     expect(dockerfile).toContain("COPY services/license-api/litestream.yml /etc/litestream.yml");
+    expect(dockerfile).toContain(
+      "COPY services/license-api/litestream-broker.yml /etc/litestream-broker.yml"
+    );
     expect(dockerfile).toContain("COPY services/license-api/docker-entrypoint.sh /usr/local/bin/license-api-entrypoint");
     expect(dockerfile).toContain("chown node:node /data");
     expect(dockerfile).toContain('ENTRYPOINT ["license-api-entrypoint"]');
@@ -145,20 +162,171 @@ describe("license service disaster recovery wiring", () => {
     expect(litestreamConfig).not.toMatch(/^\s*url:\s+(?!\$\{LICENSE_REPLICA_URL\}\s*$).+/m);
     expect(litestreamConfig).not.toMatch(/AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|secret-access-key:\s+\S|account-key:\s+\S/i);
 
+    expect(brokerLitestreamConfig).toContain(`path: \${LICENSE_DB_PATH}`);
+    expect(brokerLitestreamConfig).toContain("url: ${LICENSE_REPLICA_URL}");
+    expect(brokerLitestreamConfig).toContain(`path: \${GITHUB_BROKER_DB_PATH}`);
+    expect(brokerLitestreamConfig).toContain("url: ${GITHUB_BROKER_REPLICA_URL}");
+    expect(brokerLitestreamConfig).not.toMatch(
+      /^\s*url:\s+(?!\$\{(?:LICENSE|GITHUB_BROKER)_REPLICA_URL\}\s*$).+/m
+    );
+    expect(brokerLitestreamConfig).not.toMatch(
+      /AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|secret-access-key:\s+\S|account-key:\s+\S/i
+    );
+
     expect(entrypoint).toContain(`LICENSE_DB_PATH:=/data/license.sqlite`);
+    expect(entrypoint).toContain(`GITHUB_BROKER_DB_PATH:=/data/github-broker.sqlite`);
+    expect(entrypoint).toContain(
+      `GITHUB_BROKER_LITESTREAM_CONFIG:=/etc/litestream-broker.yml`
+    );
     expect(entrypoint).toContain('if [ ! -f "$LICENSE_DB_PATH" ]');
     expect(entrypoint).toContain('litestream restore -if-replica-exists -config "$LITESTREAM_CONFIG" "$LICENSE_DB_PATH"');
+    expect(entrypoint).toContain(
+      'litestream restore -if-replica-exists -config "$LITESTREAM_CONFIG" "$GITHUB_BROKER_DB_PATH"'
+    );
     expect(entrypoint).toContain('exec litestream replicate -config "$LITESTREAM_CONFIG" -exec "node dist/server.js"');
     expect(entrypoint).toContain("LICENSE_LITESTREAM_REQUIRED");
     expect(entrypoint).not.toMatch(/AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|secret-access-key:\s+\S|account-key:\s+\S|password\s*=/i);
 
     expect(flyConfig).toContain(`LICENSE_DB_PATH = "${dbPath}"`);
+    expect(flyConfig).toContain(`GITHUB_BROKER_DB_PATH = "/data/github-broker.sqlite"`);
+    expect(flyConfig).toContain(
+      `GITHUB_BROKER_LITESTREAM_CONFIG = "/etc/litestream-broker.yml"`
+    );
     expect(flyConfig).toContain('LICENSE_REPLICA_URL');
+    expect(flyConfig).toContain('GITHUB_BROKER_REPLICA_URL');
     expect(flyConfig).not.toMatch(/^\s*LICENSE_REPLICA_URL\s*=/m);
+    expect(flyConfig).not.toMatch(/^\s*GITHUB_BROKER_REPLICA_URL\s*=/m);
     expect(flyConfig).toContain('LICENSE_LITESTREAM_REQUIRED = "true"');
     expect(flyConfig).toContain('source = "license_data"');
     expect(flyConfig).toContain('destination = "/data"');
     expect(flyConfig).not.toMatch(/AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|secret-access-key|account-key|password\s*=/i);
+  });
+
+  it("preserves two-database DR under the broker kill switch and refuses enablement without it", () => {
+    const root = mkdtempSync(join(tmpdir(), "nd-broker-dr-entrypoint-"));
+    try {
+      const binDir = join(root, "bin");
+      const tracePath = join(root, "trace.log");
+      const licensePath = join(root, "data", "license.sqlite");
+      const brokerPath = join(root, "data", "github-broker.sqlite");
+      mkdirSync(binDir, { recursive: true });
+      writeExecutable(
+        join(binDir, "litestream"),
+        `#!/bin/sh
+printf 'litestream' >> "$TRACE_LOG"
+for arg in "$@"; do printf ' <%s>' "$arg" >> "$TRACE_LOG"; done
+printf '\\n' >> "$TRACE_LOG"
+if [ "$1" = "restore" ]; then
+  for target in "$@"; do :; done
+  mkdir -p "$(dirname "$target")"
+  : > "$target"
+fi
+`
+      );
+
+      const baseEnv = {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        TRACE_LOG: tracePath,
+        LICENSE_DB_PATH: licensePath,
+        LICENSE_REPLICA_URL: "s3://fixture/license",
+        LICENSE_LITESTREAM_REQUIRED: "true",
+        LITESTREAM_CONFIG: join(licenseApiDir, "litestream.yml"),
+        GITHUB_BROKER_ENABLED: "true",
+        GITHUB_BROKER_DB_PATH: brokerPath,
+        GITHUB_BROKER_REPLICA_URL: "s3://fixture/broker",
+        GITHUB_BROKER_LITESTREAM_CONFIG: join(
+          licenseApiDir,
+          "litestream-broker.yml"
+        )
+      };
+
+      execFileSync("sh", [join(licenseApiDir, "docker-entrypoint.sh")], {
+        env: baseEnv,
+        stdio: "pipe"
+      });
+      const trace = readFileSync(tracePath, "utf8");
+      expect(trace).toContain(`<${licensePath}>`);
+      expect(trace).toContain(`<${brokerPath}>`);
+      expect(trace.match(/litestream <restore>/g)).toHaveLength(2);
+      expect(trace).toContain(
+        `<${join(licenseApiDir, "litestream-broker.yml")}>`
+      );
+      expect(trace).toContain("litestream <replicate>");
+
+      rmSync(licensePath, { force: true });
+      rmSync(brokerPath, { force: true });
+      rmSync(tracePath, { force: true });
+      execFileSync("sh", [join(licenseApiDir, "docker-entrypoint.sh")], {
+        env: { ...baseEnv, GITHUB_BROKER_ENABLED: "false" },
+        stdio: "pipe"
+      });
+      const killedTrace = readFileSync(tracePath, "utf8");
+      expect(killedTrace.match(/litestream <restore>/g)).toHaveLength(2);
+      expect(killedTrace).toContain(`<${brokerPath}>`);
+      expect(killedTrace).toContain(
+        `<${join(licenseApiDir, "litestream-broker.yml")}>`
+      );
+
+      rmSync(licensePath, { force: true });
+      rmSync(brokerPath, { force: true });
+      rmSync(tracePath, { force: true });
+      execFileSync("sh", [join(licenseApiDir, "docker-entrypoint.sh")], {
+        env: {
+          ...baseEnv,
+          GITHUB_BROKER_ENABLED: "false",
+          GITHUB_BROKER_REPLICA_URL: ""
+        },
+        stdio: "pipe"
+      });
+      const licenseOnlyTrace = readFileSync(tracePath, "utf8");
+      expect(licenseOnlyTrace.match(/litestream <restore>/g)).toHaveLength(1);
+      expect(licenseOnlyTrace).toContain(`<${licensePath}>`);
+      expect(licenseOnlyTrace).not.toContain(`<${brokerPath}>`);
+      expect(licenseOnlyTrace).toContain(`<${join(licenseApiDir, "litestream.yml")}>`);
+
+      rmSync(tracePath, { force: true });
+      expect(() =>
+        execFileSync("sh", [join(licenseApiDir, "docker-entrypoint.sh")], {
+          env: { ...baseEnv, GITHUB_BROKER_REPLICA_URL: "" },
+          stdio: "pipe"
+        })
+      ).toThrow();
+      expect(existsSync(tracePath)).toBe(false);
+
+      expect(() =>
+        execFileSync("sh", [join(licenseApiDir, "docker-entrypoint.sh")], {
+          env: {
+            ...baseEnv,
+            GITHUB_BROKER_REPLICA_URL: baseEnv.LICENSE_REPLICA_URL
+          },
+          stdio: "pipe"
+        })
+      ).toThrow();
+      expect(existsSync(tracePath)).toBe(false);
+
+      const missingLicenseReplica = spawnSync(
+        "sh",
+        [join(licenseApiDir, "docker-entrypoint.sh")],
+        {
+          env: {
+            ...baseEnv,
+            GITHUB_BROKER_ENABLED: "false",
+            LICENSE_LITESTREAM_REQUIRED: "false",
+            LICENSE_REPLICA_URL: ""
+          },
+          encoding: "utf8",
+          stdio: "pipe"
+        }
+      );
+      expect(missingLicenseReplica.status).not.toBe(0);
+      expect(missingLicenseReplica.stderr).toContain(
+        "LICENSE_REPLICA_URL is unset; refusing to start production"
+      );
+      expect(existsSync(tracePath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("documents owner-gated DR proof without claiming live replication from this source-only slice", () => {
