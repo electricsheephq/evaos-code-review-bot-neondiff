@@ -156,6 +156,10 @@ describe("public NeonDiff CLI surface", () => {
         "true",
         "--persist-local-state",
         "false",
+        "--license-machine-id",
+        "broker-device-cli-fixture-123",
+        "--repo",
+        "acme/private",
         "--json"
       ], `${key}\n`, { env: activatedLicenseTestEnv() });
     } catch (error) {
