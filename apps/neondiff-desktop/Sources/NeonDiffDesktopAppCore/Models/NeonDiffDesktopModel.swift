@@ -140,6 +140,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set) var activationKeyRedactedPrefix: String?
     @Published package var pendingActivationKey = ""
     @Published package private(set) var activationVerifiedThisLaunch = false
+    private var activationVerifiedRepositoryThisLaunch: String?
 
     package var productionActivationBoundaryMessage: String {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
@@ -166,7 +167,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case .private, .internal:
             return activationVerifiedThisLaunch
                 && activationState == .active
-                && activatedRepository == selectedManagedGitHubRepository
+                && activationVerifiedRepositoryThisLaunch == selectedManagedGitHubRepository
         case .unknown:
             return false
         }
@@ -1155,8 +1156,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case .private, .internal:
             onboardingFlow.mode = .privateRepos
             if activationState == .active,
-               !activationVerifiedThisLaunch || activatedRepository != repository.fullName {
+               !activationVerifiedThisLaunch
+                || activationVerifiedRepositoryThisLaunch != repository.fullName {
                 activationVerifiedThisLaunch = false
+                activationVerifiedRepositoryThisLaunch = nil
                 dependencies.preferences.set("", forKey: activationRepositoryKey)
                 activationState = license.keyStored ? .keyReady : .purchaseRequired
                 dependencies.preferences.set(activationState.rawValue, forKey: activationStateKey)
@@ -1164,7 +1167,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             enterActivation(for: .privateRepos)
             onboardingFlow.licenseActivation = activationVerifiedThisLaunch
                     && activationState == .active
-                    && activatedRepository == repository.fullName
+                    && activationVerifiedRepositoryThisLaunch == repository.fullName
                 ? .activated
                 : .servicePending
         case .unknown:
@@ -1496,6 +1499,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard next != activationState else { return }
         if activationState == .active, next != .active {
             activationVerifiedThisLaunch = false
+            activationVerifiedRepositoryThisLaunch = nil
             dependencies.preferences.set("", forKey: activationRepositoryKey)
         }
         activationState = next
@@ -1683,17 +1687,21 @@ package final class NeonDiffDesktopModel: ObservableObject {
             license.entitlement = "active (\(scope)\(plan))"
             logText = "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
             if let repository = repos.filter(\.enabled).map(\.name).onlyElement {
+                activationVerifiedRepositoryThisLaunch = repository
                 dependencies.preferences.set(repository, forKey: activationRepositoryKey)
             } else {
+                activationVerifiedRepositoryThisLaunch = nil
                 dependencies.preferences.set("", forKey: activationRepositoryKey)
             }
             // Let onboarding finish through the native handoff (Continue enables).
             onboardingFlow.licenseActivation = .activated
         case .scopeConflict:
             activationVerifiedThisLaunch = false
+            activationVerifiedRepositoryThisLaunch = nil
             lastError = "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
         case .expired, .revoked, .invalid, .offline, .serviceError, .malformed:
             activationVerifiedThisLaunch = false
+            activationVerifiedRepositoryThisLaunch = nil
             // Cause copy comes from the typed state presentation — never a raw
             // error string, and never any key material.
             lastError = activationPresentation.cause

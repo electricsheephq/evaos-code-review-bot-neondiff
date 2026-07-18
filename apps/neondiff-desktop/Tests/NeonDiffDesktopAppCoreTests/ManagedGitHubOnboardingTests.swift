@@ -341,6 +341,34 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(fixture.model.productionUsefulWorkAvailable)
     }
 
+    @Test func preferenceTamperingCannotMoveCurrentActivationToAnotherRepository() async {
+        let broker = ScriptedGitHubBroker(repositories: [
+            GitHubBrokerRepository(fullName: "electric/private-a", visibility: .private),
+            GitHubBrokerRepository(fullName: "electric/private-b", visibility: .private)
+        ])
+        let fixture = ModelDependencyFixture(
+            githubBroker: broker,
+            activationLicenseClient: ActiveManagedActivationClient(),
+            productionBoundary: .testManaged
+        )
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+        fixture.model.selectManagedGitHubRepository(fullName: "electric/private-a")
+        fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
+        fixture.model.provideExistingActivationKey()
+        await fixture.model.submitActivation()
+        #expect(fixture.model.productionUsefulWorkAvailable)
+
+        fixture.preferences.set(
+            "electric/private-b",
+            forKey: "neondiff.activationRepository.v1"
+        )
+        fixture.model.selectManagedGitHubRepository(fullName: "electric/private-b")
+
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.onboardingFlow.licenseActivation == .servicePending)
+    }
+
     @Test func persistedPrivateActivationCannotUnlockUsefulWorkWithoutCurrentAPIVerification() async {
         let broker = ScriptedGitHubBroker(repositories: [
             GitHubBrokerRepository(fullName: "electric/private-a", visibility: .private)
