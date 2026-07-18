@@ -115,9 +115,9 @@ depend on device flow; this setting is only for the existing desktop path until
 Place the following in the license-service deployment environment (Fly secrets for
 the shared `services/license-api` deployment). The broker reads the private key and
 the OAuth client secret from this secret store at runtime and never persists, logs,
-or returns them. These names are the contract for the future production-wiring step
-in `services/license-api/src/http.ts` (`HttpHandlerOptions.githubBroker` →
-`createGitHubBrokerService`), read there from the deployment environment.
+or returns them. These names are the runtime contract read by
+`services/license-api/src/server.ts`, which passes validated dependencies through
+`HttpHandlerOptions.githubBroker` to `createGitHubBrokerService`.
 `server.ts` constructs the existing broker seam only when
 `GITHUB_BROKER_ENABLED=true` and every required value below validates. Missing
 or invalid enabled configuration leaves the license API available while every
