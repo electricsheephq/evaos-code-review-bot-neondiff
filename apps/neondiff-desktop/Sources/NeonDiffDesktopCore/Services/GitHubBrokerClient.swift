@@ -16,6 +16,7 @@ public struct GitHubBrokerPublicJWK: Codable, Equatable, Sendable {
 }
 
 public enum GitHubBrokerDeviceIdentityError: Error, LocalizedError, Equatable {
+    case storedIdentityMissing
     case invalidStoredIdentity
     case identityGenerationFailed
     case identityStorageUnavailable
@@ -23,6 +24,8 @@ public enum GitHubBrokerDeviceIdentityError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
+        case .storedIdentityMissing:
+            "The saved GitHub broker binding has no Keychain device identity. Reconnect explicitly to create a new binding."
         case .invalidStoredIdentity:
             "The stored GitHub broker device identity is invalid. Reconnect support is required; NeonDiff will not silently replace a bound identity."
         case .identityGenerationFailed:
@@ -133,6 +136,18 @@ public final class GitHubBrokerDeviceIdentityStore {
                 throw GitHubBrokerDeviceIdentityError.identityStorageUnavailable
             }
             return try decodeIdentity(winner)
+        }
+    }
+
+    /// Loads a previously-created identity without rotating or creating one.
+    /// Saved-binding verification must use this path so a missing Keychain item
+    /// cannot silently orphan the server-side binding.
+    public func loadExisting() throws -> GitHubBrokerDeviceIdentity {
+        try lock.withLock {
+            guard let encoded = try readStoredIdentity() else {
+                throw GitHubBrokerDeviceIdentityError.storedIdentityMissing
+            }
+            return try decodeIdentity(encoded)
         }
     }
 
@@ -339,6 +354,12 @@ public struct GitHubBrokerConnection: Equatable, Sendable {
     public let installURL: URL
     public let state: String
     public let expiresAt: Date
+
+    public init(installURL: URL, state: String, expiresAt: Date) {
+        self.installURL = installURL
+        self.state = state
+        self.expiresAt = expiresAt
+    }
 }
 
 public enum GitHubBrokerConnectionCompletion: Equatable, Sendable {
@@ -368,6 +389,32 @@ public struct GitHubBrokerRepositoryPage: Equatable, Sendable {
     public let page: Int
     public let repositories: [GitHubBrokerRepository]
     public let nextPage: Int?
+
+    public init(
+        installationId: Int,
+        page: Int,
+        repositories: [GitHubBrokerRepository],
+        nextPage: Int?
+    ) {
+        self.installationId = installationId
+        self.page = page
+        self.repositories = repositories
+        self.nextPage = nextPage
+    }
+}
+
+public protocol GitHubBrokerConnecting: Sendable {
+    func register(identity: GitHubBrokerDeviceIdentity) async throws
+    func startConnection(identity: GitHubBrokerDeviceIdentity) async throws -> GitHubBrokerConnection
+    func completeConnection(
+        identity: GitHubBrokerDeviceIdentity,
+        state: String
+    ) async throws -> GitHubBrokerConnectionCompletion
+    func listRepositories(
+        identity: GitHubBrokerDeviceIdentity,
+        installationId: Int,
+        page: Int
+    ) async throws -> GitHubBrokerRepositoryPage
 }
 
 public struct GitHubInstallationAccessGrant: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -402,7 +449,7 @@ public struct GitHubInstallationAccessGrant: Sendable, CustomStringConvertible, 
     public var debugDescription: String { description }
 }
 
-public struct GitHubBrokerClient: Sendable {
+public struct GitHubBrokerClient: GitHubBrokerConnecting, Sendable {
     public static let maximumResponseBytes = 64 * 1024
 
     private let baseURL: URL

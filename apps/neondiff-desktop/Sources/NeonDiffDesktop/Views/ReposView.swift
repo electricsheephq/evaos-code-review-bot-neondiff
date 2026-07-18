@@ -16,8 +16,11 @@ struct ReposView: View {
 
     private var pageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            OperatorSection("GitHub Connection") {
-                VStack(alignment: .leading, spacing: 10) {
+            if model.managedGitHubAvailable {
+                managedGitHubConnection
+            } else {
+                OperatorSection("GitHub Connection") {
+                    VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {
                         OperatorBadge(
                             text: model.github.userTokenStored ? "USER AUTHORIZED" : "USER NOT CONNECTED",
@@ -145,6 +148,7 @@ struct ReposView: View {
                         Label("\(model.github.discoveredRepositoryCount) repos discovered", systemImage: "folder.badge.plus")
                             .foregroundStyle(NeonDiffTheme.textSecondary)
                     }
+                    }
                 }
             }
 
@@ -176,6 +180,7 @@ struct ReposView: View {
                                 .foregroundStyle(repo.enabled ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
+                        .disabled(model.managedGitHubAvailable)
                         .accessibilityIdentifier("neondiff-repo-toggle-\(repo.name)")
                     }
                     TableColumn("Profile", value: \.profile)
@@ -201,20 +206,23 @@ struct ReposView: View {
                                 .foregroundStyle(NeonDiffTheme.warning)
                         }
                         .buttonStyle(.plain)
+                        .disabled(model.managedGitHubAvailable)
                         .accessibilityIdentifier("neondiff-repo-remove-\(repo.name)")
                     }
                 }
                 .scrollContentBackground(.hidden)
                 .frame(height: 360)
 
-                HStack(spacing: 10) {
-                    TextField("owner/repo", text: $model.pendingRepoName)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("neondiff-repo-name-input")
-                    Button { model.addPendingRepoToAllowlist() } label: {
-                        Label("Add Repo", systemImage: "plus.circle")
+                if !model.managedGitHubAvailable {
+                    HStack(spacing: 10) {
+                        TextField("owner/repo", text: $model.pendingRepoName)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("neondiff-repo-name-input")
+                        Button { model.addPendingRepoToAllowlist() } label: {
+                            Label("Add Repo", systemImage: "plus.circle")
+                        }
+                        .accessibilityIdentifier("neondiff-repo-add")
                     }
-                    .accessibilityIdentifier("neondiff-repo-add")
                 }
 
                 if !model.discoveredGitHubRepos.isEmpty {
@@ -276,5 +284,95 @@ struct ReposView: View {
             PageBottomSentinel(section: "repos")
         }
         .disabled(!model.canEditProviderConfiguration)
+    }
+
+    private var managedGitHubConnection: some View {
+        OperatorSection("Managed GitHub Connection") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    OperatorBadge(
+                        text: model.managedGitHubStatusText,
+                        color: model.isManagedGitHubBound
+                            ? NeonDiffTheme.accent
+                            : NeonDiffTheme.warning
+                    )
+                    Spacer()
+                    if model.managedGitHubConnectionState == .verificationRequired {
+                        Button { model.refreshManagedGitHubRepositories() } label: {
+                            Label("Verify Binding", systemImage: "checkmark.shield")
+                        }
+                        .disabled(model.isManagedGitHubConnectionInProgress)
+                        .accessibilityIdentifier("neondiff-managed-github-verify")
+                    } else if !model.isManagedGitHubBound {
+                        Button { model.startManagedGitHubConnection() } label: {
+                            Label("Connect GitHub", systemImage: "person.crop.circle.badge.checkmark")
+                        }
+                        .disabled(model.isManagedGitHubConnectionInProgress)
+                        .accessibilityIdentifier("neondiff-managed-github-connect")
+                    } else {
+                        Button { model.refreshManagedGitHubRepositories() } label: {
+                            Label("Refresh Bound Repositories", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(model.isManagedGitHubConnectionInProgress)
+                        .accessibilityIdentifier("neondiff-managed-github-refresh")
+                    }
+                }
+
+                Text("The paid-beta path uses the server broker and Keychain-backed device identity. It does not fall back to a user access token. Repository scope and visibility are accepted only from the verified GitHub App binding.")
+                    .operatorBodyText()
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let recovery = model.managedGitHubRecovery {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(NeonDiffTheme.warning)
+                        Text(recovery.message)
+                            .operatorBodyText()
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Retry") {
+                            model.performManagedGitHubRecoveryAction()
+                        }
+                        .disabled(model.isManagedGitHubConnectionInProgress)
+                        .accessibilityIdentifier("neondiff-managed-github-recovery")
+                    }
+                }
+
+                if let selected = model.selectedManagedGitHubRepository {
+                    Label("Selected: \(selected)", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(NeonDiffTheme.accent)
+                }
+
+                if !model.managedGitHubRepositories.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Server-bound repositories")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(NeonDiffTheme.textPrimary)
+                        ForEach(model.managedGitHubRepositories, id: \.fullName) { repository in
+                            Button {
+                                model.selectManagedGitHubRepository(fullName: repository.fullName)
+                            } label: {
+                                HStack {
+                                    Image(systemName: repository.visibility == .public ? "globe" : "lock.fill")
+                                    Text(repository.fullName)
+                                    Spacer()
+                                    Text(repository.visibility == .unknown
+                                        ? "VISIBILITY BLOCKED"
+                                        : repository.visibility.rawValue.uppercased())
+                                        .font(.caption.weight(.semibold))
+                                    if model.selectedManagedGitHubRepository == repository.fullName {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(NeonDiffTheme.accent)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(repository.visibility == .unknown)
+                            .accessibilityIdentifier("neondiff-managed-repository-\(repository.fullName)")
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -110,7 +110,7 @@ struct OverviewView: View {
                     Button { model.previewStopDaemon() } label: {
                         Label("Preview Stop", systemImage: "stop.circle")
                     }
-                    .disabled(!model.productionUsefulWorkAvailable)
+                    .disabled(!model.productionDaemonStopAvailable)
                     .accessibilityIdentifier("neondiff-preview-stop-daemon")
                 }
 

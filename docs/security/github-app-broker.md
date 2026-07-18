@@ -5,13 +5,16 @@ that lets a NeonDiff desktop client connect the official NeonDiff GitHub App and
 obtain bounded, short-lived installation access without ever holding the App
 private key.
 
-This document covers the **server-side slice** (issues #613 and #614). Native
-connect UI states are sequenced after #611/#612. The repository-visibility and
+This document covers the **server-side slice** (issues #613 and #614) and its
+rollout-disabled native composition under #630. The repository-visibility and
 entitlement decision is bound at token issuance in the single seam function
 `authorizeTokenIssuance` (#614); the live device<->license linkage and deployment
-wiring belong to the paid-beta deployment lane (#633). No production GitHub App exists yet;
-every code path below is exercised against fixtures, never a live install (see
-"Owner-gated boundary").
+wiring belong to the paid-beta deployment lane (#633). At the 2026-07-18
+checkpoint, the public-safe #613 registration checkpoint records the official
+public App and its selected-repository canary install. Public posture is
+intentional so customers can install the App outside the owner account. The
+production broker kill switch remains off. Fixture/source proof below is
+therefore not a live connect, token-mint, release, or customer-readiness claim.
 
 ## Problem
 
@@ -347,19 +350,21 @@ bindings and states; uninstalled installations are pruned on discovery.
    selection uses the separate device-authenticated `POST /github/repositories`
    metadata route, so the native app never needs an unnarrowed review token merely
    to populate its selector.
-4. **Staging vs. production App registration sequence (OWNER-GATED, OPEN).** The
-   agent builds against a staging App the owner registers with the documented
-   permission set (see `docs/security/github-app-staging-registration.md`). The
-   production identity is created only after the security review.
+4. **Staging vs. production App registration sequence (OWNER-GATED, PARTIAL).**
+   The [#613 registration checkpoint](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/613#issuecomment-5012503190)
+   records the official public App identity and the two selected-repository
+   canary installs. Production broker credentials, live wiring, and security
+   approval remain gated. The staging checklist remains the settings contract.
 
 ## Owner-gated boundary
 
-Agent-executable now (this slice): the broker service code and its contract,
-integration, adversarial, and redaction tests against fixtures; this threat model
-and data-flow document; and the staging App registration spec.
+Agent-executable now: the broker service/client contracts, integration,
+adversarial, and redaction tests against fixtures; the default-off native
+composition; this threat model and data-flow document; and the staging App
+registration spec.
 
-Owner-only (blocked, needs-owner): creating the official NeonDiff GitHub App
-registration (production identity), holding the App private key, provisioning the
-Fly deployment secrets, and approving this security review before any production
-credential exists (AC7). No code in this slice proves the live install flow; it
-proves the fixtured broker contract only.
+Owner-only (blocked, needs-owner): holding the official App private key/OAuth
+client secret, provisioning the Fly deployment secrets, and approving the
+production security review before the broker is enabled (AC7). No code in this
+slice proves the live install flow; it proves the source/fixture composition
+only.

@@ -3,10 +3,40 @@ import NeonDiffDesktopCore
 
 package struct DesktopProductionBoundary: Sendable {
     package let nativeActivationBrokerVerified: Bool
+    package let managedGitHubBrokerOrigin: URL?
 
-    package static let quarantined = DesktopProductionBoundary(nativeActivationBrokerVerified: false)
-    package static let testVerified = DesktopProductionBoundary(nativeActivationBrokerVerified: true)
+    package static let quarantined = DesktopProductionBoundary(
+        nativeActivationBrokerVerified: false,
+        managedGitHubBrokerOrigin: nil
+    )
+    package static let testVerified = DesktopProductionBoundary(
+        nativeActivationBrokerVerified: true,
+        managedGitHubBrokerOrigin: nil
+    )
+    package static let testManaged = DesktopProductionBoundary(
+        nativeActivationBrokerVerified: true,
+        managedGitHubBrokerOrigin: approvedManagedGitHubBrokerOrigin
+    )
+
+    package static func resolve(infoDictionary: [String: Any]) -> DesktopProductionBoundary {
+        guard infoDictionary["NeonDiffPaidBetaContract"] as? String == "paid-mac-beta-v1",
+              infoDictionary["NeonDiffManagedGitHubBrokerEnabled"] as? Bool == true,
+              let originText = infoDictionary["NeonDiffGitHubBrokerOrigin"] as? String,
+              let origin = URL(string: originText),
+              origin == approvedManagedGitHubBrokerOrigin
+        else {
+            return .quarantined
+        }
+        return DesktopProductionBoundary(
+            nativeActivationBrokerVerified: true,
+            managedGitHubBrokerOrigin: origin
+        )
+    }
 }
+
+private let approvedManagedGitHubBrokerOrigin = URL(
+    string: "https://neondiff-license.fly.dev"
+)!
 
 package struct DesktopAppDependencies {
     package let clipboard: any DesktopClipboard
@@ -19,6 +49,7 @@ package struct DesktopAppDependencies {
     package let providerVerifier: any DesktopProviderVerifying
     package let secretStore: any DesktopSecretStoring
     package let githubAuthenticator: any GitHubDesktopAuthenticating
+    package let githubBroker: (any GitHubBrokerConnecting)?
     package let productionBoundary: DesktopProductionBoundary
     package let cliWorkingDirectory: URL?
 
@@ -33,6 +64,7 @@ package struct DesktopAppDependencies {
         providerVerifier: any DesktopProviderVerifying,
         secretStore: any DesktopSecretStoring,
         githubAuthenticator: any GitHubDesktopAuthenticating,
+        githubBroker: (any GitHubBrokerConnecting)? = nil,
         productionBoundary: DesktopProductionBoundary,
         cliWorkingDirectory: URL? = nil
     ) {
@@ -46,6 +78,7 @@ package struct DesktopAppDependencies {
         self.providerVerifier = providerVerifier
         self.secretStore = secretStore
         self.githubAuthenticator = githubAuthenticator
+        self.githubBroker = githubBroker
         self.productionBoundary = productionBoundary
         self.cliWorkingDirectory = cliWorkingDirectory
     }

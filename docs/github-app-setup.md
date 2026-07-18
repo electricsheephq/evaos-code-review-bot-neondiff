@@ -56,8 +56,8 @@ because milestone or planning days can create large issue bursts.
 
 > This page covers the shipped **local-worker direct install**, where the worker
 > holds the App private key itself and no OAuth-during-install step is needed. The
-> separate **managed authorization broker** (production App registered, rollout
-> kill switch still off, and native integration in progress under #612/#613)
+> separate **managed authorization broker** (official App registered, source
+> composition present, rollout kill switch still off)
 > instead requires the App to enable "Request user authorization (OAuth) during
 > installation" and set the `/github/connect/callback` URL; that
 > registration is documented in `docs/security/github-app-staging-registration.md`.
@@ -73,8 +73,15 @@ same device/repository activation and never logs, reflects, or persists the raw
 key. Public requests omit the key and never consult the license authority.
 The production kill switch remains off until the paid-beta integration and
 canary gates pass, so this source contract is not production-wiring proof.
-Generic CLI status/deactivate and daemon-admission validation still use the
-legacy local identity; #630 owns that runtime migration before enablement.
+When an exact release-bundle contract enables the managed source path, the
+native app creates its P-256 identity only on explicit Connect, opens the
+broker-issued GitHub install URL, polls the device-bound completion endpoint,
+and accepts repository names/visibility only from the broker readback. A saved
+installation id is a routing hint only and cannot unlock onboarding until a
+fresh server repository read succeeds. Manual repository names and the legacy
+user-token discovery path are disabled in managed mode. Generic CLI
+status/deactivate and daemon-admission validation still require exact-candidate
+integration proof under #630.
 
 1. Open the NeonDiff GitHub App install URL.
 2. Choose the user or organization that owns the repositories.

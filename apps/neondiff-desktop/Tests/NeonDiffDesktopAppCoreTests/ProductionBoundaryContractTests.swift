@@ -8,7 +8,9 @@ import Testing
         fixture.model.pendingLicenseKey = "fixture-license-value"
 
         fixture.model.previewStartDaemon()
+        fixture.model.previewStopDaemon()
         fixture.model.startDaemon()
+        fixture.model.stopDaemon()
         fixture.model.verifyProviderKey()
         fixture.model.storeLicenseKey()
         fixture.model.activateLicenseForOnboarding()
@@ -125,13 +127,17 @@ import Testing
         #expect(source.contains("Updates blocked pending native activation proof"))
     }
 
-    @Test func productionCompositionRootInstallsTheQuarantinedBoundary() throws {
+    @Test func productionCompositionRootResolvesOnlyTheSignedBuildBoundary() throws {
         let compositionRoot = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/App/NeonDiffDesktopCompositionRoot.swift")
         let source = try sourceBoundaryText(at: compositionRoot)
 
-        #expect(source.contains("productionBoundary: .quarantined"))
+        #expect(source.contains("DesktopProductionBoundary.resolve("))
+        #expect(source.contains("Bundle.main.infoDictionary ?? [:]"))
+        #expect(source.contains("GitHubBrokerClient(baseURL: $0)"))
+        #expect(source.contains("productionBoundary: productionBoundary"))
         #expect(!source.contains("productionBoundary: .testVerified"))
+        #expect(!source.contains("productionBoundary: .testManaged"))
     }
 
     @Test func evaluationRootIdentifierDoesNotOverrideDescendantActionIdentifiers() throws {
@@ -143,5 +149,26 @@ import Testing
         #expect(source.contains("private struct EvaluationRootAccessibilityMarker: View"))
         #expect(source.contains(".accessibilityIdentifier(identifier)"))
         #expect(!source.contains(".accessibilityIdentifier(rootAccessibilityIdentifier)"))
+    }
+
+    @Test func managedOnboardingExposesRepositoryApplyAction() throws {
+        let onboardingView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift")
+        let source = try sourceBoundaryText(at: onboardingView)
+
+        #expect(source.contains("model.applyRepoAllowlistPatch()"))
+        #expect(source.contains("neondiff-onboarding-repository-apply"))
+    }
+
+    @Test func managedSafetyStopIsNotDisabledByUsefulWorkProofLoss() throws {
+        let viewsDirectory = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
+        let source = try ["OverviewView.swift", "OnboardingWizardView.swift"]
+            .map { try sourceBoundaryText(at: viewsDirectory.appendingPathComponent($0)) }
+            .joined(separator: "\n")
+
+        #expect(source.contains("model.productionDaemonStopAvailable"))
+        #expect(!source.contains("Button { model.stopDaemon() } label:")
+            || source.contains(".disabled(!model.productionDaemonStopAvailable)"))
     }
 }

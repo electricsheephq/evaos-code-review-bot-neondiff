@@ -92,12 +92,12 @@ A webhook is not required and adding one is a separate design change.
 
 ## 5. Device flow
 
-Enable **"Enable Device Flow"** while the current desktop "Connect GitHub" (Repos
-pane) path still uses device-flow OAuth (`GitHubDeviceAuthClient.swift`;
-`docs/github-app-setup.md` notes GitHub returns `device_flow_disabled` if it is
-off). The broker's install/authorize + one-shot-state flow does **not** itself
-depend on device flow; this setting is only for the existing desktop path until
-#612 migrates it onto the broker.
+Enable **"Enable Device Flow"** only for legacy direct-install desktop builds
+that still use `GitHubDeviceAuthClient.swift`; those builds receive
+`device_flow_disabled` when it is off. The managed paid-beta path uses the
+broker's install/authorize + one-shot-state flow and does **not** depend on
+device flow. When the exact signed-build contract selects managed mode, the
+native UI does not fall back to the legacy user-token path.
 
 ## 6. Private key and install URL [OWNER-GATED]
 

@@ -111,24 +111,121 @@ struct OnboardingWizardView: View {
     }
 
     private var welcomeStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            OperatorSection("Mode") {
-                Picker("Review Mode", selection: $model.onboardingFlow.mode) {
-                    ForEach(OnboardingMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if model.managedGitHubAvailable {
+                    managedGitHubSection
+                } else {
+                    OperatorSection("Mode") {
+                        Picker("Review Mode", selection: $model.onboardingFlow.mode) {
+                            ForEach(OnboardingMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("All repository review work requires live API-backed activation. This desktop build cannot yet prove the native activation broker, so onboarding cannot complete.")
+                            .operatorBodyText()
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .pickerStyle(.segmented)
 
-                Text("All repository review work requires live API-backed activation. This desktop build cannot yet prove the native activation broker, so onboarding cannot complete.")
-                    .operatorBodyText()
-                    .fixedSize(horizontal: false, vertical: true)
+                OperatorSection("Authority") {
+                    Text(model.managedGitHubAvailable
+                        ? "Repository visibility and installation scope come only from the production GitHub broker. Public repositories are free; private and internal repositories require API-backed activation. Unknown visibility fails closed."
+                        : "Desktop configures local state and starts CLI-backed checks. GitHub reviews still go through the daemon and its current-head safety gates.")
+                        .operatorBodyText()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .scrollContentBackground(.hidden)
+    }
+
+    private var managedGitHubSection: some View {
+        OperatorSection("GitHub Authorization") {
+            HStack(spacing: 10) {
+                OperatorBadge(
+                    text: model.managedGitHubStatusText,
+                    color: model.managedGitHubConnectionState.isBound
+                        ? NeonDiffTheme.accent
+                        : NeonDiffTheme.warning
+                )
+
+                Spacer()
+
+                if model.managedGitHubConnectionState == .verificationRequired {
+                    Button { model.refreshManagedGitHubRepositories() } label: {
+                        Label("Verify Binding", systemImage: "checkmark.shield")
+                    }
+                    .disabled(model.isManagedGitHubConnectionInProgress)
+                    .accessibilityIdentifier("neondiff-onboarding-github-verify")
+                } else if !model.managedGitHubConnectionState.isBound {
+                    Button { model.startManagedGitHubConnection() } label: {
+                        Label("Connect GitHub", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .disabled(model.isManagedGitHubConnectionInProgress)
+                    .accessibilityIdentifier("neondiff-onboarding-github-connect")
+                }
             }
 
-            OperatorSection("Authority") {
-                Text("Desktop configures local state and starts CLI-backed checks. GitHub reviews still go through the daemon and its current-head safety gates.")
-                    .operatorBodyText()
-                    .fixedSize(horizontal: false, vertical: true)
+            if let recovery = model.managedGitHubRecovery {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(recovery.message)
+                        .operatorBodyText()
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Retry Managed GitHub") {
+                        model.performManagedGitHubRecoveryAction()
+                    }
+                    .disabled(model.isManagedGitHubConnectionInProgress)
+                    .accessibilityIdentifier("neondiff-onboarding-github-recovery")
+                }
+            }
+
+            if !model.managedGitHubRepositories.isEmpty {
+                Text("Choose one server-bound repository")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(NeonDiffTheme.textPrimary)
+
+                ForEach(model.managedGitHubRepositories, id: \.fullName) { repository in
+                    Button {
+                        model.selectManagedGitHubRepository(fullName: repository.fullName)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: repository.visibility == .public ? "globe" : "lock.fill")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(repository.fullName)
+                                Text(repository.visibility == .unknown
+                                    ? "Visibility unavailable · blocked"
+                                    : repository.visibility.rawValue.capitalized)
+                                    .font(.caption)
+                            }
+                            Spacer()
+                            if model.selectedManagedGitHubRepository == repository.fullName {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(NeonDiffTheme.accent)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(repository.visibility == .unknown)
+                    .accessibilityLabel(
+                        "\(repository.fullName), \(repository.visibility.rawValue)"
+                    )
+                    .accessibilityIdentifier(
+                        "neondiff-onboarding-repository-\(repository.fullName)"
+                    )
+                }
+
+                Button { model.applyRepoAllowlistPatch() } label: {
+                    Label("Apply Repository", systemImage: "checkmark.shield")
+                }
+                .disabled(
+                    model.selectedManagedGitHubRepository == nil
+                        || model.isConfigPatchInProgress
+                        || model.isConfigInspectInProgress
+                )
+                .accessibilityIdentifier("neondiff-onboarding-repository-apply")
             }
         }
     }
@@ -204,7 +301,7 @@ struct OnboardingWizardView: View {
                         Button { model.stopDaemon() } label: {
                             Label("Stop", systemImage: "stop.circle")
                         }
-                        .disabled(!model.productionUsefulWorkAvailable)
+                        .disabled(!model.productionDaemonStopAvailable)
                     }
 
                     HStack(spacing: 10) {
@@ -282,6 +379,10 @@ struct OnboardingWizardView: View {
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                 LabeledContent("Mode", value: model.onboardingFlow.mode.title)
                     .foregroundStyle(NeonDiffTheme.textPrimary)
+                if let repository = model.selectedManagedGitHubRepository {
+                    LabeledContent("Repository", value: repository)
+                        .foregroundStyle(NeonDiffTheme.textPrimary)
+                }
                 LabeledContent("License", value: model.onboardingFlow.licenseActivation == .activated ? "activated" : "service pending")
                     .foregroundStyle(NeonDiffTheme.textPrimary)
             }
@@ -322,9 +423,16 @@ struct OnboardingWizardView: View {
                 Label(model.onboardingFlow.nextActionTitle, systemImage: model.onboardingFlow.currentStep == .done ? "checkmark" : "chevron.right")
             }
             .buttonStyle(OperatorButtonStyle(solid: true))
-            .disabled(!model.onboardingFlow.canAdvance)
+            .disabled(!model.canAdvanceOnboarding)
         }
         .hostedOnboardingEvaluationRegion("neondiff-onboarding-footer")
+    }
+}
+
+private extension ManagedGitHubConnectionState {
+    var isBound: Bool {
+        if case .bound = self { return true }
+        return false
     }
 }
 
