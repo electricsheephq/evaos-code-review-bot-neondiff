@@ -138,6 +138,15 @@ surface for CLI-first and non-Mac setups, not the product UI. It shows license
 status, GitHub App status, daemon status, and provider readiness, and its
 provider card includes a `Verify API Key` control that reports redacted
 pass/fail output.
+The managed native path binds activation and private-repository token issuance
+to the same Keychain-backed broker device identity and exact GitHub-selected
+repository. The raw Activation Key remains Keychain-owned: it crosses bounded
+stdin for activation and the fixed-origin broker HTTPS request body for private
+token issuance only, and is never placed in argv, config, logs, or broker
+storage. That production path remains behind its rollout kill switch until the
+paid-beta canaries pass. This slice does not migrate generic CLI
+status/deactivate or daemon-admission validation from the legacy local identity;
+#630 must wire those runtime callers before the managed path can be enabled.
 The native Providers pane reads and edits the saved `providers` registry, not
 the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview, and
 Apply the exact selected provider before Verify is enabled; verification pins

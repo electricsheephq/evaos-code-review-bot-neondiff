@@ -192,12 +192,14 @@ export async function startBroker(
     store?: unknown;
     /** Entitlement authority for private/internal issuance (#614 fixtures). */
     resolveEntitlement?: unknown;
+    /** Optional production license store for end-to-end entitlement wiring tests. */
+    licenseStore?: LicenseStore;
     deviceRegisterRateLimiter?: RateLimiter;
     tokenRateLimiter?: RateLimiter;
     connectRateLimiter?: RateLimiter;
   } = {}
 ): Promise<BrokerHarness> {
-  const licenseStore = new LicenseStore(":memory:");
+  const licenseStore = options.licenseStore ?? new LicenseStore(":memory:");
   const fake = options.fake ?? fakeGitHubClient(options.installations ?? []);
   const nowFn = options.clock ?? (() => options.now ?? FIXED_NOW);
   const started = await startLicenseServer({

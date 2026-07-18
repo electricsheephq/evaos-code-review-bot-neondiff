@@ -45,6 +45,8 @@ import {
 } from "./github-broker/index.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
+const CANONICAL_GITHUB_REPOSITORY_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
 
 class RequestBodyTooLargeError extends Error {}
 
@@ -315,7 +317,17 @@ function parseRequest(raw: string): LicenseRequest {
   const machineId = body.machineId;
   if (typeof licenseKey !== "string" || licenseKey.trim().length === 0) throw new Error("licenseKey is required");
   if (typeof machineId !== "string" || machineId.trim().length === 0) throw new Error("machineId is required");
-  const repo = typeof body.repo === "string" && body.repo.length > 0 ? body.repo : undefined;
+  let repo: string | undefined;
+  if (body.repo !== undefined) {
+    if (
+      typeof body.repo !== "string"
+      || body.repo !== body.repo.trim()
+      || !CANONICAL_GITHUB_REPOSITORY_PATTERN.test(body.repo)
+    ) {
+      throw new Error("repo must be a canonical owner/name repository");
+    }
+    repo = body.repo;
+  }
   return { licenseKey: licenseKey.trim(), machineId: machineId.trim(), repo };
 }
 

@@ -25,6 +25,8 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 const repoRoot = process.cwd();
+const BROKER_DEVICE_ID = "A".repeat(43);
+const DASH_PREFIXED_BROKER_DEVICE_ID = `--${"A".repeat(41)}`;
 const darwinDaemonEnv = { NEONDIFF_TEST_PLATFORM: "darwin" };
 const providerVerificationAdmission = await createTestLicenseAdmission({ operation: "provider_verify" });
 const admittedProviderVerification = async () => ({
@@ -143,35 +145,44 @@ describe("public NeonDiff CLI surface", () => {
       }
     })}\n`);
 
-    let failure: (Error & { code?: number; stdout?: string; stderr?: string }) | undefined;
-    try {
-      await runCliWithStdin([
-        "license",
-        "activate",
-        "--config",
-        configPath,
-        "--license-storage",
-        "keychain",
-        "--license-key-stdin",
-        "true",
-        "--persist-local-state",
-        "false",
-        "--json"
-      ], `${key}\n`, { env: activatedLicenseTestEnv() });
-    } catch (error) {
-      failure = error as Error & { code?: number; stdout?: string; stderr?: string };
-    }
-    expect(failure?.code).toBe(1);
-    const output = JSON.parse(failure?.stdout ?? "{}");
+    for (const machineId of [
+      BROKER_DEVICE_ID,
+      DASH_PREFIXED_BROKER_DEVICE_ID
+    ]) {
+      let failure: (Error & { code?: number; stdout?: string; stderr?: string }) | undefined;
+      try {
+        await runCliWithStdin([
+          "license",
+          "activate",
+          "--config",
+          configPath,
+          "--license-storage",
+          "keychain",
+          "--license-key-stdin",
+          "true",
+          "--persist-local-state",
+          "false",
+          "--license-machine-id",
+          machineId,
+          "--repo",
+          "acme/private",
+          "--json"
+        ], `${key}\n`, { env: activatedLicenseTestEnv() });
+      } catch (error) {
+        failure = error as Error & { code?: number; stdout?: string; stderr?: string };
+      }
+      expect(failure?.code).toBe(1);
+      const output = JSON.parse(failure?.stdout ?? "{}");
 
-    expect(output).toMatchObject({
-      ok: false,
-      status: "invalid",
-      source: "none",
-      detail: "no-local-state activation requires the matching native Keychain credential"
-    });
-    expect(failure?.stdout).not.toContain(key);
-    expect(failure?.stderr).not.toContain(key);
+      expect(output).toMatchObject({
+        ok: false,
+        status: "invalid",
+        source: "none",
+        detail: "no-local-state activation requires the matching native Keychain credential"
+      });
+      expect(failure?.stdout).not.toContain(key);
+      expect(failure?.stderr).not.toContain(key);
+    }
     expect(existsSync(keyPath)).toBe(false);
     expect(existsSync(cachePath)).toBe(false);
   });

@@ -195,7 +195,8 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         let grant = try await client.issueToken(
             identity: identity,
             installationId: 4242,
-            repositories: ["octo/private"]
+            repositories: ["octo/private"],
+            activationKey: ActivationKeyMaterial("nd_live_keychain-broker-fixture")
         )
         #expect(grant.repositories == ["octo/private"])
         #expect(grant.permissions == GitHubBrokerPermissions.minimumReview)
@@ -219,6 +220,7 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
             JSONSerialization.jsonObject(with: requests[5].body) as? [String: Any]
         )
         #expect(tokenRequest["repositories"] as? [String] == ["octo/private"])
+        #expect(tokenRequest["activationKey"] as? String == "nd_live_keychain-broker-fixture")
         #expect(tokenRequest["permissions"] == nil)
         let repositoryRequest = try #require(
             JSONSerialization.jsonObject(with: requests[4].body) as? [String: Any]

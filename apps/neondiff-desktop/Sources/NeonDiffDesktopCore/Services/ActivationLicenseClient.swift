@@ -7,8 +7,11 @@ import Foundation
 // logs, screenshots, accessibility, analytics, or crash evidence. The CLI is the
 // production-approved secure path — it rejects `--license-key`/`--license-key-env`
 // and reads exactly one bounded key from stdin (`--license-key-stdin true`). The
-// client parses the CLI's redacted `LicenseStatusResult` JSON, the same wire the
-// production license lifecycle (PR #574) emits, and maps it to activation states.
+// same ephemeral material may cross the fixed-origin broker HTTPS request body
+// for private token issuance; it is never placed in argv, logs, or persisted by
+// the broker. The client parses the CLI's redacted `LicenseStatusResult` JSON,
+// the same wire the production license lifecycle (PR #574) emits, and maps it to
+// activation states.
 
 /// A NeonDiff Activation Key held for the lifetime of a single activation call.
 /// Not `Codable`; its `description` is redacted so it can never be logged or
@@ -34,9 +37,15 @@ public struct ActivationKeyMaterial: Sendable, CustomStringConvertible, CustomDe
         return "\(prefix)••••"
     }
 
-    /// The only accessor for the raw bytes — for the bounded stdin pipe only.
+    /// Raw bytes for the bounded stdin pipe to the local CLI.
     public func standardInputData() -> Data {
         Data(raw.utf8)
+    }
+
+    /// Scope raw material to one fixed-origin HTTPS request-body construction.
+    /// The type remains non-Codable and redacted outside this closure.
+    public func withRawValue<T>(_ body: (String) throws -> T) rethrows -> T {
+        try body(raw)
     }
 
     public var description: String { "\(ActivationTerminology.activationKey) \(redactedPrefix)" }
@@ -125,11 +134,21 @@ public protocol ActivationLicenseClienting: Sendable {
 public final class CLIActivationLicenseClient: ActivationLicenseClienting, @unchecked Sendable {
     private let cli: any NeonDiffCLIClienting
     private let configPath: String
+    private let machineId: String
+    private let repository: String
     private let timeout: TimeInterval
 
-    public init(cli: any NeonDiffCLIClienting, configPath: String, timeout: TimeInterval = 20) {
+    public init(
+        cli: any NeonDiffCLIClienting,
+        configPath: String,
+        machineId: String,
+        repository: String,
+        timeout: TimeInterval = 20
+    ) {
         self.cli = cli
         self.configPath = configPath
+        self.machineId = machineId
+        self.repository = repository
         self.timeout = timeout
     }
 
@@ -152,6 +171,8 @@ public final class CLIActivationLicenseClient: ActivationLicenseClienting, @unch
             "--license-storage", "keychain",
             "--license-key-stdin", "true",
             "--persist-local-state", "false",
+            "--license-machine-id", machineId,
+            "--repo", repository,
             "--json"
         ]
         do {

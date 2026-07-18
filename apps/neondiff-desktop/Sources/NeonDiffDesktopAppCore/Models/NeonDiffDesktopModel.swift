@@ -1138,11 +1138,28 @@ package final class NeonDiffDesktopModel: ObservableObject {
         // and activation canaries pass. When enabled, it uses the CLI's explicit
         // no-local-state mode: the app-owned Keychain item remains the only raw
         // credential copy and the key crosses only over bounded stdin.
-        guard dependencies.preferences.bool(forKey: activationCliBackedEnabledKey) else { return nil }
+        guard dependencies.productionBoundary.nativeActivationBrokerVerified,
+              dependencies.preferences.bool(forKey: activationCliBackedEnabledKey)
+        else {
+            return nil
+        }
+        let enabledRepositories = repos
+            .filter(\.enabled)
+            .map(\.name)
+            .filter(isValidRepoName)
+        guard enabledRepositories.count == 1,
+              let identity = try? GitHubBrokerDeviceIdentityStore(
+                secretStore: dependencies.secretStore
+              ).loadOrCreate()
+        else {
+            return nil
+        }
         return DesktopActivationLicenseClient(
             cli: dependencies.cli,
             executablePath: cliPath,
-            configPath: configPath
+            configPath: configPath,
+            machineId: identity.deviceId,
+            repository: enabledRepositories[0]
         )
     }
 

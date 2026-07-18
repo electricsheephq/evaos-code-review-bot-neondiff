@@ -25,6 +25,7 @@ import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/lice
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
+const BROKER_DEVICE_ID = "A".repeat(43);
 
 function testLicenseFingerprint(key: string): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
@@ -423,6 +424,8 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: key,
+      machineId: BROKER_DEVICE_ID,
+      repo: "octo/private",
       persistLocalState: false,
       keychainCredentialVerifier: (credential) => {
         verifiedKeychainCredentials.push(credential);
@@ -446,6 +449,197 @@ describe("license activation and entitlement cache", () => {
     expect(JSON.stringify(result)).not.toContain(key);
     expect(existsSync(join(root, "license.key"))).toBe(false);
     expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
+  it("fails closed when native no-local-state activation omits the broker device identity", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-missing-binding-test-123456",
+      repo: "octo/private",
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response(JSON.stringify({
+          status: "active",
+          repoVisibilityScope: "private",
+          privateRepoAllowed: true,
+          updateEntitlement: true
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires an RFC 7638 broker device identity"
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("fails closed when native no-local-state activation receives a non-thumbprint device identity", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-malformed-binding-test-123456",
+      machineId: "broker-device-binding-123",
+      repo: "octo/private",
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("{}", { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires an RFC 7638 broker device identity"
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("fails closed when a broker device identity is supplied outside native no-local-state activation", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-file-backed-broker-device-test-123456",
+      machineId: BROKER_DEVICE_ID,
+      repo: "octo/private",
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("{}", { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "broker device identity requires native no-local-state activation"
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("fails closed when native no-local-state activation omits the canonical repository", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-missing-repository-test-123456",
+      machineId: BROKER_DEVICE_ID,
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("{}", { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires one canonical repository"
+    });
+    expect(requests).toBe(0);
+  });
+
+  it.each([
+    "octo",
+    "octo/private/extra",
+    "/private",
+    "octo/",
+    "-octo/private",
+    "octo-/private"
+  ])("fails closed when native no-local-state activation receives malformed repository %j", async (repo) => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-malformed-repository-test-123456",
+      machineId: BROKER_DEVICE_ID,
+      repo,
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("{}", { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires one canonical repository"
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("binds native activation to the explicit broker device and canonical repository", async () => {
+    const root = mkRoot(roots);
+    const requestBodies: unknown[] = [];
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-binding-test-123456",
+      repo: "octo/private",
+      machineId: BROKER_DEVICE_ID,
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async (_url, init) => {
+        requestBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({
+          status: "active",
+          repoVisibilityScope: "private",
+          privateRepoAllowed: true,
+          updateEntitlement: true
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }) as typeof fetch
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requestBodies).toEqual([{
+      licenseKey: "LIC-keychain-binding-test-123456",
+      repo: "octo/private",
+      machineId: BROKER_DEVICE_ID
+    }]);
+    expect(JSON.stringify(result)).not.toContain("LIC-keychain-binding-test-123456");
   });
 
   it("refuses no-local-state activation unless Keychain owns the recoverable credential", async () => {
@@ -495,6 +689,8 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: "LIC-keychain-mismatch-test-123456",
+      machineId: BROKER_DEVICE_ID,
+      repo: "octo/private",
       persistLocalState: false,
       keychainCredentialVerifier: () => false
     });

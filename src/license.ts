@@ -19,6 +19,9 @@ import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 import type { LicenseSecretReader } from "./license-secret-store.js";
 
 const MAXIMUM_LICENSE_API_RESPONSE_BYTES = 64 * 1024;
+const CANONICAL_GITHUB_REPOSITORY_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
+const RFC7638_SHA256_THUMBPRINT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export type LicenseStorageBackend = "keychain" | "file";
 export type LicenseStatus =
@@ -121,6 +124,8 @@ export async function activateLicense(input: {
   config: LicenseConfig;
   licenseKey: string;
   repo?: string;
+  /** Native-only non-secret binding. Defaults to the legacy local host hash. */
+  machineId?: string;
   /**
    * Persist the raw key plus redacted entitlement cache for the headless CLI.
    * Native callers keep the only raw copy in Keychain and set this false.
@@ -151,6 +156,52 @@ export async function activateLicense(input: {
       checkedAt: now.toISOString(),
       classification: "invalid",
       detail: "Keychain license activation is disabled in headless CLI until native no-argv secret storage is available; use storageBackend=file"
+    };
+  }
+  const machineId = input.machineId?.trim();
+  if (
+    !persistLocalState
+    && (
+      !machineId
+      || machineId !== input.machineId
+      || !RFC7638_SHA256_THUMBPRINT_PATTERN.test(machineId)
+    )
+  ) {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "no-local-state activation requires an RFC 7638 broker device identity"
+    };
+  }
+  if (persistLocalState && input.machineId?.trim()) {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "broker device identity requires native no-local-state activation"
+    };
+  }
+  const repository = input.repo?.trim();
+  if (
+    !persistLocalState
+    && (
+      !repository
+      || repository !== input.repo
+      || !CANONICAL_GITHUB_REPOSITORY_PATTERN.test(repository)
+    )
+  ) {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "no-local-state activation requires one canonical repository"
     };
   }
   const licenseKey = input.licenseKey.trim();
@@ -185,6 +236,7 @@ export async function activateLicense(input: {
     path: "/v1/license/activate",
     licenseKey,
     repo: input.repo,
+    machineId: input.machineId,
     now: input.now,
     fetchImpl: input.fetchImpl
   });
@@ -210,6 +262,7 @@ export async function activateLicense(input: {
       path: "/v1/license/deactivate",
       licenseKey,
       repo: input.repo,
+      machineId: input.machineId,
       now,
       fetchImpl: input.fetchImpl
     });
@@ -497,6 +550,7 @@ async function callLicenseApi(input: {
   path: string;
   licenseKey: string;
   repo?: string;
+  machineId?: string;
   now?: Date;
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
@@ -513,7 +567,7 @@ async function callLicenseApi(input: {
       body: JSON.stringify({
         licenseKey: input.licenseKey,
         repo: input.repo,
-        machineId: localMachineId()
+        machineId: input.machineId ?? localMachineId()
       })
     });
     const text = await readBoundedResponseText(response);

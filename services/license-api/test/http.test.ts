@@ -73,6 +73,23 @@ describe("license http transport", () => {
     assert.equal(res.status, 400);
   });
 
+  it("rejects a malformed repository before it can consume an activation binding", async () => {
+    const rawKey = store.issueLicense({ plan: "yearly", repoVisibilityScope: "private" }).rawKey;
+    const malformed = await post(url, "/v1/license/activate", {
+      licenseKey: rawKey,
+      machineId: "broker-device-http-fixture-123",
+      repo: "octo/private/extra"
+    });
+    assert.equal(malformed.status, 400);
+
+    const canonical = await post(url, "/v1/license/activate", {
+      licenseKey: rawKey,
+      machineId: "broker-device-http-fixture-123",
+      repo: "octo/private"
+    });
+    assert.equal(canonical.status, 200);
+  });
+
   it("activates over HTTP and echoes no raw key", async () => {
     const res = await post(url, "/v1/license/activate", { licenseKey: issuedKey, machineId: "m1" });
     assert.equal(res.status, 200);

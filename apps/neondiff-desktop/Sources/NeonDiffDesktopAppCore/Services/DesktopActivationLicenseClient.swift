@@ -10,17 +10,23 @@ package struct DesktopActivationLicenseClient: ActivationLicenseClienting {
     private let cli: any DesktopCLIExecuting
     private let executablePath: String
     private let configPath: String
+    private let machineId: String
+    private let repository: String
     private let timeout: TimeInterval
 
     package init(
         cli: any DesktopCLIExecuting,
         executablePath: String,
         configPath: String,
+        machineId: String,
+        repository: String,
         timeout: TimeInterval = 20
     ) {
         self.cli = cli
         self.executablePath = executablePath
         self.configPath = configPath
+        self.machineId = machineId
+        self.repository = repository
         self.timeout = timeout
     }
 
@@ -41,6 +47,8 @@ package struct DesktopActivationLicenseClient: ActivationLicenseClienting {
             "--license-storage", "keychain",
             "--license-key-stdin", "true",
             "--persist-local-state", "false",
+            "--license-machine-id", machineId,
+            "--repo", repository,
             "--json"
         ]
         do {
