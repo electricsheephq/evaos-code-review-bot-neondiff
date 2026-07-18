@@ -486,6 +486,59 @@ describe("license activation and entitlement cache", () => {
     expect(requests).toBe(0);
   });
 
+  it("fails closed when a broker device identity is supplied outside native no-local-state activation", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-file-backed-broker-device-test-123456",
+      machineId: "broker-device-binding-123",
+      repo: "octo/private",
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("{}", { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "broker device identity requires native no-local-state activation"
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("fails closed when native no-local-state activation omits the canonical repository", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-missing-repository-test-123456",
+      machineId: "broker-device-binding-123",
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("{}", { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires one canonical repository"
+    });
+    expect(requests).toBe(0);
+  });
+
   it("binds native activation to the explicit broker device and canonical repository", async () => {
     const root = mkRoot(roots);
     const requestBodies: unknown[] = [];
@@ -571,6 +624,7 @@ describe("license activation and entitlement cache", () => {
       config,
       licenseKey: "LIC-keychain-mismatch-test-123456",
       machineId: "broker-device-mismatch-123",
+      repo: "octo/private",
       persistLocalState: false,
       keychainCredentialVerifier: () => false
     });
