@@ -147,6 +147,22 @@ Environment:
   lifecycle route also requires it for deterministic key derivation, but never
   accepts it as request authorization. Keep it only on Fly and the checkout
   webhook server; do not expose it to browsers, clients, workflows, or logs.
+- `GITHUB_BROKER_ENABLED` — exact `true` constructs the managed GitHub App
+  broker; unset/`false` is the kill switch and keeps its routes at typed
+  `broker_unavailable`.
+- `GITHUB_BROKER_APP_ID`, `GITHUB_BROKER_PRIVATE_KEY`,
+  `GITHUB_BROKER_OAUTH_CLIENT_ID`, `GITHUB_BROKER_OAUTH_CLIENT_SECRET`,
+  `GITHUB_BROKER_INSTALL_BASE_URL`, and `GITHUB_BROKER_DB_PATH` — required
+  together when the broker is enabled. The DB path must be absolute and separate
+  from `LICENSE_DB_PATH`. Optional `GITHUB_BROKER_API_BASE_URL` and
+  `GITHUB_BROKER_OAUTH_BASE_URL` default to GitHub's public HTTPS hosts.
+  Configuration errors are reported by setting name/reason only; values are
+  never logged.
+
+This runtime wiring does not supply the production App registration, secrets,
+private-repository entitlement resolver, native client adoption, or live install
+proof. Until those owner-gated and #612 integration steps pass, keep the broker
+disabled in production.
 
 ## Admin issuance CLI
 

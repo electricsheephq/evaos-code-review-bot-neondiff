@@ -117,21 +117,23 @@ the shared `services/license-api` deployment). The broker reads the private key 
 the OAuth client secret from this secret store at runtime and never persists, logs,
 or returns them. These names are the contract for the future production-wiring step
 in `services/license-api/src/http.ts` (`HttpHandlerOptions.githubBroker` →
-`createGitHubBrokerService`), read there from the deployment environment; `server.ts`
-only starts the listener and today passes no `githubBroker` option and reads no
-`GITHUB_BROKER_*` env vars. Until `http.ts` is given `githubBroker`, the shared
-license request listener matches every broker path (`isGitHubBrokerPath`) and
-returns a typed `{ "reason": "broker_unavailable" }` 503 — a deliberate fail-closed
-status, not an unrouted 404:
+`createGitHubBrokerService`), read there from the deployment environment.
+`server.ts` constructs the existing broker seam only when
+`GITHUB_BROKER_ENABLED=true` and every required value below validates. Missing
+or invalid enabled configuration leaves the license API available while every
+broker path returns typed `{ "reason": "broker_unavailable" }` 503. Setting
+`GITHUB_BROKER_ENABLED=false` is the production kill switch; the remaining
+secrets may stay provisioned without activating the broker:
 
 | Secret                          | Purpose |
 |---------------------------------|---------|
+| `GITHUB_BROKER_ENABLED`         | Exact `true` enables construction; unset/`false` keeps every broker route unavailable. |
 | `GITHUB_BROKER_APP_ID`          | Numeric staging App id. |
 | `GITHUB_BROKER_PRIVATE_KEY`     | Staging App private key PEM contents. |
 | `GITHUB_BROKER_OAUTH_CLIENT_ID`     | Staging App OAuth **client id** ("Request user authorization (OAuth) during installation", step 1). Wires to `githubBroker.oauthClientId`. Required for callback identity verification (#614 P1). |
 | `GITHUB_BROKER_OAUTH_CLIENT_SECRET` | Staging App OAuth **client secret**. Wires to `githubBroker.oauthClientSecret`. Used only to exchange the callback `code` for a short-lived user token to confirm installation ownership; never persisted, logged, or returned. |
 | `GITHUB_BROKER_INSTALL_BASE_URL`| `https://github.com/apps/<staging-app-slug>/installations/new`. |
-| `GITHUB_BROKER_DB_PATH`         | Path for the broker SQLite DB on the mounted volume (separate from `LICENSE_DB_PATH`). |
+| `GITHUB_BROKER_DB_PATH`         | Absolute path for the broker SQLite DB on the mounted volume (must differ from `LICENSE_DB_PATH`). |
 | `GITHUB_BROKER_API_BASE_URL`    | Optional; defaults to `https://api.github.com`. |
 | `GITHUB_BROKER_OAUTH_BASE_URL`  | Optional; OAuth authorization host, defaults to `https://github.com`. Wires to `githubBroker.oauthBaseUrl`. |
 
