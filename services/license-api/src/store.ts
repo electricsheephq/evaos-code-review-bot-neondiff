@@ -15,6 +15,10 @@ import {
   type ParsedSubscriptionLifecycleRequest,
   type RenewPaidSubscriptionLifecycleRequest
 } from "./subscription-lifecycle.js";
+import {
+  stripVerifiedLitestreamInternalSchema,
+  type SchemaObjectSignature
+} from "./schema-signature.js";
 
 const SCHEMA_VERSION = 2;
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
@@ -53,13 +57,6 @@ export interface LicenseStoreOptions {
   /** Server-owned clock. Checkout callers cannot override it per issuance. */
   now?: () => Date;
   busyTimeoutMs?: number;
-}
-
-interface SchemaObjectSignature {
-  type: string;
-  name: string;
-  tableName: string;
-  sql: string;
 }
 
 const CORE_SCHEMA = `
@@ -1395,12 +1392,14 @@ function readSchemaSignature(db: DatabaseSync): SchemaObjectSignature[] {
        order by type, name`
     )
     .all() as unknown as Array<{ type: string; name: string; tbl_name: string; sql: string }>;
-  return rows.map((row) => ({
-    type: row.type,
-    name: row.name,
-    tableName: row.tbl_name,
-    sql: normalizeSchemaSql(row.sql)
-  }));
+  return stripVerifiedLitestreamInternalSchema(
+    rows.map((row) => ({
+      type: row.type,
+      name: row.name,
+      tableName: row.tbl_name,
+      sql: normalizeSchemaSql(row.sql)
+    }))
+  );
 }
 
 function normalizeSchemaSql(sql: string): string {
