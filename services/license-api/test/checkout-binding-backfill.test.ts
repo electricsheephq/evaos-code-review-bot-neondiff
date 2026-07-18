@@ -5,7 +5,7 @@ import { afterEach, describe, it } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { LicenseStore } from "../src/store.ts";
+import { LicenseStore, checkoutBindingFingerprint } from "../src/store.ts";
 
 const tempDirectories: string[] = [];
 
@@ -222,6 +222,39 @@ async function concurrentBindings(
 }
 
 describe("checkout subscription binding backfill store", () => {
+  it("fingerprints the issuance, full provider tuple, and authoritative lookup key", () => {
+    assert.equal(
+      checkoutBindingFingerprint({
+        issuanceIdempotencyKey: "checkout-session:cs_fixture",
+        provider: "stripe",
+        providerAccountId: "acct_live_fixture",
+        providerMode: "live",
+        externalSubscriptionId: "sub_fixture",
+        externalCheckoutId: "cs_fixture",
+        checkoutLookupKey: "neondiff_monthly"
+      }),
+      "bnd_7efb5b35c12691630054ec82364dc9d6"
+    );
+
+    const input = {
+      ...binding(),
+      checkoutLookupKey: "neondiff_monthly"
+    } as Parameters<typeof checkoutBindingFingerprint>[0];
+    const baseline = checkoutBindingFingerprint(input);
+    assert.match(baseline, /^bnd_[a-f0-9]{32}$/);
+
+    for (const changed of [
+      { issuanceIdempotencyKey: "checkout-session:other" },
+      { providerAccountId: "acct_other" },
+      { providerMode: "test" as const },
+      { externalSubscriptionId: "sub_other" },
+      { externalCheckoutId: "cs_other" },
+      { checkoutLookupKey: "neondiff_yearly" as const }
+    ]) {
+      assert.notEqual(checkoutBindingFingerprint({ ...input, ...changed }), baseline);
+    }
+  });
+
   it("dry-runs an existing checkout issuance with zero writes", () => {
     const path = databasePath();
     const store = new LicenseStore(path);
@@ -231,6 +264,7 @@ describe("checkout subscription binding backfill store", () => {
 
       assert.equal(result.result, "would_bind");
       assert.match(String(result.issuanceFingerprint), /^iss_[a-f0-9]{32}$/);
+      assert.match(String(result.bindingFingerprint), /^bnd_[a-f0-9]{32}$/);
       assert.equal(bindingCount(path), 0);
     } finally {
       store.close();
@@ -288,6 +322,7 @@ describe("checkout subscription binding backfill store", () => {
       assert.equal(created.result, "bound");
       assert.equal(replayed.result, "already_bound");
       assert.equal(replayed.issuanceFingerprint, created.issuanceFingerprint);
+      assert.equal(replayed.bindingFingerprint, created.bindingFingerprint);
       assert.equal(bindingCount(path), 1);
     } finally {
       second.close();

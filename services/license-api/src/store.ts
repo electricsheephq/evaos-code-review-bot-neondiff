@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   CHECKOUT_LOOKUP_KEYS,
+  checkoutLookupKeyForPlan,
   checkoutPolicyFor,
   isCheckoutLookupKey,
   type CheckoutLookupKey,
@@ -295,12 +296,32 @@ export interface BindCheckoutSubscriptionInput extends CheckoutSubscriptionBindi
 export interface BindCheckoutSubscriptionResult {
   result: "bound" | "already_bound" | "would_bind";
   issuanceFingerprint: string;
+  bindingFingerprint: string;
 }
 
 export function checkoutIssuanceFingerprint(issuanceIdempotencyKey: string): string {
   return `iss_${createHash("sha256")
     .update("neondiff:checkout-binding-backfill:issuance:v1\0")
     .update(issuanceIdempotencyKey.trim())
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
+export function checkoutBindingFingerprint(
+  input: BindCheckoutSubscriptionInput & { checkoutLookupKey: CheckoutLookupKey }
+): string {
+  const canonicalTuple = JSON.stringify([
+    input.issuanceIdempotencyKey,
+    input.provider,
+    input.providerAccountId,
+    input.providerMode,
+    input.externalSubscriptionId,
+    input.externalCheckoutId,
+    input.checkoutLookupKey
+  ]);
+  return `bnd_${createHash("sha256")
+    .update("neondiff:checkout-binding-backfill:tuple:v1\0")
+    .update(canonicalTuple)
     .digest("hex")
     .slice(0, 32)}`;
 }
@@ -621,6 +642,16 @@ export class LicenseStore {
           "checkout issuance entitlement is incompatible with subscription lifecycle"
         );
       }
+      const checkoutLookupKey = checkoutLookupKeyForPlan(record.plan);
+      if (!checkoutLookupKey) {
+        throw new CheckoutBindingConflictError(
+          "checkout issuance plan has no authoritative lookup key"
+        );
+      }
+      const bindingFingerprint = checkoutBindingFingerprint({
+        ...validated,
+        checkoutLookupKey
+      });
 
       const requestedBinding: CheckoutSubscriptionBindingInput = {
         provider: validated.provider,
@@ -641,13 +672,13 @@ export class LicenseStore {
         }
         this.db.exec("commit");
         transactionStarted = false;
-        return { result: "already_bound", issuanceFingerprint };
+        return { result: "already_bound", issuanceFingerprint, bindingFingerprint };
       }
 
       if (options.dryRun) {
         this.db.exec("rollback");
         transactionStarted = false;
-        return { result: "would_bind", issuanceFingerprint };
+        return { result: "would_bind", issuanceFingerprint, bindingFingerprint };
       }
 
       this.db
@@ -668,7 +699,7 @@ export class LicenseStore {
         );
       this.db.exec("commit");
       transactionStarted = false;
-      return { result: "bound", issuanceFingerprint };
+      return { result: "bound", issuanceFingerprint, bindingFingerprint };
     } catch (error) {
       if (transactionStarted) this.db.exec("rollback");
       if (isSqliteBusy(error)) {

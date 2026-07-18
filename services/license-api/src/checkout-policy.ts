@@ -54,6 +54,10 @@ export function checkoutPolicyFor(key: CheckoutLookupKey): CheckoutPolicy {
   return CHECKOUT_POLICIES[key];
 }
 
+export function checkoutLookupKeyForPlan(plan: string): CheckoutLookupKey | undefined {
+  return CHECKOUT_LOOKUP_KEYS.find((key) => CHECKOUT_POLICIES[key].plan === plan);
+}
+
 export function isCheckoutLookupKey(value: string): value is CheckoutLookupKey {
   return Object.prototype.hasOwnProperty.call(CHECKOUT_POLICIES, value);
 }

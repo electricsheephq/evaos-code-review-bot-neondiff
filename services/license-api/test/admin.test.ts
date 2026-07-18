@@ -135,16 +135,21 @@ describe("admin issuance CLI", () => {
     assert.doesNotMatch(output, /\u001b|forged-admin-line|cus_/);
   });
 
-  it("bind-checkout-subscription dry-run writes nothing and emits only result plus fingerprint", () => {
+  it("bind-checkout-subscription dry-run writes nothing and emits only redacted tuple proof", () => {
     issueLegacyCheckout();
     lines = [];
 
     assert.equal(runAdmin(bindArgs(["--dry-run"]), store, out), 0);
     assert.equal(lines.length, 1);
     const output = JSON.parse(lines[0]) as Record<string, unknown>;
-    assert.deepEqual(Object.keys(output).sort(), ["issuanceFingerprint", "result"]);
+    assert.deepEqual(Object.keys(output).sort(), [
+      "bindingFingerprint",
+      "issuanceFingerprint",
+      "result"
+    ]);
     assert.equal(output.result, "would_bind");
     assert.match(String(output.issuanceFingerprint), /^iss_[a-f0-9]{32}$/);
+    assert.match(String(output.bindingFingerprint), /^bnd_[a-f0-9]{32}$/);
 
     lines = [];
     assert.equal(runAdmin(bindArgs(), store, out), 0);
@@ -164,6 +169,7 @@ describe("admin issuance CLI", () => {
 
     assert.equal(replay.result, "already_bound");
     assert.equal(replay.issuanceFingerprint, first.issuanceFingerprint);
+    assert.equal(replay.bindingFingerprint, first.bindingFingerprint);
     const output = JSON.stringify([first, replay]);
     for (const secret of [
       rawKey,
