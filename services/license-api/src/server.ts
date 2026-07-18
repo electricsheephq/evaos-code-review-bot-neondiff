@@ -2,6 +2,7 @@ import { LicenseStore } from "./store.js";
 import { startLicenseServer } from "./http.js";
 import { createGitHubActionsOidcVerifier } from "./oidc-lifecycle.js";
 import { RateLimiter } from "./service.js";
+import { loadGitHubBrokerRuntimeConfig } from "./github-broker/runtime-config.js";
 
 /**
  * Production entrypoint. SQLite lives on a mounted volume in deploy
@@ -15,6 +16,16 @@ async function main(): Promise<void> {
   // Fly injects FLY_APP_NAME into Machines. Outside that operator-controlled
   // runtime, request-supplied Fly headers are untrusted and ignored.
   const trustFlyProxyHeaders = Boolean(process.env.FLY_APP_NAME?.trim());
+  const githubBrokerRuntime = loadGitHubBrokerRuntimeConfig(process.env, dbPath);
+  if (githubBrokerRuntime.status === "invalid") {
+    // Setting name + fixed reason are public-safe. Never log the submitted value.
+    // The license API remains available while every broker route fails closed
+    // with the existing typed `broker_unavailable` response.
+    // eslint-disable-next-line no-console
+    console.error(
+      `github broker unavailable: ${githubBrokerRuntime.setting} ${githubBrokerRuntime.reason}`
+    );
+  }
   const store = new LicenseStore(dbPath);
   const { url } = await startLicenseServer({
     store,
@@ -26,7 +37,10 @@ async function main(): Promise<void> {
       maxPerWindow: 60,
       windowMs: 60_000
     }),
-    lifecycleOidcVerifier: createGitHubActionsOidcVerifier()
+    lifecycleOidcVerifier: createGitHubActionsOidcVerifier(),
+    ...(githubBrokerRuntime.status === "ready"
+      ? { githubBroker: githubBrokerRuntime.deps }
+      : {})
   });
   // eslint-disable-next-line no-console
   console.log(`license-api listening on ${url} (db=${dbPath})`);
