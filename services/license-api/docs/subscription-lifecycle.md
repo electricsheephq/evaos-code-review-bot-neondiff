@@ -161,10 +161,12 @@ accept a raw key, plan, expiry, scope, ownership, update access, or seat count.
    ```
 
 2. Verify the redacted result is `would_bind` with an opaque `iss_...`
-   fingerprint. `not_found`, `wrong_source`, `conflict`, or `unavailable` is a
-   stop condition.
-3. Record explicit production owner approval against that fingerprint and
-   tuple. Dry-run success is not authorization to write production.
+   issuance fingerprint and a `bnd_...` fingerprint covering the exact
+   provider account/mode/subscription/checkout tuple plus the server-derived
+   checkout lookup key. `not_found`, `wrong_source`, `conflict`, or
+   `unavailable` is a stop condition.
+3. Record explicit production owner approval against both fingerprints and the
+   exact tuple. Dry-run success is not authorization to write production.
 4. Repeat the same command without `--dry-run` only inside the approved
    production maintenance procedure. Expect `bound`; an exact retry returns
    `already_bound`.

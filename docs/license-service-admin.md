@@ -110,9 +110,10 @@ maximum period, USD currency, scope, and one-seat authority.
 
 Legacy checkout binding uses the admin
 `bind-checkout-subscription` command. Run `--dry-run` first, review the opaque
-issuance fingerprint and exact tuple, and require explicit production owner
-approval before the write form. Never accept or print a raw key, and do not
-mint a replacement key during reconciliation.
+issuance fingerprint plus the full provider/checkout/lookup-key tuple
+fingerprint, and require explicit production owner approval before the write
+form. Never accept or print a raw key, and do not mint a replacement key during
+reconciliation.
 
 The complete matrix, result mapping, rollout steps, and redaction contract live
 in

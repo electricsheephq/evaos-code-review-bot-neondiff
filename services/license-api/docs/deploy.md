@@ -171,8 +171,9 @@ cache is diagnostic only; it does not authorize review during an outage.
 
 Run `bind-checkout-subscription ... --dry-run` first for every verified legacy
 `source=checkout` issuance. A production write needs explicit owner approval of
-the opaque fingerprint and exact provider tuple. Do not recover a raw key or
-mint a replacement during reconciliation. See
+the opaque issuance and full-tuple fingerprints plus the exact provider and
+server-derived lookup-key tuple. Do not recover a raw key or mint a replacement
+during reconciliation. See
 [`admin-runbook.md`](admin-runbook.md).
 
 Then hand the redacted source/contract evidence to #559. This runbook does not
