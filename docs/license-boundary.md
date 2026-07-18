@@ -87,7 +87,9 @@ Keychain-owned, crosses bounded stdin for activation and a fixed-origin HTTPS
 request body for private token issuance, and is never persisted by the broker.
 Public token issuance omits the key and does not query the license authority.
 These source contracts remain rollout-disabled until production integration and
-customer canaries pass.
+customer canaries pass. Generic CLI status/deactivate and daemon-admission
+validation still use the legacy local identity; #630 must migrate those runtime
+callers before the managed path can be enabled.
 
 Evidence should name the command, repo visibility source, license gate result,
 pre-checkout gate result, and redacted evidence path. It must not include raw

@@ -73,6 +73,8 @@ same device/repository activation and never logs, reflects, or persists the raw
 key. Public requests omit the key and never consult the license authority.
 The production kill switch remains off until the paid-beta integration and
 canary gates pass, so this source contract is not production-wiring proof.
+Generic CLI status/deactivate and daemon-admission validation still use the
+legacy local identity; #630 owns that runtime migration before enablement.
 
 1. Open the NeonDiff GitHub App install URL.
 2. Choose the user or organization that owns the repositories.

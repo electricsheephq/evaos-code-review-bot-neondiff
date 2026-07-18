@@ -423,6 +423,8 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: key,
+      machineId: "broker-device-native-123",
+      repo: "octo/private",
       persistLocalState: false,
       keychainCredentialVerifier: (credential) => {
         verifiedKeychainCredentials.push(credential);
@@ -446,6 +448,42 @@ describe("license activation and entitlement cache", () => {
     expect(JSON.stringify(result)).not.toContain(key);
     expect(existsSync(join(root, "license.key"))).toBe(false);
     expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
+  it("fails closed when native no-local-state activation omits the broker device identity", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-missing-binding-test-123456",
+      repo: "octo/private",
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response(JSON.stringify({
+          status: "active",
+          repoVisibilityScope: "private",
+          privateRepoAllowed: true,
+          updateEntitlement: true
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires a broker device identity"
+    });
+    expect(requests).toBe(0);
   });
 
   it("binds native activation to the explicit broker device and canonical repository", async () => {
@@ -532,6 +570,7 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: "LIC-keychain-mismatch-test-123456",
+      machineId: "broker-device-mismatch-123",
       persistLocalState: false,
       keychainCredentialVerifier: () => false
     });

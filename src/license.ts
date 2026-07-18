@@ -155,6 +155,16 @@ export async function activateLicense(input: {
       detail: "Keychain license activation is disabled in headless CLI until native no-argv secret storage is available; use storageBackend=file"
     };
   }
+  if (!persistLocalState && !input.machineId?.trim()) {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "no-local-state activation requires a broker device identity"
+    };
+  }
   const licenseKey = input.licenseKey.trim();
   if (!licenseKey) return missingResult(now, "license key is empty");
   if (!input.config.apiBaseUrl) return serverResult(now, "license API base URL is not configured");
