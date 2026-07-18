@@ -539,6 +539,42 @@ describe("license activation and entitlement cache", () => {
     expect(requests).toBe(0);
   });
 
+  it.each([
+    "octo",
+    "octo/private/extra",
+    "/private",
+    "octo/",
+    "-octo/private",
+    "octo-/private"
+  ])("fails closed when native no-local-state activation receives malformed repository %j", async (repo) => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-malformed-repository-test-123456",
+      machineId: "broker-device-binding-123",
+      repo,
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("{}", { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires one canonical repository"
+    });
+    expect(requests).toBe(0);
+  });
+
   it("binds native activation to the explicit broker device and canonical repository", async () => {
     const root = mkRoot(roots);
     const requestBodies: unknown[] = [];

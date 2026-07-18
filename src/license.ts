@@ -19,6 +19,8 @@ import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 import type { LicenseSecretReader } from "./license-secret-store.js";
 
 const MAXIMUM_LICENSE_API_RESPONSE_BYTES = 64 * 1024;
+const CANONICAL_GITHUB_REPOSITORY_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
 
 export type LicenseStorageBackend = "keychain" | "file";
 export type LicenseStatus =
@@ -175,7 +177,15 @@ export async function activateLicense(input: {
       detail: "broker device identity requires native no-local-state activation"
     };
   }
-  if (!persistLocalState && !input.repo?.trim()) {
+  const repository = input.repo?.trim();
+  if (
+    !persistLocalState
+    && (
+      !repository
+      || repository !== input.repo
+      || !CANONICAL_GITHUB_REPOSITORY_PATTERN.test(repository)
+    )
+  ) {
     return {
       ok: false,
       status: "invalid",
