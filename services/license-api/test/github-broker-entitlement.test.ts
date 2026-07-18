@@ -85,7 +85,11 @@ describe("github broker entitlement binding at the mint path (#614)", () => {
       const response = await post(
         harness.url,
         "/github/token",
-        { installationId: INSTALL.id, repositories: ["octo/private"] },
+        {
+          installationId: INSTALL.id,
+          repositories: ["octo/private"],
+          activationKey: "nd_live_keychain-owned-test-material"
+        },
         bearer(await device.sign())
       );
       assert.equal(response.status, 200, response.text);
@@ -95,6 +99,10 @@ describe("github broker entitlement binding at the mint path (#614)", () => {
       assert.equal(resolver.contexts.length, 1);
       assert.deepEqual(resolver.contexts[0].privateRepositories, ["octo/private"]);
       assert.equal(resolver.contexts[0].accountLogin, "octo");
+      assert.equal(
+        resolver.contexts[0].activationKey,
+        "nd_live_keychain-owned-test-material"
+      );
       assert.deepEqual(resolver.mintCountsAtResolve, [0], "no token minted before entitlement decided");
 
       const listIndex = fake.calls.findIndex((call) => call.op === "listInstallationRepositories");
@@ -116,7 +124,11 @@ describe("github broker entitlement binding at the mint path (#614)", () => {
       const response = await post(
         harness.url,
         "/github/token",
-        { installationId: INSTALL.id, repositories: ["octo/site"] },
+        {
+          installationId: INSTALL.id,
+          repositories: ["octo/site"],
+          activationKey: "nd_live_public-path-must-ignore-this"
+        },
         bearer(await device.sign())
       );
       assert.equal(response.status, 200, response.text);

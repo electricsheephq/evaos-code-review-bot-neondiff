@@ -31,7 +31,15 @@ import Testing
 
     private func client(_ fixture: Result<CLIRunResult, Error>) -> (CLIActivationLicenseClient, StubCLI) {
         let stub = StubCLI(fixture)
-        return (CLIActivationLicenseClient(cli: stub, configPath: "config.local.json"), stub)
+        return (
+            CLIActivationLicenseClient(
+                cli: stub,
+                configPath: "config.local.json",
+                machineId: "broker-device-binding-123",
+                repository: "octo/private"
+            ),
+            stub
+        )
     }
 
     private func success(_ json: String) -> Result<CLIRunResult, Error> {
@@ -77,6 +85,10 @@ import Testing
         #expect(stub.lastArguments.contains("false"))
         #expect(stub.lastArguments.contains("--license-storage"))
         #expect(stub.lastArguments.contains("keychain"))
+        #expect(stub.lastArguments.contains("--license-machine-id"))
+        #expect(stub.lastArguments.contains("broker-device-binding-123"))
+        #expect(stub.lastArguments.contains("--repo"))
+        #expect(stub.lastArguments.contains("octo/private"))
         #expect(stub.lastArguments.contains("--json"))
         #expect(!stub.lastArguments.contains("--license-key"))
     }

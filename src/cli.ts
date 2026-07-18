@@ -364,6 +364,9 @@ async function main(): Promise<void> {
         persistLocalState: args["persist-local-state"] === undefined
           ? true
           : parseBooleanArg(args["persist-local-state"], "--persist-local-state"),
+        ...(args["license-machine-id"]
+          ? { machineId: parseLicenseMachineIdArg(args["license-machine-id"]) }
+          : {}),
         ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
       });
       console.log(stringifyRedactedJson({ command: "license activate", ...result }));
@@ -3309,6 +3312,7 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--license-key-stdin", description: "true to read one bounded license key from stdin (activate only)." },
       { name: "--license-storage", description: "keychain for the native Keychain-owned activation path; file otherwise." },
       { name: "--persist-local-state", description: "false only when the submitted key matches the canonical native Keychain item; defaults true." },
+      { name: "--license-machine-id", description: "Native-only non-secret broker device binding; never an Activation Key." },
       { name: "--repo", description: "Repo to scope activation/status to, owner/name." },
       { name: "--refresh", description: "true to force a fresh status check instead of cached." }
     ]
@@ -3681,6 +3685,17 @@ async function resolveLicenseKeyArg(args: ParsedArgs, stdin: NodeJS.ReadableStre
 function parseLicenseStorageBackend(value: string): "keychain" | "file" {
   if (value === "keychain" || value === "file") return value;
   throw new Error("--license-storage must be keychain or file");
+}
+
+function parseLicenseMachineIdArg(value: ParsedArgs[string]): string {
+  if (value === undefined) {
+    throw new Error("--license-machine-id requires a value");
+  }
+  const machineId = parseSingleArg(value, "--license-machine-id");
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(machineId)) {
+    throw new Error("--license-machine-id must be one 8-128 character non-secret broker device id");
+  }
+  return machineId;
 }
 
 function setParsedArg(parsed: ParsedArgs, key: string, value: string, repeatableArgs: Set<string>): void {

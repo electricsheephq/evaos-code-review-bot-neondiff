@@ -448,6 +448,43 @@ describe("license activation and entitlement cache", () => {
     expect(existsSync(join(root, "entitlement.json"))).toBe(false);
   });
 
+  it("binds native activation to the explicit broker device and canonical repository", async () => {
+    const root = mkRoot(roots);
+    const requestBodies: unknown[] = [];
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-binding-test-123456",
+      repo: "octo/private",
+      machineId: "broker-device-binding-123",
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async (_url, init) => {
+        requestBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({
+          status: "active",
+          repoVisibilityScope: "private",
+          privateRepoAllowed: true,
+          updateEntitlement: true
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }) as typeof fetch
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requestBodies).toEqual([{
+      licenseKey: "LIC-keychain-binding-test-123456",
+      repo: "octo/private",
+      machineId: "broker-device-binding-123"
+    }]);
+    expect(JSON.stringify(result)).not.toContain("LIC-keychain-binding-test-123456");
+  });
+
   it("refuses no-local-state activation unless Keychain owns the recoverable credential", async () => {
     const root = mkRoot(roots);
     let requests = 0;

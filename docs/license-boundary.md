@@ -81,6 +81,14 @@ will allow public open-source review with no Activation Key once server-side
 visibility verification ships; that public-free path is not enforced by the
 current CLI.
 
+For the managed native path, private entitlement is bound to the authenticated
+broker device and exact GitHub-selected repository. The raw Activation Key is
+Keychain-owned, crosses bounded stdin for activation and a fixed-origin HTTPS
+request body for private token issuance, and is never persisted by the broker.
+Public token issuance omits the key and does not query the license authority.
+These source contracts remain rollout-disabled until production integration and
+customer canaries pass.
+
 Evidence should name the command, repo visibility source, license gate result,
 pre-checkout gate result, and redacted evidence path. It must not include raw
 private diffs, provider keys, GitHub App private keys, license keys, or customer

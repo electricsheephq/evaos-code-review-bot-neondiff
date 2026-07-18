@@ -526,7 +526,8 @@ public struct GitHubBrokerClient: Sendable {
     public func issueToken(
         identity: GitHubBrokerDeviceIdentity,
         installationId: Int,
-        repositories: [String]
+        repositories: [String],
+        activationKey: ActivationKeyMaterial? = nil
     ) async throws -> GitHubInstallationAccessGrant {
         guard installationId > 0,
               repositories.isEmpty == false,
@@ -536,12 +537,16 @@ public struct GitHubBrokerClient: Sendable {
         else {
             throw GitHubBrokerClientError.invalidRequest
         }
+        var body: [String: Any] = [
+            "installationId": installationId,
+            "repositories": repositories
+        ]
+        if let activationKey {
+            activationKey.withRawValue { body["activationKey"] = $0 }
+        }
         let response: TokenResponse = try await post(
             path: "/github/token",
-            body: [
-                "installationId": installationId,
-                "repositories": repositories
-            ],
+            body: body,
             credential: try identity.makeCredential(now: now())
         )
         guard response.status == "issued",

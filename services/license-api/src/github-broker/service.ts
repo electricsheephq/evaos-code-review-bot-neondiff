@@ -40,8 +40,8 @@ const PERMISSION_SCOPE_RANK: Record<string, number> = { read: 1, write: 2, admin
 
 /**
  * Context handed to the entitlement resolver for a private/internal token
- * request. Only the ids and the private repository names are exposed — never a
- * license key or provider secret — so a resolver stays public-safe.
+ * request. The raw Activation Key is optional and may cross only this in-memory
+ * seam; production resolvers must never log, persist, or reflect it.
  */
 export interface EntitlementResolutionContext {
   deviceId: string;
@@ -49,6 +49,8 @@ export interface EntitlementResolutionContext {
   accountLogin?: string;
   /** The requested repositories whose visibility is private or internal. */
   privateRepositories: string[];
+  /** Keychain-owned client credential, accepted only over the authenticated HTTPS route. */
+  activationKey?: string;
 }
 
 /**
@@ -355,7 +357,7 @@ export class GitHubBrokerService {
   ): Promise<Record<string, unknown>> {
     const at = this.now();
     const deviceId = await authenticateDevice(this.store, authorization, at);
-    const { installationId, repositories, permissions } = parseTokenRequest(body);
+    const { installationId, repositories, permissions, activationKey } = parseTokenRequest(body);
 
     if (!this.tokenRateLimiter.allow(hashKey(`token:${deviceId}`), at.getTime())) {
       throw new BrokerError("rate_limited", "too many token requests for this device");
@@ -397,7 +399,8 @@ export class GitHubBrokerService {
         deviceId,
         installationId,
         installation.account_login,
-        requested
+        requested,
+        activationKey
       );
 
       // The issuance seam: the ONLY path to minting.
@@ -481,7 +484,8 @@ export class GitHubBrokerService {
     deviceId: string,
     installationId: number,
     accountLogin: string | undefined,
-    requested: RequestedRepository[]
+    requested: RequestedRepository[],
+    activationKey: string | undefined
   ): Promise<EntitlementSnapshot> {
     if (requested.some((repository) => repository.visibility === "unknown")) {
       return { status: "none" };
@@ -495,7 +499,8 @@ export class GitHubBrokerService {
         deviceId,
         installationId,
         ...(accountLogin ? { accountLogin } : {}),
-        privateRepositories
+        privateRepositories,
+        ...(activationKey ? { activationKey } : {})
       });
     } catch {
       return { status: "service_unavailable" };
@@ -541,6 +546,7 @@ function parseTokenRequest(body: unknown): {
   installationId: number;
   repositories: string[];
   permissions?: Record<string, string>;
+  activationKey?: string;
 } {
   const record = asObject(body);
   const installationId = parseInstallationId(record.installationId);
@@ -558,7 +564,25 @@ function parseTokenRequest(body: unknown): {
     return value;
   });
   const permissions = parsePermissions(record.permissions);
-  return { installationId, repositories, ...(permissions ? { permissions } : {}) };
+  const activationKey = parseActivationKey(record.activationKey);
+  return {
+    installationId,
+    repositories,
+    ...(permissions ? { permissions } : {}),
+    ...(activationKey ? { activationKey } : {})
+  };
+}
+
+function parseActivationKey(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new BrokerError("invalid_request", "activationKey must be a string");
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 512) {
+    throw new BrokerError("invalid_request", "activationKey is invalid");
+  }
+  return trimmed;
 }
 
 function parseRepositoryListRequest(body: unknown): {

@@ -121,6 +121,8 @@ export async function activateLicense(input: {
   config: LicenseConfig;
   licenseKey: string;
   repo?: string;
+  /** Native-only non-secret binding. Defaults to the legacy local host hash. */
+  machineId?: string;
   /**
    * Persist the raw key plus redacted entitlement cache for the headless CLI.
    * Native callers keep the only raw copy in Keychain and set this false.
@@ -185,6 +187,7 @@ export async function activateLicense(input: {
     path: "/v1/license/activate",
     licenseKey,
     repo: input.repo,
+    machineId: input.machineId,
     now: input.now,
     fetchImpl: input.fetchImpl
   });
@@ -210,6 +213,7 @@ export async function activateLicense(input: {
       path: "/v1/license/deactivate",
       licenseKey,
       repo: input.repo,
+      machineId: input.machineId,
       now,
       fetchImpl: input.fetchImpl
     });
@@ -497,6 +501,7 @@ async function callLicenseApi(input: {
   path: string;
   licenseKey: string;
   repo?: string;
+  machineId?: string;
   now?: Date;
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
@@ -513,7 +518,7 @@ async function callLicenseApi(input: {
       body: JSON.stringify({
         licenseKey: input.licenseKey,
         repo: input.repo,
-        machineId: localMachineId()
+        machineId: input.machineId ?? localMachineId()
       })
     });
     const text = await readBoundedResponseText(response);

@@ -25,6 +25,7 @@ export {
   type EntitlementResolutionContext
 } from "./service.js";
 export { GitHubBrokerStore } from "./store.js";
+export { createLicenseStoreEntitlementResolver } from "./license-entitlement.js";
 export {
   createGitHubBrokerService,
   handleGitHubBrokerRequest,

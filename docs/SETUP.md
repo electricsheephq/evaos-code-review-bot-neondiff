@@ -205,6 +205,16 @@ The local `machineId` sent to the license API is advisory beta metadata derived
 from host name and platform, not hardware attestation or a durable seat-binding
 primitive.
 
+The managed native beta path replaces that advisory host hash with the
+Keychain-backed GitHub broker device ID and binds activation to the exact
+GitHub-selected `owner/repo`. The Activation Key stays Keychain-owned and
+crosses only two bounded channels: stdin to `license activate`, then the
+fixed-origin broker HTTPS request body when a private token is requested. The
+broker uses it for an in-memory license lookup and never logs, reflects, or
+persists it. Public-repository token requests omit the key and do not call the
+license authority. This path is still rollout-disabled; these contracts do not
+prove production enablement or customer readiness.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and
