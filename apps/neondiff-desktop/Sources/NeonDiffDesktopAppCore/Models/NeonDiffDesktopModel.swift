@@ -75,6 +75,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var configPath: String {
         didSet {
             guard configPath != oldValue else { return }
+            invalidateManagedRepoApplicationProof()
             invalidateProviderConfigAuthorization()
             invalidateProviderVerificationContext()
         }
@@ -141,6 +142,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var pendingActivationKey = ""
     @Published package private(set) var activationVerifiedThisLaunch = false
     private var activationVerifiedRepositoryThisLaunch: String?
+    private var appliedManagedRepoSelection: AppliedManagedRepoSelection?
 
     package var productionActivationBoundaryMessage: String {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
@@ -148,6 +150,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package var productionUsefulWorkAvailable: Bool {
         guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
+            return false
+        }
+        guard !isConfigPatchInProgress else {
             return false
         }
         guard dependencies.productionBoundary.managedGitHubBrokerOrigin != nil else {
@@ -159,6 +164,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
                   $0.fullName == selectedManagedGitHubRepository
               })
         else {
+            return false
+        }
+        guard appliedManagedRepoSelection == AppliedManagedRepoSelection(
+            repository: selectedManagedGitHubRepository,
+            configPath: configPath
+        ) else {
             return false
         }
         switch repository.visibility {
@@ -245,6 +256,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var previewedProviderSnapshot: ProviderConfigurationSnapshot?
     private var previewedProviderExpectedRevision: String?
     private var pendingProviderPatchProof: PendingProviderPatchProof?
+    private var pendingManagedRepoPatchProof: PendingManagedRepoPatchProof?
 
     package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
@@ -1088,6 +1100,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubConnectionTask?.cancel()
         isManagedGitHubConnectionInProgress = true
         managedGitHubConnectionState = .verificationRequired
+        invalidateManagedRepoApplicationProof()
         managedGitHubRecovery = nil
         managedGitHubRepositories = []
         selectedManagedGitHubRepository = nil
@@ -1102,7 +1115,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             do {
                 let identity = try GitHubBrokerDeviceIdentityStore(
                     secretStore: dependencies.secretStore
-                ).loadOrCreate()
+                ).loadExisting()
                 try await loadManagedGitHubRepositories(
                     broker: broker,
                     identity: identity,
@@ -1129,6 +1142,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
+        invalidateManagedRepoApplicationProof()
         selectedManagedGitHubRepository = repository.fullName
         for index in repos.indices {
             repos[index].enabled = false
@@ -1442,11 +1456,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     // MARK: - Native activation handoff (#612)
 
-    /// The new return/redeem surface is feature-flagged off by default; enabling
-    /// it is the rollback control per the issue AC. Existing validated licenses
-    /// are untouched either way.
+    /// Managed production onboarding always uses the native return/redeem state
+    /// machine. Outside that exact broker contract it remains preference-gated,
+    /// preserving the existing rollback control for legacy/local builds.
     package var activationHandoffEnabled: Bool {
-        dependencies.preferences.bool(forKey: activationHandoffEnabledKey)
+        managedGitHubAvailable
+            || dependencies.preferences.bool(forKey: activationHandoffEnabledKey)
     }
 
     /// Production checkout stays disabled pending #562 + website #46. Until then
@@ -1757,7 +1772,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func requireProductionUsefulWorkAuthorization() -> Bool {
         guard productionUsefulWorkAvailable else {
             let message = dependencies.productionBoundary.nativeActivationBrokerVerified
-                ? "Verify the selected repository and its current entitlement before running NeonDiff."
+                ? "Verify and apply the selected repository, then verify its current entitlement before running NeonDiff."
                 : productionActivationBoundaryMessage
             lastError = message
             logText = message
@@ -1780,11 +1795,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
         arguments: [String],
         displayCommand: DesktopCommand,
         controlCenterOperation: ControlCenterOperation? = nil,
-        providerPatchProof: PendingProviderPatchProof? = nil
+        providerPatchProof: PendingProviderPatchProof? = nil,
+        managedRepoPatchProof: PendingManagedRepoPatchProof? = nil
     ) {
         if let providerVerificationSafetyLatchMessage {
             lastError = providerVerificationSafetyLatchMessage
             clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
+            clearPendingManagedRepoPatchProof(ifOwnedBy: managedRepoPatchProof)
             if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
             return
         }
@@ -1794,11 +1811,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && (isProviderVerificationInProgress || isProviderVerificationCancelling) {
             lastError = "Wait for provider verification cleanup before changing config."
             clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
+            clearPendingManagedRepoPatchProof(ifOwnedBy: managedRepoPatchProof)
             if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
             return
         }
         if isConfigPatchCommand && (isConfigPatchInProgress || isConfigInspectInProgress) {
             lastError = "Another config operation is still running."
+            clearPendingManagedRepoPatchProof(ifOwnedBy: managedRepoPatchProof)
             if controlCenterOperation != nil {
                 controlCenterStatus = lastError ?? "Control-center command deferred."
                 isControlCenterOperationInProgress = false
@@ -1830,12 +1849,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         launchdLabel: launchdLabel,
                         isConfigInspectCommand: isConfigInspectCommand,
                         controlCenterOperation: controlCenterOperation,
-                        providerPatchProof: providerPatchProof
+                        providerPatchProof: providerPatchProof,
+                        managedRepoPatchProof: managedRepoPatchProof
                     )
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
                     if isConfigInspectCommand { self.isConfigInspectInProgress = false }
                     if controlCenterOperation != nil { self.isControlCenterOperationInProgress = false }
                     self.clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
+                    self.clearPendingManagedRepoPatchProof(ifOwnedBy: managedRepoPatchProof)
                 }
             } catch {
                 await MainActor.run {
@@ -1843,6 +1864,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     self.logText = self.lastError ?? "Unknown CLI error"
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
                     self.clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
+                    self.clearPendingManagedRepoPatchProof(ifOwnedBy: managedRepoPatchProof)
                     if isConfigInspectCommand {
                         self.invalidateProviderConfigAuthorization()
                         self.invalidateControlCenterAfterInspectFailure(self.lastError ?? "Config inspect failed.")
@@ -1974,7 +1996,23 @@ package final class NeonDiffDesktopModel: ObservableObject {
         if !dryRun {
             arguments.append(contentsOf: ["--confirm", "true"])
         }
-        runCLI(arguments: arguments, displayCommand: dryRun ? repoSelectionPatchPreviewCommand : repoSelectionPatchApplyCommand)
+        let proof: PendingManagedRepoPatchProof?
+        if !dryRun, managedGitHubAvailable, let selectedManagedGitHubRepository {
+            appliedManagedRepoSelection = nil
+            proof = PendingManagedRepoPatchProof(
+                id: UUID(),
+                repository: selectedManagedGitHubRepository,
+                configPath: configPath
+            )
+            pendingManagedRepoPatchProof = proof
+        } else {
+            proof = nil
+        }
+        runCLI(
+            arguments: arguments,
+            displayCommand: dryRun ? repoSelectionPatchPreviewCommand : repoSelectionPatchApplyCommand,
+            managedRepoPatchProof: proof
+        )
     }
 
     private func gitHubAccessTokenForAPI() async throws -> String {
@@ -2187,6 +2225,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func applyManagedGitHubFailure(_ error: Error) {
+        invalidateManagedRepoApplicationProof()
         managedGitHubConnectionState = .failed
         managedGitHubRepositories = []
         selectedManagedGitHubRepository = nil
@@ -2219,11 +2258,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     action: .reconnect
                 )
             }
-        } else if error is GitHubBrokerDeviceIdentityError {
+        } else if let identityError = error as? GitHubBrokerDeviceIdentityError {
             recovery = GitHubConnectionRecovery(
                 status: "device identity unavailable",
                 message: "The Keychain-backed GitHub device identity is unavailable. NeonDiff did not create a replacement binding.",
-                action: .retry
+                action: identityError == .storedIdentityMissing ? .reconnect : .retry
             )
         } else if let modelError = error as? ManagedGitHubModelError {
             recovery = modelError.recovery
@@ -2292,10 +2331,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
         launchdLabel: String,
         isConfigInspectCommand: Bool,
         controlCenterOperation: ControlCenterOperation? = nil,
-        providerPatchProof: PendingProviderPatchProof? = nil
+        providerPatchProof: PendingProviderPatchProof? = nil,
+        managedRepoPatchProof: PendingManagedRepoPatchProof? = nil
     ) {
         if let providerPatchProof,
            pendingProviderPatchProof?.id != providerPatchProof.id {
+            return
+        }
+        if let managedRepoPatchProof,
+           pendingManagedRepoPatchProof?.id != managedRepoPatchProof.id {
             return
         }
         let redactedStdout = result.redactedStdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2334,6 +2378,25 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 lastError = ConfigInspectParser.error(result.stdout, command: "config patch")
                     ?? lastError
                     ?? "Provider patch returned an invalid or stale response. Reload current config."
+                return
+            }
+        }
+        if let managedRepoPatchProof {
+            let appliedRepositories = parsedSnapshot?.repos
+                .filter(\.enabled)
+                .map(\.name) ?? []
+            guard result.exitCode == 0,
+                  commandName == "config patch",
+                  parsedSnapshot?.dryRun == false,
+                  parsedSnapshot?.wrote == true,
+                  appliedRepositories == [managedRepoPatchProof.repository],
+                  configPath == managedRepoPatchProof.configPath,
+                  selectedManagedGitHubRepository == managedRepoPatchProof.repository
+            else {
+                invalidateManagedRepoApplicationProof()
+                lastError = ConfigInspectParser.error(result.stdout, command: "config patch")
+                    ?? lastError
+                    ?? "Managed repository allowlist apply returned invalid or mismatched readback. Apply the exact verified selection again."
                 return
             }
         }
@@ -2448,6 +2511,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     providerVerificationStatus = "Provider config applied and read back. Verification is enabled for eligible targets."
                 }
                 clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
+            }
+            if commandName == "config patch", let managedRepoPatchProof {
+                appliedManagedRepoSelection = AppliedManagedRepoSelection(
+                    repository: managedRepoPatchProof.repository,
+                    configPath: managedRepoPatchProof.configPath
+                )
+                clearPendingManagedRepoPatchProof(ifOwnedBy: managedRepoPatchProof)
+                logText = "Managed repository allowlist applied and read back for \(managedRepoPatchProof.repository)."
             }
             if commandName == "config patch",
                let operation = controlCenterOperation,
@@ -2613,6 +2684,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         pendingProviderPatchProof = nil
     }
 
+    private func clearPendingManagedRepoPatchProof(ifOwnedBy proof: PendingManagedRepoPatchProof?) {
+        guard let proof, pendingManagedRepoPatchProof?.id == proof.id else { return }
+        pendingManagedRepoPatchProof = nil
+    }
+
+    private func invalidateManagedRepoApplicationProof() {
+        appliedManagedRepoSelection = nil
+        pendingManagedRepoPatchProof = nil
+    }
+
     private func invalidateControlCenterAfterPatchFailure(_ message: String) {
         invalidateControlCenterAuthorization(message)
         controlCenterStatus = lastError ?? "Config patch failed. Reload current config."
@@ -2662,6 +2743,17 @@ private struct PendingProviderPatchProof: Sendable {
     let snapshot: ProviderConfigurationSnapshot
     let expectedRevision: String
     let mode: ConfigPatchProofMode
+}
+
+private struct PendingManagedRepoPatchProof: Sendable {
+    let id: UUID
+    let repository: String
+    let configPath: String
+}
+
+private struct AppliedManagedRepoSelection: Equatable, Sendable {
+    let repository: String
+    let configPath: String
 }
 
 private enum ControlCenterOperation: Sendable {

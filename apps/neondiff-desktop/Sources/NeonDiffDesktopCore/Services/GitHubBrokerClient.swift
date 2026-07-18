@@ -16,6 +16,7 @@ public struct GitHubBrokerPublicJWK: Codable, Equatable, Sendable {
 }
 
 public enum GitHubBrokerDeviceIdentityError: Error, LocalizedError, Equatable {
+    case storedIdentityMissing
     case invalidStoredIdentity
     case identityGenerationFailed
     case identityStorageUnavailable
@@ -23,6 +24,8 @@ public enum GitHubBrokerDeviceIdentityError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
+        case .storedIdentityMissing:
+            "The saved GitHub broker binding has no Keychain device identity. Reconnect explicitly to create a new binding."
         case .invalidStoredIdentity:
             "The stored GitHub broker device identity is invalid. Reconnect support is required; NeonDiff will not silently replace a bound identity."
         case .identityGenerationFailed:
@@ -133,6 +136,18 @@ public final class GitHubBrokerDeviceIdentityStore {
                 throw GitHubBrokerDeviceIdentityError.identityStorageUnavailable
             }
             return try decodeIdentity(winner)
+        }
+    }
+
+    /// Loads a previously-created identity without rotating or creating one.
+    /// Saved-binding verification must use this path so a missing Keychain item
+    /// cannot silently orphan the server-side binding.
+    public func loadExisting() throws -> GitHubBrokerDeviceIdentity {
+        try lock.withLock {
+            guard let encoded = try readStoredIdentity() else {
+                throw GitHubBrokerDeviceIdentityError.storedIdentityMissing
+            }
+            return try decodeIdentity(encoded)
         }
     }
 

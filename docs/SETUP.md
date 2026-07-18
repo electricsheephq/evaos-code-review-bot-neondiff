@@ -227,8 +227,9 @@ client:
 release build and only through the exact matching
 `NEONDIFF_DESKTOP_PAID_BETA_CONTRACT`,
 `NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED`, and
-`NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN` inputs. Missing, partial, debug, or
-different values leave the bundle quarantined or fail the build. These are
+`NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN` inputs. When all three inputs are
+omitted, the bundle remains quarantined. Any non-empty but incomplete,
+mismatched, or non-release combination fails the build with exit 2. These are
 public configuration values, not secrets, and do not override the server-side
 kill switch. Generic CLI status/deactivate and daemon-admission validation still
 require exact-candidate integration proof under #630.

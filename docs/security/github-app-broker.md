@@ -10,10 +10,11 @@ rollout-disabled native composition under #630. The repository-visibility and
 entitlement decision is bound at token issuance in the single seam function
 `authorizeTokenIssuance` (#614); the live device<->license linkage and deployment
 wiring belong to the paid-beta deployment lane (#633). At the 2026-07-18
-checkpoint the official App registration and selected-repository canary install
-exist, but App privacy conversion is not yet verified and the production broker
-kill switch remains off. Fixture/source proof below is therefore not a live
-connect, token-mint, release, or customer-readiness claim.
+checkpoint, the public-safe #613 registration checkpoint records the official
+public App and its selected-repository canary install. Public posture is
+intentional so customers can install the App outside the owner account. The
+production broker kill switch remains off. Fixture/source proof below is
+therefore not a live connect, token-mint, release, or customer-readiness claim.
 
 ## Problem
 
@@ -350,10 +351,10 @@ bindings and states; uninstalled installations are pruned on discovery.
    metadata route, so the native app never needs an unnarrowed review token merely
    to populate its selector.
 4. **Staging vs. production App registration sequence (OWNER-GATED, PARTIAL).**
-   The official App identity now exists and is installed only on the two
-   dedicated canary repositories, but production broker credentials, verified
-   private-App posture, live wiring, and security approval remain gated. The
-   staging checklist remains the settings contract.
+   The [#613 registration checkpoint](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/613#issuecomment-5012503190)
+   records the official public App identity and the two selected-repository
+   canary installs. Production broker credentials, live wiring, and security
+   approval remain gated. The staging checklist remains the settings contract.
 
 ## Owner-gated boundary
 
@@ -362,8 +363,8 @@ adversarial, and redaction tests against fixtures; the default-off native
 composition; this threat model and data-flow document; and the staging App
 registration spec.
 
-Owner-only (blocked, needs-owner): finalizing/confirming the official App's
-private posture, holding its private key/OAuth client secret, provisioning the
-Fly deployment secrets, and approving the production security review before the
-broker is enabled (AC7). No code in this slice proves the live install flow; it
-proves the source/fixture composition only.
+Owner-only (blocked, needs-owner): holding the official App private key/OAuth
+client secret, provisioning the Fly deployment secrets, and approving the
+production security review before the broker is enabled (AC7). No code in this
+slice proves the live install flow; it proves the source/fixture composition
+only.

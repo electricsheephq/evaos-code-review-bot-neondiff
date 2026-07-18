@@ -205,7 +205,8 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(fixture.model.activationState == .publicFreeSkip)
         #expect(fixture.model.onboardingFlow.licenseActivation == .activated)
         #expect(fixture.model.canAdvanceOnboarding)
-        #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.activationHandoffEnabled)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
 
         fixture.model.selectManagedGitHubRepository(fullName: "electric/private")
         #expect(fixture.model.selectedManagedGitHubRepository == "electric/private")
@@ -238,7 +239,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(unavailableFixture.model.managedGitHubRepositories.isEmpty)
     }
 
-    @Test func recordedInstallationIsOnlyRoutingHintUntilServerReadbackPasses() async {
+    @Test func recordedInstallationIsOnlyRoutingHintUntilServerReadbackPasses() async throws {
         let broker = ScriptedGitHubBroker()
         let fixture = ModelDependencyFixture(
             githubBroker: broker,
@@ -249,11 +250,34 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(fixture.model.managedGitHubConnectionState == .verificationRequired)
         #expect(!fixture.model.canAdvanceOnboarding)
 
+        _ = try GitHubBrokerDeviceIdentityStore(
+            secretStore: fixture.secretStore
+        ).loadOrCreate()
+
         fixture.model.refreshManagedGitHubRepositories()
         await fixture.waitForManagedGitHubConnectionToFinish()
 
         #expect(broker.listedInstallationIds == [42])
         #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 42))
+    }
+
+    @Test func savedBindingVerificationNeverCreatesReplacementDeviceIdentity() async {
+        let broker = ScriptedGitHubBroker()
+        let fixture = ModelDependencyFixture(
+            githubBroker: broker,
+            preferenceStrings: ["neondiff.managedGitHubInstallationId": "42"],
+            productionBoundary: .testManaged
+        )
+
+        fixture.model.refreshManagedGitHubRepositories()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+
+        #expect(!fixture.secretStore.containsSecret(
+            account: GitHubBrokerDeviceIdentityStore.defaultAccount
+        ))
+        #expect(broker.listedInstallationIds.isEmpty)
+        #expect(fixture.model.managedGitHubConnectionState == .failed)
+        #expect(fixture.model.managedGitHubRecovery?.action == .reconnect)
     }
 
     @Test func lostBindingRevokesOnboardingAdvanceAndCompletion() async {
@@ -338,6 +362,16 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
             fixture.preferences.string(forKey: "neondiff.activationRepository.v1")
                 == "electric/private-a"
         )
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 0,
+            stdout: managedRepoPatchJSON(repository: "electric/private-a"),
+            stderr: ""
+        )))
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
         #expect(fixture.model.productionUsefulWorkAvailable)
     }
 
@@ -357,6 +391,14 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
         fixture.model.provideExistingActivationKey()
         await fixture.model.submitActivation()
+
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 0,
+            stdout: managedRepoPatchJSON(repository: "electric/private-a"),
+            stderr: ""
+        )))
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
         #expect(fixture.model.productionUsefulWorkAvailable)
 
         fixture.preferences.set(
@@ -396,4 +438,38 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         }
         #expect(fixture.cli.calls.isEmpty)
     }
+
+    @Test func daemonRequiresExactManagedSelectionToBeAppliedAndReadBack() async {
+        let broker = ScriptedGitHubBroker()
+        let fixture = ModelDependencyFixture(
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+        fixture.model.selectManagedGitHubRepository(fullName: "electric/public")
+
+        fixture.model.startDaemon()
+        #expect(fixture.cli.calls.isEmpty)
+
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 0,
+            stdout: managedRepoPatchJSON(repository: "electric/public"),
+            stderr: ""
+        )))
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+        #expect(fixture.model.productionUsefulWorkAvailable)
+
+        fixture.model.startDaemon()
+        await fixture.cli.waitUntilCallCount(2)
+        #expect(fixture.cli.calls.last?.arguments.prefix(2) == ["daemon", "start"])
+
+        fixture.model.configPath = "changed-config.json"
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+}
+
+private func managedRepoPatchJSON(repository: String) -> String {
+    #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["\#(repository)"]}}"#
 }
