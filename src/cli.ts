@@ -3308,7 +3308,7 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--config", description: "Path to the config file." },
       { name: "--license-key-stdin", description: "true to read one bounded license key from stdin (activate only)." },
       { name: "--license-storage", description: "keychain for the native Keychain-owned activation path; file otherwise." },
-      { name: "--persist-local-state", description: "false for the native Keychain-owned activation path; defaults true." },
+      { name: "--persist-local-state", description: "false only when the submitted key matches the canonical native Keychain item; defaults true." },
       { name: "--repo", description: "Repo to scope activation/status to, owner/name." },
       { name: "--refresh", description: "true to force a fresh status check instead of cached." }
     ]

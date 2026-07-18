@@ -14,5 +14,8 @@ globalThis.fetch = async (input, init) => {
       updateEntitlement: true
     }), { status: 200, headers: { "content-type": "application/json" } });
   }
+  if (url.startsWith("https://neondiff-license.fly.dev/")) {
+    throw new Error(`test mock refused an unhandled production license endpoint: ${url}`);
+  }
   return originalFetch(input, init);
 };

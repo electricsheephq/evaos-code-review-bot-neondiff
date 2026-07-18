@@ -122,7 +122,7 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
   });
 
-  it("activates the native Keychain-owned path through bounded stdin without local state", async () => {
+  it("refuses the no-local-state CLI path without the matching native Keychain credential", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-native-activation-cli-"));
     roots.push(root);
     const configPath = join(root, "config.json");
@@ -143,29 +143,35 @@ describe("public NeonDiff CLI surface", () => {
       }
     })}\n`);
 
-    const result = await runCliWithStdin([
-      "license",
-      "activate",
-      "--config",
-      configPath,
-      "--license-storage",
-      "keychain",
-      "--license-key-stdin",
-      "true",
-      "--persist-local-state",
-      "false",
-      "--json"
-    ], `${key}\n`, { env: activatedLicenseTestEnv() });
-    const output = JSON.parse(result.stdout);
+    let failure: (Error & { code?: number; stdout?: string; stderr?: string }) | undefined;
+    try {
+      await runCliWithStdin([
+        "license",
+        "activate",
+        "--config",
+        configPath,
+        "--license-storage",
+        "keychain",
+        "--license-key-stdin",
+        "true",
+        "--persist-local-state",
+        "false",
+        "--json"
+      ], `${key}\n`, { env: activatedLicenseTestEnv() });
+    } catch (error) {
+      failure = error as Error & { code?: number; stdout?: string; stderr?: string };
+    }
+    expect(failure?.code).toBe(1);
+    const output = JSON.parse(failure?.stdout ?? "{}");
 
     expect(output).toMatchObject({
-      ok: true,
-      status: "active",
-      source: "api",
-      detail: "license activated without local key or cache persistence"
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires the matching native Keychain credential"
     });
-    expect(result.stdout).not.toContain(key);
-    expect(result.stderr).not.toContain(key);
+    expect(failure?.stdout).not.toContain(key);
+    expect(failure?.stderr).not.toContain(key);
     expect(existsSync(keyPath)).toBe(false);
     expect(existsSync(cachePath)).toBe(false);
   });

@@ -2207,8 +2207,10 @@ private let githubTokenExpiresAtAccount = "github/user-token-expires-at"
 private let githubRefreshTokenExpiresAtAccount = "github/user-refresh-token-expires-at"
 private let githubUserLoginAccount = "github/user-login"
 private let onboardingCompletedKey = "neondiff.hasCompletedActivationOnboarding.v2"
-// Issue #612 — native activation handoff.
-private let activationKeyAccount = "activation-key/default"
+// Issue #612 — native activation handoff. The activation state machine and the
+// production license CLI share one canonical Keychain item; there is no second
+// raw activation-key copy.
+private let activationKeyAccount = "license/default"
 private let activationStateKey = "neondiff.activationState.v1"
 private let activationHandoffEnabledKey = "neondiff.activationHandoffEnabled"
 private let activationCheckoutEnabledKey = "neondiff.activationCheckoutEnabled"
