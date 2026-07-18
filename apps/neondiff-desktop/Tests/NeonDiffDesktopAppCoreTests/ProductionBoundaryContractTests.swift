@@ -8,7 +8,9 @@ import Testing
         fixture.model.pendingLicenseKey = "fixture-license-value"
 
         fixture.model.previewStartDaemon()
+        fixture.model.previewStopDaemon()
         fixture.model.startDaemon()
+        fixture.model.stopDaemon()
         fixture.model.verifyProviderKey()
         fixture.model.storeLicenseKey()
         fixture.model.activateLicenseForOnboarding()
@@ -156,5 +158,17 @@ import Testing
 
         #expect(source.contains("model.applyRepoAllowlistPatch()"))
         #expect(source.contains("neondiff-onboarding-repository-apply"))
+    }
+
+    @Test func managedSafetyStopIsNotDisabledByUsefulWorkProofLoss() throws {
+        let viewsDirectory = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
+        let source = try ["OverviewView.swift", "OnboardingWizardView.swift"]
+            .map { try sourceBoundaryText(at: viewsDirectory.appendingPathComponent($0)) }
+            .joined(separator: "\n")
+
+        #expect(source.contains("model.productionDaemonStopAvailable"))
+        #expect(!source.contains("Button { model.stopDaemon() } label:")
+            || source.contains(".disabled(!model.productionDaemonStopAvailable)"))
     }
 }

@@ -301,7 +301,7 @@ struct OnboardingWizardView: View {
                         Button { model.stopDaemon() } label: {
                             Label("Stop", systemImage: "stop.circle")
                         }
-                        .disabled(!model.productionUsefulWorkAvailable)
+                        .disabled(!model.productionDaemonStopAvailable)
                     }
 
                     HStack(spacing: 10) {

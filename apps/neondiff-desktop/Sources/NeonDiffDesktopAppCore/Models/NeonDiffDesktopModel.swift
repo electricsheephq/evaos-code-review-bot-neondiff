@@ -184,6 +184,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
+    /// Stopping an already-running daemon is a safety remediation, not useful
+    /// review work. Keep it available for a verified production build even if
+    /// the current repository binding or entitlement proof has been revoked.
+    package var productionDaemonStopAvailable: Bool {
+        dependencies.productionBoundary.nativeActivationBrokerVerified
+    }
+
     package var managedGitHubAvailable: Bool {
         dependencies.productionBoundary.managedGitHubBrokerOrigin != nil
             && dependencies.githubBroker != nil
@@ -652,7 +659,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func previewStopDaemon() {
-        guard requireProductionUsefulWorkAuthorization() else { return }
+        guard requireProductionDaemonStopAuthorization() else { return }
         runCLI(arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: stopDaemonDryRunCommand)
     }
 
@@ -666,7 +673,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func stopDaemon() {
-        guard requireProductionUsefulWorkAuthorization() else { return }
+        guard requireProductionDaemonStopAuthorization() else { return }
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
@@ -1776,6 +1783,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 : productionActivationBoundaryMessage
             lastError = message
             logText = message
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    private func requireProductionDaemonStopAuthorization() -> Bool {
+        guard productionDaemonStopAvailable else {
+            lastError = productionActivationBoundaryMessage
+            logText = productionActivationBoundaryMessage
             return false
         }
         return true

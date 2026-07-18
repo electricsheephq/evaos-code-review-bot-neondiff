@@ -469,6 +469,38 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
+    @Test func managedDaemonStopRemainsAvailableAfterAuthorizationProofLoss() async {
+        let broker = ScriptedGitHubBroker()
+        let fixture = ModelDependencyFixture(
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+        fixture.model.selectManagedGitHubRepository(fullName: "electric/public")
+
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 0,
+            stdout: managedRepoPatchJSON(repository: "electric/public"),
+            stderr: ""
+        )))
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+        #expect(fixture.model.productionUsefulWorkAvailable)
+
+        fixture.model.configPath = "changed-config.json"
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+
+        let callCountBeforeStop = fixture.cli.calls.count
+        fixture.model.stopDaemon()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        #expect(fixture.cli.calls.count == callCountBeforeStop + 1)
+        #expect(fixture.cli.calls.last?.arguments.prefix(2) == ["daemon", "stop"])
+    }
+
     @Test func exactNoOpManagedApplyReadbackAuthorizesUsefulWork() async {
         let broker = ScriptedGitHubBroker()
         let fixture = ModelDependencyFixture(
