@@ -25,6 +25,8 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 const repoRoot = process.cwd();
+const BROKER_DEVICE_ID = "A".repeat(43);
+const DASH_PREFIXED_BROKER_DEVICE_ID = `--${"A".repeat(41)}`;
 const darwinDaemonEnv = { NEONDIFF_TEST_PLATFORM: "darwin" };
 const providerVerificationAdmission = await createTestLicenseAdmission({ operation: "provider_verify" });
 const admittedProviderVerification = async () => ({
@@ -144,8 +146,8 @@ describe("public NeonDiff CLI surface", () => {
     })}\n`);
 
     for (const machineId of [
-      "broker-device-cli-fixture-123",
-      "--broker-device-cli-fixture-123"
+      BROKER_DEVICE_ID,
+      DASH_PREFIXED_BROKER_DEVICE_ID
     ]) {
       let failure: (Error & { code?: number; stdout?: string; stderr?: string }) | undefined;
       try {

@@ -21,6 +21,7 @@ import type { LicenseSecretReader } from "./license-secret-store.js";
 const MAXIMUM_LICENSE_API_RESPONSE_BYTES = 64 * 1024;
 const CANONICAL_GITHUB_REPOSITORY_PATTERN =
   /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
+const RFC7638_SHA256_THUMBPRINT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export type LicenseStorageBackend = "keychain" | "file";
 export type LicenseStatus =
@@ -157,14 +158,22 @@ export async function activateLicense(input: {
       detail: "Keychain license activation is disabled in headless CLI until native no-argv secret storage is available; use storageBackend=file"
     };
   }
-  if (!persistLocalState && !input.machineId?.trim()) {
+  const machineId = input.machineId?.trim();
+  if (
+    !persistLocalState
+    && (
+      !machineId
+      || machineId !== input.machineId
+      || !RFC7638_SHA256_THUMBPRINT_PATTERN.test(machineId)
+    )
+  ) {
     return {
       ok: false,
       status: "invalid",
       source: "none",
       checkedAt: now.toISOString(),
       classification: "invalid",
-      detail: "no-local-state activation requires a broker device identity"
+      detail: "no-local-state activation requires an RFC 7638 broker device identity"
     };
   }
   if (persistLocalState && input.machineId?.trim()) {

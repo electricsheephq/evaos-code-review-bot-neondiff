@@ -3695,8 +3695,8 @@ function parseLicenseMachineIdArg(value: ParsedArgs[string]): string {
     throw new Error("--license-machine-id requires a value");
   }
   const machineId = parseSingleArg(value, "--license-machine-id");
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(machineId)) {
-    throw new Error("--license-machine-id must be one 8-128 character non-secret broker device id");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(machineId)) {
+    throw new Error("--license-machine-id must be one RFC 7638 SHA-256 broker device id");
   }
   return machineId;
 }

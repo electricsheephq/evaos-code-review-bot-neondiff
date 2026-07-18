@@ -25,6 +25,7 @@ import { createTestLicenseAdmission, testLicenseAdmission } from "./helpers/lice
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
+const BROKER_DEVICE_ID = "A".repeat(43);
 
 function testLicenseFingerprint(key: string): string {
   return createHash("sha256").update(key).digest("hex").slice(0, 16);
@@ -423,7 +424,7 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: key,
-      machineId: "broker-device-native-123",
+      machineId: BROKER_DEVICE_ID,
       repo: "octo/private",
       persistLocalState: false,
       keychainCredentialVerifier: (credential) => {
@@ -481,7 +482,36 @@ describe("license activation and entitlement cache", () => {
       ok: false,
       status: "invalid",
       source: "none",
-      detail: "no-local-state activation requires a broker device identity"
+      detail: "no-local-state activation requires an RFC 7638 broker device identity"
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("fails closed when native no-local-state activation receives a non-thumbprint device identity", async () => {
+    const root = mkRoot(roots);
+    const config = licenseConfig(root, "https://license.example.invalid");
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    let requests = 0;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-malformed-binding-test-123456",
+      machineId: "broker-device-binding-123",
+      repo: "octo/private",
+      persistLocalState: false,
+      keychainCredentialVerifier: () => true,
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("{}", { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires an RFC 7638 broker device identity"
     });
     expect(requests).toBe(0);
   });
@@ -494,7 +524,7 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: "LIC-file-backed-broker-device-test-123456",
-      machineId: "broker-device-binding-123",
+      machineId: BROKER_DEVICE_ID,
       repo: "octo/private",
       fetchImpl: (async () => {
         requests += 1;
@@ -521,7 +551,7 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: "LIC-keychain-missing-repository-test-123456",
-      machineId: "broker-device-binding-123",
+      machineId: BROKER_DEVICE_ID,
       persistLocalState: false,
       keychainCredentialVerifier: () => true,
       fetchImpl: (async () => {
@@ -556,7 +586,7 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: "LIC-keychain-malformed-repository-test-123456",
-      machineId: "broker-device-binding-123",
+      machineId: BROKER_DEVICE_ID,
       repo,
       persistLocalState: false,
       keychainCredentialVerifier: () => true,
@@ -586,7 +616,7 @@ describe("license activation and entitlement cache", () => {
       config,
       licenseKey: "LIC-keychain-binding-test-123456",
       repo: "octo/private",
-      machineId: "broker-device-binding-123",
+      machineId: BROKER_DEVICE_ID,
       persistLocalState: false,
       keychainCredentialVerifier: () => true,
       fetchImpl: (async (_url, init) => {
@@ -607,7 +637,7 @@ describe("license activation and entitlement cache", () => {
     expect(requestBodies).toEqual([{
       licenseKey: "LIC-keychain-binding-test-123456",
       repo: "octo/private",
-      machineId: "broker-device-binding-123"
+      machineId: BROKER_DEVICE_ID
     }]);
     expect(JSON.stringify(result)).not.toContain("LIC-keychain-binding-test-123456");
   });
@@ -659,7 +689,7 @@ describe("license activation and entitlement cache", () => {
     const result = await activateLicense({
       config,
       licenseKey: "LIC-keychain-mismatch-test-123456",
-      machineId: "broker-device-mismatch-123",
+      machineId: BROKER_DEVICE_ID,
       repo: "octo/private",
       persistLocalState: false,
       keychainCredentialVerifier: () => false
