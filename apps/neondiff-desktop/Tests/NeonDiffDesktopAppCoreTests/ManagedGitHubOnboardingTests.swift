@@ -205,12 +205,14 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(fixture.model.activationState == .publicFreeSkip)
         #expect(fixture.model.onboardingFlow.licenseActivation == .activated)
         #expect(fixture.model.canAdvanceOnboarding)
+        #expect(fixture.model.productionUsefulWorkAvailable)
 
         fixture.model.selectManagedGitHubRepository(fullName: "electric/private")
         #expect(fixture.model.selectedManagedGitHubRepository == "electric/private")
         #expect(fixture.model.onboardingFlow.mode == .privateRepos)
         #expect(fixture.model.activationState == .purchaseRequired)
         #expect(fixture.model.onboardingFlow.licenseActivation == .servicePending)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
 
         fixture.model.selectManagedGitHubRepository(fullName: "electric/unknown")
         #expect(fixture.model.selectedManagedGitHubRepository == "electric/private")
@@ -336,5 +338,34 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
             fixture.preferences.string(forKey: "neondiff.activationRepository.v1")
                 == "electric/private-a"
         )
+        #expect(fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @Test func persistedPrivateActivationCannotUnlockUsefulWorkWithoutCurrentAPIVerification() async {
+        let broker = ScriptedGitHubBroker(repositories: [
+            GitHubBrokerRepository(fullName: "electric/private-a", visibility: .private)
+        ])
+        let fixture = ModelDependencyFixture(
+            githubBroker: broker,
+            preferenceBools: [
+                "neondiff.hasCompletedActivationOnboarding.v2": true
+            ],
+            preferenceStrings: [
+                "neondiff.activationState.v1": ActivationState.active.rawValue,
+                "neondiff.activationRepository.v1": "electric/private-a"
+            ],
+            productionBoundary: .testManaged
+        )
+
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+        fixture.model.selectManagedGitHubRepository(fullName: "electric/private-a")
+
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+        fixture.model.startDaemon()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(fixture.cli.calls.isEmpty)
     }
 }

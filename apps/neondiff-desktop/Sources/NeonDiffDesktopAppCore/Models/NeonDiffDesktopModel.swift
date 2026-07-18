@@ -139,13 +139,37 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var activationState: ActivationState = ActivationStateMachine.initialState
     @Published package private(set) var activationKeyRedactedPrefix: String?
     @Published package var pendingActivationKey = ""
+    @Published package private(set) var activationVerifiedThisLaunch = false
 
     package var productionActivationBoundaryMessage: String {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
     }
 
     package var productionUsefulWorkAvailable: Bool {
-        dependencies.productionBoundary.nativeActivationBrokerVerified
+        guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
+            return false
+        }
+        guard dependencies.productionBoundary.managedGitHubBrokerOrigin != nil else {
+            return true
+        }
+        guard hasVerifiedManagedGitHubSelection,
+              let selectedManagedGitHubRepository,
+              let repository = managedGitHubRepositories.first(where: {
+                  $0.fullName == selectedManagedGitHubRepository
+              })
+        else {
+            return false
+        }
+        switch repository.visibility {
+        case .public:
+            return true
+        case .private, .internal:
+            return activationVerifiedThisLaunch
+                && activationState == .active
+                && activatedRepository == selectedManagedGitHubRepository
+        case .unknown:
+            return false
+        }
     }
 
     package var managedGitHubAvailable: Bool {
@@ -610,17 +634,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func previewStartDaemon() {
-        guard requireVerifiedNativeActivationBroker() else { return }
+        guard requireProductionUsefulWorkAuthorization() else { return }
         runCLI(arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: startDaemonDryRunCommand)
     }
 
     package func previewStopDaemon() {
-        guard requireVerifiedNativeActivationBroker() else { return }
+        guard requireProductionUsefulWorkAuthorization() else { return }
         runCLI(arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: stopDaemonDryRunCommand)
     }
 
     package func startDaemon() {
-        guard requireVerifiedNativeActivationBroker() else { return }
+        guard requireProductionUsefulWorkAuthorization() else { return }
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
@@ -629,7 +653,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func stopDaemon() {
-        guard requireVerifiedNativeActivationBroker() else { return }
+        guard requireProductionUsefulWorkAuthorization() else { return }
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "stop", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
@@ -1131,12 +1155,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case .private, .internal:
             onboardingFlow.mode = .privateRepos
             if activationState == .active,
-               activatedRepository != repository.fullName {
-                applyActivationEvent(.activationInvalid)
-                applyActivationEvent(.resetToPurchase)
+               !activationVerifiedThisLaunch || activatedRepository != repository.fullName {
+                activationVerifiedThisLaunch = false
+                dependencies.preferences.set("", forKey: activationRepositoryKey)
+                activationState = license.keyStored ? .keyReady : .purchaseRequired
+                dependencies.preferences.set(activationState.rawValue, forKey: activationStateKey)
             }
             enterActivation(for: .privateRepos)
-            onboardingFlow.licenseActivation = activationState == .active
+            onboardingFlow.licenseActivation = activationVerifiedThisLaunch
+                    && activationState == .active
                     && activatedRepository == repository.fullName
                 ? .activated
                 : .servicePending
@@ -1231,9 +1258,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyProviderKey() {
-        guard requireVerifiedNativeActivationBroker() else {
+        guard requireProductionUsefulWorkAuthorization() else {
             providerVerification = nil
-            providerVerificationStatus = productionActivationBoundaryMessage
+            providerVerificationStatus = lastError ?? productionActivationBoundaryMessage
             return
         }
         if let providerVerificationSafetyLatchMessage {
@@ -1468,6 +1495,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let next = ActivationStateMachine.reduce(activationState, on: event)
         guard next != activationState else { return }
         if activationState == .active, next != .active {
+            activationVerifiedThisLaunch = false
             dependencies.preferences.set("", forKey: activationRepositoryKey)
         }
         activationState = next
@@ -1648,6 +1676,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func applyActivationOutcomeSideEffects(_ outcome: ActivationClientOutcome) {
         switch outcome {
         case .active(let summary):
+            activationVerifiedThisLaunch = true
             lastError = nil
             let scope = summary.repoVisibilityScope
             let plan = summary.plan.map { " · \($0)" } ?? ""
@@ -1661,8 +1690,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             // Let onboarding finish through the native handoff (Continue enables).
             onboardingFlow.licenseActivation = .activated
         case .scopeConflict:
+            activationVerifiedThisLaunch = false
             lastError = "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
         case .expired, .revoked, .invalid, .offline, .serviceError, .malformed:
+            activationVerifiedThisLaunch = false
             // Cause copy comes from the typed state presentation — never a raw
             // error string, and never any key material.
             lastError = activationPresentation.cause
@@ -1684,7 +1715,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func completeOnboarding() {
-        guard dependencies.productionBoundary.nativeActivationBrokerVerified,
+        guard productionUsefulWorkAvailable,
               dependencies.productionBoundary.managedGitHubBrokerOrigin == nil
                 || hasVerifiedManagedGitHubSelection,
               onboardingFlow.licenseActivation == .activated
@@ -1709,6 +1740,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
             lastError = productionActivationBoundaryMessage
             logText = productionActivationBoundaryMessage
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    private func requireProductionUsefulWorkAuthorization() -> Bool {
+        guard productionUsefulWorkAvailable else {
+            let message = dependencies.productionBoundary.nativeActivationBrokerVerified
+                ? "Verify the selected repository and its current entitlement before running NeonDiff."
+                : productionActivationBoundaryMessage
+            lastError = message
+            logText = message
             return false
         }
         return true
