@@ -102,7 +102,8 @@ describe("public NeonDiff CLI surface", () => {
     const licenseHelp = JSON.parse((await runCli(["license", "--help"])).stdout);
     expect(licenseHelp.licenseBoundary.activationRequired).toContain("public, private, internal, and unknown");
     expect(licenseHelp.usage.flags).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "--license-key-stdin" })
+      expect.objectContaining({ name: "--license-key-stdin" }),
+      expect.objectContaining({ name: "--persist-local-state" })
     ]));
     expect(licenseHelp.usage.flags).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "--license-key-env" })
@@ -119,6 +120,54 @@ describe("public NeonDiff CLI surface", () => {
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
     );
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
+  });
+
+  it("activates the native Keychain-owned path through bounded stdin without local state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-native-activation-cli-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const keyPath = join(root, "license.key");
+    const cachePath = join(root, "entitlement.json");
+    const key = ["nd", "live", "nativekeychainfixture123"].join("_");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/private"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: {
+        enabled: true,
+        apiBaseUrl: "https://neondiff-license.fly.dev",
+        cachePath,
+        storageBackend: "file",
+        keyPath
+      }
+    })}\n`);
+
+    const result = await runCliWithStdin([
+      "license",
+      "activate",
+      "--config",
+      configPath,
+      "--license-storage",
+      "keychain",
+      "--license-key-stdin",
+      "true",
+      "--persist-local-state",
+      "false",
+      "--json"
+    ], `${key}\n`, { env: activatedLicenseTestEnv() });
+    const output = JSON.parse(result.stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      status: "active",
+      source: "api",
+      detail: "license activated without local key or cache persistence"
+    });
+    expect(result.stdout).not.toContain(key);
+    expect(result.stderr).not.toContain(key);
+    expect(existsSync(keyPath)).toBe(false);
+    expect(existsSync(cachePath)).toBe(false);
   });
 
   it("redacts secret-like values from structured status JSON stdout", async () => {

@@ -2,7 +2,10 @@ const originalFetch = globalThis.fetch;
 
 globalThis.fetch = async (input, init) => {
   const url = String(input);
-  if (url === "https://neondiff-license.fly.dev/v1/license/validate") {
+  if (
+    url === "https://neondiff-license.fly.dev/v1/license/activate" ||
+    url === "https://neondiff-license.fly.dev/v1/license/validate"
+  ) {
     return new Response(JSON.stringify({
       status: "active",
       expiresAt: "2999-01-01T00:00:00.000Z",

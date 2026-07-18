@@ -73,8 +73,22 @@ import Testing
             #expect(!arg.contains("NDL-REALKEY-0123456789"), "raw key leaked into argv: \(arg)")
         }
         #expect(stub.lastArguments.contains("--license-key-stdin"))
+        #expect(stub.lastArguments.contains("--persist-local-state"))
+        #expect(stub.lastArguments.contains("false"))
+        #expect(stub.lastArguments.contains("--license-storage"))
+        #expect(stub.lastArguments.contains("keychain"))
         #expect(stub.lastArguments.contains("--json"))
         #expect(!stub.lastArguments.contains("--license-key"))
+    }
+
+    @Test func revalidationRepeatsIdempotentAPIActivationWithoutPersistence() async throws {
+        let (client, stub) = client(success(activeJSON))
+        _ = try await client.revalidate(key: ActivationKeyMaterial("NDL-REALKEY-0123456789"))
+
+        #expect(stub.lastArguments.prefix(2) == ["license", "activate"])
+        #expect(stub.lastArguments.contains("--persist-local-state"))
+        #expect(stub.lastArguments.contains("false"))
+        #expect(stub.lastStandardInput == Data("NDL-REALKEY-0123456789".utf8))
     }
 
     @Test func expiryFixtureMapsToExpired() async throws {

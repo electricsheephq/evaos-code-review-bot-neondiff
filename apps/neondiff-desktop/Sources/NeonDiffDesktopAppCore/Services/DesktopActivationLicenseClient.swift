@@ -25,18 +25,22 @@ package struct DesktopActivationLicenseClient: ActivationLicenseClienting {
     }
 
     package func activate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
-        await run("activate", key: key)
+        await run(key: key)
     }
 
     package func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
-        await run("status", key: key)
+        // Activation is idempotent for the same machine and re-checks the live
+        // API entitlement without creating local raw-key state.
+        await run(key: key)
     }
 
-    private func run(_ subcommand: String, key: ActivationKeyMaterial) async -> ActivationClientOutcome {
+    private func run(key: ActivationKeyMaterial) async -> ActivationClientOutcome {
         let arguments = [
-            "license", subcommand,
+            "license", "activate",
             "--config", configPath,
+            "--license-storage", "keychain",
             "--license-key-stdin", "true",
+            "--persist-local-state", "false",
             "--json"
         ]
         do {

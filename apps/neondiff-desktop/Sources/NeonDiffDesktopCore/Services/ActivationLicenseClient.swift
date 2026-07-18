@@ -134,19 +134,24 @@ public final class CLIActivationLicenseClient: ActivationLicenseClienting, @unch
     }
 
     public func activate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
-        try await run(subcommand: "activate", key: key)
+        try await run(key: key)
     }
 
     public func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
-        try await run(subcommand: "status", key: key)
+        // The server activation endpoint is idempotent for the same machine.
+        // Repeating it revalidates current entitlement without requiring a
+        // second local key/cache copy.
+        try await run(key: key)
     }
 
-    private func run(subcommand: String, key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+    private func run(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
         // The key crosses ONLY over bounded stdin; argv carries no secret.
         let arguments = [
-            "license", subcommand,
+            "license", "activate",
             "--config", configPath,
+            "--license-storage", "keychain",
             "--license-key-stdin", "true",
+            "--persist-local-state", "false",
             "--json"
         ]
         do {

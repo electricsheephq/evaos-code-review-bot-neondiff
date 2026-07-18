@@ -115,11 +115,27 @@ export async function activateLicense(input: {
   config: LicenseConfig;
   licenseKey: string;
   repo?: string;
+  /**
+   * Persist the raw key plus redacted entitlement cache for the headless CLI.
+   * Native callers keep the only raw copy in Keychain and set this false.
+   */
+  persistLocalState?: boolean;
   now?: Date;
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
-  if (input.config.storageBackend === "keychain") {
+  const persistLocalState = input.persistLocalState ?? true;
+  if (!persistLocalState && input.config.storageBackend !== "keychain") {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "no-local-state activation requires storageBackend=keychain"
+    };
+  }
+  if (input.config.storageBackend === "keychain" && persistLocalState) {
     return {
       ok: false,
       status: "invalid",
@@ -147,6 +163,13 @@ export async function activateLicense(input: {
     ...response.entitlement,
     licenseFingerprint: fingerprintLicenseKey(licenseKey)
   };
+  if (!persistLocalState) {
+    return {
+      ...response,
+      entitlement,
+      detail: "license activated without local key or cache persistence"
+    };
+  }
   try {
     writeLicenseKey(input.config, licenseKey);
     writeLicenseCache(input.config.cachePath, entitlement);
