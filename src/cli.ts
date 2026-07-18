@@ -361,6 +361,9 @@ async function main(): Promise<void> {
       const result = await activateLicense({
         config: licenseConfig,
         licenseKey,
+        persistLocalState: args["persist-local-state"] === undefined
+          ? true
+          : parseBooleanArg(args["persist-local-state"], "--persist-local-state"),
         ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
       });
       console.log(stringifyRedactedJson({ command: "license activate", ...result }));
@@ -3304,6 +3307,8 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     flags: [
       { name: "--config", description: "Path to the config file." },
       { name: "--license-key-stdin", description: "true to read one bounded license key from stdin (activate only)." },
+      { name: "--license-storage", description: "keychain for the native Keychain-owned activation path; file otherwise." },
+      { name: "--persist-local-state", description: "false only when the submitted key matches the canonical native Keychain item; defaults true." },
       { name: "--repo", description: "Repo to scope activation/status to, owner/name." },
       { name: "--refresh", description: "true to force a fresh status check instead of cached." }
     ]

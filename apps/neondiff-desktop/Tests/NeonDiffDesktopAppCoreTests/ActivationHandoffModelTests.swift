@@ -96,7 +96,7 @@ import NeonDiffDesktopCore
                       updateEntitlement: true, expiresAt: nil, plan: "team", seats: 3))
     }
 
-    private let activationKeyAccount = "activation-key/default"
+    private let activationKeyAccount = "license/default"
     private let activationStateKey = "neondiff.activationState.v1"
 
     @Test func initNeverDecryptsKeychainOnLaunchPath() {

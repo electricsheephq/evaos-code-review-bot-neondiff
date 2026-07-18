@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -111,15 +111,39 @@ export interface LicenseReviewGateResult {
   entitlement?: LicenseEntitlement;
 }
 
+interface KeychainCredentialReference {
+  service: string;
+  account: string;
+  licenseKey: string;
+}
+
 export async function activateLicense(input: {
   config: LicenseConfig;
   licenseKey: string;
   repo?: string;
+  /**
+   * Persist the raw key plus redacted entitlement cache for the headless CLI.
+   * Native callers keep the only raw copy in Keychain and set this false.
+   */
+  persistLocalState?: boolean;
+  /** Test seam for the native Keychain ownership check. Production callers use macOS Keychain. */
+  keychainCredentialVerifier?: (credential: KeychainCredentialReference) => boolean;
   now?: Date;
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
-  if (input.config.storageBackend === "keychain") {
+  const persistLocalState = input.persistLocalState ?? true;
+  if (!persistLocalState && input.config.storageBackend !== "keychain") {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "no-local-state activation requires storageBackend=keychain"
+    };
+  }
+  if (input.config.storageBackend === "keychain" && persistLocalState) {
     return {
       ok: false,
       status: "invalid",
@@ -132,6 +156,29 @@ export async function activateLicense(input: {
   const licenseKey = input.licenseKey.trim();
   if (!licenseKey) return missingResult(now, "license key is empty");
   if (!input.config.apiBaseUrl) return serverResult(now, "license API base URL is not configured");
+  if (!persistLocalState) {
+    const verifier = input.keychainCredentialVerifier ?? matchesNativeKeychainCredential;
+    let credentialMatches = false;
+    try {
+      credentialMatches = verifier({
+        service: input.config.keychainService,
+        account: input.config.keychainAccount,
+        licenseKey
+      });
+    } catch {
+      credentialMatches = false;
+    }
+    if (!credentialMatches) {
+      return {
+        ok: false,
+        status: "invalid",
+        source: "none",
+        checkedAt: now.toISOString(),
+        classification: "invalid",
+        detail: "no-local-state activation requires the matching native Keychain credential"
+      };
+    }
+  }
 
   const response = await callLicenseApi({
     config: input.config,
@@ -147,6 +194,13 @@ export async function activateLicense(input: {
     ...response.entitlement,
     licenseFingerprint: fingerprintLicenseKey(licenseKey)
   };
+  if (!persistLocalState) {
+    return {
+      ...response,
+      entitlement,
+      detail: "license activated without local key or cache persistence"
+    };
+  }
   try {
     writeLicenseKey(input.config, licenseKey);
     writeLicenseCache(input.config.cachePath, entitlement);
@@ -168,6 +222,26 @@ export async function activateLicense(input: {
     entitlement,
     detail: "license activated and entitlement cache updated"
   };
+}
+
+function matchesNativeKeychainCredential(input: KeychainCredentialReference): boolean {
+  if (platform() !== "darwin") return false;
+  const result = spawnSync(
+    "/usr/bin/security",
+    ["find-generic-password", "-s", input.service, "-a", input.account, "-w"],
+    {
+      encoding: "utf8",
+      timeout: 5_000,
+      maxBuffer: 4 * 1024,
+      windowsHide: true
+    }
+  );
+  if (result.error || result.signal || result.status !== 0 || typeof result.stdout !== "string") {
+    return false;
+  }
+  const stored = Buffer.from(result.stdout.trim(), "utf8");
+  const submitted = Buffer.from(input.licenseKey, "utf8");
+  return stored.length === submitted.length && timingSafeEqual(stored, submitted);
 }
 
 export async function getLicenseStatus(input: {

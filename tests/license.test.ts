@@ -396,6 +396,118 @@ describe("license activation and entitlement cache", () => {
     expect(requests).toBe(0);
   });
 
+  it("activates a Keychain-managed license without writing local key or cache state", async () => {
+    const root = mkRoot(roots);
+    const key = "LIC-keychain-native-test-123456";
+    let requests = 0;
+    const server = await startLicenseServer((_req, res) => {
+      requests += 1;
+      writeJson(res, 200, {
+        status: "active",
+        expiresAt: "2026-08-01T00:00:00.000Z",
+        repoVisibilityScope: "private",
+        privateRepoAllowed: true,
+        updateEntitlement: true
+      });
+    });
+    servers.push(server);
+    const config = licenseConfig(root, server.url);
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+    const verifiedKeychainCredentials: Array<{
+      service: string;
+      account: string;
+      licenseKey: string;
+    }> = [];
+
+    const result = await activateLicense({
+      config,
+      licenseKey: key,
+      persistLocalState: false,
+      keychainCredentialVerifier: (credential) => {
+        verifiedKeychainCredentials.push(credential);
+        return true;
+      },
+      now: new Date("2026-07-04T00:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "active",
+      source: "api",
+      detail: "license activated without local key or cache persistence"
+    });
+    expect(requests).toBe(1);
+    expect(verifiedKeychainCredentials).toEqual([{
+      service: config.keychainService,
+      account: config.keychainAccount,
+      licenseKey: key
+    }]);
+    expect(JSON.stringify(result)).not.toContain(key);
+    expect(existsSync(join(root, "license.key"))).toBe(false);
+    expect(existsSync(join(root, "entitlement.json"))).toBe(false);
+  });
+
+  it("refuses no-local-state activation unless Keychain owns the recoverable credential", async () => {
+    const root = mkRoot(roots);
+    let requests = 0;
+    const server = await startLicenseServer((_req, res) => {
+      requests += 1;
+      writeJson(res, 200, {
+        status: "active",
+        repoVisibilityScope: "private",
+        updateEntitlement: true
+      });
+    });
+    servers.push(server);
+
+    const result = await activateLicense({
+      config: licenseConfig(root, server.url),
+      licenseKey: "LIC-headless-no-state-test-123456",
+      persistLocalState: false
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires storageBackend=keychain"
+    });
+    expect(requests).toBe(0);
+  });
+
+  it("refuses no-local-state activation when the submitted key is not the Keychain-owned credential", async () => {
+    const root = mkRoot(roots);
+    let requests = 0;
+    const server = await startLicenseServer((_req, res) => {
+      requests += 1;
+      writeJson(res, 200, {
+        status: "active",
+        repoVisibilityScope: "private",
+        updateEntitlement: true
+      });
+    });
+    servers.push(server);
+    const config = licenseConfig(root, server.url);
+    config.storageBackend = "keychain";
+    config.keyPath = undefined;
+
+    const result = await activateLicense({
+      config,
+      licenseKey: "LIC-keychain-mismatch-test-123456",
+      persistLocalState: false,
+      keychainCredentialVerifier: () => false
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "invalid",
+      source: "none",
+      detail: "no-local-state activation requires the matching native Keychain credential"
+    });
+    expect(requests).toBe(0);
+  });
+
   it("preserves configured license API base paths when building request URLs", async () => {
     const root = mkRoot(roots);
     const urls: string[] = [];

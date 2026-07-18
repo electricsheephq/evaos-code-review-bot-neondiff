@@ -1134,12 +1134,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private var activationLicenseClient: (any ActivationLicenseClienting)? {
         if let activationLicenseClientOverride { return activationLicenseClientOverride }
-        // The real CLI adapter is withheld by default. The CLI's `license activate`
-        // persists the stdin key to `license.keyPath` under the default file backend
-        // (`src/license.ts` writeLicenseKey), which would create a SECOND raw copy on
-        // disk and break the Keychain-only promise. It is only used when explicitly
-        // enabled — production checkout is disabled anyway (#562 + website #46) —
-        // pending a no-file-persist stdin-validate CLI verb.
+        // Keep the real adapter behind the rollout flag until production billing
+        // and activation canaries pass. When enabled, it uses the CLI's explicit
+        // no-local-state mode: the app-owned Keychain item remains the only raw
+        // credential copy and the key crosses only over bounded stdin.
         guard dependencies.preferences.bool(forKey: activationCliBackedEnabledKey) else { return nil }
         return DesktopActivationLicenseClient(
             cli: dependencies.cli,
@@ -2209,8 +2207,10 @@ private let githubTokenExpiresAtAccount = "github/user-token-expires-at"
 private let githubRefreshTokenExpiresAtAccount = "github/user-refresh-token-expires-at"
 private let githubUserLoginAccount = "github/user-login"
 private let onboardingCompletedKey = "neondiff.hasCompletedActivationOnboarding.v2"
-// Issue #612 — native activation handoff.
-private let activationKeyAccount = "activation-key/default"
+// Issue #612 — native activation handoff. The activation state machine and the
+// production license CLI share one canonical Keychain item; there is no second
+// raw activation-key copy.
+private let activationKeyAccount = "license/default"
 private let activationStateKey = "neondiff.activationState.v1"
 private let activationHandoffEnabledKey = "neondiff.activationHandoffEnabled"
 private let activationCheckoutEnabledKey = "neondiff.activationCheckoutEnabled"
