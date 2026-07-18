@@ -11,7 +11,7 @@ import { BrokerError } from "./errors.js";
 import {
   GitHubBrokerClientError,
   type GitHubInstallationClient,
-  type InstallationRepository,
+  type InstallationRepositoryPage,
   type InstallationSummary
 } from "./github-app.js";
 import { GitHubBrokerStore } from "./store.js";
@@ -276,10 +276,10 @@ export class GitHubBrokerService {
    *  2. the installation's current selected repositories.
    *
    * The broker returns metadata only. Its GitHub client may use a broker-internal
-   * metadata:read token to enumerate the installation, but this path never calls
-   * the review-token mint seam or returns any token. Fixed-size pagination keeps
-   * the native response budget bounded even for large selected-repository
-   * installations.
+   * metadata:read token to enumerate one upstream page, but this path never calls
+   * the review-token mint seam or returns any token. Each native page maps to one
+   * upstream page of at most 50 repositories, keeping request and response work
+   * bounded even for large selected-repository installations.
    */
   async listRepositories(
     authorization: string | string[] | undefined,
@@ -302,37 +302,39 @@ export class GitHubBrokerService {
     const installation = await this.resolveInstallation(installationId, { uninstalledIsGone: true });
     if (installation.suspended) throw new BrokerError("installation_suspended", "installation is suspended");
 
-    let selectedRepositories: InstallationRepository[];
+    let selectedPage: InstallationRepositoryPage;
     try {
-      selectedRepositories = await this.githubClient.listInstallationRepositories(installationId);
+      selectedPage = await this.githubClient.listInstallationRepositoriesPage(
+        installationId,
+        page,
+        REPOSITORY_PAGE_SIZE
+      );
     } catch (error) {
       throw mapClientError(error);
+    }
+    if (selectedPage.totalCount > MAX_DISCOVERABLE_REPOSITORIES) {
+      throw new BrokerError(
+        "invalid_request",
+        "installation repository selection exceeds the supported discovery limit"
+      );
     }
     const authorizedRepositories = new Set(
       this.store.listBindingRepositories(deviceId, installationId)
     );
-    const repositories = selectedRepositories
+    const repositories = selectedPage.repositories
       .filter((repository) => authorizedRepositories.has(repository.full_name))
       .sort((left, right) => {
         if (left.full_name < right.full_name) return -1;
         if (left.full_name > right.full_name) return 1;
         return 0;
       });
-    if (repositories.length > MAX_DISCOVERABLE_REPOSITORIES) {
-      throw new BrokerError(
-        "invalid_request",
-        "installation repository selection exceeds the supported discovery limit"
-      );
-    }
-    const offset = (page - 1) * REPOSITORY_PAGE_SIZE;
-    const currentPage = repositories.slice(offset, offset + REPOSITORY_PAGE_SIZE);
-    const nextPage = offset + currentPage.length < repositories.length ? page + 1 : null;
+    const nextPage = selectedPage.hasNextPage ? page + 1 : null;
 
     return {
       status: "listed",
       installationId,
       page,
-      repositories: currentPage.map((repository) => ({
+      repositories: repositories.map((repository) => ({
         fullName: repository.full_name,
         visibility: repository.visibility
       })),

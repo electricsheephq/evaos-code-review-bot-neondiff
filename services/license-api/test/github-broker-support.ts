@@ -128,6 +128,25 @@ export function fakeGitHubClient(
       if (!installation || installation.missing) return [];
       return installation.repositories.map((repository) => ({ ...repository }));
     },
+    async listInstallationRepositoriesPage(installationId: number, page: number, perPage: number) {
+      calls.push({
+        op: "listInstallationRepositories",
+        installationId,
+        params: { page, perPage }
+      });
+      const installation = byId.get(installationId);
+      if (!installation || installation.missing) {
+        return { repositories: [], totalCount: 0, hasNextPage: false };
+      }
+      const offset = (page - 1) * perPage;
+      return {
+        repositories: installation.repositories
+          .slice(offset, offset + perPage)
+          .map((repository) => ({ ...repository })),
+        totalCount: installation.repositories.length,
+        hasNextPage: offset + perPage < installation.repositories.length
+      };
+    },
     async createInstallationAccessToken(
       installationId: number,
       params: { repositories?: string[]; permissions?: Record<string, string> }

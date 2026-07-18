@@ -88,10 +88,11 @@ the license store's strict schema verification is unaffected.
    the installation is live and not suspended, then returns only the intersection
    of the OAuth-authorized bind-time repository set and the installation's current
    selected repositories. The response contains canonical repository names and
-   GitHub-authoritative visibility metadata in deterministic pages of 50. The
-   broker may use a metadata:read-only installation token internally to enumerate
-   the current selection, but no token is returned and the review-token mint seam
-   is never called.
+   GitHub-authoritative visibility metadata in deterministic pages of at most 50.
+   Each native page maps to exactly one bounded upstream repository-list page; the
+   broker does not drain the full installation selection for every request. It may
+   use a metadata:read-only installation token internally, but no token is returned
+   and the review-token mint seam is never called.
 7. **Token issuance (native to broker, recurring).** `POST /github/token` with the
    device credential, `installation_id`, and the requested `repositories` /
    `permissions`. The broker checks, in order: the binding exists; the
@@ -342,9 +343,10 @@ bindings and states; uninstalled installations are pruned on discovery.
    `docs/security/github-app-staging-registration.md`); until then the callback
    fails closed. Revisit registration abuse with telemetry.
 3. **Token-response repo snapshot (RESOLVED).** `POST /github/token` returns only
-   the token, its expiry, and the granted repositories/permissions. The app lists
-   repositories client-side with the brokered token, keeping broker surfaces
-   minimal.
+   the token, its expiry, and the granted repositories/permissions. Repository
+   selection uses the separate device-authenticated `POST /github/repositories`
+   metadata route, so the native app never needs an unnarrowed review token merely
+   to populate its selector.
 4. **Staging vs. production App registration sequence (OWNER-GATED, OPEN).** The
    agent builds against a staging App the owner registers with the documented
    permission set (see `docs/security/github-app-staging-registration.md`). The

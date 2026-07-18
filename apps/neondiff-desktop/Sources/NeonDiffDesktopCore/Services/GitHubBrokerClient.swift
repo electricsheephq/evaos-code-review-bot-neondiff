@@ -511,8 +511,7 @@ public struct GitHubBrokerClient: Sendable {
               repositoryNames.allSatisfy(Self.isCanonicalRepository),
               repositoryNames == repositoryNames.sorted(),
               response.nextPage == nil || response.nextPage == page + 1,
-              response.nextPage.map({ (1...200).contains($0) }) ?? true,
-              response.nextPage == nil || response.repositories.count == 50
+              response.nextPage.map({ (1...200).contains($0) }) ?? true
         else {
             throw GitHubBrokerClientError.scopeMismatch
         }

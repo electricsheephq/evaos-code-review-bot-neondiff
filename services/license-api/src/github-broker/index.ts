@@ -12,6 +12,7 @@ export {
   type GitHubInstallationClient,
   type InstallationSummary,
   type InstallationRepository,
+  type InstallationRepositoryPage,
   type InstallationAccessToken,
   type GitHubRepositoryVisibility,
   type GitHubAppConfig

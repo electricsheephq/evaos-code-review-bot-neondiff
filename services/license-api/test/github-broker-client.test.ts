@@ -64,6 +64,33 @@ describe("production github installation client wire contract", () => {
     assert.deepEqual(tokenMint?.body, { permissions: { metadata: "read" } });
   });
 
+  it("lists exactly one bounded installation repository page for native discovery", async () => {
+    const captured = stubFetch((request) => {
+      if (request.url.includes("/access_tokens")) {
+        return { json: { token: "t", expires_at: new Date().toISOString() } };
+      }
+      return {
+        json: {
+          total_count: 73,
+          repositories: [{ id: 72, full_name: "octo/page-two", visibility: "private" }]
+        }
+      };
+    });
+    const client = createGitHubInstallationClient({ appId: "123", privateKey: appPrivateKey });
+    const result = await client.listInstallationRepositoriesPage(6001, 2, 50);
+    assert.deepEqual(result, {
+      repositories: [{ id: 72, full_name: "octo/page-two", visibility: "private" }],
+      totalCount: 73,
+      hasNextPage: false
+    });
+    const listCalls = captured.filter((request) => request.url.includes("/installation/repositories"));
+    assert.equal(listCalls.length, 1);
+    assert.equal(new URL(listCalls[0].url).searchParams.get("page"), "2");
+    assert.equal(new URL(listCalls[0].url).searchParams.get("per_page"), "50");
+    const tokenMint = captured.find((request) => request.url.includes("/access_tokens"));
+    assert.deepEqual(tokenMint?.body, { permissions: { metadata: "read" } });
+  });
+
   it("mints the returned token with repository_ids and a permissions object", async () => {
     const captured = stubFetch(() => ({ json: { token: "t", expires_at: new Date().toISOString() } }));
     const client = createGitHubInstallationClient({ appId: "123", privateKey: appPrivateKey });

@@ -23,6 +23,12 @@ export interface InstallationRepository {
   visibility: GitHubRepositoryVisibility;
 }
 
+export interface InstallationRepositoryPage {
+  repositories: InstallationRepository[];
+  totalCount: number;
+  hasNextPage: boolean;
+}
+
 export interface InstallationAccessToken {
   token: string;
   expires_at: string;
@@ -67,6 +73,16 @@ export interface GitHubInstallationClient {
   ): Promise<string[] | null>;
   /** The installation's current repository selection, with each repo's visibility. */
   listInstallationRepositories(installationId: number): Promise<InstallationRepository[]>;
+  /**
+   * One bounded page of the installation's current repository selection. Native
+   * discovery uses this seam so each customer-visible page consumes exactly one
+   * upstream list request rather than draining the full installation repeatedly.
+   */
+  listInstallationRepositoriesPage(
+    installationId: number,
+    page: number,
+    perPage: number
+  ): Promise<InstallationRepositoryPage>;
   /** Mint a narrowed installation access token. This is the RETURNED token; it is
    * reached only after the issuance seam authorizes the request. Narrowing uses
    * `repositoryIds` (GitHub's canonical `repository_ids`), never `owner/name`. */
@@ -281,6 +297,41 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
         }
         if (chunk.length < 100) return repositories;
       }
+    },
+    async listInstallationRepositoriesPage(
+      installationId: number,
+      page: number,
+      perPage: number
+    ): Promise<InstallationRepositoryPage> {
+      // Discovery needs only one bounded upstream page. The internal token stays
+      // metadata:read-only and is never returned to the device.
+      const token = (await installationToken(installationId, { permissions: { metadata: "read" } })).token;
+      const result = await request<{
+        total_count?: number;
+        repositories?: Array<{
+          id: number;
+          full_name: string;
+          visibility?: string;
+          private?: boolean;
+        }>;
+      }>(
+        `/installation/repositories?per_page=${perPage}&page=${page}`,
+        { token }
+      );
+      const totalCount = result.json?.total_count;
+      if (typeof totalCount !== "number" || !Number.isSafeInteger(totalCount) || totalCount < 0) {
+        throw new GitHubBrokerClientError("unavailable", "installation repository count was invalid");
+      }
+      const repositories = (result.json?.repositories ?? []).map((repository) => ({
+        id: repository.id,
+        full_name: repository.full_name,
+        visibility: normalizeVisibility(repository.visibility, repository.private)
+      }));
+      return {
+        repositories,
+        totalCount,
+        hasNextPage: page * perPage < totalCount
+      };
     },
     createInstallationAccessToken(installationId, params) {
       return installationToken(installationId, {

@@ -156,6 +156,13 @@ describe("github broker token-issuance contract", () => {
       assert.equal(first.json.repositories.length, 50);
       assert.equal(first.json.nextPage, 2);
       assert.equal(first.text.includes("octo-page/not-authorized"), false);
+      assert.deepEqual(
+        pagedHarness.calls
+          .filter((call) => call.op === "listInstallationRepositories")
+          .map((call) => call.params),
+        [{ page: 1, perPage: 50 }],
+        "page 1 must issue one bounded upstream repository-list request"
+      );
 
       const second = await post(
         pagedHarness.url,
@@ -167,6 +174,13 @@ describe("github broker token-issuance contract", () => {
       assert.equal(second.json.page, 2);
       assert.equal(second.json.repositories.length, 3);
       assert.equal(second.json.nextPage, null);
+      assert.deepEqual(
+        pagedHarness.calls
+          .filter((call) => call.op === "listInstallationRepositories")
+          .map((call) => call.params),
+        [{ page: 1, perPage: 50 }, { page: 2, perPage: 50 }],
+        "each native page must add exactly one bounded upstream request"
+      );
       assert.equal(
         pagedHarness.calls.some((call) => call.op === "createInstallationAccessToken"),
         false,

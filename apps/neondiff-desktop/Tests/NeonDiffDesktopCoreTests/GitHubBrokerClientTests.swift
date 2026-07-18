@@ -298,6 +298,39 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         }
     }
 
+    @Test func brokerClientAcceptsSparseAuthorizedPageWithContinuation() async throws {
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerMemorySecretStore()
+        ).loadOrCreate()
+        let transport = ScriptedBrokerTransport(responses: [
+            .json(
+                url: "https://broker.example/github/repositories",
+                body: [
+                    "status": "listed",
+                    "installationId": 4242,
+                    "page": 1,
+                    "repositories": [
+                        ["fullName": "octo/authorized", "visibility": "private"]
+                    ],
+                    "nextPage": 2
+                ]
+            )
+        ])
+        let client = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: transport
+        )
+
+        let page = try await client.listRepositories(
+            identity: identity,
+            installationId: 4242
+        )
+        #expect(page.repositories == [
+            GitHubBrokerRepository(fullName: "octo/authorized", visibility: .private)
+        ])
+        #expect(page.nextPage == 2)
+    }
+
     @Test func brokerClientFailsClosedOnIdentityOriginBudgetAndScopeMismatch() async throws {
         let identity = try GitHubBrokerDeviceIdentityStore(
             secretStore: BrokerMemorySecretStore()
