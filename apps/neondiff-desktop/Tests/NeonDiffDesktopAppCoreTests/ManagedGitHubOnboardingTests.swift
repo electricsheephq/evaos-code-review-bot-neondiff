@@ -468,8 +468,33 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         fixture.model.configPath = "changed-config.json"
         #expect(!fixture.model.productionUsefulWorkAvailable)
     }
+
+    @Test func exactNoOpManagedApplyReadbackAuthorizesUsefulWork() async {
+        let broker = ScriptedGitHubBroker()
+        let fixture = ModelDependencyFixture(
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+        fixture.model.selectManagedGitHubRepository(fullName: "electric/public")
+
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 0,
+            stdout: managedRepoPatchJSON(repository: "electric/public", wrote: false),
+            stderr: ""
+        )))
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.lastError == nil)
+    }
 }
 
-private func managedRepoPatchJSON(repository: String) -> String {
-    #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["\#(repository)"]}}"#
+private func managedRepoPatchJSON(repository: String, wrote: Bool = true) -> String {
+    let revisionAfter = wrote
+        ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    return #"{"ok":true,"command":"config patch","dryRun":false,"wrote":\#(wrote),"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"\#(revisionAfter)","config":{"pilotRepos":["\#(repository)"]}}"#
 }

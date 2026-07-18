@@ -2388,7 +2388,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             guard result.exitCode == 0,
                   commandName == "config patch",
                   parsedSnapshot?.dryRun == false,
-                  parsedSnapshot?.wrote == true,
+                  ConfigPatchProofValidator.revisionAfter(
+                      snapshot: parsedSnapshot,
+                      expectedRevision: parsedSnapshot?.revisionBefore ?? "",
+                      mode: .apply
+                  ) != nil,
                   appliedRepositories == [managedRepoPatchProof.repository],
                   configPath == managedRepoPatchProof.configPath,
                   selectedManagedGitHubRepository == managedRepoPatchProof.repository

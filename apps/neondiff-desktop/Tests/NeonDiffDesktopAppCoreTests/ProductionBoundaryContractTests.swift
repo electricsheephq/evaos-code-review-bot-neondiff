@@ -148,4 +148,13 @@ import Testing
         #expect(source.contains(".accessibilityIdentifier(identifier)"))
         #expect(!source.contains(".accessibilityIdentifier(rootAccessibilityIdentifier)"))
     }
+
+    @Test func managedOnboardingExposesRepositoryApplyAction() throws {
+        let onboardingView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift")
+        let source = try sourceBoundaryText(at: onboardingView)
+
+        #expect(source.contains("model.applyRepoAllowlistPatch()"))
+        #expect(source.contains("neondiff-onboarding-repository-apply"))
+    }
 }

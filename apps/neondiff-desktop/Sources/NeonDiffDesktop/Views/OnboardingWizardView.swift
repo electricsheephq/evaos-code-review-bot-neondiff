@@ -216,6 +216,16 @@ struct OnboardingWizardView: View {
                         "neondiff-onboarding-repository-\(repository.fullName)"
                     )
                 }
+
+                Button { model.applyRepoAllowlistPatch() } label: {
+                    Label("Apply Repository", systemImage: "checkmark.shield")
+                }
+                .disabled(
+                    model.selectedManagedGitHubRepository == nil
+                        || model.isConfigPatchInProgress
+                        || model.isConfigInspectInProgress
+                )
+                .accessibilityIdentifier("neondiff-onboarding-repository-apply")
             }
         }
     }
