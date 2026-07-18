@@ -158,6 +158,12 @@ Environment:
   `GITHUB_BROKER_OAUTH_BASE_URL` default to GitHub's public HTTPS hosts.
   Configuration errors are reported by setting name/reason only; values are
   never logged.
+- `GITHUB_BROKER_REPLICA_URL` — owner-held offsite Litestream destination for
+  broker device/binding/decision state. It must be distinct from
+  `LICENSE_REPLICA_URL`. Broker-enabled container startup refuses to proceed
+  without it. Once provisioned it selects `/etc/litestream-broker.yml` to
+  restore/replicate both SQLite databases even while the broker route-level
+  kill switch is off.
 
 This runtime wiring does not supply the production App registration, secrets,
 private-repository entitlement resolver, native client adoption, or live install

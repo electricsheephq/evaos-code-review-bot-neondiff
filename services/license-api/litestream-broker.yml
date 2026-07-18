@@ -1,0 +1,21 @@
+# Litestream v0.5 config for NeonDiff license + managed GitHub broker DR.
+#
+# Selected whenever GITHUB_BROKER_REPLICA_URL is provisioned so the server-side
+# kill switch can disable broker routes without stopping backup freshness.
+# Litestream expands ${VAR} from the process environment before parsing this
+# file. Keep replica URLs and provider credentials in Fly secrets / platform
+# env, never in this file.
+logging:
+  type: text
+  level: info
+  stderr: true
+
+dbs:
+  - path: ${LICENSE_DB_PATH}
+    replica:
+      url: ${LICENSE_REPLICA_URL}
+      sync-interval: ${LITESTREAM_SYNC_INTERVAL}
+  - path: ${GITHUB_BROKER_DB_PATH}
+    replica:
+      url: ${GITHUB_BROKER_REPLICA_URL}
+      sync-interval: ${LITESTREAM_SYNC_INTERVAL}

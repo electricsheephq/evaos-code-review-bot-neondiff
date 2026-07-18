@@ -61,6 +61,7 @@ COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
 COPY services/license-api/package.json services/license-api/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY services/license-api/litestream.yml /etc/litestream.yml
+COPY services/license-api/litestream-broker.yml /etc/litestream-broker.yml
 COPY services/license-api/docker-entrypoint.sh /usr/local/bin/license-api-entrypoint
 
 # SQLite lives on a mounted volume; the app creates the file itself on startup.
@@ -73,6 +74,8 @@ ENV LICENSE_DB_PATH=/data/license.sqlite
 ENV LITESTREAM_CONFIG=/etc/litestream.yml
 ENV LITESTREAM_SYNC_INTERVAL=1s
 ENV LICENSE_LITESTREAM_REQUIRED=true
+ENV GITHUB_BROKER_DB_PATH=/data/github-broker.sqlite
+ENV GITHUB_BROKER_LITESTREAM_CONFIG=/etc/litestream-broker.yml
 ENV PORT=8080
 ENV HOST=0.0.0.0
 EXPOSE 8080

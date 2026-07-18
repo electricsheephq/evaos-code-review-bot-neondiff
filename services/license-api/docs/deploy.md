@@ -60,7 +60,7 @@ flyctl volumes create license_data --region iad --size 1 \
 
 ## 3. Secrets
 
-Production DR now requires an owner-held Litestream replica URL, provider
+Production DR now requires an owner-held Litestream license replica URL, provider
 credentials, production `LICENSE_LITESTREAM_REQUIRED=true`, and checkout
 issuance requires `LICENSE_ISSUANCE_SECRET`. Do not commit secret values. Set
 the replica URL, provider credentials, and issuance secret through Fly secrets
@@ -68,10 +68,18 @@ before deploying with the required flag enabled; otherwise the container
 refuses to start or checkout issuance stays disabled. `LICENSE_DB_PATH` / `PORT` / `HOST` /
 `LITESTREAM_CONFIG` / `LITESTREAM_SYNC_INTERVAL` /
 `LICENSE_LITESTREAM_REQUIRED` are plain config in `fly.toml`, not secrets.
+The managed GitHub broker remains default-off. Before separately provisioning
+`GITHUB_BROKER_ENABLED=true`, the owner must also provision a distinct
+`GITHUB_BROKER_REPLICA_URL`; the entrypoint then selects
+`/etc/litestream-broker.yml`, restores both databases, and supervises both
+replicas. A missing broker replica URL refuses broker-enabled startup. Once the
+replica URL is provisioned, the combined replication config remains active when
+the broker flag is turned back off, preserving backup freshness during rollback.
 
 ```sh
 flyctl secrets set \
   LICENSE_REPLICA_URL="<object-store-url-for-license.sqlite>" \
+  GITHUB_BROKER_REPLICA_URL="<distinct-object-store-url-for-github-broker.sqlite>" \
   AWS_ACCESS_KEY_ID="<provider-access-key-id>" \
   AWS_SECRET_ACCESS_KEY="<provider-secret-access-key>" \
   LICENSE_ISSUANCE_SECRET="<shared-secret-used-by-website-webhook>" \
@@ -81,6 +89,11 @@ flyctl secrets set \
 Use the provider-specific variables for non-S3-compatible storage. See
 [`disaster-recovery.md`](disaster-recovery.md) for the owner-only setup and
 restore drill proof boundary.
+
+Do not set `GITHUB_BROKER_ENABLED=true` from this runbook alone. Production App
+registration, OAuth/install configuration, approved broker credentials,
+security approval, authoritative #612 entitlement wiring, and the two-database
+restore/rollback drill remain separate #613 gates.
 
 `LICENSE_ISSUANCE_SECRET` enables `POST /v1/admin/licenses/issue` for the
 website payment webhook. Keep the same value configured only on the license API
