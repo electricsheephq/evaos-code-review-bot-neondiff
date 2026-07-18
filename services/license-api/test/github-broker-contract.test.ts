@@ -111,4 +111,128 @@ describe("github broker token-issuance contract", () => {
     assert.equal(replay.status, 409, replayText);
     assert.equal(JSON.parse(replayText).reason, "state_replayed");
   });
+
+  it("(e) paginates only the bound user's current installation repositories without review-token minting", async () => {
+    const repositories = Array.from({ length: 53 }, (_, index) => ({
+      id: 1_000 + index,
+      full_name: `octo-page/repo-${String(index).padStart(2, "0")}`,
+      visibility: index % 2 === 0 ? ("public" as const) : ("private" as const)
+    }));
+    repositories.push({ id: 9_999, full_name: "octo-page/not-authorized", visibility: "private" });
+    const pagedHarness = await startBroker({
+      installations: [{
+        id: 4002,
+        account_login: "octo-page",
+        repositories,
+        userRepositories: repositories
+          .map((repository) => repository.full_name)
+          .filter((fullName) => fullName !== "octo-page/not-authorized")
+      }]
+    });
+    try {
+      const fresh = await makeDevice();
+      await registerDevice(pagedHarness.url, fresh);
+
+      const unbound = await post(
+        pagedHarness.url,
+        "/github/repositories",
+        { installationId: 4002, page: 1 },
+        bearer(await fresh.sign())
+      );
+      assert.equal(unbound.status, 404, unbound.text);
+      assert.equal(unbound.json.reason, "binding_not_found");
+
+      await connectInstallation(pagedHarness.url, fresh, 4002);
+      const first = await post(
+        pagedHarness.url,
+        "/github/repositories",
+        { installationId: 4002, page: 1 },
+        bearer(await fresh.sign())
+      );
+      assert.equal(first.status, 200, first.text);
+      assert.equal(first.json.status, "listed");
+      assert.equal(first.json.installationId, 4002);
+      assert.equal(first.json.page, 1);
+      assert.equal(first.json.repositories.length, 50);
+      assert.equal(first.json.nextPage, 2);
+      assert.equal(first.text.includes("octo-page/not-authorized"), false);
+      assert.deepEqual(
+        pagedHarness.calls
+          .filter((call) => call.op === "listInstallationRepositories")
+          .map((call) => call.params),
+        [{ page: 1, perPage: 50 }],
+        "page 1 must issue one bounded upstream repository-list request"
+      );
+
+      const second = await post(
+        pagedHarness.url,
+        "/github/repositories",
+        { installationId: 4002, page: 2 },
+        bearer(await fresh.sign())
+      );
+      assert.equal(second.status, 200, second.text);
+      assert.equal(second.json.page, 2);
+      assert.equal(second.json.repositories.length, 3);
+      assert.equal(second.json.nextPage, null);
+      assert.deepEqual(
+        pagedHarness.calls
+          .filter((call) => call.op === "listInstallationRepositories")
+          .map((call) => call.params),
+        [{ page: 1, perPage: 50 }, { page: 2, perPage: 50 }],
+        "each native page must add exactly one bounded upstream request"
+      );
+      assert.equal(
+        pagedHarness.calls.some((call) => call.op === "createInstallationAccessToken"),
+        false,
+        "repository discovery never calls the returned review-token mint seam"
+      );
+      assert.doesNotMatch(`${first.text}${second.text}`, /-----BEGIN [A-Z ]*PRIVATE KEY-----/);
+      assert.doesNotMatch(`${first.text}${second.text}`, /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+    } finally {
+      pagedHarness.close();
+    }
+  });
+
+  it("(f) rejects malformed pages and suspended installations before repository metadata egress", async () => {
+    const suspendedHarness = await startBroker({
+      installations: [{
+        id: 4003,
+        account_login: "octo-suspended",
+        suspended: true,
+        repositories: [
+          { id: 20_001, full_name: "octo-suspended/site", visibility: "public" }
+        ]
+      }]
+    });
+    try {
+      const fresh = await makeDevice();
+      await registerDevice(suspendedHarness.url, fresh);
+      await connectInstallation(suspendedHarness.url, fresh, 4003);
+
+      const invalidPage = await post(
+        suspendedHarness.url,
+        "/github/repositories",
+        { installationId: 4003, page: 0 },
+        bearer(await fresh.sign())
+      );
+      assert.equal(invalidPage.status, 400, invalidPage.text);
+      assert.equal(invalidPage.json.reason, "invalid_request");
+
+      const suspended = await post(
+        suspendedHarness.url,
+        "/github/repositories",
+        { installationId: 4003, page: 1 },
+        bearer(await fresh.sign())
+      );
+      assert.equal(suspended.status, 409, suspended.text);
+      assert.equal(suspended.json.reason, "installation_suspended");
+      assert.equal(
+        suspendedHarness.calls.some((call) => call.op === "listInstallationRepositories"),
+        false,
+        "suspended installation is refused before listing repository metadata"
+      );
+    } finally {
+      suspendedHarness.close();
+    }
+  });
 });

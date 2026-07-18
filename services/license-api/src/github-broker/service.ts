@@ -11,12 +11,16 @@ import { BrokerError } from "./errors.js";
 import {
   GitHubBrokerClientError,
   type GitHubInstallationClient,
+  type InstallationRepositoryPage,
   type InstallationSummary
 } from "./github-app.js";
 import { GitHubBrokerStore } from "./store.js";
 
 const STATE_TTL_MS = 10 * 60 * 1_000;
 const MAX_REPOSITORIES_PER_REQUEST = 50;
+const REPOSITORY_PAGE_SIZE = 50;
+const MAX_REPOSITORY_PAGE = 200;
+const MAX_DISCOVERABLE_REPOSITORIES = REPOSITORY_PAGE_SIZE * MAX_REPOSITORY_PAGE;
 
 /**
  * The server-defined minimal review permission set (matches
@@ -51,10 +55,10 @@ export interface EntitlementResolutionContext {
  * Resolves the production entitlement for a private/internal token request,
  * bound to the license authority (contract shape: license-api `Entitlement`,
  * merged #574). The live device<->license linkage and deployment wiring are the
- * deploy lane's (#559); the broker only depends on this narrow snapshot function,
- * proven here with fixtures. It is called ONLY when a request includes a
- * non-public repository, so the public-free tier never depends on the license
- * service. Any throw is treated as a service outage and fails closed.
+ * paid-beta deployment lane's (#633); the broker only depends on this narrow
+ * snapshot function, proven here with fixtures. It is called ONLY when a request
+ * includes a non-public repository, so the public-free tier never depends on the
+ * license service. Any throw is treated as a service outage and fails closed.
  */
 export type EntitlementResolver = (
   context: EntitlementResolutionContext
@@ -261,6 +265,81 @@ export class GitHubBrokerService {
     const binding = this.store.getBinding(deviceId, stored.installation_id);
     if (!binding) throw new BrokerError("binding_not_found", "installation binding was not found");
     return { status: "bound", installationId: stored.installation_id };
+  }
+
+  /**
+   * POST /github/repositories — device-authenticated discovery for the native
+   * repository selector. The response is the intersection of:
+   *
+   *  1. the repositories the OAuth identity could access when it established
+   *     this exact device/installation binding; and
+   *  2. the installation's current selected repositories.
+   *
+   * The broker returns metadata only. Its GitHub client may use a broker-internal
+   * metadata:read token to enumerate one upstream page, but this path never calls
+   * the review-token mint seam or returns any token. Each native page maps to one
+   * upstream page of at most 50 repositories, keeping request and response work
+   * bounded even for large selected-repository installations.
+   */
+  async listRepositories(
+    authorization: string | string[] | undefined,
+    body: unknown
+  ): Promise<Record<string, unknown>> {
+    const at = this.now();
+    const deviceId = await authenticateDevice(this.store, authorization, at);
+    const { installationId, page } = parseRepositoryListRequest(body);
+
+    if (!this.tokenRateLimiter.allow(hashKey(`repos:${deviceId}`), at.getTime())) {
+      throw new BrokerError("rate_limited", "too many repository discovery requests for this device");
+    }
+    if (!this.tokenRateLimiter.allow(hashKey(`repos-inst:${installationId}`), at.getTime())) {
+      throw new BrokerError("rate_limited", "too many repository discovery requests for this installation");
+    }
+
+    const binding = this.store.getBinding(deviceId, installationId);
+    if (!binding) throw new BrokerError("binding_not_found", "no binding for this device and installation");
+
+    const installation = await this.resolveInstallation(installationId, { uninstalledIsGone: true });
+    if (installation.suspended) throw new BrokerError("installation_suspended", "installation is suspended");
+
+    let selectedPage: InstallationRepositoryPage;
+    try {
+      selectedPage = await this.githubClient.listInstallationRepositoriesPage(
+        installationId,
+        page,
+        REPOSITORY_PAGE_SIZE
+      );
+    } catch (error) {
+      throw mapClientError(error);
+    }
+    if (selectedPage.totalCount > MAX_DISCOVERABLE_REPOSITORIES) {
+      throw new BrokerError(
+        "invalid_request",
+        "installation repository selection exceeds the supported discovery limit"
+      );
+    }
+    const authorizedRepositories = new Set(
+      this.store.listBindingRepositories(deviceId, installationId)
+    );
+    const repositories = selectedPage.repositories
+      .filter((repository) => authorizedRepositories.has(repository.full_name))
+      .sort((left, right) => {
+        if (left.full_name < right.full_name) return -1;
+        if (left.full_name > right.full_name) return 1;
+        return 0;
+      });
+    const nextPage = selectedPage.hasNextPage ? page + 1 : null;
+
+    return {
+      status: "listed",
+      installationId,
+      page,
+      repositories: repositories.map((repository) => ({
+        fullName: repository.full_name,
+        visibility: repository.visibility
+      })),
+      nextPage
+    };
   }
 
   /**
@@ -480,6 +559,27 @@ function parseTokenRequest(body: unknown): {
   });
   const permissions = parsePermissions(record.permissions);
   return { installationId, repositories, ...(permissions ? { permissions } : {}) };
+}
+
+function parseRepositoryListRequest(body: unknown): {
+  installationId: number;
+  page: number;
+} {
+  const record = asObject(body);
+  const installationId = parseInstallationId(record.installationId);
+  const page = record.page ?? 1;
+  if (
+    typeof page !== "number"
+    || !Number.isInteger(page)
+    || page <= 0
+    || page > MAX_REPOSITORY_PAGE
+  ) {
+    throw new BrokerError(
+      "invalid_request",
+      `page must be an integer between 1 and ${MAX_REPOSITORY_PAGE}`
+    );
+  }
+  return { installationId, page };
 }
 
 function parsePermissions(value: unknown): Record<string, string> | undefined {

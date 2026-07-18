@@ -11,6 +11,7 @@ const BROKER_PATHS = new Set([
   "/github/connect/start",
   "/github/connect/callback",
   "/github/connect/complete",
+  "/github/repositories",
   "/github/token"
 ]);
 
@@ -72,6 +73,9 @@ export async function handleGitHubBrokerRequest(
     }
     if (req.method === "POST" && path === "/github/connect/complete") {
       return writeJson(res, 200, await service.connectComplete(req.headers.authorization, await readBody(req)));
+    }
+    if (req.method === "POST" && path === "/github/repositories") {
+      return writeJson(res, 200, await service.listRepositories(req.headers.authorization, await readBody(req)));
     }
     if (req.method === "POST" && path === "/github/token") {
       return writeJson(res, 200, await service.issueToken(req.headers.authorization, await readBody(req)));
