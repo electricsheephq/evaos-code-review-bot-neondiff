@@ -1,12 +1,9 @@
 import { statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-
-interface SchemaObjectSignature {
-  type: string;
-  name: string;
-  tableName: string;
-  sql: string;
-}
+import {
+  stripVerifiedLitestreamInternalSchema,
+  type SchemaObjectSignature
+} from "./schema-signature.js";
 
 const LEGACY_SCHEMA = `
   create table licenses (
@@ -52,12 +49,14 @@ function readSchemaSignature(db: DatabaseSync): SchemaObjectSignature[] {
     tbl_name: string;
     sql: string;
   }>;
-  return rows.map((row) => ({
-    type: row.type,
-    name: row.name,
-    tableName: row.tbl_name,
-    sql: normalizeSchemaSql(row.sql)
-  }));
+  return stripVerifiedLitestreamInternalSchema(
+    rows.map((row) => ({
+      type: row.type,
+      name: row.name,
+      tableName: row.tbl_name,
+      sql: normalizeSchemaSql(row.sql)
+    }))
+  );
 }
 
 function normalizeSchemaSql(sql: string): string {

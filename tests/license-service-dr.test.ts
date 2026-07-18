@@ -64,6 +64,11 @@ const legacySchema = `
   );
 `;
 
+const litestreamInternalSchema = `
+  create table _litestream_lock (id integer);
+  create table _litestream_seq (id integer primary key, seq integer);
+`;
+
 function readServiceFile(relativePath: string): string {
   return readFileSync(join(licenseApiDir, relativePath), "utf8");
 }
@@ -410,6 +415,9 @@ fi
       const legacyPath = join(root, "legacy.sqlite");
       const legacyDb = new DatabaseSync(legacyPath);
       legacyDb.exec(legacySchema);
+      legacyDb.exec(litestreamInternalSchema);
+      legacyDb.prepare("insert into _litestream_lock (id) values (?)").run(1);
+      legacyDb.prepare("insert into _litestream_seq (id, seq) values (?, ?)").run(1, 3170);
       legacyDb.close();
 
       const verified = execFileSync(
@@ -418,6 +426,20 @@ fi
         { cwd: alternateCwd, encoding: "utf8" }
       );
       expect(verified.trim()).toBe("legacy restore verification ok");
+
+      const lookalikePath = join(root, "litestream-lookalike.sqlite");
+      const lookalikeDb = new DatabaseSync(lookalikePath);
+      lookalikeDb.exec(legacySchema);
+      lookalikeDb.exec(`
+        create table _litestream_lock (id text);
+        create table _litestream_seq (id integer primary key, seq integer);
+      `);
+      lookalikeDb.close();
+      expect(() => execFileSync(
+        process.execPath,
+        [legacyRestoreVerifier, lookalikePath],
+        { cwd: alternateCwd, encoding: "utf8", stdio: "pipe" }
+      )).toThrow();
 
       const v2Path = join(root, "v2.sqlite");
       const v2Store = new LicenseStore(v2Path);

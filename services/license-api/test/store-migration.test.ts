@@ -42,6 +42,11 @@ const LEGACY_SCHEMA = `
   );
 `;
 
+const LITESTREAM_INTERNAL_SCHEMA = `
+  create table _litestream_lock (id integer);
+  create table _litestream_seq (id integer primary key, seq integer);
+`;
+
 const tempDirectories: string[] = [];
 
 afterEach(() => {
@@ -362,6 +367,48 @@ describe("license store schema v2 migration", () => {
     assert.ok(objectNames(db, "table").includes("checkout_subscription_bindings"));
     assert.ok(objectNames(db, "table").includes("license_subscription_lifecycle_events"));
     db.close();
+  });
+
+  it("migrates the exact legacy schema when Litestream 0.5 metadata tables are present", () => {
+    const path = databasePath();
+    createLegacyDatabase(path);
+    const before = open(path);
+    before.exec(LITESTREAM_INTERNAL_SCHEMA);
+    before.prepare("insert into _litestream_lock (id) values (?)").run(1);
+    before.prepare("insert into _litestream_seq (id, seq) values (?, ?)").run(1, 3170);
+    before.close();
+
+    const store = new LicenseStore(path);
+    store.close();
+
+    const db = open(path);
+    assert.equal(userVersion(db), 2);
+    assertLegacyRowsPreserved(db);
+    assert.deepEqual({ ...db.prepare("select * from _litestream_lock").get() }, { id: 1 });
+    assert.deepEqual({ ...db.prepare("select * from _litestream_seq").get() }, { id: 1, seq: 3170 });
+    assert.ok(objectNames(db, "table").includes("checkout_subscription_bindings"));
+    assert.ok(objectNames(db, "table").includes("license_subscription_lifecycle_events"));
+    db.close();
+  });
+
+  it("rejects a Litestream metadata lookalike before migration", () => {
+    const path = databasePath();
+    createLegacyDatabase(path);
+    const db = open(path);
+    db.exec(`
+      create table _litestream_lock (id text);
+      create table _litestream_seq (id integer primary key, seq integer);
+    `);
+    const before = schemaRows(db);
+    db.close();
+
+    assert.throws(() => new LicenseStore(path), /unknown non-empty schema at user_version 0/);
+
+    const inspected = open(path);
+    assert.equal(userVersion(inspected), 0);
+    assert.deepEqual(schemaRows(inspected), before);
+    assertLegacyRowsPreserved(inspected);
+    inspected.close();
   });
 
   it("reopens schema v2 without changing its schema or data", () => {
