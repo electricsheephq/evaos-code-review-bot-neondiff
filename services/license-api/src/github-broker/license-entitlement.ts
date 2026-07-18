@@ -23,12 +23,12 @@ export function createLicenseStoreEntitlementResolver(
     const license = store.getLicenseByKey(activationKey);
     if (!license) return { status: "invalid" };
     if (license.status === "revoked") return { status: "revoked" };
-    if (
-      license.status === "expired"
-      || (license.expiresAt !== undefined
-        && Number.isFinite(Date.parse(license.expiresAt))
-        && Date.parse(license.expiresAt) <= now().getTime())
-    ) {
+    const expiresAt = license.expiresAt === undefined
+      ? undefined
+      : Date.parse(license.expiresAt);
+    if (license.status === "expired"
+      || (expiresAt !== undefined
+        && (!Number.isFinite(expiresAt) || expiresAt <= now().getTime()))) {
       return { status: "expired" };
     }
 

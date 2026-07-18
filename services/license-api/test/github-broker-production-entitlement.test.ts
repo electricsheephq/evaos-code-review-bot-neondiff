@@ -74,14 +74,23 @@ describe("production GitHub broker entitlement resolver (#612/#614)", () => {
     );
   });
 
-  it("fails closed for missing, invalid, wrong-device, revoked, and expired credentials", async () => {
+  it("fails closed for missing, invalid, wrong-device, revoked, expired, and malformed-expiry credentials", async () => {
     const store = new LicenseStore(":memory:");
     const active = issuePrivate(store);
     const expired = issuePrivate(store, "2026-07-18T14:59:59.000Z");
+    const malformedExpiry = issuePrivate(store, "not-a-timestamp");
     assert.equal(
       activate(
         store,
         { licenseKey: active.rawKey, machineId: DEVICE_ID, repo: PRIVATE_REPO },
+        NOW
+      ).httpStatus,
+      200
+    );
+    assert.equal(
+      activate(
+        store,
+        { licenseKey: malformedExpiry.rawKey, machineId: DEVICE_ID, repo: PRIVATE_REPO },
         NOW
       ).httpStatus,
       200
@@ -98,6 +107,7 @@ describe("production GitHub broker entitlement resolver (#612/#614)", () => {
     store.revokeLicense(active.rawKey, "cancelled");
     assert.deepEqual(await resolve(context(active.rawKey)), { status: "revoked" });
     assert.deepEqual(await resolve(context(expired.rawKey)), { status: "expired" });
+    assert.deepEqual(await resolve(context(malformedExpiry.rawKey)), { status: "expired" });
   });
 
   it("never treats a public-only or private-disabled license as private coverage", async () => {
