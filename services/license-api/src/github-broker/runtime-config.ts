@@ -2,6 +2,7 @@ import { createPrivateKey } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { createGitHubInstallationClient } from "./github-app.js";
 import type { GitHubBrokerDeps } from "./routes.js";
+import { GitHubBrokerStore } from "./store.js";
 import { normalizeHttpApiBaseUrl } from "./url.js";
 
 const REQUIRED_SETTINGS = [
@@ -115,6 +116,16 @@ export function loadGitHubBrokerRuntimeConfig(
     return invalid("GITHUB_BROKER_OAUTH_BASE_URL", "invalid");
   }
 
+  let store: GitHubBrokerStore;
+  try {
+    // Open and migrate inside the fail-closed configuration boundary. Passing
+    // the ready store onward prevents a later constructor failure from taking
+    // down unrelated license and health routes.
+    store = new GitHubBrokerStore(dbPath);
+  } catch {
+    return invalid("GITHUB_BROKER_DB_PATH", "open_failed");
+  }
+
   const githubClient = createGitHubInstallationClient({
     appId,
     privateKey,
@@ -128,6 +139,7 @@ export function loadGitHubBrokerRuntimeConfig(
     status: "ready",
     deps: {
       dbPath,
+      store,
       githubClient,
       installBaseUrl
     }

@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { loadGitHubBrokerRuntimeConfig } from "../src/github-broker/runtime-config.ts";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const appPrivateKey = privateKey.export({ type: "pkcs1", format: "pem" }).toString();
+const brokerDbRoot = mkdtempSync(join(tmpdir(), "neondiff-broker-runtime-"));
+const brokerDbPath = join(brokerDbRoot, "github-broker.sqlite");
 
 function completeEnvironment(): Record<string, string> {
   return {
@@ -15,7 +20,7 @@ function completeEnvironment(): Record<string, string> {
     GITHUB_BROKER_OAUTH_CLIENT_SECRET: "fixture-oauth-secret",
     GITHUB_BROKER_INSTALL_BASE_URL:
       "https://github.com/apps/neondiff-staging/installations/new",
-    GITHUB_BROKER_DB_PATH: "/data/github-broker.sqlite"
+    GITHUB_BROKER_DB_PATH: brokerDbPath
   };
 }
 
@@ -38,7 +43,7 @@ describe("production GitHub broker runtime configuration", () => {
     );
     assert.equal(result.status, "ready");
     if (result.status !== "ready") return;
-    assert.equal(result.deps.dbPath, "/data/github-broker.sqlite");
+    assert.equal(result.deps.dbPath, brokerDbPath);
     assert.equal(
       result.deps.installBaseUrl,
       "https://github.com/apps/neondiff-staging/installations/new"
@@ -47,6 +52,21 @@ describe("production GitHub broker runtime configuration", () => {
     const serialized = JSON.stringify(result);
     assert.equal(serialized.includes(appPrivateKey), false);
     assert.equal(serialized.includes("fixture-oauth-secret"), false);
+    result.deps.store?.close();
+  });
+
+  it("keeps the license API available when broker storage cannot open", () => {
+    assert.deepEqual(
+      loadGitHubBrokerRuntimeConfig(
+        { ...completeEnvironment(), GITHUB_BROKER_DB_PATH: brokerDbRoot },
+        "/data/license.sqlite"
+      ),
+      {
+        status: "invalid",
+        setting: "GITHUB_BROKER_DB_PATH",
+        reason: "open_failed"
+      }
+    );
   });
 
   it("fails closed with a public-safe setting name for every missing required value", () => {
