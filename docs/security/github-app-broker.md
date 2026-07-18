@@ -112,7 +112,7 @@ the license store's strict schema verification is unaffected.
    decision uses a separate **metadata:read-only** installation token, so no
    broad token is ever minted before the seam authorizes.
 8. **Local operation.** The local worker polls GitHub with the brokered token
-   exactly as it does today with a locally minted one, and renews via step 6
+   exactly as it does today with a locally minted one, and renews via step 7
    before expiry. Reviews post as the NeonDiff App installation identity (AC6),
    because installation tokens author as the App.
 
