@@ -3,6 +3,7 @@ import Security
 
 public protocol DesktopSecretStoring {
     func setSecret(_ secret: String, account: String) throws
+    func createSecretIfAbsent(_ secret: String, account: String) throws -> Bool
     func readSecret(account: String) throws -> String?
     func readSecret(account: String, allowUserInteraction: Bool) throws -> String?
     func containsSecret(account: String) -> Bool
@@ -10,6 +11,12 @@ public protocol DesktopSecretStoring {
 }
 
 public extension DesktopSecretStoring {
+    func createSecretIfAbsent(_ secret: String, account: String) throws -> Bool {
+        guard try readSecret(account: account) == nil else { return false }
+        try setSecret(secret, account: account)
+        return true
+    }
+
     func readSecret(account: String, allowUserInteraction: Bool) throws -> String? {
         guard allowUserInteraction else { return nil }
         return try readSecret(account: account)
@@ -55,6 +62,21 @@ public final class KeychainSecretStore: DesktopSecretStoring {
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         guard status == errSecSuccess else { throw KeychainSecretError.unexpectedStatus(status) }
+    }
+
+    /// Atomically creates a generic-password item without replacing an existing
+    /// value. Keychain uniqueness on class/service/account coordinates separate
+    /// store instances and prevents concurrent identity creation from orphaning
+    /// a server binding.
+    public func createSecretIfAbsent(_ secret: String, account: String) throws -> Bool {
+        let data = Data(secret.utf8)
+        var addQuery = baseQuery(account: account)
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        if status == errSecSuccess { return true }
+        if status == errSecDuplicateItem { return false }
+        throw KeychainSecretError.unexpectedStatus(status)
     }
 
     public func readSecret(account: String) throws -> String? {
