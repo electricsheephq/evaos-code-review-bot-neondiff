@@ -213,9 +213,25 @@ fixed-origin broker HTTPS request body when a private token is requested. The
 broker uses it for an in-memory license lookup and never logs, reflects, or
 persists it. Public-repository token requests omit the key and do not call the
 license authority. This path is still rollout-disabled; these contracts do not
-prove production enablement or customer readiness. Generic CLI
-status/deactivate and daemon-admission validation still use the legacy local
-identity; #630 must migrate those runtime callers before rollout.
+prove production enablement or customer readiness.
+
+The native source composition is also default-off. A release bundle must carry
+all three exact public Info.plist values before the app constructs the managed
+client:
+
+- `NeonDiffPaidBetaContract = paid-mac-beta-v1`
+- `NeonDiffManagedGitHubBrokerEnabled = true`
+- `NeonDiffGitHubBrokerOrigin = https://neondiff-license.fly.dev`
+
+`apps/neondiff-desktop/script/build_and_run.sh` accepts those values only for a
+release build and only through the exact matching
+`NEONDIFF_DESKTOP_PAID_BETA_CONTRACT`,
+`NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED`, and
+`NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN` inputs. Missing, partial, debug, or
+different values leave the bundle quarantined or fail the build. These are
+public configuration values, not secrets, and do not override the server-side
+kill switch. Generic CLI status/deactivate and daemon-admission validation still
+require exact-candidate integration proof under #630.
 
 ## 4. Check Readiness
 

@@ -339,6 +339,12 @@ public struct GitHubBrokerConnection: Equatable, Sendable {
     public let installURL: URL
     public let state: String
     public let expiresAt: Date
+
+    public init(installURL: URL, state: String, expiresAt: Date) {
+        self.installURL = installURL
+        self.state = state
+        self.expiresAt = expiresAt
+    }
 }
 
 public enum GitHubBrokerConnectionCompletion: Equatable, Sendable {
@@ -368,6 +374,32 @@ public struct GitHubBrokerRepositoryPage: Equatable, Sendable {
     public let page: Int
     public let repositories: [GitHubBrokerRepository]
     public let nextPage: Int?
+
+    public init(
+        installationId: Int,
+        page: Int,
+        repositories: [GitHubBrokerRepository],
+        nextPage: Int?
+    ) {
+        self.installationId = installationId
+        self.page = page
+        self.repositories = repositories
+        self.nextPage = nextPage
+    }
+}
+
+public protocol GitHubBrokerConnecting: Sendable {
+    func register(identity: GitHubBrokerDeviceIdentity) async throws
+    func startConnection(identity: GitHubBrokerDeviceIdentity) async throws -> GitHubBrokerConnection
+    func completeConnection(
+        identity: GitHubBrokerDeviceIdentity,
+        state: String
+    ) async throws -> GitHubBrokerConnectionCompletion
+    func listRepositories(
+        identity: GitHubBrokerDeviceIdentity,
+        installationId: Int,
+        page: Int
+    ) async throws -> GitHubBrokerRepositoryPage
 }
 
 public struct GitHubInstallationAccessGrant: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
@@ -402,7 +434,7 @@ public struct GitHubInstallationAccessGrant: Sendable, CustomStringConvertible, 
     public var debugDescription: String { description }
 }
 
-public struct GitHubBrokerClient: Sendable {
+public struct GitHubBrokerClient: GitHubBrokerConnecting, Sendable {
     public static let maximumResponseBytes = 64 * 1024
 
     private let baseURL: URL

@@ -18,6 +18,15 @@ enum NeonDiffDesktopCompositionRoot {
         #endif
 
         let keychain = KeychainSecretStore()
+        var productionBoundary = DesktopProductionBoundary.resolve(
+            infoDictionary: Bundle.main.infoDictionary ?? [:]
+        )
+        let githubBroker = productionBoundary.managedGitHubBrokerOrigin.flatMap {
+            try? GitHubBrokerClient(baseURL: $0)
+        }
+        if productionBoundary.managedGitHubBrokerOrigin != nil, githubBroker == nil {
+            productionBoundary = .quarantined
+        }
         return NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: AppKitClipboard(),
             urlOpener: AppKitURLOpener(),
@@ -29,7 +38,8 @@ enum NeonDiffDesktopCompositionRoot {
             providerVerifier: FoundationProviderVerifier(secretStore: keychain),
             secretStore: keychain,
             githubAuthenticator: GitHubDeviceAuthClient(),
-            productionBoundary: .quarantined,
+            githubBroker: githubBroker,
+            productionBoundary: productionBoundary,
             cliWorkingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
         ))
     }

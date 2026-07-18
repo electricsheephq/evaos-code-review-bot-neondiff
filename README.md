@@ -144,9 +144,15 @@ repository. The raw Activation Key remains Keychain-owned: it crosses bounded
 stdin for activation and the fixed-origin broker HTTPS request body for private
 token issuance only, and is never placed in argv, config, logs, or broker
 storage. That production path remains behind its rollout kill switch until the
-paid-beta canaries pass. This slice does not migrate generic CLI
-status/deactivate or daemon-admission validation from the legacy local identity;
-#630 must wire those runtime callers before the managed path can be enabled.
+paid-beta canaries pass. The native source now composes the managed broker only
+when a release bundle carries the exact `paid-mac-beta-v1` Info.plist contract,
+fixed production broker origin, and explicit broker-enable marker. Those public
+build values are absent by default, so ordinary/debug bundles stay quarantined;
+the server kill switch and every broker/entitlement decision still fail closed.
+This source composition is not proof that the production broker is enabled,
+that billing is live, or that a signed customer artifact exists. Generic CLI
+status/deactivate and daemon-admission validation still need exact-candidate
+integration proof under #630 before the paid-beta gate can pass.
 The native Providers pane reads and edits the saved `providers` registry, not
 the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview, and
 Apply the exact selected provider before Verify is enabled; verification pins
@@ -155,9 +161,10 @@ both the provider ID and inspected config revision.
 Create or install the GitHub App before expecting PR reviews to run. The App
 must be installed on the same selected repositories listed in `pilotRepos`; see
 [docs/github-app-setup.md](docs/github-app-setup.md) for the permission set and
-selected-repo install path. Enable device flow in the GitHub App settings before
-using the Mac desktop "Connect GitHub" repo selector; the desktop uses the
-public client ID for that user-code authorization flow.
+selected-repo install path. The rollout-disabled managed desktop path uses the
+broker-issued GitHub App install/OAuth URL and a device-signed completion poll;
+it never falls back to a user token. Legacy direct-install builds still use
+device flow and the public client ID.
 
 Do not store the GitHub App private key, provider API key, license key, tokens,
 or customer data in this repository. Keep local config, secrets, state DBs, and

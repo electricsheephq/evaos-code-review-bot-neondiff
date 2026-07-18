@@ -125,13 +125,17 @@ import Testing
         #expect(source.contains("Updates blocked pending native activation proof"))
     }
 
-    @Test func productionCompositionRootInstallsTheQuarantinedBoundary() throws {
+    @Test func productionCompositionRootResolvesOnlyTheSignedBuildBoundary() throws {
         let compositionRoot = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/App/NeonDiffDesktopCompositionRoot.swift")
         let source = try sourceBoundaryText(at: compositionRoot)
 
-        #expect(source.contains("productionBoundary: .quarantined"))
+        #expect(source.contains("DesktopProductionBoundary.resolve("))
+        #expect(source.contains("Bundle.main.infoDictionary ?? [:]"))
+        #expect(source.contains("GitHubBrokerClient(baseURL: $0)"))
+        #expect(source.contains("productionBoundary: productionBoundary"))
         #expect(!source.contains("productionBoundary: .testVerified"))
+        #expect(!source.contains("productionBoundary: .testManaged"))
     }
 
     @Test func evaluationRootIdentifierDoesNotOverrideDescendantActionIdentifiers() throws {

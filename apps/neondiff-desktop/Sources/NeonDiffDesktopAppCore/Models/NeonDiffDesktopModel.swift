@@ -59,6 +59,16 @@ package struct DesktopModelInitialState {
 }
 #endif
 
+package enum ManagedGitHubConnectionState: Equatable, Sendable {
+    case quarantined
+    case disconnected
+    case verificationRequired
+    case connecting
+    case awaitingAuthorization
+    case bound(installationId: Int)
+    case failed
+}
+
 @MainActor
 package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var selectedSection: DesktopSection = .overview
@@ -101,6 +111,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var discoveredGitHubRepos: [GitHubDiscoveredRepository] = []
     @Published package var isGitHubAuthorizationInProgress = false
     @Published package var isGitHubRepositoryRefreshInProgress = false
+    @Published package var managedGitHubConnectionState: ManagedGitHubConnectionState = .quarantined
+    @Published package var managedGitHubRepositories: [GitHubBrokerRepository] = []
+    @Published package var selectedManagedGitHubRepository: String?
+    @Published package var managedGitHubRecovery: GitHubConnectionRecovery?
+    @Published package var isManagedGitHubConnectionInProgress = false
     @Published package var logText = "No logs loaded."
     @Published package var lastError: String?
     @Published package var lastCommandLine = ""
@@ -133,6 +148,55 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.productionBoundary.nativeActivationBrokerVerified
     }
 
+    package var managedGitHubAvailable: Bool {
+        dependencies.productionBoundary.managedGitHubBrokerOrigin != nil
+            && dependencies.githubBroker != nil
+    }
+
+    package var managedGitHubStatusText: String {
+        switch managedGitHubConnectionState {
+        case .quarantined:
+            "Unavailable in this signed build"
+        case .disconnected:
+            "Not connected"
+        case .verificationRequired:
+            "Saved binding requires server verification"
+        case .connecting:
+            "Creating Keychain-backed device binding"
+        case .awaitingAuthorization:
+            "Waiting for GitHub authorization"
+        case .bound(let installationId):
+            "Server binding verified · installation \(installationId)"
+        case .failed:
+            managedGitHubRecovery?.status ?? "Verification failed"
+        }
+    }
+
+    package var isManagedGitHubBound: Bool {
+        if case .bound = managedGitHubConnectionState { return true }
+        return false
+    }
+
+    package var canAdvanceOnboarding: Bool {
+        if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil {
+            guard hasVerifiedManagedGitHubSelection else { return false }
+        }
+        return onboardingFlow.canAdvance
+    }
+
+    private var hasVerifiedManagedGitHubSelection: Bool {
+        guard case .bound = managedGitHubConnectionState,
+              let selectedManagedGitHubRepository,
+              let repository = managedGitHubRepositories.first(where: {
+                  $0.fullName == selectedManagedGitHubRepository
+              }),
+              repository.visibility != .unknown
+        else {
+            return false
+        }
+        return repos.filter(\.enabled).map(\.name) == [selectedManagedGitHubRepository]
+    }
+
     private let dependencies: DesktopAppDependencies
     private let activationLicenseClientOverride: (any ActivationLicenseClienting)?
     private var providerVerificationTask: Task<Void, Never>?
@@ -142,6 +206,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var providerKeyRevision: UInt64 = 0
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
+    private var managedGitHubConnectionTask: Task<Void, Never>?
     private var githubRepositoryRefreshGate = GitHubLatestRequestGate()
     private var controlCenterLoadedSnapshot: DesktopControlCenterSnapshot?
     private var controlCenterRollbackSnapshot: DesktopControlCenterSnapshot?
@@ -179,6 +244,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
             self.github.installationState = "not connected"
         }
         self.github.authorizedUserLogin = nil
+        if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil {
+            if dependencies.githubBroker == nil {
+                self.managedGitHubConnectionState = .quarantined
+            } else if Self.savedManagedGitHubInstallationId(
+                preferences: dependencies.preferences
+            ) != nil {
+                self.managedGitHubConnectionState = .verificationRequired
+            } else {
+                self.managedGitHubConnectionState = .disconnected
+            }
+        } else {
+            self.managedGitHubConnectionState = .quarantined
+        }
         self.onboardingFlow = OnboardingFlow(providerKeyStored: providerKeyStored)
         self.isOnboardingPresented = !dependencies.preferences.bool(forKey: onboardingCompletedKey)
         // Resume-exact: restore the persisted activation state (rawValue) without
@@ -710,6 +788,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func addPendingRepoToAllowlist() {
+        guard !managedGitHubAvailable else {
+            lastError = "Choose a repository from the verified GitHub App binding. Manual repository names are disabled in managed mode."
+            return
+        }
         guard canEditProviderConfiguration else {
             lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
             return
@@ -731,6 +813,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func toggleRepoAllowlist(_ repo: RepoMonitor) {
+        guard !managedGitHubAvailable else {
+            lastError = "Managed mode keeps exactly one server-bound repository selected. Choose it from the verified repository list."
+            return
+        }
         guard let index = repos.firstIndex(where: { $0.id == repo.id }) else { return }
         repos[index].enabled.toggle()
         lastError = nil
@@ -738,6 +824,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func githubAccessCue(for repo: RepoMonitor) -> GitHubRepositoryAccessCue? {
+        if managedGitHubAvailable,
+           let authoritative = managedGitHubRepositories.first(where: {
+               $0.fullName == repo.name
+           }) {
+            switch authoritative.visibility {
+            case .public:
+                return .publicFree
+            case .private, .internal:
+                return activationState == .active ? .licenseActive : .licenseRequired
+            case .unknown:
+                return .insufficientReadAccess
+            }
+        }
         guard let discovered = discoveredGitHubRepos.first(where: {
             $0.fullName.caseInsensitiveCompare(repo.name) == .orderedSame
         }) else {
@@ -747,6 +846,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func removeRepoFromAllowlist(_ repo: RepoMonitor) {
+        guard !managedGitHubAvailable else {
+            lastError = "Managed mode repository scope comes from the verified GitHub App binding."
+            return
+        }
         repos.removeAll { $0.id == repo.id }
         lastError = nil
         logText = "Repo removed locally. Preview or apply the config patch to persist it."
@@ -877,11 +980,205 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
+    package func startManagedGitHubConnection() {
+        guard let broker = dependencies.githubBroker,
+              dependencies.productionBoundary.managedGitHubBrokerOrigin != nil
+        else {
+            managedGitHubConnectionState = .quarantined
+            managedGitHubRecovery = GitHubConnectionRecovery(
+                status: "managed GitHub unavailable",
+                message: "Managed GitHub authorization is not enabled in this signed build.",
+                action: .retryLater
+            )
+            lastError = managedGitHubRecovery?.message
+            return
+        }
+        guard !isManagedGitHubConnectionInProgress else { return }
+
+        managedGitHubConnectionTask?.cancel()
+        isManagedGitHubConnectionInProgress = true
+        managedGitHubConnectionState = .connecting
+        managedGitHubRecovery = nil
+        managedGitHubRepositories = []
+        selectedManagedGitHubRepository = nil
+        lastError = nil
+
+        managedGitHubConnectionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                isManagedGitHubConnectionInProgress = false
+                managedGitHubConnectionTask = nil
+            }
+            do {
+                let identity = try GitHubBrokerDeviceIdentityStore(
+                    secretStore: dependencies.secretStore
+                ).loadOrCreate()
+                try await broker.register(identity: identity)
+                let connection = try await broker.startConnection(identity: identity)
+                guard dependencies.urlOpener.open(connection.installURL) else {
+                    throw ManagedGitHubModelError.installPageOpenFailed
+                }
+                managedGitHubConnectionState = .awaitingAuthorization
+                logText = "GitHub App installation opened. Complete authorization in GitHub; NeonDiff is waiting for the server binding."
+
+                let installationId = try await awaitManagedGitHubBinding(
+                    broker: broker,
+                    identity: identity,
+                    connection: connection
+                )
+                dependencies.preferences.set(
+                    String(installationId),
+                    forKey: managedGitHubInstallationIdKey
+                )
+                try await loadManagedGitHubRepositories(
+                    broker: broker,
+                    identity: identity,
+                    installationId: installationId
+                )
+            } catch {
+                guard !Task.isCancelled else { return }
+                applyManagedGitHubFailure(error)
+            }
+        }
+    }
+
+    package func refreshManagedGitHubRepositories() {
+        guard let broker = dependencies.githubBroker,
+              dependencies.productionBoundary.managedGitHubBrokerOrigin != nil,
+              let installationId = Self.savedManagedGitHubInstallationId(
+                preferences: dependencies.preferences
+              )
+        else {
+            managedGitHubConnectionState = .quarantined
+            managedGitHubRecovery = GitHubConnectionRecovery(
+                status: "connection required",
+                message: "Connect GitHub before refreshing server-bound repositories.",
+                action: .reconnect
+            )
+            lastError = managedGitHubRecovery?.message
+            return
+        }
+        guard !isManagedGitHubConnectionInProgress else { return }
+
+        managedGitHubConnectionTask?.cancel()
+        isManagedGitHubConnectionInProgress = true
+        managedGitHubConnectionState = .verificationRequired
+        managedGitHubRecovery = nil
+        managedGitHubRepositories = []
+        selectedManagedGitHubRepository = nil
+        lastError = nil
+
+        managedGitHubConnectionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                isManagedGitHubConnectionInProgress = false
+                managedGitHubConnectionTask = nil
+            }
+            do {
+                let identity = try GitHubBrokerDeviceIdentityStore(
+                    secretStore: dependencies.secretStore
+                ).loadOrCreate()
+                try await loadManagedGitHubRepositories(
+                    broker: broker,
+                    identity: identity,
+                    installationId: installationId
+                )
+            } catch {
+                guard !Task.isCancelled else { return }
+                applyManagedGitHubFailure(error)
+            }
+        }
+    }
+
+    package func selectManagedGitHubRepository(fullName: String) {
+        guard case .bound = managedGitHubConnectionState,
+              let repository = managedGitHubRepositories.first(where: {
+                  $0.fullName == fullName
+              })
+        else {
+            lastError = "Refresh the server-bound GitHub repositories before selecting one."
+            return
+        }
+        guard repository.visibility != .unknown else {
+            lastError = "GitHub repository visibility is unavailable. NeonDiff fails closed until the broker returns authoritative visibility."
+            return
+        }
+
+        selectedManagedGitHubRepository = repository.fullName
+        for index in repos.indices {
+            repos[index].enabled = false
+        }
+        if let index = repos.firstIndex(where: { $0.name == repository.fullName }) {
+            repos[index].enabled = true
+            repos[index].profile = repository.visibility.rawValue
+        } else {
+            repos.append(RepoMonitor(
+                name: repository.fullName,
+                enabled: true,
+                profile: repository.visibility.rawValue,
+                lastReview: "selected through managed GitHub broker"
+            ))
+            repos.sort {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+        }
+
+        switch repository.visibility {
+        case .public:
+            onboardingFlow.mode = .publicReposOnly
+            enterActivation(for: .publicReposOnly)
+            onboardingFlow.licenseActivation = .activated
+        case .private, .internal:
+            onboardingFlow.mode = .privateRepos
+            if activationState == .active,
+               activatedRepository != repository.fullName {
+                applyActivationEvent(.activationInvalid)
+                applyActivationEvent(.resetToPurchase)
+            }
+            enterActivation(for: .privateRepos)
+            onboardingFlow.licenseActivation = activationState == .active
+                    && activatedRepository == repository.fullName
+                ? .activated
+                : .servicePending
+        case .unknown:
+            break
+        }
+        managedGitHubRecovery = nil
+        lastError = nil
+        logText = "\(repository.fullName) selected from the authoritative GitHub App binding. Preview and apply the allowlist before review."
+    }
+
+    package func performManagedGitHubRecoveryAction() {
+        switch managedGitHubRecovery?.action {
+        case .installOrManageApp, .reconnect:
+            startManagedGitHubConnection()
+        case .retryLater, .retry:
+            if Self.savedManagedGitHubInstallationId(preferences: dependencies.preferences) != nil {
+                refreshManagedGitHubRepositories()
+            } else {
+                startManagedGitHubConnection()
+            }
+        case .contactOrganizationOwner:
+            logText = managedGitHubRecovery?.message
+                ?? "Ask an organization owner to approve the GitHub App installation."
+        case nil:
+            refreshManagedGitHubRepositories()
+        }
+    }
+
     package func previewRepoAllowlistPatch() {
+        guard !managedGitHubAvailable || hasVerifiedManagedGitHubSelection else {
+            lastError = "Verify the GitHub App binding and select exactly one server-bound repository before previewing the allowlist."
+            return
+        }
         runRepoSelectionPatch(dryRun: true)
     }
 
     package func applyRepoAllowlistPatch() {
+        guard !managedGitHubAvailable || hasVerifiedManagedGitHubSelection else {
+            lastError = "Verify the GitHub App binding and select exactly one server-bound repository before applying the allowlist."
+            return
+        }
         runRepoSelectionPatch(dryRun: false)
     }
 
@@ -1170,6 +1467,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func applyActivationEvent(_ event: ActivationEvent) {
         let next = ActivationStateMachine.reduce(activationState, on: event)
         guard next != activationState else { return }
+        if activationState == .active, next != .active {
+            dependencies.preferences.set("", forKey: activationRepositoryKey)
+        }
         activationState = next
         // Persist for resume-exact restore across relaunch / cancel / network loss.
         dependencies.preferences.set(next.rawValue, forKey: activationStateKey)
@@ -1353,6 +1653,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             let plan = summary.plan.map { " · \($0)" } ?? ""
             license.entitlement = "active (\(scope)\(plan))"
             logText = "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
+            if let repository = repos.filter(\.enabled).map(\.name).onlyElement {
+                dependencies.preferences.set(repository, forKey: activationRepositoryKey)
+            } else {
+                dependencies.preferences.set("", forKey: activationRepositoryKey)
+            }
             // Let onboarding finish through the native handoff (Continue enables).
             onboardingFlow.licenseActivation = .activated
         case .scopeConflict:
@@ -1366,6 +1671,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func advanceOnboarding() {
         onboardingFlow.providerKeyStored = providers.providerKeyStored
+        guard canAdvanceOnboarding else { return }
         if onboardingFlow.currentStep == .done {
             completeOnboarding()
             return
@@ -1379,6 +1685,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func completeOnboarding() {
         guard dependencies.productionBoundary.nativeActivationBrokerVerified,
+              dependencies.productionBoundary.managedGitHubBrokerOrigin == nil
+                || hasVerifiedManagedGitHubSelection,
               onboardingFlow.licenseActivation == .activated
         else {
             _ = requireVerifiedNativeActivationBroker()
@@ -1764,6 +2072,142 @@ package final class NeonDiffDesktopModel: ObservableObject {
         github.installationState = recovery.status
         lastError = recovery.message
         logText = recovery.message
+    }
+
+    private func awaitManagedGitHubBinding(
+        broker: any GitHubBrokerConnecting,
+        identity: GitHubBrokerDeviceIdentity,
+        connection: GitHubBrokerConnection
+    ) async throws -> Int {
+        while !Task.isCancelled && dependencies.clock.now < connection.expiresAt {
+            switch try await broker.completeConnection(
+                identity: identity,
+                state: connection.state
+            ) {
+            case .bound(let installationId):
+                return installationId
+            case .pending:
+                try await dependencies.clock.sleep(for: .seconds(2))
+            }
+        }
+        throw ManagedGitHubModelError.authorizationExpired
+    }
+
+    private func loadManagedGitHubRepositories(
+        broker: any GitHubBrokerConnecting,
+        identity: GitHubBrokerDeviceIdentity,
+        installationId: Int
+    ) async throws {
+        var pageNumber = 1
+        var repositories: [GitHubBrokerRepository] = []
+        while !Task.isCancelled {
+            let page = try await broker.listRepositories(
+                identity: identity,
+                installationId: installationId,
+                page: pageNumber
+            )
+            guard page.installationId == installationId,
+                  page.page == pageNumber
+            else {
+                throw GitHubBrokerClientError.scopeMismatch
+            }
+            repositories.append(contentsOf: page.repositories)
+            guard let nextPage = page.nextPage else { break }
+            guard nextPage == pageNumber + 1, nextPage <= 200 else {
+                throw GitHubBrokerClientError.scopeMismatch
+            }
+            pageNumber = nextPage
+        }
+        guard !Task.isCancelled else { return }
+        let names = repositories.map(\.fullName)
+        guard !repositories.isEmpty,
+              Set(names).count == names.count
+        else {
+            throw ManagedGitHubModelError.noBoundRepositories
+        }
+        managedGitHubRepositories = repositories.sorted {
+            $0.fullName.localizedCaseInsensitiveCompare($1.fullName) == .orderedAscending
+        }
+        managedGitHubConnectionState = .bound(installationId: installationId)
+        managedGitHubRecovery = nil
+        lastError = nil
+        logText = "\(repositories.count) server-bound GitHub repositories verified. Select one to continue."
+    }
+
+    private func applyManagedGitHubFailure(_ error: Error) {
+        managedGitHubConnectionState = .failed
+        managedGitHubRepositories = []
+        selectedManagedGitHubRepository = nil
+        let recovery: GitHubConnectionRecovery
+        if let brokerError = error as? GitHubBrokerClientError {
+            switch brokerError {
+            case .server(reason: .rateLimited),
+                 .server(reason: .brokerUnavailable),
+                 .server(reason: .entitlementServiceUnavailable),
+                 .transportUnavailable:
+                recovery = GitHubConnectionRecovery(
+                    status: "broker unavailable",
+                    message: "The managed GitHub service is unavailable. No repository access was granted. Retry later.",
+                    action: .retryLater
+                )
+            case .server(reason: .installationNotFound),
+                 .server(reason: .installationUninstalled),
+                 .server(reason: .installationSuspended),
+                 .server(reason: .installationAuthorizationUnverified),
+                 .server(reason: .bindingNotFound):
+                recovery = GitHubConnectionRecovery(
+                    status: "App installation unavailable",
+                    message: "The GitHub App installation is missing, suspended, or no longer authorized. Reconnect and manage selected repository access.",
+                    action: .installOrManageApp
+                )
+            default:
+                recovery = GitHubConnectionRecovery(
+                    status: "managed GitHub verification failed",
+                    message: "Managed GitHub verification failed closed. Reconnect; if it persists, contact support with redacted diagnostics.",
+                    action: .reconnect
+                )
+            }
+        } else if error is GitHubBrokerDeviceIdentityError {
+            recovery = GitHubConnectionRecovery(
+                status: "device identity unavailable",
+                message: "The Keychain-backed GitHub device identity is unavailable. NeonDiff did not create a replacement binding.",
+                action: .retry
+            )
+        } else if let modelError = error as? ManagedGitHubModelError {
+            recovery = modelError.recovery
+        } else {
+            recovery = GitHubConnectionRecovery(
+                status: "managed GitHub verification failed",
+                message: "Managed GitHub verification failed closed. Retry with the App installed on a selected repository.",
+                action: .retry
+            )
+        }
+        managedGitHubRecovery = recovery
+        lastError = recovery.message
+        logText = recovery.message
+    }
+
+    private static func savedManagedGitHubInstallationId(
+        preferences: any DesktopPreferences
+    ) -> Int? {
+        guard let raw = preferences.string(forKey: managedGitHubInstallationIdKey),
+              let installationId = Int(raw),
+              installationId > 0
+        else {
+            return nil
+        }
+        return installationId
+    }
+
+    private var activatedRepository: String? {
+        guard let repository = dependencies.preferences.string(
+            forKey: activationRepositoryKey
+        )?.trimmingCharacters(in: .whitespacesAndNewlines),
+        isValidRepoName(repository)
+        else {
+            return nil
+        }
+        return repository
     }
 
     private func readGitHubStoredDate(account: String) -> Date? {
@@ -2229,9 +2673,40 @@ private let onboardingCompletedKey = "neondiff.hasCompletedActivationOnboarding.
 // raw activation-key copy.
 private let activationKeyAccount = "license/default"
 private let activationStateKey = "neondiff.activationState.v1"
+private let activationRepositoryKey = "neondiff.activationRepository.v1"
 private let activationHandoffEnabledKey = "neondiff.activationHandoffEnabled"
 private let activationCheckoutEnabledKey = "neondiff.activationCheckoutEnabled"
 private let activationCliBackedEnabledKey = "neondiff.activationCliBackedValidation"
+private let managedGitHubInstallationIdKey = "neondiff.managedGitHubInstallationId"
+
+private enum ManagedGitHubModelError: Error {
+    case installPageOpenFailed
+    case authorizationExpired
+    case noBoundRepositories
+
+    var recovery: GitHubConnectionRecovery {
+        switch self {
+        case .installPageOpenFailed:
+            GitHubConnectionRecovery(
+                status: "GitHub install page unavailable",
+                message: "NeonDiff could not open the GitHub App installation page. No repository binding was granted.",
+                action: .retry
+            )
+        case .authorizationExpired:
+            GitHubConnectionRecovery(
+                status: "GitHub authorization expired",
+                message: "GitHub authorization expired before the server binding completed. Start a new connection.",
+                action: .reconnect
+            )
+        case .noBoundRepositories:
+            GitHubConnectionRecovery(
+                status: "no bound repositories",
+                message: "The GitHub App binding contains no selected repositories. Manage App access, then refresh.",
+                action: .installOrManageApp
+            )
+        }
+    }
+}
 
 private func isValidRepoName(_ value: String) -> Bool {
     let parts = value.split(separator: "/", omittingEmptySubsequences: false)
@@ -2249,4 +2724,10 @@ private func uniqueSortedRepoNames(_ names: [String]) -> [String] {
         .filter(isValidRepoName)
         .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         .filter { seen.insert($0.lowercased()).inserted }
+}
+
+private extension Collection {
+    var onlyElement: Element? {
+        count == 1 ? first : nil
+    }
 }

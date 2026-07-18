@@ -177,6 +177,7 @@ struct ModelDependencyFixture {
     let providerVerifier: RecordingProviderVerifier
     let secretStore: MemorySecretStore
     let githubAuthenticator: ScriptedGitHubAuthenticator
+    let githubBroker: ScriptedGitHubBroker?
 
     init(
         root: URL = fixtureURL("/fixture/model-app-support", directory: true),
@@ -185,7 +186,10 @@ struct ModelDependencyFixture {
         clipboardResult: Bool = true,
         urlResult: Bool = true,
         githubAuthenticator: ScriptedGitHubAuthenticator = ScriptedGitHubAuthenticator(),
+        githubBroker: ScriptedGitHubBroker? = nil,
+        activationLicenseClient: (any ActivationLicenseClienting)? = nil,
         preferenceBools: [String: Bool] = [:],
+        preferenceStrings: [String: String] = [:],
         productionBoundary: DesktopProductionBoundary = .testVerified
     ) {
         clipboard = RecordingClipboard(result: clipboardResult)
@@ -196,11 +200,15 @@ struct ModelDependencyFixture {
         for (key, value) in preferenceBools {
             preferences.set(value, forKey: key)
         }
+        for (key, value) in preferenceStrings {
+            preferences.set(value, forKey: key)
+        }
         clock = TestClock(now: now)
         fileWriter = TemporaryFileWriter(root: root)
         providerVerifier = RecordingProviderVerifier()
         secretStore = MemorySecretStore()
         self.githubAuthenticator = githubAuthenticator
+        self.githubBroker = githubBroker
         model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: clipboard,
             urlOpener: urlOpener,
@@ -212,8 +220,9 @@ struct ModelDependencyFixture {
             providerVerifier: providerVerifier,
             secretStore: secretStore,
             githubAuthenticator: githubAuthenticator,
+            githubBroker: githubBroker,
             productionBoundary: productionBoundary
-        ))
+        ), activationLicenseClient: activationLicenseClient)
     }
 
     func loadConfig(_ json: String? = nil) {
@@ -237,6 +246,13 @@ struct ModelDependencyFixture {
 
     func waitForGitHubRefreshToFinish() async {
         await waitUntilFalse(model.$isGitHubRepositoryRefreshInProgress, current: model.isGitHubRepositoryRefreshInProgress)
+    }
+
+    func waitForManagedGitHubConnectionToFinish() async {
+        await waitUntilFalse(
+            model.$isManagedGitHubConnectionInProgress,
+            current: model.isManagedGitHubConnectionInProgress
+        )
     }
 
     func waitForDashboardLaunch() async {
