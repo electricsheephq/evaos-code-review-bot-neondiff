@@ -1002,7 +1002,7 @@ export class LicenseStore {
         `insert into activations (license_key_hash, machine_id, repo, activated_at, last_seen_at)
          values (?, ?, ?, ?, ?)
          on conflict (license_key_hash, machine_id)
-         do update set last_seen_at = excluded.last_seen_at, repo = coalesce(excluded.repo, activations.repo)`
+         do update set last_seen_at = excluded.last_seen_at, repo = coalesce(activations.repo, excluded.repo)`
       )
       .run(licenseKeyHash, machineId, repo ?? null, now, now);
   }
