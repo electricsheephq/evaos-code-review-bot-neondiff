@@ -135,9 +135,14 @@ describe("github broker token wire contract", () => {
     try {
       const started = await startLicenseServer({ store });
       server = started.server;
-      const response = await post(started.url, "/github/token", { installationId: 1, repositories: ["octo/site"] });
-      assert.equal(response.status, 503, response.text);
-      assert.equal(response.json.reason, "broker_unavailable");
+      for (const [path, body] of [
+        ["/github/token", { installationId: 1, repositories: ["octo/site"] }],
+        ["/github/repositories", { installationId: 1, page: 1 }]
+      ] as const) {
+        const response = await post(started.url, path, body);
+        assert.equal(response.status, 503, response.text);
+        assert.equal(response.json.reason, "broker_unavailable");
+      }
     } finally {
       server?.close();
       store.close();

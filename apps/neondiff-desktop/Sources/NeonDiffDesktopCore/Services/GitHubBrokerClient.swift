@@ -346,6 +346,30 @@ public enum GitHubBrokerConnectionCompletion: Equatable, Sendable {
     case bound(installationId: Int)
 }
 
+public enum GitHubBrokerRepositoryVisibility: String, Codable, Equatable, Sendable {
+    case `public`
+    case `private`
+    case `internal`
+    case unknown
+}
+
+public struct GitHubBrokerRepository: Codable, Equatable, Sendable {
+    public let fullName: String
+    public let visibility: GitHubBrokerRepositoryVisibility
+
+    public init(fullName: String, visibility: GitHubBrokerRepositoryVisibility) {
+        self.fullName = fullName
+        self.visibility = visibility
+    }
+}
+
+public struct GitHubBrokerRepositoryPage: Equatable, Sendable {
+    public let installationId: Int
+    public let page: Int
+    public let repositories: [GitHubBrokerRepository]
+    public let nextPage: Int?
+}
+
 public struct GitHubInstallationAccessGrant: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     public let expiresAt: Date
     public let repositories: [String]
@@ -460,6 +484,44 @@ public struct GitHubBrokerClient: Sendable {
         default:
             throw GitHubBrokerClientError.invalidResponse
         }
+    }
+
+    public func listRepositories(
+        identity: GitHubBrokerDeviceIdentity,
+        installationId: Int,
+        page: Int = 1
+    ) async throws -> GitHubBrokerRepositoryPage {
+        guard installationId > 0, (1...200).contains(page) else {
+            throw GitHubBrokerClientError.invalidRequest
+        }
+        let response: RepositoryPageResponse = try await post(
+            path: "/github/repositories",
+            body: [
+                "installationId": installationId,
+                "page": page
+            ],
+            credential: try identity.makeCredential(now: now())
+        )
+        let repositoryNames = response.repositories.map(\.fullName)
+        guard response.status == "listed",
+              response.installationId == installationId,
+              response.page == page,
+              response.repositories.count <= 50,
+              Set(repositoryNames).count == repositoryNames.count,
+              repositoryNames.allSatisfy(Self.isCanonicalRepository),
+              repositoryNames == repositoryNames.sorted(),
+              response.nextPage == nil || response.nextPage == page + 1,
+              response.nextPage.map({ (1...200).contains($0) }) ?? true,
+              response.nextPage == nil || response.repositories.count == 50
+        else {
+            throw GitHubBrokerClientError.scopeMismatch
+        }
+        return GitHubBrokerRepositoryPage(
+            installationId: response.installationId,
+            page: response.page,
+            repositories: response.repositories,
+            nextPage: response.nextPage
+        )
     }
 
     public func issueToken(
@@ -648,6 +710,14 @@ private struct StartResponse: Decodable {
 private struct CompleteResponse: Decodable {
     let status: String
     let installationId: Int?
+}
+
+private struct RepositoryPageResponse: Decodable {
+    let status: String
+    let installationId: Int
+    let page: Int
+    let repositories: [GitHubBrokerRepository]
+    let nextPage: Int?
 }
 
 private struct TokenResponse: Decodable {

@@ -138,6 +138,19 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
                 body: ["status": "bound", "installationId": 4242]
             ),
             .json(
+                url: "https://broker.example/github/repositories",
+                body: [
+                    "status": "listed",
+                    "installationId": 4242,
+                    "page": 1,
+                    "repositories": [
+                        ["fullName": "octo/private", "visibility": "private"],
+                        ["fullName": "octo/public", "visibility": "public"]
+                    ],
+                    "nextPage": NSNull()
+                ]
+            ),
+            .json(
                 url: "https://broker.example/github/token",
                 body: [
                     "status": "issued",
@@ -167,6 +180,18 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         #expect(try await client.completeConnection(identity: identity, state: connect.state) == .pending)
         #expect(try await client.completeConnection(identity: identity, state: connect.state) == .bound(installationId: 4242))
 
+        let repositories = try await client.listRepositories(
+            identity: identity,
+            installationId: 4242
+        )
+        #expect(repositories.installationId == 4242)
+        #expect(repositories.page == 1)
+        #expect(repositories.nextPage == nil)
+        #expect(repositories.repositories == [
+            GitHubBrokerRepository(fullName: "octo/private", visibility: .private),
+            GitHubBrokerRepository(fullName: "octo/public", visibility: .public)
+        ])
+
         let grant = try await client.issueToken(
             identity: identity,
             installationId: 4242,
@@ -179,7 +204,7 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         #expect(grant.withToken { $0 } == "fixture-installation-value")
 
         let requests = await transport.requests
-        #expect(requests.count == 5)
+        #expect(requests.count == 6)
         #expect(requests.allSatisfy { $0.url.scheme == "https" && $0.url.host == "broker.example" })
         #expect(requests[0].headers["Authorization"] == nil)
         #expect(requests.dropFirst().allSatisfy { request in
@@ -191,10 +216,86 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         let publicJWK = try #require(registration["publicKeyJwk"] as? [String: Any])
         #expect(publicJWK["d"] == nil)
         let tokenRequest = try #require(
-            JSONSerialization.jsonObject(with: requests[4].body) as? [String: Any]
+            JSONSerialization.jsonObject(with: requests[5].body) as? [String: Any]
         )
         #expect(tokenRequest["repositories"] as? [String] == ["octo/private"])
         #expect(tokenRequest["permissions"] == nil)
+        let repositoryRequest = try #require(
+            JSONSerialization.jsonObject(with: requests[4].body) as? [String: Any]
+        )
+        #expect(repositoryRequest["installationId"] as? Int == 4242)
+        #expect(repositoryRequest["page"] as? Int == 1)
+    }
+
+    @Test func brokerClientRejectsMalformedRepositoryPages() async throws {
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerMemorySecretStore()
+        ).loadOrCreate()
+
+        let noRequestTransport = ScriptedBrokerTransport(responses: [])
+        let noRequestClient = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: noRequestTransport
+        )
+        await expectBrokerError(.invalidRequest) {
+            try await noRequestClient.listRepositories(
+                identity: identity,
+                installationId: 4242,
+                page: 0
+            )
+        }
+        #expect(await noRequestTransport.requests.isEmpty)
+
+        let duplicateTransport = ScriptedBrokerTransport(responses: [
+            .json(
+                url: "https://broker.example/github/repositories",
+                body: [
+                    "status": "listed",
+                    "installationId": 4242,
+                    "page": 1,
+                    "repositories": [
+                        ["fullName": "octo/repo", "visibility": "private"],
+                        ["fullName": "octo/repo", "visibility": "private"]
+                    ],
+                    "nextPage": NSNull()
+                ]
+            )
+        ])
+        let duplicateClient = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: duplicateTransport
+        )
+        await expectBrokerError(.scopeMismatch) {
+            try await duplicateClient.listRepositories(
+                identity: identity,
+                installationId: 4242
+            )
+        }
+
+        let unknownVisibilityTransport = ScriptedBrokerTransport(responses: [
+            .json(
+                url: "https://broker.example/github/repositories",
+                body: [
+                    "status": "listed",
+                    "installationId": 4242,
+                    "page": 1,
+                    "repositories": [
+                        ["fullName": "octo/repo", "visibility": "secret"]
+                    ],
+                    "nextPage": NSNull()
+                ]
+            )
+        ])
+        let unknownVisibilityClient = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: unknownVisibilityTransport
+        )
+        await expectBrokerError(.invalidResponse) {
+            try await unknownVisibilityClient.listRepositories(
+                identity: identity,
+                installationId: 4242
+            )
+        }
     }
 
     @Test func brokerClientFailsClosedOnIdentityOriginBudgetAndScopeMismatch() async throws {

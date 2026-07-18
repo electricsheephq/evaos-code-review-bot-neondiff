@@ -9,7 +9,7 @@ This document covers the **server-side slice** (issues #613 and #614). Native
 connect UI states are sequenced after #611/#612. The repository-visibility and
 entitlement decision is bound at token issuance in the single seam function
 `authorizeTokenIssuance` (#614); the live device<->license linkage and deployment
-wiring belong to the deploy lane (#559). No production GitHub App exists yet;
+wiring belong to the paid-beta deployment lane (#633). No production GitHub App exists yet;
 every code path below is exercised against fixtures, never a live install (see
 "Owner-gated boundary").
 
@@ -82,7 +82,17 @@ the license store's strict schema verification is unaffected.
    `POST /github/connect/complete` with its device credential and the original
    `state`. See "Return path" for why this is a device poll rather than a
    browser-to-app URL-scheme redirect in v1.
-6. **Token issuance (native to broker, recurring).** `POST /github/token` with the
+6. **Repository discovery (native to broker).** The app calls
+   `POST /github/repositories` with the device credential, installation id, and
+   page. The broker requires the exact device/installation binding, rechecks that
+   the installation is live and not suspended, then returns only the intersection
+   of the OAuth-authorized bind-time repository set and the installation's current
+   selected repositories. The response contains canonical repository names and
+   GitHub-authoritative visibility metadata in deterministic pages of 50. The
+   broker may use a metadata:read-only installation token internally to enumerate
+   the current selection, but no token is returned and the review-token mint seam
+   is never called.
+7. **Token issuance (native to broker, recurring).** `POST /github/token` with the
    device credential, `installation_id`, and the requested `repositories` /
    `permissions`. The broker checks, in order: the binding exists; the
    installation is live and not suspended; every requested repository is present
@@ -101,7 +111,7 @@ the license store's strict schema verification is unaffected.
    artifact. Reading the installation's repository list to make the visibility
    decision uses a separate **metadata:read-only** installation token, so no
    broad token is ever minted before the seam authorizes.
-7. **Local operation.** The local worker polls GitHub with the brokered token
+8. **Local operation.** The local worker polls GitHub with the brokered token
    exactly as it does today with a locally minted one, and renews via step 6
    before expiry. Reviews post as the NeonDiff App installation identity (AC6),
    because installation tokens author as the App.
@@ -254,8 +264,9 @@ active, private-covering entitlement.
 
 The entitlement snapshot is resolved through an injected authority (contract
 shape: the license-api `Entitlement`, merged #574). Its default is fail-closed
-(deny all private work) until the deploy lane (#559) wires the live device<->
-license linkage; the broker slice proves the binding against fixtures only.
+(deny all private work) until the paid-beta deployment lane (#633) wires the live
+device<->license linkage; the broker slice proves the binding against fixtures
+only.
 
 ## Threat model (STRIDE)
 
