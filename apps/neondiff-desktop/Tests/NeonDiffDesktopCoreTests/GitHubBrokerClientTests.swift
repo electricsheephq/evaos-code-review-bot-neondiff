@@ -65,6 +65,53 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         #expect(secrets.values["broker-device-fixture"] == "not-valid-private-key-material")
     }
 
+    @Test func secretStoreFailuresStayInsidePublicErrorBoundary() {
+        let readFailure = GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerFailingSecretStore(failRead: true)
+        )
+        #expect(throws: GitHubBrokerDeviceIdentityError.identityStorageUnavailable) {
+            _ = try readFailure.loadOrCreate()
+        }
+
+        let createFailure = GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerFailingSecretStore(failCreate: true)
+        )
+        #expect(throws: GitHubBrokerDeviceIdentityError.identityStorageUnavailable) {
+            _ = try createFailure.loadOrCreate()
+        }
+    }
+
+    @Test func concurrentStoreInstancesConvergeOnOnePersistedIdentity() throws {
+        let secrets = RacingBrokerSecretStore()
+        let first = ConcurrentIdentityLoader(
+            store: GitHubBrokerDeviceIdentityStore(secretStore: secrets)
+        )
+        let second = ConcurrentIdentityLoader(
+            store: GitHubBrokerDeviceIdentityStore(secretStore: secrets)
+        )
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "GitHubBrokerClientTests.identity-race", attributes: .concurrent)
+
+        group.enter()
+        queue.async {
+            first.run()
+            group.leave()
+        }
+        group.enter()
+        queue.async {
+            second.run()
+            group.leave()
+        }
+        group.wait()
+
+        let firstLoaded = try first.result.get()
+        let secondLoaded = try second.result.get()
+        let firstIdentity = try #require(firstLoaded)
+        let secondIdentity = try #require(secondLoaded)
+        #expect(firstIdentity.deviceId == secondIdentity.deviceId)
+        #expect(secrets.createCount == 1)
+    }
+
     @Test func brokerClientUsesExactOriginAndPreservesRepositoryScope() async throws {
         let secrets = BrokerMemorySecretStore()
         let identity = try GitHubBrokerDeviceIdentityStore(secretStore: secrets).loadOrCreate()
@@ -300,6 +347,31 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
             Issue.record("unexpected error type: \(error)")
         }
     }
+
+    @Test func brokerClientRejectsDuplicateCaseInsensitiveResponseHeaders() async throws {
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerMemorySecretStore()
+        ).loadOrCreate()
+        let transport = ScriptedBrokerTransport(responses: [
+            GitHubBrokerHTTPResponse(
+                statusCode: 200,
+                url: URL(string: "https://broker.example/github/connect/start")!,
+                headers: [
+                    "Content-Type": "application/json",
+                    "content-type": "application/json"
+                ],
+                body: Data(#"{"status":"connect_started"}"#.utf8)
+            )
+        ])
+        let client = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: transport
+        )
+
+        await expectBrokerError(.invalidResponse) {
+            _ = try await client.startConnection(identity: identity)
+        }
+    }
 }
 
 private final class BrokerMemorySecretStore: DesktopSecretStoring, @unchecked Sendable {
@@ -324,6 +396,120 @@ private final class BrokerMemorySecretStore: DesktopSecretStoring, @unchecked Se
 
     func deleteSecret(account: String) throws {
         _ = lock.withLock { storage.removeValue(forKey: account) }
+    }
+}
+
+private struct BrokerSecretStoreFixtureError: Error {}
+
+private final class BrokerFailingSecretStore: DesktopSecretStoring, @unchecked Sendable {
+    private let failRead: Bool
+    private let failCreate: Bool
+
+    init(failRead: Bool = false, failCreate: Bool = false) {
+        self.failRead = failRead
+        self.failCreate = failCreate
+    }
+
+    func setSecret(_ secret: String, account: String) throws {
+        if failCreate { throw BrokerSecretStoreFixtureError() }
+    }
+
+    func readSecret(account: String) throws -> String? {
+        if failRead { throw BrokerSecretStoreFixtureError() }
+        return nil
+    }
+
+    func containsSecret(account: String) -> Bool { false }
+    func deleteSecret(account: String) throws {}
+}
+
+private final class RacingBrokerSecretStore: DesktopSecretStoring, @unchecked Sendable {
+    private let condition = NSCondition()
+    private var storage: [String: String] = [:]
+    private var initialReads = 0
+    private var creations = 0
+
+    var createCount: Int {
+        condition.withLock { creations }
+    }
+
+    func setSecret(_ secret: String, account: String) throws {
+        condition.withLock {
+            storage[account] = secret
+            creations += 1
+        }
+    }
+
+    func createSecretIfAbsent(_ secret: String, account: String) throws -> Bool {
+        condition.withLock {
+            guard storage[account] == nil else { return false }
+            storage[account] = secret
+            creations += 1
+            return true
+        }
+    }
+
+    func readSecret(account: String) throws -> String? {
+        condition.lock()
+        let snapshot = storage[account]
+        if initialReads < 2 {
+            initialReads += 1
+            if initialReads == 2 {
+                condition.broadcast()
+            } else {
+                while initialReads < 2 {
+                    condition.wait()
+                }
+            }
+        }
+        condition.unlock()
+        return snapshot
+    }
+
+    func containsSecret(account: String) -> Bool {
+        condition.withLock { storage[account] != nil }
+    }
+
+    func deleteSecret(account: String) throws {
+        _ = condition.withLock { storage.removeValue(forKey: account) }
+    }
+}
+
+private final class ConcurrentIdentityLoader: @unchecked Sendable {
+    let result = LockedBrokerIdentityResult()
+    private let store: GitHubBrokerDeviceIdentityStore
+
+    init(store: GitHubBrokerDeviceIdentityStore) {
+        self.store = store
+    }
+
+    func run() {
+        do {
+            result.set(try store.loadOrCreate())
+        } catch {
+            result.set(error)
+        }
+    }
+}
+
+private final class LockedBrokerIdentityResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var identity: GitHubBrokerDeviceIdentity?
+    private var error: Error?
+
+    func set(_ identity: GitHubBrokerDeviceIdentity) {
+        lock.withLock { self.identity = identity }
+    }
+
+    func set(_ error: Error) {
+        lock.withLock { self.error = error }
+    }
+
+    func get() throws -> GitHubBrokerDeviceIdentity? {
+        try lock.withLock {
+            if let error { throw error }
+            return identity
+        }
     }
 }
 

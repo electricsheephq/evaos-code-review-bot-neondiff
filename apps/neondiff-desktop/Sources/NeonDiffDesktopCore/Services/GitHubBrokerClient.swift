@@ -18,6 +18,7 @@ public struct GitHubBrokerPublicJWK: Codable, Equatable, Sendable {
 public enum GitHubBrokerDeviceIdentityError: Error, LocalizedError, Equatable {
     case invalidStoredIdentity
     case identityGenerationFailed
+    case identityStorageUnavailable
     case credentialSigningFailed
 
     public var errorDescription: String? {
@@ -26,6 +27,8 @@ public enum GitHubBrokerDeviceIdentityError: Error, LocalizedError, Equatable {
             "The stored GitHub broker device identity is invalid. Reconnect support is required; NeonDiff will not silently replace a bound identity."
         case .identityGenerationFailed:
             "NeonDiff could not create the GitHub broker device identity."
+        case .identityStorageUnavailable:
+            "NeonDiff could not access the stored GitHub broker device identity."
         case .credentialSigningFailed:
             "NeonDiff could not sign the GitHub broker device credential."
         }
@@ -110,27 +113,46 @@ public final class GitHubBrokerDeviceIdentityStore {
     /// connect action. Never call this on the app launch path.
     public func loadOrCreate() throws -> GitHubBrokerDeviceIdentity {
         try lock.withLock {
-            if let encoded = try secretStore.readSecret(account: account) {
-                guard let raw = Data(base64Encoded: encoded),
-                      let key = try? P256.Signing.PrivateKey(rawRepresentation: raw)
-                else {
-                    // A silently replaced identity would orphan or cross-bind the
-                    // server-side installation record, so corrupt state fails closed.
-                    throw GitHubBrokerDeviceIdentityError.invalidStoredIdentity
-                }
-                return GitHubBrokerDeviceIdentity(privateKey: key)
+            if let encoded = try readStoredIdentity() {
+                return try decodeIdentity(encoded)
             }
 
+            let key = P256.Signing.PrivateKey()
+            let encoded = key.rawRepresentation.base64EncodedString()
             do {
-                let key = P256.Signing.PrivateKey()
-                try secretStore.setSecret(key.rawRepresentation.base64EncodedString(), account: account)
-                return GitHubBrokerDeviceIdentity(privateKey: key)
-            } catch let error as GitHubBrokerDeviceIdentityError {
-                throw error
+                if try secretStore.createSecretIfAbsent(encoded, account: account) {
+                    return GitHubBrokerDeviceIdentity(privateKey: key)
+                }
             } catch {
-                throw GitHubBrokerDeviceIdentityError.identityGenerationFailed
+                throw GitHubBrokerDeviceIdentityError.identityStorageUnavailable
             }
+
+            // Another store instance won the atomic Keychain add. Discard this
+            // generated key and rebind to the persisted winner.
+            guard let winner = try readStoredIdentity() else {
+                throw GitHubBrokerDeviceIdentityError.identityStorageUnavailable
+            }
+            return try decodeIdentity(winner)
         }
+    }
+
+    private func readStoredIdentity() throws -> String? {
+        do {
+            return try secretStore.readSecret(account: account)
+        } catch {
+            throw GitHubBrokerDeviceIdentityError.identityStorageUnavailable
+        }
+    }
+
+    private func decodeIdentity(_ encoded: String) throws -> GitHubBrokerDeviceIdentity {
+        guard let raw = Data(base64Encoded: encoded),
+              let key = try? P256.Signing.PrivateKey(rawRepresentation: raw)
+        else {
+            // A silently replaced identity would orphan or cross-bind the
+            // server-side installation record, so corrupt state fails closed.
+            throw GitHubBrokerDeviceIdentityError.invalidStoredIdentity
+        }
+        return GitHubBrokerDeviceIdentity(privateKey: key)
     }
 }
 
@@ -531,9 +553,14 @@ public struct GitHubBrokerClient: Sendable {
         guard response.body.count <= Self.maximumResponseBytes else {
             throw GitHubBrokerClientError.responseTooLarge
         }
-        let normalizedHeaders = Dictionary(uniqueKeysWithValues: response.headers.map {
-            ($0.key.lowercased(), $0.value.lowercased())
-        })
+        var normalizedHeaders: [String: String] = [:]
+        for (name, value) in response.headers {
+            let normalizedName = name.lowercased()
+            guard normalizedHeaders[normalizedName] == nil else {
+                throw GitHubBrokerClientError.invalidResponse
+            }
+            normalizedHeaders[normalizedName] = value.lowercased()
+        }
         guard normalizedHeaders["content-type"]?.hasPrefix("application/json") == true else {
             throw GitHubBrokerClientError.invalidResponse
         }
