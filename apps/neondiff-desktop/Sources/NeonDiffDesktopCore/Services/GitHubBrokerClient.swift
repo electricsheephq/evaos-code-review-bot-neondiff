@@ -410,6 +410,12 @@ public protocol GitHubBrokerConnecting: Sendable {
         identity: GitHubBrokerDeviceIdentity,
         state: String
     ) async throws -> GitHubBrokerConnectionCompletion
+    func authorizeExistingInstallation(
+        identity: GitHubBrokerDeviceIdentity,
+        state: String,
+        installationId: Int,
+        userAccessToken: String
+    ) async throws -> Int
     func listRepositories(
         identity: GitHubBrokerDeviceIdentity,
         installationId: Int,
@@ -531,6 +537,35 @@ public struct GitHubBrokerClient: GitHubBrokerConnecting, Sendable {
         default:
             throw GitHubBrokerClientError.invalidResponse
         }
+    }
+
+    public func authorizeExistingInstallation(
+        identity: GitHubBrokerDeviceIdentity,
+        state: String,
+        installationId: Int,
+        userAccessToken: String
+    ) async throws -> Int {
+        guard Self.isOpaqueState(state),
+              installationId > 0,
+              userAccessToken.isEmpty == false,
+              userAccessToken.utf8.count <= 4_096,
+              userAccessToken.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+        else {
+            throw GitHubBrokerClientError.invalidRequest
+        }
+        let response: AuthorizeExistingResponse = try await post(
+            path: "/github/connect/authorize-existing",
+            body: [
+                "state": state,
+                "installationId": installationId,
+                "userAccessToken": userAccessToken
+            ],
+            credential: try identity.makeCredential(now: now())
+        )
+        guard response.status == "bound", response.installationId == installationId else {
+            throw GitHubBrokerClientError.identityMismatch
+        }
+        return response.installationId
     }
 
     public func listRepositories(
@@ -761,6 +796,11 @@ private struct StartResponse: Decodable {
 private struct CompleteResponse: Decodable {
     let status: String
     let installationId: Int?
+}
+
+private struct AuthorizeExistingResponse: Decodable {
+    let status: String
+    let installationId: Int
 }
 
 private struct RepositoryPageResponse: Decodable {

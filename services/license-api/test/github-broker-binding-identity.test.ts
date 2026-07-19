@@ -8,6 +8,7 @@ import {
   post,
   registerDevice,
   startBroker,
+  userAccessTokenFor,
   type FakeInstallation
 } from "./github-broker-support.ts";
 
@@ -218,6 +219,112 @@ describe("github broker callback install-binding identity (#620 P1)", () => {
       );
       assert.equal(allowed.status, 200, allowed.text);
       assert.equal(allowed.json.token, harness.mintedToken);
+    } finally {
+      harness.close();
+    }
+  });
+});
+
+describe("github broker existing-install device authorization (#613)", () => {
+  it("binds an already-installed App only after device and user proofs agree on the installation", async () => {
+    const harness = await startBroker({ installations: [VICTIM] });
+    try {
+      const device = await makeDevice();
+      await registerDevice(harness.url, device);
+      const start = await post(harness.url, "/github/connect/start", {}, bearer(await device.sign()));
+      const state = start.json.state as string;
+
+      const authorized = await post(
+        harness.url,
+        "/github/connect/authorize-existing",
+        {
+          state,
+          installationId: VICTIM.id,
+          userAccessToken: userAccessTokenFor(VICTIM.id)
+        },
+        bearer(await device.sign())
+      );
+      assert.equal(authorized.status, 200, authorized.text);
+      assert.deepEqual(authorized.json, { status: "bound", installationId: VICTIM.id });
+
+      const token = await post(
+        harness.url,
+        "/github/token",
+        { installationId: VICTIM.id, repositories: ["victim-org/site"] },
+        bearer(await device.sign())
+      );
+      assert.equal(token.status, 200, token.text);
+      assert.equal(token.json.token, harness.mintedToken);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("rejects a proof for another installation before resolving the target and never reflects it", async () => {
+    const harness = await startBroker({ installations: [VICTIM, ATTACKER] });
+    try {
+      const device = await makeDevice();
+      await registerDevice(harness.url, device);
+      const start = await post(harness.url, "/github/connect/start", {}, bearer(await device.sign()));
+      harness.calls.length = 0;
+      const state = start.json.state as string;
+      const proof = userAccessTokenFor(ATTACKER.id);
+
+      const refused = await post(
+        harness.url,
+        "/github/connect/authorize-existing",
+        { state, installationId: VICTIM.id, userAccessToken: proof },
+        bearer(await device.sign())
+      );
+      assert.equal(refused.status, 403, refused.text);
+      assert.equal(refused.json.reason, "installation_authorization_unverified");
+      assert.equal(refused.text.includes(proof), false);
+      assert.equal(harness.calls.some((call) => call.op === "getInstallation"), false);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it("binds state to the registered device and consumes it exactly once", async () => {
+    const harness = await startBroker({ installations: [VICTIM] });
+    try {
+      const owner = await makeDevice();
+      const other = await makeDevice();
+      await registerDevice(harness.url, owner);
+      await registerDevice(harness.url, other);
+      const start = await post(harness.url, "/github/connect/start", {}, bearer(await owner.sign()));
+      const state = start.json.state as string;
+      const body = {
+        state,
+        installationId: VICTIM.id,
+        userAccessToken: userAccessTokenFor(VICTIM.id)
+      };
+
+      const crossed = await post(
+        harness.url,
+        "/github/connect/authorize-existing",
+        body,
+        bearer(await other.sign())
+      );
+      assert.equal(crossed.status, 404, crossed.text);
+      assert.equal(crossed.json.reason, "state_not_found");
+
+      const first = await post(
+        harness.url,
+        "/github/connect/authorize-existing",
+        body,
+        bearer(await owner.sign())
+      );
+      assert.equal(first.status, 200, first.text);
+
+      const replay = await post(
+        harness.url,
+        "/github/connect/authorize-existing",
+        body,
+        bearer(await owner.sign())
+      );
+      assert.equal(replay.status, 409, replay.text);
+      assert.equal(replay.json.reason, "state_replayed");
     } finally {
       harness.close();
     }

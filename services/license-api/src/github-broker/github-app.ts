@@ -71,6 +71,16 @@ export interface GitHubInstallationClient {
     installationId: number,
     authorizationCode: string
   ): Promise<string[] | null>;
+  /**
+   * Verify an already-installed App from a transient GitHub App user access
+   * token obtained through Device Flow. The token proves only that the user can
+   * access this exact installation and yields the exact authorized repository
+   * set. It is never persisted, logged, returned, or used to post a review.
+   */
+  verifyInstallationForUserToken(
+    installationId: number,
+    userAccessToken: string
+  ): Promise<string[] | null>;
   /** The installation's current repository selection, with each repo's visibility. */
   listInstallationRepositories(installationId: number): Promise<InstallationRepository[]>;
   /**
@@ -182,6 +192,28 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
     return { token: result.json.token, expires_at: result.json.expires_at };
   }
 
+  async function authorizedRepositoriesForUserToken(
+    installationId: number,
+    userToken: string
+  ): Promise<string[] | null> {
+    const authorized: string[] = [];
+    for (let page = 1; ; page += 1) {
+      let result;
+      try {
+        result = await request<{ repositories?: Array<{ full_name: string }> }>(
+          `/user/installations/${installationId}/repositories?per_page=100&page=${page}`,
+          { token: userToken }
+        );
+      } catch (error) {
+        if (error instanceof GitHubApiStatusError && (error.status === 404 || error.status === 403)) return null;
+        throw error;
+      }
+      const chunk = result.json?.repositories ?? [];
+      for (const repository of chunk) authorized.push(repository.full_name);
+      if (chunk.length < 100) return authorized;
+    }
+  }
+
   return {
     async getInstallation(installationId: number): Promise<InstallationSummary | null> {
       const jwt = createAppJwt(config.appId, config.privateKey);
@@ -253,27 +285,13 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
       // A bad/expired/forged code yields no user token: deny the binding (not a
       // transient error — the identity was not proven).
       if (!userToken) return null;
-      // Enumerate the repositories the authenticated user can access WITHIN this
-      // installation (not just installation membership). The binding is scoped to
-      // this authorized set, so a later token can never reach a private repo the
-      // connecting user cannot access on GitHub. A 404 means the user cannot access
-      // the installation at all -> identity unverified for it (null, fail closed).
-      const authorized: string[] = [];
-      for (let page = 1; ; page += 1) {
-        let result;
-        try {
-          result = await request<{ repositories?: Array<{ full_name: string }> }>(
-            `/user/installations/${installationId}/repositories?per_page=100&page=${page}`,
-            { token: userToken }
-          );
-        } catch (error) {
-          if (error instanceof GitHubApiStatusError && (error.status === 404 || error.status === 403)) return null;
-          throw error;
-        }
-        const chunk = result.json?.repositories ?? [];
-        for (const repository of chunk) authorized.push(repository.full_name);
-        if (chunk.length < 100) return authorized;
-      }
+      return authorizedRepositoriesForUserToken(installationId, userToken);
+    },
+    async verifyInstallationForUserToken(
+      installationId: number,
+      userAccessToken: string
+    ): Promise<string[] | null> {
+      return authorizedRepositoriesForUserToken(installationId, userAccessToken);
     },
     async listInstallationRepositories(installationId: number): Promise<InstallationRepository[]> {
       // Listing an installation's repositories requires an installation token. It is

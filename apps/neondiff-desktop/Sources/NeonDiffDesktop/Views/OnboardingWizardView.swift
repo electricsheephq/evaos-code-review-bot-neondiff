@@ -182,6 +182,51 @@ struct OnboardingWizardView: View {
                 }
             }
 
+            if let code = model.githubAuthorizationCode,
+               model.managedGitHubConnectionState == .awaitingAuthorization {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Authorize the existing App installation")
+                        .font(.subheadline.weight(.semibold))
+                    Text(code.userCode)
+                        .font(NeonDiffTheme.commandFont)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("neondiff-onboarding-github-device-code")
+                    HStack(spacing: 10) {
+                        Button("Copy Code") { model.copyGitHubUserCode() }
+                        Button("Open GitHub") { model.openGitHubDeviceVerification() }
+                    }
+                    Text("This user authorization proves installation access only. NeonDiff never stores it or uses it to post reviews; review credentials remain GitHub App installation tokens.")
+                        .operatorBodyText()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if !model.managedGitHubInstallationCandidates.isEmpty {
+                Text("Choose the App installation to bind")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(model.managedGitHubInstallationCandidates) { candidate in
+                    Button {
+                        model.selectManagedGitHubInstallation(
+                            installationId: candidate.installationId
+                        )
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(candidate.account)
+                                Text("Installation \(candidate.installationId) · \(candidate.repositoryCount) accessible repositories")
+                                    .font(.caption)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(
+                        "neondiff-onboarding-github-installation-\(candidate.installationId)"
+                    )
+                }
+            }
+
             if !model.managedGitHubRepositories.isEmpty {
                 Text("Choose one server-bound repository")
                     .font(.subheadline.weight(.semibold))

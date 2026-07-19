@@ -229,6 +229,41 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         #expect(repositoryRequest["page"] as? Int == 1)
     }
 
+    @Test func brokerClientAuthorizesAnExistingInstallationWithDeviceBoundState() async throws {
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerMemorySecretStore()
+        ).loadOrCreate()
+        let transport = ScriptedBrokerTransport(responses: [
+            .json(
+                url: "https://broker.example/github/connect/authorize-existing",
+                body: ["status": "bound", "installationId": 4242]
+            )
+        ])
+        let client = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: transport,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+
+        let installationId = try await client.authorizeExistingInstallation(
+            identity: identity,
+            state: "opaque-device-state",
+            installationId: 4242,
+            userAccessToken: "fixture-transient-user-proof"
+        )
+        #expect(installationId == 4242)
+
+        let request = try #require(await transport.requests.first)
+        #expect(request.url.absoluteString == "https://broker.example/github/connect/authorize-existing")
+        #expect(request.headers["Authorization"]?.hasPrefix("Bearer ey") == true)
+        let body = try #require(
+            JSONSerialization.jsonObject(with: request.body) as? [String: Any]
+        )
+        #expect(body["state"] as? String == "opaque-device-state")
+        #expect(body["installationId"] as? Int == 4242)
+        #expect(body["userAccessToken"] as? String == "fixture-transient-user-proof")
+    }
+
     @Test func brokerClientRejectsMalformedRepositoryPages() async throws {
         let identity = try GitHubBrokerDeviceIdentityStore(
             secretStore: BrokerMemorySecretStore()

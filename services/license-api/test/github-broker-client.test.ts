@@ -146,6 +146,25 @@ describe("production github installation client wire contract", () => {
     assert.ok(!exchange?.url.includes("//login/oauth"), exchange?.url);
   });
 
+  it("verifies an existing installation from a transient Device Flow user token without an OAuth exchange", async () => {
+    const captured = stubFetch((request) => {
+      if (request.url.includes("/user/installations/6001/repositories")) {
+        return { json: { repositories: [{ full_name: "octo/site" }] } };
+      }
+      return { json: {} };
+    });
+    const client = createGitHubInstallationClient({ appId: "123", privateKey: appPrivateKey });
+
+    assert.deepEqual(
+      await client.verifyInstallationForUserToken(6001, "transient-device-user-proof"),
+      ["octo/site"]
+    );
+    assert.equal(captured.length, 1);
+    assert.ok(captured[0].url.includes("/user/installations/6001/repositories"));
+    assert.equal(captured.some((request) => request.url.includes("/login/oauth/access_token")), false);
+    assert.equal(JSON.stringify(captured).includes("transient-device-user-proof"), false);
+  });
+
   it("paginates /user/installations/{id}/repositories so the authorized set spans every page", async () => {
     const page1 = Array.from({ length: 100 }, (_, i) => ({ full_name: `octo/repo-${i}` }));
     const captured = stubFetch((request) => {
