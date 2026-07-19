@@ -27,7 +27,13 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
         {
           "runs-on"?: string;
           defaults?: { run?: { "working-directory"?: string } };
-          steps?: Array<{ name?: string; uses?: string; run?: string; with?: Record<string, string> }>;
+          steps?: Array<{
+            name?: string;
+            uses?: string;
+            run?: string;
+            with?: Record<string, string>;
+            "working-directory"?: string;
+          }>;
         }
       >;
     };
@@ -48,8 +54,8 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
       "scripts/run-required-swift-test-suite.sh NeonDiffDesktopEvaluationSupportTests",
       "swift build --target NeonDiffDesktopKeychainChecks",
       "swift run NeonDiffDesktopAppcastChecks",
-      "script/build_and_run.sh build",
-      "script/build_and_run.sh bundle-check",
+      "script/build_and_run.sh release-build",
+      "script/build_and_run.sh release-bundle-check",
       "script/release-proof.sh"
     ]) {
       expect(workflow).toContain(command);
@@ -59,6 +65,13 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).not.toContain(retiredCoreChecksTarget);
     expect(workflow).not.toContain("swift run NeonDiffDesktopKeychainChecks");
     expect(workflow).not.toMatch(/Test run with \[1-9\]/);
+    const fixtureBoundaryStep = job?.steps?.find(
+      (step) => step.name === "Enforce release-only fixture boundary"
+    );
+    expect(fixtureBoundaryStep?.["working-directory"]).toBe(".");
+    expect(fixtureBoundaryStep?.run).toBe(
+      "npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist/NeonDiffDesktop.app"
+    );
     expect(workflow).toContain("unsigned");
     expect(workflow).toMatch(/macOS 15 Keychain contract compilation/);
     expect(workflow).toMatch(/persist-credentials:\s*false/);

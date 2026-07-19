@@ -48,7 +48,8 @@ jobs:
         run: script/build_and_run.sh release-bundle-check
 
       - name: Enforce release-only fixture boundary
-        run: test ! -e dist/NeonDiffDesktop.app/Contents/Helpers/NeonDiffDesktopFixtureResolve
+        working-directory: .
+        run: npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist/NeonDiffDesktop.app
 
       - name: Package unsigned app bundle and metadata
         env:
