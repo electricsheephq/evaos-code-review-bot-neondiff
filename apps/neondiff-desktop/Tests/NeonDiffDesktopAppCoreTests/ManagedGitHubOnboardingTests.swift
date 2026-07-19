@@ -25,9 +25,13 @@ final class ScriptedGitHubBroker: GitHubBrokerConnecting, @unchecked Sendable {
         var completionResults: [GitHubBrokerConnectionCompletion]
         var repositoryPages: [GitHubBrokerRepositoryPage]
         var error: GitHubBrokerClientError?
+        var authorizationError: GitHubBrokerClientError?
         var registeredDeviceIds: [String] = []
         var startedDeviceIds: [String] = []
         var completedStates: [String] = []
+        var authorizedStates: [String] = []
+        var authorizedInstallationIds: [Int] = []
+        var authorizationTokens: [String] = []
         var listedInstallationIds: [Int] = []
     }
 
@@ -39,7 +43,8 @@ final class ScriptedGitHubBroker: GitHubBrokerConnecting, @unchecked Sendable {
         repositories: [GitHubBrokerRepository] = [
             GitHubBrokerRepository(fullName: "electric/public", visibility: .public)
         ],
-        error: GitHubBrokerClientError? = nil
+        error: GitHubBrokerClientError? = nil,
+        authorizationError: GitHubBrokerClientError? = nil
     ) {
         connection = GitHubBrokerConnection(
             installURL: URL(string: "https://github.com/apps/neondiff/installations/new?state=fixture-state")!,
@@ -56,13 +61,17 @@ final class ScriptedGitHubBroker: GitHubBrokerConnecting, @unchecked Sendable {
                     nextPage: nil
                 )
             ],
-            error: error
+            error: error,
+            authorizationError: authorizationError
         ))
     }
 
     var registeredDeviceIds: [String] { state.read(\.registeredDeviceIds) }
     var startedDeviceIds: [String] { state.read(\.startedDeviceIds) }
     var completedStates: [String] { state.read(\.completedStates) }
+    var authorizedStates: [String] { state.read(\.authorizedStates) }
+    var authorizedInstallationIds: [Int] { state.read(\.authorizedInstallationIds) }
+    var authorizationTokens: [String] { state.read(\.authorizationTokens) }
     var listedInstallationIds: [Int] { state.read(\.listedInstallationIds) }
 
     func register(identity: GitHubBrokerDeviceIdentity) async throws {
@@ -87,6 +96,24 @@ final class ScriptedGitHubBroker: GitHubBrokerConnecting, @unchecked Sendable {
         }
     }
 
+    func authorizeExistingInstallation(
+        identity: GitHubBrokerDeviceIdentity,
+        state opaqueState: String,
+        installationId: Int,
+        userAccessToken: String
+    ) async throws -> Int {
+        try throwIfNeeded()
+        if let error = state.read(\.authorizationError) {
+            throw error
+        }
+        return state.update {
+            $0.authorizedStates.append(opaqueState)
+            $0.authorizedInstallationIds.append(installationId)
+            $0.authorizationTokens.append(userAccessToken)
+            return installationId
+        }
+    }
+
     func listRepositories(
         identity: GitHubBrokerDeviceIdentity,
         installationId: Int,
@@ -95,7 +122,13 @@ final class ScriptedGitHubBroker: GitHubBrokerConnecting, @unchecked Sendable {
         try throwIfNeeded()
         return state.update {
             $0.listedInstallationIds.append(installationId)
-            return $0.repositoryPages.removeFirst()
+            let page = $0.repositoryPages.removeFirst()
+            return GitHubBrokerRepositoryPage(
+                installationId: installationId,
+                page: page.page,
+                repositories: page.repositories,
+                nextPage: page.nextPage
+            )
         }
     }
 
@@ -134,6 +167,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         ])
         #expect(valid.nativeActivationBrokerVerified)
         #expect(valid.managedGitHubBrokerOrigin?.absoluteString == "https://neondiff-license.fly.dev")
+        #expect(valid.managedGitHubAppClientID == "Iv23liNr6jOVuCFC7DkN")
 
         for invalid in [
             [
@@ -184,6 +218,191 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
             "electric/public"
         ])
         #expect(fixture.secretStore.containsSecret(account: GitHubBrokerDeviceIdentityStore.defaultAccount))
+    }
+
+    @Test func alreadyInstalledAppUsesTransientDeviceFlowProofWithoutStoringUserToken() async throws {
+        let broker = ScriptedGitHubBroker(
+            completionResults: [.pending],
+            repositories: [
+                GitHubBrokerRepository(fullName: "electric/public", visibility: .public)
+            ]
+        )
+        let transientToken = "fixture-managed-transient-user-proof"
+        let authenticator = ScriptedGitHubAuthenticator(
+            pollResults: [
+                .authorized(GitHubUserToken(accessToken: transientToken))
+            ],
+            repositories: [
+                GitHubDiscoveredRepository(
+                    fullName: "electric/public",
+                    visibility: "public",
+                    installationId: 42,
+                    installationAccount: "electric"
+                )
+            ]
+        )
+        let fixture = ModelDependencyFixture(
+            githubAuthenticator: authenticator,
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+
+        #expect(authenticator.requestedClientIds == ["fixture-client-id"])
+        #expect(authenticator.listedAccessTokens == [transientToken])
+        #expect(broker.authorizedStates == ["fixture-state"])
+        #expect(broker.authorizedInstallationIds == [42])
+        #expect(broker.authorizationTokens == [transientToken])
+        #expect(broker.listedInstallationIds == [42])
+        #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 42))
+        #expect(fixture.secretStore.values.values.contains(transientToken) == false)
+    }
+
+    @Test func installCallbackThatLandsDuringDeviceFlowWinsWithoutReplayFailure() async throws {
+        let broker = ScriptedGitHubBroker(
+            completionResults: [.pending, .bound(installationId: 42)]
+        )
+        let authenticator = ScriptedGitHubAuthenticator(
+            pollResults: [
+                .pending(intervalSeconds: 2),
+                .failed(error: .accessDenied, description: "device authorization should not be required")
+            ]
+        )
+        let fixture = ModelDependencyFixture(
+            githubAuthenticator: authenticator,
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        fixture.loadConfig()
+
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+
+        #expect(broker.completedStates == ["fixture-state", "fixture-state"])
+        #expect(broker.authorizedInstallationIds.isEmpty)
+        #expect(authenticator.pollDeviceCodes.isEmpty)
+        #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 42))
+    }
+
+    @Test func callbackThatConsumesStateDuringSingleInstallSubmitConvergesByOneReadback() async throws {
+        let broker = ScriptedGitHubBroker(
+            completionResults: [.pending, .pending, .pending, .bound(installationId: 42)],
+            authorizationError: .server(reason: .stateReplayed)
+        )
+        let authenticator = ScriptedGitHubAuthenticator(
+            pollResults: [
+                .authorized(GitHubUserToken(accessToken: "fixture-submit-race-proof"))
+            ],
+            repositories: [
+                GitHubDiscoveredRepository(
+                    fullName: "electric/public",
+                    visibility: "public",
+                    installationId: 42,
+                    installationAccount: "electric"
+                )
+            ]
+        )
+        let fixture = ModelDependencyFixture(
+            githubAuthenticator: authenticator,
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        fixture.loadConfig()
+
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+
+        #expect(broker.completedStates == ["fixture-state", "fixture-state", "fixture-state", "fixture-state"])
+        #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 42))
+    }
+
+    @Test func multipleExistingInstallationsRequireExplicitSelectionBeforeBinding() async throws {
+        let broker = ScriptedGitHubBroker(completionResults: [.pending])
+        let transientToken = "fixture-multi-install-user-proof"
+        let authenticator = ScriptedGitHubAuthenticator(
+            pollResults: [
+                .authorized(GitHubUserToken(accessToken: transientToken))
+            ],
+            repositories: [
+                GitHubDiscoveredRepository(
+                    fullName: "electric/public",
+                    visibility: "public",
+                    installationId: 42,
+                    installationAccount: "electric"
+                ),
+                GitHubDiscoveredRepository(
+                    fullName: "other/private",
+                    visibility: "private",
+                    installationId: 43,
+                    installationAccount: "other"
+                )
+            ]
+        )
+        let fixture = ModelDependencyFixture(
+            githubAuthenticator: authenticator,
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        fixture.loadConfig()
+
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+
+        #expect(fixture.model.managedGitHubConnectionState == .installationSelectionRequired)
+        #expect(fixture.model.managedGitHubInstallationCandidates.map(\.installationId) == [42, 43])
+        #expect(broker.authorizedInstallationIds.isEmpty)
+        #expect(fixture.secretStore.values.values.contains(transientToken) == false)
+
+        fixture.model.selectManagedGitHubInstallation(installationId: 43)
+        await fixture.waitForManagedGitHubConnectionToFinish()
+
+        #expect(broker.authorizedInstallationIds == [43])
+        #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 43))
+        #expect(fixture.model.managedGitHubInstallationCandidates.isEmpty)
+        #expect(fixture.secretStore.values.values.contains(transientToken) == false)
+    }
+
+    @Test func callbackThatConsumesStateDuringExplicitSelectionSubmitConvergesByOneReadback() async throws {
+        let broker = ScriptedGitHubBroker(
+            completionResults: [.pending, .pending, .pending, .bound(installationId: 43)],
+            authorizationError: .server(reason: .stateReplayed)
+        )
+        let authenticator = ScriptedGitHubAuthenticator(
+            pollResults: [
+                .authorized(GitHubUserToken(accessToken: "fixture-selection-race-proof"))
+            ],
+            repositories: [
+                GitHubDiscoveredRepository(
+                    fullName: "electric/public",
+                    visibility: "public",
+                    installationId: 42,
+                    installationAccount: "electric"
+                ),
+                GitHubDiscoveredRepository(
+                    fullName: "other/private",
+                    visibility: "private",
+                    installationId: 43,
+                    installationAccount: "other"
+                )
+            ]
+        )
+        let fixture = ModelDependencyFixture(
+            githubAuthenticator: authenticator,
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        fixture.loadConfig()
+
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+        #expect(fixture.model.managedGitHubConnectionState == .installationSelectionRequired)
+
+        fixture.model.selectManagedGitHubInstallation(installationId: 43)
+        await fixture.waitForManagedGitHubConnectionToFinish()
+
+        #expect(broker.completedStates == ["fixture-state", "fixture-state", "fixture-state", "fixture-state"])
+        #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 43))
     }
 
     @Test func authoritativeVisibilityControlsPublicFreeAndPrivateActivationEntry() async {

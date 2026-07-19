@@ -10,6 +10,7 @@ const BROKER_PATHS = new Set([
   "/device/register",
   "/github/connect/start",
   "/github/connect/callback",
+  "/github/connect/authorize-existing",
   "/github/connect/complete",
   "/github/repositories",
   "/github/token"
@@ -70,6 +71,13 @@ export async function handleGitHubBrokerRequest(
     if (req.method === "GET" && path === "/github/connect/callback") {
       const { html } = await service.connectCallback(new URLSearchParams(rawQuery ?? ""));
       return writeHtml(res, 200, html);
+    }
+    if (req.method === "POST" && path === "/github/connect/authorize-existing") {
+      return writeJson(
+        res,
+        200,
+        await service.connectAuthorizeExisting(req.headers.authorization, await readBody(req))
+      );
     }
     if (req.method === "POST" && path === "/github/connect/complete") {
       return writeJson(res, 200, await service.connectComplete(req.headers.authorization, await readBody(req)));

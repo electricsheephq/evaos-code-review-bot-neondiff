@@ -318,7 +318,7 @@ struct ReposView: View {
                     }
                 }
 
-                Text("The paid-beta path uses the server broker and Keychain-backed device identity. It does not fall back to a user access token. Repository scope and visibility are accepted only from the verified GitHub App binding.")
+                Text("The paid-beta path uses the server broker and Keychain-backed device identity. Existing installations may use a transient GitHub user authorization only to prove the selected installation; it is never stored or used to post reviews. Repository scope, visibility, and review credentials come only from the verified GitHub App binding.")
                     .operatorBodyText()
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -335,6 +335,50 @@ struct ReposView: View {
                         }
                         .disabled(model.isManagedGitHubConnectionInProgress)
                         .accessibilityIdentifier("neondiff-managed-github-recovery")
+                    }
+                }
+
+                if let code = model.githubAuthorizationCode,
+                   model.managedGitHubConnectionState == .awaitingAuthorization {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Authorize existing installation")
+                            .font(.subheadline.weight(.semibold))
+                        Text(code.userCode)
+                            .font(NeonDiffTheme.commandFont)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("neondiff-managed-github-device-code")
+                        HStack(spacing: 10) {
+                            Button("Copy Code") { model.copyGitHubUserCode() }
+                            Button("Open GitHub") { model.openGitHubDeviceVerification() }
+                        }
+                    }
+                }
+
+                if !model.managedGitHubInstallationCandidates.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Choose the App installation to bind")
+                            .font(.subheadline.weight(.semibold))
+                        ForEach(model.managedGitHubInstallationCandidates) { candidate in
+                            Button {
+                                model.selectManagedGitHubInstallation(
+                                    installationId: candidate.installationId
+                                )
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(candidate.account)
+                                        Text("Installation \(candidate.installationId) · \(candidate.repositoryCount) repositories")
+                                            .font(.caption)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier(
+                                "neondiff-managed-github-installation-\(candidate.installationId)"
+                            )
+                        }
                     }
                 }
 

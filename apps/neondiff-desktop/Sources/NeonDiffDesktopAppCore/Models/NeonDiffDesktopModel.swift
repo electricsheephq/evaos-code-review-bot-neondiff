@@ -65,8 +65,16 @@ package enum ManagedGitHubConnectionState: Equatable, Sendable {
     case verificationRequired
     case connecting
     case awaitingAuthorization
+    case installationSelectionRequired
     case bound(installationId: Int)
     case failed
+}
+
+package struct ManagedGitHubInstallationCandidate: Identifiable, Equatable, Sendable {
+    package var id: Int { installationId }
+    package let installationId: Int
+    package let account: String
+    package let repositoryCount: Int
 }
 
 @MainActor
@@ -114,6 +122,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var isGitHubRepositoryRefreshInProgress = false
     @Published package var managedGitHubConnectionState: ManagedGitHubConnectionState = .quarantined
     @Published package var managedGitHubRepositories: [GitHubBrokerRepository] = []
+    @Published package var managedGitHubInstallationCandidates: [ManagedGitHubInstallationCandidate] = []
     @Published package var selectedManagedGitHubRepository: String?
     @Published package var managedGitHubRecovery: GitHubConnectionRecovery?
     @Published package var isManagedGitHubConnectionInProgress = false
@@ -208,6 +217,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             "Creating Keychain-backed device binding"
         case .awaitingAuthorization:
             "Waiting for GitHub authorization"
+        case .installationSelectionRequired:
+            "Choose an authorized App installation"
         case .bound(let installationId):
             "Server binding verified · installation \(installationId)"
         case .failed:
@@ -250,6 +261,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var managedGitHubConnectionTask: Task<Void, Never>?
+    private var pendingManagedGitHubAuthorization: PendingManagedGitHubAuthorization?
     private var githubRepositoryRefreshGate = GitHubLatestRequestGate()
     private var controlCenterLoadedSnapshot: DesktopControlCenterSnapshot?
     private var controlCenterRollbackSnapshot: DesktopControlCenterSnapshot?
@@ -1044,6 +1056,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubConnectionState = .connecting
         managedGitHubRecovery = nil
         managedGitHubRepositories = []
+        managedGitHubInstallationCandidates = []
+        pendingManagedGitHubAuthorization = nil
+        githubAuthorizationCode = nil
         selectedManagedGitHubRepository = nil
         lastError = nil
 
@@ -1064,12 +1079,23 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 }
                 managedGitHubConnectionState = .awaitingAuthorization
                 logText = "GitHub App installation opened. Complete authorization in GitHub; NeonDiff is waiting for the server binding."
-
-                let installationId = try await awaitManagedGitHubBinding(
-                    broker: broker,
+                let installationId: Int
+                switch try await broker.completeConnection(
                     identity: identity,
-                    connection: connection
-                )
+                    state: connection.state
+                ) {
+                case .bound(let callbackInstallationId):
+                    installationId = callbackInstallationId
+                case .pending:
+                    guard let existingInstallationId = try await authorizeExistingManagedGitHubInstallation(
+                        broker: broker,
+                        identity: identity,
+                        connection: connection
+                    ) else {
+                        return
+                    }
+                    installationId = existingInstallationId
+                }
                 dependencies.preferences.set(
                     String(installationId),
                     forKey: managedGitHubInstallationIdKey
@@ -1081,6 +1107,64 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 )
             } catch {
                 guard !Task.isCancelled else { return }
+                applyManagedGitHubFailure(error)
+            }
+        }
+    }
+
+    package func selectManagedGitHubInstallation(installationId: Int) {
+        guard managedGitHubConnectionState == .installationSelectionRequired,
+              !isManagedGitHubConnectionInProgress,
+              let broker = dependencies.githubBroker,
+              let pending = pendingManagedGitHubAuthorization,
+              pending.candidates.contains(where: { $0.installationId == installationId })
+        else {
+            lastError = "Choose one of the GitHub App installations verified for this authorization."
+            return
+        }
+
+        isManagedGitHubConnectionInProgress = true
+        managedGitHubConnectionState = .connecting
+        managedGitHubRecovery = nil
+        lastError = nil
+        managedGitHubConnectionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                pendingManagedGitHubAuthorization = nil
+                githubAuthorizationCode = nil
+                isManagedGitHubConnectionInProgress = false
+                managedGitHubConnectionTask = nil
+            }
+            do {
+                let boundInstallationId: Int
+                switch try await broker.completeConnection(
+                    identity: pending.identity,
+                    state: pending.connection.state
+                ) {
+                case .bound(let callbackInstallationId):
+                    boundInstallationId = callbackInstallationId
+                case .pending:
+                    boundInstallationId = try await authorizeExistingInstallationWithReplayReadback(
+                        broker: broker,
+                        identity: pending.identity,
+                        connection: pending.connection,
+                        installationId: installationId,
+                        userAccessToken: pending.userAccessToken
+                    )
+                }
+                managedGitHubInstallationCandidates = []
+                dependencies.preferences.set(
+                    String(boundInstallationId),
+                    forKey: managedGitHubInstallationIdKey
+                )
+                try await loadManagedGitHubRepositories(
+                    broker: broker,
+                    identity: pending.identity,
+                    installationId: boundInstallationId
+                )
+            } catch {
+                guard !Task.isCancelled else { return }
+                managedGitHubInstallationCandidates = []
                 applyManagedGitHubFailure(error)
             }
         }
@@ -2181,23 +2265,132 @@ package final class NeonDiffDesktopModel: ObservableObject {
         logText = recovery.message
     }
 
-    private func awaitManagedGitHubBinding(
+    private func authorizeExistingManagedGitHubInstallation(
         broker: any GitHubBrokerConnecting,
         identity: GitHubBrokerDeviceIdentity,
         connection: GitHubBrokerConnection
-    ) async throws -> Int {
-        while !Task.isCancelled && dependencies.clock.now < connection.expiresAt {
+    ) async throws -> Int? {
+        guard let clientId = dependencies.productionBoundary.managedGitHubAppClientID?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !clientId.isEmpty
+        else {
+            throw ManagedGitHubModelError.clientIdMissing
+        }
+        let code = try await dependencies.githubAuthenticator.requestDeviceCode(clientId: clientId)
+        guard !Task.isCancelled else { return nil }
+        githubAuthorizationCode = code
+        managedGitHubConnectionState = .awaitingAuthorization
+        logText = "Authorize NeonDiff at \(code.verificationURI.absoluteString) with code \(code.userCode). The user token is transient proof only; reviews use the GitHub App."
+
+        var intervalSeconds = code.intervalSeconds
+        while !Task.isCancelled,
+              dependencies.clock.now < code.expiresAt,
+              dependencies.clock.now < connection.expiresAt {
+            try await dependencies.clock.sleep(for: .seconds(max(1, intervalSeconds)))
             switch try await broker.completeConnection(
                 identity: identity,
                 state: connection.state
             ) {
-            case .bound(let installationId):
-                return installationId
+            case .bound(let callbackInstallationId):
+                return callbackInstallationId
             case .pending:
-                try await dependencies.clock.sleep(for: .seconds(2))
+                break
+            }
+            switch try await dependencies.githubAuthenticator.pollDeviceAuthorization(
+                clientId: clientId,
+                deviceCode: code.deviceCode
+            ) {
+            case .pending(let nextInterval):
+                intervalSeconds = max(1, nextInterval)
+                managedGitHubConnectionState = .awaitingAuthorization
+            case .failed(let error, let description):
+                throw GitHubDeviceAuthClientError.actionable(
+                    GitHubConnectionRecoveryClassifier.deviceAuthorizationFailure(
+                        error,
+                        description: description
+                    )
+                )
+            case .authorized(let token):
+                let discovered = try await dependencies.githubAuthenticator.listAccessibleRepositories(
+                    accessToken: token.accessToken
+                )
+                let grouped = Dictionary(grouping: discovered, by: \.installationId)
+                let candidates: [ManagedGitHubInstallationCandidate] = grouped.compactMap { element -> ManagedGitHubInstallationCandidate? in
+                    let installationId = element.key
+                    let repositories = element.value
+                    guard let first = repositories.first else { return nil }
+                    return ManagedGitHubInstallationCandidate(
+                        installationId: installationId,
+                        account: first.installationAccount,
+                        repositoryCount: Set(repositories.map(\.fullName)).count
+                    )
+                }.sorted { $0.installationId < $1.installationId }
+                guard !candidates.isEmpty else {
+                    throw ManagedGitHubModelError.noAuthorizedInstallations
+                }
+                githubAuthorizationCode = nil
+                if candidates.count == 1, let candidate = candidates.first {
+                    switch try await broker.completeConnection(
+                        identity: identity,
+                        state: connection.state
+                    ) {
+                    case .bound(let callbackInstallationId):
+                        return callbackInstallationId
+                    case .pending:
+                        return try await authorizeExistingInstallationWithReplayReadback(
+                            broker: broker,
+                            identity: identity,
+                            connection: connection,
+                            installationId: candidate.installationId,
+                            userAccessToken: token.accessToken
+                        )
+                    }
+                }
+                pendingManagedGitHubAuthorization = PendingManagedGitHubAuthorization(
+                    identity: identity,
+                    connection: connection,
+                    userAccessToken: token.accessToken,
+                    candidates: candidates
+                )
+                managedGitHubInstallationCandidates = candidates
+                managedGitHubConnectionState = .installationSelectionRequired
+                logText = "Choose the GitHub App installation to bind. NeonDiff will send the transient authorization proof only after that explicit choice."
+                return nil
             }
         }
         throw ManagedGitHubModelError.authorizationExpired
+    }
+
+    private func authorizeExistingInstallationWithReplayReadback(
+        broker: any GitHubBrokerConnecting,
+        identity: GitHubBrokerDeviceIdentity,
+        connection: GitHubBrokerConnection,
+        installationId: Int,
+        userAccessToken: String
+    ) async throws -> Int {
+        do {
+            return try await broker.authorizeExistingInstallation(
+                identity: identity,
+                state: connection.state,
+                installationId: installationId,
+                userAccessToken: userAccessToken
+            )
+        } catch let error as GitHubBrokerClientError
+            where error == .server(reason: .stateReplayed) {
+            // The browser callback can consume the one-shot state after the
+            // pre-submit completion poll but before this request wins its store
+            // race. Resolve that one exact ambiguity with one authoritative,
+            // device-authenticated readback; never retry or resubmit the token.
+            switch try await broker.completeConnection(
+                identity: identity,
+                state: connection.state
+            ) {
+            case .bound(let callbackInstallationId):
+                return callbackInstallationId
+            case .pending:
+                throw error
+            }
+        }
     }
 
     private func loadManagedGitHubRepositories(
@@ -2243,6 +2436,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private func applyManagedGitHubFailure(_ error: Error) {
         invalidateManagedRepoApplicationProof()
+        pendingManagedGitHubAuthorization = nil
+        managedGitHubInstallationCandidates = []
+        githubAuthorizationCode = nil
         managedGitHubConnectionState = .failed
         managedGitHubRepositories = []
         selectedManagedGitHubRepository = nil
@@ -2846,7 +3042,9 @@ private let managedGitHubInstallationIdKey = "neondiff.managedGitHubInstallation
 
 private enum ManagedGitHubModelError: Error {
     case installPageOpenFailed
+    case clientIdMissing
     case authorizationExpired
+    case noAuthorizedInstallations
     case noBoundRepositories
 
     var recovery: GitHubConnectionRecovery {
@@ -2857,11 +3055,23 @@ private enum ManagedGitHubModelError: Error {
                 message: "NeonDiff could not open the GitHub App installation page. No repository binding was granted.",
                 action: .retry
             )
+        case .clientIdMissing:
+            GitHubConnectionRecovery(
+                status: "GitHub App client ID unavailable",
+                message: "This build is missing the official public GitHub App client ID required for managed authorization. Install a verified NeonDiff beta build before reconnecting.",
+                action: .retry
+            )
         case .authorizationExpired:
             GitHubConnectionRecovery(
                 status: "GitHub authorization expired",
                 message: "GitHub authorization expired before the server binding completed. Start a new connection.",
                 action: .reconnect
+            )
+        case .noAuthorizedInstallations:
+            GitHubConnectionRecovery(
+                status: "no authorized App installation",
+                message: "GitHub authorization succeeded, but no selected NeonDiff App repositories are accessible. Install or manage the App, then reconnect.",
+                action: .installOrManageApp
             )
         case .noBoundRepositories:
             GitHubConnectionRecovery(
@@ -2871,6 +3081,13 @@ private enum ManagedGitHubModelError: Error {
             )
         }
     }
+}
+
+private struct PendingManagedGitHubAuthorization {
+    let identity: GitHubBrokerDeviceIdentity
+    let connection: GitHubBrokerConnection
+    let userAccessToken: String
+    let candidates: [ManagedGitHubInstallationCandidate]
 }
 
 private func isValidRepoName(_ value: String) -> Bool {

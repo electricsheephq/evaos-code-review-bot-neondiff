@@ -81,6 +81,21 @@ the license store's strict schema verification is unaffected.
    authorization) — is acknowledged with the neutral return page and binds nothing,
    so legitimate updates are never locked out; any *other* code-less callback fails
    closed with `installation_authorization_unverified`.
+   **Already-installed App path.** GitHub does not rerun OAuth-during-install when
+   the user selects an installation that already exists. If the first completion
+   poll remains pending, the native app therefore uses the official App's Device
+   Flow to obtain a transient user access token, enumerates the App installations
+   that identity can access, and requires an explicit installation choice when
+   more than one is available. It then calls device-authenticated
+   `POST /github/connect/authorize-existing` with the original one-shot state, the
+   chosen installation id, and that transient proof. The broker verifies the
+   token against `GET /user/installations/{id}/repositories` **before** resolving
+   the App installation, consumes the same state exactly once, and records the
+   same repository-scoped binding as the callback path. The user token exists only
+   in process memory for this authorization window: it is never persisted,
+   logged, reflected, minted from, or used to post a review. A second completion
+   readback wins if the browser callback lands concurrently, avoiding a false
+   replay failure.
 5. **Return (native to broker).** The app confirms the binding at
    `POST /github/connect/complete` with its device credential and the original
    `state`. See "Return path" for why this is a device poll rather than a
@@ -130,12 +145,13 @@ signature against the stored public key and rejects expired or wrong-subject
 tokens.
 
 The GitHub installation flow is the proof of repository authority, but the
-one-shot state nonce alone is NOT sufficient: it binds the returning browser
-session to the initiating device, yet it does not prove the returning identity
-actually owns the installation id in the callback. So the callback additionally
-requires an **install-time OAuth authorization code** and verifies, via the
-exchanged user identity, that the user can access the requested installation
-before recording any binding (#614, P1). Membership alone
+one-shot state nonce alone is NOT sufficient: it binds the authorization to the
+initiating device, yet it does not prove the returning identity actually owns the
+installation id. A new installation therefore requires an **install-time OAuth
+authorization code**. An existing installation uses a transient Device Flow user
+token plus the device credential and the same one-shot state. Both paths verify,
+via the user identity, that the user can access the requested installation before
+recording any binding (#614, P1). Membership alone
 (`GET /user/installations`) does **not** prove access to every repository in an
 installation — an org install can list for a user who can reach only some of its
 repos. The broker therefore uses `GET /user/installations/{id}/repositories` to
@@ -144,10 +160,10 @@ binding to it; a later `POST /github/token` for any repo outside that set fails
 closed with `repo_outside_authorization`, so an entitled but GitHub-unauthorized
 user can never mint a token for a private repo they cannot access on GitHub. A
 device therefore obtains tokens only for installations — and repositories — whose
-access it proved at callback time — a valid state plus an arbitrary victim installation id binds
-nothing. Enabling OAuth-during-install and provisioning the OAuth client
-credentials is OWNER-GATED (see the staging-registration spec); until then the
-callback fails closed with `installation_authorization_unverified`.
+access it proved at bind time — a valid state plus an arbitrary victim installation
+id binds nothing. Enabling OAuth-during-install and provisioning the OAuth client
+credentials is OWNER-GATED (see the staging-registration spec); until then the new
+installation callback fails closed with `installation_authorization_unverified`.
 
 The authorized repository set is a **bind-time snapshot** — the short-lived user
 OAuth token is deliberately not persisted, so the set is not re-verified on every
@@ -170,8 +186,10 @@ code therefore has nothing to redirect into.
 **v1 decision:** the return is a **device poll**. After the browser callback
 records the binding, the app calls `POST /github/connect/complete` with its device
 credential and the original `state`; the broker returns `pending` until the
-callback lands and `bound` (with the installation id) afterward. No completion
-secret crosses the browser-to-app boundary, so there is no code to intercept.
+callback lands and `bound` (with the installation id) afterward. A pending result
+also activates the documented Device Flow path for an already-installed App. The
+client rechecks completion before submitting that proof so a concurrently landed
+callback wins. No completion secret crosses the browser-to-app boundary.
 
 If #612 adds a registered URL scheme, an optional completion-code redirect can be
 layered on top of the same one-shot state without changing this contract. This is
@@ -179,8 +197,10 @@ a design decision surfaced for #612, not an assumption.
 
 ## Failure and abuse states (typed, all fail closed)
 
-Every failure is a typed reason code; none falls back to a user OAuth token or an
-embedded key (see Rollback in issue #613).
+Every failure is a typed reason code; none uses a user OAuth token as a review
+credential or falls back to an embedded key (see Rollback in issue #613). The
+existing-install route accepts a user token only as transient installation-access
+proof and never persists or returns it.
 
 - `device_not_registered`, `invalid_device_credential` — device auth failures.
 - `state_not_found`, `state_expired`, `state_replayed` — one-shot connect-state
@@ -191,10 +211,9 @@ embedded key (see Rollback in issue #613).
   (discovered at issuance time; there are no webhooks in v1, so uninstall surfaces
   at the next token request or poll failure).
 - `installation_suspended` — the installation is suspended.
-- `installation_authorization_unverified` — the callback did not prove the
-  returning identity owns the installation (missing/invalid install-time OAuth
-  code, or OAuth-during-install not yet provisioned); fail closed, no binding
-  (HTTP 403, #614 P1).
+- `installation_authorization_unverified` — neither the callback nor the
+  existing-install Device Flow proof established that the returning identity can
+  access the exact installation; fail closed, no binding (HTTP 403, #614 P1).
 - `repo_outside_installation` — a requested repo is not in the installation's
   current selection (AC4).
 - `repo_outside_authorization` — a requested repo is in the installation but

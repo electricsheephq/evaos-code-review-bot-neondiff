@@ -32,6 +32,11 @@ export function authorizationCodeFor(installationId: number): string {
   return `oauth-code-${installationId}`;
 }
 
+/** Fixture-only Device Flow proof for one exact installation. */
+export function userAccessTokenFor(installationId: number): string {
+  return `device-user-proof-${installationId}`;
+}
+
 /** A device identity mirroring the client: keypair + RFC 7638 thumbprint id. */
 export interface TestDevice {
   deviceId: string;
@@ -86,7 +91,11 @@ export interface FakeInstallation {
 }
 
 export interface FakeGitHubCall {
-  op: "getInstallation" | "listInstallationRepositories" | "createInstallationAccessToken";
+  op:
+    | "getInstallation"
+    | "verifyInstallationForUserToken"
+    | "listInstallationRepositories"
+    | "createInstallationAccessToken";
   installationId: number;
   params?: unknown;
 }
@@ -164,6 +173,15 @@ export function fakeGitHubClient(
       // yields the repositories the user can access in the installation (the
       // authorized set the binding is scoped to) — all installation repos by default.
       if (code !== authorizationCodeFor(installationId)) return null;
+      const installation = byId.get(installationId);
+      if (!installation || installation.missing) return null;
+      return installation.userRepositories ?? installation.repositories.map((repository) => repository.full_name);
+    },
+    async verifyInstallationForUserToken(installationId: number, userAccessToken: string) {
+      // Record only that the proof seam ran. The transient user credential is
+      // deliberately excluded from test call ledgers, mirroring production.
+      calls.push({ op: "verifyInstallationForUserToken", installationId });
+      if (userAccessToken !== userAccessTokenFor(installationId)) return null;
       const installation = byId.get(installationId);
       if (!installation || installation.missing) return null;
       return installation.userRepositories ?? installation.repositories.map((repository) => repository.full_name);

@@ -112,10 +112,16 @@ export NEONDIFF_GITHUB_APP_CLIENT_ID="<github-app-client-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 ```
 
-For the Mac desktop Repos pane, copy the GitHub App client ID into
-`github.clientId` or `NEONDIFF_GITHUB_APP_CLIENT_ID`, and enable device flow in
-the GitHub App settings. Without that optional feature, GitHub will return
-`device_flow_disabled` when the desktop tries to show a user authorization code.
+For legacy/direct Mac desktop builds, copy the GitHub App client ID into
+`github.clientId` or `NEONDIFF_GITHUB_APP_CLIENT_ID`. A verified managed beta
+build instead carries the official App's public client ID in its production
+boundary, so first-run does not depend on loading CLI config. Enable Device Flow
+in the official App settings: when GitHub does not rerun OAuth-during-install
+for an existing installation, the native app uses Device Flow only as transient
+installation-access proof. It continues polling the broker during that window,
+so a fresh-install callback wins without a second authorization. If Device Flow
+is disabled, GitHub returns `device_flow_disabled` and the existing-install path
+fails closed.
 
 ## 3. Configure Provider And License
 
@@ -222,6 +228,12 @@ client:
 - `NeonDiffPaidBetaContract = paid-mac-beta-v1`
 - `NeonDiffManagedGitHubBrokerEnabled = true`
 - `NeonDiffGitHubBrokerOrigin = https://neondiff-license.fly.dev`
+
+After that exact bundle contract passes, the managed production boundary also
+supplies the compiled official GitHub App public client ID. It is public
+metadata, not a secret, and it is unavailable to quarantined/debug composition.
+This lets native first-run authorize an already-installed App without requiring
+a prior CLI `config inspect`; it does not enable the server kill switch.
 
 `apps/neondiff-desktop/script/build_and_run.sh` accepts those values only for a
 release build and only through the exact matching

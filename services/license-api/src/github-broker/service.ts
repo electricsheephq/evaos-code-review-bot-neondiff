@@ -21,6 +21,7 @@ const MAX_REPOSITORIES_PER_REQUEST = 50;
 const REPOSITORY_PAGE_SIZE = 50;
 const MAX_REPOSITORY_PAGE = 200;
 const MAX_DISCOVERABLE_REPOSITORIES = REPOSITORY_PAGE_SIZE * MAX_REPOSITORY_PAGE;
+const MAX_USER_ACCESS_TOKEN_LENGTH = 4_096;
 
 /**
  * The server-defined minimal review permission set (matches
@@ -238,6 +239,67 @@ export class GitHubBrokerService {
       );
     }
     return authorized;
+  }
+
+  /**
+   * POST /github/connect/authorize-existing — device-authenticated fallback for
+   * an App that is already installed, where GitHub will not rerun the
+   * OAuth-during-install callback. A transient Device Flow user token is used
+   * only to prove access to the exact installation and derive its authorized
+   * repository set. The token is never stored, logged, reflected, or reused for
+   * review work; App installation tokens remain the only review credential.
+   */
+  async connectAuthorizeExisting(
+    authorization: string | string[] | undefined,
+    body: unknown
+  ): Promise<Record<string, unknown>> {
+    const at = this.now();
+    const deviceId = await authenticateDevice(this.store, authorization, at);
+    if (!this.connectRateLimiter.allow(hashKey(`connect-existing:${deviceId}`), at.getTime())) {
+      throw new BrokerError("rate_limited", "too many existing-install authorization attempts");
+    }
+    const { state, installationId, userAccessToken } = parseExistingAuthorizationRequest(body);
+    const stored = this.store.getConnectState(state);
+    if (!stored || stored.device_id !== deviceId) {
+      throw new BrokerError("state_not_found", "connect state is not recognized");
+    }
+    if (stored.consumed_at) {
+      throw new BrokerError("state_replayed", "connect state was already used");
+    }
+    if (Date.parse(stored.expires_at) <= at.getTime()) {
+      throw new BrokerError("state_expired", "connect state has expired");
+    }
+
+    let authorizedRepositories: string[] | null;
+    try {
+      // Identity proof deliberately precedes App-JWT installation resolution,
+      // preserving the callback path's anti-probing order.
+      authorizedRepositories = await this.githubClient.verifyInstallationForUserToken(
+        installationId,
+        userAccessToken
+      );
+    } catch (error) {
+      throw mapClientError(error);
+    }
+    if (authorizedRepositories === null) {
+      throw new BrokerError(
+        "installation_authorization_unverified",
+        "installation authorization could not be verified for this identity"
+      );
+    }
+
+    const installation = await this.resolveInstallation(installationId);
+    if (!this.store.consumeConnectState(state, installationId, at.toISOString())) {
+      throw new BrokerError("state_replayed", "connect state was already used");
+    }
+    this.store.upsertBinding(
+      deviceId,
+      installationId,
+      installation.account_login,
+      authorizedRepositories,
+      at.toISOString()
+    );
+    return { status: "bound", installationId };
   }
 
   /** POST /github/connect/complete — device polls to confirm the binding landed. */
@@ -570,6 +632,32 @@ function parseTokenRequest(body: unknown): {
     repositories,
     ...(permissions ? { permissions } : {}),
     ...(activationKey ? { activationKey } : {})
+  };
+}
+
+function parseExistingAuthorizationRequest(body: unknown): {
+  state: string;
+  installationId: number;
+  userAccessToken: string;
+} {
+  const record = asObject(body);
+  const state = record.state;
+  const userAccessToken = record.userAccessToken;
+  if (typeof state !== "string" || state.length === 0 || state.length > 512) {
+    throw new BrokerError("invalid_request", "state is invalid");
+  }
+  if (
+    typeof userAccessToken !== "string"
+    || userAccessToken.length === 0
+    || userAccessToken.length > MAX_USER_ACCESS_TOKEN_LENGTH
+    || /\s/.test(userAccessToken)
+  ) {
+    throw new BrokerError("invalid_request", "userAccessToken is invalid");
+  }
+  return {
+    state,
+    installationId: parseInstallationId(record.installationId),
+    userAccessToken
   };
 }
 
