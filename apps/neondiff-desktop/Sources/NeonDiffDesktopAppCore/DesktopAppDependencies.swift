@@ -4,18 +4,22 @@ import NeonDiffDesktopCore
 package struct DesktopProductionBoundary: Sendable {
     package let nativeActivationBrokerVerified: Bool
     package let managedGitHubBrokerOrigin: URL?
+    package let managedGitHubAppClientID: String?
 
     package static let quarantined = DesktopProductionBoundary(
         nativeActivationBrokerVerified: false,
-        managedGitHubBrokerOrigin: nil
+        managedGitHubBrokerOrigin: nil,
+        managedGitHubAppClientID: nil
     )
     package static let testVerified = DesktopProductionBoundary(
         nativeActivationBrokerVerified: true,
-        managedGitHubBrokerOrigin: nil
+        managedGitHubBrokerOrigin: nil,
+        managedGitHubAppClientID: nil
     )
     package static let testManaged = DesktopProductionBoundary(
         nativeActivationBrokerVerified: true,
-        managedGitHubBrokerOrigin: approvedManagedGitHubBrokerOrigin
+        managedGitHubBrokerOrigin: approvedManagedGitHubBrokerOrigin,
+        managedGitHubAppClientID: "fixture-client-id"
     )
 
     package static func resolve(infoDictionary: [String: Any]) -> DesktopProductionBoundary {
@@ -29,7 +33,8 @@ package struct DesktopProductionBoundary: Sendable {
         }
         return DesktopProductionBoundary(
             nativeActivationBrokerVerified: true,
-            managedGitHubBrokerOrigin: origin
+            managedGitHubBrokerOrigin: origin,
+            managedGitHubAppClientID: approvedManagedGitHubAppClientID
         )
     }
 }
@@ -37,6 +42,7 @@ package struct DesktopProductionBoundary: Sendable {
 private let approvedManagedGitHubBrokerOrigin = URL(
     string: "https://neondiff-license.fly.dev"
 )!
+private let approvedManagedGitHubAppClientID = "Iv23liNr6jOVuCFC7DkN"
 
 package struct DesktopAppDependencies {
     package let clipboard: any DesktopClipboard

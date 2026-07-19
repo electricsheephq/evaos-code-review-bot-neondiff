@@ -167,6 +167,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         ])
         #expect(valid.nativeActivationBrokerVerified)
         #expect(valid.managedGitHubBrokerOrigin?.absoluteString == "https://neondiff-license.fly.dev")
+        #expect(valid.managedGitHubAppClientID == "Iv23liNr6jOVuCFC7DkN")
 
         for invalid in [
             [
@@ -245,8 +246,6 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
             githubBroker: broker,
             productionBoundary: .testManaged
         )
-        fixture.loadConfig()
-
         fixture.model.startManagedGitHubConnection()
         await fixture.waitForManagedGitHubConnectionToFinish()
 
@@ -264,18 +263,10 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         let broker = ScriptedGitHubBroker(
             completionResults: [.pending, .bound(installationId: 42)]
         )
-        let transientToken = "fixture-raced-callback-user-proof"
         let authenticator = ScriptedGitHubAuthenticator(
             pollResults: [
-                .authorized(GitHubUserToken(accessToken: transientToken))
-            ],
-            repositories: [
-                GitHubDiscoveredRepository(
-                    fullName: "electric/public",
-                    visibility: "public",
-                    installationId: 42,
-                    installationAccount: "electric"
-                )
+                .pending(intervalSeconds: 2),
+                .failed(error: .accessDenied, description: "device authorization should not be required")
             ]
         )
         let fixture = ModelDependencyFixture(
@@ -290,13 +281,13 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
 
         #expect(broker.completedStates == ["fixture-state", "fixture-state"])
         #expect(broker.authorizedInstallationIds.isEmpty)
+        #expect(authenticator.pollDeviceCodes.isEmpty)
         #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 42))
-        #expect(fixture.secretStore.values.values.contains(transientToken) == false)
     }
 
     @Test func callbackThatConsumesStateDuringSingleInstallSubmitConvergesByOneReadback() async throws {
         let broker = ScriptedGitHubBroker(
-            completionResults: [.pending, .pending, .bound(installationId: 42)],
+            completionResults: [.pending, .pending, .pending, .bound(installationId: 42)],
             authorizationError: .server(reason: .stateReplayed)
         )
         let authenticator = ScriptedGitHubAuthenticator(
@@ -322,7 +313,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         fixture.model.startManagedGitHubConnection()
         await fixture.waitForManagedGitHubConnectionToFinish()
 
-        #expect(broker.completedStates == ["fixture-state", "fixture-state", "fixture-state"])
+        #expect(broker.completedStates == ["fixture-state", "fixture-state", "fixture-state", "fixture-state"])
         #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 42))
     }
 
@@ -374,7 +365,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
 
     @Test func callbackThatConsumesStateDuringExplicitSelectionSubmitConvergesByOneReadback() async throws {
         let broker = ScriptedGitHubBroker(
-            completionResults: [.pending, .pending, .bound(installationId: 43)],
+            completionResults: [.pending, .pending, .pending, .bound(installationId: 43)],
             authorizationError: .server(reason: .stateReplayed)
         )
         let authenticator = ScriptedGitHubAuthenticator(
@@ -410,7 +401,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         fixture.model.selectManagedGitHubInstallation(installationId: 43)
         await fixture.waitForManagedGitHubConnectionToFinish()
 
-        #expect(broker.completedStates == ["fixture-state", "fixture-state", "fixture-state"])
+        #expect(broker.completedStates == ["fixture-state", "fixture-state", "fixture-state", "fixture-state"])
         #expect(fixture.model.managedGitHubConnectionState == .bound(installationId: 43))
     }
 

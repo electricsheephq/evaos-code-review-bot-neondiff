@@ -2270,7 +2270,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         identity: GitHubBrokerDeviceIdentity,
         connection: GitHubBrokerConnection
     ) async throws -> Int? {
-        guard let clientId = github.clientId?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let clientId = dependencies.productionBoundary.managedGitHubAppClientID?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
               !clientId.isEmpty
         else {
             throw ManagedGitHubModelError.clientIdMissing
@@ -2286,6 +2287,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
               dependencies.clock.now < code.expiresAt,
               dependencies.clock.now < connection.expiresAt {
             try await dependencies.clock.sleep(for: .seconds(max(1, intervalSeconds)))
+            switch try await broker.completeConnection(
+                identity: identity,
+                state: connection.state
+            ) {
+            case .bound(let callbackInstallationId):
+                return callbackInstallationId
+            case .pending:
+                break
+            }
             switch try await dependencies.githubAuthenticator.pollDeviceAuthorization(
                 clientId: clientId,
                 deviceCode: code.deviceCode
@@ -3047,8 +3057,8 @@ private enum ManagedGitHubModelError: Error {
             )
         case .clientIdMissing:
             GitHubConnectionRecovery(
-                status: "GitHub client ID missing",
-                message: "Load a configuration containing the official public GitHub App client ID before connecting.",
+                status: "GitHub App client ID unavailable",
+                message: "This build is missing the official public GitHub App client ID required for managed authorization. Install a verified NeonDiff beta build before reconnecting.",
                 action: .retry
             )
         case .authorizationExpired:

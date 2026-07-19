@@ -76,9 +76,16 @@ canary gates pass, so this source contract is not production-wiring proof.
 When an exact release-bundle contract enables the managed source path, the
 native app creates its P-256 identity only on explicit Connect, opens the
 broker-issued GitHub install URL, polls the device-bound completion endpoint,
-and accepts repository names/visibility only from the broker readback. A saved
-installation id is a routing hint only and cannot unlock onboarding until a
-fresh server repository read succeeds. Manual repository names and the legacy
+and accepts repository names/visibility only from the broker readback. The app
+continues polling completion while any existing-install Device Flow prompt is
+pending, so a fresh OAuth-during-install callback wins without a second user
+authorization. If GitHub routes a pre-existing installation to configuration
+without a callback, the verified build uses its compiled official public App
+client ID for Device Flow. The resulting user token is transient proof for the
+exact selected installation only; it stays in process memory until an explicit
+installation choice, is then cleared, and is never used to post a review. A
+saved installation id is a routing hint only and cannot unlock onboarding until
+a fresh server repository read succeeds. Manual repository names and the legacy
 user-token discovery path are disabled in managed mode. Generic CLI
 status/deactivate and daemon-admission validation still require exact-candidate
 integration proof under #630.
@@ -230,6 +237,12 @@ To remove NeonDiff from a user or organization:
   treating the repo as install-proven.
 - `activeRepoChecks` is zero: the config has no enabled repo to prove; add a
   selected installed repo to `pilotRepos`.
+- A managed first run shows `GitHub App client ID unavailable`: the bundle is
+  missing the verified paid-beta production boundary. Install the exact signed
+  beta artifact; do not paste a user token or private key into the app.
+- A pre-existing App installation remains pending: confirm Device Flow is
+  enabled on the official App, then use the native code prompt. Fresh installs
+  should complete through the broker callback without a second authorization.
 - Private repo review fails before provider calls: check license status before
   widening GitHub permissions or changing provider settings.
 - App-authored comments do not appear: verify the live command used App

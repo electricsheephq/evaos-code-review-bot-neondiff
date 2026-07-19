@@ -162,9 +162,14 @@ Create or install the GitHub App before expecting PR reviews to run. The App
 must be installed on the same selected repositories listed in `pilotRepos`; see
 [docs/github-app-setup.md](docs/github-app-setup.md) for the permission set and
 selected-repo install path. The rollout-disabled managed desktop path uses the
-broker-issued GitHub App install/OAuth URL and a device-signed completion poll;
-it never falls back to a user token. Legacy direct-install builds still use
-device flow and the public client ID.
+broker-issued GitHub App install/OAuth URL and keeps polling its device-bound
+completion state while authorization is pending. A fresh installation callback
+wins without asking the customer to authorize twice. If the official App was
+already installed and GitHub therefore sends no install callback, the verified
+managed build uses its compiled public App client ID to show Device Flow as a
+transient installation-access proof. That user token stays in process memory
+only for the authorization window and is never a review credential. Legacy
+direct-install builds still read their public client ID from local config.
 
 Do not store the GitHub App private key, provider API key, license key, tokens,
 or customer data in this repository. Keep local config, secrets, state DBs, and
