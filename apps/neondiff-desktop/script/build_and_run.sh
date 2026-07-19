@@ -73,7 +73,6 @@ fi
 
 RESOURCE_DIR="$(find "$BUILD_DIR" "$ROOT_DIR/.build" \( -name "${APP_NAME}_${APP_NAME}.bundle" -o -name "${APP_NAME}_${APP_NAME}.resources" \) -type d -print -quit 2>/dev/null || true)"
 if [ -n "$RESOURCE_DIR" ]; then
-  ditto "$RESOURCE_DIR" "$APP_BUNDLE/$(basename "$RESOURCE_DIR")"
   ditto "$RESOURCE_DIR" "$APP_RESOURCES/$(basename "$RESOURCE_DIR")"
 fi
 
@@ -169,6 +168,12 @@ case "$MODE" in
     ;;
   --bundle-check|bundle-check|release-bundle-check)
     /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
+    INVALID_BUNDLE_ROOT_ENTRIES="$(find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents -print)"
+    if [ -n "$INVALID_BUNDLE_ROOT_ENTRIES" ]; then
+      echo "app bundle root may contain only Contents:" >&2
+      echo "$INVALID_BUNDLE_ROOT_ENTRIES" >&2
+      exit 1
+    fi
     otool -L "$APP_BINARY"
     if otool -L "$APP_BINARY" | grep -q "Sparkle.framework"; then
       test -d "$APP_FRAMEWORKS/Sparkle.framework"

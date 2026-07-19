@@ -130,6 +130,18 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(script).not.toMatch(/\b(notarytool|stapler|spctl)\b/);
   });
 
+  it("keeps SwiftPM resources inside Contents so the app bundle can be Developer ID sealed", () => {
+    const bundler = read("apps/neondiff-desktop/script/build_and_run.sh");
+
+    expect(bundler).toContain(
+      'ditto "$RESOURCE_DIR" "$APP_RESOURCES/$(basename "$RESOURCE_DIR")"'
+    );
+    expect(bundler).not.toContain(
+      'ditto "$RESOURCE_DIR" "$APP_BUNDLE/$(basename "$RESOURCE_DIR")"'
+    );
+    expect(bundler).toContain('find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents');
+  });
+
   it("documents the desktop smoke artifact as non-release proof", () => {
     const docPath = "apps/neondiff-desktop/docs/desktop-release-smoke.md";
 
