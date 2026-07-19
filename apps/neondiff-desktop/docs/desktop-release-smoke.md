@@ -1,6 +1,6 @@
 # Desktop Release Smoke
 
-`.github/workflows/desktop-release-smoke.yml` is the unsigned macOS app-bundle smoke lane for NeonDiff Desktop. It is manual and tag-oriented, runs `NeonDiffDesktopCoreTests` with explicit nonzero discovery, compiles `NeonDiffDesktopKeychainChecks`, runs the hosted-safe appcast checks, builds the `.app`, validates bundle structure, and uploads the zipped bundle with metadata.
+`.github/workflows/desktop-release-smoke.yml` is the unsigned macOS app-bundle smoke lane for NeonDiff Desktop. It is manual and tag-oriented, runs `NeonDiffDesktopCoreTests` with explicit nonzero discovery, compiles `NeonDiffDesktopKeychainChecks`, runs the hosted-safe appcast checks, builds the `.app` in Release configuration, validates bundle structure, verifies that the Debug-only fixture resolver is absent, and uploads the zipped bundle with metadata.
 
 The uploaded bundle is non-release proof. Its metadata marks `release_ready: false`, `customer_ready: false`, and `artifact_classification: unsigned-desktop-release-smoke`, so it is customer-not-ready by design.
 

@@ -41,11 +41,15 @@ jobs:
       - name: Run desktop appcast checks
         run: swift run NeonDiffDesktopAppcastChecks
 
-      - name: Build unsigned app bundle
-        run: script/build_and_run.sh build
+      - name: Build unsigned Release app bundle
+        run: script/build_and_run.sh release-build
 
-      - name: Check unsigned app bundle
-        run: script/build_and_run.sh bundle-check
+      - name: Check unsigned Release app bundle
+        run: script/build_and_run.sh release-bundle-check
+
+      - name: Enforce release-only fixture boundary
+        working-directory: .
+        run: npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist/NeonDiffDesktop.app
 
       - name: Package unsigned app bundle and metadata
         env:
@@ -54,7 +58,7 @@ jobs:
           NEONDIFF_DESKTOP_ARTIFACT_CLASSIFICATION: unsigned-desktop-release-smoke
           NEONDIFF_DESKTOP_UI_LAUNCH: "false"
           NEONDIFF_DESKTOP_VISUAL_SMOKE_REQUIRED: "true"
-          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release app bundle build, macOS 15 Keychain contract compilation, appcast checks, bundle structure check, artifact checksum, and metadata only
+          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release Release-configuration app bundle build, macOS 15 Keychain contract compilation, appcast checks, bundle structure and fixture-exclusion checks, artifact checksum, and metadata only
         run: script/release-proof.sh
 
       - name: Upload unsigned app bundle
