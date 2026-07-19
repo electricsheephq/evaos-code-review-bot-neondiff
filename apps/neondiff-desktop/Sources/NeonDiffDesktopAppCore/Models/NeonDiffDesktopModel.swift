@@ -1144,9 +1144,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 case .bound(let callbackInstallationId):
                     boundInstallationId = callbackInstallationId
                 case .pending:
-                    boundInstallationId = try await broker.authorizeExistingInstallation(
+                    boundInstallationId = try await authorizeExistingInstallationWithReplayReadback(
+                        broker: broker,
                         identity: pending.identity,
-                        state: pending.connection.state,
+                        connection: pending.connection,
                         installationId: installationId,
                         userAccessToken: pending.userAccessToken
                     )
@@ -2326,9 +2327,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     case .bound(let callbackInstallationId):
                         return callbackInstallationId
                     case .pending:
-                        return try await broker.authorizeExistingInstallation(
+                        return try await authorizeExistingInstallationWithReplayReadback(
+                            broker: broker,
                             identity: identity,
-                            state: connection.state,
+                            connection: connection,
                             installationId: candidate.installationId,
                             userAccessToken: token.accessToken
                         )
@@ -2347,6 +2349,38 @@ package final class NeonDiffDesktopModel: ObservableObject {
             }
         }
         throw ManagedGitHubModelError.authorizationExpired
+    }
+
+    private func authorizeExistingInstallationWithReplayReadback(
+        broker: any GitHubBrokerConnecting,
+        identity: GitHubBrokerDeviceIdentity,
+        connection: GitHubBrokerConnection,
+        installationId: Int,
+        userAccessToken: String
+    ) async throws -> Int {
+        do {
+            return try await broker.authorizeExistingInstallation(
+                identity: identity,
+                state: connection.state,
+                installationId: installationId,
+                userAccessToken: userAccessToken
+            )
+        } catch let error as GitHubBrokerClientError
+            where error == .server(reason: .stateReplayed) {
+            // The browser callback can consume the one-shot state after the
+            // pre-submit completion poll but before this request wins its store
+            // race. Resolve that one exact ambiguity with one authoritative,
+            // device-authenticated readback; never retry or resubmit the token.
+            switch try await broker.completeConnection(
+                identity: identity,
+                state: connection.state
+            ) {
+            case .bound(let callbackInstallationId):
+                return callbackInstallationId
+            case .pending:
+                throw error
+            }
+        }
     }
 
     private func loadManagedGitHubRepositories(
