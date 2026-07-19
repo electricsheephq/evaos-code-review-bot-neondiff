@@ -205,7 +205,12 @@ export function createGitHubInstallationClient(config: GitHubAppConfig): GitHubI
           { token: userToken }
         );
       } catch (error) {
-        if (error instanceof GitHubApiStatusError && (error.status === 404 || error.status === 403)) return null;
+        if (
+          error instanceof GitHubApiStatusError
+          && (error.status === 401 || error.status === 403 || error.status === 404)
+        ) {
+          return null;
+        }
         throw error;
       }
       const chunk = result.json?.repositories ?? [];

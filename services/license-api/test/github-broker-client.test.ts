@@ -165,6 +165,18 @@ describe("production github installation client wire contract", () => {
     assert.equal(JSON.stringify(captured).includes("transient-device-user-proof"), false);
   });
 
+  it("treats a rejected transient Device Flow user token as unverified authorization", async () => {
+    stubFetch((request) => {
+      if (request.url.includes("/user/installations/6001/repositories")) {
+        return { status: 401, json: { message: "Bad credentials" } };
+      }
+      return { json: {} };
+    });
+    const client = createGitHubInstallationClient({ appId: "123", privateKey: appPrivateKey });
+
+    assert.equal(await client.verifyInstallationForUserToken(6001, "expired-device-user-proof"), null);
+  });
+
   it("paginates /user/installations/{id}/repositories so the authorized set spans every page", async () => {
     const page1 = Array.from({ length: 100 }, (_, i) => ({ full_name: `octo/repo-${i}` }));
     const captured = stubFetch((request) => {
