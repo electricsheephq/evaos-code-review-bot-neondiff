@@ -3,36 +3,57 @@ import NeonDiffDesktopCore
 
 package struct DesktopProductionBoundary: Sendable {
     package let nativeActivationBrokerVerified: Bool
+    package let byoGitHubEnabled: Bool
     package let managedGitHubBrokerOrigin: URL?
     package let managedGitHubAppClientID: String?
 
     package static let quarantined = DesktopProductionBoundary(
         nativeActivationBrokerVerified: false,
+        byoGitHubEnabled: false,
         managedGitHubBrokerOrigin: nil,
         managedGitHubAppClientID: nil
     )
     package static let testVerified = DesktopProductionBoundary(
         nativeActivationBrokerVerified: true,
+        byoGitHubEnabled: false,
         managedGitHubBrokerOrigin: nil,
         managedGitHubAppClientID: nil
     )
     package static let testManaged = DesktopProductionBoundary(
         nativeActivationBrokerVerified: true,
+        byoGitHubEnabled: false,
         managedGitHubBrokerOrigin: approvedManagedGitHubBrokerOrigin,
         managedGitHubAppClientID: "fixture-client-id"
     )
 
     package static func resolve(infoDictionary: [String: Any]) -> DesktopProductionBoundary {
-        guard infoDictionary["NeonDiffPaidBetaContract"] as? String == "paid-mac-beta-v1",
+        let contract = infoDictionary["NeonDiffPaidBetaContract"] as? String
+        if contract == "paid-mac-beta-byo-v1" {
+            guard infoDictionary["NeonDiffBYOGitHubEnabled"] as? Bool == true,
+                  infoDictionary["NeonDiffManagedGitHubBrokerEnabled"] == nil,
+                  infoDictionary["NeonDiffGitHubBrokerOrigin"] == nil
+            else {
+                return .quarantined
+            }
+            return DesktopProductionBoundary(
+                nativeActivationBrokerVerified: true,
+                byoGitHubEnabled: true,
+                managedGitHubBrokerOrigin: nil,
+                managedGitHubAppClientID: nil
+            )
+        }
+
+        guard contract == "paid-mac-beta-v1",
+              infoDictionary["NeonDiffBYOGitHubEnabled"] == nil,
               infoDictionary["NeonDiffManagedGitHubBrokerEnabled"] as? Bool == true,
               let originText = infoDictionary["NeonDiffGitHubBrokerOrigin"] as? String,
               let origin = URL(string: originText),
-              origin == approvedManagedGitHubBrokerOrigin
-        else {
+              origin == approvedManagedGitHubBrokerOrigin else {
             return .quarantined
         }
         return DesktopProductionBoundary(
             nativeActivationBrokerVerified: true,
+            byoGitHubEnabled: false,
             managedGitHubBrokerOrigin: origin,
             managedGitHubAppClientID: approvedManagedGitHubAppClientID
         )

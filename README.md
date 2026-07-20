@@ -149,6 +149,12 @@ when a release bundle carries the exact `paid-mac-beta-v1` Info.plist contract,
 fixed production broker origin, and explicit broker-enable marker. Those public
 build values are absent by default, so ordinary/debug bundles stay quarantined;
 the server kill switch and every broker/entitlement decision still fail closed.
+The invite-only B0 technical-beta build uses a separate exact
+`paid-mac-beta-byo-v1` release contract with `NeonDiffBYOGitHubEnabled=true` and
+no managed-broker fields. That contract enables the existing local direct/BYO
+path and API-backed native activation without a hidden defaults mutation. It
+does not prove customer-safe private-key custody, a compatible published CLI,
+signing, billing, canaries, or release readiness.
 This source composition is not proof that the production broker is enabled,
 that billing is live, or that a signed customer artifact exists. Generic CLI
 status/deactivate and daemon-admission validation still need exact-candidate
