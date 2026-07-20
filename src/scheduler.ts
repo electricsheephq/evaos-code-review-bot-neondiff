@@ -2603,6 +2603,7 @@ function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): 
       result.queue.providerDeferred += 1;
       break;
     case "closed_retired":
+      result.skippedStaleHead += 1;
       result.queue.closedRetired += 1;
       break;
     case "skipped_draft":

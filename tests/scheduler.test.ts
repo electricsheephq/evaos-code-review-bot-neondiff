@@ -2199,6 +2199,7 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(result.queue.closedRetired).toBe(1);
+    expect(result.skippedStaleHead).toBe(1);
     expect(state.getReviewQueueJob(oldJob.jobId)).toMatchObject({ state: "closed_retired" });
     expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
       state: "closed",
