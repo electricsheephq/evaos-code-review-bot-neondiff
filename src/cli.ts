@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createPrivateKey } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
@@ -398,7 +399,8 @@ async function main(): Promise<void> {
   if (command === "doctor") {
     const config = loadConfig(args.config);
     if (args._[1] === "github") {
-      const result = await buildDoctorGithubReport(config);
+      const credentials = await resolveDoctorGitHubCredentials(args, process.stdin);
+      const result = await buildDoctorGithubReport(config, credentials);
       console.log(stringifyRedactedJson(result));
       if (!result.ok) process.exitCode = 1;
       return;
@@ -2923,8 +2925,21 @@ function isProviderDeferredQueueJobEligible(job: ReviewQueueJobRecord, now: Date
   return !Number.isFinite(eligibleAtMs) || eligibleAtMs <= now.getTime();
 }
 
-async function buildDoctorGithubReport(config: BotConfig) {
-  const github = new GitHubApi(config.github);
+type DoctorGitHubCredentialOverride = {
+  appId: string;
+  privateKey: string;
+  source: "stdin";
+};
+
+async function buildDoctorGithubReport(config: BotConfig, credentials?: DoctorGitHubCredentialOverride) {
+  const github = new GitHubApi(credentials
+    ? {
+        ...config.github,
+        appId: credentials.appId,
+        privateKey: credentials.privateKey,
+        privateKeyPath: undefined
+      }
+    : config.github);
   const monitoredRepos = listReposToScan(config);
   const readChecks = [];
   let activeRepoChecks = 0;
@@ -3007,9 +3022,10 @@ async function buildDoctorGithubReport(config: BotConfig) {
     monitoredRepos,
     activeRepoChecks,
     appCredentials: {
-      appIdConfigured: Boolean(config.github.appId),
-      privateKeyConfigured: Boolean(config.github.privateKeyPath),
-      fallbackTokenConfigured: Boolean(config.github.token)
+      appIdConfigured: Boolean(credentials?.appId ?? config.github.appId),
+      privateKeyConfigured: Boolean(credentials?.privateKey ?? config.github.privateKeyPath),
+      fallbackTokenConfigured: Boolean(config.github.token),
+      source: credentials?.source ?? "configured"
     },
     github: {
       canPostAsApp: appCredentialsConfigured,
@@ -3047,6 +3063,50 @@ async function buildDoctorGithubReport(config: BotConfig) {
       ...(readChecks.some((check) => !check.ok) ? ["Confirm the GitHub App is installed on selected repositories with the required repository permissions."] : [])
     ]
   };
+}
+
+async function resolveDoctorGitHubCredentials(
+  args: ParsedArgs,
+  stdin: NodeJS.ReadableStream
+): Promise<DoctorGitHubCredentialOverride | undefined> {
+  const appIdArg = args["github-app-id"];
+  const privateKeyStdinArg = args["github-app-private-key-stdin"];
+  if (appIdArg === undefined && privateKeyStdinArg === undefined) return undefined;
+
+  if (privateKeyStdinArg !== "true") {
+    throw new Error("doctor github requires --github-app-private-key-stdin true when --github-app-id is supplied");
+  }
+  if (appIdArg === undefined) {
+    throw new Error("doctor github requires --github-app-id with --github-app-private-key-stdin true");
+  }
+  const appId = parseSingleArg(appIdArg, "--github-app-id").trim();
+  if (!/^[1-9][0-9]{0,19}$/.test(appId)) {
+    throw new Error("--github-app-id must be one positive ASCII numeric App ID of at most 20 digits");
+  }
+
+  let privateKey: string;
+  try {
+    privateKey = await readSecretFromStdin(stdin, 64 * 1024, 5_000);
+  } catch (error) {
+    throw new Error((error instanceof Error ? error.message : "GitHub App private-key stdin could not be read")
+      .replaceAll("provider secret", "GitHub App private-key"));
+  }
+  const privateKeyLabel = "PRIVATE" + " KEY";
+  const rsaPrivateKeyLabel = "RSA " + privateKeyLabel;
+  const supportedBoundaries = [
+    [`-----BEGIN ${privateKeyLabel}-----`, `-----END ${privateKeyLabel}-----`],
+    [`-----BEGIN ${rsaPrivateKeyLabel}-----`, `-----END ${rsaPrivateKeyLabel}-----`]
+  ] as const;
+  if (!supportedBoundaries.some(([header, footer]) => privateKey.startsWith(header) && privateKey.endsWith(footer))) {
+    throw new Error("GitHub App private-key stdin must be one unencrypted PKCS#1 or PKCS#8 PEM");
+  }
+  try {
+    const parsed = createPrivateKey(privateKey);
+    if (parsed.asymmetricKeyType !== "rsa") throw new Error("unsupported key type");
+  } catch {
+    throw new Error("GitHub App private-key stdin must be one valid unencrypted RSA private key");
+  }
+  return { appId, privateKey, source: "stdin" };
 }
 
 function buildDoctorGithubLicenseGatePreview(
@@ -3189,7 +3249,9 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
   doctor: {
     description: "Check repo read access, provider env, and issue-enrichment readiness (add `github` for GitHub-only checks).",
     flags: [
-      { name: "--config", description: "Path to the config file (default config.local.json)." }
+      { name: "--config", description: "Path to the config file (default config.local.json)." },
+      { name: "--github-app-id", description: "Nonsecret customer-owned GitHub App ID used with --github-app-private-key-stdin true." },
+      { name: "--github-app-private-key-stdin", description: "true to read one bounded customer-owned GitHub App private key from stdin." }
     ]
   },
   status: {

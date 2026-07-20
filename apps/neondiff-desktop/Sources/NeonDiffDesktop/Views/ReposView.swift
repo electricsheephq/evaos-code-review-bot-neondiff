@@ -300,6 +300,10 @@ struct ReposView: View {
                         text: model.byoGitHubPrivateKeyStored ? "KEYCHAIN KEY STORED" : "PRIVATE KEY NEEDED",
                         color: model.byoGitHubPrivateKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
                     )
+                    OperatorBadge(
+                        text: model.byoGitHubCredentialsVerified ? "APP VERIFIED" : "VERIFY NEEDED",
+                        color: model.byoGitHubCredentialsVerified ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
                 }
 
                 Text("B0 uses a GitHub App owned and installed by the invited customer. Enter its numeric App ID and paste the full unencrypted PEM private key. NeonDiff stores the key in this Mac's Keychain; it is not written to config or command arguments.")
@@ -329,14 +333,23 @@ struct ReposView: View {
                     }
                     .disabled(!model.byoGitHubAppIdStored && !model.byoGitHubPrivateKeyStored)
                     .accessibilityIdentifier("neondiff-byo-github-clear")
+
+                    Button { model.verifyBYOGitHubAppCredentials() } label: {
+                        Label(
+                            model.isBYOGitHubVerificationInProgress ? "Verifying…" : "Verify App Access",
+                            systemImage: "checkmark.shield"
+                        )
+                    }
+                    .disabled(!model.byoGitHubCredentialsStored || model.isBYOGitHubVerificationInProgress)
+                    .accessibilityIdentifier("neondiff-byo-github-verify")
                 }
 
                 Text(model.byoGitHubCredentialStatus)
                     .font(.caption)
-                    .foregroundStyle(model.byoGitHubCredentialsStored ? NeonDiffTheme.accent : NeonDiffTheme.warning)
+                    .foregroundStyle(model.byoGitHubCredentialsVerified ? NeonDiffTheme.accent : NeonDiffTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Credential storage is only this slice. GitHub installation/repository verification and worker execution remain blocked until the next B0 integration slice passes.")
+                Text("Apply the repository allowlist, then verify App access. Verification uses the private key only through bounded CLI stdin and checks GitHub installation/repository truth; it does not execute or post a review.")
                     .font(.caption)
                     .foregroundStyle(NeonDiffTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -98,6 +98,11 @@ describe("public NeonDiff CLI surface", () => {
       expect.objectContaining({ name: "--expected-config-revision" })
     ]));
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
+    const doctorHelp = JSON.parse((await runCli(["doctor", "--help"])).stdout);
+    expect(doctorHelp.usage.flags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--github-app-id" }),
+      expect.objectContaining({ name: "--github-app-private-key-stdin" })
+    ]));
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples.some((example: string) => example.includes("--license-key-stdin true"))).toBe(true);
     expect(output.examples.join("\n")).not.toContain("--license-key-env");
@@ -1369,9 +1374,67 @@ exit 1
       expect(stdout).not.toContain(privateKeyPem);
       expect(stdout).not.toContain(privateKeyPath);
       expect(stdout).not.toContain(installationToken);
+
+      const stdinConfig = JSON.parse(readFileSync(configPath, "utf8"));
+      delete stdinConfig.github.appId;
+      delete stdinConfig.github.privateKeyPath;
+      writeFileSync(configPath, `${JSON.stringify(stdinConfig)}\n`);
+
+      const { stdout: stdinStdout } = await runCliWithStdin([
+        "doctor",
+        "github",
+        "--config",
+        configPath,
+        "--github-app-id",
+        "12345",
+        "--github-app-private-key-stdin",
+        "true"
+      ], privateKeyPem);
+      const stdinOutput = JSON.parse(stdinStdout);
+      expect(stdinOutput).toMatchObject({
+        ok: true,
+        command: "doctor github",
+        appCredentials: {
+          appIdConfigured: true,
+          privateKeyConfigured: true,
+          source: "stdin"
+        },
+        github: {
+          canPostAsApp: true,
+          readMode: "app_installation",
+          readChecks: [
+            {
+              repo: "acme/demo",
+              ok: true,
+              visibility_result: "public",
+              installation_id_present: true,
+              app_can_read_metadata: true,
+              app_can_read_pull_requests: true
+            }
+          ]
+        }
+      });
+      expect(stdinStdout).not.toContain(privateKeyPem);
+      expect(stdinStdout).not.toContain(installationToken);
     } finally {
       await closeServer(server);
     }
+  });
+
+  it("doctor github rejects an invalid App ID before consuming an open secret stdin", async () => {
+    const result = await runCliWithOpenStdin([
+      "doctor",
+      "github",
+      "--github-app-id",
+      "001234",
+      "--github-app-private-key-stdin",
+      "true"
+    ], "private-key-input-must-not-be-consumed");
+
+    expect(result.error).toBeTruthy();
+    expect(result.error?.killed).not.toBe(true);
+    expect(result.stderr).toContain("positive ASCII numeric App ID");
+    expect(result.stderr).not.toContain("private-key-input-must-not-be-consumed");
   });
 
   it("doctor github blocks pre-checkout when public repo PR permission is missing", async () => {

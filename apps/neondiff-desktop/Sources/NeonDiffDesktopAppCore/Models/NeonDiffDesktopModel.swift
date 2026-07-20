@@ -86,17 +86,26 @@ package final class NeonDiffDesktopModel: ObservableObject {
             invalidateManagedRepoApplicationProof()
             invalidateProviderConfigAuthorization()
             invalidateProviderVerificationContext()
+            invalidateBYOGitHubVerificationContext()
         }
     }
     @Published package var cliPath: String {
         didSet {
             guard cliPath != oldValue else { return }
             invalidateProviderVerificationContext()
+            invalidateBYOGitHubVerificationContext()
         }
     }
     @Published package var launchdLabel: String
     @Published package var status: DaemonStatus = .unknown
-    @Published package var repos: [RepoMonitor] = []
+    @Published package var repos: [RepoMonitor] = [] {
+        didSet {
+            let oldAllowlist = oldValue.filter(\.enabled).map(\.name).sorted()
+            let newAllowlist = repos.filter(\.enabled).map(\.name).sorted()
+            guard oldAllowlist != newAllowlist else { return }
+            invalidateBYOGitHubVerificationContext()
+        }
+    }
     @Published package var providers = ProviderSettings() {
         didSet {
             guard providers != oldValue else { return }
@@ -129,6 +138,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var pendingBYOGitHubAppId = ""
     @Published package var pendingBYOGitHubAppPrivateKey = ""
     @Published package private(set) var byoGitHubPrivateKeyStored = false
+    @Published package private(set) var byoGitHubCredentialsVerified = false
+    @Published package private(set) var isBYOGitHubVerificationInProgress = false
     @Published package private(set) var byoGitHubCredentialStatus = "Customer-owned GitHub App credentials are not stored."
     @Published package var logText = "No logs loaded."
     @Published package var lastError: String?
@@ -1374,6 +1385,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func storeBYOGitHubAppCredentials() {
         defer { pendingBYOGitHubAppPrivateKey = "" }
+        invalidateBYOGitHubVerificationContext()
         guard byoGitHubCredentialOnboardingAvailable else {
             lastError = "Customer-owned GitHub App onboarding is unavailable in this build."
             byoGitHubCredentialStatus = lastError ?? "Unavailable"
@@ -1409,6 +1421,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func clearBYOGitHubAppCredentials() {
         pendingBYOGitHubAppPrivateKey = ""
         pendingBYOGitHubAppId = ""
+        invalidateBYOGitHubVerificationContext()
         do {
             try dependencies.secretStore.deleteSecret(
                 account: BYOGitHubAppKeychainAccount.privateKey
@@ -1421,6 +1434,145 @@ package final class NeonDiffDesktopModel: ObservableObject {
         } catch {
             lastError = "The customer-owned GitHub App private key could not be removed from Keychain."
             byoGitHubCredentialStatus = lastError ?? "Removal failed"
+        }
+    }
+
+    package func verifyBYOGitHubAppCredentials() {
+        guard byoGitHubCredentialOnboardingAvailable else {
+            lastError = "Customer-owned GitHub App verification is unavailable in this build."
+            byoGitHubCredentialStatus = lastError ?? "Unavailable"
+            return
+        }
+        guard !isBYOGitHubVerificationInProgress else { return }
+        guard let appId = storedBYOGitHubAppId else {
+            lastError = "Store a valid customer-owned GitHub App ID before verification."
+            byoGitHubCredentialStatus = lastError ?? "App ID missing"
+            return
+        }
+
+        let privateKey: String
+        do {
+            guard let stored = try dependencies.secretStore.readSecret(
+                account: BYOGitHubAppKeychainAccount.privateKey,
+                allowUserInteraction: true
+            ) else {
+                throw BYOGitHubAppCredentialError.invalidPrivateKey
+            }
+            privateKey = try BYOGitHubAppCredentialValidator.normalizedPrivateKey(stored)
+        } catch {
+            byoGitHubCredentialsVerified = false
+            lastError = "The customer-owned GitHub App private key could not be read safely from Keychain."
+            byoGitHubCredentialStatus = lastError ?? "Keychain read failed"
+            return
+        }
+
+        let arguments = [
+            "doctor", "github",
+            "--config", configPath,
+            "--github-app-id", appId,
+            "--github-app-private-key-stdin", "true",
+            "--json"
+        ]
+        let safeCommand = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --github-app-id \(shellQuote(appId)) --github-app-private-key-stdin true --json < [secure Keychain input]"
+        let verificationContext = BYOGitHubVerificationContext(
+            appId: appId,
+            cliPath: cliPath,
+            configPath: configPath,
+            repositories: repos.filter(\.enabled).map(\.name).sorted()
+        )
+        var standardInput = Data(privateKey.utf8)
+        let executablePath = cliPath
+        let cli = dependencies.cli
+        isBYOGitHubVerificationInProgress = true
+        byoGitHubCredentialsVerified = false
+        lastError = nil
+        lastCommandLine = safeCommand
+        byoGitHubCredentialStatus = "Verifying the configured repositories against the customer-owned GitHub App installation…"
+
+        Task.detached {
+            defer {
+                standardInput.resetBytes(in: 0..<standardInput.count)
+            }
+            do {
+                let result = try await cli.run(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    standardInput: standardInput,
+                    timeout: 30
+                )
+                await MainActor.run {
+                    self.applyBYOGitHubVerificationResult(result, expectedContext: verificationContext)
+                }
+            } catch {
+                await MainActor.run {
+                    self.isBYOGitHubVerificationInProgress = false
+                    self.byoGitHubCredentialsVerified = false
+                    self.lastError = "Customer-owned GitHub App verification failed safely."
+                    self.byoGitHubCredentialStatus = self.lastError ?? "Verification failed"
+                    self.logText = "GitHub verification did not produce authoritative installation/repository proof."
+                }
+            }
+        }
+    }
+
+    private func applyBYOGitHubVerificationResult(
+        _ result: CLIRunResult,
+        expectedContext: BYOGitHubVerificationContext
+    ) {
+        isBYOGitHubVerificationInProgress = false
+        let currentContext = storedBYOGitHubAppId.map { appId in
+            BYOGitHubVerificationContext(
+                appId: appId,
+                cliPath: cliPath,
+                configPath: configPath,
+                repositories: repos.filter(\.enabled).map(\.name).sorted()
+            )
+        }
+        guard currentContext == expectedContext else {
+            byoGitHubCredentialsVerified = false
+            lastError = "GitHub App verification context changed before the check completed."
+            byoGitHubCredentialStatus = "Configuration changed. Verify App access again."
+            logText = "Stale GitHub App verification evidence was discarded."
+            return
+        }
+        guard result.exitCode == 0,
+              let data = result.stdout.data(using: .utf8),
+              let report = try? JSONDecoder().decode(BYOGitHubDoctorReport.self, from: data),
+              report.ok,
+              report.command == "doctor github",
+              report.appCredentials.source == "stdin",
+              report.appCredentials.appIdConfigured,
+              report.appCredentials.privateKeyConfigured,
+              report.github.canPostAsApp,
+              report.github.readMode == "app_installation",
+              !report.github.readChecks.isEmpty,
+              report.github.readChecks.allSatisfy({ check in
+                  check.ok
+                      && check.installationIdPresent
+                      && check.appCanReadMetadata
+                      && check.appCanReadPullRequests
+              })
+        else {
+            byoGitHubCredentialsVerified = false
+            lastError = "GitHub did not verify every configured repository through this App installation."
+            byoGitHubCredentialStatus = lastError ?? "Verification failed"
+            logText = "GitHub verification failed closed. Confirm the App installation, selected repositories, and required permissions."
+            return
+        }
+
+        let repositories = report.github.readChecks.map(\.repo).sorted().joined(separator: ", ")
+        byoGitHubCredentialsVerified = true
+        lastError = nil
+        byoGitHubCredentialStatus = "Verified App installation access for \(repositories). Worker dry/live review has not run yet."
+        logText = "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
+    }
+
+    private func invalidateBYOGitHubVerificationContext() {
+        guard byoGitHubCredentialOnboardingAvailable else { return }
+        byoGitHubCredentialsVerified = false
+        guard !isBYOGitHubVerificationInProgress else { return }
+        if byoGitHubCredentialsStored {
+            byoGitHubCredentialStatus = "Configuration changed. Verify App access again."
         }
     }
 
@@ -3114,6 +3266,48 @@ private enum GitHubDesktopAuthorizationStateError: LocalizedError {
             message
         }
     }
+}
+
+private struct BYOGitHubDoctorReport: Decodable {
+    let ok: Bool
+    let command: String
+    let appCredentials: Credentials
+    let github: GitHub
+
+    struct Credentials: Decodable {
+        let appIdConfigured: Bool
+        let privateKeyConfigured: Bool
+        let source: String
+    }
+
+    struct GitHub: Decodable {
+        let canPostAsApp: Bool
+        let readMode: String
+        let readChecks: [ReadCheck]
+    }
+
+    struct ReadCheck: Decodable {
+        let repo: String
+        let ok: Bool
+        let installationIdPresent: Bool
+        let appCanReadMetadata: Bool
+        let appCanReadPullRequests: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case repo
+            case ok
+            case installationIdPresent = "installation_id_present"
+            case appCanReadMetadata = "app_can_read_metadata"
+            case appCanReadPullRequests = "app_can_read_pull_requests"
+        }
+    }
+}
+
+private struct BYOGitHubVerificationContext: Equatable, Sendable {
+    let appId: String
+    let cliPath: String
+    let configPath: String
+    let repositories: [String]
 }
 
 private let licenseKeyAccount = "license/default"

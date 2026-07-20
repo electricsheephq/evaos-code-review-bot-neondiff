@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import NeonDiffDesktopAppCore
 import NeonDiffDesktopCore
@@ -92,6 +93,46 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.byoGitHubPrivateKeyStored)
         #expect(fixture.model.pendingBYOGitHubAppId.isEmpty)
         #expect(fixture.model.pendingBYOGitHubAppPrivateKey.isEmpty)
+    }
+
+    @Test func explicitVerificationReadsKeychainAndUsesOnlyBoundedCLIStdin() async throws {
+        let doctorResult = CLIRunResult(
+            exitCode: 0,
+            stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"acme/demo","ok":true,"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+            stderr: ""
+        )
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(doctorResult)],
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await fixture.cli.waitUntilCallCount(1)
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+
+        let call = try #require(fixture.cli.calls.first)
+        #expect(call.arguments == [
+            "doctor", "github",
+            "--config", fixture.model.configPath,
+            "--github-app-id", "123456",
+            "--github-app-private-key-stdin", "true",
+            "--json"
+        ])
+        #expect(call.standardInput == Data(fixturePrivateKey.utf8))
+        #expect(!call.arguments.joined(separator: " ").contains(fixturePrivateKey))
+        #expect(!fixture.model.lastCommandLine.contains(fixturePrivateKey))
+        #expect(fixture.model.byoGitHubCredentialsVerified)
+        #expect(!fixture.model.isBYOGitHubVerificationInProgress)
+        #expect(fixture.model.byoGitHubCredentialStatus.contains("acme/demo"))
+
+        fixture.model.configPath = "/tmp/changed-config.json"
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.byoGitHubCredentialStatus.contains("Verify App access again"))
     }
 }
 
