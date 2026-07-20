@@ -246,6 +246,20 @@ public configuration values, not secrets, and do not override the server-side
 kill switch. Generic CLI status/deactivate and daemon-admission validation still
 require exact-candidate integration proof under #630.
 
+The invite-only B0 technical beta has a separate, mutually exclusive release
+bundle contract:
+
+- `NeonDiffPaidBetaContract = paid-mac-beta-byo-v1`
+- `NeonDiffBYOGitHubEnabled = true`
+- no managed-broker enable marker or broker origin
+
+The build inputs are `NEONDIFF_DESKTOP_PAID_BETA_CONTRACT` and
+`NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED`. That exact release-only contract enables
+the existing direct/BYO GitHub path and API-backed native activation without a
+manual UserDefaults rollout mutation. It does not make the managed App path
+available and is not proof that GitHub private-key custody, the compatible CLI
+package, billing, signing, or customer canaries have passed.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and

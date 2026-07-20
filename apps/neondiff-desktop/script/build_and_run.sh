@@ -42,6 +42,47 @@ SPARKLE_PUBLIC_KEY="${NEONDIFF_SPARKLE_PUBLIC_ED_KEY:-}"
 PAID_BETA_CONTRACT="${NEONDIFF_DESKTOP_PAID_BETA_CONTRACT:-}"
 MANAGED_GITHUB_BROKER_ENABLED="${NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED:-}"
 GITHUB_BROKER_ORIGIN="${NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN:-}"
+BYO_GITHUB_ENABLED="${NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED:-}"
+
+resolve_production_contract_mode() {
+  if [ -z "$PAID_BETA_CONTRACT" ] \
+    && [ -z "$MANAGED_GITHUB_BROKER_ENABLED" ] \
+    && [ -z "$GITHUB_BROKER_ORIGIN" ] \
+    && [ -z "$BYO_GITHUB_ENABLED" ]; then
+    echo "none"
+    return
+  fi
+
+  if [ "$BUILD_CONFIGURATION" != "release" ]; then
+    echo "production configuration is accepted only for release bundles" >&2
+    return 2
+  fi
+
+  if [ "$PAID_BETA_CONTRACT" = "paid-mac-beta-v1" ] \
+    && [ "$MANAGED_GITHUB_BROKER_ENABLED" = "true" ] \
+    && [ "$GITHUB_BROKER_ORIGIN" = "https://neondiff-license.fly.dev" ] \
+    && [ -z "$BYO_GITHUB_ENABLED" ]; then
+    echo "managed"
+    return
+  fi
+
+  if [ "$PAID_BETA_CONTRACT" = "paid-mac-beta-byo-v1" ] \
+    && [ "$BYO_GITHUB_ENABLED" = "true" ] \
+    && [ -z "$MANAGED_GITHUB_BROKER_ENABLED" ] \
+    && [ -z "$GITHUB_BROKER_ORIGIN" ]; then
+    echo "byo"
+    return
+  fi
+
+  echo "production configuration must match exactly one paid beta contract" >&2
+  return 2
+}
+
+PRODUCTION_CONTRACT_MODE="$(resolve_production_contract_mode)"
+if [ "$MODE" = "production-contract-check" ]; then
+  echo "$PRODUCTION_CONTRACT_MODE"
+  exit 0
+fi
 
 if [ -x "$APP_BINARY" ]; then
   while IFS= read -r pid; do
@@ -119,21 +160,17 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
-if [ -n "$PAID_BETA_CONTRACT" ] || [ -n "$MANAGED_GITHUB_BROKER_ENABLED" ] || [ -n "$GITHUB_BROKER_ORIGIN" ]; then
-  if [ "$BUILD_CONFIGURATION" != "release" ]; then
-    echo "managed GitHub production configuration is accepted only for release bundles" >&2
-    exit 2
-  fi
-  if [ "$PAID_BETA_CONTRACT" != "paid-mac-beta-v1" ] \
-    || [ "$MANAGED_GITHUB_BROKER_ENABLED" != "true" ] \
-    || [ "$GITHUB_BROKER_ORIGIN" != "https://neondiff-license.fly.dev" ]; then
-    echo "managed GitHub production configuration must match the exact paid beta contract" >&2
-    exit 2
-  fi
-  /usr/libexec/PlistBuddy -c "Add :NeonDiffPaidBetaContract string $PAID_BETA_CONTRACT" "$INFO_PLIST"
-  /usr/libexec/PlistBuddy -c "Add :NeonDiffManagedGitHubBrokerEnabled bool true" "$INFO_PLIST"
-  /usr/libexec/PlistBuddy -c "Add :NeonDiffGitHubBrokerOrigin string $GITHUB_BROKER_ORIGIN" "$INFO_PLIST"
-fi
+case "$PRODUCTION_CONTRACT_MODE" in
+  managed)
+    /usr/libexec/PlistBuddy -c "Add :NeonDiffPaidBetaContract string $PAID_BETA_CONTRACT" "$INFO_PLIST"
+    /usr/libexec/PlistBuddy -c "Add :NeonDiffManagedGitHubBrokerEnabled bool true" "$INFO_PLIST"
+    /usr/libexec/PlistBuddy -c "Add :NeonDiffGitHubBrokerOrigin string $GITHUB_BROKER_ORIGIN" "$INFO_PLIST"
+    ;;
+  byo)
+    /usr/libexec/PlistBuddy -c "Add :NeonDiffPaidBetaContract string $PAID_BETA_CONTRACT" "$INFO_PLIST"
+    /usr/libexec/PlistBuddy -c "Add :NeonDiffBYOGitHubEnabled bool true" "$INFO_PLIST"
+    ;;
+esac
 
 if [ -n "$SPARKLE_FEED_URL" ] && [ -n "$SPARKLE_PUBLIC_KEY" ]; then
   /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $SPARKLE_FEED_URL" "$INFO_PLIST"

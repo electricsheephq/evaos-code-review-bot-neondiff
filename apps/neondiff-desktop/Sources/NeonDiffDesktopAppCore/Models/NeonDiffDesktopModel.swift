@@ -1552,6 +1552,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// preserving the existing rollback control for legacy/local builds.
     package var activationHandoffEnabled: Bool {
         managedGitHubAvailable
+            || dependencies.productionBoundary.byoGitHubEnabled
             || dependencies.preferences.bool(forKey: activationHandoffEnabledKey)
     }
 
@@ -1571,8 +1572,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         // and activation canaries pass. When enabled, it uses the CLI's explicit
         // no-local-state mode: the app-owned Keychain item remains the only raw
         // credential copy and the key crosses only over bounded stdin.
+        let bundleEnablesActivation = dependencies.productionBoundary.byoGitHubEnabled
+        let rolloutEnablesActivation = dependencies.preferences.bool(forKey: activationCliBackedEnabledKey)
         guard dependencies.productionBoundary.nativeActivationBrokerVerified,
-              dependencies.preferences.bool(forKey: activationCliBackedEnabledKey)
+              bundleEnablesActivation || rolloutEnablesActivation
         else {
             return nil
         }

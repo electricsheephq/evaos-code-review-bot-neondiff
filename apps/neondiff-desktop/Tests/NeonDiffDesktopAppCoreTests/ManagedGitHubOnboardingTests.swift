@@ -159,15 +159,25 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
 
 @MainActor
 @Suite(.timeLimit(.minutes(1))) struct ManagedGitHubOnboardingTests {
-    @Test func productionBoundaryRequiresExactSignedBuildContract() {
+    @Test func productionBoundaryRequiresExactManagedOrBYOSignedBuildContract() {
         let valid = DesktopProductionBoundary.resolve(infoDictionary: [
             "NeonDiffPaidBetaContract": "paid-mac-beta-v1",
             "NeonDiffManagedGitHubBrokerEnabled": true,
             "NeonDiffGitHubBrokerOrigin": "https://neondiff-license.fly.dev"
         ])
         #expect(valid.nativeActivationBrokerVerified)
+        #expect(!valid.byoGitHubEnabled)
         #expect(valid.managedGitHubBrokerOrigin?.absoluteString == "https://neondiff-license.fly.dev")
         #expect(valid.managedGitHubAppClientID == "Iv23liNr6jOVuCFC7DkN")
+
+        let byo = DesktopProductionBoundary.resolve(infoDictionary: [
+            "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+            "NeonDiffBYOGitHubEnabled": true
+        ])
+        #expect(byo.nativeActivationBrokerVerified)
+        #expect(byo.byoGitHubEnabled)
+        #expect(byo.managedGitHubBrokerOrigin == nil)
+        #expect(byo.managedGitHubAppClientID == nil)
 
         for invalid in [
             [
@@ -184,10 +194,55 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
                 "NeonDiffPaidBetaContract": "paid-mac-beta-v1",
                 "NeonDiffManagedGitHubBrokerEnabled": false,
                 "NeonDiffGitHubBrokerOrigin": "https://neondiff-license.fly.dev"
+            ],
+            [
+                "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+                "NeonDiffBYOGitHubEnabled": false
+            ],
+            [
+                "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+                "NeonDiffBYOGitHubEnabled": true,
+                "NeonDiffManagedGitHubBrokerEnabled": true,
+                "NeonDiffGitHubBrokerOrigin": "https://neondiff-license.fly.dev"
             ]
         ] {
             #expect(!DesktopProductionBoundary.resolve(infoDictionary: invalid).nativeActivationBrokerVerified)
         }
+    }
+
+    @Test func exactBYOBoundaryEnablesCLIBackedActivationWithoutPreferenceMutation() async throws {
+        let boundary = DesktopProductionBoundary.resolve(infoDictionary: [
+            "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+            "NeonDiffBYOGitHubEnabled": true
+        ])
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: """
+                {"command":"license activate","ok":true,"status":"active","source":"api",
+                 "checkedAt":"2026-07-20T00:00:00.000Z",
+                 "entitlement":{"status":"active","repoVisibilityScope":"private",
+                 "privateRepoAllowed":true,"updateEntitlement":true}}
+                """,
+                stderr: ""
+            ))],
+            productionBoundary: boundary
+        )
+        #expect(fixture.model.activationHandoffEnabled)
+        fixture.model.repos = [RepoMonitor(name: "electric/private", enabled: true)]
+        fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        await fixture.model.submitActivation()
+
+        let call = try #require(fixture.cli.calls.first)
+        #expect(call.standardInput == Data("NDL-BYO-0123456789".utf8))
+        #expect(call.arguments.allSatisfy { !$0.contains("NDL-BYO") })
+        #expect(call.arguments.contains("--persist-local-state"))
+        #expect(call.arguments.contains("--license-machine-id"))
+        #expect(call.arguments.contains("electric/private"))
+        #expect(fixture.model.activationState == .active)
+        #expect(!fixture.preferences.bool(forKey: "neondiff.activationCliBackedValidation"))
     }
 
     @Test func managedConnectUsesBrokerAndKeychainIdentityWithoutLegacyUserTokenFallback() async throws {
