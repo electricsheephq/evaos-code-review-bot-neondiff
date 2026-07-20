@@ -4,8 +4,10 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
+  realpathSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -83,17 +85,23 @@ function assertOutputDirectory(repoRoot, requestedOutputDirectory) {
     fail("output directory must be absolute");
   }
   const outputDirectory = resolve(requestedOutputDirectory);
-  const relativeToRepo = relative(repoRoot, outputDirectory);
-  if (relativeToRepo === "" || (!relativeToRepo.startsWith(`..${sep}`) && relativeToRepo !== "..")) {
-    fail("output directory must be outside the repository");
-  }
   if (existsSync(outputDirectory)) {
+    if (lstatSync(outputDirectory).isSymbolicLink()) fail("output directory must not be a symbolic link");
     if (!statSync(outputDirectory).isDirectory()) fail("output path must be a directory");
     if (readdirSync(outputDirectory).length > 0) fail("output directory must be empty");
   } else {
     mkdirSync(outputDirectory, { recursive: true, mode: 0o700 });
   }
-  return outputDirectory;
+  const realRepoRoot = realpathSync(repoRoot);
+  const realOutputDirectory = realpathSync(outputDirectory);
+  const relativeToRepo = relative(realRepoRoot, realOutputDirectory);
+  if (relativeToRepo === "" || (!relativeToRepo.startsWith(`..${sep}`) && relativeToRepo !== "..")) {
+    fail("output directory must resolve outside the repository");
+  }
+  if ((statSync(realOutputDirectory).mode & 0o077) !== 0) {
+    fail("output directory must be private to the current user (0700)");
+  }
+  return realOutputDirectory;
 }
 
 function ensureClean(repoRoot, stage) {
