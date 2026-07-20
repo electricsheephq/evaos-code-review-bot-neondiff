@@ -115,6 +115,8 @@ struct OnboardingWizardView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if model.managedGitHubAvailable {
                     managedGitHubSection
+                } else if model.byoGitHubCredentialOnboardingAvailable {
+                    byoGitHubSection
                 } else {
                     OperatorSection("Mode") {
                         Picker("Review Mode", selection: $model.onboardingFlow.mode) {
@@ -140,6 +142,65 @@ struct OnboardingWizardView: View {
             }
         }
         .scrollContentBackground(.hidden)
+    }
+
+    private var byoGitHubSection: some View {
+        OperatorSection("Customer-owned GitHub App") {
+            HStack(spacing: 10) {
+                OperatorBadge(
+                    text: model.byoGitHubAppIdStored ? "APP ID STORED" : "APP ID NEEDED",
+                    color: model.byoGitHubAppIdStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                )
+                OperatorBadge(
+                    text: model.byoGitHubPrivateKeyStored ? "KEYCHAIN KEY STORED" : "PRIVATE KEY NEEDED",
+                    color: model.byoGitHubPrivateKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                )
+            }
+
+            Text("This invite-only technical beta uses a GitHub App owned by you. Paste the App ID and its unencrypted private-key PEM. The private key is stored only in this Mac's Keychain and plaintext input is cleared after every attempt.")
+                .operatorBodyText()
+                .fixedSize(horizontal: false, vertical: true)
+
+            OperatorTextField(
+                title: "GitHub App ID",
+                text: $model.pendingBYOGitHubAppId
+            )
+            .accessibilityIdentifier("neondiff-onboarding-byo-github-app-id")
+
+            OperatorTextField(
+                title: "GitHub App Private Key PEM",
+                text: $model.pendingBYOGitHubAppPrivateKey,
+                secure: true
+            )
+            .accessibilityIdentifier("neondiff-onboarding-byo-github-private-key")
+
+            HStack(spacing: 10) {
+                Button("Store in Keychain") {
+                    model.storeBYOGitHubAppCredentials()
+                }
+                .disabled(
+                    model.pendingBYOGitHubAppId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || model.pendingBYOGitHubAppPrivateKey.isEmpty
+                )
+                .accessibilityIdentifier("neondiff-onboarding-byo-github-store")
+
+                Button("Remove Credentials", role: .destructive) {
+                    model.clearBYOGitHubAppCredentials()
+                }
+                .disabled(!model.byoGitHubAppIdStored && !model.byoGitHubPrivateKeyStored)
+                .accessibilityIdentifier("neondiff-onboarding-byo-github-clear")
+            }
+
+            Text(model.byoGitHubCredentialStatus)
+                .font(.caption)
+                .foregroundStyle(model.byoGitHubCredentialsStored ? NeonDiffTheme.accent : NeonDiffTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Continue becomes available after local credential custody is complete. Installation/repository verification and a live review are separate gates and are not claimed here.")
+                .font(.caption)
+                .foregroundStyle(NeonDiffTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var managedGitHubSection: some View {
