@@ -1552,6 +1552,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// preserving the existing rollback control for legacy/local builds.
     package var activationHandoffEnabled: Bool {
         managedGitHubAvailable
+            || dependencies.productionBoundary.byoGitHubEnabled
             || dependencies.preferences.bool(forKey: activationHandoffEnabledKey)
     }
 
