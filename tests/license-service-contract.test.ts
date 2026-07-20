@@ -342,6 +342,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
       config,
       licenseKey: key,
       repo: "owner/private",
+      now: LIFECYCLE_START,
       fetchImpl: service.fetchFor("machine-a")
     });
     expect(activated.status).toBe("active");
@@ -358,6 +359,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
       config,
       repo: "owner/private",
       refresh: true,
+      now: LIFECYCLE_START,
       fetchImpl: service.fetchFor("machine-a")
     });
     expect(activeAfterRenewal.status).toBe("active");
@@ -379,24 +381,29 @@ describe("client ↔ service contract (real src/license.ts against real service)
       config,
       repo: "owner/private",
       refresh: true,
+      now: cancellationTime,
       fetchImpl: service.fetchFor("machine-a")
     });
     expect(activeAfterCancellation.status).toBe("active");
 
-    service.setNow(new Date("2026-07-21T00:00:00.000Z"));
+    const afterOriginalTrialTime = new Date("2026-07-21T00:00:00.000Z");
+    service.setNow(afterOriginalTrialTime);
     const activeAfterOriginalTrial = await getLicenseStatus({
       config,
       repo: "owner/private",
       refresh: true,
+      now: afterOriginalTrialTime,
       fetchImpl: service.fetchFor("machine-a")
     });
     expect(activeAfterOriginalTrial.status).toBe("active");
 
-    service.setNow(new Date("2026-08-13T00:00:01.000Z"));
+    const paidEndTime = new Date("2026-08-13T00:00:01.000Z");
+    service.setNow(paidEndTime);
     const expired = await getLicenseStatus({
       config,
       repo: "owner/private",
       refresh: true,
+      now: paidEndTime,
       fetchImpl: service.fetchFor("machine-a")
     });
     expect(expired.status).toBe("expired");
@@ -415,6 +422,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
     const activated = await activateLicense({
       config,
       licenseKey: key,
+      now: LIFECYCLE_START,
       fetchImpl: service.fetchFor("machine-r")
     });
     expect(activated.status).toBe("active");
@@ -428,6 +436,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
     const revoked = await getLicenseStatus({
       config,
       refresh: true,
+      now: LIFECYCLE_START,
       fetchImpl: service.fetchFor("machine-r")
     });
     expect(revoked.status).toBe("revoked");
@@ -449,6 +458,7 @@ describe("client ↔ service contract (real src/license.ts against real service)
     const stillRevoked = await getLicenseStatus({
       config,
       refresh: true,
+      now: LIFECYCLE_START,
       fetchImpl: service.fetchFor("machine-r")
     });
     expect(stillRevoked.status).toBe("revoked");
