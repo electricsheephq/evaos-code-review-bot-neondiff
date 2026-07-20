@@ -74,6 +74,13 @@ private final class VisualProofPreferences: DesktopPreferences, @unchecked Senda
     func set(_ value: Bool, forKey key: String) {
         lock.withLock { booleans[key] = value }
     }
+
+    func removeValue(forKey key: String) {
+        lock.withLock {
+            strings.removeValue(forKey: key)
+            booleans.removeValue(forKey: key)
+        }
+    }
 }
 
 private struct VisualProofClock: DesktopClock {

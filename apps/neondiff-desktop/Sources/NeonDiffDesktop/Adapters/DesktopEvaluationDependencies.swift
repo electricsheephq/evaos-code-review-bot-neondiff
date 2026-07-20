@@ -70,6 +70,12 @@ private final class EvaluationPreferences: DesktopPreferences, @unchecked Sendab
     func bool(forKey key: String) -> Bool { lock.withLock { booleans[key] ?? false } }
     func set(_ value: String, forKey key: String) { lock.withLock { strings[key] = value } }
     func set(_ value: Bool, forKey key: String) { lock.withLock { booleans[key] = value } }
+    func removeValue(forKey key: String) {
+        lock.withLock {
+            strings.removeValue(forKey: key)
+            booleans.removeValue(forKey: key)
+        }
+    }
 }
 
 private struct EvaluationClock: DesktopClock {

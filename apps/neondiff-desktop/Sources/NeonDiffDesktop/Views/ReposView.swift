@@ -18,6 +18,8 @@ struct ReposView: View {
         VStack(alignment: .leading, spacing: 14) {
             if model.managedGitHubAvailable {
                 managedGitHubConnection
+            } else if model.byoGitHubCredentialOnboardingAvailable {
+                byoGitHubCredentials
             } else {
                 OperatorSection("GitHub Connection") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -284,6 +286,62 @@ struct ReposView: View {
             PageBottomSentinel(section: "repos")
         }
         .disabled(!model.canEditProviderConfiguration)
+    }
+
+    private var byoGitHubCredentials: some View {
+        OperatorSection("Customer-owned GitHub App") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    OperatorBadge(
+                        text: model.byoGitHubAppIdStored ? "APP ID STORED" : "APP ID NEEDED",
+                        color: model.byoGitHubAppIdStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                    OperatorBadge(
+                        text: model.byoGitHubPrivateKeyStored ? "KEYCHAIN KEY STORED" : "PRIVATE KEY NEEDED",
+                        color: model.byoGitHubPrivateKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                }
+
+                Text("B0 uses a GitHub App owned and installed by the invited customer. Enter its numeric App ID and paste the full unencrypted PEM private key. NeonDiff stores the key in this Mac's Keychain; it is not written to config or command arguments.")
+                    .operatorBodyText()
+                    .fixedSize(horizontal: false, vertical: true)
+
+                TextField("GitHub App ID", text: $model.pendingBYOGitHubAppId)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("neondiff-byo-github-app-id")
+
+                SecureField("Paste GitHub App private key PEM", text: $model.pendingBYOGitHubAppPrivateKey)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("neondiff-byo-github-private-key")
+
+                HStack(spacing: 10) {
+                    Button { model.storeBYOGitHubAppCredentials() } label: {
+                        Label("Store in Keychain", systemImage: "key.fill")
+                    }
+                    .disabled(
+                        model.pendingBYOGitHubAppId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || model.pendingBYOGitHubAppPrivateKey.isEmpty
+                    )
+                    .accessibilityIdentifier("neondiff-byo-github-store")
+
+                    Button(role: .destructive) { model.clearBYOGitHubAppCredentials() } label: {
+                        Label("Remove Credentials", systemImage: "trash")
+                    }
+                    .disabled(!model.byoGitHubAppIdStored && !model.byoGitHubPrivateKeyStored)
+                    .accessibilityIdentifier("neondiff-byo-github-clear")
+                }
+
+                Text(model.byoGitHubCredentialStatus)
+                    .font(.caption)
+                    .foregroundStyle(model.byoGitHubCredentialsStored ? NeonDiffTheme.accent : NeonDiffTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("Credential storage is only this slice. GitHub installation/repository verification and worker execution remain blocked until the next B0 integration slice passes.")
+                    .font(.caption)
+                    .foregroundStyle(NeonDiffTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private var managedGitHubConnection: some View {

@@ -198,6 +198,10 @@ final class MemoryPreferences: DesktopPreferences, @unchecked Sendable {
     func set(_ value: Bool, forKey key: String) {
         values.update { $0[key] = .bool(value) }
     }
+
+    func removeValue(forKey key: String) {
+        _ = values.update { $0.removeValue(forKey: key) }
+    }
 }
 
 final class TestClock: DesktopClock, @unchecked Sendable {

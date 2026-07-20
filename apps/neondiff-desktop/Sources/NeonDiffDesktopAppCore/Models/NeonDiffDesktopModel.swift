@@ -126,6 +126,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var selectedManagedGitHubRepository: String?
     @Published package var managedGitHubRecovery: GitHubConnectionRecovery?
     @Published package var isManagedGitHubConnectionInProgress = false
+    @Published package var pendingBYOGitHubAppId = ""
+    @Published package var pendingBYOGitHubAppPrivateKey = ""
+    @Published package private(set) var byoGitHubPrivateKeyStored = false
+    @Published package private(set) var byoGitHubCredentialStatus = "Customer-owned GitHub App credentials are not stored."
     @Published package var logText = "No logs loaded."
     @Published package var lastError: String?
     @Published package var lastCommandLine = ""
@@ -205,6 +209,21 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && dependencies.githubBroker != nil
     }
 
+    package var byoGitHubCredentialOnboardingAvailable: Bool {
+        dependencies.productionBoundary.byoGitHubEnabled
+            && dependencies.productionBoundary.managedGitHubBrokerOrigin == nil
+    }
+
+    package var byoGitHubAppIdStored: Bool {
+        storedBYOGitHubAppId != nil
+    }
+
+    package var byoGitHubCredentialsStored: Bool {
+        byoGitHubCredentialOnboardingAvailable
+            && byoGitHubAppIdStored
+            && byoGitHubPrivateKeyStored
+    }
+
     package var managedGitHubStatusText: String {
         switch managedGitHubConnectionState {
         case .quarantined:
@@ -234,6 +253,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var canAdvanceOnboarding: Bool {
         if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil {
             guard hasVerifiedManagedGitHubSelection else { return false }
+        }
+        if dependencies.productionBoundary.byoGitHubEnabled {
+            guard byoGitHubCredentialsStored else { return false }
         }
         return onboardingFlow.canAdvance
     }
@@ -287,9 +309,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
             .map(dependencies.secretStore.containsSecret(account:)) == true
         let githubUserTokenStored = dependencies.secretStore.containsSecret(account: githubUserTokenAccount)
         let githubRefreshTokenStored = dependencies.secretStore.containsSecret(account: githubRefreshTokenAccount)
+        let byoGitHubAppId = dependencies.preferences.string(forKey: byoGitHubAppIdPreferenceKey)
+            .flatMap { try? BYOGitHubAppCredentialValidator.normalizedAppId($0) }
         self.providers.providerKeyStored = providerKeyStored
         self.license.keyStored = dependencies.secretStore.containsSecret(account: licenseKeyAccount)
         self.github.userTokenStored = githubUserTokenStored
+        self.pendingBYOGitHubAppId = byoGitHubAppId ?? ""
+        self.byoGitHubPrivateKeyStored = dependencies.secretStore.containsSecret(
+            account: BYOGitHubAppKeychainAccount.privateKey
+        )
+        if byoGitHubAppId != nil, self.byoGitHubPrivateKeyStored {
+            self.byoGitHubCredentialStatus = "App ID stored; private key is in Keychain. Worker verification has not run yet."
+        }
         if githubUserTokenStored {
             self.github.installationState = "authorization stored; verify"
             self.githubAuthorizationStatus = "authorization stored; refresh repos to verify"
@@ -1338,6 +1369,58 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = nil
         } catch {
             lastError = NeonDiffRedactor.redact(error.localizedDescription)
+        }
+    }
+
+    package func storeBYOGitHubAppCredentials() {
+        defer { pendingBYOGitHubAppPrivateKey = "" }
+        guard byoGitHubCredentialOnboardingAvailable else {
+            lastError = "Customer-owned GitHub App onboarding is unavailable in this build."
+            byoGitHubCredentialStatus = lastError ?? "Unavailable"
+            return
+        }
+
+        do {
+            let appId = try BYOGitHubAppCredentialValidator.normalizedAppId(
+                pendingBYOGitHubAppId
+            )
+            let privateKey = try BYOGitHubAppCredentialValidator.normalizedPrivateKey(
+                pendingBYOGitHubAppPrivateKey
+            )
+            try dependencies.secretStore.setSecret(
+                privateKey,
+                account: BYOGitHubAppKeychainAccount.privateKey
+            )
+            dependencies.preferences.set(appId, forKey: byoGitHubAppIdPreferenceKey)
+            pendingBYOGitHubAppId = appId
+            byoGitHubPrivateKeyStored = true
+            lastError = nil
+            byoGitHubCredentialStatus = "App ID stored; private key is in Keychain. Worker verification has not run yet."
+            logText = "Customer-owned GitHub App credentials stored. The private key was not written to config or command arguments. Worker verification remains pending."
+        } catch {
+            byoGitHubPrivateKeyStored = dependencies.secretStore.containsSecret(
+                account: BYOGitHubAppKeychainAccount.privateKey
+            )
+            lastError = error.localizedDescription
+            byoGitHubCredentialStatus = "Credentials were not stored. Fix the App ID or private-key format and retry."
+        }
+    }
+
+    package func clearBYOGitHubAppCredentials() {
+        pendingBYOGitHubAppPrivateKey = ""
+        pendingBYOGitHubAppId = ""
+        do {
+            try dependencies.secretStore.deleteSecret(
+                account: BYOGitHubAppKeychainAccount.privateKey
+            )
+            dependencies.preferences.removeValue(forKey: byoGitHubAppIdPreferenceKey)
+            byoGitHubPrivateKeyStored = false
+            lastError = nil
+            byoGitHubCredentialStatus = "Customer-owned GitHub App credentials are not stored."
+            logText = "Customer-owned GitHub App credentials removed from this Mac."
+        } catch {
+            lastError = "The customer-owned GitHub App private key could not be removed from Keychain."
+            byoGitHubCredentialStatus = lastError ?? "Removal failed"
         }
     }
 
@@ -2517,6 +2600,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return repository
     }
 
+    private var storedBYOGitHubAppId: String? {
+        guard let value = dependencies.preferences.string(forKey: byoGitHubAppIdPreferenceKey)
+        else {
+            return nil
+        }
+        return try? BYOGitHubAppCredentialValidator.normalizedAppId(value)
+    }
+
     private func readGitHubStoredDate(account: String) -> Date? {
         Self.storedDate(secretStore: dependencies.secretStore, account: account)
     }
@@ -3042,6 +3133,7 @@ private let activationHandoffEnabledKey = "neondiff.activationHandoffEnabled"
 private let activationCheckoutEnabledKey = "neondiff.activationCheckoutEnabled"
 private let activationCliBackedEnabledKey = "neondiff.activationCliBackedValidation"
 private let managedGitHubInstallationIdKey = "neondiff.managedGitHubInstallationId"
+private let byoGitHubAppIdPreferenceKey = "neondiff.byoGitHubAppId"
 
 private enum ManagedGitHubModelError: Error {
     case installPageOpenFailed
