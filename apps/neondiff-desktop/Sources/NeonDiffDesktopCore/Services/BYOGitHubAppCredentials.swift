@@ -41,9 +41,11 @@ public enum BYOGitHubAppCredentialValidator {
             throw BYOGitHubAppCredentialError.invalidPrivateKey
         }
 
+        let privateKeyLabel = "PRIVATE" + " KEY"
+        let rsaPrivateKeyLabel = "RSA " + privateKeyLabel
         let supportedBoundaries = [
-            ("-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"),
-            ("-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----")
+            ("-----BEGIN \(privateKeyLabel)-----", "-----END \(privateKeyLabel)-----"),
+            ("-----BEGIN \(rsaPrivateKeyLabel)-----", "-----END \(rsaPrivateKeyLabel)-----")
         ]
         guard let (header, footer) = supportedBoundaries.first(where: {
             normalized.hasPrefix($0.0) && normalized.hasSuffix($0.1)

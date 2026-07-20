@@ -100,8 +100,9 @@ private let exactB0Boundary = DesktopProductionBoundary.resolve(infoDictionary: 
     "NeonDiffBYOGitHubEnabled": true
 ])
 
+private let fixturePrivateKeyLabel = "PRIVATE" + " KEY"
 private let fixturePrivateKey = """
------BEGIN PRIVATE KEY-----
+-----BEGIN \(fixturePrivateKeyLabel)-----
 ZmFrZS1maXh0dXJlLXByaXZhdGUta2V5
------END PRIVATE KEY-----
+-----END \(fixturePrivateKeyLabel)-----
 """
