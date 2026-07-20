@@ -136,6 +136,18 @@ function main() {
     fail(`candidate head is not the fetched protected-main head ${protectedMainHead}`);
   }
   ensureClean(repoRoot, "preflight");
+  execFileSync("npm", [
+    "run",
+    "build"
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (!existsSync(join(repoRoot, "dist", "src", "cli.js"))) {
+    fail("exact candidate build did not emit dist/src/cli.js");
+  }
+  ensureClean(repoRoot, "post-build");
 
   const outputDirectory = assertOutputDirectory(repoRoot, requestedOutputDirectory);
   const packagePath = join(repoRoot, "package.json");
@@ -147,10 +159,6 @@ function main() {
   if (packageMetadata.name !== "neondiff" || basePackageVersion !== "1.0.4") {
     fail("B0 candidate packaging requires the reviewed neondiff@1.0.4 source baseline");
   }
-  if (!existsSync(join(repoRoot, "dist", "src", "cli.js"))) {
-    fail("built dist/src/cli.js is required; run npm run build first");
-  }
-
   const installRoot = mkdtempSync(join(tmpdir(), "neondiff-b0-cli-install-"));
   let manifest;
   let tarballPath;
@@ -205,6 +213,7 @@ function main() {
       installRoot,
       tarballPath
     ], {
+      cwd: installRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"]
     });

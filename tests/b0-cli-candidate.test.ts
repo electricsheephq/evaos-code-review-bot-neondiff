@@ -66,6 +66,9 @@ describe("B0 access-controlled CLI candidate", () => {
     expect(script).toContain("npm");
     expect(script).toContain("pack");
     expect(script).toContain("check-packlist.mjs");
+    expect(script).toMatch(/execFileSync\("npm", \[\s*"run",\s*"build"/);
+    expect(script.search(/"run",\s*"build"/)).toBeLessThan(script.indexOf('"pack"'));
+    expect(script).toContain('ensureClean(repoRoot, "post-build")');
     expect(script).toContain("--persist-local-state");
     expect(script).toContain("--license-machine-id");
     expect(script).toContain("--github-app-id");
