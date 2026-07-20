@@ -1399,6 +1399,34 @@ describe("worker context budget preflight", () => {
     scenario.state.close();
   });
 
+  it("returns skipped_closed without posting when the pull merges during an active review", async () => {
+    const headSha = "d".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 518,
+      headSha,
+      commandComment: requestChangesComment(58, 518, headSha),
+      commandCommentId: 58,
+      closeAfterConsume: true
+    });
+
+    expect(scenario.error).toBeUndefined();
+    expect(scenario.result).toBe("skipped_closed");
+    expect(createdReviews).toEqual([]);
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 518, headSha)).toMatchObject({
+      status: "skipped",
+      error: "closed_or_merged_before_review state=closed; merged_at=2026-07-20T10:01:55.000Z"
+    });
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "closed-before-review-post.json"), "utf8"))).toMatchObject({
+      reason: "closed_or_merged_before_review",
+      state: "closed",
+      mergedAt: "2026-07-20T10:01:55.000Z",
+      expectedHeadSha: headSha,
+      liveHeadSha: headSha
+    });
+    scenario.state.close();
+  });
+
   it("keeps a successful review posted when the immediate post-review head lookup fails", async () => {
     const headSha = "c".repeat(40);
     const lookupSecret = "ghp_post_lookup_secret";
@@ -1562,6 +1590,7 @@ async function runOwnerPolicyReview(input: {
   moveHeadDuringPost?: string;
   moveHeadAfterConsume?: string;
   moveHeadAfterAuxiliaryPost?: string;
+  closeAfterConsume?: boolean;
   postReviewHeadLookupError?: Error;
   enableWalkthrough?: boolean;
   enableWalkthroughPost?: boolean;
@@ -1588,11 +1617,19 @@ async function runOwnerPolicyReview(input: {
   const pull = pullSummary(input.pullNumber, headSha);
   let livePull = pull;
   input.configureState?.(state);
-  if (input.moveHeadAfterConsume) {
+  if (input.moveHeadAfterConsume || input.closeAfterConsume) {
     const consume = state.tryConsumeReviewEventAuthorization.bind(state);
     vi.spyOn(state, "tryConsumeReviewEventAuthorization").mockImplementation((authorization) => {
       const consumed = consume(authorization);
-      livePull = pullSummary(input.pullNumber, input.moveHeadAfterConsume!);
+      if (input.closeAfterConsume) {
+        livePull = {
+          ...pull,
+          state: "closed",
+          merged_at: "2026-07-20T10:01:55.000Z"
+        };
+      } else {
+        livePull = pullSummary(input.pullNumber, input.moveHeadAfterConsume!);
+      }
       return consumed;
     });
   }

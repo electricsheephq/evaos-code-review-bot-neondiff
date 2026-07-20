@@ -231,7 +231,7 @@ export interface RetryFailedHeadResult {
   repo: string;
   pullNumber: number;
   headSha: string;
-  status: ReviewPullResult | "failed" | "dry_run" | "skipped_closed";
+  status: ReviewPullResult | "failed" | "dry_run";
 }
 
 export interface FailedHeadRetryTarget {
@@ -294,7 +294,8 @@ export type ReviewPullResult =
   | "skipped_capacity"
   | "skipped_context_budget"
   | "skipped_provider_cooldown"
-  | "skipped_stale_head";
+  | "skipped_stale_head"
+  | "skipped_closed";
 
 export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"]): boolean {
   switch (status) {
@@ -455,6 +456,7 @@ export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, stat
       return;
     case "posted_stale_head":
     case "skipped_stale_head":
+    case "skipped_closed":
       result.skippedStaleHead += 1;
       return;
     case "skipped_draft":
@@ -2008,12 +2010,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     exactOwnerReviewRequested = exactOwnerReviewRequested || authorization.status === "eligible";
     manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     if (reviewEventPolicyMode === "trusted_command_only") {
-      const liveBeforeConsume = await github.getPull(repo, pull.number);
-      const staleBeforeConsume = detectStalePullHead({ expected: pull, live: liveBeforeConsume, phase: "before_post" });
-      if (staleBeforeConsume) {
-        recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeConsume, evidenceDir });
-        return "skipped_stale_head";
-      }
+      const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+      if (lifecycleResult) return lifecycleResult;
     }
     const reviewEventResolution = decideAndConsumeReviewEvent({
       mode: reviewEventPolicyMode,
@@ -2025,12 +2023,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dryRun: false
     });
     const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
-    if (
-      reviewEventResolution.consumed &&
-      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
-    ) {
-      writeRedactedJson(join(evidenceDir, "review-event-decision.json"), reviewEventDecisionEvidence);
-      return "skipped_stale_head";
+    if (reviewEventResolution.consumed) {
+      const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+      if (lifecycleResult) {
+        writeRedactedJson(join(evidenceDir, "review-event-decision.json"), reviewEventDecisionEvidence);
+        return lifecycleResult;
+      }
     }
     writeRedactedJson(
       join(evidenceDir, "review-event-decision.json"),
@@ -2102,11 +2100,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       evidenceDir,
       walkthrough: plan.walkthrough
     });
-    if (
-      walkthroughPostAttempted &&
-      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
-    ) {
-      return "skipped_stale_head";
+    if (walkthroughPostAttempted) {
+      const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+      if (lifecycleResult) return lifecycleResult;
     }
     const enrichmentPostAttempted = Boolean(
       config.enrichment?.enabled === true && plan.enrichment?.postIssueComment && reviewGithub.canPostAsApp()
@@ -2120,16 +2116,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       enrichment: plan.enrichment,
       evidenceDir
     });
-    if (
-      enrichmentPostAttempted &&
-      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
-    ) {
-      return "skipped_stale_head";
+    if (enrichmentPostAttempted) {
+      const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+      if (lifecycleResult) return lifecycleResult;
     }
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
-    if (await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })) {
-      return "skipped_stale_head";
-    }
+    const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+    if (lifecycleResult) return lifecycleResult;
     const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
     const preservedPriorBlockingRow = Boolean(
       priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT"
@@ -3065,18 +3058,52 @@ function recordStaleHeadSkip(input: {
   });
 }
 
-async function recordStaleHeadBeforePostIfMoved(input: {
+async function recordPullLifecycleBeforePost(input: {
   state: ReviewStateStore;
   github: GitHubApi;
   repo: string;
   pull: PullRequestSummary;
   evidenceDir: string;
-}): Promise<boolean> {
+}): Promise<"skipped_stale_head" | "skipped_closed" | undefined> {
   const live = await input.github.getPull(input.repo, input.pull.number);
+  if (isClosedPull(live)) {
+    recordClosedPullBeforeReviewPost({ ...input, live });
+    return "skipped_closed";
+  }
   const stale = detectStalePullHead({ expected: input.pull, live, phase: "before_post" });
-  if (!stale) return false;
+  if (!stale) return undefined;
   recordStaleHeadSkip({ ...input, stale });
-  return true;
+  return "skipped_stale_head";
+}
+
+function recordClosedPullBeforeReviewPost(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  live: PullRequestSummary;
+  evidenceDir: string;
+}): void {
+  const state = input.live.state ?? "unknown";
+  const mergedAt = input.live.merged_at ? `; merged_at=${input.live.merged_at}` : "";
+  const error = `closed_or_merged_before_review state=${state}${mergedAt}`;
+  mkdirSync(input.evidenceDir, { recursive: true });
+  writeRedactedJson(join(input.evidenceDir, "closed-before-review-post.json"), {
+    reason: "closed_or_merged_before_review",
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    state,
+    ...(input.live.merged_at ? { mergedAt: input.live.merged_at } : {}),
+    expectedHeadSha: input.pull.head.sha,
+    liveHeadSha: input.live.head.sha
+  });
+  if (input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha)?.status === "posted") return;
+  input.state.recordProcessed({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    status: "skipped",
+    error
+  });
 }
 
 /**

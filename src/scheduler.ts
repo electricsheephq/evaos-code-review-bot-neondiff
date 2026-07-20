@@ -82,6 +82,7 @@ import {
 export interface ScheduledRunResult extends RunOnceResult {
   commandFetchErrors: number;
   statusCommentFailures: number;
+  repositoryScanErrors: Array<{ repo: string; error: string }>;
   queue: {
     enqueued: number;
     alreadyQueued: number;
@@ -186,9 +187,22 @@ export async function runScheduledCycleWithDeps(input: {
       continue;
     }
 
-    const pulls = input.options.pullNumber
-      ? [await input.github.getPull(repo, input.options.pullNumber)]
-      : await input.github.listOpenPulls(repo);
+    let pulls: PullRequestSummary[];
+    try {
+      pulls = input.options.pullNumber
+        ? [await input.github.getPull(repo, input.options.pullNumber)]
+        : await input.github.listOpenPulls(repo);
+    } catch (error) {
+      // A daemon-wide discovery cycle must keep draining already-durable queue
+      // work when one unrelated installation lookup fails. Explicit operator
+      // scopes stay fail-fast so a targeted command never reports partial work.
+      if (input.options.repo || input.options.pullNumber !== undefined) throw error;
+      result.repositoryScanErrors.push({
+        repo,
+        error: redactSecrets(error instanceof Error ? error.message : String(error))
+      });
+      continue;
+    }
     result.pullsSeen += pulls.length;
     const admittedPulls = pulls.filter((pull) => {
       const decision = authorizeAdmissionForVisibility(
@@ -1749,6 +1763,8 @@ function reviewResultStatusCommentState(
       return "provider_deferred";
     case "skipped_stale_head":
       return "stale_head";
+    case "skipped_closed":
+      return "closed_or_merged_before_review";
     case "skipped_capacity":
       return "provider_deferred";
     case "skipped_context_budget":
@@ -1947,6 +1963,8 @@ function readinessStateForReviewResult(
       return "skipped";
     case "skipped_stale_head":
       return "stale";
+    case "skipped_closed":
+      return "closed";
     case "skipped_draft":
     case "skipped_canary":
     case "skipped_command_stop":
@@ -1987,6 +2005,8 @@ function readinessReasonForReviewResult(
       return processed?.error ?? "context_budget_overflow";
     case "skipped_stale_head":
       return "stale_head";
+    case "skipped_closed":
+      return processed?.error ?? "closed_or_merged_before_review";
     case "skipped_draft":
       return "draft_pr";
     case "skipped_canary":
@@ -2208,6 +2228,7 @@ function updateReviewerSessionJobAfterReviewStatus(input: {
     case "skipped_command_explain":
     case "skipped_finishing_touch_draft":
     case "skipped_stale_head":
+    case "skipped_closed":
     case "skipped_context_budget":
       updateReviewerSessionJobFromQueueStatus(input, "skipped", "skipped");
       return;
@@ -2294,6 +2315,16 @@ function updateQueueJobAfterReviewStatus(input: {
         now: input.now
       });
       return;
+    case "skipped_closed": {
+      const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
+      input.state.updateReviewQueueJobState({
+        jobId: input.job.jobId,
+        state: "closed_retired",
+        lastError: processed?.error ?? "closed_or_merged_before_review",
+        now: input.now
+      });
+      return;
+    }
     case "skipped_processed":
       const processed = input.state.getProcessedReview(input.job.repo, input.pull.number, input.pull.head.sha);
       if (parseProviderCooldownError(processed?.error)) {
@@ -2654,6 +2685,7 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       result.skippedStaleHead += 1;
       result.queue.staleRetired += 1;
       break;
+    case "skipped_closed":
     case "closed_retired":
       result.queue.closedRetired += 1;
       break;
@@ -2688,6 +2720,7 @@ function emptyScheduledRunResult(): ScheduledRunResult {
     baselinedExisting: 0,
     commandFetchErrors: 0,
     statusCommentFailures: 0,
+    repositoryScanErrors: [],
     policySkips: [],
     queue: {
       enqueued: 0,

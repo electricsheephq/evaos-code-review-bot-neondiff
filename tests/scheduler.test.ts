@@ -99,6 +99,119 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("isolates an unscoped repository scan failure and retires unrelated merged queue work", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-scan-isolation-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/unavailable", "org/queued"]);
+    config.reviewConcurrency.maxActiveRuns = 1;
+    config.reviewScheduler!.maxProviderActive = 1;
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const queued = state.enqueueReviewQueueJob({
+      repo: "org/queued",
+      pullNumber: 2,
+      headSha: HEAD_B,
+      baseSha: "base"
+    }).job;
+    const mergedPull = pull("org/queued", 2, HEAD_B, "base", {
+      state: "closed",
+      mergedAt: "2026-07-20T10:01:55.000Z"
+    });
+    const statusCalls: StatusCommentCall[] = [];
+    const baseGithub = githubFromMap(new Map([["org/queued", [mergedPull]]]), new Map(), statusCalls);
+    const github: SchedulerGitHubApi = {
+      ...baseGithub,
+      listOpenPulls: async (repo) => {
+        if (repo === "org/unavailable") {
+          throw new Error("GitHub API 404 for /repos/org/unavailable/installation: ghp_scan_secret");
+        }
+        return baseGithub.listOpenPulls(repo);
+      }
+    };
+    let reviewCalls = 0;
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        reviewCalls += 1;
+        return "reviewed";
+      },
+      now: new Date("2026-07-20T15:31:35.111Z")
+    });
+
+    expect(result.repositoryScanErrors).toEqual([{
+      repo: "org/unavailable",
+      error: "GitHub API 404 for /repos/org/unavailable/installation: [redacted-secret]"
+    }]);
+    expect(result.queue).toMatchObject({ leased: 1, closedRetired: 1, failedQueueJobs: 0 });
+    expect(reviewCalls).toBe(0);
+    expect(state.getReviewQueueJob(queued.jobId)).toMatchObject({
+      state: "closed_retired",
+      lastError: "closed_or_merged_before_review state=closed"
+    });
+    expect(statusCalls.map(statusFromBody)).toEqual(["closed_or_merged_before_review"]);
+    expect(JSON.stringify(result)).not.toContain("ghp_scan_secret");
+    state.close();
+  });
+
+  it("keeps explicitly scoped repository discovery fail-fast", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-scoped-fail-fast-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/unavailable"]);
+    const state = new ReviewStateStore(config.statePath);
+    const failure = new Error("GitHub API 404 for /repos/org/unavailable/installation");
+
+    await expect(runScheduledCycleWithDeps({
+      config,
+      github: {
+        ...githubFromMap(new Map()),
+        listOpenPulls: async () => { throw failure; }
+      },
+      state,
+      options: { dryRun: false, repo: "org/unavailable" },
+      reviewPullImpl: async () => "reviewed"
+    })).rejects.toThrow(failure.message);
+
+    expect(state.listReviewQueueJobs()).toEqual([]);
+    state.close();
+  });
+
+  it("settles a worker skipped_closed result as a terminal closed queue status", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-active-close-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const statusCalls: StatusCommentCall[] = [];
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), new Map(), statusCalls),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => "skipped_closed"
+    });
+
+    expect(result.queue).toMatchObject({ leased: 1, closedRetired: 1, failedQueueJobs: 0 });
+    expect(state.listReviewQueueJobs()).toEqual([
+      expect.objectContaining({
+        repo: "org/repo-a",
+        pullNumber: 1,
+        state: "closed_retired",
+        lastError: "closed_or_merged_before_review"
+      })
+    ]);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "closed",
+      reason: "closed_or_merged_before_review"
+    });
+    expect(statusCalls.map(statusFromBody)).toEqual(["queued", "in_progress", "closed_or_merged_before_review"]);
+    state.close();
+  });
+
   it("queues a multi-repo burst and leases up to provider capacity with per-repo caps", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-burst-"));
     roots.push(root);
