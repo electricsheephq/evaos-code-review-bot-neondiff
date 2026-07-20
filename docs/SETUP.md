@@ -270,6 +270,21 @@ printing secrets:
 neondiff doctor github --config config.local.json --json
 ```
 
+The invite-only B0 desktop keeps the customer-owned App private key in the
+macOS Keychain. Its explicit **Verify App Access** action sends that key only to
+the local CLI's bounded stdin for this check; the equivalent CLI contract is:
+
+```bash
+neondiff doctor github --config config.local.json \
+  --github-app-id "<numeric-app-id>" \
+  --github-app-private-key-stdin true --json < "/path/to/app-private-key.pem"
+```
+
+The private key must be one unencrypted RSA PKCS#1 or PKCS#8 PEM no larger than
+64 KiB. Do not put it in arguments, environment variables, config, logs, or
+evidence. A passing doctor proves only current installation/repository read
+access for the configured allowlist; it does not execute or post a review.
+
 Check:
 
 - `ok`
