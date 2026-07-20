@@ -2687,6 +2687,7 @@ function applyReviewStatus(result: ScheduledRunResult, status: ReviewPullResult 
       break;
     case "skipped_closed":
     case "closed_retired":
+      result.skippedStaleHead += 1;
       result.queue.closedRetired += 1;
       break;
     case "failed":

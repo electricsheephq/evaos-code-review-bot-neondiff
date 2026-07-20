@@ -1427,6 +1427,34 @@ describe("worker context budget preflight", () => {
     scenario.state.close();
   });
 
+  it("prefers skipped_closed when a changed pull head closes before final posting", async () => {
+    const headSha = "e".repeat(40);
+    const liveHeadSha = "f".repeat(40);
+    const scenario = await runOwnerPolicyReview({
+      roots,
+      pullNumber: 526,
+      headSha,
+      commandComment: requestChangesComment(85, 526, headSha),
+      commandCommentId: 85,
+      closeAfterHeadClaimWithSha: liveHeadSha
+    });
+
+    expect(scenario.error).toBeUndefined();
+    expect(scenario.result).toBe("skipped_closed");
+    expect(createdReviews).toEqual([]);
+    expect(scenario.state.getProcessedReview("electricsheephq/WorldOS", 526, headSha)).toMatchObject({
+      status: "skipped",
+      error: "closed_or_merged_before_review state=closed; merged_at=2026-07-20T10:01:55.000Z"
+    });
+    expect(JSON.parse(readFileSync(join(scenario.evidenceDir, "closed-before-review-post.json"), "utf8"))).toMatchObject({
+      reason: "closed_or_merged_before_review",
+      state: "closed",
+      expectedHeadSha: headSha,
+      liveHeadSha
+    });
+    scenario.state.close();
+  });
+
   it("keeps a successful review posted when the immediate post-review head lookup fails", async () => {
     const headSha = "c".repeat(40);
     const lookupSecret = "ghp_post_lookup_secret";
@@ -1591,6 +1619,7 @@ async function runOwnerPolicyReview(input: {
   moveHeadAfterConsume?: string;
   moveHeadAfterAuxiliaryPost?: string;
   closeAfterConsume?: boolean;
+  closeAfterHeadClaimWithSha?: string;
   postReviewHeadLookupError?: Error;
   enableWalkthrough?: boolean;
   enableWalkthroughPost?: boolean;
@@ -1617,6 +1646,18 @@ async function runOwnerPolicyReview(input: {
   const pull = pullSummary(input.pullNumber, headSha);
   let livePull = pull;
   input.configureState?.(state);
+  if (input.closeAfterHeadClaimWithSha) {
+    const tryClaim = state.tryClaimReviewHeadWithOutcome.bind(state);
+    vi.spyOn(state, "tryClaimReviewHeadWithOutcome").mockImplementation((claim) => {
+      const outcome = tryClaim(claim);
+      livePull = {
+        ...pullSummary(input.pullNumber, input.closeAfterHeadClaimWithSha!),
+        state: "closed",
+        merged_at: "2026-07-20T10:01:55.000Z"
+      };
+      return outcome;
+    });
+  }
   if (input.moveHeadAfterConsume || input.closeAfterConsume) {
     const consume = state.tryConsumeReviewEventAuthorization.bind(state);
     vi.spyOn(state, "tryConsumeReviewEventAuthorization").mockImplementation((authorization) => {

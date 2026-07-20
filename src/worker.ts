@@ -1948,12 +1948,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     headClaim = headClaimAttempt.claim;
 
-    const liveBeforePost = await github.getPull(repo, pull.number);
-    const staleBeforePost = detectStalePullHead({ expected: pull, live: liveBeforePost, phase: "before_post" });
-    if (staleBeforePost) {
-      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforePost, evidenceDir });
-      return "skipped_stale_head";
-    }
+    const initialLifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+    if (initialLifecycleResult) return initialLifecycleResult;
 
     const authorization = await lookupQueuedReviewEventAuthorization({
       mode: reviewEventPolicyMode,
@@ -2010,6 +2006,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     exactOwnerReviewRequested = exactOwnerReviewRequested || authorization.status === "eligible";
     manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     if (reviewEventPolicyMode === "trusted_command_only") {
+      // Check before the irreversible authorization-consumption boundary.
       const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
       if (lifecycleResult) return lifecycleResult;
     }
@@ -2024,6 +2021,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     });
     const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
     if (reviewEventResolution.consumed) {
+      // Re-read after consumption so an external close wins before any public POST.
       const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
       if (lifecycleResult) {
         writeRedactedJson(join(evidenceDir, "review-event-decision.json"), reviewEventDecisionEvidence);
@@ -2121,6 +2119,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       if (lifecycleResult) return lifecycleResult;
     }
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
+    // This deliberately stays the final server read before createReview: PR state
+    // can change independently even when the preceding local work is synchronous.
     const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
     if (lifecycleResult) return lifecycleResult;
     const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);

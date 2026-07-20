@@ -196,6 +196,7 @@ describe("provider-aware review scheduler", () => {
     });
 
     expect(result.queue).toMatchObject({ leased: 1, closedRetired: 1, failedQueueJobs: 0 });
+    expect(result.skippedStaleHead).toBe(1);
     expect(state.listReviewQueueJobs()).toEqual([
       expect.objectContaining({
         repo: "org/repo-a",
