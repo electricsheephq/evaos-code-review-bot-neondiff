@@ -299,6 +299,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var providerVerificationContextGeneration: UInt64 = 0
     private var activeProviderVerificationRequestGeneration: UInt64?
     private var providerKeyRevision: UInt64 = 0
+    private var byoGitHubCredentialRevision: UInt64 = 0
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var managedGitHubConnectionTask: Task<Void, Never>?
@@ -1393,6 +1394,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func storeBYOGitHubAppCredentials() {
         defer { pendingBYOGitHubAppPrivateKey = "" }
+        byoGitHubCredentialRevision &+= 1
         invalidateBYOGitHubVerificationContext()
         guard byoGitHubCredentialOnboardingAvailable else {
             lastError = "Customer-owned GitHub App onboarding is unavailable in this build."
@@ -1429,6 +1431,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func clearBYOGitHubAppCredentials() {
         pendingBYOGitHubAppPrivateKey = ""
         pendingBYOGitHubAppId = ""
+        byoGitHubCredentialRevision &+= 1
         invalidateBYOGitHubVerificationContext()
         do {
             try dependencies.secretStore.deleteSecret(
@@ -1484,6 +1487,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let safeCommand = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --github-app-id \(shellQuote(appId)) --github-app-private-key-stdin true --json < [secure Keychain input]"
         let verificationContext = BYOGitHubVerificationContext(
             appId: appId,
+            credentialRevision: byoGitHubCredentialRevision,
             cliPath: cliPath,
             configPath: configPath,
             repositories: repos.filter(\.enabled).map(\.name).sorted()
@@ -1531,6 +1535,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let currentContext = storedBYOGitHubAppId.map { appId in
             BYOGitHubVerificationContext(
                 appId: appId,
+                credentialRevision: byoGitHubCredentialRevision,
                 cliPath: cliPath,
                 configPath: configPath,
                 repositories: repos.filter(\.enabled).map(\.name).sorted()
@@ -3322,6 +3327,7 @@ private struct BYOGitHubDoctorReport: Decodable {
 
 private struct BYOGitHubVerificationContext: Equatable, Sendable {
     let appId: String
+    let credentialRevision: UInt64
     let cliPath: String
     let configPath: String
     let repositories: [String]
