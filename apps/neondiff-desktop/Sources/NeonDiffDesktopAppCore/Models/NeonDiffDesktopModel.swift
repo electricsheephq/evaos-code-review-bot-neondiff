@@ -179,6 +179,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard !isConfigPatchInProgress else {
             return false
         }
+        if dependencies.productionBoundary.byoGitHubEnabled {
+            guard byoGitHubCredentialOnboardingAvailable,
+                  byoGitHubCredentialsVerified
+            else { return false }
+        }
         guard dependencies.productionBoundary.managedGitHubBrokerOrigin != nil else {
             return true
         }
@@ -266,7 +271,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             guard hasVerifiedManagedGitHubSelection else { return false }
         }
         if dependencies.productionBoundary.byoGitHubEnabled {
-            guard byoGitHubCredentialsStored else { return false }
+            guard byoGitHubCredentialOnboardingAvailable,
+                  byoGitHubCredentialsStored,
+                  byoGitHubCredentialsVerified
+            else { return false }
         }
         return onboardingFlow.canAdvance
     }
@@ -1538,6 +1546,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let report = try? JSONDecoder().decode(BYOGitHubDoctorReport.self, from: data),
+              let expectedRepositories = normalizedExactRepoNames(expectedContext.repositories),
+              let reportedRepositories = normalizedExactRepoNames(report.github.readChecks.map(\.repo)),
+              !expectedRepositories.isEmpty,
+              reportedRepositories == expectedRepositories,
               report.ok,
               report.command == "doctor github",
               report.appCredentials.source == "stdin",
@@ -1547,7 +1559,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
               report.github.readMode == "app_installation",
               !report.github.readChecks.isEmpty,
               report.github.readChecks.allSatisfy({ check in
-                  check.ok
+                  check.skippedByPolicy == nil
+                      && check.ok
                       && check.installationIdPresent
                       && check.appCanReadMetadata
                       && check.appCanReadPullRequests
@@ -1560,7 +1573,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
-        let repositories = report.github.readChecks.map(\.repo).sorted().joined(separator: ", ")
+        let repositories = report.github.readChecks.map(\.repo).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }.joined(separator: ", ")
         byoGitHubCredentialsVerified = true
         lastError = nil
         byoGitHubCredentialStatus = "Verified App installation access for \(repositories). Worker dry/live review has not run yet."
@@ -3289,6 +3304,7 @@ private struct BYOGitHubDoctorReport: Decodable {
     struct ReadCheck: Decodable {
         let repo: String
         let ok: Bool
+        let skippedByPolicy: String?
         let installationIdPresent: Bool
         let appCanReadMetadata: Bool
         let appCanReadPullRequests: Bool
@@ -3296,6 +3312,7 @@ private struct BYOGitHubDoctorReport: Decodable {
         enum CodingKeys: String, CodingKey {
             case repo
             case ok
+            case skippedByPolicy
             case installationIdPresent = "installation_id_present"
             case appCanReadMetadata = "app_can_read_metadata"
             case appCanReadPullRequests = "app_can_read_pull_requests"
@@ -3395,6 +3412,18 @@ private func uniqueSortedRepoNames(_ names: [String]) -> [String] {
         .filter(isValidRepoName)
         .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         .filter { seen.insert($0.lowercased()).inserted }
+}
+
+private func normalizedExactRepoNames(_ names: [String]) -> [String]? {
+    let normalized = names.map {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+    guard normalized.allSatisfy(isValidRepoName),
+          Set(normalized).count == normalized.count
+    else {
+        return nil
+    }
+    return normalized.sorted()
 }
 
 private extension Collection {
