@@ -160,6 +160,18 @@ import Testing
         #expect(source.contains("neondiff-onboarding-repository-apply"))
     }
 
+    @Test func b0OnboardingExposesRepositorySetupAndAppVerificationActions() throws {
+        let onboardingView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift")
+        let source = try sourceBoundaryText(at: onboardingView)
+
+        #expect(source.contains("model.addPendingRepoToAllowlist()"))
+        #expect(source.contains("neondiff-onboarding-byo-repository-add"))
+        #expect(source.contains("neondiff-onboarding-byo-repository-apply"))
+        #expect(source.contains("model.verifyBYOGitHubAppCredentials()"))
+        #expect(source.contains("neondiff-onboarding-byo-github-verify"))
+    }
+
     @Test func managedSafetyStopIsNotDisabledByUsefulWorkProofLoss() throws {
         let viewsDirectory = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)

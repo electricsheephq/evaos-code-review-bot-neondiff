@@ -189,13 +189,16 @@ A stored license key is not treated as active entitlement. Repo selection still
 writes only the local allowlist; the worker's pre-checkout license and GitHub App
 gates remain authoritative for review execution.
 
-In the invite-only B0 build, the Repos pane also accepts a customer-owned
-numeric App ID and unencrypted RSA private key. The key is stored only in the
-fixed macOS Keychain account. **Verify App Access** reads it on that explicit
-action, supplies it to `doctor github` through bounded stdin, and accepts only
-typed App-installation proof for every configured repository. Changing the App
-credentials, CLI/config path, or allowlist invalidates that proof. This step
-does not run a provider, execute a review, or post to GitHub.
+In the invite-only B0 build, first-run onboarding and the Repos pane accept a
+customer-owned numeric App ID and unencrypted RSA private key. The key is stored
+only in the fixed macOS Keychain account. First run also lets the customer add
+one `owner/repo`, apply it through the typed local config patch, and choose
+**Verify App Access** without leaving onboarding or asking an operator to edit a
+file. Verification reads the key only on that explicit action, supplies it to
+`doctor github` through bounded stdin, and accepts only typed App-installation
+proof for the exact configured repository. Changing the App credentials,
+CLI/config path, or allowlist invalidates that proof. This step does not run a
+provider, execute a review, or post to GitHub.
 
 ## Local Dashboard Launcher
 
