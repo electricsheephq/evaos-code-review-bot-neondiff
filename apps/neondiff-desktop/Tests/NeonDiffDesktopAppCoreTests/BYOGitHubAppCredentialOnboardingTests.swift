@@ -282,6 +282,35 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.productionDaemonStopAvailable)
     }
+
+    @Test func privateKeyRotationWhileDoctorRunsDiscardsOldKeyProof() async throws {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo")))],
+            suspendCLIRuns: true,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await fixture.cli.waitUntilCallCount(1)
+        #expect(fixture.model.isBYOGitHubVerificationInProgress)
+
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = rotatedFixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.cli.resumeSuspendedRuns()
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.byoGitHubCredentialStatus.contains("Configuration changed"))
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.productionDaemonStopAvailable)
+    }
 }
 
 @MainActor
@@ -318,5 +347,10 @@ private let fixturePrivateKeyLabel = "PRIVATE" + " KEY"
 private let fixturePrivateKey = """
 -----BEGIN \(fixturePrivateKeyLabel)-----
 ZmFrZS1maXh0dXJlLXByaXZhdGUta2V5
+-----END \(fixturePrivateKeyLabel)-----
+"""
+private let rotatedFixturePrivateKey = """
+-----BEGIN \(fixturePrivateKeyLabel)-----
+ZmFrZS1maXh0dXJlLXJvdGF0ZWQta2V5
 -----END \(fixturePrivateKeyLabel)-----
 """
