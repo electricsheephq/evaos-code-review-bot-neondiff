@@ -193,10 +193,115 @@ struct OnboardingWizardView: View {
 
             Text(model.byoGitHubCredentialStatus)
                 .font(.caption)
-                .foregroundStyle(model.byoGitHubCredentialsStored ? NeonDiffTheme.accent : NeonDiffTheme.warning)
+                .foregroundStyle(model.byoGitHubCredentialsVerified ? NeonDiffTheme.accent : NeonDiffTheme.warning)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Continue becomes available after local credential custody is complete. Installation/repository verification and a live review are separate gates and are not claimed here.")
+            Divider()
+                .overlay(NeonDiffTheme.stroke.opacity(0.54))
+
+            Text("Repository to review")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(NeonDiffTheme.textPrimary)
+
+            Text("B0 onboarding supports one repository at a time. On a clean install, initialize the local config first. This never overwrites an existing config. Then add owner/repo, apply that allowlist, and verify the customer-owned App installation.")
+                .operatorBodyText()
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button { model.initializeConfigForOnboarding() } label: {
+                Label(
+                    model.isConfigInitializationInProgress ? "Initializing…" : "Initialize Local Config",
+                    systemImage: "doc.badge.plus"
+                )
+            }
+            .disabled(
+                !model.canEditProviderConfiguration
+                    || model.isConfigInitializationInProgress
+                    || model.isConfigPatchInProgress
+                    || model.isConfigInspectInProgress
+            )
+            .accessibilityIdentifier("neondiff-onboarding-byo-config-initialize")
+
+            Text(model.configInitializationStatus)
+                .font(.caption)
+                .foregroundStyle(NeonDiffTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                OperatorTextField(
+                    title: "owner/repo",
+                    text: $model.pendingRepoName
+                )
+                .accessibilityIdentifier("neondiff-onboarding-byo-repository")
+
+                Button { model.addPendingRepoToAllowlist() } label: {
+                    Label("Add Repository", systemImage: "plus.circle")
+                }
+                .disabled(
+                    model.pendingRepoName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || !model.canEditProviderConfiguration
+                        || model.isConfigInitializationInProgress
+                        || model.isConfigPatchInProgress
+                        || model.isConfigInspectInProgress
+                )
+                .accessibilityIdentifier("neondiff-onboarding-byo-repository-add")
+            }
+
+            ForEach(model.repos.filter(\.enabled)) { repository in
+                HStack(spacing: 10) {
+                    Text(repository.name)
+                        .font(NeonDiffTheme.commandFont)
+                        .foregroundStyle(NeonDiffTheme.textPrimary)
+                        .textSelection(.enabled)
+
+                    Spacer()
+
+                    Button(role: .destructive) {
+                        model.removeRepoFromAllowlist(repository)
+                    } label: {
+                        Label("Remove", systemImage: "minus.circle")
+                    }
+                    .disabled(
+                        !model.canEditProviderConfiguration
+                            || model.isConfigInitializationInProgress
+                            || model.isConfigPatchInProgress
+                            || model.isConfigInspectInProgress
+                    )
+                    .accessibilityIdentifier("neondiff-onboarding-byo-repository-remove-\(repository.name)")
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button { model.applyRepoAllowlistPatch() } label: {
+                    Label("Apply Repository", systemImage: "checkmark.seal")
+                }
+                .disabled(
+                    model.repos.filter(\.enabled).count != 1
+                        || !model.canEditProviderConfiguration
+                        || model.isConfigInitializationInProgress
+                        || model.isConfigPatchInProgress
+                        || model.isConfigInspectInProgress
+                )
+                .accessibilityIdentifier("neondiff-onboarding-byo-repository-apply")
+
+                Button { model.verifyBYOGitHubAppCredentials() } label: {
+                    Label(
+                        model.isBYOGitHubVerificationInProgress ? "Verifying…" : "Verify App Access",
+                        systemImage: "checkmark.shield"
+                    )
+                }
+                .disabled(
+                    !model.byoGitHubCredentialsStored
+                        || model.repos.filter(\.enabled).count != 1
+                        || !model.canEditProviderConfiguration
+                        || model.isConfigInitializationInProgress
+                        || model.isConfigPatchInProgress
+                        || model.isConfigInspectInProgress
+                        || model.isBYOGitHubVerificationInProgress
+                )
+                .accessibilityIdentifier("neondiff-onboarding-byo-github-verify")
+            }
+
+            Text("Continue becomes available only after GitHub verifies the exact configured repository through this App installation. A dry run and live review remain separate gates and are not claimed here.")
                 .font(.caption)
                 .foregroundStyle(NeonDiffTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

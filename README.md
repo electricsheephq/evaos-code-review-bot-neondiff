@@ -153,8 +153,13 @@ The invite-only B0 technical-beta build uses a separate exact
 `paid-mac-beta-byo-v1` release contract with `NeonDiffBYOGitHubEnabled=true` and
 no managed-broker fields. That contract enables the existing local direct/BYO
 path and API-backed native activation without a hidden defaults mutation. It
-does not prove customer-safe private-key custody, a compatible published CLI,
-signing, billing, canaries, or release readiness.
+is a paid path for every repository and does not claim the managed public-free
+model. On a clean Mac, native first run exposes **Initialize Local Config**
+(non-destructive; never force-overwrites), **Add Repository**, **Apply
+Repository**, and **Verify App Access**, so the invited customer does not need a
+terminal or an operator edit to reach the repository-verification gate. This
+source path does not prove customer-safe private-key custody, a compatible
+published CLI, signing, billing, canaries, or release readiness.
 This source composition is not proof that the production broker is enabled,
 that billing is live, or that a signed customer artifact exists. Generic CLI
 status/deactivate and daemon-admission validation still need exact-candidate
@@ -167,15 +172,16 @@ both the provider ID and inspected config revision.
 Create or install the GitHub App before expecting PR reviews to run. The App
 must be installed on the same selected repositories listed in `pilotRepos`; see
 [docs/github-app-setup.md](docs/github-app-setup.md) for the permission set and
-selected-repo install path. The rollout-disabled managed desktop path uses the
+selected-repo install path. The rollout-disabled managed desktop source uses the
 broker-issued GitHub App install/OAuth URL and keeps polling its device-bound
 completion state while authorization is pending. A fresh installation callback
-wins without asking the customer to authorize twice. If the official App was
-already installed and GitHub therefore sends no install callback, the verified
-managed build uses its compiled public App client ID to show Device Flow as a
-transient installation-access proof. That user token stays in process memory
-only for the authorization window and is never a review credential. Legacy
-direct-install builds still read their public client ID from local config.
+wins without asking the customer to authorize twice. The unshipped source still
+contains Device Flow as an existing-install fallback. Before B1 release, #613
+must move that managed customer path to broker-hosted web OAuth with state and
+PKCE; Device Flow remains only an optional CLI/headless fallback. Both paths
+must verify the exact user-authorized installation/repository intersection, and
+installation tokens remain the only review credential. Legacy direct-install
+builds still read their public client ID from local config.
 
 Do not store the GitHub App private key, provider API key, license key, tokens,
 or customer data in this repository. Keep local config, secrets, state DBs, and

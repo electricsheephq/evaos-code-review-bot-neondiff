@@ -260,6 +260,25 @@ manual UserDefaults rollout mutation. It does not make the managed App path
 available and is not proof that GitHub private-key custody, the compatible CLI
 package, billing, signing, or customer canaries have passed.
 
+For an invited B0 customer, the native first-run path is:
+
+1. Create and install a customer-owned GitHub App with the permissions in
+   [`github-app-setup.md`](github-app-setup.md), selecting one repository.
+2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
+   PEM, then choose **Store in Keychain**.
+3. On a clean install, choose **Initialize Local Config**. This invokes the
+   non-destructive `neondiff init` path and never supplies `--force`; an existing
+   config is not overwritten.
+4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
+   Repository**. The app writes the allowlist through the typed local `config
+   patch` command; the customer does not edit a config file.
+5. Choose **Verify App Access**. Continue remains disabled until GitHub verifies
+   the exact configured repository through that App installation.
+
+This first-run step proves only current App installation and repository access.
+Provider verification, activation, dry run, and live review remain separate
+gates.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and
@@ -304,11 +323,12 @@ neondiff doctor --config config.local.json --json
 
 This SETUP guide is the operator/advanced CLI-first path, and the first-run path
 on non-Mac platforms. The local HTML dashboard is the operator/diagnostic surface
-it drives. On Mac, the native macOS app is the human first-run product surface —
-the customer starts there; until the native broker/launchd proof lands (see the
-native-broker note above) the app hands off to this operator path for the setup
-actions it cannot yet complete natively. The dashboard shows license status,
-GitHub App status, daemon status, and provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
+it drives. On Mac, the native macOS app is the human first-run product surface.
+The exact B0 bundle lets the customer store the customer-owned App key in
+Keychain, select and apply one repository, and verify that installation without
+an operator editing local files. The managed B1 broker remains a separate path.
+The dashboard shows license status, GitHub App status, daemon status, and
+provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing
 the submitted key.
 

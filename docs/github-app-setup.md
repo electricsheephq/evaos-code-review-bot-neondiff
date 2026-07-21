@@ -5,20 +5,22 @@ runs on your own machine or server. The App identity is what authors review
 comments in GitHub; your local worker holds the App ID, private key, provider
 configuration, state database, and evidence files.
 
-On macOS the native app (`apps/neondiff-desktop`) is the human first-run surface:
-it drives the device-flow "Connect GitHub" authorization described below, while
-this document remains the operator/CLI reference for the App identity, permission
-set, and install path. The matching public website onboarding copy for this
-Mac-first journey lives in the website repo and is tracked in
-neon-diff-agent-website#52; it is intentionally not edited here (cross-repo
-change).
+On macOS the native app (`apps/neondiff-desktop`) is the human first-run surface.
+The invite-only B0 build accepts the invited customer's own App ID and private
+key, one selected repository, and runs the explicit installation check from the
+wizard. The managed B1 path uses the official NeonDiff App and broker under
+#613; it is separate from B0. This document remains the operator/CLI reference
+for both paths' App identity, permission set, and install boundary. Matching
+public website onboarding copy lives in the website repo under
+neon-diff-agent-website#52.
 
 ## Install URL
 
-Use the public NeonDiff GitHub App install URL from the release notes or website
-for the beta you are testing. Until the public App registration is finalized,
-operators can create an equivalent App with the permission set below and record
-the generated install URL in the issue or release evidence packet.
+For B0, create a customer-owned GitHub App in the invited customer's GitHub
+account or organization, then use that App's install link. Record its numeric
+App ID, generate one private key, and keep the downloaded PEM outside git. The
+public, organization-owned NeonDiff App is the separate managed B1 path; do not
+use it to describe or prove B0.
 
 Install only on selected repositories. NeonDiff does not need organization-wide
 discovery for the v1.0 MVP, and the worker only reviews repos present in your
@@ -90,13 +92,17 @@ user-token discovery path are disabled in managed mode. Generic CLI
 status/deactivate and daemon-admission validation still require exact-candidate
 integration proof under #630.
 
-1. Open the NeonDiff GitHub App install URL.
+1. Open the customer-owned GitHub App's install URL.
 2. Choose the user or organization that owns the repositories.
 3. Select `Only select repositories`.
-4. Pick the repos you want NeonDiff to review.
+4. Pick one repository for the B0 onboarding run.
 5. Confirm the permissions above.
 6. Save the generated private key outside this repository.
-7. Add the same repos to `pilotRepos` in your local `config.local.json`.
+7. In native NeonDiff first run, store the App ID and private key, and on a clean
+   install choose **Initialize Local Config**. Enter the same `owner/repo`, then
+   choose **Add Repository**, **Apply Repository**, and **Verify App Access**.
+   Initialization never uses `--force`; the app updates `pilotRepos` through
+   `config patch`, and no operator edits the customer's config file.
 
 Keep the private key and local config out of git. A typical shell setup is:
 
@@ -110,9 +116,12 @@ export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-
 authorization flow. Do not put user access tokens or refresh tokens in config;
 desktop user tokens belong in Keychain.
 
-For the desktop Repos pane, enable device flow in the GitHub App settings before
-testing "Connect GitHub". If device flow is disabled, GitHub returns
-`device_flow_disabled` and the desktop cannot issue a user code.
+Device Flow is not part of the B0 customer-owned App path. The managed B1 path
+tracks broker-hosted browser OAuth with state/PKCE for existing installations
+under #613; fresh installs retain install-time OAuth. The unshipped managed
+source still contains a Device Flow fallback, but it is not the B1 release
+architecture. Device Flow remains only an optional CLI/headless fallback and is
+not GitHub approval of the public App.
 
 ## Verify Installation
 
