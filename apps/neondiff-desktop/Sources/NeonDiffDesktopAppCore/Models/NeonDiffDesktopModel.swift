@@ -119,6 +119,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var controlCenter = DesktopControlCenterSettings()
     @Published package var controlCenterStatus = "Load current config before editing."
     @Published package var isControlCenterOperationInProgress = false
+    @Published package private(set) var isConfigInitializationInProgress = false
+    @Published package private(set) var configInitializationStatus = "Initialize a local config once on a clean install. Existing configs are never overwritten."
     @Published package var isConfigPatchInProgress = false
     @Published package var isConfigInspectInProgress = false
     @Published package var pendingIssueRepoName = ""
@@ -491,6 +493,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         NeonDiffCommandBuilder.configInspect(cliPath: cliPath, configPath: configPath)
     }
 
+    package var configInitializeCommand: DesktopCommand {
+        NeonDiffCommandBuilder.configInitialize(cliPath: cliPath, configPath: configPath)
+    }
+
     package var providerPatchPreviewCommand: DesktopCommand {
         NeonDiffCommandBuilder.configPatch(
             cliPath: cliPath,
@@ -749,6 +755,26 @@ package final class NeonDiffDesktopModel: ObservableObject {
         runCLI(arguments: ["config", "inspect", "--config", configPath], displayCommand: configInspectCommand)
     }
 
+    package func initializeConfigForOnboarding() {
+        guard byoGitHubCredentialOnboardingAvailable else {
+            lastError = "Local config initialization is available only in the customer-owned GitHub App beta path."
+            return
+        }
+        guard canEditProviderConfiguration else {
+            lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
+            return
+        }
+        guard !isConfigInitializationInProgress, !isConfigPatchInProgress, !isConfigInspectInProgress else {
+            lastError = "Another config operation is still running."
+            return
+        }
+        configInitializationStatus = "Creating a new local config without overwriting existing data…"
+        runCLI(
+            arguments: ["init", "--config", configPath],
+            displayCommand: configInitializeCommand
+        )
+    }
+
     package func addPendingIssueRepo() {
         guard canEditProviderConfiguration else {
             lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
@@ -955,6 +981,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func removeRepoFromAllowlist(_ repo: RepoMonitor) {
         guard !managedGitHubAvailable else {
             lastError = "Managed mode repository scope comes from the verified GitHub App binding."
+            return
+        }
+        guard canEditProviderConfiguration else {
+            lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
             return
         }
         repos.removeAll { $0.id == repo.id }
@@ -2166,7 +2196,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         let isConfigPatchCommand = arguments.count >= 2 && arguments[0] == "config" && arguments[1] == "patch"
         let isConfigInspectCommand = arguments.count >= 2 && arguments[0] == "config" && arguments[1] == "inspect"
-        if (isConfigPatchCommand || isConfigInspectCommand)
+        let isConfigInitializeCommand = arguments.first == "init"
+        let isConfigOperation = isConfigInitializeCommand || isConfigPatchCommand || isConfigInspectCommand
+        if isConfigOperation
             && (isProviderVerificationInProgress || isProviderVerificationCancelling) {
             lastError = "Wait for provider verification cleanup before changing config."
             clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
@@ -2174,7 +2206,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
             return
         }
-        if isConfigPatchCommand && (isConfigPatchInProgress || isConfigInspectInProgress) {
+        if isConfigOperation
+            && (isConfigInitializationInProgress || isConfigPatchInProgress || isConfigInspectInProgress) {
             lastError = "Another config operation is still running."
             clearPendingManagedRepoPatchProof(ifOwnedBy: managedRepoPatchProof)
             if controlCenterOperation != nil {
@@ -2183,10 +2216,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             }
             return
         }
-        if isConfigInspectCommand && (isConfigPatchInProgress || isConfigInspectInProgress) {
-            lastError = "Another config operation is still running."
-            return
-        }
+        if isConfigInitializeCommand { isConfigInitializationInProgress = true }
         if isConfigPatchCommand { isConfigPatchInProgress = true }
         if isConfigInspectCommand { isConfigInspectInProgress = true }
         lastCommandLine = displayCommand.commandLine
@@ -2207,10 +2237,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         configPath: configPath,
                         launchdLabel: launchdLabel,
                         isConfigInspectCommand: isConfigInspectCommand,
+                        isConfigInitializeCommand: isConfigInitializeCommand,
                         controlCenterOperation: controlCenterOperation,
                         providerPatchProof: providerPatchProof,
                         managedRepoPatchProof: managedRepoPatchProof
                     )
+                    if isConfigInitializeCommand { self.isConfigInitializationInProgress = false }
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
                     if isConfigInspectCommand { self.isConfigInspectInProgress = false }
                     if controlCenterOperation != nil { self.isControlCenterOperationInProgress = false }
@@ -2221,6 +2253,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 await MainActor.run {
                     self.lastError = NeonDiffRedactor.redact(error.localizedDescription)
                     self.logText = self.lastError ?? "Unknown CLI error"
+                    if isConfigInitializeCommand {
+                        self.isConfigInitializationInProgress = false
+                        self.configInitializationStatus = self.lastError ?? "Local config initialization failed."
+                    }
                     if isConfigPatchCommand { self.isConfigPatchInProgress = false }
                     self.clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
                     self.clearPendingManagedRepoPatchProof(ifOwnedBy: managedRepoPatchProof)
@@ -2809,6 +2845,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         configPath: String,
         launchdLabel: String,
         isConfigInspectCommand: Bool,
+        isConfigInitializeCommand: Bool = false,
         controlCenterOperation: ControlCenterOperation? = nil,
         providerPatchProof: PendingProviderPatchProof? = nil,
         managedRepoPatchProof: PendingManagedRepoPatchProof? = nil
@@ -2827,6 +2864,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         logText = [result.redactedStdout, result.redactedStderr].filter { !$0.isEmpty }.joined(separator: "\n")
 
         let commandName = parseCommandName(result.stdout)
+        if isConfigInitializeCommand {
+            guard result.exitCode == 0, commandName == "init" else {
+                lastError = lastError ?? "Local config initialization returned an invalid response."
+                configInitializationStatus = lastError ?? "Local config initialization failed."
+                return
+            }
+            configInitializationStatus = "Local config created. Add one repository, apply it, then verify App access."
+        }
         var parsedSnapshot = (commandName == "config inspect" || commandName == "config patch")
             ? ConfigInspectParser.parse(
                 result.stdout,

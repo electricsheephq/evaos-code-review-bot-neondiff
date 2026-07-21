@@ -266,10 +266,13 @@ For an invited B0 customer, the native first-run path is:
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
 2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
    PEM, then choose **Store in Keychain**.
-3. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
+3. On a clean install, choose **Initialize Local Config**. This invokes the
+   non-destructive `neondiff init` path and never supplies `--force`; an existing
+   config is not overwritten.
+4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
    Repository**. The app writes the allowlist through the typed local `config
    patch` command; the customer does not edit a config file.
-4. Choose **Verify App Access**. Continue remains disabled until GitHub verifies
+5. Choose **Verify App Access**. Continue remains disabled until GitHub verifies
    the exact configured repository through that App installation.
 
 This first-run step proves only current App installation and repository access.

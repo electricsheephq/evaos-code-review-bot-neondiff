@@ -6,6 +6,37 @@ import NeonDiffDesktopCore
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct BYOGitHubAppCredentialOnboardingTests {
+    @Test func cleanInstallInitializationUsesNonDestructiveCLIInit() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: #"{"ok":true,"command":"init","created":true}"#,
+                stderr: ""
+            ))],
+            productionBoundary: exactB0Boundary
+        )
+
+        fixture.model.initializeConfigForOnboarding()
+        await fixture.cli.waitUntilCallCount(1)
+
+        #expect(fixture.cli.calls[0].arguments == ["init", "--config", fixture.model.configPath])
+        #expect(!fixture.cli.calls[0].arguments.contains("--force"))
+        #expect(fixture.model.configInitializeCommand.commandLine.contains(" init --config "))
+        #expect(!fixture.model.configInitializeCommand.commandLine.contains("--force"))
+    }
+
+    @Test func repositoryRemovalIsBlockedDuringProviderVerificationCleanup() {
+        let fixture = ModelDependencyFixture(productionBoundary: exactB0Boundary)
+        let repository = RepoMonitor(name: "acme/demo", enabled: true)
+        fixture.model.repos = [repository]
+        fixture.model.isProviderVerificationInProgress = true
+
+        fixture.model.removeRepoFromAllowlist(repository)
+
+        #expect(fixture.model.repos == [repository])
+        #expect(fixture.model.lastError?.contains("provider verification cleanup") == true)
+    }
+
     @Test func exactB0BuildStoresPrivateKeyOnlyInFixedKeychainAccount() throws {
         let fixture = ModelDependencyFixture(productionBoundary: exactB0Boundary)
         #expect(!fixture.model.canAdvanceOnboarding)

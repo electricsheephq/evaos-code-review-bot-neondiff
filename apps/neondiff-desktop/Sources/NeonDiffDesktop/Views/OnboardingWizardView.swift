@@ -203,8 +203,27 @@ struct OnboardingWizardView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(NeonDiffTheme.textPrimary)
 
-            Text("B0 onboarding supports one repository at a time. Add its owner/repo name, apply that allowlist to the local worker config, then verify the customer-owned App installation before continuing.")
+            Text("B0 onboarding supports one repository at a time. On a clean install, initialize the local config first. This never overwrites an existing config. Then add owner/repo, apply that allowlist, and verify the customer-owned App installation.")
                 .operatorBodyText()
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button { model.initializeConfigForOnboarding() } label: {
+                Label(
+                    model.isConfigInitializationInProgress ? "Initializing…" : "Initialize Local Config",
+                    systemImage: "doc.badge.plus"
+                )
+            }
+            .disabled(
+                !model.canEditProviderConfiguration
+                    || model.isConfigInitializationInProgress
+                    || model.isConfigPatchInProgress
+                    || model.isConfigInspectInProgress
+            )
+            .accessibilityIdentifier("neondiff-onboarding-byo-config-initialize")
+
+            Text(model.configInitializationStatus)
+                .font(.caption)
+                .foregroundStyle(NeonDiffTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 10) {
@@ -219,6 +238,8 @@ struct OnboardingWizardView: View {
                 }
                 .disabled(
                     model.pendingRepoName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || !model.canEditProviderConfiguration
+                        || model.isConfigInitializationInProgress
                         || model.isConfigPatchInProgress
                         || model.isConfigInspectInProgress
                 )
@@ -239,7 +260,12 @@ struct OnboardingWizardView: View {
                     } label: {
                         Label("Remove", systemImage: "minus.circle")
                     }
-                    .disabled(model.isConfigPatchInProgress || model.isConfigInspectInProgress)
+                    .disabled(
+                        !model.canEditProviderConfiguration
+                            || model.isConfigInitializationInProgress
+                            || model.isConfigPatchInProgress
+                            || model.isConfigInspectInProgress
+                    )
                     .accessibilityIdentifier("neondiff-onboarding-byo-repository-remove-\(repository.name)")
                 }
             }
@@ -250,6 +276,8 @@ struct OnboardingWizardView: View {
                 }
                 .disabled(
                     model.repos.filter(\.enabled).count != 1
+                        || !model.canEditProviderConfiguration
+                        || model.isConfigInitializationInProgress
                         || model.isConfigPatchInProgress
                         || model.isConfigInspectInProgress
                 )
@@ -264,6 +292,8 @@ struct OnboardingWizardView: View {
                 .disabled(
                     !model.byoGitHubCredentialsStored
                         || model.repos.filter(\.enabled).count != 1
+                        || !model.canEditProviderConfiguration
+                        || model.isConfigInitializationInProgress
                         || model.isConfigPatchInProgress
                         || model.isConfigInspectInProgress
                         || model.isBYOGitHubVerificationInProgress

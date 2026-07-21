@@ -165,6 +165,8 @@ import Testing
             .appendingPathComponent("Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift")
         let source = try sourceBoundaryText(at: onboardingView)
 
+        #expect(source.contains("model.initializeConfigForOnboarding()"))
+        #expect(source.contains("neondiff-onboarding-byo-config-initialize"))
         #expect(source.contains("model.addPendingRepoToAllowlist()"))
         #expect(source.contains("neondiff-onboarding-byo-repository-add"))
         #expect(source.contains("neondiff-onboarding-byo-repository-apply"))

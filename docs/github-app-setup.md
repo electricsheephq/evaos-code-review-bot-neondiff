@@ -98,10 +98,11 @@ integration proof under #630.
 4. Pick one repository for the B0 onboarding run.
 5. Confirm the permissions above.
 6. Save the generated private key outside this repository.
-7. In native NeonDiff first run, store the App ID and private key, enter the same
-   `owner/repo`, choose **Add Repository**, **Apply Repository**, and then
-   **Verify App Access**. The app updates `pilotRepos` through `config patch`; no
-   operator edits the customer's config file.
+7. In native NeonDiff first run, store the App ID and private key, and on a clean
+   install choose **Initialize Local Config**. Enter the same `owner/repo`, then
+   choose **Add Repository**, **Apply Repository**, and **Verify App Access**.
+   Initialization never uses `--force`; the app updates `pilotRepos` through
+   `config patch`, and no operator edits the customer's config file.
 
 Keep the private key and local config out of git. A typical shell setup is:
 
@@ -116,9 +117,11 @@ authorization flow. Do not put user access tokens or refresh tokens in config;
 desktop user tokens belong in Keychain.
 
 Device Flow is not part of the B0 customer-owned App path. The managed B1 path
-tracks browser OAuth for existing installations under #613; Device Flow remains
-only an optional CLI/headless fallback and is not GitHub approval of the public
-App.
+tracks broker-hosted browser OAuth with state/PKCE for existing installations
+under #613; fresh installs retain install-time OAuth. The unshipped managed
+source still contains a Device Flow fallback, but it is not the B1 release
+architecture. Device Flow remains only an optional CLI/headless fallback and is
+not GitHub approval of the public App.
 
 ## Verify Installation
 
