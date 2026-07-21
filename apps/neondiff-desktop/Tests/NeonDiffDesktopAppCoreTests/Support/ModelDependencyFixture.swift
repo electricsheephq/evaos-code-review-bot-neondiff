@@ -32,12 +32,17 @@ final class ScriptedDesktopCLIExecutor: DesktopCLIExecuting, @unchecked Sendable
         var calls: [RecordedCLICall] = []
         var outcomes: [Result<CLIRunResult, Error>]
         var waiters: [Waiter] = []
+        var suspendRuns: Bool
+        var suspendedRunContinuations: [CheckedContinuation<Void, Never>] = []
     }
 
     private let state: ModelFixtureLocked<State>
 
-    init(outcomes: [Result<CLIRunResult, Error>] = []) {
-        state = ModelFixtureLocked(State(outcomes: outcomes))
+    init(
+        outcomes: [Result<CLIRunResult, Error>] = [],
+        suspendRuns: Bool = false
+    ) {
+        state = ModelFixtureLocked(State(outcomes: outcomes, suspendRuns: suspendRuns))
     }
 
     var calls: [RecordedCLICall] { state.read(\.calls) }
@@ -56,6 +61,15 @@ final class ScriptedDesktopCLIExecutor: DesktopCLIExecuting, @unchecked Sendable
             }
             if shouldResume { continuation.resume() }
         }
+    }
+
+    func resumeSuspendedRuns() {
+        let continuations = state.update { state -> [CheckedContinuation<Void, Never>] in
+            state.suspendRuns = false
+            defer { state.suspendedRunContinuations.removeAll() }
+            return state.suspendedRunContinuations
+        }
+        continuations.forEach { $0.resume() }
     }
 
     func run(
@@ -79,6 +93,16 @@ final class ScriptedDesktopCLIExecutor: DesktopCLIExecuting, @unchecked Sendable
             return (outcome, ready.map(\.continuation))
         }
         resumptions.forEach { $0.resume() }
+        if state.read(\.suspendRuns) {
+            await withCheckedContinuation { continuation in
+                let shouldResume = state.update { state -> Bool in
+                    guard state.suspendRuns else { return true }
+                    state.suspendedRunContinuations.append(continuation)
+                    return false
+                }
+                if shouldResume { continuation.resume() }
+            }
+        }
         return try outcome.get()
     }
 }
@@ -183,6 +207,7 @@ struct ModelDependencyFixture {
         root: URL = fixtureURL("/fixture/model-app-support", directory: true),
         now: Date = fixtureDate(secondsSince1970: 1_000_000),
         cliOutcomes: [Result<CLIRunResult, Error>] = [],
+        suspendCLIRuns: Bool = false,
         clipboardResult: Bool = true,
         urlResult: Bool = true,
         githubAuthenticator: ScriptedGitHubAuthenticator = ScriptedGitHubAuthenticator(),
@@ -194,7 +219,10 @@ struct ModelDependencyFixture {
     ) {
         clipboard = RecordingClipboard(result: clipboardResult)
         urlOpener = RecordingURLOpener(result: urlResult)
-        cli = ScriptedDesktopCLIExecutor(outcomes: cliOutcomes)
+        cli = ScriptedDesktopCLIExecutor(
+            outcomes: cliOutcomes,
+            suspendRuns: suspendCLIRuns
+        )
         dashboard = RecordingDashboardLauncher()
         preferences = MemoryPreferences()
         for (key, value) in preferenceBools {
