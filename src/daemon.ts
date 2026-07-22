@@ -59,6 +59,11 @@ export interface RunDaemonCycleOptions {
   stderr?: (line: string) => void;
 }
 
+export interface CleanupReviewWorktreesDeps {
+  loadConfigImpl?: typeof loadConfig;
+  probeOpenReviewWorktreePathsImpl?: typeof probeOpenReviewWorktreePaths;
+}
+
 export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<DaemonCycleResult> {
   const stdout = input.stdout ?? console.log;
   const stderr = input.stderr ?? console.error;
@@ -192,18 +197,18 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   }
 }
 
-function cleanupReviewWorktreesFromConfig(input: {
+export function cleanupReviewWorktreesFromConfig(input: {
   configPath?: string;
   dryRun: boolean;
-}): ReviewWorktreeCleanupSummary {
-  const config = loadConfig(input.configPath);
+}, deps: CleanupReviewWorktreesDeps = {}): ReviewWorktreeCleanupSummary {
+  const config = (deps.loadConfigImpl ?? loadConfig)(input.configPath);
   const state = new ReviewStateStore(config.statePath);
   try {
     const activeReviewRun = state.hasActiveReviewRunLease();
     const activeReviewHeads = state
       .listReviewQueueJobs({ states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"] })
       .map((job) => ({ repo: job.repo, pullNumber: job.pullNumber, headSha: job.headSha }));
-    const openPaths = probeOpenReviewWorktreePaths(config.workRoot);
+    const openPaths = (deps.probeOpenReviewWorktreePathsImpl ?? probeOpenReviewWorktreePaths)(config.workRoot);
     if (!openPaths.ok) {
       throw new Error(`worktree cleanup open-handle probe failed: ${openPaths.error ?? "unknown error"}`);
     }

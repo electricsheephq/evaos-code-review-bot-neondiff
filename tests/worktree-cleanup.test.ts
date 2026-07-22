@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -13,7 +15,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
-import { cleanupStaleReviewWorktrees, type ReviewWorktreeCleanupOps } from "../src/worktree-cleanup.js";
+import {
+  cleanupStaleReviewWorktrees,
+  probeOpenReviewWorktreePaths,
+  type ReviewWorktreeCleanupOps
+} from "../src/worktree-cleanup.js";
 
 const REPO = "electricsheephq/example";
 const SAFE_REPO = "electricsheephq__example";
@@ -115,6 +121,46 @@ describe("stale review worktree cleanup", () => {
       expect.objectContaining({ status: "skipped", reason: "open_or_in_use" })
     ]);
     expect(existsSync(fixture.paths[0])).toBe(true);
+  });
+
+  it("finds a deleted open file beneath a symlinked worktree root", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-open-probe-"));
+    roots.push(root);
+    const workRoot = join(root, "runtime");
+    const worktreePath = join(workRoot, "worktrees", `${SAFE_REPO}__pr-1__111111111111`);
+    const linkedWorkRoot = join(root, "runtime-link");
+    const openPath = join(worktreePath, "open-then-deleted.txt");
+    mkdirSync(worktreePath, { recursive: true });
+    symlinkSync(workRoot, linkedWorkRoot, "dir");
+    writeFileSync(openPath, "keep open\n");
+    const descriptor = openSync(openPath, "r");
+
+    try {
+      rmSync(openPath);
+      const result = probeOpenReviewWorktreePaths(linkedWorkRoot);
+
+      expect(result.ok).toBe(true);
+      expect([...result.paths].map((path) => realpathSync(path))).toContain(realpathSync(worktreePath));
+    } finally {
+      closeSync(descriptor);
+    }
+  }, 20_000);
+
+  it("fails closed when the lsof probe is unavailable", () => {
+    const result = probeOpenReviewWorktreePaths("/tmp/neondiff-missing-lsof", {
+      runLsof: () => ({
+        status: null,
+        stdout: "",
+        stderr: "",
+        error: new Error("lsof unavailable")
+      })
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      paths: new Set(),
+      error: "lsof unavailable"
+    });
   });
 
   it("fails closed for every candidate while another review run holds a live lease", () => {

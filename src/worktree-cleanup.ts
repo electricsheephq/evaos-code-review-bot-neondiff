@@ -73,6 +73,15 @@ export interface OpenReviewWorktreeProbe {
   error?: string;
 }
 
+export interface OpenReviewWorktreeProbeOptions {
+  runLsof?: () => {
+    status: number | null;
+    stdout: string;
+    stderr?: string;
+    error?: Error;
+  };
+}
+
 export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesInput): ReviewWorktreeCleanupSummary {
   const safetyFloor = Math.max(MIN_RETENTION_MS, input.leaseTtlMs);
   if (!Number.isInteger(input.retentionMs) || input.retentionMs < safetyFloor) {
@@ -215,13 +224,17 @@ function parseOwnedWorktreeName(name: string): { safeRepo: string } | undefined 
   return { safeRepo };
 }
 
-export function probeOpenReviewWorktreePaths(workRoot: string): OpenReviewWorktreeProbe {
+export function probeOpenReviewWorktreePaths(
+  workRoot: string,
+  options: OpenReviewWorktreeProbeOptions = {}
+): OpenReviewWorktreeProbe {
   const worktreesRoot = resolve(workRoot, "worktrees");
   const worktreesRootVariants = comparablePathVariants(worktreesRoot);
-  const result = spawnSync("lsof", ["-Fn"], {
+  const runLsof = options.runLsof ?? (() => spawnSync("lsof", ["-Fn"], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024
-  });
+  }));
+  const result = runLsof();
   if (result.status !== 0) {
     return {
       ok: false,

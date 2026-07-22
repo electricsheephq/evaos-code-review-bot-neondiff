@@ -1,11 +1,17 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  cleanupReviewWorktreesFromConfig,
   runDaemonCycle as runDaemonCycleImpl,
   shouldExitDaemonAfterFailedCycle,
   type RunDaemonCycleOptions
 } from "../src/daemon.js";
+import type { BotConfig } from "../src/config.js";
 import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
 import type { ProductionLicenseAdmission } from "../src/license-admission.js";
+import { ReviewStateStore } from "../src/state.js";
 
 const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
   ...input,
@@ -13,6 +19,35 @@ const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
 });
 
 describe("daemon cycle resilience", () => {
+  it("fails closed and closes state when the production open-handle probe fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-cleanup-probe-"));
+    const close = vi.spyOn(ReviewStateStore.prototype, "close");
+    const config = {
+      statePath: join(root, "state.sqlite"),
+      workRoot: join(root, "runtime"),
+      reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 20 * 60_000 },
+      worktreeCleanup: { enabled: true, retentionMs: 2 * 60 * 60_000, intervalMs: 30 * 60_000 }
+    } as BotConfig;
+
+    try {
+      expect(() => cleanupReviewWorktreesFromConfig(
+        { dryRun: false },
+        {
+          loadConfigImpl: () => config,
+          probeOpenReviewWorktreePathsImpl: () => ({
+            ok: false,
+            paths: new Set(),
+            error: "lsof unavailable"
+          })
+        }
+      )).toThrow("worktree cleanup open-handle probe failed: lsof unavailable");
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("exits on activation denial but keeps long-running daemons alive after recoverable runtime failures", () => {
     const admissionDenied = { ok: false, failureKind: "admission_denied", error: "license missing" } as const;
     const runtimeFailure = { ok: false, failureKind: "runtime_failure", error: "transient timeout" } as const;
