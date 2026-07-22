@@ -161,7 +161,14 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
       });
       continue;
     }
-    const status = runGit(["-C", path, "status", "--porcelain=v1", "--untracked-files=all"]);
+    const status = runGit([
+      "-C",
+      path,
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored=matching"
+    ]);
     if (!status.ok) {
       outcomes.push({ path, status: "error", reason: "git_probe_failed", error: status.error });
       continue;

@@ -53,6 +53,19 @@ describe("stale review worktree cleanup", () => {
     expect(fixture.paths.every(existsSync)).toBe(true);
   });
 
+  it("preserves a worktree containing only ignored artifacts", () => {
+    const fixture = createFixture(roots, ["111111111111"]);
+    makeStale(fixture.paths[0]);
+    writeFileSync(join(fixture.paths[0], "review-cache.log"), "keep\n");
+
+    const result = cleanupStaleReviewWorktrees(baseInput(fixture));
+
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ path: fixture.paths[0], status: "skipped", reason: "dirty" })
+    ]);
+    expect(existsSync(fixture.paths[0])).toBe(true);
+  });
+
   it("preserves symlinks and paths that resolve outside the owned root", () => {
     const fixture = createFixture(roots, []);
     const outside = mkdtempSync(join(tmpdir(), "neondiff-cleanup-outside-"));
@@ -182,7 +195,8 @@ function createFixture(roots: string[], shortHeads: string[]) {
   execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
   execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
   writeFileSync(join(sourcePath, "README.md"), "hello\n");
-  execFileSync("git", ["-C", sourcePath, "add", "README.md"], { stdio: "ignore" });
+  writeFileSync(join(sourcePath, ".gitignore"), "review-cache.log\n");
+  execFileSync("git", ["-C", sourcePath, "add", "README.md", ".gitignore"], { stdio: "ignore" });
   execFileSync("git", ["-C", sourcePath, "commit", "-m", "initial"], { stdio: "ignore" });
   execFileSync("git", ["clone", "--mirror", sourcePath, mirrorPath], { stdio: "ignore" });
   const paths = shortHeads.map((shortHead) => {

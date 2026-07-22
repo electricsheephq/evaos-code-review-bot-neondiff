@@ -421,8 +421,12 @@ The daemon also performs a bounded worktree cleanup before selected cycles.
 `worktreeCleanup.retentionMs` defaults to two hours and cannot be shorter than
 two hours or `reviewConcurrency.leaseTtlMs`. Cleanup only asks Git to remove
 stale, clean, registered NeonDiff review worktrees; active runs and heads, open
-paths, symlinks, dirty worktrees, mirrors, and unrelated paths are preserved.
-Set `worktreeCleanup.enabled` to `false` to disable the pass.
+paths, symlinks, tracked, untracked, or ignored changes, mirrors, and unrelated
+paths are preserved. The open-handle guard requires `lsof` on `PATH`; the
+provided Docker image includes it, while Linux package installs must provide it
+through the host package manager. If the probe is unavailable, cleanup fails
+closed, logs `daemon_worktree_cleanup_failed`, and removes nothing. Set
+`worktreeCleanup.enabled` to `false` to disable the pass.
 
 Launchd and live beta promotion are advanced operator tasks. Use
 [docs/launchd.md](launchd.md), [docs/operator-cli.md](operator-cli.md), and

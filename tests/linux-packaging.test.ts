@@ -18,8 +18,10 @@ describe("Linux daemon packaging", () => {
     expect(systemdDocs).toContain("systemctl --user");
     expect(systemdDocs).toContain("EnvironmentFile");
     expect(systemdDocs).toContain("journalctl --user -u neondiff");
+    expect(systemdDocs).toContain("sudo apt-get install -y lsof");
     expect(dockerDocs).toContain("docker compose");
     expect(dockerDocs).toContain("ollama");
+    expect(dockerDocs).toContain("includes `lsof`");
     expect(ciDocs).toContain("GitHub Actions");
     expect(ciDocs).toContain("ubuntu-latest");
 
@@ -36,6 +38,7 @@ describe("Linux daemon packaging", () => {
     expect(dockerfile).toContain("\\bdaemon\\b");
     expect(dockerfile).toContain("neondiff daemon");
     expect(dockerfile).toContain("USER node");
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends lsof");
     expect(dockerfile).toContain("\"--dry-run\", \"true\"");
     expect(compose).toContain("neondiff:");
     expect(compose).toContain("ollama:");
@@ -52,6 +55,7 @@ describe("Linux daemon packaging", () => {
     expect(linuxSmokeWorkflow).toContain("node dist/src/cli.js daemon status");
     expect(linuxSmokeWorkflow).toContain("docker build --tag neondiff-ci:${{ github.sha }} .");
     expect(linuxSmokeWorkflow).toContain("docker run --rm neondiff-ci:${{ github.sha }} --help");
+    expect(linuxSmokeWorkflow).toContain("command -v lsof");
     expect(linuxSmokeWorkflow).toContain("out.command !== \"daemon status\"");
     expect(linuxSmokeWorkflow).toContain("typeof out.error !== \"string\"");
   });
