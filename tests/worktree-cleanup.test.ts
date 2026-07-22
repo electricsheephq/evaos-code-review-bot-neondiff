@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadConfigFromObject } from "../src/config.js";
 import { cleanupStaleReviewWorktrees, type ReviewWorktreeCleanupOps } from "../src/worktree-cleanup.js";
 
 const REPO = "electricsheephq/example";
@@ -139,6 +140,20 @@ describe("stale review worktree cleanup", () => {
       retentionMs: TWO_HOURS_MS,
       leaseTtlMs: TWO_HOURS_MS + 1
     })).toThrow(/retentionMs must be at least/);
+  });
+
+  it("scales an implicit retention default to a legacy long review lease", () => {
+    const config = loadConfigFromObject({
+      reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 24 * 60 * 60_000 }
+    });
+    expect(config.worktreeCleanup?.retentionMs).toBe(24 * 60 * 60_000);
+  });
+
+  it("rejects an explicitly configured retention below the active review lease", () => {
+    expect(() => loadConfigFromObject({
+      reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 24 * 60 * 60_000 },
+      worktreeCleanup: { enabled: true, retentionMs: TWO_HOURS_MS, intervalMs: 30 * 60_000 }
+    })).toThrow(/config\.worktreeCleanup\.retentionMs must be at least/);
   });
 });
 

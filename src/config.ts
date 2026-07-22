@@ -581,6 +581,15 @@ export function loadConfig(configPath?: string): BotConfig {
 
 export function loadConfigFromObject(fromFile: unknown): BotConfig {
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
+  const configuredCleanup = isRecord(fromFile) && isRecord(fromFile.worktreeCleanup)
+    ? fromFile.worktreeCleanup
+    : undefined;
+  if (!configuredCleanup || configuredCleanup.retentionMs === undefined) {
+    merged.worktreeCleanup!.retentionMs = Math.max(
+      merged.worktreeCleanup!.retentionMs,
+      merged.reviewConcurrency.leaseTtlMs
+    );
+  }
 
   merged.github.appId = resolveEnvAlias({
     primaryName: "NEONDIFF_GITHUB_APP_ID",

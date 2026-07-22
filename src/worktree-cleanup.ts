@@ -3,7 +3,6 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const MIN_RETENTION_MS = 2 * 60 * 60_000;
-const OWNED_WORKTREE_NAME = /^(?<safeRepo>[A-Za-z0-9_.-]+(?:__[A-Za-z0-9_.-]+)*)__pr-(?<pullNumber>[1-9][0-9]*)__(?<headSha>[0-9a-fA-F]{12})$/;
 
 export type ReviewWorktreeCleanupReason =
   | "stale_clean_owned"
@@ -105,8 +104,8 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
     .sort((left, right) => left.name.localeCompare(right.name));
 
   for (const entry of entries) {
-    const match = OWNED_WORKTREE_NAME.exec(entry.name);
-    if (!match?.groups) continue;
+    const ownedName = parseOwnedWorktreeName(entry.name);
+    if (!ownedName) continue;
     const path = join(worktreesRoot, entry.name);
     if (entry.isSymbolicLink()) {
       outcomes.push({ path, status: "skipped", reason: "symlink" });
@@ -147,7 +146,7 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
       continue;
     }
 
-    const mirrorPath = join(input.workRoot, "mirrors", `${match.groups.safeRepo}.git`);
+    const mirrorPath = join(input.workRoot, "mirrors", `${ownedName.safeRepo}.git`);
     if (!isValidMirror(mirrorPath, runGit)) {
       outcomes.push({ path, status: "skipped", reason: "mirror_missing_or_invalid" });
       continue;
@@ -189,6 +188,21 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
   }
 
   return summarize(worktreesRoot, input.retentionMs, outcomes);
+}
+
+function parseOwnedWorktreeName(name: string): { safeRepo: string } | undefined {
+  const pullSeparator = name.lastIndexOf("__pr-");
+  if (pullSeparator <= 0) return undefined;
+  const safeRepo = name.slice(0, pullSeparator);
+  const pullAndHead = name.slice(pullSeparator + "__pr-".length);
+  const headSeparator = pullAndHead.indexOf("__");
+  if (headSeparator <= 0 || pullAndHead.indexOf("__", headSeparator + 2) !== -1) return undefined;
+  const pullNumber = pullAndHead.slice(0, headSeparator);
+  const headSha = pullAndHead.slice(headSeparator + 2);
+  if (!/^[A-Za-z0-9_.-]+$/.test(safeRepo)) return undefined;
+  if (!/^[1-9][0-9]*$/.test(pullNumber)) return undefined;
+  if (!/^[0-9a-fA-F]{12}$/.test(headSha)) return undefined;
+  return { safeRepo };
 }
 
 export function probeOpenReviewWorktreePaths(workRoot: string): OpenReviewWorktreeProbe {
