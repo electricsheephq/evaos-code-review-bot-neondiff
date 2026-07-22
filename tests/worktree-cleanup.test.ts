@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -96,6 +97,24 @@ describe("stale review worktree cleanup", () => {
       expect.objectContaining({ path: fixture.paths[1], status: "skipped", reason: "open_or_in_use" })
     ]));
     expect(fixture.paths.every(existsSync)).toBe(true);
+  });
+
+  it("preserves an open worktree when workRoot uses a symlink spelling", () => {
+    const fixture = createFixture(roots, ["111111111111"]);
+    makeStale(fixture.paths[0]);
+    const linkedWorkRoot = join(fixture.root, "runtime-link");
+    symlinkSync(fixture.workRoot, linkedWorkRoot, "dir");
+
+    const result = cleanupStaleReviewWorktrees({
+      ...baseInput(fixture),
+      workRoot: linkedWorkRoot,
+      openWorktreePaths: new Set([realpathSync(fixture.paths[0])])
+    });
+
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ status: "skipped", reason: "open_or_in_use" })
+    ]);
+    expect(existsSync(fixture.paths[0])).toBe(true);
   });
 
   it("fails closed for every candidate while another review run holds a live lease", () => {

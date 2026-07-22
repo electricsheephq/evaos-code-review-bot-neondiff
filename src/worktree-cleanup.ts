@@ -99,7 +99,9 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
   }
 
   const activeNames = new Set(input.activeReviewHeads.map(reviewHeadWorktreeName));
-  const openPaths = new Set([...input.openWorktreePaths].map((path) => resolve(path)));
+  const openPaths = new Set(
+    [...input.openWorktreePaths].flatMap((path) => [...comparablePathVariants(path)])
+  );
   const entries = readdirSync(worktreesRoot, { withFileTypes: true })
     .sort((left, right) => left.name.localeCompare(right.name));
 
@@ -117,9 +119,10 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
     }
 
     let stat;
+    let realPath: string;
     try {
       stat = lstatSync(path);
-      const realPath = realpathSync(path);
+      realPath = realpathSync(path);
       if (stat.isSymbolicLink() || dirname(realPath) !== rootRealPath) {
         outcomes.push({ path, status: "skipped", reason: stat.isSymbolicLink() ? "symlink" : "path_escape" });
         continue;
@@ -141,7 +144,7 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
       outcomes.push({ path, status: "skipped", reason: "active_head" });
       continue;
     }
-    if (openPaths.has(resolve(path))) {
+    if (openPaths.has(resolve(path)) || openPaths.has(realPath)) {
       outcomes.push({ path, status: "skipped", reason: "open_or_in_use" });
       continue;
     }
@@ -214,6 +217,7 @@ function parseOwnedWorktreeName(name: string): { safeRepo: string } | undefined 
 
 export function probeOpenReviewWorktreePaths(workRoot: string): OpenReviewWorktreeProbe {
   const worktreesRoot = resolve(workRoot, "worktrees");
+  const worktreesRootVariants = comparablePathVariants(worktreesRoot);
   const result = spawnSync("lsof", ["-Fn"], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024
@@ -231,7 +235,7 @@ export function probeOpenReviewWorktreePaths(workRoot: string): OpenReviewWorktr
     if (!line.startsWith("n")) continue;
     const openPath = line.slice(1).replace(/ \(deleted\)$/, "");
     if (!isAbsolute(openPath)) continue;
-    const child = directChildForPath(worktreesRoot, openPath);
+    const child = directChildForPath(worktreesRootVariants, openPath);
     if (child) paths.add(child);
   }
   return { ok: true, paths };
@@ -285,11 +289,29 @@ function isRegisteredToExpectedMirror(input: {
   };
 }
 
-function directChildForPath(root: string, path: string): string | undefined {
-  const childRelative = relative(root, resolve(path));
-  if (!childRelative || childRelative === ".." || childRelative.startsWith(`..${sep}`) || isAbsolute(childRelative)) return undefined;
-  const firstSegment = childRelative.split(sep)[0];
-  return firstSegment ? join(root, firstSegment) : undefined;
+function directChildForPath(roots: ReadonlySet<string>, path: string): string | undefined {
+  for (const comparableRoot of roots) {
+    for (const comparablePath of comparablePathVariants(path)) {
+      const childRelative = relative(comparableRoot, comparablePath);
+      if (!childRelative
+        || childRelative === ".."
+        || childRelative.startsWith(`..${sep}`)
+        || isAbsolute(childRelative)) continue;
+      const firstSegment = childRelative.split(sep)[0];
+      if (firstSegment) return join(comparableRoot, firstSegment);
+    }
+  }
+  return undefined;
+}
+
+function comparablePathVariants(path: string): Set<string> {
+  const variants = new Set([resolve(path)]);
+  try {
+    variants.add(realpathSync(path));
+  } catch {
+    // lsof can report a path whose leaf was deleted after the handle opened.
+  }
+  return variants;
 }
 
 function defaultRunGit(args: string[]): GitCommandResult {
