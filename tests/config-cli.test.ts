@@ -431,6 +431,11 @@ describe("desktop config CLI", () => {
         maxActiveRuns: 2,
         leaseTtlMs: 600_000
       },
+      worktreeCleanup: {
+        enabled: true,
+        retentionMs: 7_200_000,
+        intervalMs: 1_800_000
+      },
       reviewGate: {
         maxInlineComments: 12
       },
@@ -468,6 +473,9 @@ describe("desktop config CLI", () => {
         "skipDrafts",
         "reviewConcurrency.maxActiveRuns",
         "reviewConcurrency.leaseTtlMs",
+        "worktreeCleanup.enabled",
+        "worktreeCleanup.retentionMs",
+        "worktreeCleanup.intervalMs",
         "reviewGate.maxInlineComments",
         "issueEnrichment.enabled",
         "issueEnrichment.postIssueComment",

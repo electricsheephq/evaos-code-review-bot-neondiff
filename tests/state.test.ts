@@ -455,6 +455,34 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("holds cleanup behind a live review lease and runs it once the lease is released", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const concurrentStore = new ReviewStateStore(dbPath);
+    const lease = store.tryAcquireReviewRunLease(1, 60_000);
+    let cleanupCalls = 0;
+
+    expect(store.hasActiveReviewRunLease()).toBe(true);
+    expect(store.runWithExclusiveReviewIdleGuard(() => { cleanupCalls += 1; })).toEqual({ ran: false });
+    store.releaseReviewRunLease(lease!.leaseId);
+    expect(store.runWithExclusiveReviewIdleGuard(() => {
+      cleanupCalls += 1;
+      expect(concurrentStore.tryAcquireReviewRunLease(1, 60_000)).toBeUndefined();
+      return "removed";
+    })).toEqual({
+      ran: true,
+      value: "removed"
+    });
+    expect(cleanupCalls).toBe(1);
+    const nextLease = concurrentStore.tryAcquireReviewRunLease(1, 60_000);
+    expect(nextLease).toBeDefined();
+    concurrentStore.releaseReviewRunLease(nextLease!.leaseId);
+    concurrentStore.close();
+    store.close();
+  });
+
   it("expires stale active review leases", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
     roots.push(root);

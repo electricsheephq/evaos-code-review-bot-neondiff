@@ -290,6 +290,8 @@ Default behavior:
   review quieter — they demote or suppress, never escalate
 - re-fetch PR state before live operations
 - keep ZCode/model tools read-only during review
+- periodically prune only stale, clean, inactive NeonDiff review worktrees;
+  cleanup is configurable and fails closed when open-handle safety cannot be proven
 - fail closed when credentials, provider readiness, repo policy, or current-head
   proof is missing
 

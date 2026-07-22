@@ -52,6 +52,7 @@ export type RepoMemoryNoteKind =
   | "proof_preference";
 export type IssueEnrichmentRecordStatus = "dry_run" | "posted" | "skipped" | "deferred" | "failed";
 const REPO_MEMORY_NOTE_KINDS: RepoMemoryNoteKind[] = ["policy_note", "machine_fact", "false_positive", "review_outcome", "proof_preference"];
+const WORKTREE_CLEANUP_GUARD_TTL_MS = 60_000;
 
 export interface ProcessedReviewRecord {
   repo: string;
@@ -603,6 +604,12 @@ export class ReviewStateStore {
         started_at text not null,
         expires_at text not null,
         owner_pid integer
+      );
+
+      create table if not exists worktree_cleanup_guard (
+        id integer primary key check (id = 1),
+        owner_pid integer not null,
+        expires_at text not null
       );
 
       create table if not exists review_head_claims (
@@ -1456,6 +1463,12 @@ export class ReviewStateStore {
     try {
       this.db.prepare("delete from review_run_leases where expires_at <= ?").run(startedAt);
       this.pruneInactiveReviewRunLeases();
+      this.pruneInactiveWorktreeCleanupGuard(startedAt);
+      const cleanupGuard = this.db.prepare("select 1 from worktree_cleanup_guard where id = 1").get();
+      if (cleanupGuard) {
+        this.db.exec("commit");
+        return undefined;
+      }
       const row = this.db.prepare("select count(*) as count from review_run_leases").get() as { count: number };
       if (row.count >= maxActiveRuns) {
         this.db.exec("commit");
@@ -1474,6 +1487,48 @@ export class ReviewStateStore {
 
   releaseReviewRunLease(leaseId: string): void {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
+  }
+
+  hasActiveReviewRunLease(): boolean {
+    const rows = this.db
+      .prepare("select owner_pid from review_run_leases")
+      .all() as unknown as Array<{ owner_pid: number | null }>;
+    return rows.some((row) => row.owner_pid !== null && isProcessAlive(row.owner_pid));
+  }
+
+  runWithExclusiveReviewIdleGuard<T>(operation: () => T): { ran: true; value: T } | { ran: false } {
+    const ownerPid = process.pid;
+    const startedAt = new Date();
+    const expiresAt = new Date(startedAt.getTime() + WORKTREE_CLEANUP_GUARD_TTL_MS).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      this.pruneInactiveWorktreeCleanupGuard(startedAt.toISOString());
+      const cleanupGuard = this.db.prepare("select 1 from worktree_cleanup_guard where id = 1").get();
+      if (cleanupGuard || this.hasActiveReviewRunLease()) {
+        this.db.exec("commit");
+        return { ran: false };
+      }
+      this.db
+        .prepare("insert into worktree_cleanup_guard (id, owner_pid, expires_at) values (1, ?, ?)")
+        .run(ownerPid, expiresAt);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+
+    try {
+      return { ran: true, value: operation() };
+    } finally {
+      this.db.exec("begin immediate");
+      try {
+        this.db.prepare("delete from worktree_cleanup_guard where id = 1 and owner_pid = ?").run(ownerPid);
+        this.db.exec("commit");
+      } catch (error) {
+        this.db.exec("rollback");
+        throw error;
+      }
+    }
   }
 
   /**
@@ -2812,6 +2867,18 @@ export class ReviewStateStore {
       if (row.owner_pid === null || !isProcessAlive(row.owner_pid)) {
         this.db.prepare("delete from review_run_leases where lease_id = ?").run(row.lease_id);
       }
+    }
+  }
+
+  private pruneInactiveWorktreeCleanupGuard(nowIso: string): void {
+    const row = this.db
+      .prepare("select owner_pid, expires_at from worktree_cleanup_guard where id = 1")
+      .get() as { owner_pid: number; expires_at: string } | undefined;
+    if (!row) return;
+    const expiresAtMs = Date.parse(row.expires_at);
+    const expired = !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.parse(nowIso);
+    if (expired || !isProcessAlive(row.owner_pid)) {
+      this.db.prepare("delete from worktree_cleanup_guard where id = 1").run();
     }
   }
 

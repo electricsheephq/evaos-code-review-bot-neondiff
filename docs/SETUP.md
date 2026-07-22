@@ -417,6 +417,19 @@ Live `review-pr` posting is intentionally harder than dry-run inspection. Use
 `--dry-run false --confirm true` after the target repo, PR, head SHA, and config
 path are approved by the relevant issue.
 
+The daemon also performs a bounded worktree cleanup before selected cycles.
+`worktreeCleanup.retentionMs` defaults to two hours and cannot be shorter than
+two hours or `reviewConcurrency.leaseTtlMs`. Cleanup only asks Git to remove
+stale, clean, registered NeonDiff review worktrees; active runs and heads, open
+paths, symlinks, tracked, untracked, or ignored changes, mirrors, and unrelated
+paths are preserved. The open-handle guard requires `lsof` on `PATH`; the
+provided Docker image includes it, while Linux package installs must provide it
+through the host package manager. If the probe is unavailable, cleanup fails
+closed, logs `daemon_worktree_cleanup_failed`, and removes nothing. Set
+`worktreeCleanup.enabled` to `false` to disable the pass. Run the daemon and all
+review workers under the same dedicated account that owns `workRoot`; cleanup
+does not claim visibility into handles owned by unrelated host users.
+
 Launchd and live beta promotion are advanced operator tasks. Use
 [docs/launchd.md](launchd.md), [docs/operator-cli.md](operator-cli.md), and
 [docs/beta-release-runbook.md](beta-release-runbook.md) only after dry-run proof

@@ -2306,6 +2306,7 @@ async function main(): Promise<void> {
     for (;;) {
       cycle += 1;
       const dryRun = args["dry-run"] !== "false";
+      const cleanupIntervalCycles = Math.max(1, Math.ceil(config.worktreeCleanup!.intervalMs / config.pollIntervalMs));
       const cycleResult = await runDaemonCycle({
         cycle,
         dryRun,
@@ -2315,6 +2316,7 @@ async function main(): Promise<void> {
         commandsEnabled: config.commands.enabled,
         reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
         issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
+        worktreeCleanupDue: config.worktreeCleanup!.enabled && (cycle === 1 || (cycle - 1) % cleanupIntervalCycles === 0),
         configPath: args.config
       });
       if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {

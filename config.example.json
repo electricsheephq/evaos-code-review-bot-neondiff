@@ -10,6 +10,12 @@
     "maxActiveRuns": 5,
     "leaseTtlMs": 900000
   },
+  "_worktreeCleanupComment": "Periodic daemon cleanup is limited to stale, clean, Git-registered NeonDiff review worktrees. retentionMs cannot be shorter than two hours or the active review lease TTL. Set enabled:false to disable deletion.",
+  "worktreeCleanup": {
+    "enabled": true,
+    "retentionMs": 7200000,
+    "intervalMs": 1800000
+  },
   "_reviewGateComment": "Deterministic post-model gate plus public review-event selection. trusted_command_only is the safe default; automatic is explicit legacy compatibility only. See docs/neondiff-config.md.",
   "reviewGate": {
     "maxInlineComments": 25,
