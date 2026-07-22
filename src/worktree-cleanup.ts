@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const MIN_RETENTION_MS = 2 * 60 * 60_000;
+const SUBPROCESS_TIMEOUT_MS = 30_000;
 
 export type ReviewWorktreeCleanupReason =
   | "stale_clean_owned"
@@ -242,7 +243,9 @@ export function probeOpenReviewWorktreePaths(
   const worktreesRootVariants = comparablePathVariants(worktreesRoot);
   const runLsof = options.runLsof ?? (() => spawnSync("lsof", ["-Fn"], {
     encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: SUBPROCESS_TIMEOUT_MS,
+    killSignal: "SIGKILL"
   }));
   const result = runLsof();
   if (result.status !== 0) {
@@ -299,7 +302,12 @@ function isRegisteredToExpectedMirror(input: {
 
   const listed = input.runGit(["--git-dir", input.mirrorPath, "worktree", "list", "--porcelain"]);
   if (!listed.ok) return { ok: false, error: listed.error ?? "git worktree list failed" };
-  const expected = realpathSync(input.path);
+  let expected: string;
+  try {
+    expected = realpathSync(input.path);
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
   return {
     ok: listed.stdout?.split(/\r?\n/).some((line) => {
       if (!line.startsWith("worktree ")) return false;
@@ -338,7 +346,13 @@ function comparablePathVariants(path: string): Set<string> {
 }
 
 function defaultRunGit(args: string[]): GitCommandResult {
-  const result = spawnSync("git", args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  const result = spawnSync("git", args, {
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024,
+    timeout: SUBPROCESS_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+  });
   if (result.status !== 0) {
     return {
       ok: false,

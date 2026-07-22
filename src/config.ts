@@ -642,7 +642,7 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(worktreeCleanup.retentionMs, "config.worktreeCleanup.retentionMs");
   validatePositiveInteger(worktreeCleanup.intervalMs, "config.worktreeCleanup.intervalMs");
   const worktreeRetentionFloor = Math.max(2 * 60 * 60_000, config.reviewConcurrency.leaseTtlMs);
-  if (worktreeCleanup.retentionMs < worktreeRetentionFloor) {
+  if (worktreeCleanup.enabled && worktreeCleanup.retentionMs < worktreeRetentionFloor) {
     throw new Error(`config.worktreeCleanup.retentionMs must be at least ${worktreeRetentionFloor}`);
   }
   const reviewerSessions = config.reviewerSessions ?? DEFAULT_CONFIG.reviewerSessions!;

@@ -136,6 +136,12 @@ repo read access for the enabled repos in your local config. It does not run
 ZCode, call a model provider, post comments, print tokens, or print the private
 key path.
 
+Before starting a long-running daemon, also follow the worktree-cleanup setup in
+[SETUP.md](SETUP.md): install the full `lsof` utility, and keep the configured
+work root owned and used by the same dedicated daemon account. Cleanup is not a
+cross-user shared-worktree feature; if open-handle visibility cannot be proven,
+disable `worktreeCleanup` until the host boundary is corrected.
+
 Expected signs of a usable install:
 
 - `ok: true`

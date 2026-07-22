@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -161,6 +161,31 @@ describe("stale review worktree cleanup", () => {
     }
   }, 20_000);
 
+  it("finds a process whose working directory is a review worktree", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-cwd-probe-"));
+    roots.push(root);
+    const workRoot = join(root, "runtime");
+    const worktreePath = join(workRoot, "worktrees", `${SAFE_REPO}__pr-1__111111111111`);
+    mkdirSync(worktreePath, { recursive: true });
+    const child = spawn(process.execPath, ["-e", "setInterval(() => undefined, 1000)"], {
+      cwd: worktreePath,
+      stdio: "ignore"
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
+      const result = probeOpenReviewWorktreePaths(workRoot);
+
+      expect(result.ok).toBe(true);
+      expect([...result.paths].map((path) => realpathSync(path))).toContain(realpathSync(worktreePath));
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 20_000);
+
   it("fails closed when the lsof probe is unavailable", () => {
     const result = probeOpenReviewWorktreePaths("/tmp/neondiff-missing-lsof", {
       runLsof: () => ({
@@ -257,6 +282,19 @@ describe("stale review worktree cleanup", () => {
       reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 24 * 60 * 60_000 },
       worktreeCleanup: { enabled: true, retentionMs: TWO_HOURS_MS, intervalMs: 30 * 60_000 }
     })).toThrow(/config\.worktreeCleanup\.retentionMs must be at least/);
+  });
+
+  it("allows cleanup to be disabled even when its retention is below the active review lease", () => {
+    const config = loadConfigFromObject({
+      reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 24 * 60 * 60_000 },
+      worktreeCleanup: { enabled: false, retentionMs: TWO_HOURS_MS, intervalMs: 30 * 60_000 }
+    });
+
+    expect(config.worktreeCleanup).toEqual({
+      enabled: false,
+      retentionMs: TWO_HOURS_MS,
+      intervalMs: 30 * 60_000
+    });
   });
 });
 

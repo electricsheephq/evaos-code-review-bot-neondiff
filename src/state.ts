@@ -539,6 +539,10 @@ export class ReviewStateStore {
   constructor(dbPath: string) {
     mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
+    // Cleanup deliberately holds the write lock while Git removes one worktree so a
+    // second process cannot acquire a review lease mid-removal. Match the bounded
+    // subprocess timeout so concurrent state writers wait instead of failing busy.
+    this.db.exec("pragma busy_timeout = 30000");
     this.db.exec("pragma foreign_keys = on");
     this.db.exec(`
       create table if not exists processed_reviews (
