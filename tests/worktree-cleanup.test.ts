@@ -34,7 +34,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("removes a stale clean daemon-owned worktree through its mirror", () => {
-    const fixture = createFixture(roots, ["111111111111"]);
+    const fixture = createFixture(roots, 1);
     makeStale(fixture.paths[0]);
 
     const result = cleanupStaleReviewWorktrees(baseInput(fixture));
@@ -47,7 +47,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("preserves recent and dirty worktrees", () => {
-    const fixture = createFixture(roots, ["111111111111", "222222222222"]);
+    const fixture = createFixture(roots, 2);
     makeStale(fixture.paths[1]);
     writeFileSync(join(fixture.paths[1], "untracked.txt"), "keep\n");
 
@@ -61,7 +61,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("preserves a worktree containing only ignored artifacts", () => {
-    const fixture = createFixture(roots, ["111111111111"]);
+    const fixture = createFixture(roots, 1);
     makeStale(fixture.paths[0]);
     writeFileSync(join(fixture.paths[0], "review-cache.log"), "keep\n");
 
@@ -74,7 +74,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("preserves a clean worktree whose detached HEAD no longer matches its generated name", () => {
-    const fixture = createFixture(roots, ["111111111111"]);
+    const fixture = createFixture(roots, 1);
     writeFileSync(join(fixture.paths[0], "README.md"), "local commit\n");
     execFileSync("git", ["-C", fixture.paths[0], "add", "README.md"], { stdio: "ignore" });
     execFileSync("git", ["-C", fixture.paths[0], "commit", "-m", "local-only"], { stdio: "ignore" });
@@ -89,7 +89,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("preserves symlinks and paths that resolve outside the owned root", () => {
-    const fixture = createFixture(roots, []);
+    const fixture = createFixture(roots, 0);
     const outside = mkdtempSync(join(tmpdir(), "neondiff-cleanup-outside-"));
     roots.push(outside);
     const path = join(fixture.worktreesRoot, `${SAFE_REPO}__pr-1__111111111111`);
@@ -104,12 +104,12 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("preserves an active head and an open worktree", () => {
-    const fixture = createFixture(roots, ["111111111111", "222222222222"]);
+    const fixture = createFixture(roots, 2);
     fixture.paths.forEach(makeStale);
 
     const result = cleanupStaleReviewWorktrees({
       ...baseInput(fixture),
-      activeReviewHeads: [{ repo: REPO, pullNumber: 1, headSha: "111111111111aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+      activeReviewHeads: [{ repo: REPO, pullNumber: 1, headSha: fixture.headShas[0]! }],
       openWorktreePaths: new Set([fixture.paths[1]])
     });
 
@@ -121,7 +121,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("preserves an open worktree when workRoot uses a symlink spelling", () => {
-    const fixture = createFixture(roots, ["111111111111"]);
+    const fixture = createFixture(roots, 1);
     makeStale(fixture.paths[0]);
     const linkedWorkRoot = join(fixture.root, "runtime-link");
     symlinkSync(fixture.workRoot, linkedWorkRoot, "dir");
@@ -179,7 +179,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("fails closed for every candidate while another review run holds a live lease", () => {
-    const fixture = createFixture(roots, ["111111111111"]);
+    const fixture = createFixture(roots, 1);
     makeStale(fixture.paths[0]);
 
     const result = cleanupStaleReviewWorktrees({ ...baseInput(fixture), activeReviewRun: true });
@@ -191,12 +191,12 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("keeps the active duplicate PR head while deleting a different stale head", () => {
-    const fixture = createFixture(roots, ["111111111111", "222222222222"]);
+    const fixture = createFixture(roots, 2);
     fixture.paths.forEach(makeStale);
 
     const result = cleanupStaleReviewWorktrees({
       ...baseInput(fixture),
-      activeReviewHeads: [{ repo: REPO, pullNumber: 1, headSha: "222222222222bbbbbbbbbbbbbbbbbbbbbbbbbbbb" }]
+      activeReviewHeads: [{ repo: REPO, pullNumber: 1, headSha: fixture.headShas[1]! }]
     });
 
     expect(result.outcomes).toEqual(expect.arrayContaining([
@@ -208,7 +208,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("preserves a candidate when ordinary git removal refuses", () => {
-    const fixture = createFixture(roots, ["111111111111"]);
+    const fixture = createFixture(roots, 1);
     makeStale(fixture.paths[0]);
     const ops: ReviewWorktreeCleanupOps = {
       removeWorktree: () => ({ ok: false, error: "simulated git refusal" })
@@ -223,7 +223,7 @@ describe("stale review worktree cleanup", () => {
   });
 
   it("refuses retention shorter than the two-hour and active-lease safety floors", () => {
-    const fixture = createFixture(roots, []);
+    const fixture = createFixture(roots, 0);
     expect(() => cleanupStaleReviewWorktrees({
       ...baseInput(fixture),
       retentionMs: TWO_HOURS_MS - 1
@@ -272,7 +272,7 @@ function baseInput(fixture: ReturnType<typeof createFixture>) {
   };
 }
 
-function createFixture(roots: string[], shortHeads: string[]) {
+function createFixture(roots: string[], headCount: number) {
   const root = mkdtempSync(join(tmpdir(), "neondiff-cleanup-"));
   roots.push(root);
   const sourcePath = join(root, "source");
@@ -288,14 +288,26 @@ function createFixture(roots: string[], shortHeads: string[]) {
   writeFileSync(join(sourcePath, ".gitignore"), "review-cache.log\n");
   execFileSync("git", ["-C", sourcePath, "add", "README.md", ".gitignore"], { stdio: "ignore" });
   execFileSync("git", ["-C", sourcePath, "commit", "-m", "initial"], { stdio: "ignore" });
+  const headShas: string[] = [];
+  for (let index = 0; index < headCount; index += 1) {
+    if (index > 0) {
+      const fixtureFile = `fixture-${index}.txt`;
+      writeFileSync(join(sourcePath, fixtureFile), `${index}\n`);
+      execFileSync("git", ["-C", sourcePath, "add", fixtureFile], { stdio: "ignore" });
+      execFileSync("git", ["-C", sourcePath, "commit", "-m", `fixture ${index}`], { stdio: "ignore" });
+    }
+    headShas.push(execFileSync("git", ["-C", sourcePath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+  }
   execFileSync("git", ["clone", "--mirror", sourcePath, mirrorPath], { stdio: "ignore" });
-  const paths = shortHeads.map((shortHead) => {
-    const path = join(worktreesRoot, `${SAFE_REPO}__pr-1__${shortHead}`);
-    execFileSync("git", ["--git-dir", mirrorPath, "worktree", "add", "--detach", path, "HEAD"], { stdio: "ignore" });
+  execFileSync("git", ["--git-dir", mirrorPath, "config", "user.email", "bot@example.com"]);
+  execFileSync("git", ["--git-dir", mirrorPath, "config", "user.name", "Review Bot"]);
+  const paths = headShas.map((headSha) => {
+    const path = join(worktreesRoot, `${SAFE_REPO}__pr-1__${headSha.slice(0, 12)}`);
+    execFileSync("git", ["--git-dir", mirrorPath, "worktree", "add", "--detach", path, headSha], { stdio: "ignore" });
     utimesSync(path, NOW, NOW);
     return path;
   });
-  return { root, workRoot, worktreesRoot, mirrorPath, paths };
+  return { root, workRoot, worktreesRoot, mirrorPath, paths, headShas };
 }
 
 function makeStale(path: string): void {
