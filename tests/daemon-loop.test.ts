@@ -58,6 +58,89 @@ describe("daemon cycle resilience", () => {
     expect(seen).toEqual([issueEnrichment, reviewDiscovery, reviewDiscovery]);
   });
 
+  it("runs a due worktree cleanup before review work and logs bounded outcomes", async () => {
+    const calls: string[] = [];
+    const stdout: string[] = [];
+    const result = await runDaemonCycle({
+      cycle: 1,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      worktreeCleanupDue: true,
+      cleanupReviewWorktreesImpl: () => {
+        calls.push("cleanup");
+        return {
+          worktreesRoot: "/tmp/neondiff/runtime/worktrees",
+          retentionMs: 7_200_000,
+          checked: 2,
+          deleted: 1,
+          skipped: 1,
+          errors: 0,
+          outcomes: [
+            { path: "/tmp/neondiff/runtime/worktrees/a", status: "deleted", reason: "stale_clean_owned" },
+            { path: "/tmp/neondiff/runtime/worktrees/b", status: "skipped", reason: "recent" }
+          ]
+        };
+      },
+      runOnceImpl: async () => {
+        calls.push("review");
+        return successfulRunOnceResult();
+      },
+      retryProviderCooldownsImpl: async () => successfulRetryResult(),
+      recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual(["cleanup", "review"]);
+    expect(JSON.parse(stdout[0]!)).toMatchObject({
+      event: "daemon_worktree_cleanup",
+      result: {
+        deleted: 1,
+        skipped: 1,
+        errors: 0,
+        outcomeCounts: {
+          "deleted:stale_clean_owned": 1,
+          "skipped:recent": 1
+        }
+      }
+    });
+  });
+
+  it("keeps the review cycle alive when worktree cleanup fails closed", async () => {
+    const stderr: string[] = [];
+    let reviewRan = false;
+    const result = await runDaemonCycle({
+      cycle: 1,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      worktreeCleanupDue: true,
+      cleanupReviewWorktreesImpl: () => { throw new Error("open-handle probe unavailable"); },
+      runOnceImpl: async () => {
+        reviewRan = true;
+        return successfulRunOnceResult();
+      },
+      retryProviderCooldownsImpl: async () => successfulRetryResult(),
+      recordHeartbeatImpl: () => undefined,
+      stdout: () => undefined,
+      stderr: (line) => stderr.push(line)
+    });
+
+    expect(result.ok).toBe(true);
+    expect(reviewRan).toBe(true);
+    expect(JSON.parse(stderr[0]!)).toMatchObject({
+      event: "daemon_worktree_cleanup_failed",
+      level: "error",
+      error: "open-handle probe unavailable"
+    });
+  });
+
   it("denies a cycle before heartbeat, review, retry, or enrichment work", async () => {
     const calls = { heartbeat: 0, review: 0, retry: 0, enrichment: 0 };
     const stderr: string[] = [];

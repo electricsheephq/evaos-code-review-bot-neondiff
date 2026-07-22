@@ -1,0 +1,185 @@
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanupStaleReviewWorktrees, type ReviewWorktreeCleanupOps } from "../src/worktree-cleanup.js";
+
+const REPO = "electricsheephq/example";
+const SAFE_REPO = "electricsheephq__example";
+const NOW = new Date("2026-07-22T12:00:00.000Z");
+const TWO_HOURS_MS = 2 * 60 * 60_000;
+
+describe("stale review worktree cleanup", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("removes a stale clean daemon-owned worktree through its mirror", () => {
+    const fixture = createFixture(roots, ["111111111111"]);
+    makeStale(fixture.paths[0]);
+
+    const result = cleanupStaleReviewWorktrees(baseInput(fixture));
+
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ path: fixture.paths[0], status: "deleted", reason: "stale_clean_owned" })
+    ]);
+    expect(existsSync(fixture.paths[0])).toBe(false);
+    expect(existsSync(fixture.mirrorPath)).toBe(true);
+  });
+
+  it("preserves recent and dirty worktrees", () => {
+    const fixture = createFixture(roots, ["111111111111", "222222222222"]);
+    makeStale(fixture.paths[1]);
+    writeFileSync(join(fixture.paths[1], "untracked.txt"), "keep\n");
+
+    const result = cleanupStaleReviewWorktrees(baseInput(fixture));
+
+    expect(result.outcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: fixture.paths[0], status: "skipped", reason: "recent" }),
+      expect.objectContaining({ path: fixture.paths[1], status: "skipped", reason: "dirty" })
+    ]));
+    expect(fixture.paths.every(existsSync)).toBe(true);
+  });
+
+  it("preserves symlinks and paths that resolve outside the owned root", () => {
+    const fixture = createFixture(roots, []);
+    const outside = mkdtempSync(join(tmpdir(), "neondiff-cleanup-outside-"));
+    roots.push(outside);
+    const path = join(fixture.worktreesRoot, `${SAFE_REPO}__pr-1__111111111111`);
+    symlinkSync(outside, path, "dir");
+
+    const result = cleanupStaleReviewWorktrees(baseInput(fixture));
+
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ path, status: "skipped", reason: "symlink" })
+    ]);
+    expect(existsSync(outside)).toBe(true);
+  });
+
+  it("preserves an active head and an open worktree", () => {
+    const fixture = createFixture(roots, ["111111111111", "222222222222"]);
+    fixture.paths.forEach(makeStale);
+
+    const result = cleanupStaleReviewWorktrees({
+      ...baseInput(fixture),
+      activeReviewHeads: [{ repo: REPO, pullNumber: 1, headSha: "111111111111aaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+      openWorktreePaths: new Set([fixture.paths[1]])
+    });
+
+    expect(result.outcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: fixture.paths[0], status: "skipped", reason: "active_head" }),
+      expect.objectContaining({ path: fixture.paths[1], status: "skipped", reason: "open_or_in_use" })
+    ]));
+    expect(fixture.paths.every(existsSync)).toBe(true);
+  });
+
+  it("fails closed for every candidate while another review run holds a live lease", () => {
+    const fixture = createFixture(roots, ["111111111111"]);
+    makeStale(fixture.paths[0]);
+
+    const result = cleanupStaleReviewWorktrees({ ...baseInput(fixture), activeReviewRun: true });
+
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ path: fixture.paths[0], status: "skipped", reason: "active_review_run" })
+    ]);
+    expect(existsSync(fixture.paths[0])).toBe(true);
+  });
+
+  it("keeps the active duplicate PR head while deleting a different stale head", () => {
+    const fixture = createFixture(roots, ["111111111111", "222222222222"]);
+    fixture.paths.forEach(makeStale);
+
+    const result = cleanupStaleReviewWorktrees({
+      ...baseInput(fixture),
+      activeReviewHeads: [{ repo: REPO, pullNumber: 1, headSha: "222222222222bbbbbbbbbbbbbbbbbbbbbbbbbbbb" }]
+    });
+
+    expect(result.outcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: fixture.paths[0], status: "deleted" }),
+      expect.objectContaining({ path: fixture.paths[1], status: "skipped", reason: "active_head" })
+    ]));
+    expect(existsSync(fixture.paths[0])).toBe(false);
+    expect(existsSync(fixture.paths[1])).toBe(true);
+  });
+
+  it("preserves a candidate when ordinary git removal refuses", () => {
+    const fixture = createFixture(roots, ["111111111111"]);
+    makeStale(fixture.paths[0]);
+    const ops: ReviewWorktreeCleanupOps = {
+      removeWorktree: () => ({ ok: false, error: "simulated git refusal" })
+    };
+
+    const result = cleanupStaleReviewWorktrees({ ...baseInput(fixture), ops });
+
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ path: fixture.paths[0], status: "error", reason: "git_remove_refused" })
+    ]);
+    expect(existsSync(fixture.paths[0])).toBe(true);
+  });
+
+  it("refuses retention shorter than the two-hour and active-lease safety floors", () => {
+    const fixture = createFixture(roots, []);
+    expect(() => cleanupStaleReviewWorktrees({
+      ...baseInput(fixture),
+      retentionMs: TWO_HOURS_MS - 1
+    })).toThrow(/retentionMs must be at least/);
+    expect(() => cleanupStaleReviewWorktrees({
+      ...baseInput(fixture),
+      retentionMs: TWO_HOURS_MS,
+      leaseTtlMs: TWO_HOURS_MS + 1
+    })).toThrow(/retentionMs must be at least/);
+  });
+});
+
+function baseInput(fixture: ReturnType<typeof createFixture>) {
+  return {
+    workRoot: fixture.workRoot,
+    retentionMs: TWO_HOURS_MS,
+    leaseTtlMs: 20 * 60_000,
+    now: NOW,
+    activeReviewRun: false,
+    activeReviewHeads: [],
+    openWorktreePaths: new Set<string>()
+  };
+}
+
+function createFixture(roots: string[], shortHeads: string[]) {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-cleanup-"));
+  roots.push(root);
+  const sourcePath = join(root, "source");
+  const workRoot = join(root, "runtime");
+  const worktreesRoot = join(workRoot, "worktrees");
+  const mirrorPath = join(workRoot, "mirrors", `${SAFE_REPO}.git`);
+  mkdirSync(worktreesRoot, { recursive: true });
+  mkdirSync(join(workRoot, "mirrors"), { recursive: true });
+  execFileSync("git", ["init", sourcePath], { stdio: "ignore" });
+  execFileSync("git", ["-C", sourcePath, "config", "user.email", "bot@example.com"]);
+  execFileSync("git", ["-C", sourcePath, "config", "user.name", "Review Bot"]);
+  writeFileSync(join(sourcePath, "README.md"), "hello\n");
+  execFileSync("git", ["-C", sourcePath, "add", "README.md"], { stdio: "ignore" });
+  execFileSync("git", ["-C", sourcePath, "commit", "-m", "initial"], { stdio: "ignore" });
+  execFileSync("git", ["clone", "--mirror", sourcePath, mirrorPath], { stdio: "ignore" });
+  const paths = shortHeads.map((shortHead) => {
+    const path = join(worktreesRoot, `${SAFE_REPO}__pr-1__${shortHead}`);
+    execFileSync("git", ["--git-dir", mirrorPath, "worktree", "add", "--detach", path, "HEAD"], { stdio: "ignore" });
+    utimesSync(path, NOW, NOW);
+    return path;
+  });
+  return { root, workRoot, worktreesRoot, mirrorPath, paths };
+}
+
+function makeStale(path: string): void {
+  const stale = new Date(NOW.getTime() - TWO_HOURS_MS - 1);
+  utimesSync(path, stale, stale);
+}

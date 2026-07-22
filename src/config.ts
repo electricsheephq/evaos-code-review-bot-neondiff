@@ -51,6 +51,11 @@ export interface BotConfig {
     maxActiveRuns: number;
     leaseTtlMs: number;
   };
+  worktreeCleanup?: {
+    enabled: boolean;
+    retentionMs: number;
+    intervalMs: number;
+  };
   reviewerSessions?: {
     enabled: boolean;
     ttlMs: number;
@@ -311,6 +316,11 @@ const DEFAULT_CONFIG: BotConfig = {
   reviewConcurrency: {
     maxActiveRuns: 1,
     leaseTtlMs: 15 * 60_000
+  },
+  worktreeCleanup: {
+    enabled: true,
+    retentionMs: 2 * 60 * 60_000,
+    intervalMs: 30 * 60_000
   },
   reviewerSessions: {
     enabled: false,
@@ -616,6 +626,15 @@ function validateConfig(config: BotConfig): void {
   validateBoolean(config.activation.reviewExistingOpenPrsOnActivation, "config.activation.reviewExistingOpenPrsOnActivation");
   validatePositiveInteger(config.reviewConcurrency.maxActiveRuns, "config.reviewConcurrency.maxActiveRuns");
   validatePositiveInteger(config.reviewConcurrency.leaseTtlMs, "config.reviewConcurrency.leaseTtlMs");
+  const worktreeCleanup = config.worktreeCleanup ?? DEFAULT_CONFIG.worktreeCleanup!;
+  config.worktreeCleanup = worktreeCleanup;
+  validateBoolean(worktreeCleanup.enabled, "config.worktreeCleanup.enabled");
+  validatePositiveInteger(worktreeCleanup.retentionMs, "config.worktreeCleanup.retentionMs");
+  validatePositiveInteger(worktreeCleanup.intervalMs, "config.worktreeCleanup.intervalMs");
+  const worktreeRetentionFloor = Math.max(2 * 60 * 60_000, config.reviewConcurrency.leaseTtlMs);
+  if (worktreeCleanup.retentionMs < worktreeRetentionFloor) {
+    throw new Error(`config.worktreeCleanup.retentionMs must be at least ${worktreeRetentionFloor}`);
+  }
   const reviewerSessions = config.reviewerSessions ?? DEFAULT_CONFIG.reviewerSessions!;
   config.reviewerSessions = reviewerSessions;
   validateBoolean(reviewerSessions.enabled, "config.reviewerSessions.enabled");

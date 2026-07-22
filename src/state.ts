@@ -1476,6 +1476,29 @@ export class ReviewStateStore {
     this.db.prepare("delete from review_run_leases where lease_id = ?").run(leaseId);
   }
 
+  hasActiveReviewRunLease(): boolean {
+    const rows = this.db
+      .prepare("select owner_pid from review_run_leases")
+      .all() as unknown as Array<{ owner_pid: number | null }>;
+    return rows.some((row) => row.owner_pid !== null && isProcessAlive(row.owner_pid));
+  }
+
+  runWithExclusiveReviewIdleGuard<T>(operation: () => T): { ran: true; value: T } | { ran: false } {
+    this.db.exec("begin immediate");
+    try {
+      if (this.hasActiveReviewRunLease()) {
+        this.db.exec("commit");
+        return { ran: false };
+      }
+      const value = operation();
+      this.db.exec("commit");
+      return { ran: true, value };
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
   /**
    * Atomic per-head review claim (#295): defends the at-most-one-review-per-{repo,pr,head_sha}
    * invariant against the manual-review-pr vs daemon race (both passed the getProcessedReview read
