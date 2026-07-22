@@ -73,6 +73,21 @@ describe("stale review worktree cleanup", () => {
     expect(existsSync(fixture.paths[0])).toBe(true);
   });
 
+  it("preserves a clean worktree whose detached HEAD no longer matches its generated name", () => {
+    const fixture = createFixture(roots, ["111111111111"]);
+    writeFileSync(join(fixture.paths[0], "README.md"), "local commit\n");
+    execFileSync("git", ["-C", fixture.paths[0], "add", "README.md"], { stdio: "ignore" });
+    execFileSync("git", ["-C", fixture.paths[0], "commit", "-m", "local-only"], { stdio: "ignore" });
+    makeStale(fixture.paths[0]);
+
+    const result = cleanupStaleReviewWorktrees(baseInput(fixture));
+
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({ path: fixture.paths[0], status: "skipped", reason: "unexpected_head" })
+    ]);
+    expect(existsSync(fixture.paths[0])).toBe(true);
+  });
+
   it("preserves symlinks and paths that resolve outside the owned root", () => {
     const fixture = createFixture(roots, []);
     const outside = mkdtempSync(join(tmpdir(), "neondiff-cleanup-outside-"));
@@ -225,6 +240,16 @@ describe("stale review worktree cleanup", () => {
       reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 24 * 60 * 60_000 }
     });
     expect(config.worktreeCleanup?.retentionMs).toBe(24 * 60 * 60_000);
+  });
+
+  it("does not mutate cleanup defaults after loading a legacy long review lease", () => {
+    const longLease = loadConfigFromObject({
+      reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 24 * 60 * 60_000 }
+    });
+    const normalLease = loadConfigFromObject({});
+
+    expect(longLease.worktreeCleanup?.retentionMs).toBe(24 * 60 * 60_000);
+    expect(normalLease.worktreeCleanup?.retentionMs).toBe(TWO_HOURS_MS);
   });
 
   it("rejects an explicitly configured retention below the active review lease", () => {

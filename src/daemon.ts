@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { formatDaemonLog } from "./daemon-log.js";
 import { loadConfig } from "./config.js";
 import { GitHubApi } from "./github.js";
@@ -202,6 +203,17 @@ export function cleanupReviewWorktreesFromConfig(input: {
   dryRun: boolean;
 }, deps: CleanupReviewWorktreesDeps = {}): ReviewWorktreeCleanupSummary {
   const config = (deps.loadConfigImpl ?? loadConfig)(input.configPath);
+  if (config.worktreeCleanup?.enabled !== true) {
+    return {
+      worktreesRoot: resolve(config.workRoot, "worktrees"),
+      retentionMs: config.worktreeCleanup?.retentionMs ?? 0,
+      checked: 0,
+      deleted: 0,
+      skipped: 0,
+      errors: 0,
+      outcomes: []
+    };
+  }
   const state = new ReviewStateStore(config.statePath);
   try {
     const activeReviewRun = state.hasActiveReviewRunLease();

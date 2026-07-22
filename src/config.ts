@@ -581,6 +581,7 @@ export function loadConfig(configPath?: string): BotConfig {
 
 export function loadConfigFromObject(fromFile: unknown): BotConfig {
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
+  merged.worktreeCleanup = { ...merged.worktreeCleanup! };
   const configuredCleanup = isRecord(fromFile) && isRecord(fromFile.worktreeCleanup)
     ? fromFile.worktreeCleanup
     : undefined;

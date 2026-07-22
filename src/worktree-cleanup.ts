@@ -14,6 +14,7 @@ export type ReviewWorktreeCleanupReason =
   | "active_head"
   | "active_review_run"
   | "open_or_in_use"
+  | "unexpected_head"
   | "not_registered_to_expected_mirror"
   | "mirror_missing_or_invalid"
   | "git_probe_failed"
@@ -189,6 +190,15 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
       outcomes.push({ path, status: "skipped", reason: "dirty" });
       continue;
     }
+    const head = runGit(["-C", path, "rev-parse", "HEAD"]);
+    if (!head.ok || !head.stdout?.trim()) {
+      outcomes.push({ path, status: "error", reason: "git_probe_failed", error: head.error ?? "git head probe failed" });
+      continue;
+    }
+    if (head.stdout.trim().slice(0, 12).toLowerCase() !== ownedName.headSha.toLowerCase()) {
+      outcomes.push({ path, status: "skipped", reason: "unexpected_head" });
+      continue;
+    }
     if (input.dryRun) {
       outcomes.push({ path, status: "skipped", reason: "dry_run" });
       continue;
@@ -209,7 +219,7 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
   return summarize(worktreesRoot, input.retentionMs, outcomes);
 }
 
-function parseOwnedWorktreeName(name: string): { safeRepo: string } | undefined {
+function parseOwnedWorktreeName(name: string): { safeRepo: string; headSha: string } | undefined {
   const pullSeparator = name.lastIndexOf("__pr-");
   if (pullSeparator <= 0) return undefined;
   const safeRepo = name.slice(0, pullSeparator);
@@ -221,7 +231,7 @@ function parseOwnedWorktreeName(name: string): { safeRepo: string } | undefined 
   if (!/^[A-Za-z0-9_.-]+$/.test(safeRepo)) return undefined;
   if (!/^[1-9][0-9]*$/.test(pullNumber)) return undefined;
   if (!/^[0-9a-fA-F]{12}$/.test(headSha)) return undefined;
-  return { safeRepo };
+  return { safeRepo, headSha };
 }
 
 export function probeOpenReviewWorktreePaths(

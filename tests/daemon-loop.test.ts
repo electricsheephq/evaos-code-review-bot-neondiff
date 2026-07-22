@@ -48,6 +48,39 @@ describe("daemon cycle resilience", () => {
     }
   });
 
+  it("honors a live cleanup disablement before opening state or probing handles", () => {
+    const probe = vi.fn(() => ({ ok: true, paths: new Set<string>() }));
+    const close = vi.spyOn(ReviewStateStore.prototype, "close");
+    const config = {
+      statePath: "/unused/state.sqlite",
+      workRoot: "/runtime",
+      reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 20 * 60_000 },
+      worktreeCleanup: { enabled: false, retentionMs: 2 * 60 * 60_000, intervalMs: 30 * 60_000 }
+    } as BotConfig;
+
+    try {
+      expect(cleanupReviewWorktreesFromConfig(
+        { dryRun: false },
+        {
+          loadConfigImpl: () => config,
+          probeOpenReviewWorktreePathsImpl: probe
+        }
+      )).toEqual({
+        worktreesRoot: "/runtime/worktrees",
+        retentionMs: 2 * 60 * 60_000,
+        checked: 0,
+        deleted: 0,
+        skipped: 0,
+        errors: 0,
+        outcomes: []
+      });
+      expect(probe).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      close.mockRestore();
+    }
+  });
+
   it("exits on activation denial but keeps long-running daemons alive after recoverable runtime failures", () => {
     const admissionDenied = { ok: false, failureKind: "admission_denied", error: "license missing" } as const;
     const runtimeFailure = { ok: false, failureKind: "runtime_failure", error: "transient timeout" } as const;
