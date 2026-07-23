@@ -61,6 +61,83 @@ checkout, the output root must be fresh or empty, artifacts are redacted,
 thresholds are explicit, and the decision is advisory-only until a separate
 live activation promotion gate passes.
 
+### Phase 1 advisory cohort seal
+
+The Phase 1 cohort selector has a dedicated offline package command. Supply
+independently computed SHA-256 trust pins for the metadata-only candidate pool
+and frozen policy, and keep the output beneath the independently allowed root:
+
+```bash
+npm run eval:phase1-cohort -- select \
+  --candidate-pool /absolute/path/to/candidates.json \
+  --candidate-pool-sha256 <candidate-pool-sha256> \
+  --policy /absolute/path/to/policy.json \
+  --policy-sha256 <policy-sha256> \
+  --output-dir /absolute/allowed-root/run-1 \
+  --allowed-output-root /absolute/allowed-root
+```
+
+Recompute the expected artifacts from the same pinned inputs and verify the
+existing sealed directory with the same arguments:
+
+```bash
+npm run eval:phase1-cohort -- verify \
+  --candidate-pool /absolute/path/to/candidates.json \
+  --candidate-pool-sha256 <candidate-pool-sha256> \
+  --policy /absolute/path/to/policy.json \
+  --policy-sha256 <policy-sha256> \
+  --output-dir /absolute/allowed-root/run-1 \
+  --allowed-output-root /absolute/allowed-root
+```
+
+Use `npm run eval:phase1-cohort -- --help` for the compact option contract.
+This command is an offline, advisory-only invocation path. It does not wire the
+seal into production review, posting, runtime defaults, or CI enforcement, and
+successful selection or verification does not make the cohort quality-ready.
+
+The pinned policy selects one of two fail-closed profiles. The transport profile
+retains the frozen bucket matrix and legacy first-five packet:
+
+```json
+{
+  "selectionProfile": "stratified_transport",
+  "bucketQuotas": { "16k": 2, "32k": 5, "64k": 5, "128k": 2 },
+  "firstFiveBucketQuotas": { "16k": 1, "32k": 2, "64k": 1, "128k": 1 }
+}
+```
+
+The natural-quality profile has no bucket-quota or first-five policy keys:
+
+```json
+{
+  "selectionProfile": "natural_quality",
+  "cohortSize": 14,
+  "minimumCleanControls": 4
+}
+```
+
+For `natural_quality`, the exposed candidate pool itself must contain exactly 14
+eligible rows and exactly four clean controls; a fifth reserve control stays
+outside the input. Repository, language, high-risk, lineage, per-repository,
+eligibility, integrity, privacy, and resource contracts remain enforced. Natural
+prompt sizes are accepted without a quota: the manifest's
+`admissionEstimatedPromptBucketCounts` records the observed distribution but does
+not affect admission or ordering. Only `stratified_transport` enforces 2/5/5/2
+and preserves the 1/2/1/1 first-five behavior.
+
+Candidate `admissionEstimatedPromptTokens` values and the policy's
+`admissionEstimatorFingerprint` describe a frozen deterministic admission
+estimate. They are not exact provider/backend model token counts. Record actual
+provider token usage separately when execution evidence becomes available; the
+cohort seal does not execute a model.
+
+If `select` observes an incomplete clean directory from an identical writer, or
+loses the final output-directory creation race, it waits for at most 25 checks
+spaced 10 ms apart and accepts only the exact complete matching seal. This is a
+bounded idempotency aid, not a lock or a general multi-writer coordination
+guarantee; timeout, tamper, mode drift, symlinks, and undeclared entries fail
+closed.
+
 The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.
