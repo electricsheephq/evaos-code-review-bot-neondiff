@@ -1,5 +1,8 @@
 import XCTest
 
+private let hostedPageBottomSamplingDeadlineMilliseconds = 15_000
+private let hostedNativeInnerScrollSamplingDeadlineMilliseconds = 75_000
+
 final class NeonDiffDesktopUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -286,18 +289,148 @@ final class NeonDiffDesktopUITests: XCTestCase {
         }
         try attach(
             HostedPageBottomReachabilityTrace(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 scenario: "every-sidebar-page-bottom-at-minimum-size",
                 fixtureId: "tab-overview",
                 requestedContentSize: requestedContentSize,
                 textSizeMode: "runner-default-no-test-override",
                 coordinateSpace: "xcui-screen",
                 minimumSampleIntervalMilliseconds: 100,
-                samplingDeadlineMilliseconds: 5_000,
+                samplingDeadlineMilliseconds: hostedPageBottomSamplingDeadlineMilliseconds,
                 tolerancePoints: 1,
                 navigationActions: navigationActions,
                 checkpoints: checkpoints,
                 proofBoundary: "hosted-outer-page-bottom-reachability-only-inner-scroll-exhaustion-excluded"
+            )
+        )
+    }
+
+    func testHostedNativeInnerScrollsReachTerminalStateWithoutMovingOuterPage() throws {
+        let requestedContentSize = HostedContentSize(width: 1040, height: 680)
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(
+                forResource: "hosted-inner-scroll-overflow",
+                withExtension: "json"
+            )
+        )
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "1040x680",
+            "--disable-animations"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.descendants(matching: .any)[
+                "neondiff.fixture.hosted-inner-scroll-overflow"
+            ].waitForExistence(timeout: 10)
+        )
+        guard app.state == .runningForeground else {
+            throw HostedNativeInnerScrollTraceError.appNotForeground
+        }
+
+        let reposMarker = "neondiff.evaluation.surface.repos.0.quiescent"
+        let reposGeometry = try captureCheckpoint(
+            app: app,
+            section: "repos",
+            generation: 0,
+            markerIdentifier: reposMarker,
+            requestedContentSize: requestedContentSize
+        )
+        let reposOuter = try capturePageBottomCheckpoint(
+            app: app,
+            section: "repos",
+            generation: 0,
+            markerIdentifier: reposMarker,
+            outerScrollIdentifier: "neondiff-repos-outer-scroll",
+            sentinelIdentifier: "neondiff-repos-page-bottom",
+            nestedScrollControlIdentifier: "neondiff-repos-table",
+            nestedScrollControlElementType: .outline,
+            requiresGuardedScrollAction: true
+        )
+        let reposInner = try captureNativeInnerScrollExhaustion(
+            app: app,
+            section: "repos",
+            controlIdentifier: "neondiff-repos-table",
+            controlElementType: .outline,
+            controlElementTypeName: "outline",
+            terminalRowElementType: .outlineRow,
+            terminalRowElementTypeName: "outline-row",
+            outerScrollIdentifier: "neondiff-repos-outer-scroll",
+            outerSentinelIdentifier: "neondiff-repos-page-bottom",
+            outerPreparationCheckpoint: reposOuter,
+            terminalVisibleText: "synthetic-org/repo-040",
+            terminalValueToken: nil,
+            terminalVisibilityMarkerIdentifier: nil
+        )
+
+        let logsNavigation = try clickNavigation(
+            app: app,
+            index: 0,
+            fromSection: "repos",
+            toSection: "logs",
+            identifier: "neondiff-sidebar-section-logs"
+        )
+        let logsMarker = "neondiff.evaluation.surface.logs.1.quiescent"
+        let logsGeometry = try captureCheckpoint(
+            app: app,
+            section: "logs",
+            generation: 1,
+            markerIdentifier: logsMarker,
+            requestedContentSize: requestedContentSize
+        )
+        let logsOuter = try capturePageBottomCheckpoint(
+            app: app,
+            section: "logs",
+            generation: 1,
+            markerIdentifier: logsMarker,
+            outerScrollIdentifier: "neondiff-logs-outer-scroll",
+            sentinelIdentifier: "neondiff-logs-page-bottom",
+            nestedScrollControlIdentifier: "neondiff-logs-text-editor",
+            nestedScrollControlElementType: .textView,
+            requiresGuardedScrollAction: true
+        )
+        let logsInner = try captureNativeInnerScrollExhaustion(
+            app: app,
+            section: "logs",
+            controlIdentifier: "neondiff-logs-text-editor",
+            controlElementType: .textView,
+            controlElementTypeName: "text-view",
+            terminalRowElementType: nil,
+            terminalRowElementTypeName: nil,
+            outerScrollIdentifier: "neondiff-logs-outer-scroll",
+            outerSentinelIdentifier: "neondiff-logs-page-bottom",
+            outerPreparationCheckpoint: logsOuter,
+            terminalVisibleText: nil,
+            terminalValueToken: "HOSTED_INNER_SCROLL_SAFE_TAIL_070",
+            terminalVisibilityMarkerIdentifier: "neondiff-logs-visible-tail"
+        )
+
+        guard (testRun?.failureCount ?? 0) == 0 else {
+            throw HostedNativeInnerScrollTraceError.priorValidationFailure
+        }
+        try attach(
+            HostedNativeInnerScrollTrace(
+                schemaVersion: 13,
+                scenario: "repos-and-logs-native-inner-scroll-terminal-at-1040x680",
+                fixtureId: "hosted-inner-scroll-overflow",
+                requestedContentSize: requestedContentSize,
+                coordinateSpaces: HostedNativeInnerScrollCoordinateSpaces(
+                    xcuiGeometry: "xcui-screen",
+                    observedWindowAndContent: "appkit-screen",
+                    observedRegions: "swiftui-global",
+                    terminalNativeVisibility: "per-payload-appkit-text-view-local"
+                ),
+                tolerancePoints: 1,
+                observedGeometryCheckpoints: [reposGeometry, logsGeometry],
+                innerScrollCheckpoints: [reposInner, logsInner],
+                navigationActions: [logsNavigation],
+                outerPageBottomCheckpoints: [reposOuter, logsOuter],
+                proofBoundary: "hosted-debug-fixture-repos-table-and-logs-text-editor-rendered-terminal-glyph-bounds-outer-page-bottom-checkpoint-then-native-inner-viewport-restaging-per-control-two-one-shot-public-xcui-coordinate-hover-capability-preparations-with-passive-settlement-before-per-control-two-one-shot-public-xcui-scrollbar-coordinate-drags-from-stable-thumb-geometry-to-terminal-repeat-bottom-drag-no-effect-and-outer-page-isolation-at-1040x680-only-wheel-trackpad-keyboard-voiceover-focus-overlay-scrollbar-not-exposed-after-hover-large-text-other-sizes-overflow-production-data-installed-signed-release-excluded"
             )
         )
     }
@@ -430,14 +563,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
                     proofBoundary: "hosted-every-sidebar-destination-1040x680-accessibility3-geometry-only"
                 ),
                 pageBottomReachability: HostedPageBottomReachabilityTrace(
-                    schemaVersion: 1,
+                    schemaVersion: 2,
                     scenario: "every-sidebar-page-bottom-1040x680-accessibility3",
                     fixtureId: "tab-overview",
                     requestedContentSize: requestedContentSize,
                     textSizeMode: textSizeMode,
                     coordinateSpace: "xcui-screen",
                     minimumSampleIntervalMilliseconds: 100,
-                    samplingDeadlineMilliseconds: 5_000,
+                    samplingDeadlineMilliseconds: hostedPageBottomSamplingDeadlineMilliseconds,
                     tolerancePoints: 1,
                     navigationActions: navigationActions,
                     checkpoints: pageBottomCheckpoints,
@@ -1528,14 +1661,14 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 proofBoundary: "hosted-every-sidebar-destination-\(request.contentSizeArgument)-geometry-only"
             ),
             pageBottomReachability: HostedPageBottomReachabilityTrace(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 scenario: "every-sidebar-page-bottom-\(request.contentSizeArgument)",
                 fixtureId: "tab-overview",
                 requestedContentSize: request.requestedContentSize,
                 textSizeMode: "runner-default-no-test-override",
                 coordinateSpace: "xcui-screen",
                 minimumSampleIntervalMilliseconds: 100,
-                samplingDeadlineMilliseconds: 5_000,
+                samplingDeadlineMilliseconds: hostedPageBottomSamplingDeadlineMilliseconds,
                 tolerancePoints: 1,
                 navigationActions: navigationActions,
                 checkpoints: pageBottomCheckpoints,
@@ -1591,13 +1724,1609 @@ final class NeonDiffDesktopUITests: XCTestCase {
         ]
     }
 
+    private func captureNativeInnerScrollExhaustion(
+        app: XCUIApplication,
+        section: String,
+        controlIdentifier: String,
+        controlElementType: XCUIElement.ElementType,
+        controlElementTypeName: String,
+        terminalRowElementType: XCUIElement.ElementType?,
+        terminalRowElementTypeName: String?,
+        outerScrollIdentifier: String,
+        outerSentinelIdentifier: String,
+        outerPreparationCheckpoint: HostedPageBottomCheckpoint,
+        terminalVisibleText: String?,
+        terminalValueToken: String?,
+        terminalVisibilityMarkerIdentifier: String?
+    ) throws -> HostedNativeInnerScrollCheckpoint {
+        let targetSampleIntervalMilliseconds = 100
+        let minimumAcceptedSampleIntervalMilliseconds = 90
+        let samplingDeadlineMilliseconds = hostedNativeInnerScrollSamplingDeadlineMilliseconds
+        let samplingStart = ProcessInfo.processInfo.systemUptime
+        let controlQuery = app.descendants(matching: controlElementType)
+            .matching(identifier: controlIdentifier)
+        guard controlQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                identifier: controlIdentifier,
+                count: controlQuery.count
+            )
+        }
+        let control = controlQuery.element(boundBy: 0)
+        guard control.waitForExistence(timeout: 2) else {
+            throw HostedNativeInnerScrollTraceError.missingElement(controlIdentifier)
+        }
+        let outerScroll = app.descendants(matching: .any)[outerScrollIdentifier]
+        let outerSentinel = app.descendants(matching: .any)[outerSentinelIdentifier]
+        guard outerScroll.waitForExistence(timeout: 2) else {
+            throw HostedNativeInnerScrollTraceError.missingElement(outerScrollIdentifier)
+        }
+        guard outerSentinel.waitForExistence(timeout: 2) else {
+            throw HostedNativeInnerScrollTraceError.missingElement(outerSentinelIdentifier)
+        }
+        let terminalVisibilityMarkerQuery = terminalVisibilityMarkerIdentifier.map {
+            app.descendants(matching: .any).matching(identifier: $0)
+        }
+
+        let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
+        guard outerScrollFrame.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidFrame
+        }
+        let scrollContainers = app.descendants(matching: .scrollView)
+            .allElementsBoundByIndex.filter { candidate in
+                let frame = HostedGeometryFrame(candidate.frame)
+                return candidate.identifier != outerScrollIdentifier
+                    && frame.isFiniteAndNonempty
+                    && frame.differs(from: outerScrollFrame, byMoreThan: 1)
+                    && candidate.descendants(matching: controlElementType)
+                        .matching(identifier: controlIdentifier).count == 1
+            }
+        guard scrollContainers.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollContainerCount(
+                controlIdentifier: controlIdentifier,
+                count: scrollContainers.count
+            )
+        }
+        let scrollContainer = scrollContainers[0]
+        let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
+        let verticalScrollBars = scrollContainer.scrollBars.allElementsBoundByIndex.filter {
+            candidate in
+            let frame = HostedGeometryFrame(candidate.frame)
+            return frame.isFiniteAndNonempty
+                && frame.height > frame.width
+                && frame.isFullyContained(in: scrollContainerFrame, tolerance: 2)
+        }
+        guard verticalScrollBars.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidVerticalScrollBarCount(
+                controlIdentifier: controlIdentifier,
+                count: verticalScrollBars.count
+            )
+        }
+        let verticalScrollBar = verticalScrollBars[0]
+        let outerPreparationSample = try captureNativeInnerScrollSample(
+            app: app,
+            elapsedMilliseconds: Int(
+                ((ProcessInfo.processInfo.systemUptime - samplingStart) * 1_000).rounded()
+            ),
+            control: control,
+            scrollContainer: scrollContainer,
+            verticalScrollBar: verticalScrollBar,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            captureTerminalContent: false,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+            terminalRowElementType: terminalRowElementType
+        )
+        var outerPreparationFailures: [String] = []
+        if outerPreparationCheckpoint.section != section {
+            outerPreparationFailures.append("section-mismatch")
+        }
+        if outerPreparationCheckpoint.outerScrollIdentifier != outerScrollIdentifier {
+            outerPreparationFailures.append("outer-scroll-identifier-mismatch")
+        }
+        if outerPreparationCheckpoint.sentinelIdentifier != outerSentinelIdentifier {
+            outerPreparationFailures.append("sentinel-identifier-mismatch")
+        }
+        if let outerPreparationAction = outerPreparationCheckpoint.scrollAction {
+            if outerPreparationAction.controlIdentifier != outerScrollIdentifier {
+                outerPreparationFailures.append("scroll-action-control-mismatch")
+            }
+            if outerPreparationAction.attemptCount != 1 {
+                outerPreparationFailures.append("scroll-action-attempt-count")
+            }
+            if outerPreparationAction.result != "returned" {
+                outerPreparationFailures.append("scroll-action-result")
+            }
+            if !outerPreparationAction.effectProven {
+                outerPreparationFailures.append("scroll-action-effect")
+            }
+            if outerPreparationAction.nestedScrollControlIdentifier != controlIdentifier {
+                outerPreparationFailures.append("scroll-action-nested-control-mismatch")
+            }
+            if let before = outerPreparationAction.nestedScrollValueBefore,
+               let after = outerPreparationAction.nestedScrollValueAfter {
+                if before != after {
+                    outerPreparationFailures.append("scroll-action-nested-value-changed")
+                }
+            } else {
+                outerPreparationFailures.append("scroll-action-nested-value-missing")
+            }
+            if outerPreparationAction.targetPoint == nil {
+                outerPreparationFailures.append("scroll-action-guard-target-missing")
+            }
+            if outerPreparationAction.guardOuterScrollFrame == nil
+                || outerPreparationAction.guardNestedScrollFrame == nil {
+                outerPreparationFailures.append("scroll-action-guard-frames-missing")
+            }
+            if let guardTargetPoint = outerPreparationAction.targetPoint,
+               let guardOuterScrollFrame = outerPreparationAction.guardOuterScrollFrame,
+               let guardNestedScrollFrame = outerPreparationAction.guardNestedScrollFrame {
+                if !guardOuterScrollFrame.isFiniteAndNonempty {
+                    outerPreparationFailures.append("scroll-action-guard-outer-frame-invalid")
+                }
+                if !guardNestedScrollFrame.isFiniteAndNonempty {
+                    outerPreparationFailures.append("scroll-action-guard-nested-frame-invalid")
+                }
+                let guardTargetInsideOuter =
+                    guardTargetPoint.x >= guardOuterScrollFrame.x + 1
+                    && guardTargetPoint.x <= guardOuterScrollFrame.maxX - 1
+                    && guardTargetPoint.y >= guardOuterScrollFrame.y + 1
+                    && guardTargetPoint.y <= guardOuterScrollFrame.maxY - 1
+                if !guardTargetInsideOuter {
+                    outerPreparationFailures.append("scroll-action-guard-target-outside-outer")
+                }
+                let guardTargetOutsideNested =
+                    guardTargetPoint.x < guardNestedScrollFrame.x - 1
+                    || guardTargetPoint.x > guardNestedScrollFrame.maxX + 1
+                    || guardTargetPoint.y < guardNestedScrollFrame.y - 1
+                    || guardTargetPoint.y > guardNestedScrollFrame.maxY + 1
+                if !guardTargetOutsideNested {
+                    outerPreparationFailures.append("scroll-action-guard-target-inside-nested")
+                }
+            }
+        }
+        if let preparedSample = outerPreparationCheckpoint.postActionSamples.last {
+            if !preparedSample.sentinelFullyContainedInOuterScroll {
+                outerPreparationFailures.append("post-sentinel-outside-outer")
+            }
+            if !preparedSample.sentinelFullyContainedInDetailRegion {
+                outerPreparationFailures.append("post-sentinel-outside-detail")
+            }
+            if preparedSample.outerScrollFrame.differs(
+                from: outerPreparationSample.outerScrollFrame,
+                byMoreThan: 1
+            ) {
+                outerPreparationFailures.append("outer-frame-drift")
+            }
+            if preparedSample.sentinelFrame.differs(
+                from: outerPreparationSample.outerSentinelFrame,
+                byMoreThan: 1
+            ) {
+                outerPreparationFailures.append("sentinel-frame-drift")
+            }
+        } else {
+            outerPreparationFailures.append("missing-post-action-sample")
+        }
+        if !outerPreparationSample.outerSentinelFrame.isFullyContained(
+            in: outerPreparationSample.outerScrollFrame,
+            tolerance: 1
+        ) {
+            outerPreparationFailures.append("current-sentinel-outside-outer")
+        }
+        guard outerPreparationFailures.isEmpty else {
+            throw HostedNativeInnerScrollTraceError.outerPreparationNotEstablished(section: section, failedChecks: outerPreparationFailures)
+        }
+
+        let restagingDeltaY = try outerRestagingDeltaY(
+            scrollContainerFrame: outerPreparationSample.scrollContainerFrame,
+            outerScrollFrame: outerPreparationSample.outerScrollFrame,
+            tolerance: 1
+        )
+        let requiresOuterRestaging = abs(restagingDeltaY) > 0.5
+        let outerRestagingAction: HostedNativeInnerScrollAction?
+        let restagingActionStartedAt = ProcessInfo.processInfo.systemUptime
+        let restagingActionElapsedMilliseconds = Int(
+            ((restagingActionStartedAt - samplingStart) * 1_000).rounded()
+        )
+        let outerRestagingTargetPoint: HostedGeometryPoint?
+        if requiresOuterRestaging {
+            let target = try outerRestagingCoordinate(
+                outerScroll: outerScroll,
+                outerScrollFrame: outerPreparationSample.outerScrollFrame,
+                scrollContainerFrame: outerPreparationSample.scrollContainerFrame,
+                tolerance: 1
+            )
+            outerRestagingTargetPoint = target.point
+            target.coordinate.scroll(byDeltaX: 0, deltaY: CGFloat(restagingDeltaY))
+        } else {
+            outerRestagingTargetPoint = nil
+        }
+        let restagingWindow = try captureStableNativeInnerScrollSamples(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            samplingStartedAt: samplingStart,
+            actionStartedAt: restagingActionStartedAt,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
+            control: control,
+            scrollContainer: scrollContainer,
+            verticalScrollBar: verticalScrollBar,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            captureTerminalContent: false,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+            terminalRowElementType: terminalRowElementType
+        )
+        let outerRestagingObservedSamples = restagingWindow.observedSamples
+        let outerRestagingSamples = restagingWindow.samples
+        guard let preSample = outerRestagingSamples.last else {
+            throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
+        }
+        var outerRestagingFailures: [String] = []
+        if !outerRestagingSamples.allSatisfy({ sample in
+            sample.scrollContainerFrame.isFullyContained(
+                in: sample.outerScrollFrame,
+                tolerance: 1
+            )
+        }) {
+            outerRestagingFailures.append("inner-scroll-outside-outer")
+        }
+        if !outerRestagingObservedSamples.allSatisfy({ sample in
+            sample.normalizedScrollValue == outerPreparationSample.normalizedScrollValue
+        }) {
+            outerRestagingFailures.append("inner-scroll-value-changed-during-outer-restaging")
+        }
+        let scrollContainerTranslation =
+            preSample.scrollContainerFrame.y
+                - outerPreparationSample.scrollContainerFrame.y
+        let restagingEffectObserved = abs(scrollContainerTranslation) > 0.5
+        if requiresOuterRestaging, !restagingEffectObserved {
+            outerRestagingFailures.append("outer-restaging-no-effect")
+        }
+        if !requiresOuterRestaging, restagingEffectObserved {
+            outerRestagingFailures.append("unexpected-outer-restaging-effect")
+        }
+        if requiresOuterRestaging,
+           restagingDeltaY * scrollContainerTranslation <= 0 {
+            outerRestagingFailures.append("outer-restaging-direction-mismatch")
+        }
+        if !outerRestagingSamples.allSatisfy({ sample in
+            !sample.outerScrollFrame.differs(
+                from: outerPreparationSample.outerScrollFrame,
+                byMoreThan: 1
+            )
+                && frameMatchesRigidVerticalTranslation(
+                    baseline: outerPreparationSample.controlFrame,
+                    candidate: sample.controlFrame,
+                    translationY: scrollContainerTranslation,
+                    tolerance: 1
+                )
+                && frameMatchesRigidVerticalTranslation(
+                    baseline: outerPreparationSample.scrollContainerFrame,
+                    candidate: sample.scrollContainerFrame,
+                    translationY: scrollContainerTranslation,
+                    tolerance: 1
+                )
+                && frameMatchesRigidVerticalTranslation(
+                    baseline: outerPreparationSample.scrollBarFrame,
+                    candidate: sample.scrollBarFrame,
+                    translationY: scrollContainerTranslation,
+                    tolerance: 1
+                )
+                && frameMatchesRigidVerticalTranslation(
+                    baseline: outerPreparationSample.outerSentinelFrame,
+                    candidate: sample.outerSentinelFrame,
+                    translationY: scrollContainerTranslation,
+                    tolerance: 1
+                )
+        }) {
+            outerRestagingFailures.append("outer-restaging-translation-mismatch")
+        }
+        guard outerRestagingFailures.isEmpty else {
+            throw HostedNativeInnerScrollTraceError.outerRestagingNotEstablished(section: section, failedChecks: outerRestagingFailures)
+        }
+        if !requiresOuterRestaging {
+            outerRestagingAction = nil
+        } else {
+            outerRestagingAction = HostedNativeInnerScrollAction(
+                mechanism: "public-xcui-coordinate-scroll-delta",
+                elapsedMilliseconds: restagingActionElapsedMilliseconds,
+                deltaX: 0,
+                deltaY: restagingDeltaY,
+                targetPoint: outerRestagingTargetPoint,
+                attemptCount: 1,
+                effectObserved: restagingEffectObserved,
+                effectProven: true,
+                result: "returned-and-inner-viewport-contained-with-outer-translation-proven"
+            )
+        }
+        let preTerminalValue = preSample.normalizedScrollValue
+        guard preTerminalValue < 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidPreTerminalValue(
+                controlIdentifier: controlIdentifier,
+                value: preTerminalValue
+            )
+        }
+        if let terminalVisibilityMarkerQuery,
+           terminalVisibilityMarkerQuery.count != 0 {
+            throw HostedNativeInnerScrollTraceError.terminalVisibilityMarkerPresentBeforeTerminal(
+                terminalVisibilityMarkerIdentifier ?? "unknown"
+            )
+        }
+
+        let firstPreparedDrag = try prepareNativeScrollBarThumbForDrag(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            baselineSample: preSample,
+            captureTerminalContent: false,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+            terminalRowElementType: terminalRowElementType,
+            samplingStartedAt: samplingStart,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
+            tolerance: 1
+        )
+        let firstHoverPreparation = firstPreparedDrag.preparation
+        let firstDragTarget = firstPreparedDrag.dragTarget
+        let firstActionStartedAt = ProcessInfo.processInfo.systemUptime
+        let firstActionElapsedMilliseconds = Int(
+            ((firstActionStartedAt - samplingStart) * 1_000).rounded()
+        )
+        firstDragTarget.sourceCoordinate.click(
+            forDuration: 0.1,
+            thenDragTo: firstDragTarget.destinationCoordinate
+        )
+        if let terminalVisibilityMarkerQuery,
+           let terminalVisibilityMarkerIdentifier {
+            let marker = terminalVisibilityMarkerQuery.element(boundBy: 0)
+            guard marker.waitForExistence(timeout: 2),
+                  terminalVisibilityMarkerQuery.count == 1 else {
+                throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                    identifier: terminalVisibilityMarkerIdentifier,
+                    count: terminalVisibilityMarkerQuery.count
+                )
+            }
+        }
+        let terminalWindow = try captureStableNativeInnerScrollSamples(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            samplingStartedAt: samplingStart,
+            actionStartedAt: firstActionStartedAt,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
+            control: firstPreparedDrag.chain.control,
+            scrollContainer: firstPreparedDrag.chain.scrollContainer,
+            verticalScrollBar: firstPreparedDrag.chain.verticalScrollBar,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            captureTerminalContent: true,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+            terminalRowElementType: terminalRowElementType
+        )
+        let terminalObservedSamples = terminalWindow.observedSamples
+        let terminalSamples = terminalWindow.samples
+        guard let terminalSample = terminalSamples.last else {
+            throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
+        }
+        let terminalValue = terminalSample.normalizedScrollValue
+        guard terminalSamples.allSatisfy({ $0.normalizedScrollValue == 1 }),
+              terminalValue > preTerminalValue else {
+            throw HostedNativeInnerScrollTraceError.didNotReachTerminalValue(
+                controlIdentifier: controlIdentifier,
+                preTerminalValue: preTerminalValue,
+                terminalValue: terminalValue
+            )
+        }
+        let postFirstDragChain = try reboundNativeScrollBarChain(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            tolerance: 1
+        )
+        let firstObservedThumbTranslationY =
+            postFirstDragChain.thumbFrame.y - firstDragTarget.thumbFrame.y
+        guard firstObservedThumbTranslationY > 0.5,
+              !postFirstDragChain.scrollBarFrame.differs(
+                  from: firstDragTarget.scrollBarFrame,
+                  byMoreThan: 1
+              ) else {
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbDidNotReachTerminal(
+                controlIdentifier
+            )
+        }
+
+        let repeatPreparedDrag = try prepareNativeScrollBarThumbForDrag(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            baselineSample: terminalSample,
+            captureTerminalContent: true,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+            terminalRowElementType: terminalRowElementType,
+            samplingStartedAt: samplingStart,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
+            tolerance: 1
+        )
+        let repeatHoverPreparation = repeatPreparedDrag.preparation
+        let repeatDragTarget = repeatPreparedDrag.dragTarget
+        let repeatActionStartedAt = ProcessInfo.processInfo.systemUptime
+        let repeatActionElapsedMilliseconds = Int(
+            ((repeatActionStartedAt - samplingStart) * 1_000).rounded()
+        )
+        repeatDragTarget.sourceCoordinate.click(
+            forDuration: 0.1,
+            thenDragTo: repeatDragTarget.destinationCoordinate
+        )
+        let repeatTerminalWindow = try captureStableNativeInnerScrollSamples(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            samplingStartedAt: samplingStart,
+            actionStartedAt: repeatActionStartedAt,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
+            control: repeatPreparedDrag.chain.control,
+            scrollContainer: repeatPreparedDrag.chain.scrollContainer,
+            verticalScrollBar: repeatPreparedDrag.chain.verticalScrollBar,
+            outerScroll: outerScroll,
+            outerSentinel: outerSentinel,
+            captureTerminalContent: true,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+            terminalRowElementType: terminalRowElementType
+        )
+        let repeatTerminalObservedSamples = repeatTerminalWindow.observedSamples
+        let repeatTerminalSamples = repeatTerminalWindow.samples
+        guard let repeatTerminalSample = repeatTerminalSamples.last else {
+            throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
+        }
+        let repeatTerminalValue = repeatTerminalSample.normalizedScrollValue
+        guard repeatTerminalObservedSamples.allSatisfy({
+            $0.normalizedScrollValue == terminalValue
+        }) else {
+            throw HostedNativeInnerScrollTraceError.repeatTerminalScrollChangedValue(
+                controlIdentifier: controlIdentifier,
+                terminalValue: terminalValue,
+                repeatTerminalValue: repeatTerminalValue
+            )
+        }
+        for candidate in repeatTerminalObservedSamples {
+            guard nativeInnerScrollSamplesMatch(terminalSample, candidate) else {
+                throw HostedNativeInnerScrollTraceError.repeatTerminalScrollChangedGeometry(
+                    controlIdentifier
+                )
+            }
+        }
+        let postRepeatChain = try reboundNativeScrollBarChain(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            tolerance: 1
+        )
+        let repeatObservedThumbTranslationY =
+            postRepeatChain.thumbFrame.y - repeatDragTarget.thumbFrame.y
+        guard abs(repeatObservedThumbTranslationY) <= 1,
+              !postRepeatChain.scrollBarFrame.differs(
+                  from: repeatDragTarget.scrollBarFrame,
+                  byMoreThan: 1
+              ) else {
+            throw HostedNativeInnerScrollTraceError.repeatTerminalScrollChangedGeometry(
+                controlIdentifier
+            )
+        }
+
+        let postActionSamples = terminalSamples + repeatTerminalSamples
+        let postActionObservedSamples =
+            firstHoverPreparation.observedSamples.map(\.innerScrollSample)
+                + terminalWindow.observedSamples
+                + repeatHoverPreparation.observedSamples.map(\.innerScrollSample)
+                + repeatTerminalWindow.observedSamples
+        for candidate in postActionObservedSamples {
+            guard !preSample.outerSentinelFrame.differs(
+                from: candidate.outerSentinelFrame,
+                byMoreThan: 1
+            ), !preSample.outerScrollFrame.differs(
+                from: candidate.outerScrollFrame,
+                byMoreThan: 1
+            ) else {
+                throw HostedNativeInnerScrollTraceError.outerPageMoved(section)
+            }
+        }
+        if terminalVisibleText != nil {
+            guard postActionSamples.allSatisfy({ sample in
+                sample.terminalElementFrame != nil
+                    && sample.terminalRowFrame != nil
+                    && sample.terminalElementFullyContained == true
+                    && sample.terminalElementFullyContainedInRow == true
+                    && sample.terminalRowFullyContained == true
+            }) else {
+                throw HostedNativeInnerScrollTraceError.missingTerminalContent(section)
+            }
+        }
+        if terminalValueToken != nil,
+           !postActionSamples.allSatisfy({
+               $0.controlValueContainsTerminalToken == true
+           }) {
+            throw HostedNativeInnerScrollTraceError.missingTerminalContent(section)
+        }
+        if terminalVisibilityMarkerIdentifier != nil,
+           let terminalValueToken {
+            let terminalControlValue = String(describing: control.value ?? "")
+            guard postActionSamples.allSatisfy({ sample in
+                sample.terminalVisibilityMarkerFrame != nil
+                    && sample.terminalVisibilityMarkerFullyContained == true
+                    && sample.terminalNativeVisibility != nil
+                    && sample.terminalNativeVisibility.map {
+                        nativeVisibilityProvesTerminalToken(
+                            $0,
+                            controlValue: terminalControlValue,
+                            expectedToken: terminalValueToken
+                        )
+                    } == true
+            }) else {
+                throw HostedNativeInnerScrollTraceError.missingTerminalContent(section)
+            }
+        } else if terminalVisibilityMarkerIdentifier != nil {
+            throw HostedNativeInnerScrollTraceError.missingTerminalContent(section)
+        }
+
+        return HostedNativeInnerScrollCheckpoint(
+            section: section,
+            controlIdentifier: controlIdentifier,
+            controlElementType: controlElementTypeName,
+            scrollContainerElementType: "scroll-view",
+            scrollContainerCount: scrollContainers.count,
+            verticalScrollBarCount: verticalScrollBars.count,
+            terminalVisibilityMarkerIdentifier: terminalVisibilityMarkerIdentifier,
+            terminalVisibleText: terminalVisibleText,
+            terminalValueToken: terminalValueToken,
+            terminalRowElementType: terminalRowElementTypeName,
+            outerPreparationCheckpoint: outerPreparationCheckpoint,
+            outerPreparationResult: "verified-page-bottom-then-inner-viewport-restaged-before-isolation-baseline",
+            outerPreparationSample: outerPreparationSample,
+            outerRestagingAction: outerRestagingAction,
+            outerRestagingObservedSamples: outerRestagingObservedSamples,
+            outerRestagingSamples: outerRestagingSamples,
+            outerRestagingWindowDurationMilliseconds: restagingWindow.durationMilliseconds,
+            preTerminalValue: preTerminalValue,
+            terminalValue: terminalValue,
+            repeatTerminalValue: repeatTerminalValue,
+            targetSampleIntervalMilliseconds: targetSampleIntervalMilliseconds,
+            minimumAcceptedSampleIntervalMilliseconds:
+                minimumAcceptedSampleIntervalMilliseconds,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds,
+            terminalWindowDurationMilliseconds: terminalWindow.durationMilliseconds,
+            repeatTerminalWindowDurationMilliseconds:
+                repeatTerminalWindow.durationMilliseconds,
+            terminalStateStable: true,
+            outerIsolationProven: true,
+            firstHoverPreparation: firstHoverPreparation,
+            repeatHoverPreparation: repeatHoverPreparation,
+            firstTerminalAction: HostedNativeInnerScrollAction(
+                mechanism: "public-xcui-scrollbar-thumb-drag",
+                elapsedMilliseconds: firstActionElapsedMilliseconds,
+                sourcePoint: firstDragTarget.sourcePoint,
+                targetPoint: firstDragTarget.destinationPoint,
+                normalizedTargetValue: 1,
+                requestedDisplacementY: firstDragTarget.requestedDisplacementY,
+                guardScrollBarFrame: firstDragTarget.scrollBarFrame,
+                guardThumbFrameBefore: firstDragTarget.thumbFrame,
+                guardThumbFrameAfter: postFirstDragChain.thumbFrame,
+                observedThumbTranslationY: firstObservedThumbTranslationY,
+                attemptCount: 1,
+                effectObserved: true,
+                effectProven: true,
+                result: "returned-and-terminal-value-proven"
+            ),
+            repeatTerminalAction: HostedNativeInnerScrollAction(
+                mechanism: "public-xcui-scrollbar-thumb-drag",
+                elapsedMilliseconds: repeatActionElapsedMilliseconds,
+                sourcePoint: repeatDragTarget.sourcePoint,
+                targetPoint: repeatDragTarget.destinationPoint,
+                normalizedTargetValue: 1,
+                requestedDisplacementY: repeatDragTarget.requestedDisplacementY,
+                guardScrollBarFrame: repeatDragTarget.scrollBarFrame,
+                guardThumbFrameBefore: repeatDragTarget.thumbFrame,
+                guardThumbFrameAfter: postRepeatChain.thumbFrame,
+                observedThumbTranslationY: repeatObservedThumbTranslationY,
+                attemptCount: 1,
+                effectObserved: false,
+                effectProven: true,
+                result: "returned-with-no-value-effect"
+            ),
+            preSample: preSample,
+            terminalObservedSamples: terminalObservedSamples,
+            terminalSamples: terminalSamples,
+            repeatTerminalObservedSamples: repeatTerminalObservedSamples,
+            repeatTerminalSamples: repeatTerminalSamples
+        )
+    }
+
+    private func reboundNativeScrollBarChain(
+        app: XCUIApplication,
+        controlIdentifier: String,
+        controlElementType: XCUIElement.ElementType,
+        outerScrollIdentifier: String,
+        tolerance: Double
+    ) throws -> HostedNativeScrollBarChain {
+        let controlQuery = app.descendants(matching: controlElementType)
+            .matching(identifier: controlIdentifier)
+        guard controlQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                identifier: controlIdentifier,
+                count: controlQuery.count
+            )
+        }
+        let control = controlQuery.element(boundBy: 0)
+        guard control.exists else {
+            throw HostedNativeInnerScrollTraceError.missingElement(controlIdentifier)
+        }
+        let outerScroll = app.descendants(matching: .any)[outerScrollIdentifier]
+        guard outerScroll.exists else {
+            throw HostedNativeInnerScrollTraceError.missingElement(outerScrollIdentifier)
+        }
+        let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
+        guard outerScrollFrame.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidFrame
+        }
+        let scrollContainers = app.descendants(matching: .scrollView)
+            .allElementsBoundByIndex.filter { candidate in
+                let frame = HostedGeometryFrame(candidate.frame)
+                return candidate.identifier != outerScrollIdentifier
+                    && frame.isFiniteAndNonempty
+                    && frame.differs(from: outerScrollFrame, byMoreThan: 1)
+                    && candidate.descendants(matching: controlElementType)
+                        .matching(identifier: controlIdentifier).count == 1
+            }
+        guard scrollContainers.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollContainerCount(
+                controlIdentifier: controlIdentifier,
+                count: scrollContainers.count
+            )
+        }
+        let scrollContainer = scrollContainers[0]
+        let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
+        guard scrollContainerFrame.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidFrame
+        }
+        let verticalScrollBars = scrollContainer.scrollBars.allElementsBoundByIndex.filter {
+            candidate in
+            let frame = HostedGeometryFrame(candidate.frame)
+            return frame.isFiniteAndNonempty
+                && frame.height > frame.width
+                && frame.isFullyContained(in: scrollContainerFrame, tolerance: 2)
+        }
+        guard verticalScrollBars.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidVerticalScrollBarCount(
+                controlIdentifier: controlIdentifier,
+                count: verticalScrollBars.count
+            )
+        }
+        let verticalScrollBar = verticalScrollBars[0]
+        let scrollBarFrame = HostedGeometryFrame(verticalScrollBar.frame)
+        let thumbQuery = verticalScrollBar.descendants(matching: .valueIndicator)
+        guard thumbQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarThumbCount(
+                controlIdentifier: controlIdentifier,
+                count: thumbQuery.count
+            )
+        }
+        let thumb = thumbQuery.element(boundBy: 0)
+        guard thumb.exists, thumbQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarThumbCount(
+                controlIdentifier: controlIdentifier,
+                count: thumbQuery.count
+            )
+        }
+        let thumbFrame = HostedGeometryFrame(thumb.frame)
+        guard scrollBarFrame.isFiniteAndNonempty,
+              thumbFrame.isFiniteAndNonempty,
+              thumbFrame.isFullyContained(in: scrollBarFrame, tolerance: tolerance) else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarDragGeometry(
+                controlIdentifier
+            )
+        }
+        return HostedNativeScrollBarChain(
+            control: control,
+            scrollContainer: scrollContainer,
+            verticalScrollBar: verticalScrollBar,
+            thumb: thumb,
+            scrollBarFrame: scrollBarFrame,
+            thumbFrame: thumbFrame,
+            thumbEnabled: thumb.isEnabled,
+            thumbHittable: thumb.isHittable
+        )
+    }
+
+    private func nativeScrollBarHoverTarget(
+        chain: HostedNativeScrollBarChain,
+        controlIdentifier: String
+    ) throws -> HostedNativeScrollBarHoverTarget {
+        let point = HostedGeometryPoint(
+            x: chain.thumbFrame.x + (chain.thumbFrame.width / 2),
+            y: chain.thumbFrame.y + (chain.thumbFrame.height / 2)
+        )
+        let normalizedOffset = CGVector(
+            dx: (point.x - chain.scrollBarFrame.x) / chain.scrollBarFrame.width,
+            dy: (point.y - chain.scrollBarFrame.y) / chain.scrollBarFrame.height
+        )
+        guard normalizedOffset.dx.isFinite,
+              normalizedOffset.dy.isFinite,
+              normalizedOffset.dx >= 0,
+              normalizedOffset.dx <= 1,
+              normalizedOffset.dy >= 0,
+              normalizedOffset.dy <= 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarDragGeometry(
+                controlIdentifier
+            )
+        }
+        return HostedNativeScrollBarHoverTarget(
+            coordinate: chain.verticalScrollBar.coordinate(
+                withNormalizedOffset: normalizedOffset
+            ),
+            point: point,
+            chain: chain
+        )
+    }
+
+    private func prepareNativeScrollBarThumbForDrag(
+        app: XCUIApplication,
+        controlIdentifier: String,
+        controlElementType: XCUIElement.ElementType,
+        outerScrollIdentifier: String,
+        outerScroll: XCUIElement,
+        outerSentinel: XCUIElement,
+        baselineSample: HostedNativeInnerScrollSample,
+        captureTerminalContent: Bool,
+        terminalVisibleText: String?,
+        terminalValueToken: String?,
+        terminalVisibilityMarkerQuery: XCUIElementQuery?,
+        terminalRowElementType: XCUIElement.ElementType?,
+        samplingStartedAt: TimeInterval,
+        targetSampleIntervalMilliseconds: Int,
+        minimumAcceptedSampleIntervalMilliseconds: Int,
+        samplingDeadlineMilliseconds: Int,
+        tolerance: Double
+    ) throws -> HostedNativePreparedScrollBarDrag {
+        let preHoverChain = try reboundNativeScrollBarChain(
+            app: app,
+            controlIdentifier: controlIdentifier,
+            controlElementType: controlElementType,
+            outerScrollIdentifier: outerScrollIdentifier,
+            tolerance: tolerance
+        )
+        let hoverTarget = try nativeScrollBarHoverTarget(
+            chain: preHoverChain,
+            controlIdentifier: controlIdentifier
+        )
+        let actionStartedAt = ProcessInfo.processInfo.systemUptime
+        let actionElapsedMilliseconds = Int(
+            ((actionStartedAt - samplingStartedAt) * 1_000).rounded()
+        )
+        hoverTarget.coordinate.hover()
+
+        let targetInterval = Double(targetSampleIntervalMilliseconds) / 1_000
+        let maximumSampleAttempts = max(
+            3,
+            samplingDeadlineMilliseconds / max(1, targetSampleIntervalMilliseconds)
+        )
+        var observedSamples: [HostedNativeScrollBarHoverSample] = []
+        var samples: [HostedNativeScrollBarHoverSample] = []
+        var finalChain: HostedNativeScrollBarChain?
+        var previousSampleStartedAt = actionStartedAt
+        for _ in 0..<maximumSampleAttempts {
+            let elapsedSincePrevious =
+                ProcessInfo.processInfo.systemUptime - previousSampleStartedAt
+            let remainingDelay = max(0, targetInterval - elapsedSincePrevious)
+            if remainingDelay > 0 {
+                RunLoop.current.run(until: Date().addingTimeInterval(remainingDelay))
+            }
+            let sampleStartedAt = ProcessInfo.processInfo.systemUptime
+            previousSampleStartedAt = sampleStartedAt
+            let reboundChain = try reboundNativeScrollBarChain(
+                app: app,
+                controlIdentifier: controlIdentifier,
+                controlElementType: controlElementType,
+                outerScrollIdentifier: outerScrollIdentifier,
+                tolerance: tolerance
+            )
+            if !captureTerminalContent,
+               let terminalVisibilityMarkerQuery,
+               terminalVisibilityMarkerQuery.count != 0 {
+                throw HostedNativeInnerScrollTraceError
+                    .terminalVisibilityMarkerPresentBeforeTerminal(
+                        "hover-preparation-\(controlIdentifier)"
+                    )
+            }
+            let innerScrollSample = try captureNativeInnerScrollSample(
+                app: app,
+                elapsedMilliseconds: Int(
+                    ((sampleStartedAt - samplingStartedAt) * 1_000).rounded()
+                ),
+                control: reboundChain.control,
+                scrollContainer: reboundChain.scrollContainer,
+                verticalScrollBar: reboundChain.verticalScrollBar,
+                outerScroll: outerScroll,
+                outerSentinel: outerSentinel,
+                captureTerminalContent: captureTerminalContent,
+                terminalVisibleText: terminalVisibleText,
+                terminalValueToken: terminalValueToken,
+                terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+                terminalRowElementType: terminalRowElementType
+            )
+            guard nativeInnerScrollSamplesMatch(baselineSample, innerScrollSample) else {
+                throw HostedNativeInnerScrollTraceError.hoverPreparationChangedState(
+                    controlIdentifier
+                )
+            }
+            let sample = HostedNativeScrollBarHoverSample(
+                innerScrollSample: innerScrollSample,
+                thumbFrame: reboundChain.thumbFrame,
+                thumbEnabled: reboundChain.thumbEnabled,
+                thumbHittable: reboundChain.thumbHittable
+            )
+            observedSamples.append(sample)
+            if let baseline = samples.first,
+               nativeScrollBarHoverSamplesMatch(baseline, sample) {
+                samples.append(sample)
+            } else {
+                samples = [sample]
+            }
+            finalChain = reboundChain
+            if samples.count == 3 { break }
+            let elapsedSinceActionMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - actionStartedAt) * 1_000).rounded()
+            )
+            if elapsedSinceActionMilliseconds >= samplingDeadlineMilliseconds { break }
+        }
+
+        let samplingCompletedAt = ProcessInfo.processInfo.systemUptime
+        let durationMilliseconds = Int(
+            ((samplingCompletedAt - actionStartedAt) * 1_000).rounded()
+        )
+        guard samples.count == 3,
+              let first = samples.first,
+              let last = samples.last,
+              let finalChain,
+              first.innerScrollSample.elapsedMilliseconds - actionElapsedMilliseconds
+                  >= minimumAcceptedSampleIntervalMilliseconds,
+              durationMilliseconds <= samplingDeadlineMilliseconds else {
+            throw HostedNativeInnerScrollTraceError.scrollBarThumbGeometryNotStable(
+                controlIdentifier
+            )
+        }
+        for (lhs, rhs) in zip(samples, samples.dropFirst()) {
+            guard rhs.innerScrollSample.elapsedMilliseconds
+                    - lhs.innerScrollSample.elapsedMilliseconds
+                    >= minimumAcceptedSampleIntervalMilliseconds,
+                  nativeScrollBarHoverSamplesMatch(lhs, rhs) else {
+                throw HostedNativeInnerScrollTraceError.invalidCadence(
+                    controlIdentifier: controlIdentifier,
+                    lhsElapsedMilliseconds: lhs.innerScrollSample.elapsedMilliseconds,
+                    rhsElapsedMilliseconds: rhs.innerScrollSample.elapsedMilliseconds
+                )
+            }
+        }
+        let dragTarget = try nativeScrollBarBottomDragTarget(
+            chain: finalChain,
+            controlIdentifier: controlIdentifier,
+            tolerance: tolerance
+        )
+        let effectObserved = !preHoverChain.thumbHittable && finalChain.thumbHittable
+        let action = HostedNativeInnerScrollAction(
+            mechanism: "public-xcui-coordinate-hover",
+            elapsedMilliseconds: actionElapsedMilliseconds,
+            targetPoint: hoverTarget.point,
+            guardScrollBarFrame: preHoverChain.scrollBarFrame,
+            guardScrollBarFrameAfter: finalChain.scrollBarFrame,
+            guardThumbFrameBefore: preHoverChain.thumbFrame,
+            guardThumbFrameAfter: finalChain.thumbFrame,
+            normalizedValueBefore: baselineSample.normalizedScrollValue,
+            normalizedValueAfter: last.innerScrollSample.normalizedScrollValue,
+            guardThumbHittableBefore: preHoverChain.thumbHittable,
+            guardThumbHittableAfter: finalChain.thumbHittable,
+            attemptCount: 1,
+            effectObserved: effectObserved,
+            effectProven: true,
+            result: effectObserved
+                ? "returned-and-hittable-after-passive-settlement"
+                : "returned-and-stable-geometry-confirmed-after-passive-settlement"
+        )
+        return HostedNativePreparedScrollBarDrag(
+            preparation: HostedNativeScrollBarHoverPreparation(
+                action: action,
+                observedSamples: observedSamples,
+                samples: samples,
+                durationMilliseconds: durationMilliseconds
+            ),
+            chain: finalChain,
+            dragTarget: dragTarget
+        )
+    }
+
+    private func nativeScrollBarHoverSamplesMatch(
+        _ lhs: HostedNativeScrollBarHoverSample,
+        _ rhs: HostedNativeScrollBarHoverSample
+    ) -> Bool {
+        nativeInnerScrollSamplesMatch(lhs.innerScrollSample, rhs.innerScrollSample)
+            && !lhs.thumbFrame.differs(from: rhs.thumbFrame, byMoreThan: 1)
+            && lhs.thumbEnabled == rhs.thumbEnabled
+            && lhs.thumbHittable == rhs.thumbHittable
+    }
+
+    private func nativeScrollBarBottomDragTarget(
+        chain: HostedNativeScrollBarChain,
+        controlIdentifier: String,
+        tolerance: Double
+    ) throws -> HostedNativeScrollBarDragTarget {
+        let verticalScrollBar = chain.verticalScrollBar
+        let scrollBarFrame = chain.scrollBarFrame
+        let thumbFrame = chain.thumbFrame
+
+        let sourcePoint = HostedGeometryPoint(
+            x: thumbFrame.x + (thumbFrame.width / 2),
+            y: thumbFrame.y + (thumbFrame.height / 2)
+        )
+        let destinationPoint = HostedGeometryPoint(
+            x: sourcePoint.x,
+            y: scrollBarFrame.maxY - max(1, tolerance)
+        )
+        let requestedDisplacementY = destinationPoint.y - sourcePoint.y
+        let minimumDisplacement = max(2, tolerance + 1)
+        guard destinationPoint.x >= scrollBarFrame.x + tolerance,
+              destinationPoint.x <= scrollBarFrame.maxX - tolerance,
+              destinationPoint.y >= scrollBarFrame.y + tolerance,
+              destinationPoint.y <= scrollBarFrame.maxY - tolerance,
+              requestedDisplacementY >= minimumDisplacement,
+              requestedDisplacementY <= scrollBarFrame.height else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarDragGeometry(
+                controlIdentifier
+            )
+        }
+        let normalizedSource = CGVector(
+            dx: (sourcePoint.x - scrollBarFrame.x) / scrollBarFrame.width,
+            dy: (sourcePoint.y - scrollBarFrame.y) / scrollBarFrame.height
+        )
+        let normalizedDestination = CGVector(
+            dx: (destinationPoint.x - scrollBarFrame.x) / scrollBarFrame.width,
+            dy: (destinationPoint.y - scrollBarFrame.y) / scrollBarFrame.height
+        )
+        guard normalizedSource.dx.isFinite,
+              normalizedSource.dy.isFinite,
+              normalizedSource.dx >= 0,
+              normalizedSource.dx <= 1,
+              normalizedSource.dy >= 0,
+              normalizedSource.dy <= 1,
+              normalizedDestination.dx.isFinite,
+              normalizedDestination.dy.isFinite,
+              normalizedDestination.dx >= 0,
+              normalizedDestination.dx <= 1,
+              normalizedDestination.dy >= 0,
+              normalizedDestination.dy <= 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollBarDragGeometry(
+                controlIdentifier
+            )
+        }
+        return HostedNativeScrollBarDragTarget(
+            sourceCoordinate: verticalScrollBar.coordinate(withNormalizedOffset: normalizedSource),
+            destinationCoordinate: verticalScrollBar.coordinate(withNormalizedOffset: normalizedDestination),
+            sourcePoint: sourcePoint,
+            destinationPoint: destinationPoint,
+            scrollBarFrame: scrollBarFrame,
+            thumbFrame: thumbFrame,
+            requestedDisplacementY: requestedDisplacementY
+        )
+    }
+
+    private func captureStableNativeInnerScrollSamples(
+        app: XCUIApplication,
+        controlIdentifier: String,
+        samplingStartedAt: TimeInterval,
+        actionStartedAt: TimeInterval,
+        targetSampleIntervalMilliseconds: Int,
+        minimumAcceptedSampleIntervalMilliseconds: Int,
+        samplingDeadlineMilliseconds: Int,
+        control: XCUIElement,
+        scrollContainer: XCUIElement,
+        verticalScrollBar: XCUIElement,
+        outerScroll: XCUIElement,
+        outerSentinel: XCUIElement,
+        captureTerminalContent: Bool,
+        terminalVisibleText: String?,
+        terminalValueToken: String?,
+        terminalVisibilityMarkerQuery: XCUIElementQuery?,
+        terminalRowElementType: XCUIElement.ElementType?
+    ) throws -> HostedNativeInnerScrollSettledWindow {
+        let targetInterval = Double(targetSampleIntervalMilliseconds) / 1_000
+        let maximumSampleAttempts = max(
+            3,
+            samplingDeadlineMilliseconds / max(1, targetSampleIntervalMilliseconds)
+        )
+        var observedSamples: [HostedNativeInnerScrollSample] = []
+        var samples: [HostedNativeInnerScrollSample] = []
+        var previousSampleStartedAt = actionStartedAt
+        for _ in 0..<maximumSampleAttempts {
+            let elapsedSincePrevious =
+                ProcessInfo.processInfo.systemUptime - previousSampleStartedAt
+            let remainingDelay = max(0, targetInterval - elapsedSincePrevious)
+            if remainingDelay > 0 {
+                RunLoop.current.run(until: Date().addingTimeInterval(remainingDelay))
+            }
+            let sampleStartedAt = ProcessInfo.processInfo.systemUptime
+            previousSampleStartedAt = sampleStartedAt
+            let sample = try captureNativeInnerScrollSample(
+                app: app,
+                elapsedMilliseconds: Int(
+                    ((sampleStartedAt - samplingStartedAt) * 1_000).rounded()
+                ),
+                control: control,
+                scrollContainer: scrollContainer,
+                verticalScrollBar: verticalScrollBar,
+                outerScroll: outerScroll,
+                outerSentinel: outerSentinel,
+                captureTerminalContent: captureTerminalContent,
+                terminalVisibleText: terminalVisibleText,
+                terminalValueToken: terminalValueToken,
+                terminalVisibilityMarkerQuery: terminalVisibilityMarkerQuery,
+                terminalRowElementType: terminalRowElementType
+            )
+            observedSamples.append(sample)
+            if let baseline = samples.first,
+               nativeInnerScrollSamplesMatch(baseline, sample) {
+                samples.append(sample)
+            } else {
+                samples = [sample]
+            }
+            if samples.count == 3 { break }
+            let elapsedSinceActionMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - actionStartedAt) * 1_000).rounded()
+            )
+            if elapsedSinceActionMilliseconds >= samplingDeadlineMilliseconds { break }
+        }
+
+        let samplingCompletedAt = ProcessInfo.processInfo.systemUptime
+        let actionElapsedMilliseconds = Int(
+            ((actionStartedAt - samplingStartedAt) * 1_000).rounded()
+        )
+        let durationMilliseconds = Int(
+            ((samplingCompletedAt - actionStartedAt) * 1_000).rounded()
+        )
+        guard samples.count == 3,
+              let first = samples.first,
+              first.elapsedMilliseconds - actionElapsedMilliseconds
+                  >= minimumAcceptedSampleIntervalMilliseconds,
+              durationMilliseconds <= samplingDeadlineMilliseconds else {
+            throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
+        }
+        for (lhs, rhs) in zip(samples, samples.dropFirst()) {
+            guard rhs.elapsedMilliseconds - lhs.elapsedMilliseconds
+                    >= minimumAcceptedSampleIntervalMilliseconds else {
+                throw HostedNativeInnerScrollTraceError.invalidCadence(
+                    controlIdentifier: controlIdentifier,
+                    lhsElapsedMilliseconds: lhs.elapsedMilliseconds,
+                    rhsElapsedMilliseconds: rhs.elapsedMilliseconds
+                )
+            }
+        }
+        guard let baseline = samples.first else {
+            throw HostedNativeInnerScrollTraceError.invalidSettledWindow(controlIdentifier)
+        }
+        for sample in samples.dropFirst() {
+            guard nativeInnerScrollSamplesMatch(baseline, sample) else {
+                throw HostedNativeInnerScrollTraceError.invalidSettledWindow(
+                    controlIdentifier
+                )
+            }
+        }
+        return HostedNativeInnerScrollSettledWindow(
+            observedSamples: observedSamples,
+            samples: samples,
+            durationMilliseconds: durationMilliseconds
+        )
+    }
+
+    private func nativeInnerScrollSamplesMatch(
+        _ lhs: HostedNativeInnerScrollSample,
+        _ rhs: HostedNativeInnerScrollSample
+    ) -> Bool {
+        lhs.normalizedScrollValue == rhs.normalizedScrollValue
+            && !lhs.controlFrame.differs(from: rhs.controlFrame, byMoreThan: 1)
+            && !lhs.scrollContainerFrame.differs(
+                from: rhs.scrollContainerFrame,
+                byMoreThan: 1
+            )
+            && !lhs.scrollBarFrame.differs(from: rhs.scrollBarFrame, byMoreThan: 1)
+            && !lhs.outerScrollFrame.differs(from: rhs.outerScrollFrame, byMoreThan: 1)
+            && !lhs.outerSentinelFrame.differs(from: rhs.outerSentinelFrame, byMoreThan: 1)
+            && optionalNativeInnerFramesMatch(
+                lhs.terminalElementFrame,
+                rhs.terminalElementFrame
+            )
+            && optionalNativeInnerFramesMatch(lhs.terminalRowFrame, rhs.terminalRowFrame)
+            && lhs.terminalElementFullyContained == rhs.terminalElementFullyContained
+            && lhs.terminalElementFullyContainedInRow
+                == rhs.terminalElementFullyContainedInRow
+            && lhs.terminalRowFullyContained == rhs.terminalRowFullyContained
+            && lhs.controlValueContainsTerminalToken
+                == rhs.controlValueContainsTerminalToken
+            && optionalNativeInnerFramesMatch(
+                lhs.terminalVisibilityMarkerFrame,
+                rhs.terminalVisibilityMarkerFrame
+            )
+            && lhs.terminalVisibilityMarkerFullyContained
+                == rhs.terminalVisibilityMarkerFullyContained
+            && lhs.terminalNativeVisibility == rhs.terminalNativeVisibility
+    }
+
+    private func optionalNativeInnerFramesMatch(
+        _ lhs: HostedGeometryFrame?,
+        _ rhs: HostedGeometryFrame?
+    ) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            true
+        case let (.some(lhs), .some(rhs)):
+            !lhs.differs(from: rhs, byMoreThan: 1)
+        default:
+            false
+        }
+    }
+
+    private func captureNativeInnerScrollSample(
+        app: XCUIApplication,
+        elapsedMilliseconds: Int,
+        control: XCUIElement,
+        scrollContainer: XCUIElement,
+        verticalScrollBar: XCUIElement,
+        outerScroll: XCUIElement,
+        outerSentinel: XCUIElement,
+        captureTerminalContent: Bool,
+        terminalVisibleText: String?,
+        terminalValueToken: String?,
+        terminalVisibilityMarkerQuery: XCUIElementQuery?,
+        terminalRowElementType: XCUIElement.ElementType?
+    ) throws -> HostedNativeInnerScrollSample {
+        let controlFrame = HostedGeometryFrame(control.frame)
+        let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
+        let scrollBarFrame = HostedGeometryFrame(verticalScrollBar.frame)
+        let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
+        let outerSentinelFrame = HostedGeometryFrame(outerSentinel.frame)
+        guard controlFrame.isFiniteAndNonempty,
+              scrollContainerFrame.isFiniteAndNonempty,
+              scrollBarFrame.isFiniteAndNonempty,
+              outerScrollFrame.isFiniteAndNonempty,
+              outerSentinelFrame.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidFrame
+        }
+
+        var terminalElementFrame: HostedGeometryFrame?
+        var terminalRowFrame: HostedGeometryFrame?
+        if captureTerminalContent, let terminalVisibleText {
+            let terminalQuery = control.staticTexts.matching(
+                identifier: terminalVisibleText
+            )
+            if terminalQuery.count == 1 {
+                terminalElementFrame = HostedGeometryFrame(
+                    terminalQuery.element(boundBy: 0).frame
+                )
+                guard let terminalElementFrame,
+                      terminalElementFrame.isFiniteAndNonempty else {
+                    throw HostedNativeInnerScrollTraceError.invalidFrame
+                }
+                guard let terminalRowElementType else {
+                    throw HostedNativeInnerScrollTraceError.missingTerminalRowElementType(
+                        control.identifier
+                    )
+                }
+                let containingRows = control.descendants(matching: terminalRowElementType)
+                    .allElementsBoundByIndex.compactMap { candidate -> HostedGeometryFrame? in
+                        let candidateFrame = HostedGeometryFrame(candidate.frame)
+                        guard candidateFrame.isFiniteAndNonempty,
+                              terminalElementFrame.isFullyContained(
+                                  in: candidateFrame,
+                                  tolerance: 1
+                              ) else {
+                            return nil
+                        }
+                        return candidateFrame
+                    }
+                guard containingRows.count == 1 else {
+                    throw HostedNativeInnerScrollTraceError.invalidTerminalRowCount(
+                        controlIdentifier: control.identifier,
+                        count: containingRows.count
+                    )
+                }
+                terminalRowFrame = containingRows[0]
+            } else if terminalQuery.count > 1 {
+                throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                    identifier: terminalVisibleText,
+                    count: terminalQuery.count
+                )
+            }
+        }
+        let controlValue = String(describing: control.value ?? "")
+        let controlValueContainsTerminalToken = captureTerminalContent
+            ? terminalValueToken.map { token in
+                controlValue.contains(token)
+            }
+            : nil
+        var terminalVisibilityMarkerFrame: HostedGeometryFrame?
+        var terminalNativeVisibility: HostedTerminalNativeVisibility?
+        if captureTerminalContent, let terminalVisibilityMarkerQuery {
+            guard terminalVisibilityMarkerQuery.count == 1 else {
+                throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                    identifier: "terminal-visibility-marker",
+                    count: terminalVisibilityMarkerQuery.count
+                )
+            }
+            let marker = terminalVisibilityMarkerQuery.element(boundBy: 0)
+            terminalVisibilityMarkerFrame = HostedGeometryFrame(marker.frame)
+            guard terminalVisibilityMarkerFrame?.isFiniteAndNonempty == true else {
+                throw HostedNativeInnerScrollTraceError.invalidFrame
+            }
+            terminalNativeVisibility = try decodeTerminalNativeVisibility(
+                app: app,
+                marker: marker
+            )
+        }
+        return HostedNativeInnerScrollSample(
+            elapsedMilliseconds: elapsedMilliseconds,
+            normalizedScrollValue: try normalizedScrollValue(verticalScrollBar.value),
+            controlFrame: controlFrame,
+            scrollContainerFrame: scrollContainerFrame,
+            scrollBarFrame: scrollBarFrame,
+            outerScrollFrame: outerScrollFrame,
+            outerSentinelFrame: outerSentinelFrame,
+            terminalElementFrame: terminalElementFrame,
+            terminalElementFullyContained: terminalElementFrame.map {
+                $0.isFullyContained(in: scrollContainerFrame, tolerance: 1)
+            },
+            terminalRowFrame: terminalRowFrame,
+            terminalElementFullyContainedInRow: terminalElementFrame.flatMap { element in
+                terminalRowFrame.map { row in
+                    element.isFullyContained(in: row, tolerance: 1)
+                }
+            },
+            terminalRowFullyContained: terminalRowFrame.map {
+                $0.isFullyContained(in: scrollContainerFrame, tolerance: 1)
+            },
+            controlValueContainsTerminalToken: controlValueContainsTerminalToken,
+            terminalVisibilityMarkerFrame: terminalVisibilityMarkerFrame,
+            terminalVisibilityMarkerFullyContained: terminalVisibilityMarkerFrame.map {
+                $0.isFullyContained(in: scrollContainerFrame, tolerance: 1)
+            },
+            terminalNativeVisibility: terminalNativeVisibility
+        )
+    }
+
+    private func decodeTerminalNativeVisibility(
+        app: XCUIApplication,
+        marker: XCUIElement
+    ) throws -> HostedTerminalNativeVisibility {
+        let manifest = marker.label
+        let manifestPrefix = "ndlv1-chunks:"
+        guard manifest.hasPrefix("ndlv1-chunks:"),
+              let chunkCount = Int(manifest.dropFirst(manifestPrefix.count)),
+              chunkCount > 0,
+              chunkCount <= 64 else {
+            throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+        }
+        var data = Data()
+        for index in 0..<chunkCount {
+            let identifier = "neondiff-logs-visible-tail-chunk-\(index)"
+            let query = app.descendants(matching: .any).matching(identifier: identifier)
+            let chunk = query.element(boundBy: 0)
+            guard chunk.waitForExistence(timeout: 2) else {
+                throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+            }
+            guard query.count == 1 else {
+                throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+            }
+            let label = chunk.label
+            let prefix = "ndlv1:\(index):\(chunkCount):"
+            guard label.utf8.count <= 128,
+                  label.hasPrefix(prefix),
+                  let decoded = Data(base64Encoded: String(label.dropFirst(prefix.count))),
+                  !decoded.isEmpty,
+                  decoded.count <= 64,
+                  (index == chunkCount - 1 || decoded.count == 64) else {
+                throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+            }
+            data.append(decoded)
+        }
+        guard let payload = try? JSONDecoder().decode(
+                  HostedTerminalNativeVisibility.self,
+                  from: data
+              ),
+              payload.schemaVersion == 1,
+              payload.textUTF16Length >= 0,
+              payload.terminalTokenRange.isValid,
+              payload.visibleCharacterRange.isValid,
+              payload.visibleRect.isFiniteAndNonempty,
+              payload.terminalGlyphBounds.isFiniteAndNonempty else {
+            throw HostedNativeInnerScrollTraceError.invalidTerminalNativeVisibility
+        }
+        return payload
+    }
+
+    private func nativeVisibilityProvesTerminalToken(
+        _ payload: HostedTerminalNativeVisibility,
+        controlValue: String,
+        expectedToken: String
+    ) -> Bool {
+        let utf16Value = controlValue as NSString
+        let expectedRange = utf16Value.range(of: expectedToken)
+        guard payload.coordinateSpace == "appkit-text-view-local",
+              payload.terminalToken == expectedToken,
+              payload.textUTF16Length == utf16Value.length,
+              expectedRange.location != NSNotFound,
+              payload.terminalTokenRange == HostedTextRange(expectedRange),
+              payload.visibleCharacterRange.location
+                  + payload.visibleCharacterRange.length <= utf16Value.length,
+              payload.visibleCharacterRange.fullyContains(
+                  payload.terminalTokenRange
+              ),
+              payload.terminalTokenFullyVisible,
+              payload.terminalGlyphBounds.isFullyContained(
+                  in: payload.visibleRect,
+                  tolerance: 0
+              ) else {
+            return false
+        }
+        let remainingLocation = NSMaxRange(expectedRange)
+        guard remainingLocation <= utf16Value.length else { return false }
+        let remainingRange = NSRange(
+            location: remainingLocation,
+            length: utf16Value.length - remainingLocation
+        )
+        return utf16Value.range(of: expectedToken, options: [], range: remainingRange).location
+            == NSNotFound
+    }
+
+    private func normalizedScrollValue(_ rawValue: Any?) throws -> Double {
+        let parsed: Double?
+        if let number = rawValue as? NSNumber {
+            parsed = number.doubleValue
+        } else if let string = rawValue as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasSuffix("%") {
+                parsed = Double(trimmed.dropLast()).map { $0 / 100 }
+            } else {
+                parsed = Double(trimmed)
+            }
+        } else {
+            parsed = nil
+        }
+        guard let parsed, parsed.isFinite, parsed >= 0, parsed <= 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidNormalizedScrollValue(
+                runtimeValueType(rawValue)
+            )
+        }
+        if abs(parsed - 1) <= 0.000_1 { return 1 }
+        if abs(parsed) <= 0.000_1 { return 0 }
+        return parsed
+    }
+
+    private func outerRestagingDeltaY(
+        scrollContainerFrame: HostedGeometryFrame,
+        outerScrollFrame: HostedGeometryFrame,
+        tolerance: Double
+    ) throws -> Double {
+        guard scrollContainerFrame.height + (tolerance * 2) <= outerScrollFrame.height else {
+            throw HostedNativeInnerScrollTraceError.innerViewportExceedsOuterViewport
+        }
+        let minimumContainedY = outerScrollFrame.y + tolerance
+        let maximumContainedY =
+            outerScrollFrame.y + outerScrollFrame.height - tolerance
+        if scrollContainerFrame.y < minimumContainedY {
+            return minimumContainedY - scrollContainerFrame.y
+        }
+        let scrollContainerMaximumY =
+            scrollContainerFrame.y + scrollContainerFrame.height
+        if scrollContainerMaximumY > maximumContainedY {
+            return maximumContainedY - scrollContainerMaximumY
+        }
+        return 0
+    }
+
+    private func outerRestagingCoordinate(
+        outerScroll: XCUIElement,
+        outerScrollFrame: HostedGeometryFrame,
+        scrollContainerFrame: HostedGeometryFrame,
+        tolerance: Double
+    ) throws -> (coordinate: XCUICoordinate, point: HostedGeometryPoint) {
+        let corridorInset = max(4, tolerance + 1)
+        let minimumOuterX = outerScrollFrame.x + corridorInset
+        let maximumOuterX = outerScrollFrame.maxX - corridorInset
+        let leftCorridorMaximumX = scrollContainerFrame.x - corridorInset
+        let rightCorridorMinimumX = scrollContainerFrame.maxX + corridorInset
+        let minimumOuterY = outerScrollFrame.y + corridorInset
+        let maximumOuterY = outerScrollFrame.maxY - corridorInset
+        let topCorridorMaximumY = min(
+            scrollContainerFrame.y - corridorInset,
+            maximumOuterY
+        )
+        let bottomCorridorMinimumY = max(
+            scrollContainerFrame.maxY + corridorInset,
+            minimumOuterY
+        )
+        let topCorridorHeight = max(0, topCorridorMaximumY - minimumOuterY)
+        let bottomCorridorHeight = max(0, maximumOuterY - bottomCorridorMinimumY)
+
+        let targetX: Double
+        let targetY: Double
+        if leftCorridorMaximumX > minimumOuterX {
+            targetX = leftCorridorMaximumX
+            targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
+        } else if maximumOuterX > rightCorridorMinimumX {
+            targetX = rightCorridorMinimumX
+            targetY = outerScrollFrame.y + (outerScrollFrame.height / 2)
+        } else if max(topCorridorHeight, bottomCorridorHeight) > 0 {
+            targetX = outerScrollFrame.x + (outerScrollFrame.width / 2)
+            if topCorridorHeight >= bottomCorridorHeight {
+                targetY = (minimumOuterY + topCorridorMaximumY) / 2
+            } else {
+                targetY = (bottomCorridorMinimumY + maximumOuterY) / 2
+            }
+        } else {
+            throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
+        }
+
+        let point = HostedGeometryPoint(x: targetX, y: targetY)
+        let pointIsInsideOuter = targetX >= outerScrollFrame.x + tolerance
+            && targetX <= outerScrollFrame.maxX - tolerance
+            && targetY >= outerScrollFrame.y + tolerance
+            && targetY <= outerScrollFrame.maxY - tolerance
+        let pointIsOutsideInner = targetX < scrollContainerFrame.x - tolerance
+            || targetX > scrollContainerFrame.maxX + tolerance
+            || targetY < scrollContainerFrame.y - tolerance
+            || targetY > scrollContainerFrame.maxY + tolerance
+        guard pointIsInsideOuter, pointIsOutsideInner else {
+            throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
+        }
+
+        let normalizedOffset = CGVector(
+            dx: (targetX - outerScrollFrame.x) / outerScrollFrame.width,
+            dy: (targetY - outerScrollFrame.y) / outerScrollFrame.height
+        )
+        guard normalizedOffset.dx.isFinite,
+              normalizedOffset.dy.isFinite,
+              normalizedOffset.dx > 0,
+              normalizedOffset.dx < 1,
+              normalizedOffset.dy > 0,
+              normalizedOffset.dy < 1 else {
+            throw HostedNativeInnerScrollTraceError.noSafeOuterRestagingCoordinate
+        }
+        return (
+            outerScroll.coordinate(withNormalizedOffset: normalizedOffset),
+            point
+        )
+    }
+
+    private func frameMatchesRigidVerticalTranslation(
+        baseline: HostedGeometryFrame,
+        candidate: HostedGeometryFrame,
+        translationY: Double,
+        tolerance: Double
+    ) -> Bool {
+        abs(candidate.x - baseline.x) <= tolerance
+            && abs(candidate.y - (baseline.y + translationY)) <= tolerance
+            && abs(candidate.width - baseline.width) <= tolerance
+            && abs(candidate.height - baseline.height) <= tolerance
+    }
+
+    private func guardedOuterPageScrollTarget(
+        app: XCUIApplication,
+        outerScroll: XCUIElement,
+        outerScrollIdentifier: String,
+        controlIdentifier: String?,
+        controlElementType: XCUIElement.ElementType?
+    ) throws -> HostedPageBottomNestedScrollGuard? {
+        guard controlIdentifier != nil || controlElementType != nil else {
+            return nil
+        }
+        guard let controlIdentifier, let controlElementType else {
+            throw HostedPageBottomTraceError.invalidNestedScrollGuardConfiguration
+        }
+        let controlQuery = app.descendants(matching: controlElementType)
+            .matching(identifier: controlIdentifier)
+        guard controlQuery.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidElementCount(
+                identifier: controlIdentifier,
+                count: controlQuery.count
+            )
+        }
+        let outerScrollFrame = HostedGeometryFrame(outerScroll.frame)
+        guard outerScrollFrame.isFiniteAndNonempty else {
+            throw HostedPageBottomTraceError.invalidFrame(outerScrollIdentifier)
+        }
+        let scrollContainers = app.descendants(matching: .scrollView)
+            .allElementsBoundByIndex.filter { candidate in
+                let frame = HostedGeometryFrame(candidate.frame)
+                return candidate.identifier != outerScrollIdentifier
+                    && frame.isFiniteAndNonempty
+                    && frame.differs(from: outerScrollFrame, byMoreThan: 1)
+                    && candidate.descendants(matching: controlElementType)
+                        .matching(identifier: controlIdentifier).count == 1
+            }
+        guard scrollContainers.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidScrollContainerCount(
+                controlIdentifier: controlIdentifier,
+                count: scrollContainers.count
+            )
+        }
+        let scrollContainer = scrollContainers[0]
+        let scrollContainerFrame = HostedGeometryFrame(scrollContainer.frame)
+        let verticalScrollBars = scrollContainer.scrollBars.allElementsBoundByIndex.filter {
+            candidate in
+            let frame = HostedGeometryFrame(candidate.frame)
+            return frame.isFiniteAndNonempty
+                && frame.height > frame.width
+                && frame.isFullyContained(in: scrollContainerFrame, tolerance: 2)
+        }
+        guard verticalScrollBars.count == 1 else {
+            throw HostedNativeInnerScrollTraceError.invalidVerticalScrollBarCount(
+                controlIdentifier: controlIdentifier,
+                count: verticalScrollBars.count
+            )
+        }
+        let verticalScrollBar = verticalScrollBars[0]
+        let target = try outerRestagingCoordinate(
+            outerScroll: outerScroll,
+            outerScrollFrame: outerScrollFrame,
+            scrollContainerFrame: scrollContainerFrame,
+            tolerance: 1
+        )
+        return HostedPageBottomNestedScrollGuard(
+            controlIdentifier: controlIdentifier,
+            targetCoordinate: target.coordinate,
+            targetPoint: target.point,
+            outerScrollFrame: outerScrollFrame,
+            nestedScrollFrame: scrollContainerFrame,
+            verticalScrollBar: verticalScrollBar,
+            baselineValue: try normalizedScrollValue(verticalScrollBar.value)
+        )
+    }
+
     private func capturePageBottomCheckpoint(
         app: XCUIApplication,
         section: String,
         generation: Int,
         markerIdentifier: String,
         outerScrollIdentifier: String,
-        sentinelIdentifier: String
+        sentinelIdentifier: String,
+        nestedScrollControlIdentifier: String? = nil,
+        nestedScrollControlElementType: XCUIElement.ElementType? = nil,
+        requiresGuardedScrollAction: Bool = false
     ) throws -> HostedPageBottomCheckpoint {
         let outerPageScroll = app.descendants(matching: .any)[outerScrollIdentifier]
         let bottomSentinel = app.descendants(matching: .any)[sentinelIdentifier]
@@ -1611,29 +3340,61 @@ final class NeonDiffDesktopUITests: XCTestCase {
         guard detailRegion.waitForExistence(timeout: 2) else {
             throw HostedPageBottomTraceError.missingElement("neondiff-detail")
         }
-        let preActionSamples = try capturePageBottomSamples(
+        let preActionWindow = try capturePageBottomSamples(
             outerPageScroll: outerPageScroll,
             bottomSentinel: bottomSentinel,
             detailRegion: detailRegion,
             context: "\(section)-pre"
         )
+        let preActionSamples = preActionWindow.samples
+        let nestedScrollGuard = try guardedOuterPageScrollTarget(
+            app: app,
+            outerScroll: outerPageScroll,
+            outerScrollIdentifier: outerScrollIdentifier,
+            controlIdentifier: nestedScrollControlIdentifier,
+            controlElementType: nestedScrollControlElementType
+        )
+        if requiresGuardedScrollAction, nestedScrollGuard == nil {
+            throw HostedPageBottomTraceError.invalidNestedScrollGuardConfiguration
+        }
         let didIssueScroll: Bool
-        let postActionSamples: [HostedPageBottomSample]
+        let postActionWindow: HostedPageBottomSettledWindow
         if preActionSamples.allSatisfy({
             $0.sentinelFullyContainedInOuterScroll
                 && $0.sentinelFullyContainedInDetailRegion
         }) {
+            if requiresGuardedScrollAction {
+                throw HostedPageBottomTraceError
+                    .requiredGuardedScrollActionWasNotIssued(section)
+            }
             didIssueScroll = false
-            postActionSamples = preActionSamples
+            postActionWindow = preActionWindow
         } else {
-            outerPageScroll.scroll(byDeltaX: 0, deltaY: -10_000)
+            let outerPageScrollTarget = nestedScrollGuard?.targetCoordinate
+                ?? defaultOuterPageScrollCoordinate(outerPageScroll)
+            outerPageScrollTarget.scroll(byDeltaX: 0, deltaY: -10_000)
             didIssueScroll = true
-            postActionSamples = try capturePageBottomSamples(
+            postActionWindow = try capturePageBottomSamples(
                 outerPageScroll: outerPageScroll,
                 bottomSentinel: bottomSentinel,
                 detailRegion: detailRegion,
                 context: "\(section)-post"
             )
+        }
+        let postActionSamples = postActionWindow.samples
+        let nestedScrollValueAfter = try nestedScrollGuard.map {
+            try normalizedScrollValue($0.verticalScrollBar.value)
+        }
+        if didIssueScroll, let nestedScrollGuard {
+            guard let nestedScrollValueAfter,
+                  nestedScrollValueAfter == nestedScrollGuard.baselineValue else {
+                throw HostedPageBottomTraceError
+                    .nestedScrollValueChangedDuringOuterPreparation(
+                        controlIdentifier: nestedScrollGuard.controlIdentifier,
+                        before: nestedScrollGuard.baselineValue,
+                        after: nestedScrollValueAfter
+                    )
+            }
         }
 
         for (sampleIndex, postActionSample) in postActionSamples.enumerated() {
@@ -1655,7 +3416,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 deltaY: -10_000,
                 attemptCount: 1,
                 result: "returned",
-                effectProven: true
+                effectProven: true,
+                targetPoint: nestedScrollGuard?.targetPoint,
+                nestedScrollControlIdentifier: nestedScrollGuard?.controlIdentifier,
+                nestedScrollValueBefore: nestedScrollGuard?.baselineValue,
+                nestedScrollValueAfter: nestedScrollValueAfter,
+                guardOuterScrollFrame: nestedScrollGuard?.outerScrollFrame,
+                guardNestedScrollFrame: nestedScrollGuard?.nestedScrollFrame
             )
             : nil
         return HostedPageBottomCheckpoint(
@@ -1665,17 +3432,26 @@ final class NeonDiffDesktopUITests: XCTestCase {
             outerScrollIdentifier: outerScrollIdentifier,
             sentinelIdentifier: sentinelIdentifier,
             preActionSamples: preActionSamples,
+            preActionSamplingDurationMilliseconds: preActionWindow.durationMilliseconds,
             scrollAction: scrollAction,
-            postActionSamples: postActionSamples
+            postActionSamples: postActionSamples,
+            postActionSamplingDurationMilliseconds: postActionWindow.durationMilliseconds
         )
+    }
+
+    private func defaultOuterPageScrollCoordinate(
+        _ outerScroll: XCUIElement
+    ) -> XCUICoordinate {
+        outerScroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
     }
 
     private func capturePageBottomSamples(
         outerPageScroll: XCUIElement,
         bottomSentinel: XCUIElement,
         detailRegion: XCUIElement,
-        context: String
-    ) throws -> [HostedPageBottomSample] {
+        context: String,
+        samplingDeadlineMilliseconds: Int = hostedPageBottomSamplingDeadlineMilliseconds
+    ) throws -> HostedPageBottomSettledWindow {
         let start = ProcessInfo.processInfo.systemUptime
         var samples: [HostedPageBottomSample] = []
         var previousSampleStart: TimeInterval?
@@ -1720,22 +3496,35 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 )
             )
         }
-        try validatePageBottomCadence(samples, context: context)
+        let samplingCompletedAt = ProcessInfo.processInfo.systemUptime
+        let durationMilliseconds = Int(
+            ((samplingCompletedAt - start) * 1_000).rounded()
+        )
+        try validatePageBottomCadence(
+            samples,
+            durationMilliseconds: durationMilliseconds,
+            context: context,
+            samplingDeadlineMilliseconds: samplingDeadlineMilliseconds
+        )
         try validateStablePageBottomSamples(samples, context: context)
-        return samples
+        return HostedPageBottomSettledWindow(
+            samples: samples,
+            durationMilliseconds: durationMilliseconds
+        )
     }
 
     private func validatePageBottomCadence(
         _ samples: [HostedPageBottomSample],
-        context: String
+        durationMilliseconds: Int,
+        context: String,
+        samplingDeadlineMilliseconds: Int
     ) throws {
         guard samples.count == 3 else {
             throw HostedPageBottomTraceError.invalidCadence(context)
         }
         guard samples[0].elapsedMilliseconds >= 0,
               samples[0].elapsedMilliseconds <= 25,
-              let finalElapsed = samples.last?.elapsedMilliseconds,
-              finalElapsed <= 5_000 else {
+              durationMilliseconds <= samplingDeadlineMilliseconds else {
             throw HostedPageBottomTraceError.invalidCadence(context)
         }
         for (lhs, rhs) in zip(samples, samples.dropFirst()) {
@@ -2085,7 +3874,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func attach(_ trace: HostedSettledGeometryTrace) throws {
-        let encoder = JSONEncoder()
+        let encoder = Foundation.JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let attachment = XCTAttachment(
             data: try encoder.encode(trace),
@@ -2093,7 +3882,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
         attachment.name = "neondiff-hosted-settled-geometry.json"
         attachment.lifetime = .keepAlways
-        add(attachment)
+        self.add(attachment)
     }
 
     private func attach(_ trace: HostedPageBottomReachabilityTrace) throws {
@@ -2106,6 +3895,18 @@ final class NeonDiffDesktopUITests: XCTestCase {
         attachment.name = "neondiff-hosted-page-bottom-reachability.json"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func attach(_ trace: HostedNativeInnerScrollTrace) throws {
+        let encoder = Foundation.JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let attachment = XCTAttachment(
+            data: try encoder.encode(trace),
+            uniformTypeIdentifier: "public.json"
+        )
+        attachment.name = "neondiff-hosted-native-inner-scroll.json"
+        attachment.lifetime = .keepAlways
+        self.add(attachment)
     }
 
     private func attach(_ trace: HostedCanonicalSizeMatrixTrace) throws {
@@ -2157,7 +3958,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     private func attach(_ trace: HostedSettingsSceneTrace) throws {
-        let encoder = JSONEncoder()
+        let encoder = Foundation.JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let attachment = XCTAttachment(
             data: try encoder.encode(trace),
@@ -2165,7 +3966,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
         )
         attachment.name = "neondiff-hosted-settings-scene.json"
         attachment.lifetime = .keepAlways
-        add(attachment)
+        self.add(attachment)
     }
 
     private func attachTransportDiagnostic(_ diagnostic: HostedTransportDiagnostic) {
@@ -2272,6 +4073,43 @@ private struct HostedGeometryFrame: Codable, Equatable {
     var maxX: Double { x + width }
     var maxY: Double { y + height }
     var area: Double { width * height }
+}
+
+private struct HostedGeometryPoint: Codable, Equatable {
+    let x: Double
+    let y: Double
+}
+
+private struct HostedTextRange: Codable, Equatable {
+    let location: Int
+    let length: Int
+
+    init(_ range: NSRange) {
+        location = range.location
+        length = range.length
+    }
+
+    var isValid: Bool {
+        location >= 0 && length >= 0 && location <= Int.max - length
+    }
+
+    func fullyContains(_ other: Self) -> Bool {
+        isValid && other.isValid
+            && other.location >= location
+            && other.location + other.length <= location + length
+    }
+}
+
+private struct HostedTerminalNativeVisibility: Codable, Equatable {
+    let schemaVersion: Int
+    let coordinateSpace: String
+    let terminalToken: String
+    let textUTF16Length: Int
+    let terminalTokenRange: HostedTextRange
+    let visibleCharacterRange: HostedTextRange
+    let visibleRect: HostedGeometryFrame
+    let terminalGlyphBounds: HostedGeometryFrame
+    let terminalTokenFullyVisible: Bool
 }
 
 private struct HostedGeometryRegionFrame: Codable, Equatable {
@@ -2389,6 +4227,21 @@ private struct HostedPageBottomSample: Codable, Equatable {
     let sentinelFullyContainedInDetailRegion: Bool
 }
 
+private struct HostedPageBottomSettledWindow {
+    let samples: [HostedPageBottomSample]
+    let durationMilliseconds: Int
+}
+
+private struct HostedPageBottomNestedScrollGuard {
+    let controlIdentifier: String
+    let targetCoordinate: XCUICoordinate
+    let targetPoint: HostedGeometryPoint
+    let outerScrollFrame: HostedGeometryFrame
+    let nestedScrollFrame: HostedGeometryFrame
+    let verticalScrollBar: XCUIElement
+    let baselineValue: Double
+}
+
 private struct HostedPageScrollAction: Codable, Equatable {
     let controlIdentifier: String
     let deltaX: Double
@@ -2396,6 +4249,120 @@ private struct HostedPageScrollAction: Codable, Equatable {
     let attemptCount: Int
     let result: String
     let effectProven: Bool
+    let targetPoint: HostedGeometryPoint?
+    let nestedScrollControlIdentifier: String?
+    let nestedScrollValueBefore: Double?
+    let nestedScrollValueAfter: Double?
+    let guardOuterScrollFrame: HostedGeometryFrame?
+    let guardNestedScrollFrame: HostedGeometryFrame?
+
+    private enum CodingKeys: String, CodingKey {
+        case controlIdentifier
+        case deltaX
+        case deltaY
+        case attemptCount
+        case result
+        case effectProven
+        case targetPoint
+        case nestedScrollControlIdentifier
+        case nestedScrollValueBefore
+        case nestedScrollValueAfter
+        case guardOuterScrollFrame
+        case guardNestedScrollFrame
+    }
+
+    init(
+        controlIdentifier: String,
+        deltaX: Double,
+        deltaY: Double,
+        attemptCount: Int,
+        result: String,
+        effectProven: Bool,
+        targetPoint: HostedGeometryPoint? = nil,
+        nestedScrollControlIdentifier: String? = nil,
+        nestedScrollValueBefore: Double? = nil,
+        nestedScrollValueAfter: Double? = nil,
+        guardOuterScrollFrame: HostedGeometryFrame? = nil,
+        guardNestedScrollFrame: HostedGeometryFrame? = nil
+    ) {
+        self.controlIdentifier = controlIdentifier
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.attemptCount = attemptCount
+        self.result = result
+        self.effectProven = effectProven
+        self.targetPoint = targetPoint
+        self.nestedScrollControlIdentifier = nestedScrollControlIdentifier
+        self.nestedScrollValueBefore = nestedScrollValueBefore
+        self.nestedScrollValueAfter = nestedScrollValueAfter
+        self.guardOuterScrollFrame = guardOuterScrollFrame
+        self.guardNestedScrollFrame = guardNestedScrollFrame
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        controlIdentifier = try container.decode(String.self, forKey: .controlIdentifier)
+        deltaX = try container.decode(Double.self, forKey: .deltaX)
+        deltaY = try container.decode(Double.self, forKey: .deltaY)
+        attemptCount = try container.decode(Int.self, forKey: .attemptCount)
+        result = try container.decode(String.self, forKey: .result)
+        effectProven = try container.decode(Bool.self, forKey: .effectProven)
+        targetPoint = try container.decodeIfPresent(
+            HostedGeometryPoint.self,
+            forKey: .targetPoint
+        )
+        nestedScrollControlIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .nestedScrollControlIdentifier
+        )
+        nestedScrollValueBefore = try container.decodeIfPresent(
+            Double.self,
+            forKey: .nestedScrollValueBefore
+        )
+        nestedScrollValueAfter = try container.decodeIfPresent(
+            Double.self,
+            forKey: .nestedScrollValueAfter
+        )
+        guardOuterScrollFrame = try container.decodeIfPresent(
+            HostedGeometryFrame.self,
+            forKey: .guardOuterScrollFrame
+        )
+        guardNestedScrollFrame = try container.decodeIfPresent(
+            HostedGeometryFrame.self,
+            forKey: .guardNestedScrollFrame
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(controlIdentifier, forKey: .controlIdentifier)
+        try container.encode(deltaX, forKey: .deltaX)
+        try container.encode(deltaY, forKey: .deltaY)
+        try container.encode(attemptCount, forKey: .attemptCount)
+        try container.encode(result, forKey: .result)
+        try container.encode(effectProven, forKey: .effectProven)
+        try container.encodeIfPresent(targetPoint, forKey: .targetPoint)
+        try container.encodeIfPresent(
+            nestedScrollControlIdentifier,
+            forKey: .nestedScrollControlIdentifier
+        )
+        try container.encodeIfPresent(
+            nestedScrollValueBefore,
+            forKey: .nestedScrollValueBefore
+        )
+        try container.encodeIfPresent(
+            nestedScrollValueAfter,
+            forKey: .nestedScrollValueAfter
+        )
+        try container.encodeIfPresent(
+            guardOuterScrollFrame,
+            forKey: .guardOuterScrollFrame
+        )
+        try container.encodeIfPresent(
+            guardNestedScrollFrame,
+            forKey: .guardNestedScrollFrame
+        )
+    }
 }
 
 private struct HostedPageBottomCheckpoint: Codable, Equatable {
@@ -2405,8 +4372,10 @@ private struct HostedPageBottomCheckpoint: Codable, Equatable {
     let outerScrollIdentifier: String
     let sentinelIdentifier: String
     let preActionSamples: [HostedPageBottomSample]
+    let preActionSamplingDurationMilliseconds: Int
     let scrollAction: HostedPageScrollAction?
     let postActionSamples: [HostedPageBottomSample]
+    let postActionSamplingDurationMilliseconds: Int
 }
 
 private struct HostedPageBottomReachabilityTrace: Codable {
@@ -2422,6 +4391,208 @@ private struct HostedPageBottomReachabilityTrace: Codable {
     let navigationActions: [HostedNavigationAction]
     let checkpoints: [HostedPageBottomCheckpoint]
     let proofBoundary: String
+}
+
+private struct HostedNativeScrollBarDragTarget {
+    let sourceCoordinate: XCUICoordinate
+    let destinationCoordinate: XCUICoordinate
+    let sourcePoint: HostedGeometryPoint
+    let destinationPoint: HostedGeometryPoint
+    let scrollBarFrame: HostedGeometryFrame
+    let thumbFrame: HostedGeometryFrame
+    let requestedDisplacementY: Double
+}
+
+private struct HostedNativeScrollBarChain {
+    let control: XCUIElement
+    let scrollContainer: XCUIElement
+    let verticalScrollBar: XCUIElement
+    let thumb: XCUIElement
+    let scrollBarFrame: HostedGeometryFrame
+    let thumbFrame: HostedGeometryFrame
+    let thumbEnabled: Bool
+    let thumbHittable: Bool
+}
+
+private struct HostedNativeScrollBarHoverTarget {
+    let coordinate: XCUICoordinate
+    let point: HostedGeometryPoint
+    let chain: HostedNativeScrollBarChain
+}
+
+private struct HostedNativeScrollBarHoverSample: Codable, Equatable {
+    let innerScrollSample: HostedNativeInnerScrollSample
+    let thumbFrame: HostedGeometryFrame
+    let thumbEnabled: Bool
+    let thumbHittable: Bool
+}
+
+private struct HostedNativeScrollBarHoverPreparation: Codable, Equatable {
+    let action: HostedNativeInnerScrollAction
+    let observedSamples: [HostedNativeScrollBarHoverSample]
+    let samples: [HostedNativeScrollBarHoverSample]
+    let durationMilliseconds: Int
+}
+
+private struct HostedNativePreparedScrollBarDrag {
+    let preparation: HostedNativeScrollBarHoverPreparation
+    let chain: HostedNativeScrollBarChain
+    let dragTarget: HostedNativeScrollBarDragTarget
+}
+
+private struct HostedNativeInnerScrollAction: Codable, Equatable {
+    let mechanism: String
+    let elapsedMilliseconds: Int
+    let deltaX: Double?
+    let deltaY: Double?
+    let sourcePoint: HostedGeometryPoint?
+    let targetPoint: HostedGeometryPoint?
+    let normalizedTargetValue: Double?
+    let requestedDisplacementY: Double?
+    let guardScrollBarFrame: HostedGeometryFrame?
+    let guardScrollBarFrameAfter: HostedGeometryFrame?
+    let guardThumbFrameBefore: HostedGeometryFrame?
+    let guardThumbFrameAfter: HostedGeometryFrame?
+    let normalizedValueBefore: Double?
+    let normalizedValueAfter: Double?
+    let guardThumbHittableBefore: Bool?
+    let guardThumbHittableAfter: Bool?
+    let observedThumbTranslationY: Double?
+    let attemptCount: Int
+    let effectObserved: Bool
+    let effectProven: Bool
+    let result: String
+
+    init(
+        mechanism: String,
+        elapsedMilliseconds: Int,
+        deltaX: Double? = nil,
+        deltaY: Double? = nil,
+        sourcePoint: HostedGeometryPoint? = nil,
+        targetPoint: HostedGeometryPoint? = nil,
+        normalizedTargetValue: Double? = nil,
+        requestedDisplacementY: Double? = nil,
+        guardScrollBarFrame: HostedGeometryFrame? = nil,
+        guardScrollBarFrameAfter: HostedGeometryFrame? = nil,
+        guardThumbFrameBefore: HostedGeometryFrame? = nil,
+        guardThumbFrameAfter: HostedGeometryFrame? = nil,
+        normalizedValueBefore: Double? = nil,
+        normalizedValueAfter: Double? = nil,
+        guardThumbHittableBefore: Bool? = nil,
+        guardThumbHittableAfter: Bool? = nil,
+        observedThumbTranslationY: Double? = nil,
+        attemptCount: Int,
+        effectObserved: Bool,
+        effectProven: Bool,
+        result: String
+    ) {
+        self.mechanism = mechanism
+        self.elapsedMilliseconds = elapsedMilliseconds
+        self.deltaX = deltaX
+        self.deltaY = deltaY
+        self.sourcePoint = sourcePoint
+        self.targetPoint = targetPoint
+        self.normalizedTargetValue = normalizedTargetValue
+        self.requestedDisplacementY = requestedDisplacementY
+        self.guardScrollBarFrame = guardScrollBarFrame
+        self.guardScrollBarFrameAfter = guardScrollBarFrameAfter
+        self.guardThumbFrameBefore = guardThumbFrameBefore
+        self.guardThumbFrameAfter = guardThumbFrameAfter
+        self.normalizedValueBefore = normalizedValueBefore
+        self.normalizedValueAfter = normalizedValueAfter
+        self.guardThumbHittableBefore = guardThumbHittableBefore
+        self.guardThumbHittableAfter = guardThumbHittableAfter
+        self.observedThumbTranslationY = observedThumbTranslationY
+        self.attemptCount = attemptCount
+        self.effectObserved = effectObserved
+        self.effectProven = effectProven
+        self.result = result
+    }
+}
+
+private struct HostedNativeInnerScrollSample: Codable, Equatable {
+    let elapsedMilliseconds: Int
+    let normalizedScrollValue: Double
+    let controlFrame: HostedGeometryFrame
+    let scrollContainerFrame: HostedGeometryFrame
+    let scrollBarFrame: HostedGeometryFrame
+    let outerScrollFrame: HostedGeometryFrame
+    let outerSentinelFrame: HostedGeometryFrame
+    let terminalElementFrame: HostedGeometryFrame?
+    let terminalElementFullyContained: Bool?
+    let terminalRowFrame: HostedGeometryFrame?
+    let terminalElementFullyContainedInRow: Bool?
+    let terminalRowFullyContained: Bool?
+    let controlValueContainsTerminalToken: Bool?
+    let terminalVisibilityMarkerFrame: HostedGeometryFrame?
+    let terminalVisibilityMarkerFullyContained: Bool?
+    let terminalNativeVisibility: HostedTerminalNativeVisibility?
+}
+
+private struct HostedNativeInnerScrollSettledWindow {
+    let observedSamples: [HostedNativeInnerScrollSample]
+    let samples: [HostedNativeInnerScrollSample]
+    let durationMilliseconds: Int
+}
+
+private struct HostedNativeInnerScrollCheckpoint: Codable, Equatable {
+    let section: String
+    let controlIdentifier: String
+    let controlElementType: String
+    let scrollContainerElementType: String
+    let scrollContainerCount: Int
+    let verticalScrollBarCount: Int
+    let terminalVisibilityMarkerIdentifier: String?
+    let terminalVisibleText: String?
+    let terminalValueToken: String?
+    let terminalRowElementType: String?
+    let outerPreparationCheckpoint: HostedPageBottomCheckpoint
+    let outerPreparationResult: String
+    let outerPreparationSample: HostedNativeInnerScrollSample
+    let outerRestagingAction: HostedNativeInnerScrollAction?
+    let outerRestagingObservedSamples: [HostedNativeInnerScrollSample]
+    let outerRestagingSamples: [HostedNativeInnerScrollSample]
+    let outerRestagingWindowDurationMilliseconds: Int
+    let preTerminalValue: Double
+    let terminalValue: Double
+    let repeatTerminalValue: Double
+    let targetSampleIntervalMilliseconds: Int
+    let minimumAcceptedSampleIntervalMilliseconds: Int
+    let samplingDeadlineMilliseconds: Int
+    let terminalWindowDurationMilliseconds: Int
+    let repeatTerminalWindowDurationMilliseconds: Int
+    let terminalStateStable: Bool
+    let outerIsolationProven: Bool
+    let firstHoverPreparation: HostedNativeScrollBarHoverPreparation
+    let repeatHoverPreparation: HostedNativeScrollBarHoverPreparation
+    let firstTerminalAction: HostedNativeInnerScrollAction
+    let repeatTerminalAction: HostedNativeInnerScrollAction
+    let preSample: HostedNativeInnerScrollSample
+    let terminalObservedSamples: [HostedNativeInnerScrollSample]
+    let terminalSamples: [HostedNativeInnerScrollSample]
+    let repeatTerminalObservedSamples: [HostedNativeInnerScrollSample]
+    let repeatTerminalSamples: [HostedNativeInnerScrollSample]
+}
+
+private struct HostedNativeInnerScrollTrace: Codable {
+    let schemaVersion: Int
+    let scenario: String
+    let fixtureId: String
+    let requestedContentSize: HostedContentSize
+    let coordinateSpaces: HostedNativeInnerScrollCoordinateSpaces
+    let tolerancePoints: Double
+    let observedGeometryCheckpoints: [HostedGeometryCheckpoint]
+    let innerScrollCheckpoints: [HostedNativeInnerScrollCheckpoint]
+    let navigationActions: [HostedNavigationAction]
+    let outerPageBottomCheckpoints: [HostedPageBottomCheckpoint]
+    let proofBoundary: String
+}
+
+private struct HostedNativeInnerScrollCoordinateSpaces: Codable {
+    let xcuiGeometry: String
+    let observedWindowAndContent: String
+    let observedRegions: String
+    let terminalNativeVisibility: String
 }
 
 private struct HostedCanonicalSizeScenario: Codable {
@@ -2691,9 +4862,157 @@ private struct HostedTransportDiagnostic: Codable {
     let equalsUnavailableSentinel: Bool
 }
 
+private enum HostedNativeInnerScrollTraceError: LocalizedError {
+    case priorValidationFailure
+    case appNotForeground
+    case missingElement(String)
+    case invalidElementCount(identifier: String, count: Int)
+    case invalidScrollContainerCount(controlIdentifier: String, count: Int)
+    case invalidVerticalScrollBarCount(controlIdentifier: String, count: Int)
+    case invalidScrollBarThumbCount(controlIdentifier: String, count: Int)
+    case scrollBarThumbGeometryNotStable(String)
+    case hoverPreparationChangedState(String)
+    case invalidScrollBarDragGeometry(String)
+    case scrollBarThumbDidNotReachTerminal(String)
+    case missingTerminalRowElementType(String)
+    case invalidTerminalRowCount(controlIdentifier: String, count: Int)
+    case invalidNormalizedScrollValue(String)
+    case invalidPreTerminalValue(controlIdentifier: String, value: Double)
+    case didNotReachTerminalValue(
+        controlIdentifier: String,
+        preTerminalValue: Double,
+        terminalValue: Double
+    )
+    case repeatTerminalScrollChangedValue(
+        controlIdentifier: String,
+        terminalValue: Double,
+        repeatTerminalValue: Double
+    )
+    case repeatTerminalScrollChangedGeometry(String)
+    case invalidCadence(
+        controlIdentifier: String,
+        lhsElapsedMilliseconds: Int,
+        rhsElapsedMilliseconds: Int
+    )
+    case invalidSettledWindow(String)
+    case invalidFrame
+    case innerViewportExceedsOuterViewport
+    case noSafeOuterRestagingCoordinate
+    case outerPreparationNotEstablished(section: String, failedChecks: [String])
+    case outerRestagingNotEstablished(section: String, failedChecks: [String])
+    case outerPageMoved(String)
+    case missingTerminalContent(String)
+    case terminalVisibilityMarkerPresentBeforeTerminal(String)
+    case invalidTerminalNativeVisibility
+
+    var errorDescription: String? {
+        switch self {
+        case .priorValidationFailure:
+            "Hosted native inner-scroll trace withheld after an earlier validation failure"
+        case .appNotForeground:
+            "Hosted native inner-scroll fixture is not running in the foreground"
+        case .missingElement(let identifier):
+            "Missing hosted native inner-scroll element: \(identifier)"
+        case let .invalidElementCount(identifier, count):
+            "Hosted native inner-scroll element count is not exactly one: "
+                + "identifier=\(identifier) count=\(count)"
+        case let .invalidScrollContainerCount(controlIdentifier, count):
+            "Hosted native control does not bind exactly one inner scroll container: "
+                + "control=\(controlIdentifier) count=\(count)"
+        case let .invalidVerticalScrollBarCount(controlIdentifier, count):
+            "Hosted native control does not have exactly one geometry-bound vertical scrollbar: "
+                + "control=\(controlIdentifier) count=\(count)"
+        case let .invalidScrollBarThumbCount(controlIdentifier, count):
+            "Hosted native vertical scrollbar does not expose exactly one public value indicator: "
+                + "control=\(controlIdentifier) count=\(count)"
+        case .scrollBarThumbGeometryNotStable(let controlIdentifier):
+            "Hosted native vertical scrollbar thumb geometry did not establish a stable sampled window: "
+                + "control=\(controlIdentifier)"
+        case .hoverPreparationChangedState(let controlIdentifier):
+            "Hosted native scrollbar hover preparation changed inner or outer state: "
+                + "control=\(controlIdentifier)"
+        case .invalidScrollBarDragGeometry(let controlIdentifier):
+            "Hosted native vertical scrollbar thumb has no safe bounded downward drag: "
+                + "control=\(controlIdentifier)"
+        case .scrollBarThumbDidNotReachTerminal(let controlIdentifier):
+            "Hosted native vertical scrollbar thumb did not translate to terminal geometry: "
+                + "control=\(controlIdentifier)"
+        case .missingTerminalRowElementType(let controlIdentifier):
+            "Hosted native terminal text requires a semantic row type: "
+                + "control=\(controlIdentifier)"
+        case let .invalidTerminalRowCount(controlIdentifier, count):
+            "Hosted native terminal text does not bind exactly one semantic row: "
+                + "control=\(controlIdentifier) count=\(count)"
+        case .invalidNormalizedScrollValue(let runtimeType):
+            "Hosted native scrollbar value is not normalized: runtimeType=\(runtimeType)"
+        case let .invalidPreTerminalValue(controlIdentifier, value):
+            "Hosted native scrollbar started at its terminal value: "
+                + "control=\(controlIdentifier) value=\(value)"
+        case let .didNotReachTerminalValue(
+            controlIdentifier,
+            preTerminalValue,
+            terminalValue
+        ):
+            "Hosted native scrollbar did not reach terminal value: "
+                + "control=\(controlIdentifier) pre=\(preTerminalValue) "
+                + "terminal=\(terminalValue)"
+        case let .repeatTerminalScrollChangedValue(
+            controlIdentifier,
+            terminalValue,
+            repeatTerminalValue
+        ):
+            "Repeated hosted terminal scroll changed the scrollbar value: "
+                + "control=\(controlIdentifier) terminal=\(terminalValue) "
+                + "repeat=\(repeatTerminalValue)"
+        case .repeatTerminalScrollChangedGeometry(let controlIdentifier):
+            "Repeated hosted terminal scroll changed inner-control geometry: "
+                + "control=\(controlIdentifier)"
+        case let .invalidCadence(
+            controlIdentifier,
+            lhsElapsedMilliseconds,
+            rhsElapsedMilliseconds
+        ):
+            "Hosted native inner-scroll sample cadence is invalid: "
+                + "control=\(controlIdentifier) lhs=\(lhsElapsedMilliseconds)ms "
+                + "rhs=\(rhsElapsedMilliseconds)ms"
+        case .invalidSettledWindow(let controlIdentifier):
+            "Hosted native inner-scroll settled window is invalid: "
+                + "control=\(controlIdentifier)"
+        case .invalidFrame:
+            "Hosted native inner-scroll geometry contains an invalid frame"
+        case .innerViewportExceedsOuterViewport:
+            "Hosted native inner-scroll viewport cannot fit inside its outer page viewport"
+        case .noSafeOuterRestagingCoordinate:
+            "Hosted native inner-scroll trace could not bind an outer-only restaging coordinate"
+        case .outerPreparationNotEstablished(let section, let failedChecks):
+            "Hosted native inner-scroll outer page was not prepared at page bottom: "
+                + "section=\(section) failedChecks=\(failedChecks.joined(separator: ","))"
+        case .outerRestagingNotEstablished(let section, let failedChecks):
+            "Hosted native inner-scroll viewport was not restaged inside its outer page: "
+                + "section=\(section) failedChecks=\(failedChecks.joined(separator: ","))"
+        case .outerPageMoved(let section):
+            "Hosted outer page moved while scrolling its native inner control: \(section)"
+        case .missingTerminalContent(let section):
+            "Hosted native inner control did not expose its terminal content: \(section)"
+        case .terminalVisibilityMarkerPresentBeforeTerminal(let identifier):
+            "Hosted native terminal visibility marker existed before terminal scroll: "
+                + "identifier=\(identifier)"
+        case .invalidTerminalNativeVisibility:
+            "Hosted native terminal visibility payload was missing or invalid"
+        }
+    }
+}
+
 private enum HostedPageBottomTraceError: LocalizedError {
     case priorValidationFailure
     case missingElement(String)
+    case invalidNestedScrollGuardConfiguration
+    case requiredGuardedScrollActionWasNotIssued(String)
+    case nestedScrollValueChangedDuringOuterPreparation(
+        controlIdentifier: String,
+        before: Double,
+        after: Double?
+    )
     case invalidFrame(String)
     case missingSamples(String)
     case invalidCadence(String)
@@ -2710,6 +5029,19 @@ private enum HostedPageBottomTraceError: LocalizedError {
             "Hosted page-bottom trace withheld after an earlier validation failure"
         case .missingElement(let identifier):
             "Missing hosted page-bottom element: \(identifier)"
+        case .invalidNestedScrollGuardConfiguration:
+            "Hosted page-bottom nested-scroll guard requires both identifier and element type"
+        case .requiredGuardedScrollActionWasNotIssued(let section):
+            "Hosted page-bottom fixture did not require its guarded outer scroll action: "
+                + "section=\(section)"
+        case let .nestedScrollValueChangedDuringOuterPreparation(
+            controlIdentifier,
+            before,
+            after
+        ):
+            "Hosted outer page preparation changed a nested native scrollbar: "
+                + "control=\(controlIdentifier) before=\(before) "
+                + "after=\(String(describing: after))"
         case .invalidFrame(let context):
             "Invalid hosted page-bottom frame: \(context)"
         case .missingSamples(let context):

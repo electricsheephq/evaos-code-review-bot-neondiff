@@ -175,6 +175,7 @@ struct ReposView: View {
                     TableColumn("Repository") { repo in
                         Text(repo.name)
                             .textSelection(.enabled)
+                            .accessibilityIdentifier(repo.name)
                     }
                     TableColumn("Enabled") { repo in
                         Button { model.toggleRepoAllowlist(repo) } label: {
@@ -212,6 +213,7 @@ struct ReposView: View {
                         .accessibilityIdentifier("neondiff-repo-remove-\(repo.name)")
                     }
                 }
+                .accessibilityIdentifier("neondiff-repos-table")
                 .scrollContentBackground(.hidden)
                 .frame(height: 360)
 

@@ -104,7 +104,12 @@ struct NeonWindowConfigurator: NSViewRepresentable {
            coordinator.positionedWindowNumber != window.windowNumber {
             if let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
                 window.setFrameOrigin(NSPoint(
-                    x: visibleFrame.minX + 80,
+                    x: DesktopWindowGeometryPolicy.evaluationWindowHorizontalOrigin(
+                        visibleMinimumX: visibleFrame.minX,
+                        visibleMaximumX: visibleFrame.maxX,
+                        windowWidth: window.frame.width,
+                        preferredInset: 80
+                    ),
                     y: visibleFrame.maxY - window.frame.height - 80
                 ))
             }
