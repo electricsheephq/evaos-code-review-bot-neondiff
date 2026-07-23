@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { execFileSync, spawn } from "node:child_process";
@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   runPhase1Screen as executePhase1Screen,
   createLlamaServerExecutableAdapter,
+  phase1ScreeningRunnerModulePath,
   phase1LeaseCoordinationPort,
   verifyPairedPhase1Cohort,
   type Phase1ResidentAdapter,
@@ -42,10 +43,14 @@ const ownershipProof = {
   verifyProcessIdentity: async () => true
 };
 const runnerSourcePath = join(process.cwd(), "src", "phase1-screening-runner.ts");
-const harnessRepo = mkdtempSync(join(tmpdir(), "neondiff-phase1-harness-repo-"));
+const harnessRepo = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-phase1-harness-repo-")));
 const harnessRepoSource = join(harnessRepo, "src", "phase1-screening-runner.ts");
+const harnessEntrypoint = join(harnessRepo, "dist", "src", "phase1-characterization-cli.js");
+const harnessRunner = realpathSync(phase1ScreeningRunnerModulePath());
 mkdirSync(dirname(harnessRepoSource), { recursive: true });
+mkdirSync(dirname(harnessEntrypoint), { recursive: true });
 writeFileSync(harnessRepoSource, readFileSync(runnerSourcePath));
+writeFileSync(harnessEntrypoint, "export const entrypoint = true;\n");
 execFileSync("git", ["init", "-q", harnessRepo]);
 execFileSync("git", ["-C", harnessRepo, "config", "user.email", "phase1@example.invalid"]);
 execFileSync("git", ["-C", harnessRepo, "config", "user.name", "Phase 1 Test"]);
@@ -60,7 +65,13 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
   writeFileSync(modulePath, `
     const kind = ${JSON.stringify(kind)};
     let sequence = 0;
-    export function createMonitor() {
+    let attachObserved = false;
+    let forceStopOom = false;
+    let attemptTag = "none";
+    export function createMonitor(factoryParameters) {
+      if (kind === "factory-parameters" && (!Object.isFrozen(factoryParameters) || factoryParameters?.nvidiaSmiSha256 !== ${JSON.stringify("a".repeat(64))})) {
+        throw new Error("factory parameters were not immutably bound");
+      }
       return {
         async start() {
           if (kind === "start-error") throw new Error("monitor start exploded");
@@ -69,10 +80,19 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
           if (kind === "start-empty") return {};
           return { id: "monitor" };
         },
+        async attach(_session, resident) {
+          if (kind === "attach-error") throw new Error("monitor attach exploded");
+          if (kind === "conditional-attach-error" && resident.metadata?.failAttach) throw new Error("monitor attach exploded");
+          if (kind === "attach-and-stop-error") throw new Error("monitor attach exploded");
+          if (kind === "attach-unsafe-probe") attachObserved = true;
+          if (kind === "conditional-stop-oom") forceStopOom = resident.metadata?.forceStopOom === true;
+          if (kind === "attempt-tagged") attemptTag = resident.metadata?.attemptTag ?? "none";
+          if (!resident.metadata || resident.metadata.pid !== 42) throw new Error("monitor did not receive resident metadata");
+        },
         async sample(_session, context) {
           if (kind === "throw-" + context.phase) throw new Error("monitor " + context.phase + " exploded");
           sequence += 1;
-          const base = { capturedAt: "sample-" + sequence, phase: context.phase, rssBytes: 100 + sequence, vramBytes: 200, swapBytes: kind === "swap" && sequence > 2 ? 4096 : 0 };
+          const base = { capturedAt: "sample-" + sequence, phase: context.phase, rssBytes: 100 + sequence, vramBytes: 200, swapBytes: kind === "swap" && sequence > 2 ? 4096 : 0, factoryParametersBound: kind === "factory-parameters" ? 1 : 0, attemptTag };
           if (kind === "sample-nan") return { ...base, rssBytes: Number.NaN };
           if (kind === "sample-infinity") return { ...base, diagnosticValue: Number.POSITIVE_INFINITY };
           if (kind === "sample-negative") return { ...base, vramBytes: -1 };
@@ -83,12 +103,17 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
           if (kind === "classify-invalid-status") return { status: "completed", errorCode: "invalid" };
           if (kind === "classify-missing-code") return { status: "stopped" };
           if (kind === "classify-scalar") return "stopped";
+          if (kind === "attempt-tagged" && samples.some(sample => sample.attemptTag === "old") && samples.some(sample => sample.attemptTag === "current")) return { status: "stopped", errorCode: "stale_attempt_included" };
           if (kind === "swap" && samples.some(sample => sample.swapBytes >= 4096)) return { status: "stopped", errorCode: "sustained_swap_growth" };
           if (kind === "stop-oom" && samples.some(sample => sample.phase === "stopped")) return { status: "oom", errorCode: "stop_time_oom" };
+          if (kind === "conditional-stop-oom" && forceStopOom && samples.some(sample => sample.phase === "stopped")) return { status: "oom", errorCode: "stop_time_oom" };
           return undefined;
         },
         async stop() {
-          const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0 };
+          const base = { capturedAt: "stop", phase: "stopped", rssBytes: 0, vramBytes: 0, swapBytes: 0, attachObserved: attachObserved ? 1 : 0, attemptTag };
+          if (kind === "attach-and-stop-error") throw new Error("monitor stop exploded");
+          if (kind === "stop-empty") return [];
+          if (kind === "stop-array") return [{ ...base, capturedAt: "periodic", phase: "periodic" }, base];
           if (kind === "secret-stop") return { ...base, diagnostic: "Authorization: Bearer sk-secret-value-1234567890" };
           if (kind === "secret-fingerprint-stop") return { ...base, evidenceSha256: "sk-secret-value-1234567890" };
           if (kind === "stop-nan") return { ...base, swapBytes: Number.NaN };
@@ -102,7 +127,8 @@ function monitorModule(kind: string): Phase1ResourceMonitorModule {
     modulePath,
     moduleSha256: digest(readFileSync(modulePath)),
     approvedRoot: monitorModuleRoot,
-    exportName: "createMonitor"
+    exportName: "createMonitor",
+    ...(kind === "factory-parameters" ? { factoryParameters: { nvidiaSmiSha256: "a".repeat(64) } } : {})
   };
 }
 
@@ -136,7 +162,15 @@ function spec(outputDir: string): Phase1RunSpec {
       requiredMetrics: [],
       parameters: { temperature: 0.6, top_p: 0.95, top_k: 20 }
     },
-    harness: { commit: harnessCommit, sourcePath: harnessRepoSource, sourceSha256: digest(readFileSync(harnessRepoSource)) },
+    harness: {
+      commit: harnessCommit,
+      sourcePath: harnessRepoSource,
+      sourceSha256: digest(readFileSync(harnessRepoSource)),
+      entrypointPath: harnessEntrypoint,
+      entrypointSha256: digest(readFileSync(harnessEntrypoint)),
+      runnerPath: harnessRunner,
+      runnerSha256: digest(readFileSync(harnessRunner))
+    },
     parser: { version: "phase1-parser/v1", format: "json", sha256: digest("phase1-parser/v1:json") },
     gate: { version: "phase1-gate/v1", requiredTopLevelKeys: [], sha256: digest("phase1-gate/v1:") }
   };
@@ -146,7 +180,7 @@ function adapter(overrides: Partial<Phase1ResidentAdapter> = {}): Phase1Resident
   return {
     async start(context) {
       expect(existsSync(join(context.outputDir, "manifest.json"))).toBe(true);
-      return { id: "resident-1", argv: ["/opt/llama-server", "--model", "/models/qwen.gguf"] };
+      return { id: "resident-1", argv: ["/opt/llama-server", "--model", "/models/qwen.gguf"], metadata: { pid: 42 } };
     },
     async invoke(_resident, request) {
       return {
@@ -322,6 +356,37 @@ describe("Phase 1 screening runner", () => {
     await expect(runPhase1Screen(outside, adapter())).rejects.toThrow(/inside checkoutRoot/i);
   });
 
+  it("verifies declared entrypoint and runner bytes before manifest persistence or adapter startup", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-phase1-loaded-artifacts-")));
+    for (const artifact of ["entrypoint", "runner"] as const) {
+      const outputDir = join(root, artifact);
+      const runSpec = spec(outputDir);
+      const path = join(root, `${artifact}.js`);
+      writeFileSync(path, `export const ${artifact} = true;\n`);
+      runSpec.harness[`${artifact}Path`] = path;
+      runSpec.harness[`${artifact}Sha256`] = "0".repeat(64);
+      let starts = 0;
+      await expect(runPhase1Screen(runSpec, adapter({
+        async start() { starts += 1; return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42 } }; }
+      }))).rejects.toThrow(new RegExp(`${artifact} SHA-256`, "i"));
+      expect(starts).toBe(0);
+      expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+    }
+
+    const outputDir = join(root, "unrelated-runner");
+    const runSpec = spec(outputDir);
+    const unrelatedRunner = join(root, "unrelated-runner.js");
+    writeFileSync(unrelatedRunner, "export const runner = true;\n");
+    runSpec.harness.runnerPath = unrelatedRunner;
+    runSpec.harness.runnerSha256 = digest(readFileSync(unrelatedRunner));
+    let starts = 0;
+    await expect(runPhase1Screen(runSpec, adapter({
+      async start() { starts += 1; return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42 } }; }
+    }))).rejects.toThrow(/does not identify the executing implementation artifact/i);
+    expect(starts).toBe(0);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+  });
+
   it("turns parser and deterministic gate failures into explicit schema_failed terminals", async () => {
     const parserDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-parser-"));
     const parserResult = await runPhase1Screen(spec(parserDir), adapter({
@@ -488,6 +553,145 @@ describe("Phase 1 screening runner", () => {
     expect(second.samples[0].rssBytes).toBe(101);
   });
 
+  it("binds frozen factory parameters into monitor identity and resume fingerprints", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-parameters-"));
+    const identity = monitorModule("factory-parameters");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const manifest = JSON.parse(readFileSync(join(outputDir, "manifest.json"), "utf8"));
+    expect(manifest.monitorIdentity.factoryParameters).toEqual({ nvidiaSmiSha256: "a".repeat(64) });
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.some((sample: { factoryParametersBound?: number }) => sample.factoryParametersBound === 1)).toBe(true);
+
+    const drift = { ...identity, factoryParameters: { nvidiaSmiSha256: "b".repeat(64) } };
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: drift })).rejects.toThrow(/manifest fingerprint mismatch/i);
+  });
+
+  it("rejects secret-like monitor factory parameters before writing evidence", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-parameter-secret-"));
+    const identity = { ...monitorModule("normal"), factoryParameters: { token: "sk-secret-value-1234567890" } };
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity })).rejects.toThrow(/secret-like text/i);
+    expect(existsSync(join(outputDir, "manifest.json"))).toBe(false);
+  });
+
+  it("attaches the pinned monitor after resident start and persists a bounded stop trace array", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-"));
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("stop-array") });
+    const resource = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resource.samples.map((sample: { phase: string }) => sample.phase)).toEqual(["before", "after", "before", "after", "periodic", "stopped"]);
+  });
+
+  it("fails closed and stops the resident when monitor attachment fails", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-fail-"));
+    let stopped = false;
+    let invoked = false;
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async invoke() { invoked = true; return { status: "completed", rawOutput: "{}" }; },
+      async stop() { stopped = true; }
+    }), { monitorModule: monitorModule("attach-error") })).rejects.toThrow(/monitor attach exploded/i);
+    expect(stopped).toBe(true);
+    expect(invoked).toBe(false);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+  });
+
+  it("preserves completed results when attachment fails during a partial resume", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-resume-"));
+    const identity = monitorModule("conditional-attach-error");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const completedPath = join(outputDir, "results", "warm-8k", "pr-1.json");
+    const completedBytes = readFileSync(completedPath);
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start() { return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42, failAttach: true } }; }
+    }), { monitorModule: identity })).rejects.toThrow(/monitor attach exploded/i);
+    expect(readFileSync(completedPath)).toEqual(completedBytes);
+  });
+
+  it("cleans up the resident and monitor when attach-failure result persistence also fails", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-write-fail-"));
+    const resultsPath = join(outputDir, "results");
+    let stopped = false;
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start() {
+        writeFileSync(resultsPath, "blocks result directory");
+        return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42 } };
+      },
+      async stop() {
+        stopped = true;
+        rmSync(resultsPath);
+      }
+    }), { monitorModule: monitorModule("attach-error") })).rejects.toThrow();
+    expect(stopped).toBe(true);
+    expect(existsSync(join(outputDir, "resources", "warm-8k.json"))).toBe(true);
+  });
+
+  it("retains ordered attachment and cleanup failures", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-multi-failure-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async stop() { throw new Error("resident stop exploded"); }
+    }), { monitorModule: monitorModule("attach-and-stop-error") })).rejects.toThrow(/monitor attach exploded.*resident stop exploded.*monitor stop exploded/i);
+  });
+
+  it("rejects unsafe resident evidence before it can reach monitor attachment", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-attach-secret-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start() {
+        return { id: "resident", argv: ["/opt/llama-server"], logs: "Authorization: Bearer sk-secret-value-1234567890", metadata: { pid: 42 } };
+      }
+    }), { monitorModule: monitorModule("attach-unsafe-probe") })).rejects.toThrow(/secret-like text/i);
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.every((sample: { attachObserved?: number }) => sample.attachObserved === 0)).toBe(true);
+  });
+
+  it("preserves reconstructed resource samples when a resumed monitor returns a terminal trace array", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-resume-trace-"));
+    const identity = monitorModule("stop-array");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const firstResult = JSON.parse(readFileSync(join(outputDir, "results", "warm-8k", "pr-1.json"), "utf8"));
+    const reconstructedCapturedAt = firstResult.resourceSamples.map((sample: { capturedAt: string }) => sample.capturedAt);
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.map((sample: { capturedAt: string }) => sample.capturedAt)).toEqual(expect.arrayContaining(reconstructedCapturedAt));
+  });
+
+  it("excludes reconstructed history from resumed terminal classification while retaining it as evidence", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-current-terminal-classification-"));
+    const identity = monitorModule("attempt-tagged");
+    let starts = 0;
+    const taggedAdapter = adapter({
+      async start() {
+        starts += 1;
+        return { id: `resident-${starts}`, argv: ["/opt/llama-server"], metadata: { pid: 42, attemptTag: starts === 1 ? "old" : "current" } };
+      }
+    });
+    await runPhase1Screen(spec(outputDir), taggedAdapter, { monitorModule: identity });
+    const existingPath = join(outputDir, "results", "warm-8k", "pr-1.json");
+    const existingBytes = readFileSync(existingPath);
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "resources", "warm-8k.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+    const result = await runPhase1Screen(spec(outputDir), taggedAdapter, { monitorModule: identity });
+    expect(result.status).toBe("completed");
+    expect(readFileSync(existingPath)).toEqual(existingBytes);
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.some((sample: { attemptTag: string }) => sample.attemptTag === "old")).toBe(true);
+    expect(resources.samples.some((sample: { attemptTag: string }) => sample.attemptTag === "current")).toBe(true);
+    expect(resources.terminalClassification).toBeUndefined();
+  });
+
+  it("rejects an empty terminal monitor trace", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-empty-stop-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("stop-empty") })).rejects.toThrow(/terminal trace.*empty/i);
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+  });
+
   it("rejects relative or package imports because pinned monitors load as self-contained exact bytes", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-relative-import-"));
     const identity = monitorModule("normal");
@@ -566,6 +770,32 @@ describe("Phase 1 screening runner", () => {
     expect(existsSync(join(outputDir, "resources", "warm-8k.json"))).toBe(true);
   });
 
+  it("finalizes monitor evidence even when resident startup and terminal-result persistence both fail", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-start-write-fail-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start(context) {
+        writeFileSync(join(context.outputDir, "results"), "blocks result directory");
+        throw new Error("resident startup failed");
+      }
+    }), { monitorModule: monitorModule("normal") })).rejects.toThrow();
+    expect(existsSync(join(outputDir, "resources", "warm-8k.json"))).toBe(true);
+  });
+
+  it("stops resident and monitor when unsafe resident evidence cannot persist terminal results", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-unsafe-write-fail-"));
+    let stopped = false;
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async start(context) {
+        writeFileSync(join(context.outputDir, "results"), "blocks result directory");
+        return { id: "resident", argv: ["/opt/llama-server"], logs: "Authorization: Bearer sk-secret-value-1234567890", metadata: { pid: 42 } };
+      },
+      async stop() { stopped = true; }
+    }), { monitorModule: monitorModule("attach-unsafe-probe") })).rejects.toThrow();
+    expect(stopped).toBe(true);
+    const resources = JSON.parse(readFileSync(join(outputDir, "resources", "warm-8k.json"), "utf8"));
+    expect(resources.samples.every((sample: { attachObserved?: number }) => sample.attachObserved === 0)).toBe(true);
+  });
+
   it("records valid empty resource evidence when the monitor itself cannot start", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-start-error-"));
     await expect(runPhase1Screen(spec(outputDir), adapter(), { monitorModule: monitorModule("start-error") })).rejects.toThrow(/monitor start exploded/i);
@@ -629,6 +859,24 @@ describe("Phase 1 screening runner", () => {
     expect(result.status).toBe("failed");
     expect(result.counts.oom).toBe(2);
     expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
+  });
+
+  it("does not rewrite a prior completed result when a resumed attempt stops with OOM", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-monitor-resume-stop-oom-"));
+    const identity = monitorModule("conditional-stop-oom");
+    await runPhase1Screen(spec(outputDir), adapter(), { monitorModule: identity });
+    const existingPath = join(outputDir, "results", "warm-8k", "pr-1.json");
+    const existingBytes = readFileSync(existingPath);
+    rmSync(join(outputDir, "results", "warm-8k", "pr-2.json"));
+    rmSync(join(outputDir, "summary.json"));
+    rmSync(join(outputDir, "COMPLETED"));
+
+    const resumed = await runPhase1Screen(spec(outputDir), adapter({
+      async start() { return { id: "resident", argv: ["/opt/llama-server"], metadata: { pid: 42, forceStopOom: true } }; }
+    }), { monitorModule: identity });
+    expect(resumed.status).toBe("failed");
+    expect(readFileSync(existingPath)).toEqual(existingBytes);
+    expect(JSON.parse(readFileSync(join(outputDir, "results", "warm-8k", "pr-2.json"), "utf8"))).toMatchObject({ status: "oom" });
   });
 
   it("continues after an isolated request failure and records retry counts", async () => {
@@ -783,10 +1031,15 @@ describe("Phase 1 screening runner", () => {
     expect(result.status).toBe("completed");
 
     const blockedDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-coordinated-lease-"));
-    const coordinator = createNetServer();
+    const blockedLeasePath = join(blockedDir, ".phase1-run.lock");
+    const coordinator = createNetServer((socket) => {
+      socket.once("error", () => {});
+      socket.write("neondiff-phase1-lease-v1:");
+      setImmediate(() => socket.end(`${digest(resolve(blockedLeasePath))}\n`));
+    });
     await new Promise<void>((resolvePromise) => coordinator.listen({
       host: "127.0.0.1",
-      port: phase1LeaseCoordinationPort(join(blockedDir, ".phase1-run.lock")),
+      port: phase1LeaseCoordinationPort(blockedLeasePath),
       exclusive: true
     }, resolvePromise));
     try {
@@ -795,6 +1048,123 @@ describe("Phase 1 screening runner", () => {
       await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
     }
   });
+
+  it("falls through a loopback coordination-port collision owned by a different output path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-phase1-port-collision-"));
+    const seen = new Map<number, string>();
+    let collision: { first: string; second: string; port: number } | undefined;
+    for (let index = 0; index < 2_000 && !collision; index += 1) {
+      const candidate = join(root, `candidate-${index}`);
+      const port = phase1LeaseCoordinationPort(join(candidate, ".phase1-run.lock"));
+      const first = seen.get(port);
+      if (first) collision = { first, second: candidate, port };
+      else seen.set(port, candidate);
+    }
+    expect(collision).toBeDefined();
+    const coordinator = createNetServer((socket) => {
+      socket.once("error", () => {});
+      socket.end(`neondiff-phase1-lease-v1:${digest(resolve(join(collision!.first, ".phase1-run.lock")))}\n`);
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({ host: "127.0.0.1", port: collision!.port, exclusive: true }, resolvePromise));
+    try {
+      await expect(runPhase1Screen(spec(collision!.second), adapter())).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("blocks a same-path legacy raw-token coordinator during mixed-version acquisition", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-legacy-coordinator-"));
+    const leasePath = join(outputDir, ".phase1-run.lock");
+    const coordinator = createNetServer((socket) => {
+      socket.once("error", () => {});
+      const token = digest(resolve(leasePath));
+      socket.write(token.slice(0, 17));
+      setImmediate(() => socket.end(`${token.slice(17)}\n`));
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(leasePath),
+      exclusive: true
+    }, resolvePromise));
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).rejects.toThrow(/lease acquisition is already coordinated/i);
+      expect(existsSync(leasePath)).toBe(false);
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("fails closed when an occupied lease coordination port returns an incomplete token", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-inconclusive-coordinator-"));
+    const leasePath = join(outputDir, ".phase1-run.lock");
+    let connections = 0;
+    const coordinator = createNetServer((socket) => {
+      connections += 1;
+      socket.once("error", () => {});
+      socket.end("neondiff-phase1-lease-v1:partial-token");
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(leasePath),
+      exclusive: true
+    }, resolvePromise));
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).rejects.toThrow(/coordination probe.*inconclusive/i);
+      expect(existsSync(leasePath)).toBe(false);
+      expect(connections).toBe(3);
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("falls through an occupied coordination port owned by a foreign protocol", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-foreign-coordinator-"));
+    const leasePath = join(outputDir, ".phase1-run.lock");
+    const coordinator = createNetServer((socket) => {
+      socket.once("error", () => {});
+      socket.end("HTTP/1.1 204 No Content\r\n\r\n");
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(leasePath),
+      exclusive: true
+    }, resolvePromise));
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
+  it("bounds a slow-drip partial lease frame with an absolute probe deadline", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-drip-coordinator-"));
+    const leasePath = join(outputDir, ".phase1-run.lock");
+    let connections = 0;
+    const coordinator = createNetServer((socket) => {
+      connections += 1;
+      socket.once("error", () => {});
+      let offset = 0;
+      const prefix = "neondiff-phase1-lease-v1:";
+      const interval = setInterval(() => {
+        if (offset < prefix.length) socket.write(prefix[offset++]);
+      }, 100);
+      socket.once("close", () => clearInterval(interval));
+    });
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(leasePath),
+      exclusive: true
+    }, resolvePromise));
+    const startedAt = Date.now();
+    try {
+      await expect(runPhase1Screen(spec(outputDir), adapter())).rejects.toThrow(/coordination probe.*inconclusive/i);
+      expect(Date.now() - startedAt).toBeLessThan(4500);
+      expect(connections).toBe(3);
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  }, 6000);
 
   it("treats EPERM from process liveness probing as a live lease owner", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-eperm-lease-"));
@@ -1108,5 +1478,16 @@ describe("Phase 1 screening runner", () => {
     expect(resumed.infrastructureErrorCode).toBe("shutdown_failed");
     expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
     expect(existsSync(join(outputDir, "COMPLETED"))).toBe(false);
+  });
+
+  it("fails closed when an infrastructure exception has an empty message", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-empty-stop-failure-"));
+    await expect(runPhase1Screen(spec(outputDir), adapter({
+      async stop() { throw new Error(""); }
+    }))).rejects.toThrow(/infrastructure_failure/i);
+    const summary = JSON.parse(readFileSync(join(outputDir, "summary.json"), "utf8"));
+    expect(summary.status).toBe("failed");
+    expect(summary.infrastructureErrorCode).toBe("infrastructure_failure");
+    expect(existsSync(join(outputDir, "FAILED"))).toBe(true);
   });
 });
