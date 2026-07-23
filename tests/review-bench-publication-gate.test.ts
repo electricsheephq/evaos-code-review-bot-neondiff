@@ -107,6 +107,13 @@ describe("Review Bench public corpus gate", () => {
     expect(operatorDocs).not.toContain("/Volumes/LEXAR/Codex/evals");
   });
 
+  it("documents needs-resolution as an operator routing status rather than a broken run", () => {
+    const operatorDocs = readFileSync(join(repoRoot, "docs/operator-cli.md"), "utf8");
+    expect(operatorDocs).toContain("review-bench verify-adjudication");
+    expect(operatorDocs).toMatch(/exits\s+with code 1 for `needs_resolution`/);
+    expect(operatorDocs).toMatch(/branch on the emitted JSON `status`/);
+  });
+
   it("rejects a checkout-local receipt even when the CLI starts outside every git repository", () => {
     const root = mkdtempSync(join(tmpdir(), "review-bench-outside-cwd-"));
     const unsafeReceipt = join(repoRoot, `.review-bench-unsafe-${process.pid}.json`);
@@ -150,12 +157,81 @@ describe("Review Bench public corpus gate", () => {
     expect(result.status).toBe(0);
     const help = JSON.parse(result.stdout);
     expect(help.commands.existing).toContain("review-bench verify-sources");
+    expect(help.commands.existing).toContain("review-bench prepare-adjudication");
+    expect(help.commands.existing).toContain("review-bench verify-adjudication");
+    expect(help.commands.existing).toContain("review-bench verify-advisory-adjudication");
     expect(help.usage.flags.map((flag: { name: string }) => flag.name)).toEqual([
+      "--candidate",
+      "--output",
+      "--packet",
+      "--primary",
+      "--secondary",
+      "--resolver",
       "--corpus",
       "--artifacts",
       "--receipt"
     ]);
+  }, 15_000);
+
+  it("documents that advisory agent receipts cannot satisfy Corpus v1 or publication gates", () => {
+    const operatorDocs = readFileSync(join(repoRoot, "docs/operator-cli.md"), "utf8");
+    const corpusDocs = readFileSync(join(repoRoot, "docs/evals/review-bench-corpus-v1.md"), "utf8");
+    for (const docs of [operatorDocs, corpusDocs]) {
+      expect(docs).toContain("verify-advisory-adjudication");
+      expect(docs).toContain("review-bench-phase1-advisory-protocol/v1");
+      expect(docs).toContain("corpusV1Eligible: false");
+      expect(docs).toContain("publicationEligible: false");
+      expect(docs).toContain("resolutionAuthority: independent_ai");
+      expect(docs).toContain("does not authenticate separate agent processes");
+    }
   });
+
+  it("rejects an advisory receipt at the executable publication comparator", () => {
+    const root = mkdtempSync(join(tmpdir(), "review-bench-advisory-publication-gate-"));
+    try {
+      const advisoryPath = join(root, "advisory-receipt.json");
+      for (const schemaVersion of [
+        "review-bench-advisory-adjudication-receipt/v1",
+        "review-bench-advisory-adjudication-receipt/v2"
+      ]) {
+        const advisory = {
+          schemaVersion,
+          profile: "phase1_advisory",
+          claimClass: "advisory_model_selection_only",
+          corpusV1Eligible: false,
+          publicationEligible: false,
+          resolutionAuthority: "independent_ai",
+          receiptSha256: "a".repeat(64)
+        };
+        writeFileSync(advisoryPath, `${stableJson(advisory)}\n`);
+
+        const rejected = runReceiptGate(advisoryPath, advisoryPath);
+        expect(rejected.status).not.toBe(0);
+        expect(`${rejected.stdout}\n${rejected.stderr}`).toMatch(/missing or unknown keys|invalid fields/i);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts secret-shaped path components from terminal CLI failures", () => {
+    const syntheticToken = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
+    const result = spawnSync("npx", [
+      "tsx",
+      "src/cli.ts",
+      "review-bench",
+      "prepare-adjudication",
+      "--candidate",
+      `/tmp/${syntheticToken}/candidate.json`,
+      "--artifacts",
+      "/tmp/missing-artifacts",
+      "--output",
+      "/tmp/missing-output"
+    ], { cwd: repoRoot, encoding: "utf8" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain(syntheticToken);
+  }, 15_000);
 });
 
 function receipt(overrides: Partial<{

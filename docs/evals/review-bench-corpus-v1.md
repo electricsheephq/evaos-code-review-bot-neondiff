@@ -112,6 +112,81 @@ that human judgment is correct. It makes the judgment independently reviewable,
 immutable, and bound to the exact bytes and admission receipt; blinded human
 adjudication and adversarial review remain part of the trust boundary.
 
+## Blinded adjudication intake
+
+`review-bench prepare-adjudication` creates a private, provider-free packet from
+one canonical candidate manifest plus digest-named source, rubric, and protocol
+artifacts. The packet is allowlist-projected and excludes oracle/gold answers,
+provider or model identity, split assignment, peer decisions, and resolver
+decisions. Source candidate IDs are replaced by deterministic opaque
+packet-local IDs. Original allegation text is represented only by a SHA-256
+HMAC commitment keyed by a coordinator-only 256-bit blinding nonce and bound
+into the packet fingerprint; neither the nonce nor allegation text is shown to
+adjudicators. The coordinator MUST generate the nonce from 32 CSPRNG bytes,
+never reuse it across candidate manifests, and keep it outside the packet. The
+validator enforces the 256-bit encoding and rejects the all-zero value, but it
+cannot prove entropy; resistance to guess-and-confirm recovery depends on this
+operational requirement. Allegation-text dictionaries do not enable offline
+verification without the secret nonce because the commitment is keyed; the
+remaining risk is nonce generation, reuse, or coordinator disclosure rather
+than low-entropy allegation wording alone.
+Each path/line anchor asks the same fixed rubric-bound actionability question.
+This binds both humans to one frozen source-candidate universe without exposing
+source identities, allegation wording, or expected outcomes. Its copied
+artifacts and packet bytes are immutable, hash-bound,
+private-permissioned, and must be written outside a Git checkout under a
+current-user-owned parent that is not writable by group or other users. Parent
+device/inode identity is rechecked through publication. A malicious process
+already running as the same operating-system user remains inside the local
+evidence trust boundary; Node does not expose portable descriptor-relative
+creation for eliminating that same-account pathname race.
+
+`review-bench verify-adjudication` binds two complete canonical `human:*`
+responses to that exact packet. It records agreement counts and either returns
+`ready` or emits a deterministic `needs_resolution` queue. A third distinct,
+later resolver may close only disputed units; it cannot rewrite an undisputed
+verdict or candidate decision. One-tier severity proximity remains an agreement
+metric; any non-identical final severity still requires resolution. A
+`defect_present` verdict requires at least one actionable, severity-bearing
+candidate, while an empty candidate universe is reserved for clean controls
+such as deletion-only diffs. The CLI exits with code 1 for `needs_resolution`
+while preserving the immutable receipt for the resolver workflow. This is a
+structured routing signal, not evidence corruption; automation must branch on
+the emitted `status` field instead of treating every nonzero result as a broken
+run.
+
+Every receipt also records a machine-readable lifecycle kind:
+`initial_ready` when the two initial adjudicators agree,
+`initial_needs_resolution` when a resolver is still owed, and `resolved` when a
+valid third response closes the frozen disagreement queue. Multiple immutable
+receipts for one packet may coexist at different paths; corpus assembly must
+prefer `resolved` over `initial_needs_resolution`, must reject competing
+receipts of the same terminal kind, and must never treat a
+`needs_resolution` receipt as admission-ready. The four artifact-level
+`*Count` fields are intentionally one-hot per packet; summing them across
+receipts counts packet verdict-agreement categories, not candidate decisions.
+
+These commands make claimed independent human decisions inspectable; they do
+not authenticate a human identity, establish oracle truth, assemble a final
+Corpus v1 scenario, or issue a source-admission receipt. Real human completion,
+oracle assembly, live source verification, and final admission remain separate
+gates. Packet and response material stays in the private Lexar evaluation root,
+not in fixtures or public documentation.
+
+Phase 1 model selection has a separate
+`review-bench verify-advisory-adjudication` command. It accepts exactly two
+distinct canonical `agent:*` responses and may use one later third distinct
+canonical `agent:*` response only to resolve a frozen disagreement. Advisory packets must
+bind `review-bench-phase1-advisory-protocol/v1`; the verifier rejects packets
+bound to the human-only Corpus v1 protocol. Its receipt is a
+different schema with `profile: phase1_advisory`,
+`resolutionAuthority: independent_ai`, `corpusV1Eligible: false`, and
+`publicationEligible: false`; `pilot_ready`
+means only that the private advisory screen may proceed. This evidence cannot
+assemble or admit Corpus v1 and cannot support a promotion or public claim. An
+advisory receipt records asserted logical identities and does not authenticate separate agent processes;
+it also does not authenticate providers, models, or actual execution independence.
+
 ## Supported provenance
 
 Corpus v1 supports immutable public GitHub pull-request, commit, and revert

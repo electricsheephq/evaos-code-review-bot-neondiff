@@ -1716,8 +1716,68 @@ async function main(): Promise<void> {
   }
 
   if (command === "review-bench") {
-    if (args._[1] !== "verify-sources") {
-      throw new Error("review-bench subcommand must be: verify-sources");
+    const subcommand = args._[1];
+    if (subcommand === "prepare-adjudication") {
+      if (!args.candidate) throw new Error("--candidate is required for review-bench prepare-adjudication");
+      if (!args.artifacts) throw new Error("--artifacts is required for review-bench prepare-adjudication");
+      if (!args.output) throw new Error("--output is required for review-bench prepare-adjudication");
+      const outputDirectory = assertEvalOutputDirSafe(parseSingleArg(args.output, "--output"));
+      const { prepareReviewBenchAdjudicationPacket } = await import("./review-bench-adjudication-packets.js");
+      const summary = prepareReviewBenchAdjudicationPacket({
+        candidatePath: parseSingleArg(args.candidate, "--candidate"),
+        artifactsDirectory: parseSingleArg(args.artifacts, "--artifacts"),
+        outputDirectory
+      });
+      console.log(stringifyRedactedJson({ command: "review-bench", subcommand, ...summary }));
+      return;
+    }
+    if (subcommand === "verify-adjudication") {
+      if (!args.packet) throw new Error("--packet is required for review-bench verify-adjudication");
+      if (!args.primary) throw new Error("--primary is required for review-bench verify-adjudication");
+      if (!args.secondary) throw new Error("--secondary is required for review-bench verify-adjudication");
+      if (!args.receipt) throw new Error("--receipt is required for review-bench verify-adjudication");
+      const receiptPath = parseSingleArg(args.receipt, "--receipt");
+      assertEvalOutputDirSafe(dirname(receiptPath));
+      const { verifyReviewBenchAdjudicationResponses } = await import("./review-bench-adjudication-packets.js");
+      const summary = verifyReviewBenchAdjudicationResponses({
+        packetPath: parseSingleArg(args.packet, "--packet"),
+        primaryResponsePath: parseSingleArg(args.primary, "--primary"),
+        secondaryResponsePath: parseSingleArg(args.secondary, "--secondary"),
+        ...(args.resolver === undefined ? {} : {
+          resolverResponsePath: parseSingleArg(args.resolver, "--resolver")
+        }),
+        receiptPath
+      });
+      console.log(stringifyRedactedJson({ command: "review-bench", subcommand, ...summary }));
+      if (summary.status === "needs_resolution") process.exitCode = 1;
+      return;
+    }
+    if (subcommand === "verify-advisory-adjudication") {
+      if (!args.packet) throw new Error("--packet is required for review-bench verify-advisory-adjudication");
+      if (!args.primary) throw new Error("--primary is required for review-bench verify-advisory-adjudication");
+      if (!args.secondary) throw new Error("--secondary is required for review-bench verify-advisory-adjudication");
+      if (!args.receipt) throw new Error("--receipt is required for review-bench verify-advisory-adjudication");
+      const receiptPath = parseSingleArg(args.receipt, "--receipt");
+      assertEvalOutputDirSafe(dirname(receiptPath));
+      const { verifyReviewBenchAdvisoryAdjudicationResponses } =
+        await import("./review-bench-adjudication-packets.js");
+      const summary = verifyReviewBenchAdvisoryAdjudicationResponses({
+        packetPath: parseSingleArg(args.packet, "--packet"),
+        primaryResponsePath: parseSingleArg(args.primary, "--primary"),
+        secondaryResponsePath: parseSingleArg(args.secondary, "--secondary"),
+        ...(args.resolver === undefined ? {} : {
+          resolverResponsePath: parseSingleArg(args.resolver, "--resolver")
+        }),
+        receiptPath
+      });
+      console.log(stringifyRedactedJson({ command: "review-bench", subcommand, ...summary }));
+      if (summary.status === "needs_ai_resolution") process.exitCode = 1;
+      return;
+    }
+    if (subcommand !== "verify-sources") {
+      throw new Error(
+        "review-bench subcommand must be: verify-sources, prepare-adjudication, verify-adjudication, or verify-advisory-adjudication"
+      );
     }
     if (!args.corpus) throw new Error("--corpus is required for review-bench verify-sources");
     if (!args.artifacts) throw new Error("--artifacts is required for review-bench verify-sources");
@@ -3327,11 +3387,17 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     ]
   },
   "review-bench": {
-    description: "Verify public Corpus v1 sources and issue one immutable admission receipt; no model/provider execution or publication.",
+    description: "Prepare blinded packets, verify private human or Phase 1 advisory evidence, or verify public sources; no model/provider execution or publication.",
     flags: [
+      { name: "--candidate", description: "Canonical candidate manifest for prepare-adjudication." },
+      { name: "--output", description: "Fresh private output directory for prepare-adjudication." },
+      { name: "--packet", description: "Blinded packet JSON for verify-adjudication." },
+      { name: "--primary", description: "Canonical primary human-response JSON for verify-adjudication." },
+      { name: "--secondary", description: "Canonical secondary human-response JSON for verify-adjudication." },
+      { name: "--resolver", description: "Optional canonical resolver-response JSON when disagreements exist." },
       { name: "--corpus", description: "Corpus v1 JSON manifest to validate and live-reverify." },
-      { name: "--artifacts", description: "Directory containing <sourceArtifactSha256>.diff files." },
-      { name: "--receipt", description: "Fresh receipt JSON path outside the checkout, normally under /Volumes/LEXAR/Codex/evals." }
+      { name: "--artifacts", description: "Digest-named source/rubric/protocol artifacts for preparation or source verification." },
+      { name: "--receipt", description: "Fresh immutable receipt JSON path outside the checkout." }
     ]
   },
   daemon: {
@@ -3461,6 +3527,9 @@ function buildHelp(command?: string) {
         "eval-repo-wiki-context-ab",
         "eval-openwiki-docs-drift",
         "review-bench verify-sources",
+        "review-bench prepare-adjudication",
+        "review-bench verify-adjudication",
+        "review-bench verify-advisory-adjudication",
         "review-lenses-eval",
         "outcome-ledger",
         "outcome-scorecard",
@@ -3524,6 +3593,9 @@ function buildHelp(command?: string) {
       "npx tsx src/cli.ts eval-repo-wiki-context-ab --input /path/to/repo-wiki-ab.json --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/ab",
       "npx tsx src/cli.ts eval-openwiki-docs-drift --input /path/to/docs-drift.json --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/docs-drift",
       "npx tsx src/cli.ts review-bench verify-sources --corpus /path/to/corpus.json --artifacts /path/to/source-artifacts --receipt /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/source-admission.json",
+      "npx tsx src/cli.ts review-bench prepare-adjudication --candidate /path/to/candidate.json --artifacts /path/to/source-artifacts --output /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/adjudication-packet",
+      "npx tsx src/cli.ts review-bench verify-adjudication --packet /path/to/packet.json --primary /path/to/primary.json --secondary /path/to/secondary.json --receipt /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/adjudication-receipt.json",
+      "npx tsx src/cli.ts review-bench verify-advisory-adjudication --packet /path/to/packet.json --primary /path/to/agent-a.json --secondary /path/to/agent-b.json --receipt /Volumes/LEXAR/Codex/evals/neondiff-local-review-bench/advisory-receipt.json",
       "npx tsx src/cli.ts review-lenses-eval --input-dir tests/fixtures/review-lenses-eval --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) --dry-run true",
       "npx tsx src/cli.ts outcome-ledger --input /path/to/outcome-ledger-input.json --dry-run true --output-dir /path/to/evidence/outcome-ledger-run",
       "npx tsx src/cli.ts outcome-scorecard --input /path/to/outcome-scorecard-input.json --dry-run true --output-dir /path/to/evidence/outcome-scorecard-run",
@@ -4123,6 +4195,6 @@ interface ParsedArgs {
 }
 
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(redactSecrets(error instanceof Error ? error.message : String(error)));
   process.exitCode = 1;
 });

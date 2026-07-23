@@ -17,7 +17,10 @@ describe("default-deny command license policy", () => {
     ["daemon", "status"],
     ["eval-offline", undefined],
     ["eval-suite", undefined],
-    ["review-bench", "verify-sources"]
+    ["review-bench", "verify-sources"],
+    ["review-bench", "prepare-adjudication"],
+    ["review-bench", "verify-adjudication"],
+    ["review-bench", "verify-advisory-adjudication"]
   ])("keeps setup-safe %s %s available", (command, subcommand) => {
     expect(classifyCommandLicensePolicy({ command, subcommand })).toEqual({ mode: "setup_safe" });
   });
