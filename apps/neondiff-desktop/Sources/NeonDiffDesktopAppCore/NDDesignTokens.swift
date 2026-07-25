@@ -1,7 +1,7 @@
 import Foundation
 
 // Semantic design tokens for issue #611, derived from the live production
-// website (https://neondiff.com, captured 2026-07-15). These are pure sRGB
+// website (https://neondiff.com, refreshed 2026-07-26). These are pure sRGB
 // values with no SwiftUI/AppKit dependency so they can be unit-tested for
 // existence and WCAG contrast, and consumed by the SwiftUI theme layer
 // (NeonDiffTheme.NDColor) for appearance resolution. See
@@ -42,16 +42,16 @@ package struct NDSemanticColor: Sendable {
 }
 
 package enum NDDesignTokens {
-    package static let background = NDSemanticColor(dark: NDColorValue(hex: 0x000000), light: NDColorValue(hex: 0xFAFAF8))
-    package static let surface = NDSemanticColor(dark: NDColorValue(hex: 0x0A0F0C), light: NDColorValue(hex: 0xFFFFFF))
-    package static let textPrimary = NDSemanticColor(dark: NDColorValue(hex: 0xD9FFE6), light: NDColorValue(hex: 0x1A211C))
-    package static let textSecondary = NDSemanticColor(dark: NDColorValue(hex: 0x6D8A75), light: NDColorValue(hex: 0x5A6B5F))
-    package static let accentPrimary = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88), light: NDColorValue(hex: 0x0F7A3D))
-    package static let accentMagenta = NDSemanticColor(dark: NDColorValue(hex: 0xFF2BD6), light: NDColorValue(hex: 0xB01E96))
-    package static let warning = NDSemanticColor(dark: NDColorValue(hex: 0xFFCC33), light: NDColorValue(hex: 0x8A6D00))
-    package static let danger = NDSemanticColor(dark: NDColorValue(hex: 0xFF3B6B), light: NDColorValue(hex: 0xC21E44))
-    package static let borderPrimary = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88, opacity: 0.22), light: NDColorValue(hex: 0x0F7A3D, opacity: 0.35))
-    package static let borderInput = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88, opacity: 0.18), light: NDColorValue(hex: 0x0F7A3D, opacity: 0.30))
+    package static let background = NDSemanticColor(dark: NDColorValue(hex: 0x000000), light: NDColorValue(hex: 0xF4EFE6))
+    package static let surface = NDSemanticColor(dark: NDColorValue(hex: 0x0A0F0C), light: NDColorValue(hex: 0xEFEADD))
+    package static let textPrimary = NDSemanticColor(dark: NDColorValue(hex: 0xD9FFE6), light: NDColorValue(hex: 0x0A1420))
+    package static let textSecondary = NDSemanticColor(dark: NDColorValue(hex: 0x6D8A75), light: NDColorValue(hex: 0x3A4756))
+    package static let accentPrimary = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88), light: NDColorValue(hex: 0x0E7490))
+    package static let accentMagenta = NDSemanticColor(dark: NDColorValue(hex: 0xFF2BD6), light: NDColorValue(hex: 0xBE185D))
+    package static let warning = NDSemanticColor(dark: NDColorValue(hex: 0xFFCC33), light: NDColorValue(hex: 0xB45309))
+    package static let danger = NDSemanticColor(dark: NDColorValue(hex: 0xFF3B6B), light: NDColorValue(hex: 0xB91C1C))
+    package static let borderPrimary = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88, opacity: 0.22), light: NDColorValue(hex: 0x0A1420, opacity: 0.16))
+    package static let borderInput = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88, opacity: 0.18), light: NDColorValue(hex: 0x0A1420, opacity: 0.12))
 
     /// Stable name → value listing for contract enforcement.
     package static let all: [(name: String, color: NDSemanticColor)] = [

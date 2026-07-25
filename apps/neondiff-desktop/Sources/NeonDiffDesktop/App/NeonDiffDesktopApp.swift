@@ -8,6 +8,7 @@ struct NeonDiffDesktopApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model: NeonDiffDesktopModel
     @StateObject private var updateController: NeonUpdateController
+    @AppStorage("neondiff.appearance") private var appearancePreference = "dark"
     @State private var settingsContentHeight =
         SettingsWindowLayout.preferredContentHeight
 #if DEBUG
@@ -111,6 +112,12 @@ struct NeonDiffDesktopApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command])
 
+                Button("Switch to \(preferredColorScheme == .light ? "Dark" : "Light") Mode") {
+                    toggleAppearance()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(!appearanceToggleAvailable)
+
                 Button("Copy Status Command") {
                     model.copyCommand(model.statusCommand)
                 }
@@ -195,6 +202,9 @@ struct NeonDiffDesktopApp: App {
             rootAccessibilityIdentifier: rootAccessibilityIdentifier,
             enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled,
             onSurfaceReady: evaluationSurfaceReadyAction,
+            appearanceLabel: preferredColorScheme == .light ? "LIGHT" : "DARK",
+            appearanceToggleAvailable: appearanceToggleAvailable,
+            toggleAppearance: toggleAppearance,
             evaluationSurfaceStatus: evaluationSurfaceStatus
         )
 #else
@@ -204,7 +214,10 @@ struct NeonDiffDesktopApp: App {
             preferredColorScheme: preferredColorScheme,
             rootAccessibilityIdentifier: rootAccessibilityIdentifier,
             enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled,
-            onSurfaceReady: evaluationSurfaceReadyAction
+            onSurfaceReady: evaluationSurfaceReadyAction,
+            appearanceLabel: preferredColorScheme == .light ? "LIGHT" : "DARK",
+            appearanceToggleAvailable: appearanceToggleAvailable,
+            toggleAppearance: toggleAppearance
         )
 #endif
     }
@@ -233,14 +246,28 @@ struct NeonDiffDesktopApp: App {
 
     private var preferredColorScheme: ColorScheme? {
 #if DEBUG
-        switch evaluationContext?.fixture.environment.appearance {
-        case .light: .light
-        case .system: nil
-        case .dark, nil: .dark
+        if let evaluationAppearance = evaluationContext?.fixture.environment.appearance {
+            switch evaluationAppearance {
+            case .light: return .light
+            case .system: return nil
+            case .dark: return .dark
+            }
         }
-#else
-        .dark
 #endif
+        return appearancePreference == "light" ? .light : .dark
+    }
+
+    private var appearanceToggleAvailable: Bool {
+#if DEBUG
+        evaluationContext == nil
+#else
+        true
+#endif
+    }
+
+    private func toggleAppearance() {
+        guard appearanceToggleAvailable else { return }
+        appearancePreference = preferredColorScheme == .light ? "dark" : "light"
     }
 
     // DEBUG-only hook so design-reference evidence can capture the large-text

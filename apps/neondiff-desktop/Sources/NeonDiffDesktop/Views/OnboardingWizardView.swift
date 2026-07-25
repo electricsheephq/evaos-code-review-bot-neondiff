@@ -6,89 +6,125 @@ struct OnboardingWizardView: View {
     @ObservedObject var model: NeonDiffDesktopModel
 
     var body: some View {
-        ZStack {
-            OperatorBackdrop()
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 18)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
 
-            VStack(spacing: 0) {
-                header
-                    .padding([.horizontal, .top], 22)
-                    .padding(.bottom, 12)
+            Rectangle()
+                .fill(NeonDiffTheme.stroke.opacity(0.35))
+                .frame(height: 1)
 
-                HStack(spacing: 0) {
-                    stepList
-                        .frame(width: 190)
-                        .padding(.leading, 22)
-                        .padding(.bottom, 22)
+            stepList
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
 
-                    Divider()
-                        .overlay(NeonDiffTheme.stroke.opacity(0.54))
-                        .padding(.vertical, 4)
-
-                    stepContent
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .padding(22)
+            stepContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 18)
+                .safeAreaInset(edge: .bottom) {
+                    Color.clear.frame(height: 72)
                 }
 
-                footer
-                    .padding(.horizontal, 22)
-                    .padding(.bottom, 22)
-            }
+            footer
+                .padding(18)
+        }
+        .background(NeonDiffTheme.chrome)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(NeonDiffTheme.accent.opacity(0.64))
+                .frame(width: 1)
         }
         .hostedOnboardingEvaluationRegion("neondiff-onboarding-wizard")
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: model.onboardingFlow.currentStep.systemImage)
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(NeonDiffTheme.accent)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Text("• SETUP // \(String(format: "%02d", currentStepNumber))")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(0.8)
+                    .foregroundStyle(NeonDiffTheme.accent)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text("NeonDiff Onboarding")
-                    .font(NeonDiffTheme.headlineFont)
+                Spacer()
+
+                Button {
+                    model.openReadOnlyAppFromQuarantinedOnboarding()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .medium))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(NeonDiffTheme.textPrimary)
+                .help("Close setup and continue in read-only mode.")
+                .accessibilityIdentifier("neondiff-onboarding-dismiss")
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("STEP \(currentStepNumber) OF \(OnboardingStep.allCases.count)")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(NeonDiffTheme.accent)
+
+                Text(model.onboardingFlow.currentStep.title.uppercased())
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
                     .foregroundStyle(NeonDiffTheme.textPrimary)
-                Text(model.onboardingFlow.currentStep.title)
-                    .font(NeonDiffTheme.badgeFont)
-                    .foregroundStyle(NeonDiffTheme.textSecondary)
                     .accessibilityIdentifier(
                         "neondiff-onboarding-current-step-\(model.onboardingFlow.currentStep.rawValue)"
                     )
+
+                Text(stepSubtitle)
+                    .font(.callout)
+                    .foregroundStyle(NeonDiffTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer()
-
-            OperatorBadge(
-                text: model.onboardingFlow.mode == .publicReposOnly ? "Public" : "Private",
-                color: model.onboardingFlow.mode == .publicReposOnly ? NeonDiffTheme.accent : NeonDiffTheme.cyan
-            )
         }
-        .operatorPanel(active: true)
         .hostedOnboardingEvaluationRegion("neondiff-onboarding-header")
     }
 
     private var stepList: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(OnboardingStep.allCases) { step in
-                HStack(spacing: 9) {
-                    Image(systemName: step.systemImage)
-                        .frame(width: 18)
-                    Text(step.title)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.76)
-                }
-                .font(NeonDiffTheme.badgeFont)
-                .foregroundStyle(step == model.onboardingFlow.currentStep ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background {
-                    AngularRectangle(corner: 8)
-                        .fill(step == model.onboardingFlow.currentStep ? NeonDiffTheme.panelActive : Color.black.opacity(0.20))
-                }
+        HStack(spacing: 7) {
+            ForEach(Array(OnboardingStep.allCases.enumerated()), id: \.element.id) { index, step in
+                Capsule()
+                    .fill(index < currentStepNumber ? NeonDiffTheme.accent : NeonDiffTheme.panelRaised)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 3)
+                    .accessibilityLabel(step.title)
+                    .accessibilityValue(index < currentStepNumber ? "reached" : "upcoming")
             }
-
-            Spacer()
         }
         .hostedOnboardingEvaluationRegion("neondiff-onboarding-step-list")
+    }
+
+    private var currentStepNumber: Int {
+        (OnboardingStep.allCases.firstIndex(of: model.onboardingFlow.currentStep) ?? 0) + 1
+    }
+
+    private var stepSubtitle: String {
+        switch model.onboardingFlow.currentStep {
+        case .welcome:
+            "Connect GitHub and choose the repository you want NeonDiff to review."
+        case .provider:
+            "Choose and verify the model provider that will analyze your pull requests."
+        case .daemon:
+            "Check the local review worker before starting a review."
+        case .license:
+            "Activate access for the selected repository without exposing your key."
+        case .done:
+            "Review your setup, then finish or continue in read-only mode."
+        }
+    }
+
+    private var setupModeBadge: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(model.onboardingFlow.mode == .publicReposOnly ? NeonDiffTheme.accent : NeonDiffTheme.cyan)
+                .frame(width: 7, height: 7)
+            Text(model.onboardingFlow.mode == .publicReposOnly ? "PUBLIC" : "PRIVATE")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(NeonDiffTheme.textSecondary)
+        }
     }
 
     @ViewBuilder
@@ -174,8 +210,23 @@ struct OnboardingWizardView: View {
             )
             .accessibilityIdentifier("neondiff-onboarding-byo-github-private-key")
 
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "lock.fill")
+                    .foregroundStyle(NeonDiffTheme.accent)
+                Text("Your private key is stored securely in macOS Keychain and never written to the NeonDiff config.")
+                    .font(.caption)
+                    .foregroundStyle(NeonDiffTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .background(NeonDiffTheme.panelRaised.opacity(0.55))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(NeonDiffTheme.stroke.opacity(0.45), lineWidth: 1)
+            )
+
             HStack(spacing: 10) {
-                Button("Store in Keychain") {
+                Button("SAVE CONNECTION") {
                     model.storeBYOGitHubAppCredentials()
                 }
                 .disabled(
@@ -601,42 +652,54 @@ struct OnboardingWizardView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
-            Button { model.goBackOnboarding() } label: {
-                Label("Back", systemImage: "chevron.left")
-            }
-            .disabled(!model.onboardingFlow.canGoBack)
-
-            Spacer()
-
-            if model.incompleteOnboardingEscapeAvailable {
-                Button("Open Read-Only App") {
-                    model.openReadOnlyAppFromQuarantinedOnboarding()
-                }
-                .help("Inspect setup and settings without completing activation onboarding. Useful work remains blocked.")
-                .keyboardShortcut(.cancelAction)
-                .accessibilityIdentifier("neondiff-onboarding-read-only-exit")
-            }
-
+        VStack(spacing: 12) {
             if let lastError = model.lastError, !lastError.isEmpty {
                 Text(lastError)
                     .font(.caption)
                     .foregroundStyle(NeonDiffTheme.warning)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Button {
-                if model.onboardingFlow.currentStep == .done {
-                    model.completeOnboarding()
-                } else {
-                    model.advanceOnboarding()
+            if model.incompleteOnboardingEscapeAvailable {
+                Button("Continue Later") {
+                    model.openReadOnlyAppFromQuarantinedOnboarding()
                 }
-            } label: {
-                Label(model.onboardingFlow.nextActionTitle, systemImage: model.onboardingFlow.currentStep == .done ? "checkmark" : "chevron.right")
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(NeonDiffTheme.cyan)
+                .keyboardShortcut(.cancelAction)
+                .help("Close setup and inspect the app in read-only mode. Review actions remain blocked.")
+                .accessibilityIdentifier("neondiff-onboarding-read-only-exit")
             }
-            .buttonStyle(OperatorButtonStyle(solid: true))
-            .disabled(!model.canAdvanceOnboarding)
+
+            Rectangle()
+                .fill(NeonDiffTheme.stroke.opacity(0.35))
+                .frame(height: 1)
+
+            HStack(spacing: 10) {
+                Button { model.goBackOnboarding() } label: {
+                    Label("BACK", systemImage: "arrow.left")
+                }
+                .disabled(!model.onboardingFlow.canGoBack)
+
+                Spacer()
+
+                Button {
+                    if model.onboardingFlow.currentStep == .done {
+                        model.completeOnboarding()
+                    } else {
+                        model.advanceOnboarding()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(model.onboardingFlow.nextActionTitle.uppercased())
+                        Image(systemName: model.onboardingFlow.currentStep == .done ? "checkmark" : "arrow.right")
+                    }
+                }
+                .buttonStyle(OperatorButtonStyle(solid: true))
+                .disabled(!model.canAdvanceOnboarding)
+            }
         }
         .hostedOnboardingEvaluationRegion("neondiff-onboarding-footer")
     }

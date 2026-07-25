@@ -1,6 +1,7 @@
 # NeonDiff design source of truth — live production website
 
 Captured: 2026-07-15
+Refreshed: 2026-07-26 (live palette and wordmark)
 Source: https://neondiff.com (live production site; computed-style token extraction + full-page review)
 Owner ratification: the current live website is the ONLY approved visual source (epic #610, issue #611).
 The unshipped website redesign is rejected. Browser-dashboard parity and WebView product UI are rejected.
@@ -24,16 +25,16 @@ Raw live-site values → semantic roles → native mapping. Dark appearance is t
 
 | Role | Site value (dark) | Native dark | Native light | Usage |
 |---|---|---|---|---|
-| background | #000 | #000000 | #FAFAF8 | window/content background |
-| surface | #000 + green-tinted border | #0A0F0C | #FFFFFF | cards, consoles, panels |
-| textPrimary | #d9ffe6 | #D9FFE6 | #1A211C | primary text |
-| textSecondary | #6d8a75 | #6D8A75 | #5A6B5F | secondary/muted text |
-| accentPrimary | #39ff88 | #39FF88 | #0F7A3D | primary action, live/healthy status ONLY |
-| accentMagenta | #ff2bd6 | #FF2BD6 | #B01E96 | PR identity, attention accents |
-| warning | #ffcc33 | #FFCC33 | #8A6D00 | warning text/icons |
-| danger | #ff3b6b | #FF3B6B | #C21E44 | destructive/error |
-| borderPrimary | #39ff88 @ 22% | same | #0F7A3D @ 35% | panel/console borders |
-| borderInput | #39ff88 @ 18% | same | #0F7A3D @ 30% | field borders |
+| background | #000 / #f4efe6 | #000000 | #F4EFE6 | window/content background |
+| surface | #000 / #efeadd | #0A0F0C | #EFEADD | native cards and panels; evidence consoles may remain dark |
+| textPrimary | #d9ffe6 / #0a1420 | #D9FFE6 | #0A1420 | primary text |
+| textSecondary | #6d8a75 / #3a4756 | #6D8A75 | #3A4756 | secondary/muted text |
+| accentPrimary | #39ff88 / #0e7490 | #39FF88 | #0E7490 | primary action, live/healthy status ONLY |
+| accentMagenta | #ff2bd6 / #be185d | #FF2BD6 | #BE185D | PR identity, attention accents |
+| warning | #ffcc33 / #b45309 | #FFCC33 | #B45309 | warning text/icons |
+| danger | #ff3b6b / #b91c1c | #FF3B6B | #B91C1C | destructive/error |
+| borderPrimary | #39ff88 @ 22% / ink @ 16% | same | #0A1420 @ 16% | panel/console borders |
+| borderInput | #39ff88 @ 18% / ink @ 12% | same | #0A1420 @ 12% | field borders |
 
 Corners: the site renders square components. Native translation: sharp (0–2pt) corners on brand
 surfaces (consoles, evidence panels, bracket buttons); standard macOS radii on system controls
@@ -43,7 +44,7 @@ surfaces (consoles, evidence panels, bracket buttons); standard macOS radii on s
 
 | Site | Native | Rule |
 |---|---|---|
-| Orbitron 500 uppercase (display) | SF Pro Display, heavy tracking uppercase — or nothing | Brand display voice is for brand moments only (About, onboarding welcome). Never in working screens. |
+| SAIBA-45 uppercase (wordmark/display) | First-party raster wordmark derived from the live site; no redistributable font binary. SF Pro Display for other brand moments | The live wordmark shape is used in app chrome and navigation. Do not use SAIBA for working-screen body text. |
 | Inter (body) | SF Pro Text (system default) | All body/control text is system type at system sizes. |
 | JetBrains Mono uppercase, ~2.6px tracking @ 10–11px (labels/nav/status) | SF Mono, semibold, 11pt equivalent, tracking 1.5–2.0, uppercase | Section labels, status chips, key-value stat rows, console text. This is the strongest carry-over identity element. |
 
@@ -83,17 +84,18 @@ text styles, not fixed pixel sizes.
 
 ## Light mode
 
-Light mode is a first-class translation, not an inversion: near-white background, ink-green text,
-accentPrimary darkened to #0F7A3D (4.5:1+ on white), borders at higher alpha to survive light
-backgrounds. Brand identity carries via the mono label system, bracket CTA, panel structure, and
-status glyph language — not via neon-on-black.
+Light mode is a first-class translation, not an inversion: the live site's warm-bone #F4EFE6
+background, deep-ink #0A1420 text, cyan #0E7490 primary accent, warm paper surfaces, and low-alpha
+ink borders. Evidence/terminal panels may remain dark, matching the live site, while ordinary native
+controls stay on paper surfaces. Brand identity carries via the exact SAIBA wordmark, mono label
+system, bracket CTA, panel structure, and status glyph language — not via neon-on-black.
 
 ## Accessibility floors
 
 - Text contrast ≥ 4.5:1 in both appearances (large text ≥ 3:1). Measured (dark, on #000): textPrimary
   #D9FFE6 ≈ 19.4:1; accentPrimary #39FF88 ≈ 15.8:1; textSecondary #6D8A75 ≈ 5.5:1; accentMagenta
-  #FF2BD6 ≈ 6.6:1. Measured (light, on #FAFAF8): textPrimary #1A211C ≈ 15.7:1; accentPrimary #0F7A3D
-  ≈ 5.2:1; textSecondary #5A6B5F ≈ 5.4:1.
+  #FF2BD6 ≈ 6.6:1. Light ratios are recomputed against the live #F4EFE6 background by
+  `NDDesignTokenContractTests`.
   Method: these ratios use the WCAG 2.x relative-luminance formula computed in-repo by
   `apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests/NDDesignTokenContractTests.swift` — the
   reproducible proof any reader can run (`cd apps/neondiff-desktop && swift test --filter NDDesignTokenContractTests`).

@@ -10,6 +10,10 @@ struct ContentView: View {
     let rootAccessibilityIdentifier: String
     let enablesEvaluationRegionBindings: Bool
     let onSurfaceReady: ((DesktopSection) -> Void)?
+    let appearanceLabel: String
+    let appearanceToggleAvailable: Bool
+    let toggleAppearance: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
 #if DEBUG
     let evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus?
 #endif
@@ -22,6 +26,9 @@ struct ContentView: View {
         rootAccessibilityIdentifier: String = "neondiff.desktop.root",
         enablesEvaluationRegionBindings: Bool = false,
         onSurfaceReady: ((DesktopSection) -> Void)? = nil,
+        appearanceLabel: String = "DARK",
+        appearanceToggleAvailable: Bool = true,
+        toggleAppearance: @escaping () -> Void = {},
         evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus? = nil
     ) {
         self.model = model
@@ -30,6 +37,9 @@ struct ContentView: View {
         self.rootAccessibilityIdentifier = rootAccessibilityIdentifier
         self.enablesEvaluationRegionBindings = enablesEvaluationRegionBindings
         self.onSurfaceReady = onSurfaceReady
+        self.appearanceLabel = appearanceLabel
+        self.appearanceToggleAvailable = appearanceToggleAvailable
+        self.toggleAppearance = toggleAppearance
         self.evaluationSurfaceStatus = evaluationSurfaceStatus
     }
 #else
@@ -39,7 +49,10 @@ struct ContentView: View {
         preferredColorScheme: ColorScheme? = .dark,
         rootAccessibilityIdentifier: String = "neondiff.desktop.root",
         enablesEvaluationRegionBindings: Bool = false,
-        onSurfaceReady: ((DesktopSection) -> Void)? = nil
+        onSurfaceReady: ((DesktopSection) -> Void)? = nil,
+        appearanceLabel: String = "DARK",
+        appearanceToggleAvailable: Bool = true,
+        toggleAppearance: @escaping () -> Void = {}
     ) {
         self.model = model
         self.updateController = updateController
@@ -47,6 +60,9 @@ struct ContentView: View {
         self.rootAccessibilityIdentifier = rootAccessibilityIdentifier
         self.enablesEvaluationRegionBindings = enablesEvaluationRegionBindings
         self.onSurfaceReady = onSurfaceReady
+        self.appearanceLabel = appearanceLabel
+        self.appearanceToggleAvailable = appearanceToggleAvailable
+        self.toggleAppearance = toggleAppearance
     }
 #endif
 
@@ -65,67 +81,136 @@ struct ContentView: View {
     }
 
     private func content(evaluationSurfaceGeneration: Int?) -> some View {
-        ZStack(alignment: .top) {
-            OperatorBackdrop()
-            EvaluationRootAccessibilityMarker(identifier: rootAccessibilityIdentifier)
 #if DEBUG
-            if let evaluationSurfaceStatus {
-                EvaluationSurfaceAccessibilityMarker(status: evaluationSurfaceStatus)
-            }
+        let shell = ReferenceShellLayout(
+            model: model,
+            updateController: updateController,
+            evaluationSurfaceGeneration: evaluationSurfaceGeneration,
+            rootAccessibilityIdentifier: rootAccessibilityIdentifier,
+            enablesEvaluationRegionBindings: enablesEvaluationRegionBindings,
+            onSurfaceReady: onSurfaceReady,
+            appearanceLabel: appearanceLabel,
+            appearanceToggleAvailable: appearanceToggleAvailable,
+            toggleAppearance: toggleAppearance,
+            evaluationSurfaceStatus: evaluationSurfaceStatus
+        )
+#else
+        let shell = ReferenceShellLayout(
+            model: model,
+            updateController: updateController,
+            evaluationSurfaceGeneration: evaluationSurfaceGeneration,
+            rootAccessibilityIdentifier: rootAccessibilityIdentifier,
+            enablesEvaluationRegionBindings: enablesEvaluationRegionBindings,
+            onSurfaceReady: onSurfaceReady,
+            appearanceLabel: appearanceLabel,
+            appearanceToggleAvailable: appearanceToggleAvailable,
+            toggleAppearance: toggleAppearance
+        )
 #endif
-            Rectangle()
-                .fill(NeonDiffTheme.accent)
-                .frame(height: 34)
-                .shadow(color: NeonDiffTheme.accent.opacity(0.80), radius: 8, y: 1)
-                .ignoresSafeArea(.container, edges: .top)
-                .allowsHitTesting(false)
+        return shell
+        .tint(NDPalette(scheme: colorScheme).accentPrimary)
+        .buttonStyle(OperatorButtonStyle())
+        .preferredColorScheme(preferredColorScheme)
+        .onExitCommand {
+            guard model.incompleteOnboardingEscapeAvailable else { return }
+            model.openReadOnlyAppFromQuarantinedOnboarding()
+        }
+    }
+}
 
-            VStack(spacing: 0) {
-                NeonChromeStrip(model: model, updateController: updateController)
-                    .ignoresSafeArea(.container, edges: .top)
+private struct ReferenceShellLayout: View {
+    @ObservedObject var model: NeonDiffDesktopModel
+    @ObservedObject var updateController: NeonUpdateController
+    let evaluationSurfaceGeneration: Int?
+    let rootAccessibilityIdentifier: String
+    let enablesEvaluationRegionBindings: Bool
+    let onSurfaceReady: ((DesktopSection) -> Void)?
+    let appearanceLabel: String
+    let appearanceToggleAvailable: Bool
+    let toggleAppearance: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+#if DEBUG
+    let evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus?
+#endif
+
+    var body: some View {
+        GeometryReader { proxy in
+            let compactSetup = proxy.size.width < 900
+            let setupWidth = min(430, max(360, proxy.size.width * 0.34))
+            let reservedSetupWidth =
+                model.isOnboardingPresented && !compactSetup ? setupWidth : 0
+            let setupShadowColor = colorScheme == .dark
+                ? Color.black.opacity(0.72)
+                : Color.black.opacity(0.16)
+
+            ZStack(alignment: .trailing) {
+                OperatorBackdrop()
+                EvaluationRootAccessibilityMarker(identifier: rootAccessibilityIdentifier)
+#if DEBUG
+                if let evaluationSurfaceStatus {
+                    EvaluationSurfaceAccessibilityMarker(status: evaluationSurfaceStatus)
+                }
+#endif
+
+                VStack(spacing: 0) {
+                    ReferenceChromeStrip(
+                        appearanceLabel: appearanceLabel,
+                        appearanceToggleAvailable: appearanceToggleAvailable,
+                        toggleAppearance: toggleAppearance
+                    )
                     .evaluationAccessibilityRegion(
                         "neondiff-chrome",
                         enabled: enablesEvaluationRegionBindings,
                         generation: evaluationSurfaceGeneration
                     )
 
-                HStack(spacing: 0) {
-                    SidebarView(selection: $model.selectedSection)
-                        .frame(width: 230)
+                    HStack(spacing: 0) {
+                        SidebarView(selection: $model.selectedSection)
+                            .frame(width: proxy.size.width < 980 ? 204 : 242)
                         .evaluationAccessibilityRegion(
                             "neondiff-sidebar",
                             enabled: enablesEvaluationRegionBindings,
                             generation: evaluationSurfaceGeneration
                         )
 
-                    Rectangle()
-                        .fill(NeonDiffTheme.stroke.opacity(0.55))
-                        .frame(width: 1)
+                        Rectangle()
+                            .fill(NeonDiffTheme.stroke.opacity(0.34))
+                            .frame(width: 1)
 
-                    DetailView(
-                        model: model,
-                        updateController: updateController,
-                        onSurfaceReady: model.isOnboardingPresented ? nil : onSurfaceReady
-                    )
+                        DetailView(
+                            model: model,
+                            updateController: updateController,
+                            onSurfaceReady: model.isOnboardingPresented ? nil : onSurfaceReady
+                        )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .evaluationAccessibilityRegion(
                             "neondiff-detail",
                             enabled: enablesEvaluationRegionBindings,
                             generation: evaluationSurfaceGeneration
                         )
+                    }
+                }
+                .padding(.trailing, reservedSetupWidth)
+
+                if model.isOnboardingPresented {
+                    if compactSetup {
+                        Color.black.opacity(0.52)
+                            .ignoresSafeArea()
+                            .allowsHitTesting(false)
+                    }
+
+                    OnboardingWizardView(model: model)
+                        .frame(
+                            width: compactSetup ? proxy.size.width : setupWidth,
+                            height: proxy.size.height
+                        )
+                        .background(NeonDiffTheme.chrome)
+                        .shadow(color: setupShadowColor, radius: 24, x: -8)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .onAppear { onSurfaceReady?(model.selectedSection) }
                 }
             }
-        }
-        .tint(NeonDiffTheme.accent)
-        .buttonStyle(OperatorButtonStyle())
-        .preferredColorScheme(preferredColorScheme)
-        .sheet(isPresented: $model.isOnboardingPresented) {
-            OnboardingWizardView(model: model)
-                .frame(minWidth: 760, minHeight: 560)
-                .buttonStyle(OperatorButtonStyle())
-                .tint(NeonDiffTheme.accent)
-                .preferredColorScheme(preferredColorScheme)
-                .onAppear { onSurfaceReady?(model.selectedSection) }
+            .animation(.easeOut(duration: 0.18), value: model.isOnboardingPresented)
         }
     }
 }
@@ -275,7 +360,10 @@ private struct DetailView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                OperatorSectionHeader(title: model.selectedSection.title, status: model.status.healthState)
+                OperatorSectionHeader(
+                    title: model.selectedSection.title,
+                    status: model.isOnboardingPresented ? "SETUP REQUIRED" : model.status.healthState
+                )
                     .padding(.horizontal, 22)
                     .padding(.top, 18)
                     .padding(.bottom, 8)
@@ -317,82 +405,51 @@ private struct SurfaceIdentityModifier: ViewModifier {
     }
 }
 
-private struct NeonChromeStrip: View {
-    @ObservedObject var model: NeonDiffDesktopModel
-    @ObservedObject var updateController: NeonUpdateController
+private struct ReferenceChromeStrip: View {
+    let appearanceLabel: String
+    let appearanceToggleAvailable: Bool
+    let toggleAppearance: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Rectangle()
-                    .fill(NeonDiffTheme.accent)
-                    .shadow(color: NeonDiffTheme.accent.opacity(0.54), radius: 8, y: 1)
-                    .allowsHitTesting(false)
-                WindowDragRegion()
-                    .accessibilityHidden(true)
-            }
-            .frame(height: 28)
+        let palette = NDPalette(scheme: colorScheme)
 
-            HStack(spacing: 14) {
-                Color.clear
-                    .frame(width: 78)
+        HStack(spacing: 14) {
+            Color.clear
+                .frame(width: 120, height: 1)
 
-                HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text("NEON")
-                        .foregroundStyle(NeonDiffTheme.chrome)
-                    Text("DIFF")
-                        .foregroundStyle(NeonDiffTheme.shell)
+            Spacer()
+
+            Button(action: toggleAppearance) {
+                HStack(spacing: 6) {
+                    Image(systemName: appearanceLabel == "LIGHT" ? "sun.max" : "moon")
+                    Text("[\(appearanceLabel)]")
                 }
-                .font(NeonDiffTheme.displayFont(size: 20))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-
-                Text("[ DESKTOP OPERATOR ]")
-                    .font(NeonDiffTheme.badgeFont)
-                    .foregroundStyle(NeonDiffTheme.chrome.opacity(0.76))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-
-                Rectangle()
-                    .fill(NeonDiffTheme.chrome.opacity(0.45))
-                    .frame(width: 1, height: 24)
-
-                OperatorBadge(text: model.status.healthState, color: NeonDiffTheme.statusColor(model.status.healthState))
-
-                Spacer(minLength: 10)
-
-                HStack(spacing: 10) {
-                    OperatorBadge(text: updateController.badgeText, color: updateController.isConfigured ? NeonDiffTheme.cyan : NeonDiffTheme.textSecondary)
-
-                    Button {
-                        updateController.checkForUpdates()
-                    } label: {
-                        Label("Check", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .buttonStyle(OperatorButtonStyle())
-                    .disabled(!updateController.canCheckForUpdates)
-                    .help(updateController.statusText)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background {
-                    AngularRectangle(corner: 8)
-                        .fill(NeonDiffTheme.chrome.opacity(0.92))
-                }
+                .font(NeonDiffTheme.badgeFont)
             }
-            .padding(.trailing, 16)
-            .frame(height: 54)
-            .background {
-                ZStack {
-                    NeonDiffTheme.accent
-                    ChromeCircuitBackdrop()
-                }
-            }
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(NeonDiffTheme.chrome.opacity(0.82))
-                    .frame(height: 2)
-            }
+            .buttonStyle(.plain)
+            .foregroundStyle(palette.accentPrimary)
+            .disabled(!appearanceToggleAvailable)
+            .help("Switch the NeonDiff appearance.")
+            .accessibilityLabel("Switch to \(appearanceLabel == "LIGHT" ? "dark" : "light") mode")
+            .accessibilityIdentifier("neondiff-appearance-toggle")
+        }
+        .overlay {
+            NDBrandWordmark(size: 18)
+                .allowsHitTesting(false)
+        }
+        .padding(.leading, 258)
+        .padding(.trailing, 18)
+        .frame(height: 48)
+        .background(palette.background)
+        .background {
+            WindowDragRegion()
+                .accessibilityHidden(true)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(palette.interfaceBorder)
+                .frame(height: 1)
         }
     }
 }
@@ -410,29 +467,5 @@ private final class WindowDragNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.performDrag(with: event)
-    }
-}
-
-private struct ChromeCircuitBackdrop: View {
-    var body: some View {
-        Canvas { context, size in
-            var path = Path()
-            path.move(to: CGPoint(x: size.width * 0.62, y: 0))
-            path.addLine(to: CGPoint(x: size.width * 0.71, y: size.height))
-            path.move(to: CGPoint(x: size.width * 0.80, y: 0))
-            path.addLine(to: CGPoint(x: size.width * 0.98, y: size.height))
-            context.stroke(path, with: .color(NeonDiffTheme.chrome.opacity(0.20)), lineWidth: 0.8)
-
-            var ticks = Path()
-            let spacing: CGFloat = 34
-            var x: CGFloat = 0
-            while x < size.width {
-                ticks.move(to: CGPoint(x: x, y: size.height - 8))
-                ticks.addLine(to: CGPoint(x: x + 12, y: size.height - 8))
-                x += spacing
-            }
-            context.stroke(ticks, with: .color(NeonDiffTheme.chrome.opacity(0.18)), lineWidth: 0.7)
-        }
-        .allowsHitTesting(false)
     }
 }

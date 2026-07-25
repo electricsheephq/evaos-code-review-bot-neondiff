@@ -3,7 +3,7 @@ import Testing
 @testable import NeonDiffDesktopAppCore
 
 // Contract for issue #611: the semantic design tokens derived from the live
-// production site (https://neondiff.com, captured 2026-07-15) must exist for
+// production site (https://neondiff.com, refreshed 2026-07-26) must exist for
 // both appearances and clear the WCAG accessibility floors documented in
 // docs/design/live-site-design-source.md. The WCAG relative-luminance formula
 // is implemented here so the floor is proven, not asserted by fiat.
@@ -42,6 +42,19 @@ import Testing
         for token in [NDDesignTokens.background, NDDesignTokens.textPrimary, NDDesignTokens.accentPrimary] {
             #expect(token.dark != token.light, "dark and light values must differ for a first-class light mode")
         }
+    }
+
+    @Test func lightAppearanceMatchesTheLiveDaylightSaibaPalette() {
+        #expect(NDDesignTokens.background.light == NDColorValue(hex: 0xF4EFE6))
+        #expect(NDDesignTokens.surface.light == NDColorValue(hex: 0xEFEADD))
+        #expect(NDDesignTokens.textPrimary.light == NDColorValue(hex: 0x0A1420))
+        #expect(NDDesignTokens.textSecondary.light == NDColorValue(hex: 0x3A4756))
+        #expect(NDDesignTokens.accentPrimary.light == NDColorValue(hex: 0x0E7490))
+        #expect(NDDesignTokens.accentMagenta.light == NDColorValue(hex: 0xBE185D))
+        #expect(NDDesignTokens.warning.light == NDColorValue(hex: 0xB45309))
+        #expect(NDDesignTokens.danger.light == NDColorValue(hex: 0xB91C1C))
+        #expect(NDDesignTokens.borderPrimary.light == NDColorValue(hex: 0x0A1420, opacity: 0.16))
+        #expect(NDDesignTokens.borderInput.light == NDColorValue(hex: 0x0A1420, opacity: 0.12))
     }
 
     @Test func contrastFloorsHoldInBothAppearances() {
