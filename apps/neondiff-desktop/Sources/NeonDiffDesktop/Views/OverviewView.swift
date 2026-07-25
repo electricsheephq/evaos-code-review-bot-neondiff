@@ -65,7 +65,7 @@ struct OverviewView: View {
                         isReady: readiness.github,
                         actionTitle: readiness.github ? "VIEW" : "CONNECT"
                     ) {
-                        model.reopenOnboarding(at: .welcome)
+                        model.reopenOnboarding(at: readiness.github ? nil : .welcome)
                     }
 
                     ReferenceReadinessCard(

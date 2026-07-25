@@ -142,11 +142,13 @@ import NeonDiffDesktopCore
         )
         fixture.model.repos = [RepoMonitor(name: "electric/public", enabled: true)]
 
+        #expect(!fixture.model.repositoryConfigurationReady)
         fixture.model.applyRepoAllowlistPatch()
         await fixture.waitForConfigPatchToFinish()
 
         #expect(fixture.model.lastError == nil)
         #expect(fixture.model.logText.contains("Repository allowlist applied and read back"))
+        #expect(fixture.model.repositoryConfigurationReady)
     }
 
     @Test func clipboardAndURLOpenFailuresStayInsideInjectedSeams() {

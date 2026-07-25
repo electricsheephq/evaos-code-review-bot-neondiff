@@ -260,7 +260,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 )
         }
 
-        return true
+        return appliedRepoSelection == AppliedRepoSelection(
+            repositories: enabledRepositories,
+            configPath: configPath
+        )
     }
 
     package var managedGitHubAvailable: Bool {
