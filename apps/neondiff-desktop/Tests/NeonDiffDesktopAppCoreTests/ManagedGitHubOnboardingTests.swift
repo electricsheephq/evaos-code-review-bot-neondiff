@@ -785,6 +785,8 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         await fixture.waitForManagedGitHubConnectionToFinish()
         fixture.model.selectManagedGitHubRepository(fullName: "electric/public")
 
+        #expect(!fixture.model.repositoryConfigurationReady)
+
         fixture.cli.enqueue(.success(CLIRunResult(
             exitCode: 0,
             stdout: managedRepoPatchJSON(repository: "electric/public", wrote: false),
@@ -794,6 +796,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         await fixture.waitForConfigPatchToFinish()
 
         #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.repositoryConfigurationReady)
         #expect(fixture.model.lastError == nil)
     }
 }

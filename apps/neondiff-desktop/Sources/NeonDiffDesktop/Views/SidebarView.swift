@@ -3,6 +3,7 @@ import NeonDiffDesktopCore
 
 struct SidebarView: View {
     @Binding var selection: DesktopSection
+    let readiness: DesktopSetupReadiness
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -15,7 +16,7 @@ struct SidebarView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     NDBrandWordmark(size: 22)
                     Text("AI CODE REVIEW SYSTEM")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .font(.system(.caption2, design: .monospaced).weight(.medium))
                         .tracking(0.9)
                         .foregroundStyle(palette.textSecondary)
                 }
@@ -39,20 +40,34 @@ struct SidebarView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("SYSTEM READINESS")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .font(.system(.caption2, design: .monospaced).weight(.semibold))
                             .foregroundStyle(palette.accentPrimary)
                         Spacer()
                         Circle()
-                            .fill(palette.warning)
+                            .fill(readiness.isComplete ? palette.accentPrimary : palette.warning)
                             .frame(width: 7, height: 7)
                     }
 
-                    Text("COMPLETE SETUP TO REVIEW")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    Text(readiness.isComplete
+                        ? "READY FOR A DRY RUN"
+                        : "\(readiness.completedCount) OF \(readiness.totalCount) SETUP STEPS COMPLETE")
+                        .font(.system(.caption2, design: .monospaced).weight(.medium))
                         .foregroundStyle(palette.textSecondary)
 
-                    Capsule()
-                        .fill(palette.interfaceBorder)
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(palette.interfaceBorder)
+                            Capsule()
+                                .fill(readiness.isComplete
+                                    ? palette.accentPrimary
+                                    : palette.warning)
+                                .frame(
+                                    width: proxy.size.width
+                                        * CGFloat(readiness.completedCount)
+                                        / CGFloat(readiness.totalCount)
+                                )
+                        }
+                    }
                     .frame(height: 4)
                 }
                 .padding(12)
@@ -64,7 +79,7 @@ struct SidebarView: View {
                 .accessibilityIdentifier("neondiff-sidebar-readiness")
 
                 Label("YOUR DATA STAYS LOCAL", systemImage: "lock")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .font(.system(.caption2, design: .monospaced).weight(.medium))
                     .foregroundStyle(palette.textSecondary)
             }
             .padding(.horizontal, 16)
@@ -89,7 +104,10 @@ private struct ReferenceSidebarItem: View {
                 Image(systemName: section.systemImage)
                     .frame(width: 20)
                 Text(displayTitle)
-                    .font(.system(size: 12, weight: selection == section ? .semibold : .regular, design: .monospaced))
+                    .font(
+                        .system(.callout, design: .monospaced)
+                            .weight(selection == section ? .semibold : .regular)
+                    )
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .foregroundStyle(selection == section ? palette.accentPrimary : palette.textPrimary.opacity(0.78))

@@ -51,10 +51,10 @@ import Testing
         #expect(NDDesignTokens.textSecondary.light == NDColorValue(hex: 0x3A4756))
         #expect(NDDesignTokens.accentPrimary.light == NDColorValue(hex: 0x0E7490))
         #expect(NDDesignTokens.accentMagenta.light == NDColorValue(hex: 0xBE185D))
-        #expect(NDDesignTokens.warning.light == NDColorValue(hex: 0xB45309))
+        #expect(NDDesignTokens.warning.light == NDColorValue(hex: 0x92400E))
         #expect(NDDesignTokens.danger.light == NDColorValue(hex: 0xB91C1C))
-        #expect(NDDesignTokens.borderPrimary.light == NDColorValue(hex: 0x0A1420, opacity: 0.16))
-        #expect(NDDesignTokens.borderInput.light == NDColorValue(hex: 0x0A1420, opacity: 0.12))
+        #expect(NDDesignTokens.borderPrimary.light == NDColorValue(hex: 0x0A1420, opacity: 0.26))
+        #expect(NDDesignTokens.borderInput.light == NDColorValue(hex: 0x0A1420, opacity: 0.20))
     }
 
     @Test func contrastFloorsHoldInBothAppearances() {
@@ -63,15 +63,39 @@ import Testing
         let darkAccent = contrastRatio(NDDesignTokens.accentPrimary.dark, NDDesignTokens.background.dark)
         let lightText = contrastRatio(NDDesignTokens.textPrimary.light, NDDesignTokens.background.light)
         let lightAccent = contrastRatio(NDDesignTokens.accentPrimary.light, NDDesignTokens.background.light)
+        let lightWarningOnBackground = contrastRatio(
+            NDDesignTokens.warning.light,
+            NDDesignTokens.background.light
+        )
+        let lightWarningOnSurface = contrastRatio(
+            NDDesignTokens.warning.light,
+            NDDesignTokens.surface.light
+        )
 
         print(String(format: "NDContrast textPrimary/background dark  = %.2f:1", darkText))
         print(String(format: "NDContrast accentPrimary/background dark = %.2f:1", darkAccent))
         print(String(format: "NDContrast textPrimary/background light = %.2f:1", lightText))
         print(String(format: "NDContrast accentPrimary/background light= %.2f:1", lightAccent))
+        print(String(
+            format: "NDContrast warning/background light = %.2f:1",
+            lightWarningOnBackground
+        ))
+        print(String(
+            format: "NDContrast warning/surface light = %.2f:1",
+            lightWarningOnSurface
+        ))
 
         #expect(darkText >= floor, "textPrimary-on-background (dark) = \(darkText)")
         #expect(darkAccent >= floor, "accentPrimary-on-background (dark) = \(darkAccent)")
         #expect(lightText >= floor, "textPrimary-on-background (light) = \(lightText)")
         #expect(lightAccent >= floor, "accentPrimary-on-background (light) = \(lightAccent)")
+        #expect(
+            lightWarningOnBackground >= floor,
+            "warning-on-background (light) = \(lightWarningOnBackground)"
+        )
+        #expect(
+            lightWarningOnSurface >= floor,
+            "warning-on-surface (light) = \(lightWarningOnSurface)"
+        )
     }
 }

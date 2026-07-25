@@ -2,6 +2,32 @@ import SwiftUI
 import NeonDiffDesktopAppCore
 import NeonDiffDesktopCore
 
+@MainActor
+struct DesktopSetupReadiness {
+    let github: Bool
+    let provider: Bool
+    let license: Bool
+    let repository: Bool
+    let repositoryName: String
+
+    init(model: NeonDiffDesktopModel) {
+        github = model.byoGitHubCredentialsVerified || model.isManagedGitHubBound
+        provider = model.providerVerification?.isVerified == true
+        license = model.activationState == .active
+            || model.onboardingFlow.licenseActivation == .activated
+        repository = model.repositoryConfigurationReady
+        repositoryName = model.selectedManagedGitHubRepository
+            ?? model.repos.first(where: \.enabled)?.name
+            ?? "owner/repository"
+    }
+
+    private var gates: [Bool] { [github, provider, license, repository] }
+
+    var completedCount: Int { gates.filter { $0 }.count }
+    var totalCount: Int { gates.count }
+    var isComplete: Bool { completedCount == totalCount }
+}
+
 /// Owner-reference Home surface for #657.
 ///
 /// This keeps the existing model and safety actions intact while replacing the
@@ -14,18 +40,19 @@ struct OverviewView: View {
 
     var body: some View {
         let nd = NDPalette(scheme: colorScheme)
+        let readiness = DesktopSetupReadiness(model: model)
 
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                hero(palette: nd)
+                hero(palette: nd, readiness: readiness)
 
                 VStack(spacing: 8) {
                     ReferenceReadinessCard(
                         title: "GITHUB APP",
                         systemImage: "link",
-                        status: githubReady ? "CONNECTED" : "NOT CONNECTED",
-                        isReady: githubReady,
-                        actionTitle: githubReady ? "VIEW" : "CONNECT"
+                        status: readiness.github ? "CONNECTED" : "NOT CONNECTED",
+                        isReady: readiness.github,
+                        actionTitle: readiness.github ? "VIEW" : "CONNECT"
                     ) {
                         model.isOnboardingPresented = true
                     }
@@ -33,9 +60,9 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "PROVIDER",
                         systemImage: "cloud",
-                        status: providerReady ? "CONFIGURED" : "SETUP REQUIRED",
-                        isReady: providerReady,
-                        actionTitle: providerReady ? "MANAGE" : "SET UP"
+                        status: readiness.provider ? "CONFIGURED" : "SETUP REQUIRED",
+                        isReady: readiness.provider,
+                        actionTitle: readiness.provider ? "MANAGE" : "SET UP"
                     ) {
                         model.selectedSection = .providers
                     }
@@ -43,8 +70,8 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "LICENSE",
                         systemImage: "key",
-                        status: licenseReady ? "ACTIVE" : "ACTIVATION REQUIRED",
-                        isReady: licenseReady,
+                        status: readiness.license ? "ACTIVE" : "ACTIVATION REQUIRED",
+                        isReady: readiness.license,
                         actionTitle: "VIEW"
                     ) {
                         model.selectedSection = .license
@@ -53,9 +80,9 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "REPOSITORY",
                         systemImage: "chevron.left.forwardslash.chevron.right",
-                        status: repositoryReady ? "SELECTED" : "NOT SELECTED",
-                        isReady: repositoryReady,
-                        actionTitle: repositoryReady ? "MANAGE" : "ADD"
+                        status: readiness.repository ? "APPLIED" : "NOT APPLIED",
+                        isReady: readiness.repository,
+                        actionTitle: readiness.repository ? "MANAGE" : "ADD"
                     ) {
                         model.selectedSection = .repos
                     }
@@ -63,13 +90,13 @@ struct OverviewView: View {
 
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 14) {
-                        repositoryPanel(palette: nd)
-                        recentActivityPanel(palette: nd)
+                        repositoryPanel(palette: nd, readiness: readiness)
+                        recentActivityPanel(palette: nd, readiness: readiness)
                     }
 
                     VStack(spacing: 14) {
-                        repositoryPanel(palette: nd)
-                        recentActivityPanel(palette: nd)
+                        repositoryPanel(palette: nd, readiness: readiness)
+                        recentActivityPanel(palette: nd, readiness: readiness)
                     }
                 }
 
@@ -90,7 +117,7 @@ struct OverviewView: View {
                     Text("LOCAL-FIRST")
                         .foregroundStyle(nd.accentPrimary)
                 }
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .font(.system(.caption2, design: .monospaced).weight(.medium))
                 .foregroundStyle(nd.textSecondary)
             }
             .padding(24)
@@ -103,27 +130,27 @@ struct OverviewView: View {
         .scrollContentBackground(.hidden)
     }
 
-    private func hero(palette: NDPalette) -> some View {
+    private func hero(palette: NDPalette, readiness: DesktopSetupReadiness) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("// SYSTEM STATUS")
                 .ndSectionLabel(palette)
                 .foregroundStyle(NeonDiffTheme.cyan)
 
-            Text(readinessCount == 4 ? "Ready for your first review" : "Set up your first review")
-                .font(.system(size: 32, weight: .semibold, design: .rounded))
+            Text(readiness.isComplete ? "Ready for your first review" : "Set up your first review")
+                .font(.system(.largeTitle, design: .rounded).weight(.semibold))
                 .foregroundStyle(palette.accentPrimary)
                 .minimumScaleFactor(0.72)
                 .lineLimit(2)
 
-            Text(readinessCount == 4
+            Text(readiness.isComplete
                 ? "Your review path is configured. Start with a dry run before any live GitHub post."
                 : "Complete the remaining steps below. You can leave setup at any time and return here.")
                 .font(.body)
                 .foregroundStyle(palette.textPrimary.opacity(0.78))
 
             HStack(spacing: 10) {
-                Text("\(readinessCount) OF 4 READY")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                Text("\(readiness.completedCount) OF \(readiness.totalCount) READY")
+                    .font(.system(.caption2, design: .monospaced).weight(.semibold))
                     .foregroundStyle(palette.textSecondary)
 
                 GeometryReader { proxy in
@@ -131,7 +158,11 @@ struct OverviewView: View {
                         Capsule().fill(palette.borderInput)
                         Capsule()
                             .fill(palette.accentPrimary)
-                            .frame(width: proxy.size.width * CGFloat(readinessCount) / 4)
+                            .frame(
+                                width: proxy.size.width
+                                    * CGFloat(readiness.completedCount)
+                                    / CGFloat(readiness.totalCount)
+                            )
                     }
                 }
                 .frame(height: 4)
@@ -142,28 +173,41 @@ struct OverviewView: View {
         .padding(.vertical, 8)
     }
 
-    private func repositoryPanel(palette: NDPalette) -> some View {
+    private func repositoryPanel(
+        palette: NDPalette,
+        readiness: DesktopSetupReadiness
+    ) -> some View {
         ReferenceHomePanel(title: "// REPOSITORY", palette: palette) {
-            Text(repositoryName)
-                .font(.system(size: 20, weight: .medium, design: .monospaced))
-                .foregroundStyle(repositoryReady ? palette.accentPrimary : palette.textSecondary)
+            Text(readiness.repositoryName)
+                .font(.system(.title3, design: .monospaced).weight(.medium))
+                .foregroundStyle(
+                    readiness.repository ? palette.accentPrimary : palette.textSecondary
+                )
                 .lineLimit(1)
 
-            Text(repositoryReady ? "Ready for a dry-run review." : "Choose one repository to begin.")
+            Text(readiness.repository
+                ? "Applied and ready for a dry-run review."
+                : "Choose and apply one repository to begin.")
                 .font(.callout)
                 .foregroundStyle(palette.textSecondary)
 
             Button {
                 model.selectedSection = .repos
             } label: {
-                Label(repositoryReady ? "Manage Repository" : "Add Repository", systemImage: "plus.circle")
+                Label(
+                    readiness.repository ? "Manage Repository" : "Add Repository",
+                    systemImage: "plus.circle"
+                )
             }
             .buttonStyle(ReferenceOutlineButtonStyle())
         }
         .frame(maxWidth: .infinity, minHeight: 174, alignment: .topLeading)
     }
 
-    private func recentActivityPanel(palette: NDPalette) -> some View {
+    private func recentActivityPanel(
+        palette: NDPalette,
+        readiness: DesktopSetupReadiness
+    ) -> some View {
         ReferenceHomePanel(title: "// RECENT ACTIVITY", palette: palette) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "checkmark.circle")
@@ -174,14 +218,16 @@ struct OverviewView: View {
                     Text("Welcome to NeonDiff")
                         .font(.system(.callout, design: .monospaced).weight(.medium))
                         .foregroundStyle(palette.textPrimary)
-                    Text(readinessCount == 4 ? "Setup is ready for a dry run." : "Let’s finish your setup.")
+                    Text(readiness.isComplete
+                        ? "Setup is ready for a dry run."
+                        : "Let’s finish your setup.")
                         .font(.callout)
                         .foregroundStyle(palette.textSecondary)
                 }
 
                 Spacer()
                 Text("NOW")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .font(.system(.caption2, design: .monospaced).weight(.semibold))
                     .foregroundStyle(palette.accentPrimary)
             }
         }
@@ -254,36 +300,6 @@ struct OverviewView: View {
         .accessibilityIdentifier("neondiff-preview-stop-daemon")
     }
 
-    private var githubReady: Bool {
-        model.byoGitHubCredentialsVerified || managedGitHubReady
-    }
-
-    private var managedGitHubReady: Bool {
-        if case .bound = model.managedGitHubConnectionState { return true }
-        return false
-    }
-
-    private var providerReady: Bool {
-        model.providerVerification?.isVerified == true
-    }
-
-    private var licenseReady: Bool {
-        model.activationState == .active || model.onboardingFlow.licenseActivation == .activated
-    }
-
-    private var repositoryReady: Bool {
-        model.selectedManagedGitHubRepository != nil || !model.repos.filter(\.enabled).isEmpty
-    }
-
-    private var readinessCount: Int {
-        [githubReady, providerReady, licenseReady, repositoryReady].filter { $0 }.count
-    }
-
-    private var repositoryName: String {
-        model.selectedManagedGitHubRepository
-            ?? model.repos.first(where: \.enabled)?.name
-            ?? "owner/repository"
-    }
 }
 
 private struct ReferenceReadinessCard: View {
@@ -311,14 +327,14 @@ private struct ReferenceReadinessCard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .font(.system(.callout, design: .monospaced).weight(.medium))
                     .foregroundStyle(palette.textPrimary)
                 HStack(spacing: 6) {
                     Circle()
                         .fill(isReady ? palette.accentPrimary : palette.warning)
                         .frame(width: 7, height: 7)
                     Text(status)
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .font(.system(.caption2, design: .monospaced).weight(.semibold))
                         .foregroundStyle(isReady ? palette.accentPrimary : palette.warning)
                 }
             }
@@ -388,7 +404,7 @@ private struct ReferenceOutlineButtonStyle: ButtonStyle {
         let palette = NDPalette(scheme: colorScheme)
 
         configuration.label
-            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .font(.system(.caption, design: .monospaced).weight(.semibold))
             .foregroundStyle(palette.accentPrimary.opacity(configuration.isPressed ? 0.65 : 1))
             .padding(.horizontal, 13)
             .padding(.vertical, 8)

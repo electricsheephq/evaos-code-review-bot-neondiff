@@ -31,10 +31,10 @@ Raw live-site values → semantic roles → native mapping. Dark appearance is t
 | textSecondary | #6d8a75 / #3a4756 | #6D8A75 | #3A4756 | secondary/muted text |
 | accentPrimary | #39ff88 / #0e7490 | #39FF88 | #0E7490 | primary action, live/healthy status ONLY |
 | accentMagenta | #ff2bd6 / #be185d | #FF2BD6 | #BE185D | PR identity, attention accents |
-| warning | #ffcc33 / #b45309 | #FFCC33 | #B45309 | warning text/icons |
+| warning | #ffcc33 / #b45309 | #FFCC33 | #92400E | warning text/icons; native light darkens the site orange for 4.5:1 small-text contrast |
 | danger | #ff3b6b / #b91c1c | #FF3B6B | #B91C1C | destructive/error |
-| borderPrimary | #39ff88 @ 22% / ink @ 16% | same | #0A1420 @ 16% | panel/console borders |
-| borderInput | #39ff88 @ 18% / ink @ 12% | same | #0A1420 @ 12% | field borders |
+| borderPrimary | #39ff88 @ 22% / ink @ 16% | same | #0A1420 @ 26% | panel/console borders; strengthened for native light-mode separation |
+| borderInput | #39ff88 @ 18% / ink @ 12% | same | #0A1420 @ 20% | field borders; strengthened for native light-mode separation |
 
 Corners: the site renders square components. Native translation: sharp (0–2pt) corners on brand
 surfaces (consoles, evidence panels, bracket buttons); standard macOS radii on system controls

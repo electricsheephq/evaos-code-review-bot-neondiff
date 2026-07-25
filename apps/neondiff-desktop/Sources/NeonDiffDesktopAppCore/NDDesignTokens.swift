@@ -48,10 +48,10 @@ package enum NDDesignTokens {
     package static let textSecondary = NDSemanticColor(dark: NDColorValue(hex: 0x6D8A75), light: NDColorValue(hex: 0x3A4756))
     package static let accentPrimary = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88), light: NDColorValue(hex: 0x0E7490))
     package static let accentMagenta = NDSemanticColor(dark: NDColorValue(hex: 0xFF2BD6), light: NDColorValue(hex: 0xBE185D))
-    package static let warning = NDSemanticColor(dark: NDColorValue(hex: 0xFFCC33), light: NDColorValue(hex: 0xB45309))
+    package static let warning = NDSemanticColor(dark: NDColorValue(hex: 0xFFCC33), light: NDColorValue(hex: 0x92400E))
     package static let danger = NDSemanticColor(dark: NDColorValue(hex: 0xFF3B6B), light: NDColorValue(hex: 0xB91C1C))
-    package static let borderPrimary = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88, opacity: 0.22), light: NDColorValue(hex: 0x0A1420, opacity: 0.16))
-    package static let borderInput = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88, opacity: 0.18), light: NDColorValue(hex: 0x0A1420, opacity: 0.12))
+    package static let borderPrimary = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88, opacity: 0.22), light: NDColorValue(hex: 0x0A1420, opacity: 0.26))
+    package static let borderInput = NDSemanticColor(dark: NDColorValue(hex: 0x39FF88, opacity: 0.18), light: NDColorValue(hex: 0x0A1420, opacity: 0.20))
 
     /// Stable name → value listing for contract enforcement.
     package static let all: [(name: String, color: NDSemanticColor)] = [

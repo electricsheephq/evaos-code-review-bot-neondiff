@@ -43,14 +43,14 @@ struct OnboardingWizardView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Text("• SETUP // \(String(format: "%02d", currentStepNumber))")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
                     .tracking(0.8)
                     .foregroundStyle(NeonDiffTheme.accent)
 
                 Spacer()
 
                 Button {
-                    model.openReadOnlyAppFromQuarantinedOnboarding()
+                    model.dismissOnboardingPanel()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 14, weight: .medium))
@@ -64,11 +64,11 @@ struct OnboardingWizardView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("STEP \(currentStepNumber) OF \(OnboardingStep.allCases.count)")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .font(.system(.caption2, design: .monospaced).weight(.semibold))
                     .foregroundStyle(NeonDiffTheme.accent)
 
                 Text(model.onboardingFlow.currentStep.title.uppercased())
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                     .accessibilityIdentifier(
                         "neondiff-onboarding-current-step-\(model.onboardingFlow.currentStep.rawValue)"
@@ -113,17 +113,6 @@ struct OnboardingWizardView: View {
             "Activate access for the selected repository without exposing your key."
         case .done:
             "Review your setup, then finish or continue in read-only mode."
-        }
-    }
-
-    private var setupModeBadge: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(model.onboardingFlow.mode == .publicReposOnly ? NeonDiffTheme.accent : NeonDiffTheme.cyan)
-                .frame(width: 7, height: 7)
-            Text(model.onboardingFlow.mode == .publicReposOnly ? "PUBLIC" : "PRIVATE")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(NeonDiffTheme.textSecondary)
         }
     }
 
@@ -661,17 +650,17 @@ struct OnboardingWizardView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if model.incompleteOnboardingEscapeAvailable {
-                Button("Continue Later") {
-                    model.openReadOnlyAppFromQuarantinedOnboarding()
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(NeonDiffTheme.cyan)
-                .keyboardShortcut(.cancelAction)
-                .help("Close setup and inspect the app in read-only mode. Review actions remain blocked.")
-                .accessibilityIdentifier("neondiff-onboarding-read-only-exit")
+            Button(model.incompleteOnboardingEscapeAvailable ? "Continue Later" : "Close Setup") {
+                model.dismissOnboardingPanel()
             }
+            .buttonStyle(.plain)
+            .font(.system(.caption, design: .monospaced).weight(.semibold))
+            .foregroundStyle(NeonDiffTheme.cyan)
+            .keyboardShortcut(.cancelAction)
+            .help(model.incompleteOnboardingEscapeAvailable
+                ? "Close setup and inspect the app in read-only mode. Review actions remain blocked."
+                : "Close setup and return to the app.")
+            .accessibilityIdentifier("neondiff-onboarding-read-only-exit")
 
             Rectangle()
                 .fill(NeonDiffTheme.stroke.opacity(0.35))

@@ -227,6 +227,34 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && !dependencies.preferences.bool(forKey: onboardingCompletedKey)
     }
 
+    /// Customer-facing repository readiness is intentionally stricter than
+    /// selection. Managed repositories become ready only after the exact
+    /// broker-authorized selection has been applied and read back from the
+    /// active config path. BYO builds require verified credentials plus an
+    /// enabled repository.
+    package var repositoryConfigurationReady: Bool {
+        let enabledRepositories = repos.filter(\.enabled).map(\.name)
+        guard !enabledRepositories.isEmpty else { return false }
+
+        if managedGitHubAvailable {
+            guard hasVerifiedManagedGitHubSelection,
+                  let selectedManagedGitHubRepository
+            else {
+                return false
+            }
+            return appliedManagedRepoSelection == AppliedManagedRepoSelection(
+                repository: selectedManagedGitHubRepository,
+                configPath: configPath
+            )
+        }
+
+        if byoGitHubCredentialOnboardingAvailable {
+            return byoGitHubCredentialsVerified
+        }
+
+        return true
+    }
+
     package var managedGitHubAvailable: Bool {
         dependencies.productionBoundary.managedGitHubBrokerOrigin != nil
             && dependencies.githubBroker != nil
@@ -2142,6 +2170,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
         logText = dependencies.productionBoundary.nativeActivationBrokerVerified
             ? "Opened the read-only setup surface. Finish GitHub, repository, provider, and activation setup before starting a review."
             : "Opened the read-only setup surface. \(productionActivationBoundaryMessage)"
+    }
+
+    /// Dismisses the integrated setup panel in every state. Incomplete users
+    /// keep the existing read-only escape behavior; completed users reopening
+    /// setup can close it without rewriting their completion proof.
+    package func dismissOnboardingPanel() {
+        guard isOnboardingPresented else { return }
+        if incompleteOnboardingEscapeAvailable {
+            openReadOnlyAppFromQuarantinedOnboarding()
+        } else {
+            isOnboardingPresented = false
+        }
     }
 
     @discardableResult

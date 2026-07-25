@@ -34,12 +34,8 @@ struct NDPalette {
     var danger: Color { resolve(NDDesignTokens.danger) }
     var borderPrimary: Color { resolve(NDDesignTokens.borderPrimary) }
     var borderInput: Color { resolve(NDDesignTokens.borderInput) }
-    var interfaceBorder: Color {
-        scheme == .dark ? borderPrimary : textPrimary.opacity(0.26)
-    }
-    var interfaceInputBorder: Color {
-        scheme == .dark ? borderInput : textPrimary.opacity(0.20)
-    }
+    var interfaceBorder: Color { borderPrimary }
+    var interfaceInputBorder: Color { borderInput }
 }
 
 /// The mono label/console type system — the strongest carry-over identity
@@ -217,12 +213,7 @@ enum NeonDiffTheme {
     static let magenta = adaptive(NDDesignTokens.accentMagenta)
     static let textPrimary = adaptive(NDDesignTokens.textPrimary)
     static let textSecondary = adaptive(NDDesignTokens.textSecondary)
-    static let stroke = adaptive(
-        NDSemanticColor(
-            dark: NDDesignTokens.borderPrimary.dark,
-            light: NDColorValue(hex: 0x0A1420, opacity: 0.26)
-        )
-    )
+    static let stroke = adaptive(NDDesignTokens.borderPrimary)
     static let warning = adaptive(NDDesignTokens.warning)
 
     static let logoFont = Font.system(size: 26, weight: .black, design: .monospaced)
@@ -451,9 +442,9 @@ struct OperatorTextField: View {
                 .background(
                     AngularRectangle(corner: 7)
                         .fill(
-                            colorScheme == .dark
-                                ? Color.black.opacity(0.38)
-                                : palette.background.opacity(0.88)
+                            palette.background.opacity(
+                                colorScheme == .dark ? 0.62 : 0.88
+                            )
                         )
                 )
                 .overlay {

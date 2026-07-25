@@ -201,14 +201,14 @@ struct NeonWindowConfigurator: NSViewRepresentable {
     }
 
     private var referenceChrome: NSColor {
-        if colorScheme == .dark {
-            return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
-        }
+        let token = colorScheme == .dark
+            ? NDDesignTokens.background.dark
+            : NDDesignTokens.background.light
         return NSColor(
-            srgbRed: 244.0 / 255.0,
-            green: 239.0 / 255.0,
-            blue: 230.0 / 255.0,
-            alpha: 1
+            srgbRed: token.red,
+            green: token.green,
+            blue: token.blue,
+            alpha: token.opacity
         )
     }
 

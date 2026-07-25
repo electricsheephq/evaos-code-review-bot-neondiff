@@ -112,8 +112,7 @@ struct ContentView: View {
         .buttonStyle(OperatorButtonStyle())
         .preferredColorScheme(preferredColorScheme)
         .onExitCommand {
-            guard model.incompleteOnboardingEscapeAvailable else { return }
-            model.openReadOnlyAppFromQuarantinedOnboarding()
+            model.dismissOnboardingPanel()
         }
     }
 }
@@ -165,7 +164,10 @@ private struct ReferenceShellLayout: View {
                     )
 
                     HStack(spacing: 0) {
-                        SidebarView(selection: $model.selectedSection)
+                        SidebarView(
+                            selection: $model.selectedSection,
+                            readiness: DesktopSetupReadiness(model: model)
+                        )
                             .frame(width: proxy.size.width < 980 ? 204 : 242)
                         .evaluationAccessibilityRegion(
                             "neondiff-sidebar",
