@@ -61,6 +61,24 @@ import Testing
         ))
     }
 
+    @MainActor
+    @Test func completedUserCanDismissReopenedSetupWithoutLosingCompletion() throws {
+        let fixture = ModelDependencyFixture(
+            preferenceBools: [
+                "neondiff.hasCompletedActivationOnboarding.v2": true
+            ],
+            productionBoundary: .testVerified
+        )
+        fixture.model.isOnboardingPresented = true
+
+        fixture.model.dismissOnboardingPanel()
+
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(fixture.preferences.bool(
+            forKey: "neondiff.hasCompletedActivationOnboarding.v2"
+        ))
+    }
+
     @Test func installedWindowPreservesNativeEscapeMovementAndBoundedLaunchSize() throws {
         let packageRoot = sourceBoundaryPackageRoot()
         let contentView = try sourceBoundaryText(

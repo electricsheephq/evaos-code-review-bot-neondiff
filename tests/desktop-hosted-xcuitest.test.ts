@@ -696,7 +696,12 @@ releaseTabbedAlternative()
     expect(source).toContain(
       '"--content-size", "\\(requestedContentSize.width)x\\(requestedContentSize.height)"'
     );
-    expect(source).toContain("wizardFrame.matches(requestedContentSize");
+    expect(source).toContain(
+      "abs(wizardFrame.width - Double(requestedContentSize.width)) <= 1"
+    );
+    expect(source).toContain(
+      "wizardFrame.height <= Double(requestedContentSize.height) + 1"
+    );
     expect(source).toContain('"neondiff-onboarding-wizard"');
     expect(source).toContain('"neondiff-onboarding-header"');
     expect(source).toContain('"neondiff-onboarding-step-list"');
@@ -711,6 +716,8 @@ releaseTabbedAlternative()
     expect(source).toContain("completionElapsedMilliseconds");
     expect(source).toContain("validateStableOnboardingSamples");
     expect(source).toContain("validateOnboardingRegionLayout");
+    expect(source).toContain("stepList.maxY <= stepContent.y + 1");
+    expect(source).not.toContain("stepList.maxX <= stepContent.x + 1");
     expect(source).toContain("fullyContainedInWizard");
     expect(source).toContain("fullyContainedInWindow");
     expect(source).toContain("testRun?.failureCount");
@@ -945,8 +952,10 @@ releaseTabbedAlternative()
     );
     const attachSource = extractBalancedSwiftDeclaration(
       app,
-      "func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>)"
+      "func attach("
     );
+    expect(attachSource).toContain("colorScheme: ColorScheme");
+    expect(attachSource).toContain("window?.appearance = colorScheme == .dark");
     expect(attachSource).toMatch(
       /attachmentGeneration \+= 1\s+pendingHeight = nil\s+pendingOriginContainment = false\s+self\.window = window/
     );

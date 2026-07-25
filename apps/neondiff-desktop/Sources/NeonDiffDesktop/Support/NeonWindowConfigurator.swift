@@ -6,6 +6,7 @@ import NeonDiffDesktopCore
 struct NeonWindowConfigurator: NSViewRepresentable {
     let requestedContentSize: NSSize?
     let disablesAnimations: Bool
+    @Environment(\.colorScheme) private var colorScheme
 #if DEBUG
     let readinessRequest: DesktopEvaluationReadinessRequest?
     let evaluationSection: DesktopSection?
@@ -57,12 +58,10 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.backgroundColor = NSColor(
-            calibratedRed: 0.224,
-            green: 1.0,
-            blue: 0.533,
-            alpha: 1.0
+        window.appearance = NSAppearance(
+            named: colorScheme == .dark ? .darkAqua : .aqua
         )
+        window.backgroundColor = referenceChrome
         window.styleMask.insert(.fullSizeContentView)
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
@@ -184,16 +183,33 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         }
 
         titlebarView.wantsLayer = true
-        titlebarView.layer?.backgroundColor = neonGreen.cgColor
+        titlebarView.layer?.backgroundColor = referenceChrome.cgColor
 
-        if !titlebarView.subviews.contains(where: { $0.identifier == nativeTitlebarBackgroundIdentifier }) {
-            let background = NSView(frame: titlebarView.bounds)
+        let background: NSView
+        if let existing = titlebarView.subviews.first(
+            where: { $0.identifier == nativeTitlebarBackgroundIdentifier }
+        ) {
+            background = existing
+        } else {
+            background = NSView(frame: titlebarView.bounds)
             background.identifier = nativeTitlebarBackgroundIdentifier
             background.wantsLayer = true
-            background.layer?.backgroundColor = neonGreen.cgColor
             background.autoresizingMask = [.width, .height]
             titlebarView.addSubview(background, positioned: .below, relativeTo: nil)
         }
+        background.layer?.backgroundColor = referenceChrome.cgColor
+    }
+
+    private var referenceChrome: NSColor {
+        let token = colorScheme == .dark
+            ? NDDesignTokens.background.dark
+            : NDDesignTokens.background.light
+        return NSColor(
+            srgbRed: token.red,
+            green: token.green,
+            blue: token.blue,
+            alpha: token.opacity
+        )
     }
 
     final class Coordinator {
@@ -394,9 +410,3 @@ struct NeonWindowConfigurator: NSViewRepresentable {
 }
 
 private let nativeTitlebarBackgroundIdentifier = NSUserInterfaceItemIdentifier("NeonDiffNativeTitlebarBackground")
-private let neonGreen = NSColor(
-    calibratedRed: 0.224,
-    green: 1.0,
-    blue: 0.533,
-    alpha: 1.0
-)

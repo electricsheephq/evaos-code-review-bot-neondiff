@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import NeonDiffDesktopAppCore
 
@@ -33,6 +34,8 @@ struct NDPalette {
     var danger: Color { resolve(NDDesignTokens.danger) }
     var borderPrimary: Color { resolve(NDDesignTokens.borderPrimary) }
     var borderInput: Color { resolve(NDDesignTokens.borderInput) }
+    var interfaceBorder: Color { borderPrimary }
+    var interfaceInputBorder: Color { borderInput }
 }
 
 /// The mono label/console type system — the strongest carry-over identity
@@ -198,20 +201,20 @@ private struct NDConsoleCornerTicks: View {
 }
 
 enum NeonDiffTheme {
-    static let shell = Color(red: 0.020, green: 0.024, blue: 0.031)
-    static let chrome = Color(red: 0.008, green: 0.014, blue: 0.012)
-    static let sidebar = Color(red: 0.018, green: 0.030, blue: 0.025)
-    static let panel = Color(red: 0.030, green: 0.047, blue: 0.039)
-    static let panelActive = Color(red: 0.035, green: 0.082, blue: 0.055)
-    static let panelRaised = Color(red: 0.050, green: 0.066, blue: 0.058)
-    static let accent = Color(red: 0.224, green: 1.0, blue: 0.533)
-    static let accentSoft = Color(red: 0.68, green: 0.91, blue: 0.78)
-    static let cyan = Color(red: 0.0, green: 0.898, blue: 1.0)
-    static let magenta = Color(red: 1.0, green: 0.169, blue: 0.839)
-    static let textPrimary = Color(red: 0.90, green: 1.0, blue: 0.97)
-    static let textSecondary = Color(red: 0.55, green: 0.70, blue: 0.62)
-    static let stroke = Color(red: 0.10, green: 0.58, blue: 0.25)
-    static let warning = Color(red: 1.0, green: 0.34, blue: 0.30)
+    static let shell = adaptive(NDDesignTokens.background)
+    static let chrome = adaptive(NDDesignTokens.background)
+    static let sidebar = adaptive(NDDesignTokens.surface)
+    static let panel = adaptive(NDDesignTokens.surface)
+    static let panelActive = adaptive(NDDesignTokens.surface)
+    static let panelRaised = adaptive(NDDesignTokens.surface)
+    static let accent = adaptive(NDDesignTokens.accentPrimary)
+    static let accentSoft = adaptive(NDDesignTokens.textSecondary)
+    static let cyan = adaptive(NDDesignTokens.accentPrimary)
+    static let magenta = adaptive(NDDesignTokens.accentMagenta)
+    static let textPrimary = adaptive(NDDesignTokens.textPrimary)
+    static let textSecondary = adaptive(NDDesignTokens.textSecondary)
+    static let stroke = adaptive(NDDesignTokens.borderPrimary)
+    static let warning = adaptive(NDDesignTokens.warning)
 
     static let logoFont = Font.system(size: 26, weight: .black, design: .monospaced)
     static let headlineFont = Font.system(.headline, design: .monospaced).weight(.bold)
@@ -231,6 +234,65 @@ enum NeonDiffTheme {
             return warning
         }
         return accentSoft
+    }
+
+    private static func adaptive(_ token: NDSemanticColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let value = isDark ? token.dark : token.light
+            return NSColor(
+                srgbRed: value.red,
+                green: value.green,
+                blue: value.blue,
+                alpha: value.opacity
+            )
+        })
+    }
+}
+
+struct NDBrandWordmark: View {
+    var size: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
+    private static let resourceBundle: Bundle = {
+#if SWIFT_PACKAGE
+        Bundle.module
+#else
+        Bundle.main
+#endif
+    }()
+    private static let image: NSImage? = {
+        guard let url = resourceBundle.url(
+            forResource: "NeonDiffWordmark",
+            withExtension: "png"
+        ), let image = NSImage(contentsOf: url) else {
+            return nil
+        }
+        image.isTemplate = true
+        return image
+    }()
+
+    var body: some View {
+        let palette = NDPalette(scheme: colorScheme)
+
+        Group {
+            if let image = Self.image {
+                Image(nsImage: image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Text("NEONDIFF")
+                    .font(.system(size: size, weight: .black, design: .rounded))
+                    .tracking(size * 0.04)
+            }
+        }
+            .frame(height: size)
+            .foregroundStyle(palette.accentPrimary)
+            .shadow(
+                color: palette.accentPrimary.opacity(colorScheme == .dark ? 0.65 : 0.22),
+                radius: colorScheme == .dark ? 6 : 3
+            )
+            .accessibilityLabel("NeonDiff")
     }
 }
 
@@ -256,40 +318,18 @@ struct AngularRectangle: Shape {
 struct OperatorBackdrop: View {
     var body: some View {
         ZStack {
-            NeonDiffTheme.shell
+            NeonDiffTheme.chrome
 
             Canvas { context, size in
-                var grid = Path()
-                let spacing: CGFloat = 36
-                var x: CGFloat = 0
-                while x <= size.width {
-                    grid.move(to: CGPoint(x: x, y: 0))
-                    grid.addLine(to: CGPoint(x: x, y: size.height))
-                    x += spacing
-                }
-                var y: CGFloat = 0
-                while y <= size.height {
-                    grid.move(to: CGPoint(x: 0, y: y))
-                    grid.addLine(to: CGPoint(x: size.width, y: y))
-                    y += spacing
-                }
-                context.stroke(grid, with: .color(NeonDiffTheme.accent.opacity(0.055)), lineWidth: 0.6)
-
-                var scanlines = Path()
-                y = 0
-                while y <= size.height {
-                    scanlines.move(to: CGPoint(x: 0, y: y))
-                    scanlines.addLine(to: CGPoint(x: size.width, y: y))
-                    y += 7
-                }
-                context.stroke(scanlines, with: .color(NeonDiffTheme.accent.opacity(0.032)), lineWidth: 0.35)
-
-                var diagonal = Path()
-                diagonal.move(to: CGPoint(x: size.width * 0.70, y: 0))
-                diagonal.addLine(to: CGPoint(x: size.width, y: size.height * 0.26))
-                diagonal.move(to: CGPoint(x: size.width * 0.77, y: size.height))
-                diagonal.addLine(to: CGPoint(x: size.width, y: size.height * 0.76))
-                context.stroke(diagonal, with: .color(NeonDiffTheme.accent.opacity(0.18)), lineWidth: 0.8)
+                var traces = Path()
+                let start = size.width * 0.62
+                traces.move(to: CGPoint(x: start, y: 0))
+                traces.addLine(to: CGPoint(x: start + 74, y: 74))
+                traces.addLine(to: CGPoint(x: size.width, y: 74))
+                traces.move(to: CGPoint(x: size.width * 0.76, y: size.height))
+                traces.addLine(to: CGPoint(x: size.width * 0.84, y: size.height * 0.84))
+                traces.addLine(to: CGPoint(x: size.width, y: size.height * 0.84))
+                context.stroke(traces, with: .color(NeonDiffTheme.accent.opacity(0.055)), lineWidth: 0.75)
             }
         }
         .ignoresSafeArea()
@@ -322,26 +362,19 @@ struct OperatorSectionHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("NEONDIFF")
-                    .font(NeonDiffTheme.logoFont)
-                    .foregroundStyle(NeonDiffTheme.accent)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                Text(title)
-                    .font(.system(size: sectionTitleSize, weight: .bold, design: .monospaced))
-                    .foregroundStyle(NeonDiffTheme.textPrimary)
-                    .accessibilityIdentifier("neondiff-section-title")
-            }
+            Text("// \(title.uppercased())")
+                .font(.system(size: sectionTitleSize, weight: .bold, design: .monospaced))
+                .tracking(0.8)
+                .foregroundStyle(NeonDiffTheme.cyan)
+                .accessibilityIdentifier("neondiff-section-title")
+                .accessibilityValue(title)
 
             Spacer(minLength: 16)
 
-            HStack(spacing: 8) {
-                OperatorBadge(text: "DEV MVP")
-                OperatorBadge(text: status, color: NeonDiffTheme.statusColor(status))
-            }
+            OperatorBadge(text: status, color: NeonDiffTheme.statusColor(status))
         }
-        .operatorPanel(padding: 16, active: true)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 8)
     }
 }
 
@@ -392,24 +425,32 @@ struct OperatorTextField: View {
     var title: String
     @Binding var text: String
     var secure = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let palette = NDPalette(scheme: colorScheme)
+
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
                 .font(.caption)
-                .foregroundStyle(NeonDiffTheme.textSecondary)
+                .foregroundStyle(palette.textSecondary)
             field
                 .textFieldStyle(.plain)
                 .font(.body)
+                .foregroundStyle(palette.textPrimary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .background(
                     AngularRectangle(corner: 7)
-                        .fill(Color.black.opacity(0.38))
+                        .fill(
+                            palette.background.opacity(
+                                colorScheme == .dark ? 0.62 : 0.88
+                            )
+                        )
                 )
                 .overlay {
                     AngularRectangle(corner: 7)
-                        .stroke(NeonDiffTheme.stroke.opacity(0.72), lineWidth: 0.7)
+                        .stroke(palette.interfaceInputBorder, lineWidth: 0.7)
                 }
         }
     }
@@ -470,6 +511,7 @@ private enum HostedEvaluationAccessibility {
 
 struct OperatorButtonStyle: ButtonStyle {
     var solid = false
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -487,6 +529,7 @@ struct OperatorButtonStyle: ButtonStyle {
                 AngularRectangle(corner: 7)
                     .stroke(NeonDiffTheme.accent.opacity(configuration.isPressed ? 0.95 : 0.72), lineWidth: 0.8)
             }
+            .opacity(isEnabled ? 1 : 0.38)
     }
 
     private func foreground(isPressed: Bool) -> Color {

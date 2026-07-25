@@ -242,7 +242,16 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(call.arguments.contains("--license-machine-id"))
         #expect(call.arguments.contains("electric/private"))
         #expect(fixture.model.activationState == .active)
+        #expect(fixture.model.currentRepositoryActivationReady)
         #expect(!fixture.preferences.bool(forKey: "neondiff.activationCliBackedValidation"))
+
+        fixture.model.repos = [
+            RepoMonitor(name: "electric/private-b", enabled: true)
+        ]
+
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.activationVerifiedThisLaunch)
+        #expect(fixture.model.activationState != .active)
     }
 
     @Test func managedConnectUsesBrokerAndKeychainIdentityWithoutLegacyUserTokenFallback() async throws {
@@ -785,6 +794,8 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         await fixture.waitForManagedGitHubConnectionToFinish()
         fixture.model.selectManagedGitHubRepository(fullName: "electric/public")
 
+        #expect(!fixture.model.repositoryConfigurationReady)
+
         fixture.cli.enqueue(.success(CLIRunResult(
             exitCode: 0,
             stdout: managedRepoPatchJSON(repository: "electric/public", wrote: false),
@@ -794,6 +805,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         await fixture.waitForConfigPatchToFinish()
 
         #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.repositoryConfigurationReady)
         #expect(fixture.model.lastError == nil)
     }
 }

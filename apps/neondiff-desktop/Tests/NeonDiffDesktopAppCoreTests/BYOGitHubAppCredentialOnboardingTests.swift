@@ -165,7 +165,8 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.isBYOGitHubVerificationInProgress)
         #expect(fixture.model.byoGitHubCredentialStatus.contains("acme/demo"))
         #expect(fixture.model.canAdvanceOnboarding)
-        #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(!fixture.model.repositoryConfigurationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.productionDaemonStopAvailable)
         #expect(fixture.model.isOnboardingPresented)
 
@@ -180,6 +181,36 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.canAdvanceOnboarding)
         #expect(!fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.productionDaemonStopAvailable)
+    }
+
+    @Test func byoRepositoryReadinessDoesNotUnlockUnactivatedUsefulWork() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(doctorResult(
+                readChecks: doctorReadCheck(repo: "acme/demo")
+            ))],
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+
+        #expect(!fixture.model.repositoryConfigurationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 0,
+            stdout: byoRepoPatchJSON(repository: "acme/demo"),
+            stderr: ""
+        )))
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        #expect(fixture.model.repositoryConfigurationReady)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
     @Test func verificationFailsClosedUnlessDoctorChecksExactlyMatchEnabledRepositories() async throws {
@@ -262,8 +293,9 @@ struct BYOGitHubAppCredentialOnboardingTests {
                 fixture.model.byoGitHubCredentialsVerified == scenario.shouldVerify,
                 Comment(rawValue: scenario.name)
             )
+            #expect(!fixture.model.repositoryConfigurationReady)
             #expect(
-                fixture.model.productionUsefulWorkAvailable == scenario.shouldVerify,
+                !fixture.model.productionUsefulWorkAvailable,
                 Comment(rawValue: scenario.name)
             )
             #expect(fixture.model.productionDaemonStopAvailable)
@@ -283,7 +315,8 @@ struct BYOGitHubAppCredentialOnboardingTests {
         await waitForBYOVerification(fixture)
 
         #expect(fixture.model.byoGitHubCredentialsVerified)
-        #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(!fixture.model.repositoryConfigurationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
 
         fixture.model.repos.append(RepoMonitor(name: "acme/api", enabled: true))
 
@@ -356,6 +389,10 @@ private func waitForBYOVerification(_ fixture: ModelDependencyFixture) async {
     for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
         await Task.yield()
     }
+}
+
+private func byoRepoPatchJSON(repository: String) -> String {
+    #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["\#(repository)"]}}"#
 }
 
 private func doctorResult(readChecks: String) -> CLIRunResult {
