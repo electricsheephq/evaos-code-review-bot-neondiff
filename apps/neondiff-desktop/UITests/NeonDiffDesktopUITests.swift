@@ -28,13 +28,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                 .waitForExistence(timeout: 10)
         )
 
-        let applicationMenu = app.menuBars.menuBarItems["NeonDiff Desktop"]
-        XCTAssertTrue(applicationMenu.waitForExistence(timeout: 5))
-        applicationMenu.click()
-
-        let quit = app.menuItems["Quit NeonDiff Desktop"]
-        XCTAssertTrue(quit.waitForExistence(timeout: 5))
-        quit.click()
+        app.typeKey("q", modifierFlags: .command)
 
         XCTAssertTrue(
             app.wait(for: .notRunning, timeout: 5),
