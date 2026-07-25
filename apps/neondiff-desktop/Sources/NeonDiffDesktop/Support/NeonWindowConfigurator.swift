@@ -99,6 +99,45 @@ struct NeonWindowConfigurator: NSViewRepresentable {
             }
         } else {
             window.minSize = NSSize(width: 1040, height: 680)
+            if coordinator.configuredProductionWindowNumber != window.windowNumber,
+               let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+                let targetFrameSize = DesktopWindowGeometryPolicy.productionLaunchFrameSize(
+                    currentFrame: DesktopWindowContentSize(
+                        width: window.frame.width,
+                        height: window.frame.height
+                    ),
+                    currentContent: DesktopWindowContentSize(
+                        width: window.contentLayoutRect.width,
+                        height: window.contentLayoutRect.height
+                    ),
+                    visibleFrame: DesktopWindowContentSize(
+                        width: visibleFrame.width,
+                        height: visibleFrame.height
+                    )
+                )
+                let targetOrigin = DesktopWindowGeometryPolicy.centeredOrigin(
+                    frameSize: targetFrameSize,
+                    visibleOrigin: DesktopWindowOrigin(
+                        x: visibleFrame.minX,
+                        y: visibleFrame.minY
+                    ),
+                    visibleFrame: DesktopWindowContentSize(
+                        width: visibleFrame.width,
+                        height: visibleFrame.height
+                    )
+                )
+                window.setFrame(
+                    NSRect(
+                        origin: NSPoint(x: targetOrigin.x, y: targetOrigin.y),
+                        size: NSSize(
+                            width: targetFrameSize.width,
+                            height: targetFrameSize.height
+                        )
+                    ),
+                    display: true
+                )
+                coordinator.configuredProductionWindowNumber = window.windowNumber
+            }
         }
         if requestedContentSize != nil,
            coordinator.positionedWindowNumber != window.windowNumber {
@@ -143,6 +182,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
 
     final class Coordinator {
         var positionedWindowNumber: Int?
+        var configuredProductionWindowNumber: Int?
 #if DEBUG
         var readinessSampling = false
         var readinessEmitted = false

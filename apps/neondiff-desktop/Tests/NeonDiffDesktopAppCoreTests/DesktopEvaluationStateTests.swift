@@ -29,6 +29,40 @@ struct DesktopEvaluationStateTests {
         ) == DesktopWindowContentSize(width: 760, height: 560))
     }
 
+    @Test func productionLaunchUsesCenteredBoundedWindowInsteadOfScreenFillingFrame() {
+        let frameSize = DesktopWindowGeometryPolicy.productionLaunchFrameSize(
+            currentFrame: DesktopWindowContentSize(width: 1920, height: 983),
+            currentContent: DesktopWindowContentSize(width: 1920, height: 951),
+            visibleFrame: DesktopWindowContentSize(width: 1920, height: 983)
+        )
+
+        #expect(frameSize == DesktopWindowContentSize(width: 1200, height: 792))
+        #expect(
+            DesktopWindowGeometryPolicy.centeredOrigin(
+                frameSize: frameSize,
+                visibleOrigin: DesktopWindowOrigin(x: 0, y: 31),
+                visibleFrame: DesktopWindowContentSize(width: 1920, height: 983)
+            ) == DesktopWindowOrigin(x: 360, y: 126.5)
+        )
+    }
+
+    @Test func productionLaunchFrameStaysInsideSmallerVisibleScreen() {
+        let frameSize = DesktopWindowGeometryPolicy.productionLaunchFrameSize(
+            currentFrame: DesktopWindowContentSize(width: 1100, height: 700),
+            currentContent: DesktopWindowContentSize(width: 1100, height: 668),
+            visibleFrame: DesktopWindowContentSize(width: 1100, height: 700)
+        )
+
+        #expect(frameSize == DesktopWindowContentSize(width: 1100, height: 700))
+        #expect(
+            DesktopWindowGeometryPolicy.centeredOrigin(
+                frameSize: frameSize,
+                visibleOrigin: DesktopWindowOrigin(x: -1100, y: 0),
+                visibleFrame: DesktopWindowContentSize(width: 1100, height: 700)
+            ) == DesktopWindowOrigin(x: -1100, y: 0)
+        )
+    }
+
     @Test func appliesASettledProviderFixtureWithoutLiveDependencies() {
         let dependencies = RecordingDesktopDependencies(
             root: fixtureURL("/fixture/evaluation", directory: true)

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import NeonDiffDesktopAppCore
 import NeonDiffDesktopCore
@@ -77,6 +78,7 @@ struct ContentView: View {
                 .frame(height: 34)
                 .shadow(color: NeonDiffTheme.accent.opacity(0.80), radius: 8, y: 1)
                 .ignoresSafeArea(.container, edges: .top)
+                .allowsHitTesting(false)
 
             VStack(spacing: 0) {
                 NeonChromeStrip(model: model, updateController: updateController)
@@ -123,7 +125,6 @@ struct ContentView: View {
                 .buttonStyle(OperatorButtonStyle())
                 .tint(NeonDiffTheme.accent)
                 .preferredColorScheme(preferredColorScheme)
-                .interactiveDismissDisabled(model.onboardingFlow.currentStep != .done)
                 .onAppear { onSurfaceReady?(model.selectedSection) }
         }
     }
@@ -322,10 +323,15 @@ private struct NeonChromeStrip: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(NeonDiffTheme.accent)
-                .frame(height: 28)
-                .shadow(color: NeonDiffTheme.accent.opacity(0.54), radius: 8, y: 1)
+            ZStack {
+                Rectangle()
+                    .fill(NeonDiffTheme.accent)
+                    .shadow(color: NeonDiffTheme.accent.opacity(0.54), radius: 8, y: 1)
+                    .allowsHitTesting(false)
+                WindowDragRegion()
+                    .accessibilityHidden(true)
+            }
+            .frame(height: 28)
 
             HStack(spacing: 14) {
                 Color.clear
@@ -388,7 +394,22 @@ private struct NeonChromeStrip: View {
                     .frame(height: 2)
             }
         }
-        .contentShape(Rectangle())
+    }
+}
+
+private struct WindowDragRegion: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        WindowDragNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class WindowDragNSView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }
 

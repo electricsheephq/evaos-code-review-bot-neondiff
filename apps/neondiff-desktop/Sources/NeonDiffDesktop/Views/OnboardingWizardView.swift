@@ -614,6 +614,8 @@ struct OnboardingWizardView: View {
                     model.openReadOnlyAppFromQuarantinedOnboarding()
                 }
                 .help("Inspect setup and settings without completing activation onboarding. Useful work remains blocked.")
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("neondiff-onboarding-read-only-exit")
             }
 
             if let lastError = model.lastError, !lastError.isEmpty {
