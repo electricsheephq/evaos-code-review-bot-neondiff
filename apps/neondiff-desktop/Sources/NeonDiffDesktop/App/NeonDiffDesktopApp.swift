@@ -389,6 +389,7 @@ private enum SettingsWindowLayout {
 
 private struct SettingsWindowFitView: NSViewRepresentable {
     @Binding var contentHeight: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -400,7 +401,8 @@ private struct SettingsWindowFitView: NSViewRepresentable {
         DispatchQueue.main.async {
             context.coordinator.attach(
                 to: view.window,
-                contentHeight: $contentHeight
+                contentHeight: $contentHeight,
+                colorScheme: colorScheme
             )
         }
         return view
@@ -410,7 +412,8 @@ private struct SettingsWindowFitView: NSViewRepresentable {
         DispatchQueue.main.async {
             context.coordinator.attach(
                 to: view.window,
-                contentHeight: $contentHeight
+                contentHeight: $contentHeight,
+                colorScheme: colorScheme
             )
         }
     }
@@ -427,8 +430,15 @@ private struct SettingsWindowFitView: NSViewRepresentable {
         private var pendingOriginContainment = false
         private var attachmentGeneration = 0
 
-        func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>) {
+        func attach(
+            to window: NSWindow?,
+            contentHeight: Binding<CGFloat>,
+            colorScheme: ColorScheme
+        ) {
             self.contentHeight = contentHeight
+            window?.appearance = colorScheme == .dark
+                ? NSAppearance(named: .darkAqua)
+                : NSAppearance(named: .aqua)
             guard self.window !== window else {
                 return
             }

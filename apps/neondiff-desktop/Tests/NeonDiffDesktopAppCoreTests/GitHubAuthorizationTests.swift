@@ -151,6 +151,61 @@ import NeonDiffDesktopCore
         #expect(fixture.model.repositoryConfigurationReady)
     }
 
+    @Test func exactConfigInspectReestablishesRepositoryReadbackProof() {
+        let fixture = ModelDependencyFixture(productionBoundary: .testVerified)
+
+        fixture.loadConfig(
+            #"{"ok":true,"command":"config inspect","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"pilotRepos":["electric/public"]}}"#
+        )
+
+        #expect(fixture.model.repos == [RepoMonitor(name: "electric/public", enabled: true)])
+        #expect(fixture.model.repositoryConfigurationReady)
+    }
+
+    @Test func emptyConfigInspectClearsStaleRepositoryReadiness() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["electric/public"]}}"#,
+                stderr: ""
+            ))],
+            productionBoundary: .testVerified
+        )
+        fixture.model.repos = [RepoMonitor(name: "electric/public", enabled: true)]
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+        #expect(fixture.model.repositoryConfigurationReady)
+
+        fixture.loadConfig()
+
+        #expect(fixture.model.repos.isEmpty)
+        #expect(!fixture.model.repositoryConfigurationReady)
+    }
+
+    @Test func overlappingRepositoryApplyPreservesFirstPendingProof() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["electric/public"]}}"#,
+                stderr: ""
+            ))],
+            suspendCLIRuns: true,
+            productionBoundary: .testVerified
+        )
+        fixture.model.repos = [RepoMonitor(name: "electric/public", enabled: true)]
+
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.cli.waitUntilCallCount(1)
+        fixture.model.applyRepoAllowlistPatch()
+        await Task.yield()
+
+        #expect(fixture.cli.calls.count == 1)
+
+        fixture.cli.resumeSuspendedRuns()
+        await fixture.waitForConfigPatchToFinish()
+        #expect(fixture.model.repositoryConfigurationReady)
+    }
+
     @Test func clipboardAndURLOpenFailuresStayInsideInjectedSeams() {
         let fixture = ModelDependencyFixture(clipboardResult: false, urlResult: false)
         let code = GitHubDeviceAuthorizationCode(

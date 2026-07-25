@@ -2443,6 +2443,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Wait for provider verification cleanup before changing config."
             return
         }
+        guard !isConfigInitializationInProgress,
+              !isConfigPatchInProgress,
+              !isConfigInspectInProgress
+        else {
+            lastError = "Another config operation is still running."
+            return
+        }
         do {
             try writeRepoSelectionPatch()
         } catch {
@@ -3055,7 +3062,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 invalidateProviderConfigAuthorization()
             }
             if let snapshot = parsedSnapshot {
-                if !snapshot.repos.isEmpty { repos = snapshot.repos }
+                repos = snapshot.repos
                 providers = snapshot.providers
                 license = snapshot.license
                 var parsedGitHub = snapshot.github
@@ -3068,6 +3075,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 }
                 github = parsedGitHub
                 if commandName == "config inspect" {
+                    let inspectedRepositories = uniqueSortedRepoNames(
+                        snapshot.repos
+                            .filter(\.enabled)
+                            .map(\.name)
+                    )
+                    appliedRepoSelection = self.configPath == configPath
+                        && !inspectedRepositories.isEmpty
+                        ? AppliedRepoSelection(
+                            repositories: inspectedRepositories,
+                            configPath: configPath
+                        )
+                        : nil
                     providerLoadedSnapshot = ProviderConfigurationSnapshot(
                         providers: snapshot.providers,
                         configPath: configPath
