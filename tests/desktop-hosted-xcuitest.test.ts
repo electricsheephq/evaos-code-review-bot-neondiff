@@ -952,8 +952,10 @@ releaseTabbedAlternative()
     );
     const attachSource = extractBalancedSwiftDeclaration(
       app,
-      "func attach(to window: NSWindow?, contentHeight: Binding<CGFloat>)"
+      "func attach("
     );
+    expect(attachSource).toContain("colorScheme: ColorScheme");
+    expect(attachSource).toContain("window?.appearance = colorScheme == .dark");
     expect(attachSource).toMatch(
       /attachmentGeneration \+= 1\s+pendingHeight = nil\s+pendingOriginContainment = false\s+self\.window = window/
     );
