@@ -696,7 +696,12 @@ releaseTabbedAlternative()
     expect(source).toContain(
       '"--content-size", "\\(requestedContentSize.width)x\\(requestedContentSize.height)"'
     );
-    expect(source).toContain("wizardFrame.matches(requestedContentSize");
+    expect(source).toContain(
+      "abs(wizardFrame.width - Double(requestedContentSize.width)) <= 1"
+    );
+    expect(source).toContain(
+      "wizardFrame.height <= Double(requestedContentSize.height) + 1"
+    );
     expect(source).toContain('"neondiff-onboarding-wizard"');
     expect(source).toContain('"neondiff-onboarding-header"');
     expect(source).toContain('"neondiff-onboarding-step-list"');

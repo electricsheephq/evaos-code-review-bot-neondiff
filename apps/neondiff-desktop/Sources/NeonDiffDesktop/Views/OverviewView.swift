@@ -54,7 +54,7 @@ struct OverviewView: View {
                         isReady: readiness.github,
                         actionTitle: readiness.github ? "VIEW" : "CONNECT"
                     ) {
-                        model.isOnboardingPresented = true
+                        model.reopenOnboarding(at: .welcome)
                     }
 
                     ReferenceReadinessCard(
@@ -112,7 +112,7 @@ struct OverviewView: View {
 
                 HStack(spacing: 8) {
                     Image(systemName: "lock")
-                    Text("Your data stays on this Mac. Secrets remain in Keychain.")
+                    Text("Config and secrets stay on this Mac. Model context follows your selected provider.")
                     Spacer()
                     Text("LOCAL-FIRST")
                         .foregroundStyle(nd.accentPrimary)

@@ -19,7 +19,20 @@ import Testing
         #expect(onboarding.contains("neondiff-onboarding-read-only-exit"))
         #expect(onboarding.contains("Continue Later"))
         #expect(onboarding.contains(".safeAreaInset(edge: .bottom)"))
+        #expect(onboarding.contains(".lineLimit(2)"))
+        #expect(onboarding.contains(".truncationMode(.tail)"))
         #expect(onboarding.contains("STEP \\(currentStepNumber) OF \\(OnboardingStep.allCases.count)"))
+    }
+
+    @MainActor
+    @Test func githubReadinessActionReopensTheGitHubStep() {
+        let fixture = ModelDependencyFixture()
+        fixture.model.onboardingFlow.currentStep = .done
+
+        fixture.model.reopenOnboarding(at: .welcome)
+
+        #expect(fixture.model.isOnboardingPresented)
+        #expect(fixture.model.onboardingFlow.currentStep == .welcome)
     }
 
     @Test func shellAndHomeExposeTheOwnerReferenceHierarchy() throws {
@@ -40,6 +53,7 @@ import Testing
 
         #expect(sidebar.contains("AI CODE REVIEW SYSTEM"))
         #expect(sidebar.contains("SYSTEM READINESS"))
+        #expect(sidebar.contains("CONFIG + SECRETS STAY LOCAL"))
         #expect(sidebar.contains("neondiff-sidebar-readiness"))
         #expect(chrome.contains("ReferenceChromeStrip"))
         #expect(!chrome.contains(".ignoresSafeArea(.container, edges: .top)"))
@@ -51,7 +65,8 @@ import Testing
             #expect(overview.contains(title))
         }
         #expect(overview.contains("ReferenceReadinessCard"))
-        #expect(overview.contains("Your data stays on this Mac"))
+        #expect(overview.contains("Config and secrets stay on this Mac"))
+        #expect(overview.contains("Model context follows your selected provider"))
         #expect(overview.contains("model.providerVerification?.isVerified == true"))
         #expect(!overview.contains("model.providers.providerKeyStored"))
         #expect(overview.contains(#"systemImage: "link""#))

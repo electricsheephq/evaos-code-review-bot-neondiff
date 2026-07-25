@@ -78,7 +78,7 @@ struct SidebarView: View {
                 )
                 .accessibilityIdentifier("neondiff-sidebar-readiness")
 
-                Label("YOUR DATA STAYS LOCAL", systemImage: "lock")
+                Label("CONFIG + SECRETS STAY LOCAL", systemImage: "lock")
                     .font(.system(.caption2, design: .monospaced).weight(.medium))
                     .foregroundStyle(palette.textSecondary)
             }

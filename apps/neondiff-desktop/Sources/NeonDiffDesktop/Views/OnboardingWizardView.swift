@@ -647,7 +647,9 @@ struct OnboardingWizardView: View {
                     .font(.caption)
                     .foregroundStyle(NeonDiffTheme.warning)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .help(lastError)
             }
 
             Button(model.incompleteOnboardingEscapeAvailable ? "Continue Later" : "Close Setup") {
