@@ -7,14 +7,25 @@ struct DesktopSetupReadiness {
     let github: Bool
     let provider: Bool
     let license: Bool
+    let licenseStatus: String
     let repository: Bool
     let repositoryName: String
 
     init(model: NeonDiffDesktopModel) {
         github = model.byoGitHubCredentialsVerified || model.isManagedGitHubBound
         provider = model.providerVerification?.isVerified == true
-        license = model.activationState == .active
+        let publicRepositoryLicenseNotRequired = model.selectedManagedGitHubRepository
+            .flatMap { selectedRepository in
+                model.managedGitHubRepositories.first {
+                    $0.fullName == selectedRepository
+                }
+            }?.visibility == .public
+        let licenseIsActive = model.activationState == .active
             || model.onboardingFlow.licenseActivation == .activated
+        license = publicRepositoryLicenseNotRequired || licenseIsActive
+        licenseStatus = publicRepositoryLicenseNotRequired
+            ? "PUBLIC · FREE"
+            : (licenseIsActive ? "ACTIVE" : "ACTIVATION REQUIRED")
         repository = model.repositoryConfigurationReady
         repositoryName = model.selectedManagedGitHubRepository
             ?? model.repos.first(where: \.enabled)?.name
@@ -70,7 +81,7 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "LICENSE",
                         systemImage: "key",
-                        status: readiness.license ? "ACTIVE" : "ACTIVATION REQUIRED",
+                        status: readiness.licenseStatus,
                         isReady: readiness.license,
                         actionTitle: "VIEW"
                     ) {

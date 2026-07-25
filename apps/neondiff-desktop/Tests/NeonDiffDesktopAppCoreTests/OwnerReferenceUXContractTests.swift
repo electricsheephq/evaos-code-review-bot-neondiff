@@ -65,6 +65,8 @@ import Testing
             #expect(overview.contains(title))
         }
         #expect(overview.contains("ReferenceReadinessCard"))
+        #expect(overview.contains("status: readiness.licenseStatus"))
+        #expect(overview.contains(#""PUBLIC · FREE""#))
         #expect(overview.contains("Config and secrets stay on this Mac"))
         #expect(overview.contains("Model context follows your selected provider"))
         #expect(overview.contains("model.providerVerification?.isVerified == true"))
