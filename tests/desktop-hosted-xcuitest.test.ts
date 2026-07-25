@@ -716,6 +716,8 @@ releaseTabbedAlternative()
     expect(source).toContain("completionElapsedMilliseconds");
     expect(source).toContain("validateStableOnboardingSamples");
     expect(source).toContain("validateOnboardingRegionLayout");
+    expect(source).toContain("stepList.maxY <= stepContent.y + 1");
+    expect(source).not.toContain("stepList.maxX <= stepContent.x + 1");
     expect(source).toContain("fullyContainedInWizard");
     expect(source).toContain("fullyContainedInWindow");
     expect(source).toContain("testRun?.failureCount");

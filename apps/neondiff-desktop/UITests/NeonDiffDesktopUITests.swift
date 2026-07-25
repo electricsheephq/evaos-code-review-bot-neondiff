@@ -1278,7 +1278,7 @@ final class NeonDiffDesktopUITests: XCTestCase {
                   $0.identifier == "neondiff-onboarding-footer"
               })?.frame,
               header.maxY <= min(stepList.y, stepContent.y) + 1,
-              stepList.maxX <= stepContent.x + 1,
+              stepList.maxY <= stepContent.y + 1,
               max(stepList.maxY, stepContent.maxY) <= footer.y + 1 else {
             throw HostedOnboardingTraceError.invalidRegionLayout(context)
         }
