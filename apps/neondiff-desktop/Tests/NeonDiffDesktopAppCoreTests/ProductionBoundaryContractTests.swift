@@ -41,6 +41,63 @@ import Testing
     }
 
     @MainActor
+    @Test func verifiedButIncompleteBetaOffersNonPersistentReadOnlyEscape() throws {
+        let boundary = DesktopProductionBoundary.resolve(infoDictionary: [
+            "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+            "NeonDiffBYOGitHubEnabled": true
+        ])
+        let fixture = ModelDependencyFixture(productionBoundary: boundary)
+
+        #expect(boundary.nativeActivationBrokerVerified)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.isOnboardingPresented)
+
+        fixture.model.openReadOnlyAppFromQuarantinedOnboarding()
+
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(!fixture.preferences.bool(forKey: "neondiff.hasCompletedActivationOnboarding.v2"))
+        #expect(fixture.model.logText.contains(
+            "Finish GitHub, repository, provider, and activation setup"
+        ))
+    }
+
+    @Test func installedWindowPreservesNativeEscapeMovementAndBoundedLaunchSize() throws {
+        let packageRoot = sourceBoundaryPackageRoot()
+        let contentView = try sourceBoundaryText(
+            at: packageRoot.appendingPathComponent(
+                "Sources/NeonDiffDesktop/Views/ContentView.swift"
+            )
+        )
+        let app = try sourceBoundaryText(
+            at: packageRoot.appendingPathComponent(
+                "Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift"
+            )
+        )
+
+        #expect(!contentView.contains(".interactiveDismissDisabled("))
+        #expect(contentView.contains(".allowsHitTesting(false)"))
+        #expect(contentView.contains("WindowDragRegion()"))
+        #expect(contentView.contains("override var mouseDownCanMoveWindow: Bool { true }"))
+        #expect(contentView.contains("window?.performDrag(with: event)"))
+        #expect(!contentView.contains(".contentShape(Rectangle())"))
+        #expect(app.contains(".defaultSize(width: 1200, height: 760)"))
+        #expect(app.contains(".windowResizability(.contentMinSize)"))
+        #expect(app.contains("CommandGroup(replacing: .appTermination)"))
+        #expect(app.contains("CommandGroup(after: .newItem)"))
+        #expect(app.contains("model.isOnboardingPresented = false"))
+        #expect(app.contains("NSApplication.shared.keyWindow?.performClose(nil)"))
+        #expect(app.contains(
+            "func applicationShouldRestoreSecureApplicationState(_ app: NSApplication) -> Bool {\n        false"
+        ))
+        #expect(app.contains(
+            "func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool {\n        false"
+        ))
+        #expect(app.contains(
+            "func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {\n        .terminateNow"
+        ))
+    }
+
+    @MainActor
     @Test func verifiedActivationCompletionWritesOnlyTheVersionedProofStamp() throws {
         let fixture = ModelDependencyFixture(productionBoundary: .testVerified)
         fixture.model.onboardingFlow.licenseActivation = .activated

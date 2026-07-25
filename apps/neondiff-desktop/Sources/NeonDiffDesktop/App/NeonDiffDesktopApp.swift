@@ -77,7 +77,29 @@ struct NeonDiffDesktopApp: App {
                     windowConfigurator.allowsHitTesting(false)
                 )
         }
+        .defaultSize(width: 1200, height: 760)
+        .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit NeonDiff Desktop") {
+                    model.isOnboardingPresented = false
+                    DispatchQueue.main.async {
+                        NSApplication.shared.terminate(nil)
+                    }
+                }
+                .keyboardShortcut("q", modifiers: [.command])
+            }
+
+            CommandGroup(after: .newItem) {
+                Button("Close NeonDiff Desktop Window") {
+                    model.isOnboardingPresented = false
+                    DispatchQueue.main.async {
+                        NSApplication.shared.keyWindow?.performClose(nil)
+                    }
+                }
+                .keyboardShortcut("w", modifiers: [.command])
+            }
+
             CommandMenu("NeonDiff") {
                 Button("Open Local Dashboard") {
                     model.openDashboard()
@@ -526,17 +548,15 @@ private extension View {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldRestoreSecureApplicationState(_ app: NSApplication) -> Bool {
-#if DEBUG
-        if CommandLine.arguments.contains("--ui-testing") { return false }
-#endif
-        return true
+        false
     }
 
     func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool {
-#if DEBUG
-        if CommandLine.arguments.contains("--ui-testing") { return false }
-#endif
-        return true
+        false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        .terminateNow
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

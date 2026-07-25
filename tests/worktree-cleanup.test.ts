@@ -50,6 +50,7 @@ describe("stale review worktree cleanup", () => {
     const fixture = createFixture(roots, 2);
     makeStale(fixture.paths[1]);
     writeFileSync(join(fixture.paths[1], "untracked.txt"), "keep\n");
+    makeStale(fixture.paths[1]);
 
     const result = cleanupStaleReviewWorktrees(baseInput(fixture));
 
@@ -64,6 +65,7 @@ describe("stale review worktree cleanup", () => {
     const fixture = createFixture(roots, 1);
     makeStale(fixture.paths[0]);
     writeFileSync(join(fixture.paths[0], "review-cache.log"), "keep\n");
+    makeStale(fixture.paths[0]);
 
     const result = cleanupStaleReviewWorktrees(baseInput(fixture));
 

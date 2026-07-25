@@ -222,6 +222,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.productionBoundary.nativeActivationBrokerVerified
     }
 
+    package var incompleteOnboardingEscapeAvailable: Bool {
+        isOnboardingPresented
+            && !dependencies.preferences.bool(forKey: onboardingCompletedKey)
+    }
+
     package var managedGitHubAvailable: Bool {
         dependencies.productionBoundary.managedGitHubBrokerOrigin != nil
             && dependencies.githubBroker != nil
@@ -2131,10 +2136,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func openReadOnlyAppFromQuarantinedOnboarding() {
-        guard !dependencies.productionBoundary.nativeActivationBrokerVerified else { return }
+        guard incompleteOnboardingEscapeAvailable else { return }
         isOnboardingPresented = false
         lastError = nil
-        logText = "Opened the read-only setup surface. \(productionActivationBoundaryMessage)"
+        logText = dependencies.productionBoundary.nativeActivationBrokerVerified
+            ? "Opened the read-only setup surface. Finish GitHub, repository, provider, and activation setup before starting a review."
+            : "Opened the read-only setup surface. \(productionActivationBoundaryMessage)"
     }
 
     @discardableResult
