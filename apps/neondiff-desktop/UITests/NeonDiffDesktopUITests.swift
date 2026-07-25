@@ -6,8 +6,21 @@ final class NeonDiffDesktopUITests: XCTestCase {
     }
 
     func testQuitFromMandatoryOnboardingTerminatesTheApplication() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "onboarding-welcome", withExtension: "json")
+        )
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing"]
+        defer {
+            if app.state != .notRunning {
+                app.terminate()
+            }
+        }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "760x560",
+            "--disable-animations"
+        ]
         app.launch()
 
         XCTAssertTrue(
