@@ -25,7 +25,7 @@ public enum DesktopWindowGeometryPolicy {
     public static func minimumContentSize(
         requested: DesktopWindowContentSize?
     ) -> DesktopWindowContentSize {
-        requested ?? DesktopWindowContentSize(width: 1040, height: 680)
+        requested ?? DesktopWindowContentSize(width: 760, height: 560)
     }
 
     public static func targetFrameSize(

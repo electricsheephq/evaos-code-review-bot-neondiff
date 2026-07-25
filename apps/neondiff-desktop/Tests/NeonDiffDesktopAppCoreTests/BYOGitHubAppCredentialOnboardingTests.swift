@@ -167,6 +167,12 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.canAdvanceOnboarding)
         #expect(fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.productionDaemonStopAvailable)
+        #expect(fixture.model.isOnboardingPresented)
+
+        fixture.model.openReadOnlyAppFromQuarantinedOnboarding()
+
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(!fixture.preferences.bool(forKey: "neondiff.hasCompletedActivationOnboarding.v2"))
 
         fixture.model.configPath = "/tmp/changed-config.json"
         #expect(!fixture.model.byoGitHubCredentialsVerified)

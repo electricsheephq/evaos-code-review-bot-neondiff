@@ -609,7 +609,7 @@ struct OnboardingWizardView: View {
 
             Spacer()
 
-            if !model.productionUsefulWorkAvailable {
+            if model.incompleteOnboardingEscapeAvailable {
                 Button("Open Read-Only App") {
                     model.openReadOnlyAppFromQuarantinedOnboarding()
                 }

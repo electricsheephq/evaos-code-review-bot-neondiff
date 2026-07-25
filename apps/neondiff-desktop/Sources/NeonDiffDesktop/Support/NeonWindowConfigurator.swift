@@ -98,7 +98,23 @@ struct NeonWindowConfigurator: NSViewRepresentable {
                 )
             }
         } else {
-            window.minSize = NSSize(width: 1040, height: 680)
+            let productionMinimumContentSize =
+                DesktopWindowGeometryPolicy.minimumContentSize(requested: nil)
+            let productionMinimumFrameSize = DesktopWindowGeometryPolicy.targetFrameSize(
+                requestedContent: productionMinimumContentSize,
+                currentFrame: DesktopWindowContentSize(
+                    width: window.frame.width,
+                    height: window.frame.height
+                ),
+                currentContent: DesktopWindowContentSize(
+                    width: window.contentLayoutRect.width,
+                    height: window.contentLayoutRect.height
+                )
+            )
+            window.minSize = NSSize(
+                width: productionMinimumFrameSize.width,
+                height: productionMinimumFrameSize.height
+            )
             if coordinator.configuredProductionWindowNumber != window.windowNumber,
                let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
                 let targetFrameSize = DesktopWindowGeometryPolicy.productionLaunchFrameSize(

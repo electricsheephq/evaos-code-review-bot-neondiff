@@ -222,6 +222,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.productionBoundary.nativeActivationBrokerVerified
     }
 
+    package var incompleteOnboardingEscapeAvailable: Bool {
+        isOnboardingPresented
+            && !dependencies.preferences.bool(forKey: onboardingCompletedKey)
+    }
+
     package var managedGitHubAvailable: Bool {
         dependencies.productionBoundary.managedGitHubBrokerOrigin != nil
             && dependencies.githubBroker != nil
@@ -2131,7 +2136,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func openReadOnlyAppFromQuarantinedOnboarding() {
-        guard !productionUsefulWorkAvailable else { return }
+        guard incompleteOnboardingEscapeAvailable else { return }
         isOnboardingPresented = false
         lastError = nil
         logText = dependencies.productionBoundary.nativeActivationBrokerVerified

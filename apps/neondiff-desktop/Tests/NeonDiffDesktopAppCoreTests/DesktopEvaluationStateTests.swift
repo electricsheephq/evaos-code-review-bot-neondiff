@@ -23,7 +23,7 @@ struct DesktopEvaluationStateTests {
             currentContent: DesktopWindowContentSize(width: 1040, height: 648)
         ) == DesktopWindowContentSize(width: 760, height: 592))
         #expect(DesktopWindowGeometryPolicy.minimumContentSize(requested: nil)
-            == DesktopWindowContentSize(width: 1040, height: 680))
+            == DesktopWindowContentSize(width: 760, height: 560))
         #expect(DesktopWindowGeometryPolicy.minimumContentSize(
             requested: DesktopWindowContentSize(width: 760, height: 560)
         ) == DesktopWindowContentSize(width: 760, height: 560))
