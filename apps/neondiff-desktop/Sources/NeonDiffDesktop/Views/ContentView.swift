@@ -138,9 +138,7 @@ private struct ReferenceShellLayout: View {
             let setupWidth = min(430, max(360, proxy.size.width * 0.34))
             let compactSetupHeight = max(
                 0,
-                proxy.size.height
-                    - proxy.safeAreaInsets.top
-                    - proxy.safeAreaInsets.bottom
+                proxy.size.height - ReferenceChromeStrip.height
             )
             let reservedSetupWidth =
                 model.isOnboardingPresented && !compactSetup ? setupWidth : 0
@@ -414,6 +412,8 @@ private struct SurfaceIdentityModifier: ViewModifier {
 }
 
 private struct ReferenceChromeStrip: View {
+    static let height: CGFloat = 48
+
     let appearanceLabel: String
     let appearanceToggleAvailable: Bool
     let toggleAppearance: () -> Void
@@ -448,7 +448,7 @@ private struct ReferenceChromeStrip: View {
         }
         .padding(.leading, 258)
         .padding(.trailing, 18)
-        .frame(height: 48)
+        .frame(height: ReferenceChromeStrip.height)
         .background(palette.background)
         .background {
             WindowDragRegion()

@@ -14,6 +14,8 @@ import Testing
         #expect(content.contains("reservedSetupWidth"))
         #expect(content.contains(".padding(.trailing, reservedSetupWidth)"))
         #expect(content.contains("OnboardingWizardView(model: model)"))
+        #expect(content.contains("- ReferenceChromeStrip.height"))
+        #expect(content.contains(".frame(height: ReferenceChromeStrip.height)"))
         #expect(!content.contains(".sheet(isPresented: $model.isOnboardingPresented)"))
         #expect(onboarding.contains("neondiff-onboarding-dismiss"))
         #expect(onboarding.contains("neondiff-onboarding-read-only-exit"))
