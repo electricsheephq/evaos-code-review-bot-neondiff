@@ -105,6 +105,50 @@ import NeonDiffDesktopCore
         #expect(fixture.model.github.authorizedUserLogin == "fixture-user")
     }
 
+    @Test func successfulLegacyDiscoveryMarksGitHubReady() async {
+        let authenticator = ScriptedGitHubAuthenticator(
+            pollResults: [
+                .authorized(GitHubUserToken(accessToken: "authorized-access"))
+            ],
+            repositories: [
+                GitHubDiscoveredRepository(
+                    fullName: "electric/public",
+                    visibility: "public",
+                    installationId: 42,
+                    installationAccount: "electric"
+                )
+            ]
+        )
+        let fixture = ModelDependencyFixture(
+            githubAuthenticator: authenticator,
+            productionBoundary: .testVerified
+        )
+        fixture.model.github.clientId = "fixture-client-id"
+
+        fixture.model.startGitHubAuthorization()
+        await fixture.waitForGitHubAuthorizationToFinish()
+
+        #expect(fixture.model.githubConnectionReady)
+    }
+
+    @Test func legacyRepositoryApplyAcceptsExactReadback() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["electric/public"]}}"#,
+                stderr: ""
+            ))],
+            productionBoundary: .testVerified
+        )
+        fixture.model.repos = [RepoMonitor(name: "electric/public", enabled: true)]
+
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        #expect(fixture.model.lastError == nil)
+        #expect(fixture.model.logText.contains("Repository allowlist applied and read back"))
+    }
+
     @Test func clipboardAndURLOpenFailuresStayInsideInjectedSeams() {
         let fixture = ModelDependencyFixture(clipboardResult: false, urlResult: false)
         let code = GitHubDeviceAuthorizationCode(

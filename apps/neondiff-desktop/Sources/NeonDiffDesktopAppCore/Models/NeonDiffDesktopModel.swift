@@ -309,6 +309,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return false
     }
 
+    package var githubConnectionReady: Bool {
+        if isManagedGitHubBound || byoGitHubCredentialsVerified {
+            return true
+        }
+        return github.userTokenStored
+            && github.authorizedUserLogin != nil
+            && github.installationCount > 0
+            && github.discoveredRepositoryCount > 0
+    }
+
     package var canAdvanceOnboarding: Bool {
         if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil {
             guard hasVerifiedManagedGitHubSelection else { return false }
@@ -2367,7 +2377,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             mode: dryRun ? .preview : .apply
         )
         pendingProviderPatchProof = proof
-        if !dryRun, managedGitHubAvailable || byoGitHubCredentialOnboardingAvailable {
+        if !dryRun {
             arguments.append(contentsOf: ["--confirm", "true"])
         }
         runCLI(
@@ -2974,10 +2984,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     .filter(\.enabled)
                     .map(\.name) ?? []
             )
-            let managedSelectionMatches = repoPatchProof.managedRepository.map {
+            let repositoryAuthorityMatches = repoPatchProof.managedRepository.map {
                 selectedManagedGitHubRepository == $0
                     && repoPatchProof.repositories == [$0]
-            } ?? byoGitHubCredentialOnboardingAvailable
+            } ?? true
             guard result.exitCode == 0,
                   commandName == "config patch",
                   parsedSnapshot?.dryRun == false,
@@ -2988,7 +2998,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                   ) != nil,
                   appliedRepositories == repoPatchProof.repositories,
                   configPath == repoPatchProof.configPath,
-                  managedSelectionMatches
+                  repositoryAuthorityMatches
             else {
                 invalidateRepoApplicationProof()
                 lastError = ConfigInspectParser.error(result.stdout, command: "config patch")

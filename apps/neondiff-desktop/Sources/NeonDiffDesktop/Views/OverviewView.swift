@@ -12,7 +12,7 @@ struct DesktopSetupReadiness {
     let repositoryName: String
 
     init(model: NeonDiffDesktopModel) {
-        github = model.byoGitHubCredentialsVerified || model.isManagedGitHubBound
+        github = model.githubConnectionReady
         provider = model.providerVerification?.isVerified == true
         let publicRepositoryLicenseNotRequired = model.selectedManagedGitHubRepository
             .flatMap { selectedRepository in
