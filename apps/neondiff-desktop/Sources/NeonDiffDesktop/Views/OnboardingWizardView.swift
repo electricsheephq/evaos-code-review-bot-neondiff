@@ -526,61 +526,64 @@ struct OnboardingWizardView: View {
     }
 
     private var daemonStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            OperatorSection("Daemon") {
-                LabeledContent("Heartbeat", value: model.status.healthState)
-                    .foregroundStyle(NeonDiffTheme.textPrimary)
-                LabeledContent("Config", value: model.configPath)
-                    .foregroundStyle(NeonDiffTheme.textPrimary)
-                LabeledContent("Launchd Label", value: model.launchdLabel)
-                    .foregroundStyle(NeonDiffTheme.textPrimary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                OperatorSection("Daemon") {
+                    LabeledContent("Heartbeat", value: model.status.healthState)
+                        .foregroundStyle(NeonDiffTheme.textPrimary)
+                    LabeledContent("Config", value: model.configPath)
+                        .foregroundStyle(NeonDiffTheme.textPrimary)
+                    LabeledContent("Launchd Label", value: model.launchdLabel)
+                        .foregroundStyle(NeonDiffTheme.textPrimary)
 
-                OperatorCommandText(text: model.statusCommand.commandLine, lineLimit: 4)
+                    OperatorCommandText(text: model.statusCommand.commandLine, lineLimit: 4)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Button { model.refreshStatus() } label: {
-                            Label("Check Status", systemImage: "arrow.clockwise")
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Button { model.refreshStatus() } label: {
+                                Label("Check Status", systemImage: "arrow.clockwise")
+                            }
+                            Button { model.startDaemon() } label: {
+                                Label("Start/Restart", systemImage: "play.circle")
+                            }
+                            .disabled(!model.productionUsefulWorkAvailable)
+                            Button { model.stopDaemon() } label: {
+                                Label("Stop", systemImage: "stop.circle")
+                            }
+                            .disabled(!model.productionDaemonStopAvailable)
                         }
-                        Button { model.startDaemon() } label: {
-                            Label("Start/Restart", systemImage: "play.circle")
+
+                        HStack(spacing: 10) {
+                            Button { model.previewStartDaemon() } label: {
+                                Label("Preview Start", systemImage: "eye")
+                            }
+                            .disabled(!model.productionUsefulWorkAvailable)
+                            Button { model.copyCommand(model.statusCommand) } label: {
+                                Label("Copy Status", systemImage: "doc.on.doc")
+                            }
                         }
-                        .disabled(!model.productionUsefulWorkAvailable)
-                        Button { model.stopDaemon() } label: {
-                            Label("Stop", systemImage: "stop.circle")
-                        }
-                        .disabled(!model.productionDaemonStopAvailable)
                     }
 
-                    HStack(spacing: 10) {
-                        Button { model.previewStartDaemon() } label: {
-                            Label("Preview Start", systemImage: "eye")
-                        }
-                        .disabled(!model.productionUsefulWorkAvailable)
-                        Button { model.copyCommand(model.statusCommand) } label: {
-                            Label("Copy Status", systemImage: "doc.on.doc")
-                        }
-                    }
+                    OperatorBadge(
+                        text: model.onboardingFlow.daemonBootstrapChecked ? "Checked" : "Check Required",
+                        color: model.onboardingFlow.daemonBootstrapChecked ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                    Text(model.productionActivationBoundaryMessage)
+                        .operatorBodyText()
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                OperatorBadge(
-                    text: model.onboardingFlow.daemonBootstrapChecked ? "Checked" : "Check Required",
-                    color: model.onboardingFlow.daemonBootstrapChecked ? NeonDiffTheme.accent : NeonDiffTheme.warning
-                )
-                Text(model.productionActivationBoundaryMessage)
-                    .operatorBodyText()
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if !model.repos.isEmpty {
-                OperatorSection("Monitored Repos") {
-                    Text(model.repos.map(\.name).prefix(6).joined(separator: "\n"))
-                        .font(NeonDiffTheme.commandFont)
-                        .foregroundStyle(NeonDiffTheme.textSecondary)
-                        .textSelection(.enabled)
+                if !model.repos.isEmpty {
+                    OperatorSection("Monitored Repos") {
+                        Text(model.repos.map(\.name).prefix(6).joined(separator: "\n"))
+                            .font(NeonDiffTheme.commandFont)
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                            .textSelection(.enabled)
+                    }
                 }
             }
         }
+        .scrollContentBackground(.hidden)
     }
 
     @ViewBuilder

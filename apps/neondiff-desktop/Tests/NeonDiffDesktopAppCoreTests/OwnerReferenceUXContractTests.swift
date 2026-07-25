@@ -21,6 +21,7 @@ import Testing
         #expect(onboarding.contains("neondiff-onboarding-read-only-exit"))
         #expect(onboarding.contains("Continue Later"))
         #expect(!onboarding.contains(".safeAreaInset(edge: .bottom)"))
+        #expect(onboarding.contains("private var daemonStep: some View {\n        ScrollView {"))
         #expect(onboarding.contains(".lineLimit(2)"))
         #expect(onboarding.contains(".truncationMode(.tail)"))
         #expect(onboarding.contains("STEP \\(currentStepNumber) OF \\(OnboardingStep.allCases.count)"))
