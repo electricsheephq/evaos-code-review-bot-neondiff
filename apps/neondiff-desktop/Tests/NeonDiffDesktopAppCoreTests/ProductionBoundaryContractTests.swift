@@ -56,7 +56,9 @@ import Testing
 
         #expect(!fixture.model.isOnboardingPresented)
         #expect(!fixture.preferences.bool(forKey: "neondiff.hasCompletedActivationOnboarding.v2"))
-        #expect(fixture.model.logText.contains("read-only setup surface"))
+        #expect(fixture.model.logText.contains(
+            "Finish GitHub, repository, provider, and activation setup"
+        ))
     }
 
     @Test func installedWindowPreservesNativeEscapeMovementAndBoundedLaunchSize() throws {
