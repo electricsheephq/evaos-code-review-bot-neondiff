@@ -23,9 +23,6 @@ struct OnboardingWizardView: View {
             stepContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(.horizontal, 18)
-                .safeAreaInset(edge: .bottom) {
-                    Color.clear.frame(height: 72)
-                }
 
             footer
                 .padding(18)
