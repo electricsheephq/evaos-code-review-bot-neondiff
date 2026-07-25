@@ -367,6 +367,7 @@ struct OperatorSectionHeader: View {
                 .tracking(0.8)
                 .foregroundStyle(NeonDiffTheme.cyan)
                 .accessibilityIdentifier("neondiff-section-title")
+                .accessibilityValue(title)
 
             Spacer(minLength: 16)
 

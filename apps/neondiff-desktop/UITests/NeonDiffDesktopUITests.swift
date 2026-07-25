@@ -1112,8 +1112,9 @@ final class NeonDiffDesktopUITests: XCTestCase {
             guard wizardFrame.isFiniteAndNonempty else {
                 throw HostedOnboardingTraceError.invalidFrame("\(context) wizard")
             }
-            guard wizardFrame.matches(requestedContentSize, tolerance: 1) else {
-                throw HostedOnboardingTraceError.unexpectedContentSize(
+            guard abs(wizardFrame.width - Double(requestedContentSize.width)) <= 1,
+                  wizardFrame.height <= Double(requestedContentSize.height) + 1 else {
+                throw HostedOnboardingTraceError.unexpectedWizardFootprint(
                     context: context,
                     requested: requestedContentSize,
                     observed: wizardFrame
@@ -1207,7 +1208,13 @@ final class NeonDiffDesktopUITests: XCTestCase {
             }
             .sorted { $0.area < $1.area }
         guard let windowFrame = candidates.first else {
-            throw HostedOnboardingTraceError.missingContainingWindow(context)
+            let observedWindows = (0..<app.windows.count)
+                .map { HostedGeometryFrame(app.windows.element(boundBy: $0).frame) }
+            throw HostedOnboardingTraceError.missingContainingWindow(
+                context: context,
+                wizard: frame,
+                observedWindows: observedWindows
+            )
         }
         return windowFrame
     }
@@ -2791,12 +2798,16 @@ private enum HostedOnboardingTraceError: LocalizedError {
     case invalidElementCount(identifier: String, count: Int)
     case interactiveQuiescenceMarker(String)
     case invalidFrame(String)
-    case unexpectedContentSize(
+    case unexpectedWizardFootprint(
         context: String,
         requested: HostedContentSize,
         observed: HostedGeometryFrame
     )
-    case missingContainingWindow(String)
+    case missingContainingWindow(
+        context: String,
+        wizard: HostedGeometryFrame,
+        observedWindows: [HostedGeometryFrame]
+    )
     case wizardNotContained(
         context: String,
         wizard: HostedGeometryFrame,
@@ -2828,12 +2839,13 @@ private enum HostedOnboardingTraceError: LocalizedError {
             "Hosted onboarding quiescence marker is unexpectedly interactive: \(identifier)"
         case .invalidFrame(let context):
             "Invalid hosted onboarding frame: \(context)"
-        case let .unexpectedContentSize(context, requested, observed):
-            "Hosted onboarding content size does not match the request: "
+        case let .unexpectedWizardFootprint(context, requested, observed):
+            "Hosted onboarding wizard footprint is incompatible with the request: "
                 + "context=\(context) requested=\(requested.width)x\(requested.height) "
                 + "observed=\(observed)"
-        case .missingContainingWindow(let context):
-            "Hosted onboarding wizard has no containing app window: \(context)"
+        case let .missingContainingWindow(context, wizard, observedWindows):
+            "Hosted onboarding wizard has no containing app window: "
+                + "context=\(context) wizard=\(wizard) windows=\(observedWindows)"
         case let .wizardNotContained(context, wizard, window):
             "Hosted onboarding wizard is not fully contained: "
                 + "context=\(context) wizard=\(wizard) window=\(window)"

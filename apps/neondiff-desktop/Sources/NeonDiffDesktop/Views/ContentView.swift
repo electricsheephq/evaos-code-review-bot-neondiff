@@ -136,6 +136,12 @@ private struct ReferenceShellLayout: View {
         GeometryReader { proxy in
             let compactSetup = proxy.size.width < 900
             let setupWidth = min(430, max(360, proxy.size.width * 0.34))
+            let compactSetupHeight = max(
+                0,
+                proxy.size.height
+                    - proxy.safeAreaInsets.top
+                    - proxy.safeAreaInsets.bottom
+            )
             let reservedSetupWidth =
                 model.isOnboardingPresented && !compactSetup ? setupWidth : 0
             let setupShadowColor = colorScheme == .dark
@@ -204,7 +210,7 @@ private struct ReferenceShellLayout: View {
                     OnboardingWizardView(model: model)
                         .frame(
                             width: compactSetup ? proxy.size.width : setupWidth,
-                            height: proxy.size.height
+                            height: compactSetup ? compactSetupHeight : proxy.size.height
                         )
                         .background(NeonDiffTheme.chrome)
                         .shadow(color: setupShadowColor, radius: 24, x: -8)
