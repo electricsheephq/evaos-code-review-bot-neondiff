@@ -60,6 +60,8 @@ import Testing
         #expect(theme.contains("@Environment(\\.isEnabled) private var isEnabled"))
         #expect(theme.contains(".opacity(isEnabled ? 1 : 0.38)"))
         #expect(theme.contains("NDBrandWordmark"))
+        #expect(theme.contains("#if SWIFT_PACKAGE"))
+        #expect(theme.contains("Bundle.main"))
         #expect(theme.contains("interfaceBorder"))
         #expect(!theme.contains(".fill(Color.black.opacity(0.38))"))
         #expect(chrome.contains("setupShadowColor"))

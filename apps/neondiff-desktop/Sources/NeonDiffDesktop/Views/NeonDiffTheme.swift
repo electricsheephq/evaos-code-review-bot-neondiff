@@ -262,8 +262,15 @@ enum NeonDiffTheme {
 struct NDBrandWordmark: View {
     var size: CGFloat
     @Environment(\.colorScheme) private var colorScheme
+    private static let resourceBundle: Bundle = {
+#if SWIFT_PACKAGE
+        Bundle.module
+#else
+        Bundle.main
+#endif
+    }()
     private static let image: NSImage? = {
-        guard let url = Bundle.module.url(
+        guard let url = resourceBundle.url(
             forResource: "NeonDiffWordmark",
             withExtension: "png"
         ), let image = NSImage(contentsOf: url) else {
