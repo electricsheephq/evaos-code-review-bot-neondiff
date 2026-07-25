@@ -5,6 +5,37 @@ final class NeonDiffDesktopUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testQuitFromMandatoryOnboardingTerminatesTheApplication() throws {
+        let fixtureURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "onboarding-welcome", withExtension: "json")
+        )
+        let app = XCUIApplication()
+        defer {
+            if app.state != .notRunning {
+                app.terminate()
+            }
+        }
+        app.launchArguments = [
+            "--ui-testing",
+            "--ui-fixture", fixtureURL.path,
+            "--content-size", "760x560",
+            "--disable-animations"
+        ]
+        app.launch()
+
+        XCTAssertTrue(
+            app.buttons["neondiff-onboarding-read-only-exit"]
+                .waitForExistence(timeout: 10)
+        )
+
+        app.typeKey("q", modifierFlags: .command)
+
+        XCTAssertTrue(
+            app.wait(for: .notRunning, timeout: 5),
+            "Quit must terminate even while mandatory onboarding is presented"
+        )
+    }
+
     func testAccessibility3OverrideScalesVisibleProductionSectionTitle() throws {
         let requestedContentSize = HostedContentSize(width: 1040, height: 680)
         let defaultScenario = try captureRenderedTextScaleScenario(
