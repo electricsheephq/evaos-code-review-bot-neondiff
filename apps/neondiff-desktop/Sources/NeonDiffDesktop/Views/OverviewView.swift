@@ -20,8 +20,7 @@ struct DesktopSetupReadiness {
                     $0.fullName == selectedRepository
                 }
             }?.visibility == .public
-        let licenseIsActive = model.activationVerifiedThisLaunch
-            && model.activationState == .active
+        let licenseIsActive = model.currentRepositoryActivationReady
         license = publicRepositoryLicenseNotRequired || licenseIsActive
         licenseStatus = publicRepositoryLicenseNotRequired
             ? "PUBLIC · FREE"

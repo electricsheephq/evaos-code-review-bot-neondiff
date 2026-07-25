@@ -242,7 +242,16 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(call.arguments.contains("--license-machine-id"))
         #expect(call.arguments.contains("electric/private"))
         #expect(fixture.model.activationState == .active)
+        #expect(fixture.model.currentRepositoryActivationReady)
         #expect(!fixture.preferences.bool(forKey: "neondiff.activationCliBackedValidation"))
+
+        fixture.model.repos = [
+            RepoMonitor(name: "electric/private-b", enabled: true)
+        ]
+
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.activationVerifiedThisLaunch)
+        #expect(fixture.model.activationState != .active)
     }
 
     @Test func managedConnectUsesBrokerAndKeychainIdentityWithoutLegacyUserTokenFallback() async throws {

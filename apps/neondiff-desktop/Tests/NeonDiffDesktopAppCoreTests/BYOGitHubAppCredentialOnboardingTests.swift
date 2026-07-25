@@ -183,7 +183,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.productionDaemonStopAvailable)
     }
 
-    @Test func byoRepositoryReadinessRequiresExactApplyReadback() async {
+    @Test func byoRepositoryReadinessDoesNotUnlockUnactivatedUsefulWork() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(doctorResult(
                 readChecks: doctorReadCheck(repo: "acme/demo")
@@ -209,7 +209,8 @@ struct BYOGitHubAppCredentialOnboardingTests {
         await fixture.waitForConfigPatchToFinish()
 
         #expect(fixture.model.repositoryConfigurationReady)
-        #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
     @Test func verificationFailsClosedUnlessDoctorChecksExactlyMatchEnabledRepositories() async throws {

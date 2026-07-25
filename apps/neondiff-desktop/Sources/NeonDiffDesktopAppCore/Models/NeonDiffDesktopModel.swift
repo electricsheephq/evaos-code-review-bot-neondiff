@@ -105,6 +105,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             guard oldAllowlist != newAllowlist else { return }
             invalidateRepoApplicationProof()
             invalidateBYOGitHubVerificationContext()
+            invalidateActivationForRepositoryChange()
         }
     }
     @Published package var providers = ProviderSettings() {
@@ -175,6 +176,21 @@ package final class NeonDiffDesktopModel: ObservableObject {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
     }
 
+    package var currentRepositoryActivationReady: Bool {
+        guard activationVerifiedThisLaunch,
+              activationState == .active,
+              let activationVerifiedRepositoryThisLaunch
+        else {
+            return false
+        }
+        let enabledRepositories = uniqueSortedRepoNames(
+            repos.filter(\.enabled).map(\.name)
+        )
+        return enabledRepositories.count == 1
+            && enabledRepositories[0].lowercased()
+                == activationVerifiedRepositoryThisLaunch.lowercased()
+    }
+
     package var productionUsefulWorkAvailable: Bool {
         guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
             return false
@@ -185,7 +201,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         if dependencies.productionBoundary.byoGitHubEnabled {
             guard byoGitHubCredentialOnboardingAvailable,
                   byoGitHubCredentialsVerified,
-                  repositoryConfigurationReady
+                  repositoryConfigurationReady,
+                  currentRepositoryActivationReady
             else { return false }
         }
         guard dependencies.productionBoundary.managedGitHubBrokerOrigin != nil else {
@@ -3321,6 +3338,25 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func invalidateRepoApplicationProof() {
         appliedRepoSelection = nil
         pendingRepoPatchProof = nil
+    }
+
+    private func invalidateActivationForRepositoryChange() {
+        guard activationVerifiedThisLaunch
+                || activationVerifiedRepositoryThisLaunch != nil
+        else {
+            return
+        }
+        activationVerifiedThisLaunch = false
+        activationVerifiedRepositoryThisLaunch = nil
+        dependencies.preferences.set("", forKey: activationRepositoryKey)
+        if activationState == .active {
+            activationState = license.keyStored ? .keyReady : .purchaseRequired
+            dependencies.preferences.set(
+                activationState.rawValue,
+                forKey: activationStateKey
+            )
+        }
+        onboardingFlow.licenseActivation = .servicePending
     }
 
     private func invalidateControlCenterAfterPatchFailure(_ message: String) {
