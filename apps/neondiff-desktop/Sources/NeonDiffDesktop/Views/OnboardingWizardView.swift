@@ -539,11 +539,23 @@ struct OnboardingWizardView: View {
                             Button { model.storeProviderKey() } label: {
                                 Label("Store Key", systemImage: "key.fill")
                             }
+                            Button { model.verifyProviderKey() } label: {
+                                Label(
+                                    model.providerVerificationButtonTitle,
+                                    systemImage: "checkmark.shield"
+                                )
+                            }
+                            .disabled(!model.canVerifyProviderKey || !model.productionUsefulWorkAvailable)
                             OperatorBadge(
                                 text: model.providers.providerKeyStored ? "Stored in Keychain" : "Key Required",
                                 color: model.providers.providerKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
                             )
                         }
+
+                        Text(model.providerVerificationStatus)
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     } else {
                         OperatorBadge(
                             text: model.providerSetupReady ? "APP CONFIG LOADED" : "CONFIG REQUIRED",

@@ -24,10 +24,8 @@ struct LogsView: View {
             OperatorSection("Current Activity") {
                 activityRow(
                     title: "Account and bot",
-                    detail: model.existingLocalBotIdentityReady
-                        ? "Existing verified bot selected on this Mac"
-                        : "Setup or account selection required",
-                    ready: model.existingLocalBotIdentityReady
+                    detail: accountAndBotDetail,
+                    ready: model.githubSetupReady
                 )
                 activityRow(
                     title: "Repository configuration",
@@ -87,6 +85,16 @@ struct LogsView: View {
         .overlay(alignment: .bottom) {
             PageBottomSentinel(section: "logs")
         }
+    }
+
+    private var accountAndBotDetail: String {
+        if model.existingLocalBotIdentityReady {
+            return "Existing verified bot selected on this Mac"
+        }
+        if model.githubConnectionReady {
+            return "GitHub connection ready"
+        }
+        return "Setup or account selection required"
     }
 
     private func activityRow(

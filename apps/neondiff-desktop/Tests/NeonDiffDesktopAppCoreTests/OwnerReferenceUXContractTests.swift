@@ -132,6 +132,11 @@ import Testing
         #expect(onboarding.contains("model.existingLocalBotReconciliationMode"))
         #expect(onboarding.contains("Existing Bot Detected"))
         #expect(onboarding.contains("setup will not initialize or overwrite the config"))
+        #expect(onboarding.contains("model.verifyProviderKey()"))
+        #expect(onboarding.contains("model.providerVerificationButtonTitle"))
+        #expect(onboarding.contains(
+            ".disabled(!model.canVerifyProviderKey || !model.productionUsefulWorkAvailable)"
+        ))
         #expect(onboarding.contains(
             "if model.managedGitHubAvailable {\n"
                 + "                        managedGitHubSection"
@@ -166,6 +171,8 @@ import Testing
         #expect(activation.contains("neondiff.activation.existing-account"))
         #expect(activation.contains("model.existingAccountEntitlementSummaryReady"))
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
+        #expect(activity.contains("model.githubSetupReady"))
+        #expect(activity.contains("GitHub connection ready"))
         #expect(activity.contains("DisclosureGroup"))
         #expect(activity.contains("// ADVANCED DIAGNOSTICS"))
         #expect(settings.contains("Signed update, rollback, and installed-app proof"))
