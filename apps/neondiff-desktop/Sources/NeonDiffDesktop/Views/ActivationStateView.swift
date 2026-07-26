@@ -155,8 +155,46 @@ struct ActivationStateView: View {
                 entitlement,
                 palette: palette
             )
-            activationFlow(palette: palette)
+            switch model.activationState {
+            case .purchaseRequired:
+                existingAccountActivationRecovery(palette: palette)
+            case .active:
+                EmptyView()
+            default:
+                activationFlow(palette: palette)
+            }
         }
+    }
+
+    private func existingAccountActivationRecovery(
+        palette: NDPalette
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("This Mac needs activation")
+                .font(.system(.headline, design: .monospaced).weight(.bold))
+                .foregroundStyle(palette.textPrimary)
+
+            Text("The selected account already has an active entitlement. Use its existing NeonDiff Activation Key to verify this Mac; no new purchase is required.")
+                .font(NDFont.mono)
+                .foregroundStyle(palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button("Use existing activation key") {
+                model.applyActivationEvent(.checkoutUnavailable)
+            }
+            .buttonStyle(NDBracketButtonStyle())
+            .accessibilityIdentifier(
+                "neondiff.activation.existing-account-use-key"
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Rectangle().fill(palette.surface))
+        .overlay(Rectangle().stroke(palette.borderPrimary, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(
+            "neondiff.activation.existing-account-device-recovery"
+        )
     }
 
     private func keyField(palette: NDPalette) -> some View {
