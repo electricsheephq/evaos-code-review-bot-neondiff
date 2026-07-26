@@ -21,6 +21,57 @@ import Testing
         #expect(!theme.contains("Bundle.module"))
     }
 
+    @Test func canonicalBrandAssetsAreOutlinedAndWiredIntoBothBundlePaths() throws {
+        let root = sourceBoundaryPackageRoot()
+        let brand = root.appendingPathComponent("Brand", isDirectory: true)
+        let resources = root.appendingPathComponent(
+            "Sources/NeonDiffDesktop/Resources",
+            isDirectory: true
+        )
+        let sourceFiles = [
+            "source/neondiff-wordmark-light-outline.svg",
+            "source/neondiff-wordmark-dark-outline.svg",
+            "source/neondiff-monogram-light-outline.svg",
+            "source/neondiff-monogram-dark-outline.svg"
+        ]
+        let requiredFiles = sourceFiles + [
+            "README.md",
+            "PALETTE.json",
+            "wordmark/neondiff-wordmark-light-1x.png",
+            "wordmark/neondiff-wordmark-light-2x.png",
+            "wordmark/neondiff-wordmark-dark-1x.png",
+            "wordmark/neondiff-wordmark-dark-2x.png",
+            "app-icon/light/neondiff-app-icon-light-1024.png",
+            "app-icon/dark/neondiff-app-icon-dark-1024.png",
+            "app-icon/NeonDiff.icns",
+            "previews/neondiff-logo-system-overview.png",
+            "previews/neondiff-macos-small-size-check.png"
+        ]
+
+        for relativePath in requiredFiles {
+            #expect(sourceBoundaryFileExists(brand.appendingPathComponent(relativePath)))
+        }
+        for relativePath in sourceFiles {
+            let source = try sourceBoundaryText(at: brand.appendingPathComponent(relativePath))
+            #expect(!source.contains("<text"))
+            #expect(!source.contains("font-family"))
+            #expect(!source.contains(".ttf"))
+            #expect(!source.contains(".otf"))
+        }
+        #expect(sourceBoundaryFileExists(resources.appendingPathComponent("NeonDiffWordmark.png")))
+        #expect(sourceBoundaryFileExists(resources.appendingPathComponent("NeonDiff.icns")))
+        #expect(sourceBoundaryFileExists(resources.appendingPathComponent("NeonDiff-Light.icns")))
+        #expect(sourceBoundaryFileExists(resources.appendingPathComponent("NeonDiff-Dark.icns")))
+        #expect(!sourceBoundaryFileExists(resources.appendingPathComponent("SAIBA-45.ttf")))
+        #expect(!sourceBoundaryFileExists(resources.appendingPathComponent("SAIBA-45.otf")))
+
+        let buildScript = try sourceBoundaryText(
+            at: root.appendingPathComponent("script/build_and_run.sh")
+        )
+        #expect(buildScript.contains("CFBundleIconFile"))
+        #expect(buildScript.contains("NeonDiff.icns"))
+    }
+
     @Test func setupUsesAnEscapableIntegratedPanelInsteadOfAModalSheet() throws {
         let views = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
