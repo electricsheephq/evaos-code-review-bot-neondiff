@@ -70,6 +70,26 @@ import Testing
         ) == nil)
     }
 
+    @Test func rejectsDuplicateConfigFlagsIncludingATrailingBareFlag() throws {
+        let configURL = URL(filePath: "/tmp/existing-neondiff-worker.json")
+        let duplicateConfig = try propertyList(
+            label: "com.electricsheephq.evaos-code-review-bot",
+            environment: ["EVAOS_REVIEW_BOT_APP_ID": "4184532"],
+            arguments: [
+                "neondiff",
+                "--config",
+                configURL.path,
+                "--config"
+            ]
+        )
+
+        #expect(DesktopLaunchAgentBotConfigurationParser.parse(
+            data: duplicateConfig,
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            configExists: { _ in true }
+        ) == nil)
+    }
+
     private func propertyList(
         label: String,
         environment: [String: String],

@@ -68,12 +68,12 @@ package enum DesktopLaunchAgentBotConfigurationParser {
             return nil
         }
 
-        let configIndexes = arguments.indices.filter { index in
-            arguments[index] == "--config"
-                && arguments.index(after: index) < arguments.endIndex
+        let configIndexes = arguments.indices.filter {
+            arguments[$0] == "--config"
         }
         guard configIndexes.count == 1,
-              let configIndex = configIndexes.first
+              let configIndex = configIndexes.first,
+              arguments.index(after: configIndex) < arguments.endIndex
         else {
             return nil
         }
