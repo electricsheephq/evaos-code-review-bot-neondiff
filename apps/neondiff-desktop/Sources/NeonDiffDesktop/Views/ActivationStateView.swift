@@ -14,9 +14,19 @@ struct ActivationStateView: View {
 
     var body: some View {
         let palette = NDPalette(scheme: colorScheme)
-        let presentation = model.activationPresentation
+        Group {
+            if model.existingAccountEntitlementSummaryReady,
+               let entitlement = model.selectedAccountEntitlementLabel {
+                existingAccountEntitlement(entitlement, palette: palette)
+            } else {
+                activationFlow(palette: palette)
+            }
+        }
+    }
 
-        VStack(alignment: .leading, spacing: 14) {
+    private func activationFlow(palette: NDPalette) -> some View {
+        let presentation = model.activationPresentation
+        return VStack(alignment: .leading, spacing: 14) {
             Text("Activation")
                 .ndSectionLabel(palette)
 
@@ -58,6 +68,35 @@ struct ActivationStateView: View {
         .overlay(Rectangle().stroke(palette.borderPrimary, lineWidth: 1))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("neondiff.activation.state.\(presentation.state.rawValue)")
+    }
+
+    private func existingAccountEntitlement(
+        _ entitlement: String,
+        palette: NDPalette
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Activation")
+                .ndSectionLabel(palette)
+
+            Text("Active")
+                .font(.system(.headline, design: .monospaced).weight(.bold))
+                .foregroundStyle(palette.accentPrimary)
+
+            LabeledContent("Account entitlement", value: entitlement)
+                .font(NDFont.mono)
+                .foregroundStyle(palette.textPrimary)
+
+            Text("This is the authoritative entitlement for the selected existing account and bot. NeonDiff still reverifies the exact repository and current access before starting new work.")
+                .font(NDFont.mono)
+                .foregroundStyle(palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Rectangle().fill(palette.surface))
+        .overlay(Rectangle().stroke(palette.borderPrimary, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("neondiff.activation.existing-account")
     }
 
     private func keyField(palette: NDPalette) -> some View {

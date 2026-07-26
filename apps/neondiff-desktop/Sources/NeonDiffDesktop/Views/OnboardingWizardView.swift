@@ -135,7 +135,14 @@ struct OnboardingWizardView: View {
     private var welcomeStep: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if model.managedGitHubAvailable {
+                if model.existingLocalBotReconciliationMode {
+                    existingLocalBotSection
+                    if model.managedGitHubAvailable {
+                        managedGitHubSection
+                    } else if model.byoGitHubCredentialOnboardingAvailable {
+                        byoGitHubSection
+                    }
+                } else if model.managedGitHubAvailable {
                     managedGitHubSection
                 } else if model.byoGitHubCredentialOnboardingAvailable {
                     byoGitHubSection
@@ -164,6 +171,41 @@ struct OnboardingWizardView: View {
             }
         }
         .scrollContentBackground(.hidden)
+    }
+
+    private var existingLocalBotSection: some View {
+        OperatorSection("Existing Bot Detected") {
+            OperatorBadge(
+                text: model.existingLocalBotSetupReady ? "SETUP CONFIGURED" : "RECOVERY NEEDED",
+                color: model.existingLocalBotSetupReady ? NeonDiffTheme.accent : NeonDiffTheme.warning
+            )
+
+            Text("NeonDiff matched this Mac’s local config to a server-verified bot in the selected account. Existing credentials remain in their current approved stores; setup will not initialize or overwrite the config.")
+                .operatorBodyText()
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let bot = model.selectedBotInstallation {
+                LabeledContent("Bot", value: bot.appSlug)
+                    .foregroundStyle(NeonDiffTheme.textPrimary)
+                LabeledContent(
+                    "GitHub",
+                    value: model.githubSetupReady ? "connected" : "recovery required"
+                )
+                .foregroundStyle(NeonDiffTheme.textPrimary)
+                LabeledContent(
+                    "Repositories",
+                    value: model.repositorySetupReady
+                        ? "\(model.repos.filter(\.enabled).count) applied"
+                        : "recovery required"
+                )
+                .foregroundStyle(NeonDiffTheme.textPrimary)
+            }
+
+            Text(model.customerRuntimeBoundaryMessage)
+                .font(.caption)
+                .foregroundStyle(NeonDiffTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var byoGitHubSection: some View {
@@ -486,27 +528,55 @@ struct OnboardingWizardView: View {
                     OperatorTextField(title: "CLI Path", text: $model.providers.zcodeCliPath)
                     OperatorTextField(title: "App Config Path", text: $model.providers.zcodeAppConfigPath)
                     OperatorTextField(title: "OpenAI-Compatible Endpoint", text: $model.providers.openAICompatibleEndpoint)
-                    OperatorTextField(title: "Provider API Key", text: $model.pendingProviderKey, secure: true)
-
-                    HStack(spacing: 10) {
-                        Button { model.storeProviderKey() } label: {
-                            Label("Store Key", systemImage: "key.fill")
-                        }
-                        OperatorBadge(
-                            text: model.providers.providerKeyStored ? "Stored in Keychain" : "Key Required",
-                            color: model.providers.providerKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    if model.selectedProviderRequiresAPIKey {
+                        OperatorTextField(
+                            title: "Provider API Key",
+                            text: $model.pendingProviderKey,
+                            secure: true
                         )
+
+                        HStack(spacing: 10) {
+                            Button { model.storeProviderKey() } label: {
+                                Label("Store Key", systemImage: "key.fill")
+                            }
+                            Button { model.verifyProviderKey() } label: {
+                                Label(
+                                    model.providerVerificationButtonTitle,
+                                    systemImage: "checkmark.shield"
+                                )
+                            }
+                            .disabled(!model.canVerifyProviderKey || !model.productionUsefulWorkAvailable)
+                            OperatorBadge(
+                                text: model.providers.providerKeyStored ? "Stored in Keychain" : "Key Required",
+                                color: model.providers.providerKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                            )
+                        }
+
+                        Text(model.providerVerificationStatus)
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        OperatorBadge(
+                            text: model.providerSetupReady ? "APP CONFIG LOADED" : "CONFIG REQUIRED",
+                            color: model.providerSetupReady ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                        )
+                        Text("This provider uses its own app/config authentication path. No separate NeonDiff provider key is required.")
+                            .operatorBodyText()
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
-                OperatorSection("Config Patch") {
-                    OperatorCommandText(text: model.providerPatchPreviewCommand.commandLine, lineLimit: 4)
-                    HStack(spacing: 10) {
-                        Button { model.previewProviderConfigPatch() } label: {
-                            Label("Preview", systemImage: "eye")
-                        }
-                        Button { model.copyCommand(model.providerPatchPreviewCommand) } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
+                if !model.existingLocalBotReconciliationMode {
+                    OperatorSection("Config Patch") {
+                        OperatorCommandText(text: model.providerPatchPreviewCommand.commandLine, lineLimit: 4)
+                        HStack(spacing: 10) {
+                            Button { model.previewProviderConfigPatch() } label: {
+                                Label("Preview", systemImage: "eye")
+                            }
+                            Button { model.copyCommand(model.providerPatchPreviewCommand) } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
                         }
                     }
                 }
@@ -568,7 +638,7 @@ struct OnboardingWizardView: View {
                         text: model.onboardingFlow.daemonBootstrapChecked ? "Checked" : "Check Required",
                         color: model.onboardingFlow.daemonBootstrapChecked ? NeonDiffTheme.accent : NeonDiffTheme.warning
                     )
-                    Text(model.productionActivationBoundaryMessage)
+                    Text(model.customerRuntimeBoundaryMessage)
                         .operatorBodyText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -624,7 +694,10 @@ struct OnboardingWizardView: View {
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: 16) {
             OperatorSection("Ready") {
-                LabeledContent("Provider key", value: model.providers.providerKeyStored ? "stored" : "missing")
+                LabeledContent(
+                    "Provider",
+                    value: model.providerSetupReady ? "configured" : "setup required"
+                )
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                 LabeledContent("Daemon check", value: model.onboardingFlow.daemonBootstrapChecked ? "checked" : "not checked")
                     .foregroundStyle(NeonDiffTheme.textPrimary)
@@ -634,8 +707,16 @@ struct OnboardingWizardView: View {
                     LabeledContent("Repository", value: repository)
                         .foregroundStyle(NeonDiffTheme.textPrimary)
                 }
-                LabeledContent("License", value: model.onboardingFlow.licenseActivation == .activated ? "activated" : "service pending")
+                LabeledContent(
+                    "License",
+                    value: model.licenseSetupReady ? "active" : "activation required"
+                )
                     .foregroundStyle(NeonDiffTheme.textPrimary)
+                if model.existingLocalBotReconciliationMode {
+                    Text("This existing setup remains read-only until current GitHub and repository entitlement checks pass for new work.")
+                        .operatorBodyText()
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -677,14 +758,17 @@ struct OnboardingWizardView: View {
                 Spacer()
 
                 Button {
-                    if model.onboardingFlow.currentStep == .done {
-                        model.completeOnboarding()
-                    } else {
-                        model.advanceOnboarding()
-                    }
+                    model.advanceOnboarding()
                 } label: {
                     HStack(spacing: 8) {
-                        Text(model.onboardingFlow.nextActionTitle.uppercased())
+                        Text(
+                            model.existingLocalBotReconciliationMode
+                                && model.onboardingFlow.currentStep == .done
+                                && (!model.productionUsefulWorkAvailable
+                                    || !model.providerSetupReady)
+                                ? "CLOSE"
+                                : model.onboardingFlow.nextActionTitle.uppercased()
+                        )
                         Image(systemName: model.onboardingFlow.currentStep == .done ? "checkmark" : "arrow.right")
                     }
                 }

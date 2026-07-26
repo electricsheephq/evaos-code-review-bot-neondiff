@@ -279,6 +279,26 @@ This first-run step proves only current App installation and repository access.
 Provider verification, activation, dry run, and live review remain separate
 gates.
 
+### Existing bot on this Mac
+
+After account linking, the native app may find a server-verified bot whose App
+identity and GitHub account intersect an existing launchd/config candidate on
+the same Mac. In that exact case it opens a reconciliation path:
+
+- it loads the existing config and repository allowlist without overwriting it;
+- it does not ask the user to paste or migrate the worker's existing GitHub App
+  private key;
+- it reports the server-authoritative account entitlement separately from
+  current-launch review authorization;
+- it treats `zcode-app-config` and `none` provider auth modes as config-backed,
+  not as missing NeonDiff Keychain API keys;
+- it keeps new work blocked until the exact current GitHub/repository and
+  entitlement checks required by the release path pass.
+
+A local config path, launchd label, App ID, or repository name by itself is not
+authority. Suspended, revoked, pending, mismatched, or server-unrecognized bots
+remain in setup/recovery and fail closed.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and
@@ -343,7 +363,9 @@ entry is the source of truth. Endpoint/model edits are dirty until a successful
 Preview and confirmed Apply/readback. Verify stays disabled until that saved
 state is current, then invokes the exact provider ID and config revision. The
 Keychain value crosses only bounded stdin; it is never added to the registry
-patch, argv, environment, logs, or evidence.
+patch, argv, environment, logs, or evidence. That Keychain flow applies only to
+`api-key-env` providers. `zcode-app-config` and `none` providers use their
+declared app/config path and must not prompt for an unrelated NeonDiff API key.
 
 The full doctor output is JSON. Check:
 

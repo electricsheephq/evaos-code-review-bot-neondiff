@@ -181,6 +181,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
     }
 
+    package var customerRuntimeBoundaryMessage: String {
+        if existingLocalBotSetupReady {
+            return "Existing setup is configured. Before new work, reverify the current GitHub App access and repository-scoped entitlement for this launch."
+        }
+        if existingLocalBotIdentityReady {
+            return "Existing bot identity is matched. Finish or recover the missing setup items, then reverify the current GitHub App access and repository-scoped entitlement before new work."
+        }
+        return productionActivationBoundaryMessage
+    }
+
     package var currentRepositoryActivationReady: Bool {
         guard activationVerifiedThisLaunch,
               activationState == .active,
@@ -194,6 +204,40 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return enabledRepositories.count == 1
             && enabledRepositories[0].lowercased()
                 == activationVerifiedRepositoryThisLaunch.lowercased()
+    }
+
+    /// Existing-account entitlement is useful setup context, but it must not
+    /// replace the recovery control for a managed private/internal repository.
+    /// Public managed repositories need no paid activation; every other beta
+    /// path keeps the repository-scoped current-launch proof visible.
+    package var existingAccountEntitlementSummaryReady: Bool {
+        guard existingLocalBotIdentityReady,
+              let accountEntitlement = selectedAccountWorkspace?.entitlement
+        else {
+            return false
+        }
+        if case .none = accountEntitlement { return false }
+        if managedGitHubAvailable {
+            guard let selectedManagedGitHubRepository,
+                  let repository = managedGitHubRepositories.first(where: {
+                      $0.fullName == selectedManagedGitHubRepository
+                  })
+            else {
+                return false
+            }
+            switch repository.visibility {
+            case .public:
+                return true
+            case .private, .internal:
+                return currentRepositoryActivationReady
+            case .unknown:
+                return false
+            }
+        }
+        if byoGitHubCredentialOnboardingAvailable {
+            return currentRepositoryActivationReady
+        }
+        return true
     }
 
     package var productionUsefulWorkAvailable: Bool {
@@ -308,6 +352,36 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && byoGitHubPrivateKeyStored
     }
 
+    package var existingLocalBotBYOGitHubVerificationAvailable: Bool {
+        guard existingLocalBotIdentityReady,
+              byoGitHubCredentialOnboardingAvailable,
+              byoGitHubPrivateKeyStored,
+              let bot = selectedBotInstallation,
+              let storedAppID = storedBYOGitHubAppId
+        else {
+            return false
+        }
+        return storedAppID == String(bot.appID)
+    }
+
+    package var existingLocalBotBYOGitHubVerificationStatus: String {
+        guard existingLocalBotIdentityReady,
+              let bot = selectedBotInstallation
+        else {
+            return "The selected existing bot identity is not verified for this local config."
+        }
+        guard let storedAppID = storedBYOGitHubAppId else {
+            return "No app-owned Keychain App ID is stored for current-access verification."
+        }
+        guard storedAppID == String(bot.appID) else {
+            return "The stored App ID does not match the selected existing bot. Select the matching bot or replace that bot's Keychain credential."
+        }
+        guard byoGitHubPrivateKeyStored else {
+            return "The App ID matches, but its app-owned private key is missing from Keychain."
+        }
+        return byoGitHubCredentialStatus
+    }
+
     package var managedGitHubStatusText: String {
         switch managedGitHubConnectionState {
         case .quarantined:
@@ -345,6 +419,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var canAdvanceOnboarding: Bool {
+        if existingLocalBotReconciliationMode {
+            return true
+        }
         if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil {
             guard hasVerifiedManagedGitHubSelection else { return false }
         }
@@ -473,6 +550,136 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var selectedBotInstallation: DesktopBotInstallation? {
         guard let botID = accountWorkspaceSelection.botID else { return nil }
         return selectedAccountWorkspace?.bots.first { $0.id == botID }
+    }
+
+    /// Setup truth for an existing worker is distinct from current-launch
+    /// authorization to perform useful work. This becomes true only after a
+    /// server-authoritative verified bot intersects the exact local config path
+    /// discovered on this Mac. It never consumes local config as membership or
+    /// installation authority.
+    package var existingLocalBotIdentityReady: Bool {
+        guard let account = selectedAccountWorkspace,
+              account.role != nil,
+              let bot = selectedBotInstallation,
+              bot.status == .verified,
+              bot.appID > 0,
+              bot.githubInstallationID != nil,
+              bot.githubAccountLogin?.trimmingCharacters(
+                  in: .whitespacesAndNewlines
+              ).isEmpty == false,
+              let localConfigPath = bot.localConfigPath
+        else {
+            return false
+        }
+        return normalizedPath(localConfigPath) == normalizedPath(configPath)
+    }
+
+    /// Customer-facing connection status may reuse a verified existing bot
+    /// identity. The stricter `githubConnectionReady` property remains the
+    /// current-launch credential proof used by review authorization.
+    package var githubSetupReady: Bool {
+        githubConnectionReady || existingLocalBotIdentityReady
+    }
+
+    /// A loaded non-key provider such as ZCode's app-config adapter is already
+    /// configured; asking for a NeonDiff Keychain API key is incorrect. API-key
+    /// providers still require their app-owned Keychain state or a current
+    /// verification result.
+    package var providerSetupReady: Bool {
+        guard providerLoadedSnapshot?.configPath == configPath,
+              providerLoadedRevision != nil,
+              providerLoadedSnapshot == currentProviderConfigurationSnapshot,
+              let provider = providers.selectedRegistryTarget,
+              provider.enabled
+        else {
+            return false
+        }
+        switch provider.authMode {
+        case "zcode-app-config", "none":
+            return true
+        case "api-key-env":
+            guard let verification = providerVerification else {
+                return false
+            }
+            return verification.isVerified
+                && verification.providerId == provider.id
+                && verification.configRevision == providerLoadedRevision
+        default:
+            return false
+        }
+    }
+
+    /// Account entitlement is server authority for the selected existing bot's
+    /// setup display. It does not replace the exact current-launch activation
+    /// checks in `currentRepositoryActivationReady` or
+    /// `productionUsefulWorkAvailable`.
+    package var licenseSetupReady: Bool {
+        if currentRepositoryActivationReady {
+            return true
+        }
+        guard existingLocalBotIdentityReady,
+              let entitlement = selectedAccountWorkspace?.entitlement
+        else {
+            return false
+        }
+        switch entitlement {
+        case .paid, .internalAdmin, .trial, .publicFree:
+            return true
+        case .none:
+            return false
+        }
+    }
+
+    /// Successful config inspection proves that the selected local config
+    /// already contains and read back its repository allowlist. BYO credential
+    /// verification remains a separate current-launch work gate.
+    package var repositorySetupReady: Bool {
+        if repositoryConfigurationReady {
+            return true
+        }
+        let enabledRepositories = uniqueSortedRepoNames(
+            repos.filter(\.enabled).map(\.name)
+        )
+        guard existingLocalBotIdentityReady,
+              !enabledRepositories.isEmpty
+        else {
+            return false
+        }
+        return appliedRepoSelection == AppliedRepoSelection(
+            repositories: enabledRepositories,
+            configPath: configPath
+        )
+    }
+
+    package var existingLocalBotSetupReady: Bool {
+        existingLocalBotIdentityReady
+            && githubSetupReady
+            && providerSetupReady
+            && licenseSetupReady
+            && repositorySetupReady
+    }
+
+    package var existingLocalBotReconciliationMode: Bool {
+        existingLocalBotIdentityReady
+    }
+
+    package var selectedProviderRequiresAPIKey: Bool {
+        providers.selectedRegistryTarget?.authMode == "api-key-env"
+    }
+
+    package var selectedAccountEntitlementLabel: String? {
+        guard existingLocalBotIdentityReady,
+              let entitlement = selectedAccountWorkspace?.entitlement
+        else {
+            return nil
+        }
+        return switch entitlement {
+        case .paid: "Paid account"
+        case .internalAdmin: "Internal administrator"
+        case .trial: "Active trial"
+        case .publicFree: "Public repositories only"
+        case .none: "No active entitlement"
+        }
     }
 
     package var accountLinkAvailable: Bool {
@@ -1060,6 +1267,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             .appendingPathComponent("_unselected", isDirectory: true)
             .appendingPathComponent("config.local.json")
             .standardizedFileURL.path
+    }
+
+    private func normalizedPath(_ path: String) -> String {
+        URL(filePath: path).standardizedFileURL.path
     }
 
     private func isolatedBotConfigPath(accountID: String, appSlug: String) -> String {
@@ -2827,6 +3038,25 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func advanceOnboarding() {
+        if existingLocalBotReconciliationMode {
+            switch onboardingFlow.currentStep {
+            case .welcome:
+                onboardingFlow.currentStep = .provider
+            case .provider:
+                onboardingFlow.currentStep = .daemon
+            case .daemon:
+                onboardingFlow.currentStep = .license
+            case .license:
+                onboardingFlow.currentStep = .done
+            case .done:
+                if productionUsefulWorkAvailable && providerSetupReady {
+                    completeOnboarding()
+                } else {
+                    dismissOnboardingPanel()
+                }
+            }
+            return
+        }
         onboardingFlow.providerKeyStored = providers.providerKeyStored
         guard canAdvanceOnboarding else { return }
         if onboardingFlow.currentStep == .done {

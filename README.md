@@ -160,14 +160,24 @@ Repository**, and **Verify App Access**, so the invited customer does not need a
 terminal or an operator edit to reach the repository-verification gate. This
 source path does not prove customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.
+When the signed-in account already contains a verified bot and its App identity
+matches a local launchd/config candidate on this Mac, the native app reuses that
+authoritative account/bot intersection instead of asking the user to initialize
+or re-enter the existing worker credentials. It may show GitHub, provider,
+entitlement, and repository setup as configured while still requiring fresh,
+repository-scoped GitHub and activation verification before new review work.
+Local config alone can never invent account membership or unlock a review.
 This source composition is not proof that the production broker is enabled,
-that billing is live, or that a signed customer artifact exists. Generic CLI
-status/deactivate and daemon-admission validation still need exact-candidate
-integration proof under #630 before the paid-beta gate can pass.
+that billing is live, or that a signed customer artifact exists. Update,
+rollback, daemon admission, and live-review behavior still require exact signed
+candidate validation before distribution.
 The native Providers pane reads and edits the saved `providers` registry, not
 the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview, and
 Apply the exact selected provider before Verify is enabled; verification pins
-both the provider ID and inspected config revision.
+both the provider ID and inspected config revision. A provider with
+`authMode: zcode-app-config` or `none` does not use a NeonDiff-stored API key,
+so the native app reports its loaded config without showing a false missing-key
+state. `api-key-env` providers retain the Keychain and verification gate.
 
 Create or install the GitHub App before expecting PR reviews to run. The App
 must be installed on the same selected repositories listed in `pilotRepos`; see

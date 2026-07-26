@@ -46,7 +46,7 @@ struct SettingsPane: View {
                             Text(updateController.statusText)
                                 .operatorBodyText()
                                 .fixedSize(horizontal: false, vertical: true)
-                            Text("Future release lane: #116. This dev build does not include a public feed or signing key.")
+                            Text("Automatic updates are not configured for this candidate. Signed update, rollback, and installed-app proof remain required under #116 before release.")
                                 .font(.caption)
                                 .foregroundStyle(NeonDiffTheme.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)

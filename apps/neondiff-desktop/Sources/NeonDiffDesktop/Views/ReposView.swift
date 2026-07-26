@@ -16,7 +16,14 @@ struct ReposView: View {
 
     private var pageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if model.managedGitHubAvailable {
+            if model.existingLocalBotReconciliationMode {
+                existingLocalBotConnection
+                if model.managedGitHubAvailable {
+                    managedGitHubConnection
+                } else if model.byoGitHubCredentialOnboardingAvailable {
+                    byoGitHubCredentials
+                }
+            } else if model.managedGitHubAvailable {
                 managedGitHubConnection
             } else if model.byoGitHubCredentialOnboardingAvailable {
                 byoGitHubCredentials
@@ -286,6 +293,82 @@ struct ReposView: View {
             PageBottomSentinel(section: "repos")
         }
         .disabled(!model.canEditProviderConfiguration)
+    }
+
+    private var existingLocalBotConnection: some View {
+        OperatorSection("Existing GitHub App Connection") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    OperatorBadge(
+                        text: model.githubSetupReady ? "CONNECTED" : "RECOVERY REQUIRED",
+                        color: model.githubSetupReady ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                    OperatorBadge(
+                        text: "\(model.repos.filter(\.enabled).count) CONFIGURED REPOS",
+                        color: model.repositorySetupReady ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                }
+
+                if let bot = model.selectedBotInstallation {
+                    LabeledContent("Bot", value: bot.appSlug)
+                        .foregroundStyle(NeonDiffTheme.textPrimary)
+                    LabeledContent(
+                        "GitHub account",
+                        value: bot.githubAccountLogin ?? "not verified"
+                    )
+                    .foregroundStyle(NeonDiffTheme.textPrimary)
+                    LabeledContent(
+                        "Installation",
+                        value: bot.githubInstallationID.map(String.init) ?? "not verified"
+                    )
+                    .foregroundStyle(NeonDiffTheme.textPrimary)
+                }
+
+                Text("This connection comes from a server-verified account/bot record matched to the exact local config on this Mac. NeonDiff will not copy, migrate, or ask you to re-enter the existing worker private key.")
+                    .operatorBodyText()
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(model.customerRuntimeBoundaryMessage)
+                    .font(.caption)
+                    .foregroundStyle(NeonDiffTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if model.byoGitHubCredentialOnboardingAvailable {
+                    HStack(spacing: 10) {
+                        OperatorBadge(
+                            text: model.byoGitHubCredentialsVerified
+                                ? "CURRENT ACCESS VERIFIED"
+                                : "CURRENT ACCESS REQUIRED",
+                            color: model.byoGitHubCredentialsVerified
+                                ? NeonDiffTheme.accent
+                                : NeonDiffTheme.warning
+                        )
+                        Button { model.verifyBYOGitHubAppCredentials() } label: {
+                            Label(
+                                model.isBYOGitHubVerificationInProgress
+                                    ? "Verifying…"
+                                    : "Verify Existing App Access",
+                                systemImage: "checkmark.shield"
+                            )
+                        }
+                        .disabled(
+                            !model.existingLocalBotBYOGitHubVerificationAvailable
+                                || model.isBYOGitHubVerificationInProgress
+                        )
+                        .accessibilityIdentifier("neondiff-existing-byo-github-verify")
+                    }
+
+                    Text(model.existingLocalBotBYOGitHubVerificationStatus)
+                    .font(.caption)
+                    .foregroundStyle(
+                        model.byoGitHubCredentialsVerified
+                            ? NeonDiffTheme.accent
+                            : NeonDiffTheme.warning
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 
     private var byoGitHubCredentials: some View {

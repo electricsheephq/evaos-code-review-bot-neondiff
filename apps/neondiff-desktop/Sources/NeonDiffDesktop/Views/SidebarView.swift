@@ -54,9 +54,11 @@ struct SidebarView: View {
                             .frame(width: 7, height: 7)
                     }
 
-                    Text(readiness.isComplete
+                    Text(readiness.canRunDryRun
                         ? "READY FOR A DRY RUN"
-                        : "\(readiness.completedCount) OF \(readiness.totalCount) SETUP STEPS COMPLETE")
+                        : (readiness.isComplete
+                            ? "SETUP CONFIGURED · REVERIFY TO RUN"
+                            : "\(readiness.completedCount) OF \(readiness.totalCount) SETUP STEPS COMPLETE"))
                         .font(.system(.caption2, design: .monospaced).weight(.medium))
                         .foregroundStyle(palette.textSecondary)
 
