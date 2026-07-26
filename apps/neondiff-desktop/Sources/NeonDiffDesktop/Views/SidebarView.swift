@@ -112,11 +112,13 @@ struct SidebarView: View {
                     .tracking(0.9)
                     .foregroundStyle(palette.textSecondary)
                     .lineLimit(1)
-                    .contentShape(Rectangle())
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("NeonDiff account and bot menu")
+        .accessibilityValue(selectedAccountName ?? "No account selected")
         .accessibilityIdentifier("neondiff-account-menu")
         .popover(isPresented: $isAccountPopoverPresented, arrowEdge: .leading) {
             VStack(alignment: .leading, spacing: 10) {
@@ -124,7 +126,13 @@ struct SidebarView: View {
                     .font(.system(.caption2, design: .monospaced).weight(.semibold))
                     .foregroundStyle(palette.accentPrimary)
                 Divider()
-                accountMenuEntries
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        accountMenuEntries
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 360)
             }
             .padding(16)
             .frame(minWidth: 280, maxWidth: 360, alignment: .leading)
@@ -196,6 +204,7 @@ struct SidebarView: View {
                     Divider()
                     ForEach(selected.bots) { bot in
                         Button {
+                            isAccountPopoverPresented = false
                             selectBot(bot.id)
                         } label: {
                             Label(
@@ -211,6 +220,7 @@ struct SidebarView: View {
                         .accessibilityIdentifier("neondiff-bot-option-\(bot.id)")
                     }
                     Button {
+                        isAccountPopoverPresented = false
                         beginNewBot()
                     } label: {
                         Label("NEW BOT", systemImage: "plus.circle")
