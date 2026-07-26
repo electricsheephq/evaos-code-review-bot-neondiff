@@ -259,6 +259,30 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func authorityChangeInvalidatesAPendingNewBotPlanAndRuntimeState() {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
+        fixture.model.repos = [RepoMonitor(name: "electric/private", enabled: true)]
+        fixture.model.providers.providerKeyStored = true
+        let withdrawn = DesktopAccountWorkspace(
+            id: electricSheep.id,
+            kind: electricSheep.kind,
+            name: electricSheep.name,
+            role: electricSheep.role,
+            entitlement: .none,
+            bots: electricSheep.bots
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([withdrawn]))
+
+        #expect(fixture.model.pendingNewBotPlan == nil)
+        #expect(fixture.model.accountWorkspaceSelection.botID == nil)
+        #expect(fixture.model.repos.isEmpty)
+        #expect(!fixture.model.providers.providerKeyStored)
+    }
+
+    @MainActor
     @Test func switchingWorkspaceClearsConfigAuthorizationOnboardingProofAndTransientGitHubInput() {
         let localBot = bot(
             id: "bot-local",

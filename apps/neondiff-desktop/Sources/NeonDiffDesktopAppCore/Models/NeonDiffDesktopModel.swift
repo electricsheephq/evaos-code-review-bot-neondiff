@@ -473,6 +473,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// Installs a server-authoritative snapshot. Accounts without a membership
     /// are filtered by the catalog and can never become selectable client-side.
     package func applyAccountWorkspaceCatalog(_ catalog: DesktopAccountWorkspaceCatalog) {
+        let previousSelectedAccount = selectedAccountWorkspace
         let previousSelectedBot = selectedBotInstallation
         accountWorkspaceCatalog = catalog
         guard !catalog.accounts.isEmpty else {
@@ -487,7 +488,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             if let selectedBotID = accountWorkspaceSelection.botID {
                 if let pendingNewBotPlan,
                    pendingNewBotPlan.accountID == selectedAccountID,
-                   pendingNewBotPlan.bot.id == selectedBotID {
+                   pendingNewBotPlan.bot.id == selectedBotID,
+                   previousSelectedAccount == selectedAccount {
                     accountWorkspaceStatus = "New bot setup remains local until its server registration is verified."
                     return
                 }
