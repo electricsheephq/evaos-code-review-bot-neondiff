@@ -50,7 +50,7 @@ struct LogsView: View {
                         .foregroundStyle(NeonDiffTheme.textPrimary)
                         .scrollContentBackground(.hidden)
                         .textSelection(.enabled)
-                        .frame(height: 300)
+                        .frame(height: 360)
                         .padding(8)
                         .background(Color.black.opacity(0.42))
                         .overlay {
