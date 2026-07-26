@@ -16,6 +16,7 @@ struct SidebarView: View {
     let cancelAccountLink: () -> Void
     let refreshAccounts: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isAccountPopoverPresented = false
 
     var body: some View {
         let palette = NDPalette(scheme: colorScheme)
@@ -95,35 +96,47 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func accountMenu(palette: NDPalette) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                NDBrandWordmark(size: 22)
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
+        Button {
+            isAccountPopoverPresented.toggle()
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    NDBrandWordmark(size: 22)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(palette.textSecondary)
+                }
+                Text(selectedAccountName ?? "AI CODE REVIEW SYSTEM")
+                    .font(.system(.caption2, design: .monospaced).weight(.medium))
+                    .tracking(0.9)
                     .foregroundStyle(palette.textSecondary)
+                    .lineLimit(1)
             }
-            Text(selectedAccountName ?? "AI CODE REVIEW SYSTEM")
-                .font(.system(.caption2, design: .monospaced).weight(.medium))
-                .tracking(0.9)
-                .foregroundStyle(palette.textSecondary)
-                .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .contentShape(Rectangle())
-        .accessibilityHidden(true)
-        .overlay {
-            Menu {
-                accountMenuEntries
-            } label: {
-                Color.clear
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        .accessibilityLabel("NeonDiff account and bot menu")
+        .accessibilityValue(selectedAccountName ?? "No account selected")
+        .accessibilityIdentifier("neondiff-account-menu")
+        .popover(isPresented: $isAccountPopoverPresented, arrowEdge: .leading) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("// ACCOUNT / BOT")
+                    .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(palette.accentPrimary)
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        accountMenuEntries
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 360)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .accessibilityLabel("NeonDiff account and bot menu")
-            .accessibilityIdentifier("neondiff-account-menu")
+            .padding(16)
+            .frame(minWidth: 280, maxWidth: 360, alignment: .leading)
+            .background(palette.surface)
         }
     }
 
@@ -191,6 +204,7 @@ struct SidebarView: View {
                     Divider()
                     ForEach(selected.bots) { bot in
                         Button {
+                            isAccountPopoverPresented = false
                             selectBot(bot.id)
                         } label: {
                             Label(
@@ -206,6 +220,7 @@ struct SidebarView: View {
                         .accessibilityIdentifier("neondiff-bot-option-\(bot.id)")
                     }
                     Button {
+                        isAccountPopoverPresented = false
                         beginNewBot()
                     } label: {
                         Label("NEW BOT", systemImage: "plus.circle")
