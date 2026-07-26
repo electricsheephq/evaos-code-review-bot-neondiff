@@ -90,80 +90,90 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func accountMenu(palette: NDPalette) -> some View {
-        Menu {
-            switch accountCatalog {
-            case .idle:
-                Text("SIGN IN REQUIRED")
-            case .loading:
-                Text("LOADING ACCOUNTS…")
-            case .failed:
-                Text("ACCOUNT SERVICE UNAVAILABLE")
-            case .loaded:
-                if accountCatalog.accounts.isEmpty {
-                    Text("NO AUTHORIZED ACCOUNTS")
-                } else {
-                    ForEach(accountCatalog.accounts) { account in
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                NDBrandWordmark(size: 22)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(palette.textSecondary)
+            }
+            Text(selectedAccountName ?? "AI CODE REVIEW SYSTEM")
+                .font(.system(.caption2, design: .monospaced).weight(.medium))
+                .tracking(0.9)
+                .foregroundStyle(palette.textSecondary)
+                .lineLimit(1)
+        }
+        .contentShape(Rectangle())
+        .overlay {
+            Menu {
+                accountMenuEntries
+            } label: {
+                Color.clear
+                    .contentShape(Rectangle())
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .accessibilityLabel("NeonDiff account and bot menu")
+            .accessibilityIdentifier("neondiff-account-menu")
+        }
+    }
+
+    @ViewBuilder
+    private var accountMenuEntries: some View {
+        switch accountCatalog {
+        case .idle:
+            Text("SIGN IN REQUIRED")
+        case .loading:
+            Text("LOADING ACCOUNTS…")
+        case .failed:
+            Text("ACCOUNT SERVICE UNAVAILABLE")
+        case .loaded:
+            if accountCatalog.accounts.isEmpty {
+                Text("NO AUTHORIZED ACCOUNTS")
+            } else {
+                ForEach(accountCatalog.accounts) { account in
+                    Button {
+                        selectAccount(account.id)
+                    } label: {
+                        Label(
+                            account.name,
+                            systemImage: accountSelection.accountID == account.id
+                                ? "checkmark.circle.fill"
+                                : account.kind == .organization ? "building.2" : "person"
+                        )
+                    }
+                    .accessibilityIdentifier("neondiff-account-option-\(account.id)")
+                }
+
+                if let selected = accountCatalog.accounts.first(where: {
+                    $0.id == accountSelection.accountID
+                }) {
+                    Divider()
+                    ForEach(selected.bots) { bot in
                         Button {
-                            selectAccount(account.id)
+                            selectBot(bot.id)
                         } label: {
                             Label(
-                                account.name,
-                                systemImage: accountSelection.accountID == account.id
-                                    ? "checkmark.circle.fill"
-                                    : account.kind == .organization ? "building.2" : "person"
+                                bot.appSlug,
+                                systemImage: accountSelection.botID == bot.id
+                                    ? "checkmark.square.fill"
+                                    : bot.isAvailableOnThisMac ? "laptopcomputer" : "app.badge"
                             )
                         }
-                        .accessibilityIdentifier("neondiff-account-option-\(account.id)")
+                        .disabled(bot.status == .revoked || bot.status == .suspended)
+                        .accessibilityIdentifier("neondiff-bot-option-\(bot.id)")
                     }
-
-                    if let selected = accountCatalog.accounts.first(where: {
-                        $0.id == accountSelection.accountID
-                    }) {
-                        Divider()
-                        ForEach(selected.bots) { bot in
-                            Button {
-                                selectBot(bot.id)
-                            } label: {
-                                Label(
-                                    bot.appSlug,
-                                    systemImage: accountSelection.botID == bot.id
-                                        ? "checkmark.square.fill"
-                                        : bot.isAvailableOnThisMac ? "laptopcomputer" : "app.badge"
-                                )
-                            }
-                            .disabled(bot.status == .revoked || bot.status == .suspended)
-                            .accessibilityIdentifier("neondiff-bot-option-\(bot.id)")
-                        }
-                        Button {
-                            beginNewBot()
-                        } label: {
-                            Label("NEW BOT", systemImage: "plus.circle")
-                        }
-                        .accessibilityIdentifier("neondiff-new-bot")
+                    Button {
+                        beginNewBot()
+                    } label: {
+                        Label("NEW BOT", systemImage: "plus.circle")
                     }
+                    .accessibilityIdentifier("neondiff-new-bot")
                 }
             }
-        } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    NDBrandWordmark(size: 22)
-                    Spacer(minLength: 4)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(palette.textSecondary)
-                }
-                Text(selectedAccountName ?? "AI CODE REVIEW SYSTEM")
-                    .font(.system(.caption2, design: .monospaced).weight(.medium))
-                    .tracking(0.9)
-                    .foregroundStyle(palette.textSecondary)
-                    .lineLimit(1)
-            }
-            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .accessibilityLabel("NeonDiff account and bot menu")
-        .accessibilityIdentifier("neondiff-account-menu")
     }
 
     private var selectedAccountName: String? {
