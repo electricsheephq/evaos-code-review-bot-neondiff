@@ -10,7 +10,7 @@ const SETTINGS = [
   "ACCOUNT_LINK_CONNECT_ORIGIN",
   "ACCOUNT_LINK_SUPABASE_URL",
   "ACCOUNT_LINK_SUPABASE_PUBLISHABLE_KEY",
-  "ACCOUNT_LINK_SUPABASE_SERVICE_ROLE_KEY"
+  "ACCOUNT_LINK_AUTHORITY_URL"
 ] as const;
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -63,12 +63,15 @@ export function loadAccountLinkRuntimeConfig(
   if (!supabaseUrl) return invalid("ACCOUNT_LINK_SUPABASE_URL", "invalid");
 
   const publishableKey = required(values, "ACCOUNT_LINK_SUPABASE_PUBLISHABLE_KEY");
-  const serviceRoleKey = required(values, "ACCOUNT_LINK_SUPABASE_SERVICE_ROLE_KEY");
   if (publishableKey.length > 4_096) {
     return invalid("ACCOUNT_LINK_SUPABASE_PUBLISHABLE_KEY", "invalid");
   }
-  if (serviceRoleKey.length > 4_096) {
-    return invalid("ACCOUNT_LINK_SUPABASE_SERVICE_ROLE_KEY", "invalid");
+  const authorityUrl = normalizedHttpsUrl(
+    required(values, "ACCOUNT_LINK_AUTHORITY_URL"),
+    { allowPath: "/api/internal/desktop/workspaces" }
+  );
+  if (!authorityUrl || new URL(authorityUrl).hostname !== "www.neondiff.com") {
+    return invalid("ACCOUNT_LINK_AUTHORITY_URL", "invalid");
   }
 
   let store: GitHubBrokerStore;
@@ -83,34 +86,32 @@ export function loadAccountLinkRuntimeConfig(
     deps: {
       store,
       dbPath,
-      authority: createSupabaseAccountAuthority({
+      authority: createComposedAccountAuthority({
         connectOrigin,
         supabaseUrl,
         publishableKey,
-        serviceRoleKey
+        authorityUrl
       })
     }
   };
 }
 
-export interface SupabaseAccountAuthorityOptions {
+export interface ComposedAccountAuthorityOptions {
   connectOrigin: string;
   supabaseUrl: string;
   publishableKey: string;
-  serviceRoleKey: string;
+  authorityUrl: string;
   fetchImpl?: typeof fetch;
-  now?: () => Date;
   requestTimeoutMs?: number;
 }
 
-export function createSupabaseAccountAuthority(
-  options: SupabaseAccountAuthorityOptions
+export function createComposedAccountAuthority(
+  options: ComposedAccountAuthorityOptions
 ): AccountAuthority {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const now = options.now ?? (() => new Date());
   const timeout = options.requestTimeoutMs ?? 8_000;
   const base = options.supabaseUrl.replace(/\/$/, "");
-  const serviceHeaders = supabaseHeaders(options.serviceRoleKey);
+  const authorityUrl = options.authorityUrl;
 
   return {
     connectOrigin: options.connectOrigin,
@@ -123,8 +124,12 @@ export function createSupabaseAccountAuthority(
           Authorization: `Bearer ${accessToken}`,
           Accept: "application/json"
         },
+        redirect: "manual",
         signal: AbortSignal.timeout(timeout)
       });
+      if (response.status >= 300 && response.status < 400) {
+        throw new Error("account identity redirect refused");
+      }
       if (response.status === 401 || response.status === 403) return null;
       if (!response.ok) throw new Error("account identity request failed");
       const body = await boundedJson(response);
@@ -132,95 +137,46 @@ export function createSupabaseAccountAuthority(
       return body.id;
     },
 
-    async loadWorkspaceSnapshot(userId: string): Promise<AccountWorkspaceSnapshot> {
+    async loadWorkspaceSnapshot(
+      userId: string,
+      deviceAuthorization: string
+    ): Promise<AccountWorkspaceSnapshot> {
       if (!UUID.test(userId)) throw new Error("invalid bound user id");
-      const memberships = parseMemberships(await supabaseGet(
-        "/rest/v1/account_memberships",
-        {
-          select: "account_id,role",
-          user_id: `eq.${userId}`
+      if (!/^Bearer [A-Za-z0-9._~-]+$/.test(deviceAuthorization) || deviceAuthorization.length > 4_096) {
+        throw new Error("invalid device authorization");
+      }
+      const response = await fetchImpl(authorityUrl, {
+        method: "POST",
+        headers: {
+          Authorization: deviceAuthorization,
+          Accept: "application/json"
         },
-        serviceHeaders,
-        fetchImpl,
-        base,
-        timeout
-      ));
-      if (memberships.length === 0) return { accounts: [] };
-
-      const accountIds = memberships.map((membership) => membership.accountId);
-      const inFilter = `in.(${accountIds.join(",")})`;
-      const accounts = parseAccounts(await supabaseGet(
-        "/rest/v1/accounts",
-        { select: "id,kind,name", id: inFilter },
-        serviceHeaders,
-        fetchImpl,
-        base,
-        timeout
-      ));
-      const bots = parseBots(await supabaseGet(
-        "/rest/v1/bot_installations",
-        {
-          select: "id,account_id,app_id,app_slug,mode,github_installation_id,github_account_login,status",
-          account_id: inFilter
-        },
-        serviceHeaders,
-        fetchImpl,
-        base,
-        timeout
-      ));
-      const grants = parseGrants(await supabaseGet(
-        "/rest/v1/account_entitlement_grants",
-        {
-          select: "account_id,grant_kind,status,expires_at",
-          account_id: inFilter,
-          status: "eq.active"
-        },
-        serviceHeaders,
-        fetchImpl,
-        base,
-        timeout
-      ));
-
-      return {
-        accounts: memberships.map((membership) => {
-          const account = accounts.find((candidate) => candidate.id === membership.accountId);
-          if (!account) throw new Error("membership account is missing");
-          return {
-            id: account.id,
-            kind: account.kind,
-            name: account.name,
-            role: membership.role,
-            entitlement: entitlementFor(
-              grants.filter((grant) => grant.accountId === account.id),
-              now()
-            ),
-            bots: bots
-              .filter((bot) => bot.accountId === account.id)
-              .map(({ accountId: _accountId, ...bot }) => bot)
-          };
-        })
-      };
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeout)
+      });
+      if (response.status >= 300 && response.status < 400) {
+        throw new Error("account authority redirect refused");
+      }
+      if (!response.ok) throw new Error("account authority request failed");
+      const mediaType = response.headers.get("content-type")
+        ?.split(";", 1)[0]
+        ?.trim()
+        .toLowerCase();
+      if (mediaType !== "application/json") {
+        throw new Error("account authority response is not JSON");
+      }
+      const body = await boundedJson(response);
+      if (
+        !isRecord(body)
+        || body.status !== "ready"
+        || body.userId !== userId
+        || !Array.isArray(body.accounts)
+      ) {
+        throw new Error("account authority identity mismatch");
+      }
+      return { accounts: parseWorkspaceAccounts(body.accounts) };
     }
   };
-}
-
-async function supabaseGet(
-  path: string,
-  query: Record<string, string>,
-  headers: Record<string, string>,
-  fetchImpl: typeof fetch,
-  base: string,
-  timeout: number
-): Promise<unknown> {
-  const url = new URL(`${base}${path}`);
-  for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
-  const response = await fetchImpl(url, {
-    method: "GET",
-    headers: { ...headers, Accept: "application/json" },
-    signal: AbortSignal.timeout(timeout)
-  });
-  if (!response.ok) throw new Error("account authority request failed");
-  return boundedJson(response);
 }
 
 async function boundedJson(response: Response): Promise<unknown> {
@@ -247,138 +203,89 @@ async function boundedJson(response: Response): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks, size).toString("utf8")) as unknown;
 }
 
-function supabaseHeaders(key: string): Record<string, string> {
-  const headers: Record<string, string> = { apikey: key };
-  if (key.split(".").length === 3) headers.Authorization = `Bearer ${key}`;
-  return headers;
-}
-
-function parseMemberships(value: unknown): Array<{
-  accountId: string;
-  role: "owner" | "admin" | "member";
-}> {
-  if (!Array.isArray(value)) throw new Error("invalid memberships response");
-  return value.map((row) => {
-    if (!isRecord(row) || typeof row.account_id !== "string" || !UUID.test(row.account_id)) {
-      throw new Error("invalid membership account");
-    }
-    if (row.role !== "owner" && row.role !== "admin" && row.role !== "member") {
-      throw new Error("invalid membership role");
-    }
-    return { accountId: row.account_id, role: row.role };
-  });
-}
-
-function parseAccounts(value: unknown): Array<{
-  id: string;
-  kind: "personal" | "organization";
-  name: string;
-}> {
-  if (!Array.isArray(value)) throw new Error("invalid accounts response");
-  return value.map((row) => {
-    if (!isRecord(row) || typeof row.id !== "string" || !UUID.test(row.id)) {
-      throw new Error("invalid account id");
-    }
-    if (row.kind !== "personal" && row.kind !== "organization") {
-      throw new Error("invalid account kind");
-    }
-    if (typeof row.name !== "string" || row.name.length === 0 || row.name.length > 120) {
-      throw new Error("invalid account name");
-    }
-    return { id: row.id, kind: row.kind, name: row.name };
-  });
-}
-
-function parseBots(value: unknown): Array<{
-  accountId: string;
-  id: string;
-  appId: number;
-  appSlug: string;
-  mode: "byo" | "managed";
-  githubInstallationId: number | null;
-  githubAccountLogin: string | null;
-  status: "pending" | "verified" | "suspended" | "revoked";
-}> {
-  if (!Array.isArray(value)) throw new Error("invalid bots response");
-  return value.map((row) => {
-    if (!isRecord(row)) throw new Error("invalid bot row");
-    if (typeof row.id !== "string" || !UUID.test(row.id)) throw new Error("invalid bot id");
-    if (typeof row.account_id !== "string" || !UUID.test(row.account_id)) {
-      throw new Error("invalid bot account");
-    }
-    if (typeof row.app_id !== "number" || !Number.isSafeInteger(row.app_id) || row.app_id <= 0) {
-      throw new Error("invalid bot app id");
-    }
-    if (typeof row.app_slug !== "string" || !/^[a-z0-9][a-z0-9-]{0,99}$/.test(row.app_slug)) {
-      throw new Error("invalid bot slug");
-    }
-    if (row.mode !== "byo" && row.mode !== "managed") throw new Error("invalid bot mode");
-    if (!["pending", "verified", "suspended", "revoked"].includes(String(row.status))) {
-      throw new Error("invalid bot status");
-    }
-    const installationId = row.github_installation_id;
+function parseWorkspaceAccounts(value: unknown[]): AccountWorkspaceSnapshot["accounts"] {
+  if (value.length > 100) throw new Error("too many workspace accounts");
+  const accounts = value.map((row) => {
     if (
-      installationId !== null
-      && (typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId <= 0)
+      !isRecord(row)
+      || typeof row.id !== "string"
+      || !UUID.test(row.id)
+      || (row.kind !== "personal" && row.kind !== "organization")
+      || typeof row.name !== "string"
+      || row.name.trim().length === 0
+      || row.name.length > 120
+      || /[\r\n]/.test(row.name)
+      || (row.role !== "owner" && row.role !== "admin" && row.role !== "member")
+      || !isEntitlement(row.entitlement)
+      || !Array.isArray(row.bots)
+      || row.bots.length > 100
     ) {
-      throw new Error("invalid installation id");
+      throw new Error("invalid workspace account");
     }
-    if (row.status === "verified" && installationId === null) {
-      throw new Error("verified bot has no installation proof");
-    }
-    if (
-      row.github_account_login !== null
-      && (typeof row.github_account_login !== "string" || row.github_account_login.length > 100)
-    ) {
-      throw new Error("invalid GitHub account login");
+    const bots = row.bots.map(parseWorkspaceBot);
+    if (new Set(bots.map((bot) => bot.id)).size !== bots.length) {
+      throw new Error("duplicate workspace bot");
     }
     return {
-      accountId: row.account_id,
       id: row.id,
-      appId: row.app_id,
-      appSlug: row.app_slug,
-      mode: row.mode,
-      githubInstallationId: installationId,
-      githubAccountLogin: row.github_account_login as string | null,
-      status: row.status as "pending" | "verified" | "suspended" | "revoked"
+      kind: row.kind as "personal" | "organization",
+      name: row.name,
+      role: row.role as "owner" | "admin" | "member",
+      entitlement: row.entitlement,
+      bots
     };
   });
+  if (new Set(accounts.map((account) => account.id)).size !== accounts.length) {
+    throw new Error("duplicate workspace account");
+  }
+  return accounts;
 }
 
-function parseGrants(value: unknown): Array<{
-  accountId: string;
-  kind: "internal_admin" | "trial" | "legacy";
-  expiresAt: string | null;
-}> {
-  if (!Array.isArray(value)) throw new Error("invalid grants response");
-  return value.map((row) => {
-    if (!isRecord(row) || typeof row.account_id !== "string" || !UUID.test(row.account_id)) {
-      throw new Error("invalid grant account");
-    }
-    if (row.status !== "active") throw new Error("inactive grant in active snapshot");
-    if (row.grant_kind !== "internal_admin" && row.grant_kind !== "trial" && row.grant_kind !== "legacy") {
-      throw new Error("invalid grant kind");
-    }
-    if (row.expires_at !== null && (typeof row.expires_at !== "string" || !Number.isFinite(Date.parse(row.expires_at)))) {
-      throw new Error("invalid grant expiry");
-    }
-    return {
-      accountId: row.account_id,
-      kind: row.grant_kind,
-      expiresAt: row.expires_at as string | null
-    };
-  });
+function parseWorkspaceBot(value: unknown): AccountWorkspaceSnapshot["accounts"][number]["bots"][number] {
+  if (!isRecord(value)) throw new Error("invalid workspace bot");
+  const installationId = value.githubInstallationId;
+  if (
+    typeof value.id !== "string"
+    || !UUID.test(value.id)
+    || typeof value.appId !== "number"
+    || !Number.isSafeInteger(value.appId)
+    || value.appId <= 0
+    || typeof value.appSlug !== "string"
+    || !/^[a-z0-9][a-z0-9-]{0,99}$/.test(value.appSlug)
+    || (value.mode !== "byo" && value.mode !== "managed")
+    || !isBotStatus(value.status)
+    || (installationId !== null
+      && (typeof installationId !== "number"
+        || !Number.isSafeInteger(installationId)
+        || installationId <= 0))
+    || (value.status === "verified" && installationId === null)
+    || (value.githubAccountLogin !== null
+      && (typeof value.githubAccountLogin !== "string"
+        || !/^[A-Za-z0-9][A-Za-z0-9-]{0,99}$/.test(value.githubAccountLogin)))
+  ) {
+    throw new Error("invalid workspace bot");
+  }
+  return {
+    id: value.id,
+    appId: value.appId,
+    appSlug: value.appSlug,
+    mode: value.mode,
+    githubInstallationId: installationId,
+    githubAccountLogin: value.githubAccountLogin as string | null,
+    status: value.status
+  };
 }
 
-function entitlementFor(
-  grants: Array<{ kind: "internal_admin" | "trial" | "legacy"; expiresAt: string | null }>,
-  at: Date
-): "public_free" | "paid" | "internal_admin" | "trial" {
-  const active = grants.filter((grant) => !grant.expiresAt || Date.parse(grant.expiresAt) > at.getTime());
-  if (active.some((grant) => grant.kind === "internal_admin")) return "internal_admin";
-  if (active.some((grant) => grant.kind === "trial")) return "trial";
-  if (active.some((grant) => grant.kind === "legacy")) return "paid";
-  return "public_free";
+function isEntitlement(value: unknown): value is AccountWorkspaceSnapshot["accounts"][number]["entitlement"] {
+  return value === "public_free"
+    || value === "paid"
+    || value === "internal_admin"
+    || value === "trial"
+    || value === "none";
+}
+
+function isBotStatus(value: unknown): value is AccountWorkspaceSnapshot["accounts"][number]["bots"][number]["status"] {
+  return value === "pending" || value === "verified" || value === "suspended" || value === "revoked";
 }
 
 function sameFileIdentity(left: string, right: string): boolean {

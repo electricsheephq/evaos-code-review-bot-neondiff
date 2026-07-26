@@ -32,7 +32,10 @@ export interface AccountWorkspaceSnapshot {
 export interface AccountAuthority {
   connectOrigin: string;
   verifyAccessToken(accessToken: string): Promise<string | null>;
-  loadWorkspaceSnapshot(userId: string): Promise<AccountWorkspaceSnapshot>;
+  loadWorkspaceSnapshot(
+    userId: string,
+    deviceAuthorization: string
+  ): Promise<AccountWorkspaceSnapshot>;
 }
 
 export interface AccountLinkServiceOptions {
@@ -194,10 +197,14 @@ export class AccountLinkService {
     )) {
       throw new BrokerError("rate_limited", "too many account workspace refreshes");
     }
+    const deviceAuthorization = deviceBearerAuthorization(authorization);
     try {
       return {
         status: "ready",
-        ...(await this.authority.loadWorkspaceSnapshot(binding.user_id))
+        ...(await this.authority.loadWorkspaceSnapshot(
+          binding.user_id,
+          deviceAuthorization
+        ))
       };
     } catch {
       throw new BrokerError(
@@ -205,6 +212,24 @@ export class AccountLinkService {
         "account workspace service is unavailable"
       );
     }
+  }
+
+  async introspectDevice(
+    authorization: string | string[] | undefined
+  ): Promise<Record<string, unknown>> {
+    const at = this.now();
+    const deviceId = await authenticateDevice(this.store, authorization, at);
+    if (!this.workspaceRateLimiter.allow(
+      hash(`account-introspect:${deviceId}`),
+      at.getTime()
+    )) {
+      throw new BrokerError("rate_limited", "too many account device introspections");
+    }
+    const binding = this.store.getAccountBinding(deviceId);
+    if (!binding) {
+      throw new BrokerError("account_link_required", "link a signed-in NeonDiff account first");
+    }
+    return { status: "account_device_bound", userId: binding.user_id };
   }
 }
 
@@ -235,6 +260,23 @@ function accountBearerToken(authorization: string | string[] | undefined): strin
     throw new BrokerError("account_identity_unverified", "signed-in account proof is invalid");
   }
   return token;
+}
+
+function deviceBearerAuthorization(
+  authorization: string | string[] | undefined
+): string {
+  if (Array.isArray(authorization)) {
+    throw new BrokerError("invalid_device_credential", "device authentication is invalid");
+  }
+  const prefix = "Bearer ";
+  if (!authorization?.startsWith(prefix)) {
+    throw new BrokerError("invalid_device_credential", "device authentication is invalid");
+  }
+  const token = authorization.slice(prefix.length);
+  if (!token || token.length > MAX_ACCESS_TOKEN_LENGTH || !/^[A-Za-z0-9._~-]+$/.test(token)) {
+    throw new BrokerError("invalid_device_credential", "device authentication is invalid");
+  }
+  return authorization;
 }
 
 function asObject(body: unknown): Record<string, unknown> {
