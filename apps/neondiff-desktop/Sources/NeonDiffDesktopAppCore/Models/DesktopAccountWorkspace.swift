@@ -99,13 +99,13 @@ package struct DesktopBotInstallation: Identifiable, Codable, Equatable, Sendabl
 
 package struct DesktopLocalBotCandidate: Equatable, Sendable {
     package let appID: Int64
-    package let appSlug: String
+    package let appSlug: String?
     package let githubAccountLogin: String
     package let configPath: String
 
     package init(
         appID: Int64,
-        appSlug: String,
+        appSlug: String? = nil,
         githubAccountLogin: String,
         configPath: String
     ) {
@@ -152,7 +152,8 @@ package struct DesktopAccountWorkspace: Identifiable, Codable, Equatable, Sendab
                   let account = bot.githubAccountLogin,
                   let local = localCandidates.first(where: {
                       $0.appID == bot.appID
-                          && $0.appSlug.caseInsensitiveCompare(bot.appSlug) == .orderedSame
+                          && ($0.appSlug == nil
+                              || $0.appSlug?.caseInsensitiveCompare(bot.appSlug) == .orderedSame)
                           && $0.githubAccountLogin.caseInsensitiveCompare(account) == .orderedSame
                   })
             else {

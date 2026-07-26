@@ -543,6 +543,133 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
             _ = try await client.startConnection(identity: identity)
         }
     }
+
+    @Test func accountLinkReusesDeviceIdentityAndDecodesAuthoritativeWorkspaces() async throws {
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerMemorySecretStore()
+        ).loadOrCreate()
+        let state = String(repeating: "a", count: 43)
+        let transport = ScriptedBrokerTransport(responses: [
+            .json(
+                url: "https://broker.example/account/device/register",
+                body: ["status": "registered", "deviceId": identity.deviceId]
+            ),
+            .json(
+                url: "https://broker.example/account/connect/start",
+                body: [
+                    "status": "account_connect_started",
+                    "connectUrl": "https://www.neondiff.com/desktop/connect?state=\(state)",
+                    "state": state,
+                    "expiresAt": "2027-01-15T08:05:00Z"
+                ]
+            ),
+            .json(
+                url: "https://broker.example/account/workspaces",
+                body: [
+                    "status": "ready",
+                    "accounts": [[
+                        "id": "account-electric-sheep",
+                        "kind": "organization",
+                        "name": "Electric Sheep",
+                        "role": "admin",
+                        "entitlement": "internal_admin",
+                        "bots": [[
+                            "id": "bot-existing",
+                            "appId": 4242,
+                            "appSlug": "evaos-code-review-bot",
+                            "mode": "byo",
+                            "githubInstallationId": 9001,
+                            "githubAccountLogin": "electricsheephq",
+                            "status": "verified"
+                        ]]
+                    ]]
+                ]
+            )
+        ])
+        let client = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: transport,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+
+        try await client.registerAccountLinkIdentity(identity: identity)
+        let connection = try await client.startAccountLink(identity: identity)
+        let workspaces = try await client.loadAccountWorkspaces(identity: identity)
+
+        #expect(connection.state == state)
+        #expect(connection.connectURL.absoluteString == "https://www.neondiff.com/desktop/connect?state=\(state)")
+        #expect(workspaces.accounts.count == 1)
+        #expect(workspaces.accounts[0].name == "Electric Sheep")
+        #expect(workspaces.accounts[0].bots[0].appID == 4242)
+        #expect(workspaces.accounts[0].bots[0].githubInstallationID == 9001)
+
+        let requests = await transport.requests
+        #expect(requests.map(\.url.path) == [
+            "/account/device/register",
+            "/account/connect/start",
+            "/account/workspaces"
+        ])
+        #expect(requests[0].headers["Authorization"] == nil)
+        #expect(requests[1].headers["Authorization"]?.hasPrefix("Bearer ") == true)
+        #expect(requests[2].headers["Authorization"]?.hasPrefix("Bearer ") == true)
+        #expect(requests.allSatisfy { request in
+            String(data: request.body, encoding: .utf8)?.contains("access_token") == false
+        })
+    }
+
+    @Test func accountLinkPendingAndUntrustedResponsesFailClosed() async throws {
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerMemorySecretStore()
+        ).loadOrCreate()
+        let pendingTransport = ScriptedBrokerTransport(responses: [
+            .json(
+                statusCode: 403,
+                url: "https://broker.example/account/workspaces",
+                body: ["status": "error", "reason": "account_link_required"]
+            )
+        ])
+        let pendingClient = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: pendingTransport
+        )
+
+        await expectBrokerError(.server(reason: .accountLinkRequired)) {
+            _ = try await pendingClient.loadAccountWorkspaces(identity: identity)
+        }
+
+        let untrustedTransport = ScriptedBrokerTransport(responses: [
+            .json(
+                url: "https://broker.example/account/workspaces",
+                body: [
+                    "status": "ready",
+                    "accounts": [[
+                        "id": "account-electric-sheep",
+                        "kind": "organization",
+                        "name": "Electric Sheep",
+                        "role": "admin",
+                        "entitlement": "internal_admin",
+                        "bots": [[
+                            "id": "bot-existing",
+                            "appId": 0,
+                            "appSlug": "evaos-code-review-bot",
+                            "mode": "byo",
+                            "githubInstallationId": -1,
+                            "githubAccountLogin": "electricsheephq",
+                            "status": "verified"
+                        ]]
+                    ]]
+                ]
+            )
+        ])
+        let untrustedClient = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: untrustedTransport
+        )
+
+        await expectBrokerError(.scopeMismatch) {
+            _ = try await untrustedClient.loadAccountWorkspaces(identity: identity)
+        }
+    }
 }
 
 private final class BrokerMemorySecretStore: DesktopSecretStoring, @unchecked Sendable {

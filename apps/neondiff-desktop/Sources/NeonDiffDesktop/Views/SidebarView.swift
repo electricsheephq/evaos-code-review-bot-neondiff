@@ -5,11 +5,15 @@ import NeonDiffDesktopCore
 struct SidebarView: View {
     @Binding var selection: DesktopSection
     let readiness: DesktopSetupReadiness
+    let accountLinkAvailable: Bool
     let accountCatalog: DesktopAccountWorkspaceCatalog
     let accountSelection: DesktopAccountWorkspaceSelection
     let selectAccount: (String) -> Void
     let selectBot: (String) -> Void
     let beginNewBot: () -> Void
+    let connectAccount: () -> Void
+    let cancelAccountLink: () -> Void
+    let refreshAccounts: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -126,14 +130,45 @@ struct SidebarView: View {
     private var accountMenuEntries: some View {
         switch accountCatalog {
         case .idle:
-            Text("SIGN IN REQUIRED")
+            if accountLinkAvailable {
+                Button {
+                    connectAccount()
+                } label: {
+                    Label("CONNECT NEONDIFF ACCOUNT", systemImage: "person.crop.circle.badge.plus")
+                }
+                .accessibilityIdentifier("neondiff-account-connect")
+            } else {
+                Text("ACCOUNT LINK UNAVAILABLE")
+            }
         case .loading:
             Text("LOADING ACCOUNTS…")
+            Button {
+                cancelAccountLink()
+            } label: {
+                Label("CANCEL", systemImage: "xmark.circle")
+            }
+            .accessibilityIdentifier("neondiff-account-cancel")
         case .failed:
             Text("ACCOUNT SERVICE UNAVAILABLE")
+            if accountLinkAvailable {
+                Button {
+                    connectAccount()
+                } label: {
+                    Label("RECONNECT ACCOUNT", systemImage: "arrow.clockwise")
+                }
+                .accessibilityIdentifier("neondiff-account-reconnect")
+            }
         case .loaded:
             if accountCatalog.accounts.isEmpty {
                 Text("NO AUTHORIZED ACCOUNTS")
+                if accountLinkAvailable {
+                    Button {
+                        connectAccount()
+                    } label: {
+                        Label("CONNECT ACCOUNT", systemImage: "person.crop.circle.badge.plus")
+                    }
+                    .accessibilityIdentifier("neondiff-account-connect-empty")
+                }
             } else {
                 ForEach(accountCatalog.accounts) { account in
                     Button {
@@ -173,6 +208,15 @@ struct SidebarView: View {
                         Label("NEW BOT", systemImage: "plus.circle")
                     }
                     .accessibilityIdentifier("neondiff-new-bot")
+                }
+                if accountLinkAvailable {
+                    Divider()
+                    Button {
+                        refreshAccounts()
+                    } label: {
+                        Label("REFRESH ACCOUNTS", systemImage: "arrow.clockwise")
+                    }
+                    .accessibilityIdentifier("neondiff-account-refresh")
                 }
             }
         }

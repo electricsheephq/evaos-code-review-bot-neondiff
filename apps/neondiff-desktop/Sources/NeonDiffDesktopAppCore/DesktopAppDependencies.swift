@@ -6,24 +6,40 @@ package struct DesktopProductionBoundary: Sendable {
     package let byoGitHubEnabled: Bool
     package let managedGitHubBrokerOrigin: URL?
     package let managedGitHubAppClientID: String?
+    package let accountLinkBrokerOrigin: URL?
+    package let accountConnectURL: URL?
 
     package static let quarantined = DesktopProductionBoundary(
         nativeActivationBrokerVerified: false,
         byoGitHubEnabled: false,
         managedGitHubBrokerOrigin: nil,
-        managedGitHubAppClientID: nil
+        managedGitHubAppClientID: nil,
+        accountLinkBrokerOrigin: nil,
+        accountConnectURL: nil
     )
     package static let testVerified = DesktopProductionBoundary(
         nativeActivationBrokerVerified: true,
         byoGitHubEnabled: false,
         managedGitHubBrokerOrigin: nil,
-        managedGitHubAppClientID: nil
+        managedGitHubAppClientID: nil,
+        accountLinkBrokerOrigin: nil,
+        accountConnectURL: nil
     )
     package static let testManaged = DesktopProductionBoundary(
         nativeActivationBrokerVerified: true,
         byoGitHubEnabled: false,
         managedGitHubBrokerOrigin: approvedManagedGitHubBrokerOrigin,
-        managedGitHubAppClientID: "fixture-client-id"
+        managedGitHubAppClientID: "fixture-client-id",
+        accountLinkBrokerOrigin: nil,
+        accountConnectURL: nil
+    )
+    package static let testAccountLink = DesktopProductionBoundary(
+        nativeActivationBrokerVerified: true,
+        byoGitHubEnabled: true,
+        managedGitHubBrokerOrigin: nil,
+        managedGitHubAppClientID: nil,
+        accountLinkBrokerOrigin: approvedAccountLinkBrokerOrigin,
+        accountConnectURL: approvedAccountConnectURL
     )
 
     package static func resolve(infoDictionary: [String: Any]) -> DesktopProductionBoundary {
@@ -39,7 +55,9 @@ package struct DesktopProductionBoundary: Sendable {
                 nativeActivationBrokerVerified: true,
                 byoGitHubEnabled: true,
                 managedGitHubBrokerOrigin: nil,
-                managedGitHubAppClientID: nil
+                managedGitHubAppClientID: nil,
+                accountLinkBrokerOrigin: approvedAccountLinkBrokerOrigin,
+                accountConnectURL: approvedAccountConnectURL
             )
         }
 
@@ -55,7 +73,9 @@ package struct DesktopProductionBoundary: Sendable {
             nativeActivationBrokerVerified: true,
             byoGitHubEnabled: false,
             managedGitHubBrokerOrigin: origin,
-            managedGitHubAppClientID: approvedManagedGitHubAppClientID
+            managedGitHubAppClientID: approvedManagedGitHubAppClientID,
+            accountLinkBrokerOrigin: approvedAccountLinkBrokerOrigin,
+            accountConnectURL: approvedAccountConnectURL
         )
     }
 }
@@ -64,6 +84,12 @@ private let approvedManagedGitHubBrokerOrigin = URL(
     string: "https://neondiff-license.fly.dev"
 )!
 private let approvedManagedGitHubAppClientID = "Iv23liNr6jOVuCFC7DkN"
+private let approvedAccountLinkBrokerOrigin = URL(
+    string: "https://neondiff-license.fly.dev"
+)!
+private let approvedAccountConnectURL = URL(
+    string: "https://www.neondiff.com/desktop/connect"
+)!
 
 package struct DesktopAppDependencies {
     package let clipboard: any DesktopClipboard
@@ -77,6 +103,7 @@ package struct DesktopAppDependencies {
     package let secretStore: any DesktopSecretStoring
     package let githubAuthenticator: any GitHubDesktopAuthenticating
     package let githubBroker: (any GitHubBrokerConnecting)?
+    package let accountLink: (any NeonDiffAccountLinkConnecting)?
     package let productionBoundary: DesktopProductionBoundary
     package let cliWorkingDirectory: URL?
 
@@ -92,6 +119,7 @@ package struct DesktopAppDependencies {
         secretStore: any DesktopSecretStoring,
         githubAuthenticator: any GitHubDesktopAuthenticating,
         githubBroker: (any GitHubBrokerConnecting)? = nil,
+        accountLink: (any NeonDiffAccountLinkConnecting)? = nil,
         productionBoundary: DesktopProductionBoundary,
         cliWorkingDirectory: URL? = nil
     ) {
@@ -106,6 +134,7 @@ package struct DesktopAppDependencies {
         self.secretStore = secretStore
         self.githubAuthenticator = githubAuthenticator
         self.githubBroker = githubBroker
+        self.accountLink = accountLink
         self.productionBoundary = productionBoundary
         self.cliWorkingDirectory = cliWorkingDirectory
     }
