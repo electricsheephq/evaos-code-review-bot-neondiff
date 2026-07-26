@@ -690,14 +690,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func currentLocalBotCandidates(
         snapshot: NeonDiffAccountWorkspaceSnapshot
     ) -> [DesktopLocalBotCandidate] {
-        guard dependencies.fileWriter.fileExists(at: URL(filePath: configPath)) else {
-            return []
-        }
-
-        if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil,
-           let installationID = Self.savedManagedGitHubInstallationId(
-               preferences: dependencies.preferences
-           ) {
+        if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil {
+            guard let installationID = Self.savedManagedGitHubInstallationId(
+                preferences: dependencies.preferences
+            ) else {
+                return []
+            }
+            guard dependencies.fileWriter.fileExists(at: URL(filePath: configPath)) else {
+                return []
+            }
             let managedMatches = snapshot.accounts.flatMap(\.bots).filter {
                 $0.mode == .managed
                     && $0.githubInstallationID == Int64(installationID)
@@ -711,6 +712,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 return []
             }
             return [DesktopLocalBotCandidate(
+                botID: managed.id,
                 appID: managed.appID,
                 appSlug: managed.appSlug,
                 githubAccountLogin: githubAccountLogin,
@@ -718,30 +720,69 @@ package final class NeonDiffDesktopModel: ObservableObject {
             )]
         }
 
-        guard let rawAppID = dependencies.preferences.string(forKey: byoGitHubAppIdPreferenceKey),
-              let appID = Int64(rawAppID),
-              appID > 0
-        else {
+        guard dependencies.productionBoundary.byoGitHubEnabled else {
             return []
         }
 
+        var candidates: [DesktopLocalBotCandidate] = []
+        for configuration in dependencies.localBotConfigurations {
+            let configurationURL = URL(filePath: configuration.configPath)
+                .standardizedFileURL
+            guard dependencies.fileWriter.fileExists(at: configurationURL) else {
+                continue
+            }
+            if let candidate = verifiedBYOLocalBotCandidate(
+                appID: configuration.appID,
+                configPath: configurationURL.path,
+                snapshot: snapshot
+            ) {
+                candidates.append(candidate)
+            }
+        }
+
+        if dependencies.fileWriter.fileExists(at: URL(filePath: configPath)),
+           let rawAppID = dependencies.preferences.string(forKey: byoGitHubAppIdPreferenceKey),
+           let appID = Int64(rawAppID),
+           appID > 0 {
+            if let candidate = verifiedBYOLocalBotCandidate(
+                appID: appID,
+                configPath: URL(filePath: configPath).standardizedFileURL.path,
+                snapshot: snapshot
+            ) {
+                candidates.append(candidate)
+            }
+        }
+
+        var seen = Set<String>()
+        return candidates.filter {
+            seen.insert("\($0.appID):\($0.configPath)").inserted
+        }
+    }
+
+    private func verifiedBYOLocalBotCandidate(
+        appID: Int64,
+        configPath: String,
+        snapshot: NeonDiffAccountWorkspaceSnapshot
+    ) -> DesktopLocalBotCandidate? {
         let matches = snapshot.accounts.flatMap(\.bots).filter {
-            $0.appID == appID
+            $0.mode == .byo
+                && $0.appID == appID
                 && $0.status == .verified
                 && $0.githubAccountLogin?.isEmpty == false
         }
-        guard matches.count == 1, let matchedBot = matches.first else {
-            return []
+        guard matches.count == 1,
+              let matchedBot = matches.first,
+              let githubAccountLogin = matchedBot.githubAccountLogin
+        else {
+            return nil
         }
-        guard let githubAccountLogin = matchedBot.githubAccountLogin else {
-            return []
-        }
-        return [DesktopLocalBotCandidate(
+        return DesktopLocalBotCandidate(
+            botID: matchedBot.id,
             appID: appID,
             appSlug: matchedBot.appSlug,
             githubAccountLogin: githubAccountLogin,
-            configPath: URL(filePath: configPath).standardizedFileURL.path
-        )]
+            configPath: configPath
+        )
     }
 
     private func applyAccountLinkFailure(_ error: Error, generation: UInt64) {

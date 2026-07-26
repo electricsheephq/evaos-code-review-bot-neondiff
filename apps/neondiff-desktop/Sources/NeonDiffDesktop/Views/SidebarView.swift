@@ -8,6 +8,7 @@ struct SidebarView: View {
     let accountLinkAvailable: Bool
     let accountCatalog: DesktopAccountWorkspaceCatalog
     let accountSelection: DesktopAccountWorkspaceSelection
+    let accountStatus: String
     let selectAccount: (String) -> Void
     let selectBot: (String) -> Void
     let beginNewBot: () -> Void
@@ -141,7 +142,7 @@ struct SidebarView: View {
                 Text("ACCOUNT LINK UNAVAILABLE")
             }
         case .loading:
-            Text("LOADING ACCOUNTS…")
+            Text(accountStatus.uppercased())
             Button {
                 cancelAccountLink()
             } label: {
@@ -193,7 +194,9 @@ struct SidebarView: View {
                             selectBot(bot.id)
                         } label: {
                             Label(
-                                bot.appSlug,
+                                bot.isAvailableOnThisMac
+                                    ? "\(bot.appSlug) · THIS MAC"
+                                    : bot.appSlug,
                                 systemImage: accountSelection.botID == bot.id
                                     ? "checkmark.square.fill"
                                     : bot.isAvailableOnThisMac ? "laptopcomputer" : "app.badge"
