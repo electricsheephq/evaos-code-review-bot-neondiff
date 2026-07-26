@@ -160,6 +160,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var pendingLicenseKey = ""
     @Published package var onboardingFlow = OnboardingFlow()
     @Published package var isOnboardingPresented = false
+    @Published package var accountWorkspaceCatalog: DesktopAccountWorkspaceCatalog = .idle
+    @Published package private(set) var accountWorkspaceSelection = DesktopAccountWorkspaceSelection()
+    @Published package private(set) var accountWorkspaceStatus = "Sign in to load your personal and organization accounts."
+    @Published package private(set) var pendingNewBotPlan: DesktopNewBotPlan?
 
     // Issue #612 — native purchase-to-activation state. Restored from preferences
     // (its raw value) so onboarding resumes exactly across relaunch / cancel /
@@ -391,6 +395,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var previewedProviderExpectedRevision: String?
     private var pendingProviderPatchProof: PendingProviderPatchProof?
     private var pendingRepoPatchProof: PendingRepoPatchProof?
+    private let accountWorkspacePreferenceKey = "neondiff.accountWorkspaceID"
+    private let accountBotPreferenceKey = "neondiff.accountBotID"
 
     package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
@@ -451,6 +457,142 @@ package final class NeonDiffDesktopModel: ObservableObject {
             self.activationState = ActivationStateMachine.initialState
         }
         self.lastCommandLine = statusCommand.commandLine
+    }
+
+    package var selectedAccountWorkspace: DesktopAccountWorkspace? {
+        guard let accountID = accountWorkspaceSelection.accountID else { return nil }
+        return accountWorkspaceCatalog.accounts.first { $0.id == accountID }
+    }
+
+    package var selectedBotInstallation: DesktopBotInstallation? {
+        guard let botID = accountWorkspaceSelection.botID else { return nil }
+        return selectedAccountWorkspace?.bots.first { $0.id == botID }
+    }
+
+    /// Installs a server-authoritative snapshot. Accounts without a membership
+    /// are filtered by the catalog and can never become selectable client-side.
+    package func applyAccountWorkspaceCatalog(_ catalog: DesktopAccountWorkspaceCatalog) {
+        accountWorkspaceCatalog = catalog
+        guard !catalog.accounts.isEmpty else {
+            accountWorkspaceSelection = DesktopAccountWorkspaceSelection()
+            accountWorkspaceStatus = catalogFailureOrEmptyMessage(catalog)
+            resetWorkspaceBoundRuntimeState()
+            return
+        }
+
+        if let selected = accountWorkspaceSelection.accountID,
+           catalog.accounts.contains(where: { $0.id == selected }) {
+            accountWorkspaceStatus = "Account authority verified."
+            return
+        }
+
+        let saved = dependencies.preferences.string(forKey: accountWorkspacePreferenceKey)
+        let initial = catalog.accounts.first(where: { $0.id == saved }) ?? catalog.accounts[0]
+        selectAccountWorkspace(initial.id)
+    }
+
+    package func selectAccountWorkspace(_ accountID: String) {
+        guard accountWorkspaceCatalog.accounts.contains(where: { $0.id == accountID }) else {
+            accountWorkspaceStatus = "That account is not available to this signed-in user."
+            return
+        }
+        guard accountWorkspaceSelection.accountID != accountID else { return }
+
+        resetWorkspaceBoundRuntimeState()
+        accountWorkspaceSelection.selectAccount(accountID)
+        pendingNewBotPlan = nil
+        dependencies.preferences.set(accountID, forKey: accountWorkspacePreferenceKey)
+        dependencies.preferences.removeValue(forKey: accountBotPreferenceKey)
+        accountWorkspaceStatus = "Account selected. Choose an existing bot or create a new one."
+    }
+
+    package func selectBotInstallation(_ botID: String) {
+        guard let account = selectedAccountWorkspace,
+              let bot = account.bots.first(where: { $0.id == botID }),
+              bot.status == .verified || bot.status == .pending
+        else {
+            accountWorkspaceStatus = "That bot is not authorized for the selected account."
+            return
+        }
+
+        resetWorkspaceBoundRuntimeState()
+        accountWorkspaceSelection.selectBot(botID)
+        pendingNewBotPlan = nil
+        dependencies.preferences.set(botID, forKey: accountBotPreferenceKey)
+        if let localConfigPath = bot.localConfigPath {
+            configPath = localConfigPath
+            accountWorkspaceStatus = "Local bot selected. Verify its config and GitHub binding before use."
+            inspectConfig()
+        } else {
+            accountWorkspaceStatus = "Bot selected. Complete setup on this Mac before use."
+            reopenOnboarding(at: .welcome)
+        }
+    }
+
+    package func beginNewBot(appSlug: String = "new-neondiff-bot") {
+        guard let account = selectedAccountWorkspace else {
+            accountWorkspaceStatus = "Choose an account before creating a bot."
+            return
+        }
+        do {
+            let occupiedPaths = Set(account.bots.compactMap(\.localConfigPath))
+            let plan = try DesktopNewBotPlan.make(
+                account: account,
+                appSlug: appSlug,
+                applicationSupportDirectory: dependencies.fileWriter.applicationSupportDirectory,
+                occupiedConfigPaths: occupiedPaths
+            )
+            resetWorkspaceBoundRuntimeState()
+            pendingNewBotPlan = plan
+            accountWorkspaceSelection.selectBot(plan.bot.id)
+            configPath = plan.bot.localConfigPath ?? configPath
+            dependencies.preferences.set(plan.bot.id, forKey: accountBotPreferenceKey)
+            accountWorkspaceStatus = "New bot setup is isolated from existing bot configs."
+            reopenOnboarding(at: .welcome)
+        } catch {
+            accountWorkspaceStatus = "A new bot setup could not be created safely."
+        }
+    }
+
+    private func catalogFailureOrEmptyMessage(
+        _ catalog: DesktopAccountWorkspaceCatalog
+    ) -> String {
+        switch catalog {
+        case .idle:
+            "Sign in to load your personal and organization accounts."
+        case .loading:
+            "Loading account authority…"
+        case .loaded:
+            "No authorized accounts were returned."
+        case .failed(let message):
+            message
+        }
+    }
+
+    /// Runtime proof is account-bound. Switching accounts or bots invalidates
+    /// it without deleting Keychain material; credentials must be reselected
+    /// and reverified for the new context before useful work is available.
+    private func resetWorkspaceBoundRuntimeState() {
+        repos = []
+        providers = ProviderSettings()
+        license = LicenseStatus()
+        github = GitHubConnectionStatus()
+        discoveredGitHubRepos = []
+        managedGitHubRepositories = []
+        managedGitHubInstallationCandidates = []
+        selectedManagedGitHubRepository = nil
+        managedGitHubRecovery = nil
+        managedGitHubConnectionState = managedGitHubAvailable ? .disconnected : .quarantined
+        byoGitHubCredentialsVerified = false
+        providerVerification = nil
+        providerVerificationStatus = "Verify the selected account's provider credential when ready."
+        activationVerifiedThisLaunch = false
+        activationVerifiedRepositoryThisLaunch = nil
+        appliedRepoSelection = nil
+        pendingRepoName = ""
+        pendingProviderKey = ""
+        pendingLicenseKey = ""
+        lastError = nil
     }
 
     #if DEBUG

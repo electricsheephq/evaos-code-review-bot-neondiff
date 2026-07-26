@@ -170,7 +170,12 @@ private struct ReferenceShellLayout: View {
                     HStack(spacing: 0) {
                         SidebarView(
                             selection: $model.selectedSection,
-                            readiness: DesktopSetupReadiness(model: model)
+                            readiness: DesktopSetupReadiness(model: model),
+                            accountCatalog: model.accountWorkspaceCatalog,
+                            accountSelection: model.accountWorkspaceSelection,
+                            selectAccount: model.selectAccountWorkspace,
+                            selectBot: model.selectBotInstallation,
+                            beginNewBot: { model.beginNewBot() }
                         )
                             .frame(width: proxy.size.width < 980 ? 204 : 242)
                         .evaluationAccessibilityRegion(
