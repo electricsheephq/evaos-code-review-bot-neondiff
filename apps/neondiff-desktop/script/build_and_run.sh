@@ -44,48 +44,6 @@ MANAGED_GITHUB_BROKER_ENABLED="${NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED:
 GITHUB_BROKER_ORIGIN="${NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN:-}"
 BYO_GITHUB_ENABLED="${NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED:-}"
 
-list_binary_rpaths() {
-  otool -l "$APP_BINARY" | awk '
-    /^[[:space:]]*cmd LC_RPATH$/ { waiting_for_path = 1; next }
-    waiting_for_path && /^[[:space:]]*path / {
-      print $2
-      waiting_for_path = 0
-    }
-  '
-}
-
-is_portable_release_rpath() {
-  case "$1" in
-    @*|/usr/lib/swift|/System/*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-sanitize_release_rpaths() {
-  local rpath
-  while IFS= read -r rpath; do
-    [ -n "$rpath" ] || continue
-    if ! is_portable_release_rpath "$rpath"; then
-      install_name_tool -delete_rpath "$rpath" "$APP_BINARY"
-    fi
-  done < <(list_binary_rpaths)
-}
-
-assert_portable_release_rpaths() {
-  local rpath
-  while IFS= read -r rpath; do
-    [ -n "$rpath" ] || continue
-    if ! is_portable_release_rpath "$rpath"; then
-      echo "release bundle contains a non-portable absolute LC_RPATH: $rpath" >&2
-      return 1
-    fi
-  done < <(list_binary_rpaths)
-}
-
 resolve_production_contract_mode() {
   if [ -z "$PAID_BETA_CONTRACT" ] \
     && [ -z "$MANAGED_GITHUB_BROKER_ENABLED" ] \
@@ -149,8 +107,8 @@ mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
 if [ "$BUILD_CONFIGURATION" = "release" ]; then
-  sanitize_release_rpaths
-  assert_portable_release_rpaths
+  "$SCRIPT_DIR/release-rpaths.sh" sanitize "$APP_BINARY"
+  "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
 fi
 if [ "$BUILD_CONFIGURATION" = "debug" ]; then
   mkdir -p "$APP_HELPERS"
@@ -252,7 +210,7 @@ case "$MODE" in
   --bundle-check|bundle-check|release-bundle-check)
     /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
     if [ "$BUILD_CONFIGURATION" = "release" ]; then
-      assert_portable_release_rpaths
+      "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
     fi
     INVALID_BUNDLE_ROOT_ENTRIES="$(find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents -print)"
     if [ -n "$INVALID_BUNDLE_ROOT_ENTRIES" ]; then
