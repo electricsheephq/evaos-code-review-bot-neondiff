@@ -10,6 +10,7 @@ import {
 const MAX_BODY_BYTES = 16 * 1024;
 const PATHS = new Set([
   "/account/device/register",
+  "/account/device/introspect",
   "/account/connect/start",
   "/account/connect/complete",
   "/account/workspaces"
@@ -75,6 +76,9 @@ export async function handleAccountLinkRequest(
   try {
     if (req.method === "POST" && path === "/account/device/register") {
       return writeJson(res, 200, await service.registerDevice(await readBody(req), context.sourceAddress), corsHeaders);
+    }
+    if (req.method === "POST" && path === "/account/device/introspect") {
+      return writeJson(res, 200, await service.introspectDevice(req.headers.authorization), corsHeaders);
     }
     if (req.method === "POST" && path === "/account/connect/start") {
       return writeJson(res, 200, await service.connectStart(req.headers.authorization), corsHeaders);

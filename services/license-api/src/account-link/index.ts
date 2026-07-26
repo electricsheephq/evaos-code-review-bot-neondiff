@@ -12,8 +12,8 @@ export {
   type AccountLinkDeps
 } from "./routes.js";
 export {
-  createSupabaseAccountAuthority,
+  createComposedAccountAuthority,
   loadAccountLinkRuntimeConfig,
   type AccountLinkRuntimeConfig,
-  type SupabaseAccountAuthorityOptions
+  type ComposedAccountAuthorityOptions
 } from "./runtime-config.js";
