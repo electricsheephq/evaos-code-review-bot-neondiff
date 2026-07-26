@@ -169,7 +169,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
         [
           "/usr/lib/swift",
           "@loader_path",
-          "/Volumes/BuildDisk/Xcode.app/Contents/Developer/usr/lib/swift",
+          "/Volumes/Build Disk/Xcode.app/Contents/Developer/usr/lib/swift",
           "@executable_path/../Frameworks"
         ].join("\n") + "\n"
       );

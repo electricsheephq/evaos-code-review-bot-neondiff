@@ -21,7 +21,10 @@ list_binary_rpaths() {
   printf '%s\n' "$otool_output" | awk '
     /^[[:space:]]*cmd LC_RPATH$/ { waiting_for_path = 1; next }
     waiting_for_path && /^[[:space:]]*path / {
-      print $2
+      path = $0
+      sub(/^[[:space:]]*path[[:space:]]+/, "", path)
+      sub(/[[:space:]]+\(offset[[:space:]]+[0-9]+\)$/, "", path)
+      print path
       waiting_for_path = 0
     }
   '
