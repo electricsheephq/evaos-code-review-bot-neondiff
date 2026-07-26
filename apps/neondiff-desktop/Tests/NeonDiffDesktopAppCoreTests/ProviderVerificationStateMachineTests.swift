@@ -26,7 +26,7 @@ import NeonDiffDesktopCore
         legacy.expect(fixture.cli.calls.count == 1, "concurrent Verify clicks launch one operation")
         legacy.expect(
             fixture.cli.calls[0].arguments == [
-                "providers", "verify", "--config", "config.local.json", "--provider", "zcode-glm",
+                "providers", "verify", "--config", fixture.model.configPath, "--provider", "zcode-glm",
                 "--expected-config-revision", ProviderModelFixture.loadedRevision, "--api-key-stdin", "true",
                 "--allow-remote-smoke", "true", "--json"
             ],
