@@ -136,11 +136,19 @@ import Testing
             "if model.managedGitHubAvailable {\n"
                 + "                        managedGitHubSection"
         ))
+        #expect(onboarding.contains(
+            "} else if model.byoGitHubCredentialOnboardingAvailable {\n"
+                + "                        byoGitHubSection"
+        ))
         #expect(repos.contains("Existing GitHub App Connection"))
         #expect(repos.contains("will not copy, migrate, or ask you to re-enter"))
         #expect(repos.contains(
             "if model.managedGitHubAvailable {\n"
                 + "                    managedGitHubConnection"
+        ))
+        #expect(repos.contains(
+            "} else if model.byoGitHubCredentialOnboardingAvailable {\n"
+                + "                    byoGitHubCredentials"
         ))
         #expect(repos.contains("neondiff-existing-byo-github-verify"))
         #expect(repos.contains("model.verifyBYOGitHubAppCredentials()"))
@@ -216,6 +224,10 @@ import Testing
         #expect(overview.contains(#""PUBLIC · FREE""#))
         #expect(overview.contains("model.licenseSetupReady"))
         #expect(overview.contains("model.productionUsefulWorkAvailable"))
+        #expect(overview.contains(
+            "canRunDryRun = model.productionUsefulWorkAvailable\n"
+                + "            && model.providerSetupReady"
+        ))
         #expect(overview.contains("Config and secrets stay on this Mac"))
         #expect(overview.contains("Model context follows your selected provider"))
         #expect(overview.contains("model.providerSetupReady"))

@@ -211,9 +211,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// Public managed repositories need no paid activation; every other beta
     /// path keeps the repository-scoped current-launch proof visible.
     package var existingAccountEntitlementSummaryReady: Bool {
-        guard existingLocalBotIdentityReady, licenseSetupReady else {
+        guard existingLocalBotIdentityReady,
+              let accountEntitlement = selectedAccountWorkspace?.entitlement
+        else {
             return false
         }
+        if case .none = accountEntitlement { return false }
         if managedGitHubAvailable {
             guard let selectedManagedGitHubRepository,
                   let repository = managedGitHubRepositories.first(where: {
@@ -3046,7 +3049,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             case .license:
                 onboardingFlow.currentStep = .done
             case .done:
-                dismissOnboardingPanel()
+                if productionUsefulWorkAvailable && providerSetupReady {
+                    completeOnboarding()
+                } else {
+                    dismissOnboardingPanel()
+                }
             }
             return
         }

@@ -20,6 +20,8 @@ struct ReposView: View {
                 existingLocalBotConnection
                 if model.managedGitHubAvailable {
                     managedGitHubConnection
+                } else if model.byoGitHubCredentialOnboardingAvailable {
+                    byoGitHubCredentials
                 }
             } else if model.managedGitHubAvailable {
                 managedGitHubConnection

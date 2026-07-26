@@ -31,6 +31,7 @@ struct DesktopSetupReadiness {
             ?? model.repos.first(where: \.enabled)?.name
             ?? "owner/repository"
         canRunDryRun = model.productionUsefulWorkAvailable
+            && model.providerSetupReady
     }
 
     private var gates: [Bool] { [github, provider, license, repository] }

@@ -139,6 +139,8 @@ struct OnboardingWizardView: View {
                     existingLocalBotSection
                     if model.managedGitHubAvailable {
                         managedGitHubSection
+                    } else if model.byoGitHubCredentialOnboardingAvailable {
+                        byoGitHubSection
                     }
                 } else if model.managedGitHubAvailable {
                     managedGitHubSection
@@ -744,20 +746,14 @@ struct OnboardingWizardView: View {
                 Spacer()
 
                 Button {
-                    if model.onboardingFlow.currentStep == .done {
-                        if model.existingLocalBotReconciliationMode {
-                            model.dismissOnboardingPanel()
-                        } else {
-                            model.completeOnboarding()
-                        }
-                    } else {
-                        model.advanceOnboarding()
-                    }
+                    model.advanceOnboarding()
                 } label: {
                     HStack(spacing: 8) {
                         Text(
                             model.existingLocalBotReconciliationMode
                                 && model.onboardingFlow.currentStep == .done
+                                && (!model.productionUsefulWorkAvailable
+                                    || !model.providerSetupReady)
                                 ? "CLOSE"
                                 : model.onboardingFlow.nextActionTitle.uppercased()
                         )
