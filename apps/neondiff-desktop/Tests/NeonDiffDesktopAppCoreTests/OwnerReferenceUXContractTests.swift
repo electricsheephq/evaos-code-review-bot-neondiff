@@ -134,6 +134,8 @@ import Testing
         #expect(onboarding.contains("setup will not initialize or overwrite the config"))
         #expect(repos.contains("Existing GitHub App Connection"))
         #expect(repos.contains("will not copy, migrate, or ask you to re-enter"))
+        #expect(repos.contains("neondiff-existing-byo-github-verify"))
+        #expect(repos.contains("model.verifyBYOGitHubAppCredentials()"))
         #expect(provider.contains("model.selectedProviderRequiresAPIKey"))
         #expect(provider.contains("APP CONFIG LOADED"))
         #expect(provider.contains(
@@ -145,6 +147,8 @@ import Testing
                 + "                       let verification = model.providerVerification"
         ))
         #expect(activation.contains("neondiff.activation.existing-account"))
+        #expect(activation.contains("!model.byoGitHubCredentialOnboardingAvailable"))
+        #expect(activation.contains("model.currentRepositoryActivationReady"))
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
         #expect(activity.contains("DisclosureGroup"))
         #expect(activity.contains("// ADVANCED DIAGNOSTICS"))

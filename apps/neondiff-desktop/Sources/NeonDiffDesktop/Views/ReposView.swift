@@ -327,6 +327,45 @@ struct ReposView: View {
                     .font(.caption)
                     .foregroundStyle(NeonDiffTheme.warning)
                     .fixedSize(horizontal: false, vertical: true)
+
+                if model.byoGitHubCredentialOnboardingAvailable {
+                    HStack(spacing: 10) {
+                        OperatorBadge(
+                            text: model.byoGitHubCredentialsVerified
+                                ? "CURRENT ACCESS VERIFIED"
+                                : "CURRENT ACCESS REQUIRED",
+                            color: model.byoGitHubCredentialsVerified
+                                ? NeonDiffTheme.accent
+                                : NeonDiffTheme.warning
+                        )
+                        Button { model.verifyBYOGitHubAppCredentials() } label: {
+                            Label(
+                                model.isBYOGitHubVerificationInProgress
+                                    ? "Verifying…"
+                                    : "Verify Existing App Access",
+                                systemImage: "checkmark.shield"
+                            )
+                        }
+                        .disabled(
+                            !model.existingLocalBotBYOGitHubVerificationAvailable
+                                || model.isBYOGitHubVerificationInProgress
+                        )
+                        .accessibilityIdentifier("neondiff-existing-byo-github-verify")
+                    }
+
+                    Text(
+                        model.existingLocalBotBYOGitHubVerificationAvailable
+                            ? model.byoGitHubCredentialStatus
+                            : "The existing App identity is matched, but its app-owned Keychain credential is not available for current-access verification on this Mac."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(
+                        model.byoGitHubCredentialsVerified
+                            ? NeonDiffTheme.accent
+                            : NeonDiffTheme.warning
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

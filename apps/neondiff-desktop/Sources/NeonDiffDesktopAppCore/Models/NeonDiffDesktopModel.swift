@@ -318,6 +318,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && byoGitHubPrivateKeyStored
     }
 
+    package var existingLocalBotBYOGitHubVerificationAvailable: Bool {
+        guard existingLocalBotIdentityReady,
+              byoGitHubCredentialOnboardingAvailable,
+              byoGitHubPrivateKeyStored,
+              let bot = selectedBotInstallation,
+              let storedAppID = storedBYOGitHubAppId
+        else {
+            return false
+        }
+        return storedAppID == String(bot.appID)
+    }
+
     package var managedGitHubStatusText: String {
         switch managedGitHubConnectionState {
         case .quarantined:
@@ -522,9 +534,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// providers still require their app-owned Keychain state or a current
     /// verification result.
     package var providerSetupReady: Bool {
-        if providerVerification?.isVerified == true {
-            return true
-        }
         guard providerLoadedSnapshot?.configPath == configPath,
               providerLoadedRevision != nil,
               providerLoadedSnapshot == currentProviderConfigurationSnapshot,
@@ -537,7 +546,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case "zcode-app-config", "none":
             return true
         case "api-key-env":
-            return providers.providerKeyStored
+            guard let verification = providerVerification else {
+                return false
+            }
+            return verification.isVerified
+                && verification.providerId == provider.id
+                && verification.configRevision == providerLoadedRevision
         default:
             return false
         }
@@ -1078,6 +1092,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.preferences.set(botID, forKey: accountBotPreferenceKey)
         if let localConfigPath = bot.localConfigPath {
             configPath = localConfigPath
+            if bot.mode == .byo,
+               dependencies.productionBoundary.byoGitHubEnabled {
+                let appID = String(bot.appID)
+                dependencies.preferences.set(
+                    appID,
+                    forKey: byoGitHubAppIdPreferenceKey
+                )
+                pendingBYOGitHubAppId = appID
+            }
             accountWorkspaceStatus = "Local bot selected. Verify its config and GitHub binding before use."
             inspectConfig()
         } else {

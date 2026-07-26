@@ -89,6 +89,61 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func failedAPIKeyVerificationDoesNotAppearSetupReady() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(authMode: "api-key-env"))
+        fixture.model.providers.providerKeyStored = true
+        fixture.model.providerVerification = ProviderVerificationSnapshot(
+            ok: true,
+            command: "providers verify",
+            providerId: "zcode-glm",
+            checkedAt: "2026-07-26T00:00:00Z",
+            state: .configuredUnverified,
+            mode: "metadata_only",
+            detail: "Provider rejected current verification.",
+            troubleshooting: [],
+            configRevision: String(repeating: "a", count: 64)
+        )
+
+        #expect(!fixture.model.providerSetupReady)
+        #expect(!fixture.model.existingLocalBotSetupReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
+    @Test func selectedExistingBYOBotReusesKeychainCredentialForReverification() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.pendingBYOGitHubAppId = "999999"
+        fixture.model.pendingBYOGitHubAppPrivateKey = existingBotFixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        #expect(fixture.model.byoGitHubPrivateKeyStored)
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(authMode: "zcode-app-config"))
+
+        #expect(fixture.model.pendingBYOGitHubAppId == "4184532")
+        #expect(fixture.model.existingLocalBotIdentityReady)
+        #expect(fixture.model.byoGitHubCredentialOnboardingAvailable)
+        #expect(fixture.model.byoGitHubAppIdStored)
+        #expect(fixture.model.byoGitHubPrivateKeyStored)
+        #expect(fixture.model.existingLocalBotBYOGitHubVerificationAvailable)
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
     @Test func noKeyProviderDoesNotInventAKeyRequirement() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -193,3 +248,10 @@ import NeonDiffDesktopCore
         """#
     }
 }
+
+private let existingBotFixturePrivateKeyLabel = "PRIVATE" + " KEY"
+private let existingBotFixturePrivateKey = """
+-----BEGIN \(existingBotFixturePrivateKeyLabel)-----
+ZmFrZS1maXh0dXJlLXByaXZhdGUta2V5
+-----END \(existingBotFixturePrivateKeyLabel)-----
+"""

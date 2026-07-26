@@ -17,6 +17,10 @@ struct ActivationStateView: View {
         Group {
             if model.existingLocalBotIdentityReady,
                model.licenseSetupReady,
+               (
+                   !model.byoGitHubCredentialOnboardingAvailable
+                       || model.currentRepositoryActivationReady
+               ),
                let entitlement = model.selectedAccountEntitlementLabel {
                 existingAccountEntitlement(entitlement, palette: palette)
             } else {
