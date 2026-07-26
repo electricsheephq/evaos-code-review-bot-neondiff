@@ -35,10 +35,15 @@ enum NeonDiffDesktopCompositionRoot {
         if productionBoundary.managedGitHubBrokerOrigin != nil, githubBroker == nil {
             productionBoundary = .quarantined
         }
+        let cliWorkingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
+        let localBotConfigurations = LaunchAgentLocalBotConfigurationDiscovery.discover()
         return NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: AppKitClipboard(),
             urlOpener: AppKitURLOpener(),
-            cli: FoundationDesktopCLIExecutor(),
+            cli: FoundationDesktopCLIExecutor(
+                localBotConfigurations: localBotConfigurations,
+                defaultWorkingDirectory: cliWorkingDirectory
+            ),
             dashboard: FoundationDesktopDashboardLauncher(),
             preferences: UserDefaultsDesktopPreferences(.standard),
             clock: ContinuousDesktopClock(),
@@ -49,8 +54,8 @@ enum NeonDiffDesktopCompositionRoot {
             githubBroker: githubBroker,
             accountLink: accountLink,
             productionBoundary: productionBoundary,
-            cliWorkingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory(),
-            localBotConfigurations: LaunchAgentLocalBotConfigurationDiscovery.discover()
+            cliWorkingDirectory: cliWorkingDirectory,
+            localBotConfigurations: localBotConfigurations
         ))
     }
 }

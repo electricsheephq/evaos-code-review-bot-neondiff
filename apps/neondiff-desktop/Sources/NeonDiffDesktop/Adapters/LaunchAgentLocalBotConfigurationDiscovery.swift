@@ -16,7 +16,14 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
               let configuration = DesktopLaunchAgentBotConfigurationParser.parse(
                   data: data,
                   expectedLabel: label,
-                  configExists: { fileManager.fileExists(atPath: $0.path) }
+                  configExists: { fileManager.fileExists(atPath: $0.path) },
+                  workingDirectoryExists: {
+                      var isDirectory: ObjCBool = false
+                      return fileManager.fileExists(
+                          atPath: $0.path,
+                          isDirectory: &isDirectory
+                      ) && isDirectory.boolValue
+                  }
               )
         else {
             return []
