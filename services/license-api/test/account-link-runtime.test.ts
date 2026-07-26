@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -56,6 +56,33 @@ describe("account-link runtime configuration", () => {
       );
       assert.equal(ready.status, "ready");
       if (ready.status === "ready") ready.deps.store?.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects symlink and hard-link aliases of the license database", () => {
+    const dir = mkdtempSync(join(tmpdir(), "account-link-identity-"));
+    try {
+      const licensePath = join(dir, "license.sqlite");
+      writeFileSync(licensePath, "");
+      for (const [label, createAlias] of [
+        ["symlink", (path: string) => symlinkSync(licensePath, path)],
+        ["hard-link", (path: string) => linkSync(licensePath, path)]
+      ] as const) {
+        const aliasPath = join(dir, `${label}.sqlite`);
+        createAlias(aliasPath);
+        const result = loadAccountLinkRuntimeConfig(
+          { ...BASE_ENV, ACCOUNT_LINK_DB_PATH: aliasPath },
+          licensePath
+        );
+        if (result.status === "ready") result.deps.store?.close();
+        assert.deepEqual(result, {
+          status: "invalid",
+          setting: "ACCOUNT_LINK_DB_PATH",
+          reason: "must_differ_from_license_db"
+        });
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -188,5 +215,56 @@ describe("Supabase account authority", () => {
     await assert.rejects(
       authority.loadWorkspaceSnapshot("11111111-1111-4111-8111-111111111111")
     );
+  });
+
+  test("maps an active legacy customer grant to paid entitlement", async () => {
+    const authority = createSupabaseAccountAuthority({
+      connectOrigin: BASE_ENV.ACCOUNT_LINK_CONNECT_ORIGIN,
+      supabaseUrl: BASE_ENV.ACCOUNT_LINK_SUPABASE_URL,
+      publishableKey: BASE_ENV.ACCOUNT_LINK_SUPABASE_PUBLISHABLE_KEY,
+      serviceRoleKey: BASE_ENV.ACCOUNT_LINK_SUPABASE_SERVICE_ROLE_KEY,
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes("/account_memberships")) {
+          return Response.json([{ account_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", role: "owner" }]);
+        }
+        if (url.includes("/accounts")) {
+          return Response.json([{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", kind: "personal", name: "Legacy customer" }]);
+        }
+        if (url.includes("/bot_installations")) return Response.json([]);
+        if (url.includes("/account_entitlement_grants")) {
+          return Response.json([{
+            account_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            grant_kind: "legacy",
+            status: "active",
+            expires_at: null
+          }]);
+        }
+        return Response.json({ id: "11111111-1111-4111-8111-111111111111" });
+      }
+    });
+
+    const snapshot = await authority.loadWorkspaceSnapshot("11111111-1111-4111-8111-111111111111");
+    assert.equal(snapshot.accounts[0]?.entitlement, "paid");
+  });
+
+  test("stops reading an undeclared oversized Supabase response at the byte cap", async () => {
+    let pulls = 0;
+    const authority = createSupabaseAccountAuthority({
+      connectOrigin: BASE_ENV.ACCOUNT_LINK_CONNECT_ORIGIN,
+      supabaseUrl: BASE_ENV.ACCOUNT_LINK_SUPABASE_URL,
+      publishableKey: BASE_ENV.ACCOUNT_LINK_SUPABASE_PUBLISHABLE_KEY,
+      serviceRoleKey: BASE_ENV.ACCOUNT_LINK_SUPABASE_SERVICE_ROLE_KEY,
+      fetchImpl: async () => new Response(new ReadableStream({
+        pull(controller) {
+          pulls += 1;
+          if (pulls === 1) controller.enqueue(new Uint8Array(300 * 1024));
+          else throw new Error("response was read beyond the configured cap");
+        }
+      }))
+    });
+
+    await assert.rejects(authority.verifyAccessToken("transient-user-token"), /too large/);
+    assert.ok(pulls <= 2, `stream pulled ${pulls} chunks after crossing the cap`);
   });
 });

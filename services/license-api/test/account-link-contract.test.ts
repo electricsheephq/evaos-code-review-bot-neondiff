@@ -7,6 +7,7 @@ import {
   startBroker,
   type BrokerHarness
 } from "./github-broker-support.ts";
+import { RateLimiter } from "../src/service.ts";
 
 const CONNECT_ORIGIN = "https://www.neondiff.com/desktop/connect";
 
@@ -220,6 +221,89 @@ describe("Lovable account link contract", () => {
     assert.equal(outage.status, 503);
     assert.equal(outage.json.reason, "account_authority_unavailable");
     assert.doesNotMatch(outage.text, /sensitive upstream detail/);
+  });
+
+  test("rate-limits browser completion before calling the Supabase identity seam", async () => {
+    let identityCalls = 0;
+    const harness = await startBroker({
+      accountCompleteRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
+      accountAuthority: {
+        connectOrigin: CONNECT_ORIGIN,
+        async verifyAccessToken() {
+          identityCalls += 1;
+          return null;
+        },
+        async loadWorkspaceSnapshot() {
+          return workspaceSnapshot;
+        }
+      }
+    });
+    harnesses.push(harness);
+    const device = await makeDevice();
+    await registerAccountDevice(harness.url, device);
+    const start = await post(
+      harness.url,
+      "/account/connect/start",
+      {},
+      bearer(await device.sign())
+    );
+
+    const first = await post(
+      harness.url,
+      "/account/connect/complete",
+      { state: start.json.state },
+      bearer("first-invalid-token")
+    );
+    const throttled = await post(
+      harness.url,
+      "/account/connect/complete",
+      { state: start.json.state },
+      bearer("second-invalid-token")
+    );
+
+    assert.equal(first.status, 403);
+    assert.equal(throttled.status, 429);
+    assert.equal(throttled.json.reason, "rate_limited");
+    assert.equal(identityCalls, 1);
+  });
+
+  test("permits CORS only for the configured NeonDiff connect origin", async () => {
+    const harness = await startBroker({
+      accountAuthority: {
+        connectOrigin: CONNECT_ORIGIN,
+        async verifyAccessToken() {
+          return "user-owner";
+        },
+        async loadWorkspaceSnapshot() {
+          return workspaceSnapshot;
+        }
+      }
+    });
+    harnesses.push(harness);
+
+    const allowed = await fetch(`${harness.url}/account/connect/complete`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://www.neondiff.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type"
+      }
+    });
+    assert.equal(allowed.status, 204);
+    assert.equal(allowed.headers.get("access-control-allow-origin"), "https://www.neondiff.com");
+    assert.equal(allowed.headers.get("vary"), "Origin");
+
+    const denied = await fetch(`${harness.url}/account/connect/complete`, {
+      method: "POST",
+      headers: {
+        Origin: "https://attacker.example",
+        Authorization: "Bearer never-forwarded",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ state: "a".repeat(43) })
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.headers.get("access-control-allow-origin"), null);
   });
 
   test("expired state and disabled account runtime return typed safe failures", async () => {

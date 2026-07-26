@@ -1,4 +1,5 @@
 import { isAbsolute, resolve } from "node:path";
+import { statSync } from "node:fs";
 import { GitHubBrokerStore } from "../github-broker/store.js";
 import type { AccountLinkDeps } from "./routes.js";
 import type { AccountAuthority, AccountWorkspaceSnapshot } from "./service.js";
@@ -38,7 +39,7 @@ export function loadAccountLinkRuntimeConfig(
 
   const dbPath = required(values, "ACCOUNT_LINK_DB_PATH");
   if (!isAbsolute(dbPath)) return invalid("ACCOUNT_LINK_DB_PATH", "must_be_absolute");
-  if (resolve(dbPath) === resolve(licenseDbPath)) {
+  if (sameFileIdentity(dbPath, licenseDbPath)) {
     return invalid("ACCOUNT_LINK_DB_PATH", "must_differ_from_license_db");
   }
 
@@ -217,11 +218,25 @@ async function supabaseGet(
 async function boundedJson(response: Response): Promise<unknown> {
   const declared = Number(response.headers.get("content-length") ?? 0);
   if (declared > MAX_RESPONSE_BYTES) throw new Error("account authority response too large");
-  const text = await response.text();
-  if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
-    throw new Error("account authority response too large");
+  if (!response.body) return JSON.parse("") as unknown;
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error("account authority response too large");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
   }
-  return JSON.parse(text) as unknown;
+  return JSON.parse(Buffer.concat(chunks, size).toString("utf8")) as unknown;
 }
 
 function supabaseHeaders(key: string): Record<string, string> {
@@ -350,11 +365,23 @@ function parseGrants(value: unknown): Array<{
 function entitlementFor(
   grants: Array<{ kind: "internal_admin" | "trial" | "legacy"; expiresAt: string | null }>,
   at: Date
-): "public_free" | "internal_admin" | "trial" {
+): "public_free" | "paid" | "internal_admin" | "trial" {
   const active = grants.filter((grant) => !grant.expiresAt || Date.parse(grant.expiresAt) > at.getTime());
   if (active.some((grant) => grant.kind === "internal_admin")) return "internal_admin";
   if (active.some((grant) => grant.kind === "trial")) return "trial";
+  if (active.some((grant) => grant.kind === "legacy")) return "paid";
   return "public_free";
+}
+
+function sameFileIdentity(left: string, right: string): boolean {
+  if (resolve(left) === resolve(right)) return true;
+  try {
+    const leftStat = statSync(left);
+    const rightStat = statSync(right);
+    return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+  } catch {
+    return false;
+  }
 }
 
 function normalized(value: string | undefined): string | undefined {

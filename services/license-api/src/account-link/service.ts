@@ -41,6 +41,7 @@ export interface AccountLinkServiceOptions {
   now?: () => Date;
   registerRateLimiter?: RateLimiter;
   connectRateLimiter?: RateLimiter;
+  completeRateLimiter?: RateLimiter;
 }
 
 /** B0-safe account linking; independent from the managed GitHub App runtime. */
@@ -50,6 +51,7 @@ export class AccountLinkService {
   private readonly now: () => Date;
   private readonly registerRateLimiter: RateLimiter;
   private readonly connectRateLimiter: RateLimiter;
+  private readonly completeRateLimiter: RateLimiter;
 
   constructor(options: AccountLinkServiceOptions) {
     this.store = options.store;
@@ -59,6 +61,12 @@ export class AccountLinkService {
       options.registerRateLimiter ?? new RateLimiter({ maxPerWindow: 20, windowMs: 60_000 });
     this.connectRateLimiter =
       options.connectRateLimiter ?? new RateLimiter({ maxPerWindow: 30, windowMs: 60_000 });
+    this.completeRateLimiter =
+      options.completeRateLimiter ?? new RateLimiter({ maxPerWindow: 10, windowMs: 60_000 });
+  }
+
+  get connectOrigin(): string {
+    return this.authority.connectOrigin;
   }
 
   async registerDevice(body: unknown, sourceAddress: string): Promise<Record<string, unknown>> {
@@ -110,6 +118,14 @@ export class AccountLinkService {
     if (stored.consumed_at) throw new BrokerError("state_replayed", "account link state was already used");
     if (Date.parse(stored.expires_at) <= at.getTime()) {
       throw new BrokerError("state_expired", "account link state has expired");
+    }
+    if (
+      !this.completeRateLimiter.allow(
+        hash(`account-complete:${stored.device_id}`),
+        at.getTime()
+      )
+    ) {
+      throw new BrokerError("rate_limited", "too many account completion attempts");
     }
 
     let userId: string | null;

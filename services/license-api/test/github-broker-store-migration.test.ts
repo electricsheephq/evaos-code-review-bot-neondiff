@@ -132,4 +132,44 @@ describe("github broker store v1/v2 -> v3 migration", () => {
       store.close();
     }
   });
+
+  it("prunes expired and old consumed account-link states during state creation", () => {
+    const path = seedV2Database();
+    const store = new GitHubBrokerStore(path);
+    try {
+      store.createAccountConnectState(
+        "expired-state",
+        "dev-1",
+        "2026-07-24T00:00:00.000Z",
+        "2026-07-24T00:10:00.000Z"
+      );
+      store.createAccountConnectState(
+        "consumed-state",
+        "dev-1",
+        "2026-07-24T00:00:00.000Z",
+        "2026-07-30T00:00:00.000Z"
+      );
+      assert.equal(
+        store.consumeAccountConnectStateAndBind(
+          "consumed-state",
+          "user-owner",
+          "2026-07-24T00:05:00.000Z"
+        ),
+        true
+      );
+
+      store.createAccountConnectState(
+        "current-state",
+        "dev-1",
+        "2026-07-26T00:00:00.000Z",
+        "2026-07-26T00:10:00.000Z"
+      );
+
+      assert.equal(store.getAccountConnectState("expired-state"), undefined);
+      assert.equal(store.getAccountConnectState("consumed-state"), undefined);
+      assert.equal(store.getAccountConnectState("current-state")?.device_id, "dev-1");
+    } finally {
+      store.close();
+    }
+  });
 });

@@ -216,6 +216,7 @@ export async function startBroker(
     tokenRateLimiter?: RateLimiter;
     connectRateLimiter?: RateLimiter;
     accountAuthority?: unknown;
+    accountCompleteRateLimiter?: RateLimiter;
   } = {}
 ): Promise<BrokerHarness> {
   const licenseStore = options.licenseStore ?? new LicenseStore(":memory:");
@@ -241,7 +242,8 @@ export async function startBroker(
           accountLink: {
             dbPath: ":memory:",
             authority: options.accountAuthority,
-            now: nowFn
+            now: nowFn,
+            completeRateLimiter: options.accountCompleteRateLimiter
           }
         }
       : {})

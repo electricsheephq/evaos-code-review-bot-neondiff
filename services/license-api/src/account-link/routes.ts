@@ -24,6 +24,7 @@ export interface AccountLinkDeps {
   now?: () => Date;
   registerRateLimiter?: RateLimiter;
   connectRateLimiter?: RateLimiter;
+  completeRateLimiter?: RateLimiter;
 }
 
 export function isAccountLinkPath(path: string | undefined): boolean {
@@ -37,7 +38,8 @@ export function createAccountLinkService(deps: AccountLinkDeps): AccountLinkServ
     authority: deps.authority,
     now: deps.now,
     registerRateLimiter: deps.registerRateLimiter,
-    connectRateLimiter: deps.connectRateLimiter
+    connectRateLimiter: deps.connectRateLimiter,
+    completeRateLimiter: deps.completeRateLimiter
   });
 }
 
@@ -48,35 +50,81 @@ export async function handleAccountLinkRequest(
   context: { sourceAddress: string }
 ): Promise<void> {
   const path = req.url?.split("?")[0];
+  const corsHeaders = accountCorsHeaders(req, service.connectOrigin);
+  if (req.headers.origin && !corsHeaders) {
+    return writeJson(res, 403, {
+      status: "error",
+      reason: "invalid_request",
+      detail: "origin is not allowed"
+    });
+  }
+  if (req.method === "OPTIONS") {
+    if (!corsHeaders || !validPreflight(req)) {
+      return writeJson(res, 403, {
+        status: "error",
+        reason: "invalid_request",
+        detail: "preflight is not allowed"
+      });
+    }
+    res.writeHead(204, corsHeaders);
+    res.end();
+    return;
+  }
   try {
     if (req.method === "POST" && path === "/account/device/register") {
-      return writeJson(res, 200, await service.registerDevice(await readBody(req), context.sourceAddress));
+      return writeJson(res, 200, await service.registerDevice(await readBody(req), context.sourceAddress), corsHeaders);
     }
     if (req.method === "POST" && path === "/account/connect/start") {
-      return writeJson(res, 200, await service.connectStart(req.headers.authorization));
+      return writeJson(res, 200, await service.connectStart(req.headers.authorization), corsHeaders);
     }
     if (req.method === "POST" && path === "/account/connect/complete") {
       return writeJson(
         res,
         200,
-        await service.connectComplete(req.headers.authorization, await readBody(req))
+        await service.connectComplete(req.headers.authorization, await readBody(req)),
+        corsHeaders
       );
     }
     if (req.method === "POST" && path === "/account/workspaces") {
-      return writeJson(res, 200, await service.workspaces(req.headers.authorization));
+      return writeJson(res, 200, await service.workspaces(req.headers.authorization), corsHeaders);
     }
-    return writeJson(res, 404, { status: "error", reason: "invalid_request", detail: "unknown account route" });
+    return writeJson(res, 404, { status: "error", reason: "invalid_request", detail: "unknown account route" }, corsHeaders);
   } catch (error) {
-    if (error instanceof BrokerError) return writeJson(res, error.httpStatus, error.body());
+    if (error instanceof BrokerError) return writeJson(res, error.httpStatus, error.body(), corsHeaders);
     if (error instanceof BodyTooLargeError) {
-      return writeJson(res, 413, { status: "error", reason: "invalid_request", detail: "request body too large" });
+      return writeJson(res, 413, { status: "error", reason: "invalid_request", detail: "request body too large" }, corsHeaders);
     }
     return writeJson(res, 500, {
       status: "error",
       reason: "account_authority_unavailable",
       detail: "internal error"
-    });
+    }, corsHeaders);
   }
+}
+
+function accountCorsHeaders(
+  req: IncomingMessage,
+  connectOrigin: string
+): Record<string, string> | undefined {
+  const requestOrigin = req.headers.origin;
+  if (!requestOrigin) return {};
+  if (requestOrigin !== new URL(connectOrigin).origin) return undefined;
+  return {
+    "Access-Control-Allow-Origin": requestOrigin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Max-Age": "600",
+    Vary: "Origin"
+  };
+}
+
+function validPreflight(req: IncomingMessage): boolean {
+  if (req.headers["access-control-request-method"] !== "POST") return false;
+  const requested = String(req.headers["access-control-request-headers"] ?? "")
+    .split(",")
+    .map((header) => header.trim().toLowerCase())
+    .filter(Boolean);
+  return requested.every((header) => header === "authorization" || header === "content-type");
 }
 
 function readBody(req: IncomingMessage): Promise<unknown> {
@@ -111,10 +159,16 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
+function writeJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {}
+): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
-    "Cache-Control": "no-store"
+    "Cache-Control": "no-store",
+    ...headers
   });
   res.end(JSON.stringify(body));
 }

@@ -15,6 +15,7 @@ import { DatabaseSync } from "node:sqlite";
  */
 const SCHEMA_VERSION = 3;
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
+const ACCOUNT_CONNECT_CONSUMED_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 /**
  * The per-repo authorized-set table. Extracted so a fresh bootstrap and the
@@ -304,6 +305,19 @@ export class GitHubBrokerStore {
     createdAt: string,
     expiresAt: string
   ): void {
+    const createdAtMs = Date.parse(createdAt);
+    if (Number.isFinite(createdAtMs)) {
+      const consumedCutoff = new Date(
+        createdAtMs - ACCOUNT_CONNECT_CONSUMED_RETENTION_MS
+      ).toISOString();
+      this.db
+        .prepare(
+          `delete from account_connect_states
+           where expires_at <= ?
+              or (consumed_at is not null and consumed_at <= ?)`
+        )
+        .run(createdAt, consumedCutoff);
+    }
     this.db
       .prepare(
         `insert into account_connect_states
