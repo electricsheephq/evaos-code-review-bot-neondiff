@@ -46,6 +46,28 @@ import NeonDiffDesktopCore
         #expect(fixture.model.repositorySetupReady)
         #expect(!fixture.model.existingLocalBotSetupReady)
         #expect(!fixture.model.productionUsefulWorkAvailable)
+        #expect(!fixture.model.customerRuntimeBoundaryMessage.contains("setup is configured"))
+        #expect(fixture.model.customerRuntimeBoundaryMessage.contains("bot identity"))
+    }
+
+    @MainActor
+    @Test func publicFreeEntitlementIsDisplayedWithoutUnlockingUsefulWork() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .publicFree)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(authMode: "none"))
+
+        #expect(fixture.model.existingLocalBotIdentityReady)
+        #expect(fixture.model.providerSetupReady)
+        #expect(fixture.model.licenseSetupReady)
+        #expect(fixture.model.selectedAccountEntitlementLabel == "Public repositories only")
+        #expect(fixture.model.existingLocalBotSetupReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
     @MainActor
@@ -63,6 +85,25 @@ import NeonDiffDesktopCore
         #expect(fixture.model.existingLocalBotIdentityReady)
         #expect(!fixture.model.providerSetupReady)
         #expect(!fixture.model.existingLocalBotSetupReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
+    @Test func noKeyProviderDoesNotInventAKeyRequirement() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(authMode: "none"))
+
+        #expect(fixture.model.existingLocalBotIdentityReady)
+        #expect(!fixture.model.selectedProviderRequiresAPIKey)
+        #expect(fixture.model.providerSetupReady)
+        #expect(fixture.model.existingLocalBotSetupReady)
         #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 

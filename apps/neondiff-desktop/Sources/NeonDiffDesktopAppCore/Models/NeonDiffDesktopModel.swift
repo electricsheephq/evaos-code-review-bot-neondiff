@@ -182,8 +182,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var customerRuntimeBoundaryMessage: String {
-        if existingLocalBotIdentityReady {
+        if existingLocalBotSetupReady {
             return "Existing setup is configured. Before new work, reverify the current GitHub App access and repository-scoped entitlement for this launch."
+        }
+        if existingLocalBotIdentityReady {
+            return "Existing bot identity is matched. Finish or recover the missing setup items, then reverify the current GitHub App access and repository-scoped entitlement before new work."
         }
         return productionActivationBoundaryMessage
     }
@@ -554,9 +557,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return false
         }
         switch entitlement {
-        case .paid, .internalAdmin, .trial:
+        case .paid, .internalAdmin, .trial, .publicFree:
             return true
-        case .publicFree, .none:
+        case .none:
             return false
         }
     }

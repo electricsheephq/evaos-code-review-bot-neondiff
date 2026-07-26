@@ -136,6 +136,14 @@ import Testing
         #expect(repos.contains("will not copy, migrate, or ask you to re-enter"))
         #expect(provider.contains("model.selectedProviderRequiresAPIKey"))
         #expect(provider.contains("APP CONFIG LOADED"))
+        #expect(provider.contains(
+            "if model.selectedProviderRequiresAPIKey {\n"
+                + "                        Text(model.providerVerificationStatus)"
+        ))
+        #expect(provider.contains(
+            "if model.selectedProviderRequiresAPIKey,\n"
+                + "                       let verification = model.providerVerification"
+        ))
         #expect(activation.contains("neondiff.activation.existing-account"))
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
         #expect(activity.contains("DisclosureGroup"))

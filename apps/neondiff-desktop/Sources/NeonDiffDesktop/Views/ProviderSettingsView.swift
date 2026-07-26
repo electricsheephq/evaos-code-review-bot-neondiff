@@ -75,16 +75,19 @@ struct ProviderSettingsView: View {
                             .foregroundStyle(NeonDiffTheme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(model.providerVerificationStatus)
-                        .font(.caption)
-                        .foregroundStyle(NeonDiffTheme.textSecondary)
+                    if model.selectedProviderRequiresAPIKey {
+                        Text(model.providerVerificationStatus)
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                    }
                     if !model.productionUsefulWorkAvailable {
                         Text(model.customerRuntimeBoundaryMessage)
                             .font(.caption)
                             .foregroundStyle(NeonDiffTheme.warning)
                     }
 
-                    if let verification = model.providerVerification {
+                    if model.selectedProviderRequiresAPIKey,
+                       let verification = model.providerVerification {
                         ProviderVerificationResultCard(snapshot: verification)
                     }
                 }

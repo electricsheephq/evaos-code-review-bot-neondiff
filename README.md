@@ -168,9 +168,9 @@ entitlement, and repository setup as configured while still requiring fresh,
 repository-scoped GitHub and activation verification before new review work.
 Local config alone can never invent account membership or unlock a review.
 This source composition is not proof that the production broker is enabled,
-that billing is live, or that a signed customer artifact exists. Generic CLI
-status/deactivate and daemon-admission validation still need exact-candidate
-integration proof under #630 before the paid-beta gate can pass.
+that billing is live, or that a signed customer artifact exists. Update,
+rollback, daemon admission, and live-review behavior still require exact signed
+candidate validation before distribution.
 The native Providers pane reads and edits the saved `providers` registry, not
 the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview, and
 Apply the exact selected provider before Verify is enabled; verification pins
