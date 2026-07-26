@@ -259,6 +259,28 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func localBotDiscoveryDoesNotInvalidateAPendingNewBotPlan() throws {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
+        let original = try #require(fixture.model.pendingNewBotPlan)
+        let local = DesktopLocalBotCandidate(
+            appID: 4_184_532,
+            appSlug: "evaos-code-review-bot",
+            githubAccountLogin: "electricsheephq",
+            configPath: "/fixture/evaos-code-review-bot/config.local.json"
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            electricSheep.merging(localCandidates: [local])
+        ]))
+
+        #expect(fixture.model.pendingNewBotPlan == original)
+        #expect(fixture.model.accountWorkspaceSelection.botID == original.bot.id)
+        #expect(fixture.model.configPath == original.bot.localConfigPath)
+    }
+
+    @MainActor
     @Test func authorityChangeInvalidatesAPendingNewBotPlanAndRuntimeState() {
         let fixture = ModelDependencyFixture()
         fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))

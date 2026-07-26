@@ -489,7 +489,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 if let pendingNewBotPlan,
                    pendingNewBotPlan.accountID == selectedAccountID,
                    pendingNewBotPlan.bot.id == selectedBotID,
-                   previousSelectedAccount == selectedAccount {
+                   previousSelectedAccount?.hasSameAuthority(as: selectedAccount) == true {
                     accountWorkspaceStatus = "New bot setup remains local until its server registration is verified."
                     return
                 }

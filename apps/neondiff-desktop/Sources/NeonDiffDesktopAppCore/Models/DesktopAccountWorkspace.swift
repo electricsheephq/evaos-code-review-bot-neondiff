@@ -162,6 +162,22 @@ package struct DesktopAccountWorkspace: Identifiable, Codable, Equatable, Sendab
         }
         return result
     }
+
+    /// Compares only the server-authoritative account and installation fields.
+    /// Local config discovery may enrich a catalog without changing authority.
+    package func hasSameAuthority(as other: DesktopAccountWorkspace) -> Bool {
+        func authorityOnly(_ workspace: DesktopAccountWorkspace) -> DesktopAccountWorkspace {
+            var result = workspace
+            result.bots = workspace.bots.map { bot in
+                var authoritativeBot = bot
+                authoritativeBot.localConfigPath = nil
+                return authoritativeBot
+            }.sorted { $0.id < $1.id }
+            return result
+        }
+
+        return authorityOnly(self) == authorityOnly(other)
+    }
 }
 
 package enum DesktopAccountWorkspaceCatalog: Equatable, Sendable {
