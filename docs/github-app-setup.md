@@ -104,6 +104,15 @@ integration proof under #630.
    Initialization never uses `--force`; the app updates `pilotRepos` through
    `config patch`, and no operator edits the customer's config file.
 
+If account linking finds a server-verified bot whose exact App identity and
+GitHub account match a local launchd/config candidate on this Mac, NeonDiff
+shows that existing connection instead of presenting clean-install credential
+entry. It does not copy, rotate, or migrate the worker private key. This
+reconciliation proves account/bot/config setup only: current App access and
+repository-scoped entitlement must still pass before a new dry or live review.
+Local config alone never establishes membership, installation authority, or
+review authorization.
+
 Keep the private key and local config out of git. A typical shell setup is:
 
 ```bash

@@ -107,6 +107,43 @@ import Testing
         #expect(fixture.model.onboardingFlow.currentStep == .welcome)
     }
 
+    @Test func existingBotUsesReconciliationInsteadOfCleanSetupOrRawDiagnostics() throws {
+        let views = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
+        let onboarding = try sourceBoundaryText(
+            at: views.appendingPathComponent("OnboardingWizardView.swift")
+        )
+        let repos = try sourceBoundaryText(
+            at: views.appendingPathComponent("ReposView.swift")
+        )
+        let provider = try sourceBoundaryText(
+            at: views.appendingPathComponent("ProviderSettingsView.swift")
+        )
+        let activation = try sourceBoundaryText(
+            at: views.appendingPathComponent("ActivationStateView.swift")
+        )
+        let activity = try sourceBoundaryText(
+            at: views.appendingPathComponent("LogsView.swift")
+        )
+        let settings = try sourceBoundaryText(
+            at: views.appendingPathComponent("SettingsPane.swift")
+        )
+
+        #expect(onboarding.contains("model.existingLocalBotReconciliationMode"))
+        #expect(onboarding.contains("Existing Bot Detected"))
+        #expect(onboarding.contains("setup will not initialize or overwrite the config"))
+        #expect(repos.contains("Existing GitHub App Connection"))
+        #expect(repos.contains("will not copy, migrate, or ask you to re-enter"))
+        #expect(provider.contains("model.selectedProviderRequiresAPIKey"))
+        #expect(provider.contains("APP CONFIG LOADED"))
+        #expect(activation.contains("neondiff.activation.existing-account"))
+        #expect(activity.contains("OperatorSection(\"Current Activity\")"))
+        #expect(activity.contains("DisclosureGroup"))
+        #expect(activity.contains("// ADVANCED DIAGNOSTICS"))
+        #expect(settings.contains("Signed update, rollback, and installed-app proof"))
+        #expect(!settings.contains("This dev build"))
+    }
+
     @Test func shellAndHomeExposeTheOwnerReferenceHierarchy() throws {
         let views = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
@@ -147,7 +184,8 @@ import Testing
         #expect(!chrome.contains(".ignoresSafeArea(.container, edges: .top)"))
         #expect(chrome.contains("WindowDragRegion"))
         #expect(!chrome.contains("ChromeCircuitBackdrop"))
-        #expect(overview.contains("Ready for your first review"))
+        #expect(overview.contains("Ready for a dry run"))
+        #expect(overview.contains("Existing bot configured"))
         #expect(overview.contains("design: .rounded"))
         for title in ["GITHUB APP", "PROVIDER", "LICENSE", "REPOSITORY"] {
             #expect(overview.contains(title))
@@ -156,10 +194,11 @@ import Testing
         #expect(overview.contains("model.reopenOnboarding(at: .welcome)"))
         #expect(overview.contains("status: readiness.licenseStatus"))
         #expect(overview.contains(#""PUBLIC · FREE""#))
-        #expect(overview.contains("model.currentRepositoryActivationReady"))
+        #expect(overview.contains("model.licenseSetupReady"))
+        #expect(overview.contains("model.productionUsefulWorkAvailable"))
         #expect(overview.contains("Config and secrets stay on this Mac"))
         #expect(overview.contains("Model context follows your selected provider"))
-        #expect(overview.contains("model.providerVerification?.isVerified == true"))
+        #expect(overview.contains("model.providerSetupReady"))
         #expect(!overview.contains("model.providers.providerKeyStored"))
         #expect(overview.contains(#"systemImage: "link""#))
         #expect(!overview.contains(#"systemImage: "arrow.triangle.branch""#))

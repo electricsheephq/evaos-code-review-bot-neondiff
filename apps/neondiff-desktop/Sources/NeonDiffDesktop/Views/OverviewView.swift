@@ -10,25 +10,27 @@ struct DesktopSetupReadiness {
     let licenseStatus: String
     let repository: Bool
     let repositoryName: String
+    let canRunDryRun: Bool
 
     init(model: NeonDiffDesktopModel) {
-        github = model.githubConnectionReady
-        provider = model.providerVerification?.isVerified == true
+        github = model.githubSetupReady
+        provider = model.providerSetupReady
         let publicRepositoryLicenseNotRequired = model.selectedManagedGitHubRepository
             .flatMap { selectedRepository in
                 model.managedGitHubRepositories.first {
                     $0.fullName == selectedRepository
                 }
             }?.visibility == .public
-        let licenseIsActive = model.currentRepositoryActivationReady
+        let licenseIsActive = model.licenseSetupReady
         license = publicRepositoryLicenseNotRequired || licenseIsActive
         licenseStatus = publicRepositoryLicenseNotRequired
             ? "PUBLIC · FREE"
             : (licenseIsActive ? "ACTIVE" : "ACTIVATION REQUIRED")
-        repository = model.repositoryConfigurationReady
+        repository = model.repositorySetupReady
         repositoryName = model.selectedManagedGitHubRepository
             ?? model.repos.first(where: \.enabled)?.name
             ?? "owner/repository"
+        canRunDryRun = model.productionUsefulWorkAvailable
     }
 
     private var gates: [Bool] { [github, provider, license, repository] }
@@ -146,15 +148,13 @@ struct OverviewView: View {
                 .ndSectionLabel(palette)
                 .foregroundStyle(NeonDiffTheme.cyan)
 
-            Text(readiness.isComplete ? "Ready for your first review" : "Set up your first review")
+            Text(heroTitle(readiness))
                 .font(.system(.largeTitle, design: .rounded).weight(.semibold))
                 .foregroundStyle(palette.accentPrimary)
                 .minimumScaleFactor(0.72)
                 .lineLimit(2)
 
-            Text(readiness.isComplete
-                ? "Your review path is configured. Start with a dry run before any live GitHub post."
-                : "Complete the remaining steps below. You can leave setup at any time and return here.")
+            Text(heroDetail(readiness))
                 .font(.body)
                 .foregroundStyle(palette.textPrimary.opacity(0.78))
 
@@ -183,6 +183,26 @@ struct OverviewView: View {
         .padding(.vertical, 8)
     }
 
+    private func heroTitle(_ readiness: DesktopSetupReadiness) -> String {
+        if readiness.canRunDryRun {
+            return "Ready for a dry run"
+        }
+        if readiness.isComplete {
+            return "Existing bot configured"
+        }
+        return "Set up your first review"
+    }
+
+    private func heroDetail(_ readiness: DesktopSetupReadiness) -> String {
+        if readiness.canRunDryRun {
+            return "Start with a dry run before any live GitHub post."
+        }
+        if readiness.isComplete {
+            return "NeonDiff found this bot’s existing account, GitHub, provider, entitlement, and repository setup. Reverify current access before running new work."
+        }
+        return "Complete the remaining steps below. You can leave setup at any time and return here."
+    }
+
     private func repositoryPanel(
         palette: NDPalette,
         readiness: DesktopSetupReadiness
@@ -196,7 +216,9 @@ struct OverviewView: View {
                 .lineLimit(1)
 
             Text(readiness.repository
-                ? "Applied and ready for a dry-run review."
+                ? (readiness.canRunDryRun
+                    ? "Applied and ready for a dry-run review."
+                    : "Applied in the selected local bot config.")
                 : "Choose and apply one repository to begin.")
                 .font(.callout)
                 .foregroundStyle(palette.textSecondary)
@@ -228,9 +250,11 @@ struct OverviewView: View {
                     Text("Welcome to NeonDiff")
                         .font(.system(.callout, design: .monospaced).weight(.medium))
                         .foregroundStyle(palette.textPrimary)
-                    Text(readiness.isComplete
+                    Text(readiness.canRunDryRun
                         ? "Setup is ready for a dry run."
-                        : "Let’s finish your setup.")
+                        : (readiness.isComplete
+                            ? "Existing bot setup detected on this Mac."
+                            : "Let’s finish your setup."))
                         .font(.callout)
                         .foregroundStyle(palette.textSecondary)
                 }

@@ -38,33 +38,48 @@ struct ProviderSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(NeonDiffTheme.textSecondary)
                     }
-                    OperatorTextField(title: "Provider API Key", text: $model.pendingProviderKey, secure: true)
-                    HStack(spacing: 10) {
-                        Button { model.storeProviderKey() } label: {
-                            Label("Store Key", systemImage: "key.fill")
-                        }
-                        .disabled(!model.canEditProviderConfiguration)
-                        Button(role: .destructive) { model.clearProviderKey() } label: {
-                            Label("Clear Key", systemImage: "key.slash")
-                        }
-                        .disabled(!model.canEditProviderConfiguration || !model.providers.providerKeyStored)
-                        Button { model.verifyProviderKey() } label: {
-                            Label(
-                                model.providerVerificationButtonTitle,
-                                systemImage: "checkmark.shield"
+                    if model.selectedProviderRequiresAPIKey {
+                        OperatorTextField(
+                            title: "Provider API Key",
+                            text: $model.pendingProviderKey,
+                            secure: true
+                        )
+                        HStack(spacing: 10) {
+                            Button { model.storeProviderKey() } label: {
+                                Label("Store Key", systemImage: "key.fill")
+                            }
+                            .disabled(!model.canEditProviderConfiguration)
+                            Button(role: .destructive) { model.clearProviderKey() } label: {
+                                Label("Clear Key", systemImage: "key.slash")
+                            }
+                            .disabled(!model.canEditProviderConfiguration || !model.providers.providerKeyStored)
+                            Button { model.verifyProviderKey() } label: {
+                                Label(
+                                    model.providerVerificationButtonTitle,
+                                    systemImage: "checkmark.shield"
+                                )
+                            }
+                            .disabled(!model.canVerifyProviderKey || !model.productionUsefulWorkAvailable)
+                            OperatorBadge(
+                                text: model.providers.providerKeyStored ? "Stored in Keychain" : "Not Stored",
+                                color: model.providers.providerKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary
                             )
                         }
-                        .disabled(!model.canVerifyProviderKey || !model.productionUsefulWorkAvailable)
+                    } else {
                         OperatorBadge(
-                            text: model.providers.providerKeyStored ? "Stored in Keychain" : "Not Stored",
-                            color: model.providers.providerKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary
+                            text: model.providerSetupReady ? "APP CONFIG LOADED" : "CONFIG REQUIRED",
+                            color: model.providerSetupReady ? NeonDiffTheme.accent : NeonDiffTheme.warning
                         )
+                        Text("This provider uses its own app/config authentication path. NeonDiff does not need or store a separate provider API key.")
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Text(model.providerVerificationStatus)
                         .font(.caption)
                         .foregroundStyle(NeonDiffTheme.textSecondary)
                     if !model.productionUsefulWorkAvailable {
-                        Text(model.productionActivationBoundaryMessage)
+                        Text(model.customerRuntimeBoundaryMessage)
                             .font(.caption)
                             .foregroundStyle(NeonDiffTheme.warning)
                     }

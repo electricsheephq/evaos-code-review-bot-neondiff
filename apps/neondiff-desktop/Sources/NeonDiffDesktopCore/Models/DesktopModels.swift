@@ -17,7 +17,7 @@ public enum DesktopSection: String, CaseIterable, Codable, Identifiable, Sendabl
         case .repos: "Repos"
         case .providers: "Providers"
         case .license: "License"
-        case .logs: "Logs"
+        case .logs: "Activity"
         case .policy: "Policy"
         case .settings: "Settings"
         }
@@ -29,7 +29,7 @@ public enum DesktopSection: String, CaseIterable, Codable, Identifiable, Sendabl
         case .repos: "folder.badge.gearshape"
         case .providers: "cpu"
         case .license: "key"
-        case .logs: "doc.text.magnifyingglass"
+        case .logs: "clock.arrow.circlepath"
         case .policy: "slider.horizontal.3"
         case .settings: "gearshape"
         }
