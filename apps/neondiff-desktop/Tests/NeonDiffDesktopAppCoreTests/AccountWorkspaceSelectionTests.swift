@@ -42,6 +42,7 @@ import NeonDiffDesktopCore
 
     @Test func matchingLocalBotIsMergedWithoutDuplicatingTheServerInstallation() throws {
         let local = DesktopLocalBotCandidate(
+            botID: "bot-evaos-code-review-bot",
             appID: 4_184_532,
             appSlug: "evaos-code-review-bot",
             githubAccountLogin: "electricsheephq",
@@ -56,8 +57,42 @@ import NeonDiffDesktopCore
         #expect(bot.isAvailableOnThisMac)
     }
 
+    @Test func localCandidateAttachesOnlyToItsExactAuthoritativeBot() {
+        let managedTwin = DesktopBotInstallation(
+            id: "bot-managed-twin",
+            appID: 4_184_532,
+            appSlug: "evaos-code-review-bot",
+            mode: .managed,
+            githubInstallationID: 72_002,
+            githubAccountLogin: "electricsheephq",
+            status: .verified,
+            localConfigPath: nil
+        )
+        let workspace = DesktopAccountWorkspace(
+            id: electricSheep.id,
+            kind: electricSheep.kind,
+            name: electricSheep.name,
+            role: electricSheep.role,
+            entitlement: electricSheep.entitlement,
+            bots: electricSheep.bots + [managedTwin]
+        )
+        let local = DesktopLocalBotCandidate(
+            botID: "bot-evaos-code-review-bot",
+            appID: 4_184_532,
+            appSlug: "evaos-code-review-bot",
+            githubAccountLogin: "electricsheephq",
+            configPath: "/Users/test/Library/Application Support/NeonDiff/config.local.json"
+        )
+
+        let merged = workspace.merging(localCandidates: [local])
+
+        #expect(merged.bots[0].localConfigPath == local.configPath)
+        #expect(merged.bots[1].localConfigPath == nil)
+    }
+
     @Test func localBotCannotCrossAnAuthoritativeGitHubAccountBoundary() {
         let local = DesktopLocalBotCandidate(
+            botID: "bot-evaos-code-review-bot",
             appID: 4_184_532,
             appSlug: "evaos-code-review-bot",
             githubAccountLogin: "someone-else",
@@ -267,6 +302,7 @@ import NeonDiffDesktopCore
         fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
         let original = try #require(fixture.model.pendingNewBotPlan)
         let local = DesktopLocalBotCandidate(
+            botID: "bot-evaos-code-review-bot",
             appID: 4_184_532,
             appSlug: "evaos-code-review-bot",
             githubAccountLogin: "electricsheephq",

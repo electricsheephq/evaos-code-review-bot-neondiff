@@ -712,6 +712,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 return []
             }
             return [DesktopLocalBotCandidate(
+                botID: managed.id,
                 appID: managed.appID,
                 appSlug: managed.appSlug,
                 githubAccountLogin: githubAccountLogin,
@@ -776,6 +777,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return nil
         }
         return DesktopLocalBotCandidate(
+            botID: matchedBot.id,
             appID: appID,
             appSlug: matchedBot.appSlug,
             githubAccountLogin: githubAccountLogin,
