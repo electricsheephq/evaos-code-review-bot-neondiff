@@ -291,13 +291,19 @@ neondiff doctor github --config config.local.json --json
 
 The invite-only B0 desktop keeps the customer-owned App private key in the
 macOS Keychain. Its explicit **Verify App Access** action sends that key only to
-the local CLI's bounded stdin for this check; the equivalent CLI contract is:
+the local CLI's bounded stdin for this check. The native app's clean-install
+config lives in its user-writable Application Support directory; the equivalent
+CLI contract is:
 
 ```bash
-neondiff doctor github --config config.local.json \
+NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.json"
+neondiff doctor github --config "$NATIVE_CONFIG" \
   --github-app-id "<numeric-app-id>" \
   --github-app-private-key-stdin true --json < "/path/to/app-private-key.pem"
 ```
+
+The relative `config.local.json` examples elsewhere in this guide remain the
+separate CLI-first/operator path; they do not inspect the native app's config.
 
 The private key must be one unencrypted RSA PKCS#1 or PKCS#8 PEM no larger than
 64 KiB. Do not put it in arguments, environment variables, config, logs, or

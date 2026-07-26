@@ -395,7 +395,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
         self.activationLicenseClientOverride = activationLicenseClient
-        self.configPath = dependencies.preferences.string(forKey: "neondiff.configPath") ?? "config.local.json"
+        self.configPath = dependencies.preferences.string(forKey: "neondiff.configPath")
+            ?? dependencies.fileWriter.applicationSupportDirectory
+                .appendingPathComponent("config.local.json")
+                .standardizedFileURL.path
         self.cliPath = dependencies.preferences.string(forKey: "neondiff.cliPath") ?? "neondiff"
         self.launchdLabel = dependencies.preferences.string(forKey: "neondiff.launchdLabel") ?? "com.electricsheephq.evaos-code-review-bot"
         let providerKeyStored = ProviderKeychainAccount.account(providerId: providers.selectedProviderId)

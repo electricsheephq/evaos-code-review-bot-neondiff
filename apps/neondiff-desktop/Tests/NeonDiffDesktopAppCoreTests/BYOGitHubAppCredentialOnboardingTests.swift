@@ -19,7 +19,11 @@ struct BYOGitHubAppCredentialOnboardingTests {
         fixture.model.initializeConfigForOnboarding()
         await fixture.cli.waitUntilCallCount(1)
 
-        #expect(fixture.cli.calls[0].arguments == ["init", "--config", fixture.model.configPath])
+        let expectedConfigPath = fixture.fileWriter.applicationSupportDirectory
+            .appendingPathComponent("config.local.json")
+            .standardizedFileURL.path
+        #expect(fixture.model.configPath == expectedConfigPath)
+        #expect(fixture.cli.calls[0].arguments == ["init", "--config", expectedConfigPath])
         #expect(!fixture.cli.calls[0].arguments.contains("--force"))
         #expect(fixture.model.configInitializeCommand.commandLine.contains(" init --config "))
         #expect(!fixture.model.configInitializeCommand.commandLine.contains("--force"))

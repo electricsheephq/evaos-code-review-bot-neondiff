@@ -125,7 +125,17 @@ not GitHub approval of the public App.
 
 ## Verify Installation
 
-Run the GitHub-only doctor before provider or daemon checks:
+Run the GitHub-only doctor before provider or daemon checks. For the native B0
+app, use the config created in the app's user-writable Application Support
+directory:
+
+```bash
+NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.json"
+neondiff doctor github --config "$NATIVE_CONFIG" --json
+```
+
+CLI-first and non-Mac setups may instead use the checkout-local path documented
+in [SETUP.md](SETUP.md):
 
 ```bash
 neondiff doctor github --config config.local.json --json
