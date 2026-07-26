@@ -583,7 +583,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 account: account,
                 appSlug: appSlug,
                 applicationSupportDirectory: dependencies.fileWriter.applicationSupportDirectory,
-                occupiedConfigPaths: occupiedPaths
+                occupiedConfigPaths: occupiedPaths,
+                fileExists: dependencies.fileWriter.fileExists(at:)
             )
             resetWorkspaceBoundRuntimeState()
             pendingNewBotPlan = plan

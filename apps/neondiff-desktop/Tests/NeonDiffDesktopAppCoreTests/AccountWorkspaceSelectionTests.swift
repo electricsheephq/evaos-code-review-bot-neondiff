@@ -106,7 +106,8 @@ import NeonDiffDesktopCore
             account: electricSheep,
             appSlug: "electric-sheep-secondary",
             applicationSupportDirectory: root,
-            occupiedConfigPaths: []
+            occupiedConfigPaths: [],
+            fileExists: { FileManager.default.fileExists(atPath: $0.path) }
         )
 
         #expect(plan.bot.localConfigPath != occupied.standardizedFileURL.path)

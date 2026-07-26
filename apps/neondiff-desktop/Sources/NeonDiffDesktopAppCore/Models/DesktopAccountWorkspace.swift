@@ -194,7 +194,8 @@ package struct DesktopNewBotPlan: Equatable, Sendable {
         account: DesktopAccountWorkspace,
         appSlug: String,
         applicationSupportDirectory: URL,
-        occupiedConfigPaths: Set<String>
+        occupiedConfigPaths: Set<String>,
+        fileExists: (URL) -> Bool = { _ in false }
     ) throws -> DesktopNewBotPlan {
         guard account.role != nil else {
             throw DesktopNewBotPlanError.accountMembershipRequired
@@ -216,7 +217,7 @@ package struct DesktopNewBotPlan: Equatable, Sendable {
             .standardizedFileURL.path
         var suffix = 2
         while occupiedConfigPaths.contains(candidate)
-            || FileManager.default.fileExists(atPath: candidate) {
+            || fileExists(URL(filePath: candidate)) {
             candidate = baseDirectory
                 .appendingPathComponent("\(appSlug)-\(suffix)", isDirectory: true)
                 .appendingPathComponent("config.local.json")

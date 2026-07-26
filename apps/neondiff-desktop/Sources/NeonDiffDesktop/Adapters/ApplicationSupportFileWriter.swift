@@ -16,6 +16,10 @@ final class ApplicationSupportFileWriter: DesktopFileWriting, @unchecked Sendabl
             .standardizedFileURL
     }
 
+    func fileExists(at url: URL) -> Bool {
+        fileManager.fileExists(atPath: url.standardizedFileURL.path)
+    }
+
     func write(_ data: Data, to url: URL) throws {
         let destination = url.standardizedFileURL
         let rootPath = applicationSupportDirectory.path
