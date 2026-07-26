@@ -219,13 +219,17 @@ function parseWorkspaceAccounts(value: unknown[]): AccountWorkspaceSnapshot["acc
     ) {
       throw new Error("invalid workspace account");
     }
+    const bots = row.bots.map(parseWorkspaceBot);
+    if (new Set(bots.map((bot) => bot.id)).size !== bots.length) {
+      throw new Error("duplicate workspace bot");
+    }
     return {
       id: row.id,
       kind: row.kind as "personal" | "organization",
       name: row.name,
       role: row.role as "owner" | "admin" | "member",
       entitlement: row.entitlement,
-      bots: row.bots.map(parseWorkspaceBot)
+      bots
     };
   });
   if (new Set(accounts.map((account) => account.id)).size !== accounts.length) {

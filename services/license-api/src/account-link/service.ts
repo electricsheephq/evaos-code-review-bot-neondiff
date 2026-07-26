@@ -197,12 +197,13 @@ export class AccountLinkService {
     )) {
       throw new BrokerError("rate_limited", "too many account workspace refreshes");
     }
+    const deviceAuthorization = deviceBearerAuthorization(authorization);
     try {
       return {
         status: "ready",
         ...(await this.authority.loadWorkspaceSnapshot(
           binding.user_id,
-          deviceBearerAuthorization(authorization)
+          deviceAuthorization
         ))
       };
     } catch {
@@ -264,11 +265,18 @@ function accountBearerToken(authorization: string | string[] | undefined): strin
 function deviceBearerAuthorization(
   authorization: string | string[] | undefined
 ): string {
-  const value = Array.isArray(authorization) ? authorization[0] : authorization;
-  if (!value || value.length > MAX_ACCESS_TOKEN_LENGTH || !/^Bearer [A-Za-z0-9._~-]+$/.test(value)) {
+  if (Array.isArray(authorization)) {
     throw new BrokerError("invalid_device_credential", "device authentication is invalid");
   }
-  return value;
+  const prefix = "Bearer ";
+  if (!authorization?.startsWith(prefix)) {
+    throw new BrokerError("invalid_device_credential", "device authentication is invalid");
+  }
+  const token = authorization.slice(prefix.length);
+  if (!token || token.length > MAX_ACCESS_TOKEN_LENGTH || !/^[A-Za-z0-9._~-]+$/.test(token)) {
+    throw new BrokerError("invalid_device_credential", "device authentication is invalid");
+  }
+  return authorization;
 }
 
 function asObject(body: unknown): Record<string, unknown> {

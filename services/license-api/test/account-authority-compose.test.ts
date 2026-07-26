@@ -3,8 +3,10 @@ import { afterEach, describe, test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SignJWT } from "jose";
 import {
   bearer,
+  FIXED_NOW,
   makeDevice,
   post,
   startBroker,
@@ -111,12 +113,23 @@ describe("composed Lovable account authority", () => {
     ]);
   });
 
-  test("workspace authority rejects a user mismatch, redirects, and oversized responses", async () => {
+  test("workspace authority rejects identity, redirect, duplicate-bot, and response-size failures", async () => {
+    const duplicateBotSnapshot = {
+      ...workspaceSnapshot,
+      accounts: workspaceSnapshot.accounts.map((account) => ({
+        ...account,
+        bots: [account.bots[0], account.bots[0]]
+      }))
+    };
     for (const response of [
       Response.json({ status: "ready", userId: "22222222-2222-4222-8222-222222222222", ...workspaceSnapshot }),
       new Response(null, { status: 302, headers: { location: "https://evil.example" } }),
-      new Response(JSON.stringify({ status: "ready", userId: USER_ID, ...workspaceSnapshot }), {
-        headers: { "content-length": String(300 * 1024), "content-type": "application/json" }
+      Response.json({ status: "ready", userId: USER_ID, ...duplicateBotSnapshot }),
+      Response.json({
+        status: "ready",
+        userId: USER_ID,
+        ...workspaceSnapshot,
+        padding: "x".repeat(300 * 1024)
       })
     ]) {
       const authority = createComposedAccountAuthority({
@@ -140,7 +153,7 @@ describe("device introspection", () => {
     while (harnesses.length > 0) harnesses.pop()?.close();
   });
 
-  test("returns only the bound user UUID after device authentication", async () => {
+  test("returns only the bound user UUID for the exact linked device", async () => {
     const harness = await startBroker({
       accountAuthority: {
         connectOrigin: CONNECT_ORIGIN,
@@ -154,7 +167,9 @@ describe("device introspection", () => {
     });
     harnesses.push(harness);
     const device = await makeDevice();
+    const otherDevice = await makeDevice();
     await post(harness.url, "/account/device/register", { publicKeyJwk: device.publicJwk });
+    await post(harness.url, "/account/device/register", { publicKeyJwk: otherDevice.publicJwk });
 
     const before = await post(
       harness.url,
@@ -186,5 +201,30 @@ describe("device introspection", () => {
 
     assert.equal(bound.status, 200);
     assert.deepEqual(bound.json, { status: "account_device_bound", userId: USER_ID });
+
+    const unbound = await post(
+      harness.url,
+      "/account/device/introspect",
+      {},
+      bearer(await otherDevice.sign())
+    );
+    assert.equal(unbound.status, 403);
+    assert.equal(unbound.json.reason, "account_link_required");
+
+    const nowSeconds = Math.floor(FIXED_NOW.getTime() / 1_000);
+    const oversizedAssertion = await new SignJWT({ padding: "x".repeat(5_000) })
+      .setProtectedHeader({ alg: "ES256" })
+      .setSubject(device.deviceId)
+      .setIssuedAt(nowSeconds)
+      .setExpirationTime(nowSeconds + 120)
+      .sign(device.privateKey);
+    const malformedWorkspaceCredential = await post(
+      harness.url,
+      "/account/workspaces",
+      {},
+      bearer(oversizedAssertion)
+    );
+    assert.equal(malformedWorkspaceCredential.status, 401);
+    assert.equal(malformedWorkspaceCredential.json.reason, "invalid_device_credential");
   });
 });
