@@ -1,4 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
 
@@ -140,6 +150,79 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
       'ditto "$RESOURCE_DIR" "$APP_BUNDLE/$(basename "$RESOURCE_DIR")"'
     );
     expect(bundler).toContain('find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents');
+    expect(bundler).toContain('"$SCRIPT_DIR/release-rpaths.sh" sanitize "$APP_BINARY"');
+    expect(bundler).toContain('"$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"');
+  });
+
+  it("removes machine-local release rpaths and fails closed on inspection errors", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-release-rpaths-"));
+    const binary = join(root, "NeonDiffDesktop");
+    const state = join(root, "rpaths.txt");
+    const otool = join(root, "otool");
+    const installNameTool = join(root, "install_name_tool");
+    const helper = "apps/neondiff-desktop/script/release-rpaths.sh";
+
+    try {
+      writeFileSync(binary, "fixture");
+      writeFileSync(
+        state,
+        [
+          "/usr/lib/swift",
+          "@loader_path",
+          "/Volumes/Build Disk/Xcode.app/Contents/Developer/usr/lib/swift",
+          "@executable_path/../Frameworks"
+        ].join("\n") + "\n"
+      );
+      writeFileSync(
+        otool,
+        `#!/bin/sh
+set -eu
+while IFS= read -r rpath; do
+  printf '          cmd LC_RPATH\\n      cmdsize 64\\n         path %s (offset 12)\\n' "$rpath"
+done < "$NEONDIFF_RPATH_STATE"
+`
+      );
+      writeFileSync(
+        installNameTool,
+        `#!/bin/sh
+set -eu
+test "$1" = "-delete_rpath"
+grep -Fvx "$2" "$NEONDIFF_RPATH_STATE" > "$NEONDIFF_RPATH_STATE.next"
+mv "$NEONDIFF_RPATH_STATE.next" "$NEONDIFF_RPATH_STATE"
+`
+      );
+      chmodSync(otool, 0o755);
+      chmodSync(installNameTool, 0o755);
+
+      const env = {
+        ...process.env,
+        NEONDIFF_RPATH_STATE: state,
+        NEONDIFF_OTOOL_BIN: otool,
+        NEONDIFF_INSTALL_NAME_TOOL_BIN: installNameTool
+      };
+      const sanitize = spawnSync(helper, ["sanitize", binary], { encoding: "utf8", env });
+      expect(sanitize.status).toBe(0);
+      expect(readFileSync(state, "utf8").trim().split("\n")).toEqual([
+        "/usr/lib/swift",
+        "@loader_path",
+        "@executable_path/../Frameworks"
+      ]);
+
+      const assertion = spawnSync(helper, ["assert", binary], { encoding: "utf8", env });
+      expect(assertion.status).toBe(0);
+
+      writeFileSync(state, "@loader_path/../../escape\n");
+      const rejected = spawnSync(helper, ["assert", binary], { encoding: "utf8", env });
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain("non-portable LC_RPATH");
+
+      writeFileSync(otool, "#!/bin/sh\nexit 7\n");
+      const unreadable = spawnSync(helper, ["assert", binary], { encoding: "utf8", env });
+      expect(unreadable.status).not.toBe(0);
+      expect(unreadable.stderr).toContain("unable to inspect release bundle LC_RPATH entries");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("documents the desktop smoke artifact as non-release proof", () => {
@@ -160,5 +243,12 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(docs).toMatch(/bundle_id/i);
     expect(docs).toMatch(/visible smoke/i);
     expect(docs).not.toMatch(/\b(codesign|notarytool|stapler|spctl)\b/);
+  });
+
+  it("documents release-mode bundle commands for the Developer ID flow", () => {
+    const runbook = read("apps/neondiff-desktop/docs/mac-release-runbook.md");
+
+    expect(runbook).toContain("script/build_and_run.sh release-build");
+    expect(runbook).toContain("script/build_and_run.sh release-bundle-check");
   });
 });

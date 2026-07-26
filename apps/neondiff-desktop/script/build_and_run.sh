@@ -106,6 +106,10 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
+if [ "$BUILD_CONFIGURATION" = "release" ]; then
+  "$SCRIPT_DIR/release-rpaths.sh" sanitize "$APP_BINARY"
+  "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
+fi
 if [ "$BUILD_CONFIGURATION" = "debug" ]; then
   mkdir -p "$APP_HELPERS"
   cp "$BUILD_DIR/NeonDiffDesktopFixtureResolve" "$APP_HELPERS/NeonDiffDesktopFixtureResolve"
@@ -205,6 +209,9 @@ case "$MODE" in
     ;;
   --bundle-check|bundle-check|release-bundle-check)
     /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
+    if [ "$BUILD_CONFIGURATION" = "release" ]; then
+      "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
+    fi
     INVALID_BUNDLE_ROOT_ENTRIES="$(find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents -print)"
     if [ -n "$INVALID_BUNDLE_ROOT_ENTRIES" ]; then
       echo "app bundle root may contain only Contents:" >&2
