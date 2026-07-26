@@ -22,6 +22,7 @@ import NeonDiffDesktopCore
         #expect(fixture.model.githubSetupReady)
         #expect(fixture.model.providerSetupReady)
         #expect(fixture.model.licenseSetupReady)
+        #expect(fixture.model.existingAccountEntitlementNeedsCurrentAccessVerification)
         #expect(fixture.model.repositorySetupReady)
         #expect(fixture.model.existingLocalBotSetupReady)
         #expect(!fixture.model.productionUsefulWorkAvailable)
@@ -43,6 +44,7 @@ import NeonDiffDesktopCore
         #expect(fixture.model.githubSetupReady)
         #expect(fixture.model.providerSetupReady)
         #expect(!fixture.model.licenseSetupReady)
+        #expect(!fixture.model.existingAccountEntitlementNeedsCurrentAccessVerification)
         #expect(fixture.model.repositorySetupReady)
         #expect(!fixture.model.existingLocalBotSetupReady)
         #expect(!fixture.model.productionUsefulWorkAvailable)
@@ -51,7 +53,29 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
-    @Test func publicFreeEntitlementIsDisplayedWithoutUnlockingUsefulWork() {
+    @Test func existingEntitlementRecoveryExitsOnboardingAndOpensRepositories() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(authMode: "zcode-app-config"))
+        fixture.model.onboardingFlow.currentStep = .license
+        fixture.model.isOnboardingPresented = true
+
+        fixture.model.reviewExistingBotRepositoryAccess()
+
+        #expect(fixture.model.selectedSection == .repos)
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(fixture.model.onboardingFlow.currentStep == .license)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
+    @Test func publicFreeEntitlementDoesNotAppearActiveForBYORepository() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
             productionBoundary: .testAccountLink
@@ -64,9 +88,35 @@ import NeonDiffDesktopCore
 
         #expect(fixture.model.existingLocalBotIdentityReady)
         #expect(fixture.model.providerSetupReady)
-        #expect(fixture.model.licenseSetupReady)
+        #expect(!fixture.model.licenseSetupReady)
         #expect(fixture.model.selectedAccountEntitlementLabel == "Public repositories only")
-        #expect(fixture.model.existingLocalBotSetupReady)
+        #expect(!fixture.model.existingAccountEntitlementSummaryReady)
+        #expect(!fixture.model.existingAccountEntitlementNeedsCurrentAccessVerification)
+        #expect(!fixture.model.existingLocalBotSetupReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
+    @Test func activatedBYOBotKeepsRepositoryRecoveryUntilGitHubVerification() async {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            activationLicenseClient: ExistingBotActiveActivationClient(),
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(authMode: "zcode-app-config"))
+        fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        await fixture.model.submitActivation()
+
+        #expect(fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(!fixture.model.existingAccountEntitlementSummaryReady)
+        #expect(fixture.model.existingAccountEntitlementNeedsCurrentAccessVerification)
         #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 

@@ -212,11 +212,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// path keeps the repository-scoped current-launch proof visible.
     package var existingAccountEntitlementSummaryReady: Bool {
         guard existingLocalBotIdentityReady,
-              let accountEntitlement = selectedAccountWorkspace?.entitlement
+              selectedAccountEntitlementSupportsCurrentPath
         else {
             return false
         }
-        if case .none = accountEntitlement { return false }
         if managedGitHubAvailable {
             guard let selectedManagedGitHubRepository,
                   let repository = managedGitHubRepositories.first(where: {
@@ -235,9 +234,45 @@ package final class NeonDiffDesktopModel: ObservableObject {
             }
         }
         if byoGitHubCredentialOnboardingAvailable {
-            return currentRepositoryActivationReady
+            return repositoryConfigurationReady
+                && currentRepositoryActivationReady
         }
         return true
+    }
+
+    private var selectedAccountEntitlementSupportsCurrentPath: Bool {
+        guard let accountEntitlement = selectedAccountWorkspace?.entitlement
+        else {
+            return false
+        }
+        switch accountEntitlement {
+        case .paid, .internalAdmin, .trial:
+            return true
+        case .publicFree:
+            guard managedGitHubAvailable,
+                  let selectedManagedGitHubRepository,
+                  let repository = managedGitHubRepositories.first(where: {
+                      $0.fullName == selectedManagedGitHubRepository
+                  })
+            else {
+                return false
+            }
+            return repository.visibility == .public
+        case .none:
+            return false
+        }
+    }
+
+    /// The selected existing bot has server-authoritative account entitlement,
+    /// but current-launch repository access still needs proof. This is a
+    /// customer-facing recovery state only; it never unlocks useful work.
+    package var existingAccountEntitlementNeedsCurrentAccessVerification: Bool {
+        guard existingLocalBotIdentityReady,
+              selectedAccountEntitlementSupportsCurrentPath
+        else {
+            return false
+        }
+        return !existingAccountEntitlementSummaryReady
     }
 
     package var productionUsefulWorkAvailable: Bool {
@@ -623,8 +658,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return false
         }
         switch entitlement {
-        case .paid, .internalAdmin, .trial, .publicFree:
+        case .paid, .internalAdmin, .trial:
             return true
+        case .publicFree:
+            return selectedAccountEntitlementSupportsCurrentPath
         case .none:
             return false
         }
@@ -3144,6 +3181,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         onboardingFlow.providerKeyStored = providers.providerKeyStored
         isOnboardingPresented = true
+    }
+
+    package func reviewExistingBotRepositoryAccess() {
+        guard existingAccountEntitlementNeedsCurrentAccessVerification else {
+            return
+        }
+        selectedSection = .repos
+        isOnboardingPresented = false
     }
 
     package func copyCommand(_ command: DesktopCommand) {
