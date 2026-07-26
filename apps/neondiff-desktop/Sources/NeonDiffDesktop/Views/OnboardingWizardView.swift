@@ -137,6 +137,9 @@ struct OnboardingWizardView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if model.existingLocalBotReconciliationMode {
                     existingLocalBotSection
+                    if model.managedGitHubAvailable {
+                        managedGitHubSection
+                    }
                 } else if model.managedGitHubAvailable {
                     managedGitHubSection
                 } else if model.byoGitHubCredentialOnboardingAvailable {

@@ -15,12 +15,7 @@ struct ActivationStateView: View {
     var body: some View {
         let palette = NDPalette(scheme: colorScheme)
         Group {
-            if model.existingLocalBotIdentityReady,
-               model.licenseSetupReady,
-               (
-                   !model.byoGitHubCredentialOnboardingAvailable
-                       || model.currentRepositoryActivationReady
-               ),
+            if model.existingAccountEntitlementSummaryReady,
                let entitlement = model.selectedAccountEntitlementLabel {
                 existingAccountEntitlement(entitlement, palette: palette)
             } else {

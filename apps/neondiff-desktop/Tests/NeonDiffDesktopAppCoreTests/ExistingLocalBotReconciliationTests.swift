@@ -193,6 +193,59 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func managedExistingBotKeepsPrivateActivationRecoveryUntilRepositoryProofPasses() async {
+        let broker = ScriptedGitHubBroker(repositories: [
+            GitHubBrokerRepository(fullName: "electricsheephq/WorldOS", visibility: .private),
+            GitHubBrokerRepository(fullName: "electricsheephq/PublicOS", visibility: .public)
+        ])
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            githubBroker: broker,
+            productionBoundary: .testManaged
+        )
+        let bot = DesktopBotInstallation(
+            id: "bot-neondiff-managed",
+            appID: 4_184_532,
+            appSlug: "neondiff",
+            mode: .managed,
+            githubInstallationID: 42,
+            githubAccountLogin: "electricsheephq",
+            status: .verified,
+            localConfigPath: configPath
+        )
+        fixture.model.applyAccountWorkspaceCatalog(
+            DesktopAccountWorkspaceCatalog.loaded([
+                DesktopAccountWorkspace(
+                    id: "account-electric-sheep",
+                    kind: .organization,
+                    name: "ElectricSheep",
+                    role: .admin,
+                    entitlement: .internalAdmin,
+                    bots: [bot]
+                )
+            ])
+        )
+        fixture.model.selectBotInstallation(bot.id)
+        fixture.loadConfig(existingBotConfig(authMode: "zcode-app-config"))
+
+        fixture.model.startManagedGitHubConnection()
+        await fixture.waitForManagedGitHubConnectionToFinish()
+        fixture.model.selectManagedGitHubRepository(
+            fullName: "electricsheephq/WorldOS"
+        )
+
+        #expect(fixture.model.existingLocalBotIdentityReady)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.existingAccountEntitlementSummaryReady)
+
+        fixture.model.selectManagedGitHubRepository(
+            fullName: "electricsheephq/PublicOS"
+        )
+
+        #expect(fixture.model.existingAccountEntitlementSummaryReady)
+    }
+
+    @MainActor
     @Test func localConfigCannotInventOrCrossServerBotAuthority() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,

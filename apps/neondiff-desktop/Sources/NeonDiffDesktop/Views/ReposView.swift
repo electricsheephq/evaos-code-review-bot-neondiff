@@ -18,6 +18,9 @@ struct ReposView: View {
         VStack(alignment: .leading, spacing: 14) {
             if model.existingLocalBotReconciliationMode {
                 existingLocalBotConnection
+                if model.managedGitHubAvailable {
+                    managedGitHubConnection
+                }
             } else if model.managedGitHubAvailable {
                 managedGitHubConnection
             } else if model.byoGitHubCredentialOnboardingAvailable {

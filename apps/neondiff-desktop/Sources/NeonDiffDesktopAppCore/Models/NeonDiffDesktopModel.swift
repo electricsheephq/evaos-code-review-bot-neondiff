@@ -206,6 +206,37 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 == activationVerifiedRepositoryThisLaunch.lowercased()
     }
 
+    /// Existing-account entitlement is useful setup context, but it must not
+    /// replace the recovery control for a managed private/internal repository.
+    /// Public managed repositories need no paid activation; every other beta
+    /// path keeps the repository-scoped current-launch proof visible.
+    package var existingAccountEntitlementSummaryReady: Bool {
+        guard existingLocalBotIdentityReady, licenseSetupReady else {
+            return false
+        }
+        if managedGitHubAvailable {
+            guard let selectedManagedGitHubRepository,
+                  let repository = managedGitHubRepositories.first(where: {
+                      $0.fullName == selectedManagedGitHubRepository
+                  })
+            else {
+                return false
+            }
+            switch repository.visibility {
+            case .public:
+                return true
+            case .private, .internal:
+                return currentRepositoryActivationReady
+            case .unknown:
+                return false
+            }
+        }
+        if byoGitHubCredentialOnboardingAvailable {
+            return currentRepositoryActivationReady
+        }
+        return true
+    }
+
     package var productionUsefulWorkAvailable: Bool {
         guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
             return false

@@ -132,8 +132,16 @@ import Testing
         #expect(onboarding.contains("model.existingLocalBotReconciliationMode"))
         #expect(onboarding.contains("Existing Bot Detected"))
         #expect(onboarding.contains("setup will not initialize or overwrite the config"))
+        #expect(onboarding.contains(
+            "if model.managedGitHubAvailable {\n"
+                + "                        managedGitHubSection"
+        ))
         #expect(repos.contains("Existing GitHub App Connection"))
         #expect(repos.contains("will not copy, migrate, or ask you to re-enter"))
+        #expect(repos.contains(
+            "if model.managedGitHubAvailable {\n"
+                + "                    managedGitHubConnection"
+        ))
         #expect(repos.contains("neondiff-existing-byo-github-verify"))
         #expect(repos.contains("model.verifyBYOGitHubAppCredentials()"))
         #expect(repos.contains("model.existingLocalBotBYOGitHubVerificationStatus"))
@@ -148,8 +156,7 @@ import Testing
                 + "                       let verification = model.providerVerification"
         ))
         #expect(activation.contains("neondiff.activation.existing-account"))
-        #expect(activation.contains("!model.byoGitHubCredentialOnboardingAvailable"))
-        #expect(activation.contains("model.currentRepositoryActivationReady"))
+        #expect(activation.contains("model.existingAccountEntitlementSummaryReady"))
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
         #expect(activity.contains("DisclosureGroup"))
         #expect(activity.contains("// ADVANCED DIAGNOSTICS"))
