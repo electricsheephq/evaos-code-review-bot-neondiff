@@ -25,6 +25,7 @@ export function getProtectedCheckoutRoots(): string[] {
       legacyName: "EVAOS_REVIEW_BOT_PROTECTED_CHECKOUT_ROOT",
       valueLabel: "protected checkout root"
     }),
+    findGitCheckoutRoot(process.cwd()),
     findPackageRoot(process.cwd()),
     getInstalledPackageRoot()
   ]);
@@ -38,6 +39,16 @@ export function findPackageRoot(startPath: string): string | undefined {
   let current = resolvePathFollowingExistingSymlinks(startPath);
   while (true) {
     if (existsSync(resolve(current, "package.json"))) return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
+export function findGitCheckoutRoot(startPath: string): string | undefined {
+  let current = resolvePathFollowingExistingSymlinks(startPath);
+  while (true) {
+    if (existsSync(resolve(current, ".git"))) return current;
     const parent = dirname(current);
     if (parent === current) return undefined;
     current = parent;

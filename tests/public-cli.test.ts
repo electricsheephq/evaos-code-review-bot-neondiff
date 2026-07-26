@@ -169,6 +169,41 @@ describe("public NeonDiff CLI surface", () => {
     });
   });
 
+  it("still rejects license state inside a non-package Git checkout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-non-package-checkout-"));
+    roots.push(root);
+    const checkoutRoot = join(root, "checkout");
+    const configPath = join(root, "config.json");
+    mkdirSync(join(checkoutRoot, ".git"), { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/private"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: {
+        enabled: true,
+        apiBaseUrl: "https://neondiff-license.fly.dev",
+        cachePath: join(checkoutRoot, "state", "entitlement.json"),
+        storageBackend: "file",
+        keyPath: join(checkoutRoot, "state", "license.key")
+      }
+    }, null, 2)}\n`, "utf8");
+
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      join(repoRoot, "src/cli.ts"),
+      "config",
+      "inspect",
+      "--config",
+      configPath
+    ], {
+      cwd: checkoutRoot,
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stdout: expect.stringContaining("config.license.cachePath must be outside protected checkout root")
+    });
+  });
+
   it("refuses the no-local-state CLI path without the matching native Keychain credential", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-native-activation-cli-"));
     roots.push(root);
