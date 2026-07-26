@@ -2,7 +2,9 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="NeonDiffDesktop"
+APP_NAME="NeonDiff"
+PRODUCT_NAME="NeonDiffDesktop"
+BUNDLE_NAME="NeonDiffDesktop"
 BUNDLE_ID="com.electricsheephq.NeonDiffDesktop"
 MIN_SYSTEM_VERSION="14.0"
 
@@ -27,13 +29,13 @@ if [ "$MODE" = "preflight" ] || [ "$MODE" = "--preflight" ]; then
 fi
 
 DIST_DIR="${NEONDIFF_DESKTOP_DIST_DIR:-$ROOT_DIR/dist}"
-APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+APP_BUNDLE="$DIST_DIR/$BUNDLE_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_FRAMEWORKS="$APP_CONTENTS/Frameworks"
 APP_HELPERS="$APP_CONTENTS/Helpers"
-APP_BINARY="$APP_MACOS/$APP_NAME"
+APP_BINARY="$APP_MACOS/$PRODUCT_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 SHORT_VERSION="${NEONDIFF_DESKTOP_VERSION:-0.1.0}"
 BUILD_VERSION="${NEONDIFF_DESKTOP_BUILD:-1}"
@@ -91,16 +93,16 @@ if [ -x "$APP_BINARY" ]; then
     if [ "$proc_path" = "$APP_BINARY" ]; then
       kill "$pid" >/dev/null 2>&1 || true
     fi
-  done < <(pgrep -x "$APP_NAME" 2>/dev/null || true)
+  done < <(pgrep -x "$PRODUCT_NAME" 2>/dev/null || true)
 fi
 
 cd "$ROOT_DIR"
-swift build -c "$BUILD_CONFIGURATION" --product "$APP_NAME"
+swift build -c "$BUILD_CONFIGURATION" --product "$PRODUCT_NAME"
 if [ "$BUILD_CONFIGURATION" = "debug" ]; then
   swift build -c debug --product NeonDiffDesktopFixtureResolve
 fi
 BUILD_DIR="$(swift build -c "$BUILD_CONFIGURATION" --show-bin-path)"
-BUILD_BINARY="$BUILD_DIR/$APP_NAME"
+BUILD_BINARY="$BUILD_DIR/$PRODUCT_NAME"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
@@ -116,7 +118,7 @@ if [ "$BUILD_CONFIGURATION" = "debug" ]; then
   chmod +x "$APP_HELPERS/NeonDiffDesktopFixtureResolve"
 fi
 
-RESOURCE_DIR="$(find "$BUILD_DIR" "$ROOT_DIR/.build" \( -name "${APP_NAME}_${APP_NAME}.bundle" -o -name "${APP_NAME}_${APP_NAME}.resources" \) -type d -print -quit 2>/dev/null || true)"
+RESOURCE_DIR="$(find "$BUILD_DIR" "$ROOT_DIR/.build" \( -name "${PRODUCT_NAME}_${PRODUCT_NAME}.bundle" -o -name "${PRODUCT_NAME}_${PRODUCT_NAME}.resources" \) -type d -print -quit 2>/dev/null || true)"
 if [ -n "$RESOURCE_DIR" ]; then
   ditto "$RESOURCE_DIR" "$APP_RESOURCES/$(basename "$RESOURCE_DIR")"
 fi
@@ -149,11 +151,13 @@ cat >"$INFO_PLIST" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key>
-  <string>$APP_NAME</string>
+  <string>$PRODUCT_NAME</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
-  <string>NeonDiff Desktop</string>
+  <string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
   <key>CFBundleIconFile</key>
   <string>NeonDiff.icns</string>
   <key>CFBundleShortVersionString</key>
@@ -202,7 +206,7 @@ case "$MODE" in
     ;;
   --logs|logs)
     open_app
-    /usr/bin/log stream --info --style compact --predicate "process == \"$APP_NAME\""
+    /usr/bin/log stream --info --style compact --predicate "process == \"$PRODUCT_NAME\""
     ;;
   --telemetry|telemetry)
     open_app
@@ -211,7 +215,7 @@ case "$MODE" in
   --verify|verify)
     open_app
     sleep 1
-    pgrep -x "$APP_NAME" >/dev/null
+    pgrep -x "$PRODUCT_NAME" >/dev/null
     ;;
   --bundle-check|bundle-check|release-bundle-check)
     /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
@@ -219,6 +223,9 @@ case "$MODE" in
     test -f "$APP_RESOURCES/NeonDiff-Light.icns"
     test -f "$APP_RESOURCES/NeonDiff-Dark.icns"
     test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$INFO_PLIST")" = "NeonDiff.icns"
+    test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO_PLIST")" = "$PRODUCT_NAME"
+    test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$INFO_PLIST")" = "$APP_NAME"
+    test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST")" = "$APP_NAME"
     if [ "$BUILD_CONFIGURATION" = "release" ]; then
       "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
     fi

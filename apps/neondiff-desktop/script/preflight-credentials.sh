@@ -228,7 +228,7 @@ if [ "$MODE" = "json" ]; then
   printf ']\n'
   printf '}\n'
 else
-  printf 'NeonDiff Desktop — credential preflight doctor\n'
+  printf 'NeonDiff — credential preflight doctor\n'
   printf '(reports presence only; signs/notarizes nothing; no secret values printed)\n\n'
   printf '%-26s %-9s %-9s %s\n' "CREDENTIAL" "STATUS" "REQUIRED" "DETAIL"
   printf '%-26s %-9s %-9s %s\n' "--------------------------" "-------" "--------" "------"

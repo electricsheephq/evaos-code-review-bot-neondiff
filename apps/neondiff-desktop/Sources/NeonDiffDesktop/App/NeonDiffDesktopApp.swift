@@ -60,7 +60,7 @@ struct NeonDiffDesktopApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("NeonDiff Desktop") {
+        WindowGroup("NeonDiff") {
             evaluationTextSizedContentView
                 .frame(
                     minWidth: CGFloat(minimumContentSize.width),
@@ -82,7 +82,7 @@ struct NeonDiffDesktopApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appTermination) {
-                Button("Quit NeonDiff Desktop") {
+                Button("Quit NeonDiff") {
                     model.isOnboardingPresented = false
                     DispatchQueue.main.async {
                         NSApplication.shared.terminate(nil)
@@ -92,7 +92,7 @@ struct NeonDiffDesktopApp: App {
             }
 
             CommandGroup(after: .newItem) {
-                Button("Close NeonDiff Desktop Window") {
+                Button("Close NeonDiff Window") {
                     model.isOnboardingPresented = false
                     DispatchQueue.main.async {
                         NSApplication.shared.keyWindow?.performClose(nil)
