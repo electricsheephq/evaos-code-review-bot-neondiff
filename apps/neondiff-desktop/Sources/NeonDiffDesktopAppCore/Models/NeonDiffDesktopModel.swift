@@ -560,6 +560,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             accountWorkspaceStatus = "Local bot selected. Verify its config and GitHub binding before use."
             inspectConfig()
         } else {
+            configPath = isolatedBotConfigPath(
+                accountID: account.id,
+                appSlug: bot.appSlug
+            )
             accountWorkspaceStatus = "Bot selected. Complete setup on this Mac before use."
             reopenOnboarding(at: .welcome)
         }
@@ -634,6 +638,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         isConfigPatchInProgress = false
         isConfigInspectInProgress = false
         isControlCenterOperationInProgress = false
+        configPath = unselectedWorkspaceConfigPath
         invalidateProviderConfigAuthorization()
         invalidateControlCenterAuthorization("Workspace changed. Load the selected bot config before editing.")
         invalidateProviderVerificationContext(
@@ -659,6 +664,24 @@ package final class NeonDiffDesktopModel: ObservableObject {
         pendingLicenseKey = ""
         onboardingFlow = OnboardingFlow(providerKeyStored: false)
         lastError = nil
+    }
+
+    private var unselectedWorkspaceConfigPath: String {
+        dependencies.fileWriter.applicationSupportDirectory
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent("_unselected", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+            .standardizedFileURL.path
+    }
+
+    private func isolatedBotConfigPath(accountID: String, appSlug: String) -> String {
+        dependencies.fileWriter.applicationSupportDirectory
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent(accountID, isDirectory: true)
+            .appendingPathComponent("Bots", isDirectory: true)
+            .appendingPathComponent(appSlug, isDirectory: true)
+            .appendingPathComponent("config.local.json")
+            .standardizedFileURL.path
     }
 
     #if DEBUG

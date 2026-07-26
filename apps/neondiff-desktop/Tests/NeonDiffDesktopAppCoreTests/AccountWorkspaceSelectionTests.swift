@@ -113,6 +113,20 @@ import NeonDiffDesktopCore
         #expect(plan.bot.localConfigPath?.contains("electric-sheep-secondary-2") == true)
     }
 
+    @Test func newBotRejectsASlugWithATrailingLineTerminator() {
+        #expect(throws: DesktopNewBotPlanError.invalidSlug) {
+            try DesktopNewBotPlan.make(
+                account: electricSheep,
+                appSlug: "electric-sheep-secondary\n",
+                applicationSupportDirectory: URL(
+                    filePath: "/Users/test/Library/Application Support/NeonDiff",
+                    directoryHint: .isDirectory
+                ),
+                occupiedConfigPaths: []
+            )
+        }
+    }
+
     @Test func switchingAccountClearsEveryWorkspaceBoundRuntimeSelection() {
         var selection = DesktopAccountWorkspaceSelection(
             accountID: personal.id,
@@ -132,11 +146,11 @@ import NeonDiffDesktopCore
     @MainActor
     @Test func modelAccountSwitchInvalidatesPriorWorkspaceProofWithoutDeletingAuthority() {
         let fixture = ModelDependencyFixture()
+        fixture.secretStore.values = ["provider/anthropic": "fixture-secret"]
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([personal, electricSheep]))
         fixture.model.repos = [RepoMonitor(name: "personal/private-repo", enabled: true)]
         fixture.model.providers.providerKeyStored = true
         fixture.model.github.installationCount = 1
-        fixture.secretStore.values = ["provider/anthropic": "fixture-secret"]
-        fixture.model.applyAccountWorkspaceCatalog(.loaded([personal, electricSheep]))
 
         fixture.model.selectAccountWorkspace(electricSheep.id)
 
@@ -145,6 +159,11 @@ import NeonDiffDesktopCore
         #expect(!fixture.model.providers.providerKeyStored)
         #expect(fixture.model.github.installationCount == 0)
         #expect(fixture.secretStore.values == ["provider/anthropic": "fixture-secret"])
+        #expect(fixture.model.configPath == fixture.fileWriter.applicationSupportDirectory
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent("_unselected", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+            .standardizedFileURL.path)
     }
 
     @MainActor
@@ -267,6 +286,7 @@ import NeonDiffDesktopCore
     @Test func modelNewBotStartsAnIsolatedLocalPlanWithoutInventingAServerBot() throws {
         let fixture = ModelDependencyFixture()
         fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        let authoritativeBotIDs = fixture.model.selectedAccountWorkspace?.bots.map(\.id)
 
         fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
 
@@ -274,6 +294,27 @@ import NeonDiffDesktopCore
         #expect(plan.accountID == electricSheep.id)
         #expect(fixture.model.selectedBotInstallation == nil)
         #expect(fixture.model.configPath == plan.bot.localConfigPath)
+        #expect(fixture.model.isOnboardingPresented)
+        #expect(fixture.model.selectedAccountWorkspace?.bots.map(\.id) == authoritativeBotIDs)
+        #expect(fixture.model.selectedAccountWorkspace?.bots.contains(where: {
+            $0.id == plan.bot.id
+        }) == false)
+    }
+
+    @MainActor
+    @Test func serverBotWithoutALocalMatchGetsItsOwnIsolatedSetupPath() {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+
+        #expect(fixture.model.configPath == fixture.fileWriter.applicationSupportDirectory
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent(electricSheep.id, isDirectory: true)
+            .appendingPathComponent("Bots", isDirectory: true)
+            .appendingPathComponent("evaos-code-review-bot", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+            .standardizedFileURL.path)
         #expect(fixture.model.isOnboardingPresented)
     }
 

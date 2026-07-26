@@ -76,6 +76,7 @@ import Testing
         #expect(sidebar.contains("Menu"))
         #expect(sidebar.contains("neondiff-account-menu"))
         #expect(sidebar.contains("neondiff-account-option-"))
+        #expect(sidebar.contains("neondiff-bot-option-"))
         #expect(sidebar.contains("NEW BOT"))
         #expect(sidebar.contains("neondiff-new-bot"))
         #expect(sidebar.contains("SYSTEM READINESS"))
