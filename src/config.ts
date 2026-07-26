@@ -1254,7 +1254,7 @@ function validateLicenseConfig(value: unknown, label: string): void {
   }
   assertPathOutsideProtectedRoot({
     path: value.cachePath,
-    protectedRoot: process.cwd(),
+    protectedRoot: undefined,
     protectedRoots: getProtectedCheckoutRoots(),
     pathLabel: `${label}.cachePath`,
     protectedRootLabel: "protected checkout root"
@@ -1270,7 +1270,7 @@ function validateLicenseConfig(value: unknown, label: string): void {
   if (typeof value.keyPath === "string" && value.keyPath.trim().length > 0) {
     assertPathOutsideProtectedRoot({
       path: value.keyPath,
-      protectedRoot: process.cwd(),
+      protectedRoot: undefined,
       protectedRoots: getProtectedCheckoutRoots(),
       pathLabel: `${label}.keyPath`,
       protectedRootLabel: "protected checkout root"

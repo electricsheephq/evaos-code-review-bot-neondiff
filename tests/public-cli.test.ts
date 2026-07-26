@@ -129,6 +129,46 @@ describe("public NeonDiff CLI surface", () => {
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
   });
 
+  it("initializes a config that remains valid when a desktop launch gives the CLI root cwd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-desktop-root-cwd-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const cliSourcePath = join(repoRoot, "src/cli.ts");
+
+    const initialized = await execFileAsync(process.execPath, [
+      tsxCliPath,
+      cliSourcePath,
+      "init",
+      "--config",
+      configPath
+    ], {
+      cwd: "/",
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    });
+    expect(JSON.parse(initialized.stdout)).toMatchObject({
+      ok: true,
+      command: "init",
+      created: true,
+      configPath
+    });
+
+    const inspected = await execFileAsync(process.execPath, [
+      tsxCliPath,
+      cliSourcePath,
+      "config",
+      "inspect",
+      "--config",
+      configPath
+    ], {
+      cwd: "/",
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    });
+    expect(JSON.parse(inspected.stdout)).toMatchObject({
+      ok: true,
+      command: "config inspect"
+    });
+  });
+
   it("refuses the no-local-state CLI path without the matching native Keychain credential", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-native-activation-cli-"));
     roots.push(root);
