@@ -249,6 +249,19 @@ import Testing
         #expect(source.contains("neondiff-onboarding-byo-github-verify"))
     }
 
+    @Test func activationEnabledLicenseViewHidesLegacyCredentialAndFalseBoundary() throws {
+        let licenseView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/LicenseView.swift")
+        let source = try sourceBoundaryText(at: licenseView)
+
+        #expect(source.contains(
+            "if model.activationHandoffEnabled {\n                    ActivationStateView(model: model)\n                } else {\n                    legacyLicenseContent"
+        ))
+        #expect(source.contains("private var legacyLicenseContent: some View"))
+        #expect(source.contains("OperatorSection(\"License\")"))
+        #expect(source.contains("OperatorSection(\"Boundary\")"))
+    }
+
     @Test func managedSafetyStopIsNotDisabledByUsefulWorkProofLoss() throws {
         let viewsDirectory = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
