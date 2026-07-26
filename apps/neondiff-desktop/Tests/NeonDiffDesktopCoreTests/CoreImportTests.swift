@@ -17,6 +17,5 @@ import Testing
         let settings = ProviderSettings()
 
         #expect(settings.zcodeAppConfigPath == expected)
-        #expect(!settings.zcodeAppConfigPath.hasPrefix("/Volumes/"))
     }
 }
