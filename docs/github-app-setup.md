@@ -134,8 +134,12 @@ NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.js
 neondiff doctor github --config "$NATIVE_CONFIG" --json
 ```
 
-CLI-first and non-Mac setups may instead use the checkout-local
-`--config config.local.json` path documented in [SETUP.md](SETUP.md).
+CLI-first and non-Mac setups may instead use the checkout-local path documented
+in [SETUP.md](SETUP.md):
+
+```bash
+neondiff doctor github --config config.local.json --json
+```
 
 The command verifies App credential presence, App installation visibility, and
 repo read access for the enabled repos in your local config. It does not run
