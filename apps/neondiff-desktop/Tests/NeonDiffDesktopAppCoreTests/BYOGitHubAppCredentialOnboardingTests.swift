@@ -357,6 +357,31 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.productionDaemonStopAvailable)
     }
 
+    @Test func workspaceSwitchDiscardsAStaleDoctorFailureWithoutMutatingNewWorkspace() async throws {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.failure(NSError(domain: "fixture-old-workspace", code: 1))],
+            suspendCLIRuns: true,
+            productionBoundary: exactB0Boundary
+        )
+        let accountA = fixtureWorkspace(id: "account-a")
+        let accountB = fixtureWorkspace(id: "account-b")
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([accountA, accountB]))
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await fixture.cli.waitUntilCallCount(1)
+
+        fixture.model.selectAccountWorkspace(accountB.id)
+        fixture.cli.resumeSuspendedRuns()
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(fixture.model.selectedAccountWorkspace?.id == accountB.id)
+        #expect(fixture.model.lastError == nil)
+        #expect(!fixture.model.isBYOGitHubVerificationInProgress)
+    }
+
     @Test func privateKeyRotationWhileDoctorRunsDiscardsOldKeyProof() async throws {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo")))],
@@ -385,6 +410,17 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.productionDaemonStopAvailable)
     }
+}
+
+private func fixtureWorkspace(id: String) -> DesktopAccountWorkspace {
+    DesktopAccountWorkspace(
+        id: id,
+        kind: .organization,
+        name: id,
+        role: .admin,
+        entitlement: .internalAdmin,
+        bots: []
+    )
 }
 
 @MainActor

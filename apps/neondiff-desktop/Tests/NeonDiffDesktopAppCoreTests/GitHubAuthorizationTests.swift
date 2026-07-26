@@ -78,6 +78,44 @@ import NeonDiffDesktopCore
         #expect(fixture.secretStore.values["github/user-refresh-token"] == nil)
     }
 
+    @Test func staleTokenRefreshCannotOverwriteCredentialsAfterWorkspaceSwitch() async throws {
+        let now = fixtureDate(secondsSince1970: 1_000_000)
+        let authenticator = ScriptedGitHubAuthenticator(
+            refreshedToken: GitHubUserToken(
+                accessToken: "old-workspace-refreshed-access",
+                refreshToken: "old-workspace-refreshed-refresh",
+                expiresAt: now.addingTimeInterval(3_600),
+                refreshTokenExpiresAt: now.addingTimeInterval(7_200)
+            ),
+            suspendRefresh: true
+        )
+        let fixture = ModelDependencyFixture(now: now, githubAuthenticator: authenticator)
+        let accountA = DesktopAccountWorkspace(
+            id: "account-a", kind: .organization, name: "Account A", role: .admin,
+            entitlement: .paid, bots: []
+        )
+        let accountB = DesktopAccountWorkspace(
+            id: "account-b", kind: .organization, name: "Account B", role: .admin,
+            entitlement: .paid, bots: []
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([accountA, accountB]))
+        fixture.model.github.clientId = "fixture-client-id"
+        try fixture.secretStore.setSecret("old-access", account: "github/user-access-token")
+        try fixture.secretStore.setSecret("old-refresh", account: "github/user-refresh-token")
+        try fixture.secretStore.setSecret(fixtureISO8601String(now), account: "github/user-token-expires-at")
+
+        fixture.model.refreshGitHubRepositories()
+        while authenticator.refreshTokens.isEmpty { await Task.yield() }
+        fixture.model.selectAccountWorkspace(accountB.id)
+        try fixture.secretStore.setSecret("new-access", account: "github/user-access-token")
+        try fixture.secretStore.setSecret("new-refresh", account: "github/user-refresh-token")
+        authenticator.resumeSuspendedRefreshes()
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(fixture.secretStore.values["github/user-access-token"] == "new-access")
+        #expect(fixture.secretStore.values["github/user-refresh-token"] == "new-refresh")
+    }
+
     @Test func devicePollingAdoptsServerIntervalWithoutWallClockSleep() async throws {
         let now = fixtureDate(secondsSince1970: 1_000_000)
         let deviceCode = GitHubDeviceAuthorizationCode(
