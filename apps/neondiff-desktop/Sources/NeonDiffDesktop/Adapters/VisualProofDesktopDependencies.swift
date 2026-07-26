@@ -121,7 +121,7 @@ private final class VisualProofProviderVerifier: DesktopProviderVerifying, @unch
     }
 }
 
-private final class VisualProofSecretStore: DesktopSecretStoring {
+private final class VisualProofSecretStore: DesktopSecretStoring, @unchecked Sendable {
     private var secrets: [String: String] = [:]
 
     func setSecret(_ secret: String, account: String) throws {

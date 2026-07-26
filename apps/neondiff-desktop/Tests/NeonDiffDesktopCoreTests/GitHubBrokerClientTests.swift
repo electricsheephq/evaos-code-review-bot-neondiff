@@ -568,13 +568,13 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
                 body: [
                     "status": "ready",
                     "accounts": [[
-                        "id": "account-electric-sheep",
+                        "id": "11111111-1111-4111-8111-111111111111",
                         "kind": "organization",
                         "name": "Electric Sheep",
                         "role": "admin",
                         "entitlement": "internal_admin",
                         "bots": [[
-                            "id": "bot-existing",
+                            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                             "appId": 4242,
                             "appSlug": "evaos-code-review-bot",
                             "mode": "byo",
@@ -594,7 +594,10 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
 
         try await client.registerAccountLinkIdentity(identity: identity)
         let connection = try await client.startAccountLink(identity: identity)
-        let workspaces = try await client.loadAccountWorkspaces(identity: identity)
+        let workspaces = try await client.loadAccountWorkspaces(
+            identity: identity,
+            state: connection.state
+        )
 
         #expect(connection.state == state)
         #expect(connection.connectURL.absoluteString == "https://www.neondiff.com/desktop/connect?state=\(state)")
@@ -612,6 +615,7 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         #expect(requests[0].headers["Authorization"] == nil)
         #expect(requests[1].headers["Authorization"]?.hasPrefix("Bearer ") == true)
         #expect(requests[2].headers["Authorization"]?.hasPrefix("Bearer ") == true)
+        #expect(String(data: requests[2].body, encoding: .utf8)?.contains(state) == true)
         #expect(requests.allSatisfy { request in
             String(data: request.body, encoding: .utf8)?.contains("access_token") == false
         })
@@ -643,13 +647,13 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
                 body: [
                     "status": "ready",
                     "accounts": [[
-                        "id": "account-electric-sheep",
+                        "id": "11111111-1111-4111-8111-111111111111",
                         "kind": "organization",
                         "name": "Electric Sheep",
                         "role": "admin",
                         "entitlement": "internal_admin",
                         "bots": [[
-                            "id": "bot-existing",
+                            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                             "appId": 0,
                             "appSlug": "evaos-code-review-bot",
                             "mode": "byo",
@@ -668,6 +672,105 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
 
         await expectBrokerError(.scopeMismatch) {
             _ = try await untrustedClient.loadAccountWorkspaces(identity: identity)
+        }
+    }
+
+    @Test func accountLinkRejectsPathLikeAuthorityIdentifiers() async throws {
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerMemorySecretStore()
+        ).loadOrCreate()
+        let transport = ScriptedBrokerTransport(responses: [
+            .json(
+                url: "https://broker.example/account/workspaces",
+                body: [
+                    "status": "ready",
+                    "accounts": [[
+                        "id": "../../tmp/account",
+                        "kind": "organization",
+                        "name": "Electric Sheep",
+                        "role": "admin",
+                        "entitlement": "internal_admin",
+                        "bots": [[
+                            "id": "11111111-1111-4111-8111-111111111111",
+                            "appId": 4242,
+                            "appSlug": "evaos-code-review-bot",
+                            "mode": "byo",
+                            "githubInstallationId": 9001,
+                            "githubAccountLogin": "electricsheephq",
+                            "status": "verified"
+                        ]]
+                    ]]
+                ]
+            )
+        ])
+        let client = try GitHubBrokerClient(
+            baseURL: URL(string: "https://broker.example")!,
+            transport: transport
+        )
+
+        await expectBrokerError(.scopeMismatch) {
+            _ = try await client.loadAccountWorkspaces(identity: identity)
+        }
+    }
+
+    @Test func accountLinkRedirectValidationFailsClosedForEveryTrustBoundary() async throws {
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: BrokerMemorySecretStore()
+        ).loadOrCreate()
+        let validState = String(repeating: "a", count: 43)
+        let cases: [[String: String]] = [
+            [
+                "connectUrl": "https://evil.example/desktop/connect?state=\(validState)",
+                "state": validState,
+                "expiresAt": "2027-01-15T08:05:00Z"
+            ],
+            [
+                "connectUrl": "https://www.neondiff.com/wrong?state=\(validState)",
+                "state": validState,
+                "expiresAt": "2027-01-15T08:05:00Z"
+            ],
+            [
+                "connectUrl": "https://www.neondiff.com/desktop/connect?state=\(String(repeating: "b", count: 43))",
+                "state": validState,
+                "expiresAt": "2027-01-15T08:05:00Z"
+            ],
+            [
+                "connectUrl": "https://www.neondiff.com/desktop/connect?state=\(validState)&next=evil",
+                "state": validState,
+                "expiresAt": "2027-01-15T08:05:00Z"
+            ],
+            [
+                "connectUrl": "https://www.neondiff.com/desktop/connect?state=short",
+                "state": "short",
+                "expiresAt": "2027-01-15T08:05:00Z"
+            ],
+            [
+                "connectUrl": "https://www.neondiff.com/desktop/connect?state=\(validState)",
+                "state": validState,
+                "expiresAt": "2027-01-15T08:20:00Z"
+            ]
+        ]
+
+        for response in cases {
+            let transport = ScriptedBrokerTransport(responses: [
+                .json(
+                    url: "https://broker.example/account/connect/start",
+                    body: [
+                        "status": "account_connect_started",
+                        "connectUrl": response["connectUrl"]!,
+                        "state": response["state"]!,
+                        "expiresAt": response["expiresAt"]!
+                    ]
+                )
+            ])
+            let client = try GitHubBrokerClient(
+                baseURL: URL(string: "https://broker.example")!,
+                transport: transport,
+                now: { Date(timeIntervalSince1970: 1_800_000_000) }
+            )
+            await expectBrokerError(.invalidResponse) {
+                _ = try await client.startAccountLink(identity: identity)
+            }
         }
     }
 }

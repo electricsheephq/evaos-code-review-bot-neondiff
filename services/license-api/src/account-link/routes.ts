@@ -88,7 +88,12 @@ export async function handleAccountLinkRequest(
       );
     }
     if (req.method === "POST" && path === "/account/workspaces") {
-      return writeJson(res, 200, await service.workspaces(req.headers.authorization), corsHeaders);
+      return writeJson(
+        res,
+        200,
+        await service.workspaces(req.headers.authorization, await readBody(req)),
+        corsHeaders
+      );
     }
     return writeJson(res, 404, { status: "error", reason: "invalid_request", detail: "unknown account route" }, corsHeaders);
   } catch (error) {

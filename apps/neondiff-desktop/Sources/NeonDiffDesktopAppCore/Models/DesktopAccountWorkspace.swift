@@ -105,7 +105,7 @@ package struct DesktopLocalBotCandidate: Equatable, Sendable {
 
     package init(
         appID: Int64,
-        appSlug: String? = nil,
+        appSlug: String?,
         githubAccountLogin: String,
         configPath: String
     ) {

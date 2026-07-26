@@ -39,16 +39,14 @@ import NeonDiffDesktopCore
         ))
 
         model.connectNeonDiffAccount()
-        for _ in 0..<100 where model.isAccountLinkInProgress {
-            await Task.yield()
-        }
+        await model.waitForAccountLinkOperation()
 
         #expect(model.isAccountLinkInProgress == false)
         #expect(urlOpener.urls == [accountLink.connection.connectURL])
         #expect(accountLink.registeredDeviceIds.count == 1)
         #expect(accountLink.startedDeviceIds == accountLink.registeredDeviceIds)
         #expect(accountLink.workspaceDeviceIds.count == 2)
-        #expect(clock.sleeps == [.seconds(2)])
+        #expect(clock.sleeps == [.seconds(1)])
         #expect(model.accountWorkspaceCatalog.accounts.map(\.name) == ["Electric Sheep"])
         #expect(model.selectedAccountWorkspace?.name == "Electric Sheep")
         #expect(model.selectedBotInstallation?.appSlug == "evaos-code-review-bot")
@@ -79,9 +77,7 @@ import NeonDiffDesktopCore
         ))
 
         model.refreshAccountWorkspaces()
-        for _ in 0..<100 where model.isAccountLinkInProgress {
-            await Task.yield()
-        }
+        await model.waitForAccountLinkOperation()
 
         #expect(secrets.mutations.isEmpty)
         #expect(accountLink.workspaceDeviceIds.isEmpty)
@@ -119,6 +115,162 @@ import NeonDiffDesktopCore
         #expect(model.accountWorkspaceStatus.contains("cancelled"))
         #expect(urlOpener.urls.isEmpty)
     }
+
+    @Test func ambiguousBYOAppAcrossAccountsNeverAttachesTheLocalConfig() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-ambiguous-\(UUID().uuidString)", isDirectory: true)
+        let fileWriter = TemporaryFileWriter(root: root)
+        let configURL = root.appendingPathComponent("config.local.json")
+        try fileWriter.write(Data("{}".utf8), to: configURL)
+        let preferences = MemoryPreferences()
+        preferences.set(configURL.path, forKey: "neondiff.configPath")
+        preferences.set("4242", forKey: "neondiff.byoGitHubAppId")
+        let secrets = AccountLinkMemorySecretStore()
+        try secrets.setSecret("100yenadmin", account: "github/user-login")
+        let snapshot = NeonDiffAccountWorkspaceSnapshot(accounts: [
+            AccountLinkFixtures.workspace(
+                id: "11111111-1111-4111-8111-111111111111",
+                name: "Personal",
+                login: "100yenadmin",
+                botID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            ),
+            AccountLinkFixtures.workspace(
+                id: "22222222-2222-4222-8222-222222222222",
+                name: "Electric Sheep",
+                login: "electricsheephq",
+                botID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+            )
+        ])
+        let accountLink = ScriptedAccountLink(workspaceResults: [.success(snapshot)])
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: preferences,
+            clock: TestClock(),
+            fileWriter: fileWriter,
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: secrets,
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: accountLink,
+            productionBoundary: .testAccountLink
+        ))
+
+        model.connectNeonDiffAccount()
+        await model.waitForAccountLinkOperation()
+
+        #expect(model.accountWorkspaceCatalog.accounts.flatMap(\.bots).allSatisfy {
+            $0.localConfigPath == nil
+        })
+    }
+
+    @Test func managedInstallationReconcilesOnlyByItsSavedInstallationID() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-managed-\(UUID().uuidString)", isDirectory: true)
+        let fileWriter = TemporaryFileWriter(root: root)
+        let configURL = root.appendingPathComponent("config.local.json")
+        try fileWriter.write(Data("{}".utf8), to: configURL)
+        let preferences = MemoryPreferences()
+        preferences.set(configURL.path, forKey: "neondiff.configPath")
+        preferences.set("9001", forKey: "neondiff.managedGitHubInstallationId")
+        let managedSnapshot = NeonDiffAccountWorkspaceSnapshot(accounts: [
+            NeonDiffAccountWorkspace(
+                id: "11111111-1111-4111-8111-111111111111",
+                kind: .organization,
+                name: "Electric Sheep",
+                role: .admin,
+                entitlement: .internalAdmin,
+                bots: [
+                    NeonDiffAccountBot(
+                        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                        appID: 4_184_532,
+                        appSlug: "neondiff",
+                        mode: .managed,
+                        githubInstallationID: 9001,
+                        githubAccountLogin: "electricsheephq",
+                        status: .verified
+                    )
+                ]
+            )
+        ])
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: preferences,
+            clock: TestClock(),
+            fileWriter: fileWriter,
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: AccountLinkMemorySecretStore(),
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [.success(managedSnapshot)]),
+            productionBoundary: .testManagedAccountLink
+        ))
+
+        model.connectNeonDiffAccount()
+        await model.waitForAccountLinkOperation()
+
+        #expect(model.selectedBotInstallation?.githubInstallationID == 9001)
+        #expect(model.selectedBotInstallation?.localConfigPath == configURL.path)
+    }
+
+    @Test func cancelledAccountLinkCannotInstallALateWorkspaceResult() async {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-late-\(UUID().uuidString)", isDirectory: true)
+        let accountLink = BlockingAccountLink()
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: MemoryPreferences(),
+            clock: TestClock(),
+            fileWriter: TemporaryFileWriter(root: root),
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: AccountLinkMemorySecretStore(),
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: accountLink,
+            productionBoundary: .testAccountLink
+        ))
+
+        model.connectNeonDiffAccount()
+        await accountLink.waitUntilWorkspaceRequested()
+        model.cancelAccountLink()
+        accountLink.complete(with: AccountLinkFixtures.electricSheep)
+        await model.waitForAccountLinkOperation()
+
+        #expect(model.accountWorkspaceCatalog == .idle)
+        #expect(model.accountWorkspaceStatus.contains("cancelled"))
+    }
+
+    @Test func accountIdentityKeychainWorkRunsOffTheMainThread() async {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-keychain-thread-\(UUID().uuidString)", isDirectory: true)
+        let secrets = MainThreadRecordingSecretStore()
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: MemoryPreferences(),
+            clock: TestClock(),
+            fileWriter: TemporaryFileWriter(root: root),
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: secrets,
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [.success(.init(accounts: []))]),
+            productionBoundary: .testAccountLink
+        ))
+        secrets.resetObservation()
+
+        model.connectNeonDiffAccount()
+        await model.waitForAccountLinkOperation()
+
+        #expect(secrets.observedMainThreadAccess == false)
+        #expect(model.isAccountLinkInProgress == false)
+    }
 }
 
 private enum AccountLinkFixtures {
@@ -142,6 +294,27 @@ private enum AccountLinkFixtures {
             ]
         )
     ])
+
+    static func workspace(id: String, name: String, login: String, botID: String) -> NeonDiffAccountWorkspace {
+        NeonDiffAccountWorkspace(
+            id: id,
+            kind: name == "Personal" ? .personal : .organization,
+            name: name,
+            role: name == "Personal" ? .owner : .admin,
+            entitlement: .internalAdmin,
+            bots: [
+                NeonDiffAccountBot(
+                    id: botID,
+                    appID: 4242,
+                    appSlug: "evaos-code-review-bot",
+                    mode: .byo,
+                    githubInstallationID: 9001,
+                    githubAccountLogin: login,
+                    status: .verified
+                )
+            ]
+        )
+    }
 }
 
 private final class AccountLinkMemorySecretStore: DesktopSecretStoring, @unchecked Sendable {
@@ -205,7 +378,8 @@ private final class ScriptedAccountLink: NeonDiffAccountLinkConnecting, @uncheck
     }
 
     func loadAccountWorkspaces(
-        identity: GitHubBrokerDeviceIdentity
+        identity: GitHubBrokerDeviceIdentity,
+        state: String?
     ) async throws -> NeonDiffAccountWorkspaceSnapshot {
         try lock.withLock {
             workspaces.append(identity.deviceId)
@@ -213,6 +387,98 @@ private final class ScriptedAccountLink: NeonDiffAccountLinkConnecting, @uncheck
                 throw GitHubBrokerClientError.transportUnavailable
             }
             return try workspaceResults.removeFirst().get()
+        }
+    }
+}
+
+private final class BlockingAccountLink: NeonDiffAccountLinkConnecting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var workspaceRequested = false
+    private var continuation: CheckedContinuation<NeonDiffAccountWorkspaceSnapshot, Error>?
+    private let connection = NeonDiffAccountLinkConnection(
+        connectURL: URL(string: "https://www.neondiff.com/desktop/connect?state=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!,
+        state: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        expiresAt: Date(timeIntervalSince1970: 1_800_000_600)
+    )
+
+    func registerAccountLinkIdentity(identity: GitHubBrokerDeviceIdentity) async throws {}
+
+    func startAccountLink(identity: GitHubBrokerDeviceIdentity) async throws -> NeonDiffAccountLinkConnection {
+        connection
+    }
+
+    func loadAccountWorkspaces(
+        identity: GitHubBrokerDeviceIdentity,
+        state: String?
+    ) async throws -> NeonDiffAccountWorkspaceSnapshot {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock {
+                workspaceRequested = true
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func waitUntilWorkspaceRequested() async {
+        while lock.withLock({ workspaceRequested == false }) {
+            await Task.yield()
+        }
+    }
+
+    func complete(with snapshot: NeonDiffAccountWorkspaceSnapshot) {
+        let pending = lock.withLock { () -> CheckedContinuation<NeonDiffAccountWorkspaceSnapshot, Error>? in
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume(returning: snapshot)
+    }
+}
+
+private final class MainThreadRecordingSecretStore: DesktopSecretStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+    private var touchedMainThread = false
+
+    var observedMainThreadAccess: Bool { lock.withLock { touchedMainThread } }
+
+    func resetObservation() {
+        lock.withLock { touchedMainThread = false }
+    }
+
+    func setSecret(_ secret: String, account: String) throws {
+        lock.withLock {
+            touchedMainThread = touchedMainThread || Thread.isMainThread
+            values[account] = secret
+        }
+    }
+
+    func createSecretIfAbsent(_ secret: String, account: String) throws -> Bool {
+        lock.withLock {
+            touchedMainThread = touchedMainThread || Thread.isMainThread
+            guard values[account] == nil else { return false }
+            values[account] = secret
+            return true
+        }
+    }
+
+    func readSecret(account: String) throws -> String? {
+        lock.withLock {
+            touchedMainThread = touchedMainThread || Thread.isMainThread
+            return values[account]
+        }
+    }
+
+    func containsSecret(account: String) -> Bool {
+        lock.withLock {
+            touchedMainThread = touchedMainThread || Thread.isMainThread
+            return values[account] != nil
+        }
+    }
+
+    func deleteSecret(account: String) throws {
+        lock.withLock {
+            touchedMainThread = touchedMainThread || Thread.isMainThread
+            values.removeValue(forKey: account)
         }
     }
 }

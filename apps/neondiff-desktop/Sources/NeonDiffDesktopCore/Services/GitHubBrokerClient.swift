@@ -519,7 +519,18 @@ public struct NeonDiffAccountWorkspaceSnapshot: Equatable, Sendable {
 public protocol NeonDiffAccountLinkConnecting: Sendable {
     func registerAccountLinkIdentity(identity: GitHubBrokerDeviceIdentity) async throws
     func startAccountLink(identity: GitHubBrokerDeviceIdentity) async throws -> NeonDiffAccountLinkConnection
-    func loadAccountWorkspaces(identity: GitHubBrokerDeviceIdentity) async throws -> NeonDiffAccountWorkspaceSnapshot
+    func loadAccountWorkspaces(
+        identity: GitHubBrokerDeviceIdentity,
+        state: String?
+    ) async throws -> NeonDiffAccountWorkspaceSnapshot
+}
+
+public extension NeonDiffAccountLinkConnecting {
+    func loadAccountWorkspaces(
+        identity: GitHubBrokerDeviceIdentity
+    ) async throws -> NeonDiffAccountWorkspaceSnapshot {
+        try await loadAccountWorkspaces(identity: identity, state: nil)
+    }
 }
 
 public protocol GitHubBrokerConnecting: Sendable {
@@ -647,11 +658,15 @@ public struct GitHubBrokerClient: GitHubBrokerConnecting, NeonDiffAccountLinkCon
     }
 
     public func loadAccountWorkspaces(
-        identity: GitHubBrokerDeviceIdentity
+        identity: GitHubBrokerDeviceIdentity,
+        state: String? = nil
     ) async throws -> NeonDiffAccountWorkspaceSnapshot {
+        if let state, !Self.isOpaqueAccountState(state) {
+            throw GitHubBrokerClientError.invalidRequest
+        }
         let response: AccountWorkspaceResponse = try await post(
             path: "/account/workspaces",
-            body: [:],
+            body: state.map { ["state": $0] } ?? [:],
             credential: try identity.makeCredential(now: now())
         )
         guard response.status == "ready",
@@ -975,12 +990,12 @@ public struct GitHubBrokerClient: GitHubBrokerConnecting, NeonDiffAccountLinkCon
             return false
         }
         return accounts.allSatisfy { account in
-            Self.isBoundedIdentifier(account.id, maximum: 200)
+            Self.isUUIDIdentifier(account.id)
                 && Self.isBoundedDisplayName(account.name, maximum: 200)
                 && account.bots.count <= 100
                 && Set(account.bots.map(\.id)).count == account.bots.count
                 && account.bots.allSatisfy { bot in
-                    Self.isBoundedIdentifier(bot.id, maximum: 200)
+                    Self.isUUIDIdentifier(bot.id)
                         && bot.appID > 0
                         && bot.appSlug.range(
                             of: "^[a-z0-9][a-z0-9-]{0,99}$",
@@ -998,6 +1013,10 @@ public struct GitHubBrokerClient: GitHubBrokerConnecting, NeonDiffAccountLinkCon
         value.isEmpty == false
             && value.utf8.count <= maximum
             && value.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+    }
+
+    private static func isUUIDIdentifier(_ value: String) -> Bool {
+        UUID(uuidString: value)?.uuidString.caseInsensitiveCompare(value) == .orderedSame
     }
 
     private static func isBoundedDisplayName(_ value: String, maximum: Int) -> Bool {

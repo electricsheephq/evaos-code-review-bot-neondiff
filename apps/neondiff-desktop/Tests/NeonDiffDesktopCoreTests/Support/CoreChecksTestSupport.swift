@@ -117,7 +117,7 @@ final class CoreCLIFixture {
     }
 }
 
-final class InMemoryProviderSecretStore: DesktopSecretStoring {
+final class InMemoryProviderSecretStore: DesktopSecretStoring, @unchecked Sendable {
     var secrets: [String: String] = [:]
 
     func setSecret(_ secret: String, account: String) throws {

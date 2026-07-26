@@ -41,6 +41,14 @@ package struct DesktopProductionBoundary: Sendable {
         accountLinkBrokerOrigin: approvedAccountLinkBrokerOrigin,
         accountConnectURL: approvedAccountConnectURL
     )
+    package static let testManagedAccountLink = DesktopProductionBoundary(
+        nativeActivationBrokerVerified: true,
+        byoGitHubEnabled: false,
+        managedGitHubBrokerOrigin: approvedManagedGitHubBrokerOrigin,
+        managedGitHubAppClientID: "fixture-client-id",
+        accountLinkBrokerOrigin: approvedAccountLinkBrokerOrigin,
+        accountConnectURL: approvedAccountConnectURL
+    )
 
     package static func resolve(infoDictionary: [String: Any]) -> DesktopProductionBoundary {
         let contract = infoDictionary["NeonDiffPaidBetaContract"] as? String

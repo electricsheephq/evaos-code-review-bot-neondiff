@@ -163,10 +163,26 @@ export class AccountLinkService {
   }
 
   async workspaces(
-    authorization: string | string[] | undefined
+    authorization: string | string[] | undefined,
+    body: unknown = {}
   ): Promise<Record<string, unknown>> {
     const at = this.now();
     const deviceId = await authenticateDevice(this.store, authorization, at);
+    const requestedState = optionalState(body);
+    if (requestedState) {
+      const state = this.store.getAccountConnectState(hash(requestedState));
+      if (
+        !state
+        || state.device_id !== deviceId
+        || state.consumed_at === null
+        || Date.parse(state.expires_at) <= at.getTime()
+      ) {
+        throw new BrokerError(
+          "account_link_required",
+          "finish this account link before loading workspaces"
+        );
+      }
+    }
     const binding = this.store.getAccountBinding(deviceId);
     if (!binding) {
       throw new BrokerError("account_link_required", "link a signed-in NeonDiff account first");
@@ -193,6 +209,15 @@ export class AccountLinkService {
 
 function requiredState(body: unknown): string {
   const state = asObject(body).state;
+  if (typeof state !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(state)) {
+    throw new BrokerError("invalid_request", "state is invalid");
+  }
+  return state;
+}
+
+function optionalState(body: unknown): string | undefined {
+  const state = asObject(body).state;
+  if (state === undefined) return undefined;
   if (typeof state !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(state)) {
     throw new BrokerError("invalid_request", "state is invalid");
   }

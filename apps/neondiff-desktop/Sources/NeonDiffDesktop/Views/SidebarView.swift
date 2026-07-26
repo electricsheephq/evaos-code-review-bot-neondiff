@@ -148,8 +148,8 @@ struct SidebarView: View {
                 Label("CANCEL", systemImage: "xmark.circle")
             }
             .accessibilityIdentifier("neondiff-account-cancel")
-        case .failed:
-            Text("ACCOUNT SERVICE UNAVAILABLE")
+        case .failed(let message):
+            Text(message.uppercased())
             if accountLinkAvailable {
                 Button {
                     connectAccount()
