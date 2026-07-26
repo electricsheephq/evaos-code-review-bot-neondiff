@@ -13,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
  * states, installation bindings, and an append-only decision ledger. No tokens,
  * private keys, source, or diffs are ever stored.
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
 const ACCOUNT_CONNECT_CONSUMED_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
@@ -40,6 +40,7 @@ const ACCOUNT_LINK_TABLES = `
     created_at text not null,
     expires_at text not null,
     consumed_at text,
+    bound_user_id text,
     foreign key (device_id) references devices(device_id)
   );
 
@@ -121,6 +122,7 @@ export interface AccountConnectStateRow {
   created_at: string;
   expires_at: string;
   consumed_at: string | null;
+  bound_user_id: string | null;
 }
 
 export interface AccountBindingRow {
@@ -156,7 +158,7 @@ export class GitHubBrokerStore {
   private ensureSchema(): void {
     const version = this.readUserVersion();
     if (version === SCHEMA_VERSION) return;
-    if (version !== 0 && version !== 1 && version !== 2) {
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3) {
       throw new Error(`unsupported github broker schema version ${version}`);
     }
     this.db.exec("begin immediate");
@@ -177,9 +179,14 @@ export class GitHubBrokerStore {
         // table". Idempotent and crash-safe under the same writer transaction.
         this.db.exec(BINDING_REPOSITORIES_TABLE);
         this.db.exec(ACCOUNT_LINK_TABLES);
-      } else {
+      } else if (current === 2) {
         // v2 -> v3 adds the account-link state and device/user binding tables.
         this.db.exec(ACCOUNT_LINK_TABLES);
+      } else {
+        // v3 -> v4 records which user each consumed state actually bound. This
+        // lets polling reject a stale completed state after a newer reconnect
+        // changes the device binding to another account.
+        this.db.exec("alter table account_connect_states add column bound_user_id text");
       }
       this.db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
       this.db.exec("commit");
@@ -352,10 +359,10 @@ export class GitHubBrokerStore {
       }
       const info = this.db
         .prepare(
-          `update account_connect_states set consumed_at = ?
+          `update account_connect_states set consumed_at = ?, bound_user_id = ?
            where state_hash = ? and consumed_at is null and expires_at > ?`
         )
-        .run(consumedAt, stateHash, consumedAt);
+        .run(consumedAt, userId, stateHash, consumedAt);
       if (Number(info.changes) === 0) {
         this.db.exec("rollback");
         return false;
