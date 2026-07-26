@@ -1092,15 +1092,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.preferences.set(botID, forKey: accountBotPreferenceKey)
         if let localConfigPath = bot.localConfigPath {
             configPath = localConfigPath
-            if bot.mode == .byo,
-               dependencies.productionBoundary.byoGitHubEnabled {
-                let appID = String(bot.appID)
-                dependencies.preferences.set(
-                    appID,
-                    forKey: byoGitHubAppIdPreferenceKey
-                )
-                pendingBYOGitHubAppId = appID
-            }
             accountWorkspaceStatus = "Local bot selected. Verify its config and GitHub binding before use."
             inspectConfig()
         } else {

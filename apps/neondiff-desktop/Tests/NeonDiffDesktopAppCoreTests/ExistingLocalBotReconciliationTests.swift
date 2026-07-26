@@ -123,7 +123,7 @@ import NeonDiffDesktopCore
             suspendCLIRuns: true,
             productionBoundary: .testAccountLink
         )
-        fixture.model.pendingBYOGitHubAppId = "999999"
+        fixture.model.pendingBYOGitHubAppId = "4184532"
         fixture.model.pendingBYOGitHubAppPrivateKey = existingBotFixturePrivateKey
         fixture.model.storeBYOGitHubAppCredentials()
         #expect(fixture.model.byoGitHubPrivateKeyStored)
@@ -133,7 +133,10 @@ import NeonDiffDesktopCore
         fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
         fixture.loadConfig(existingBotConfig(authMode: "zcode-app-config"))
 
-        #expect(fixture.model.pendingBYOGitHubAppId == "4184532")
+        #expect(
+            fixture.preferences.string(forKey: "neondiff.byoGitHubAppId")
+                == "4184532"
+        )
         #expect(fixture.model.existingLocalBotIdentityReady)
         #expect(fixture.model.byoGitHubCredentialOnboardingAvailable)
         #expect(fixture.model.byoGitHubAppIdStored)
