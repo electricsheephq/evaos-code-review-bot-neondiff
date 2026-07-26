@@ -70,6 +70,14 @@ import NeonDiffDesktopCore
         #expect(merged.bots[0].localConfigPath == nil)
     }
 
+    @Test func serverCatalogCannotInjectALocalConfigPath() throws {
+        let data = Data(#"{"id":"bot-remote","appID":4184532,"appSlug":"evaos-code-review-bot","mode":"byo","githubInstallationID":72001,"githubAccountLogin":"electricsheephq","status":"verified","localConfigPath":"/tmp/server-controlled.json"}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(DesktopBotInstallation.self, from: data)
+
+        #expect(decoded.localConfigPath == nil)
+    }
+
     @Test func newBotUsesADistinctPendingIdentityAndNeverReusesExistingConfig() throws {
         let existingPath = "/Users/test/Library/Application Support/NeonDiff/config.local.json"
         let plan = try DesktopNewBotPlan.make(
@@ -84,6 +92,48 @@ import NeonDiffDesktopCore
         #expect(plan.bot.localConfigPath != existingPath)
         #expect(plan.bot.localConfigPath?.contains("account-electric-sheep") == true)
         #expect(plan.bot.localConfigPath?.contains("electric-sheep-secondary") == true)
+    }
+
+    @Test func newBotSkipsAnOrphanedConfigAlreadyPresentOnDisk() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let occupied = root
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent(electricSheep.id, isDirectory: true)
+            .appendingPathComponent("Bots", isDirectory: true)
+            .appendingPathComponent("electric-sheep-secondary", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+        try FileManager.default.createDirectory(
+            at: occupied.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("orphaned".utf8).write(to: occupied)
+
+        let plan = try DesktopNewBotPlan.make(
+            account: electricSheep,
+            appSlug: "electric-sheep-secondary",
+            applicationSupportDirectory: root,
+            occupiedConfigPaths: [],
+            fileExists: { FileManager.default.fileExists(atPath: $0.path) }
+        )
+
+        #expect(plan.bot.localConfigPath != occupied.standardizedFileURL.path)
+        #expect(plan.bot.localConfigPath?.contains("electric-sheep-secondary-2") == true)
+    }
+
+    @Test func newBotRejectsASlugWithATrailingLineTerminator() {
+        #expect(throws: DesktopNewBotPlanError.invalidSlug) {
+            try DesktopNewBotPlan.make(
+                account: electricSheep,
+                appSlug: "electric-sheep-secondary\n",
+                applicationSupportDirectory: URL(
+                    filePath: "/Users/test/Library/Application Support/NeonDiff",
+                    directoryHint: .isDirectory
+                ),
+                occupiedConfigPaths: []
+            )
+        }
     }
 
     @Test func switchingAccountClearsEveryWorkspaceBoundRuntimeSelection() {
@@ -105,11 +155,11 @@ import NeonDiffDesktopCore
     @MainActor
     @Test func modelAccountSwitchInvalidatesPriorWorkspaceProofWithoutDeletingAuthority() {
         let fixture = ModelDependencyFixture()
+        fixture.secretStore.values = ["provider/anthropic": "fixture-secret"]
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([personal, electricSheep]))
         fixture.model.repos = [RepoMonitor(name: "personal/private-repo", enabled: true)]
         fixture.model.providers.providerKeyStored = true
         fixture.model.github.installationCount = 1
-        fixture.secretStore.values = ["provider/anthropic": "fixture-secret"]
-        fixture.model.applyAccountWorkspaceCatalog(.loaded([personal, electricSheep]))
 
         fixture.model.selectAccountWorkspace(electricSheep.id)
 
@@ -118,12 +168,246 @@ import NeonDiffDesktopCore
         #expect(!fixture.model.providers.providerKeyStored)
         #expect(fixture.model.github.installationCount == 0)
         #expect(fixture.secretStore.values == ["provider/anthropic": "fixture-secret"])
+        #expect(fixture.model.configPath == fixture.fileWriter.applicationSupportDirectory
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent("_unselected", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+            .standardizedFileURL.path)
+    }
+
+    @MainActor
+    @Test func catalogRefreshRevokesASelectedBotAndItsWorkspaceProof() {
+        let localBot = bot(
+            id: "bot-local",
+            slug: "local-bot",
+            configPath: "/fixture/local-bot/config.local.json"
+        )
+        let account = workspace(id: "account-a", name: "Account A", bots: [localBot])
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+        fixture.model.selectBotInstallation(localBot.id)
+        fixture.model.repos = [RepoMonitor(name: "account-a/private", enabled: true)]
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(id: account.id, name: account.name, bots: [])
+        ]))
+
+        #expect(fixture.model.accountWorkspaceSelection.botID == nil)
+        #expect(fixture.model.selectedBotInstallation == nil)
+        #expect(fixture.model.repos.isEmpty)
+        #expect(fixture.preferences.string(forKey: "neondiff.accountBotID") == nil)
+    }
+
+    @MainActor
+    @Test func reselectingTheCurrentBotPreservesVerifiedRuntimeState() {
+        let localBot = bot(
+            id: "bot-local",
+            slug: "local-bot",
+            configPath: "/fixture/local-bot/config.local.json"
+        )
+        let account = workspace(id: "account-a", name: "Account A", bots: [localBot])
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+        fixture.model.selectBotInstallation(localBot.id)
+        fixture.model.repos = [RepoMonitor(name: "account-a/private", enabled: true)]
+        fixture.model.providers.providerKeyStored = true
+
+        fixture.model.selectBotInstallation(localBot.id)
+
+        #expect(fixture.model.repos == [RepoMonitor(name: "account-a/private", enabled: true)])
+        #expect(fixture.model.providers.providerKeyStored)
+    }
+
+    @MainActor
+    @Test func catalogLocalPathLossInvalidatesSelectedBotRuntimeState() {
+        let localBot = bot(
+            id: "bot-local",
+            slug: "local-bot",
+            configPath: "/fixture/local-bot/config.local.json"
+        )
+        let account = workspace(id: "account-a", name: "Account A", bots: [localBot])
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+        fixture.model.selectBotInstallation(localBot.id)
+        fixture.model.repos = [RepoMonitor(name: "account-a/private", enabled: true)]
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(
+                id: account.id,
+                name: account.name,
+                bots: [bot(id: localBot.id, slug: localBot.appSlug, configPath: nil)]
+            )
+        ]))
+
+        #expect(fixture.model.repos.isEmpty)
+        #expect(fixture.model.configPath.contains("Accounts/account-a/Bots/local-bot/config.local.json"))
+        #expect(fixture.model.isOnboardingPresented)
+    }
+
+    @MainActor
+    @Test func unchangedCatalogRefreshPreservesAPendingNewBotPlan() throws {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
+        let original = try #require(fixture.model.pendingNewBotPlan)
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+
+        #expect(fixture.model.pendingNewBotPlan == original)
+        #expect(fixture.model.accountWorkspaceSelection.botID == original.bot.id)
+        #expect(fixture.model.configPath == original.bot.localConfigPath)
+    }
+
+    @MainActor
+    @Test func localBotDiscoveryDoesNotInvalidateAPendingNewBotPlan() throws {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
+        let original = try #require(fixture.model.pendingNewBotPlan)
+        let local = DesktopLocalBotCandidate(
+            appID: 4_184_532,
+            appSlug: "evaos-code-review-bot",
+            githubAccountLogin: "electricsheephq",
+            configPath: "/fixture/evaos-code-review-bot/config.local.json"
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            electricSheep.merging(localCandidates: [local])
+        ]))
+
+        #expect(fixture.model.pendingNewBotPlan == original)
+        #expect(fixture.model.accountWorkspaceSelection.botID == original.bot.id)
+        #expect(fixture.model.configPath == original.bot.localConfigPath)
+    }
+
+    @MainActor
+    @Test func authorityChangeInvalidatesAPendingNewBotPlanAndRuntimeState() {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
+        fixture.model.repos = [RepoMonitor(name: "electric/private", enabled: true)]
+        fixture.model.providers.providerKeyStored = true
+        let withdrawn = DesktopAccountWorkspace(
+            id: electricSheep.id,
+            kind: electricSheep.kind,
+            name: electricSheep.name,
+            role: electricSheep.role,
+            entitlement: .none,
+            bots: electricSheep.bots
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([withdrawn]))
+
+        #expect(fixture.model.pendingNewBotPlan == nil)
+        #expect(fixture.model.accountWorkspaceSelection.botID == nil)
+        #expect(fixture.model.repos.isEmpty)
+        #expect(!fixture.model.providers.providerKeyStored)
+    }
+
+    @MainActor
+    @Test func switchingWorkspaceClearsConfigAuthorizationOnboardingProofAndTransientGitHubInput() {
+        let localBot = bot(
+            id: "bot-local",
+            slug: "local-bot",
+            configPath: "/fixture/local-bot/config.local.json"
+        )
+        let accountA = workspace(id: "account-a", name: "Account A", bots: [localBot])
+        let accountB = workspace(id: "account-b", name: "Account B", bots: [])
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([accountA, accountB]))
+        fixture.model.configPath = localBot.localConfigPath!
+        fixture.loadConfig()
+        fixture.model.controlCenter.pollIntervalMs += 1
+        #expect(fixture.model.canPreviewControlCenter)
+        fixture.model.onboardingFlow.daemonBootstrapChecked = true
+        fixture.model.onboardingFlow.licenseActivation = .activated
+        fixture.model.pendingBYOGitHubAppId = "4184532"
+        fixture.model.pendingBYOGitHubAppPrivateKey = "fixture-private-key"
+        fixture.model.pendingActivationKey = "NDL-OLD-WORKSPACE-123456"
+        fixture.model.pendingIssueRepoName = "account-a/old"
+        fixture.model.controlCenter.pollIntervalMs += 1
+        fixture.model.githubAuthorizationCode = GitHubDeviceAuthorizationCode(
+            deviceCode: "fixture-device-code",
+            userCode: "ABCD-EFGH",
+            verificationURI: URL(string: "https://github.com/login/device")!,
+            expiresAt: Date(timeIntervalSince1970: 2_000_000_000),
+            intervalSeconds: 2
+        )
+        fixture.model.isGitHubAuthorizationInProgress = true
+        fixture.model.isGitHubRepositoryRefreshInProgress = true
+
+        fixture.model.selectAccountWorkspace(accountB.id)
+
+        #expect(!fixture.model.canPreviewControlCenter)
+        #expect(!fixture.model.onboardingFlow.daemonBootstrapChecked)
+        #expect(fixture.model.onboardingFlow.licenseActivation == .servicePending)
+        #expect(fixture.model.pendingBYOGitHubAppId.isEmpty)
+        #expect(fixture.model.pendingBYOGitHubAppPrivateKey.isEmpty)
+        #expect(fixture.model.pendingActivationKey.isEmpty)
+        #expect(fixture.model.pendingIssueRepoName.isEmpty)
+        #expect(fixture.model.controlCenter == DesktopControlCenterSettings())
+        #expect(fixture.model.githubAuthorizationCode == nil)
+        #expect(!fixture.model.isGitHubAuthorizationInProgress)
+        #expect(!fixture.model.isGitHubRepositoryRefreshInProgress)
+    }
+
+    @MainActor
+    @Test func firstCatalogRestoresTheSavedAuthorizedBot() {
+        let savedBot = bot(
+            id: "bot-saved",
+            slug: "saved-bot",
+            configPath: nil
+        )
+        let account = workspace(id: "account-saved", name: "Saved Account", bots: [savedBot])
+        let fixture = ModelDependencyFixture(preferenceStrings: [
+            "neondiff.accountWorkspaceID": account.id,
+            "neondiff.accountBotID": savedBot.id
+        ])
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+
+        #expect(fixture.model.accountWorkspaceSelection.accountID == account.id)
+        #expect(fixture.model.accountWorkspaceSelection.botID == savedBot.id)
+        #expect(fixture.preferences.string(forKey: "neondiff.accountBotID") == savedBot.id)
+    }
+
+    @MainActor
+    @Test func staleConfigInspectCannotPopulateTheNewWorkspace() async throws {
+        let botA = bot(id: "bot-a", slug: "bot-a", configPath: "/fixture/a/config.local.json")
+        let botB = bot(id: "bot-b", slug: "bot-b", configPath: "/fixture/b/config.local.json")
+        let accountA = workspace(id: "account-a", name: "Account A", bots: [botA])
+        let accountB = workspace(id: "account-b", name: "Account B", bots: [botB])
+        let resultA = ModelDependencyFixture.configInspectJSON
+            .replacingOccurrences(of: "neondiff-bot", with: "bot-a")
+        let resultB = ModelDependencyFixture.configInspectJSON
+            .replacingOccurrences(of: "neondiff-bot", with: "bot-b")
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(CLIRunResult(exitCode: 0, stdout: resultA, stderr: "")),
+                .success(CLIRunResult(exitCode: 0, stdout: resultB, stderr: ""))
+            ],
+            suspendCLIRuns: true
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([accountA, accountB]))
+        fixture.model.selectBotInstallation(botA.id)
+        await fixture.cli.waitUntilCallCount(1)
+
+        fixture.model.selectAccountWorkspace(accountB.id)
+        fixture.model.selectBotInstallation(botB.id)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fixture.cli.calls.count == 2)
+
+        fixture.cli.resumeSuspendedRuns()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(fixture.model.configPath == botB.localConfigPath)
+        #expect(fixture.model.github.botLogin == "bot-b")
     }
 
     @MainActor
     @Test func modelNewBotStartsAnIsolatedLocalPlanWithoutInventingAServerBot() throws {
         let fixture = ModelDependencyFixture()
         fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        let authoritativeBotIDs = fixture.model.selectedAccountWorkspace?.bots.map(\.id)
 
         fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
 
@@ -132,5 +416,73 @@ import NeonDiffDesktopCore
         #expect(fixture.model.selectedBotInstallation == nil)
         #expect(fixture.model.configPath == plan.bot.localConfigPath)
         #expect(fixture.model.isOnboardingPresented)
+        #expect(fixture.model.selectedAccountWorkspace?.bots.map(\.id) == authoritativeBotIDs)
+        #expect(fixture.model.selectedAccountWorkspace?.bots.contains(where: {
+            $0.id == plan.bot.id
+        }) == false)
+    }
+
+    @MainActor
+    @Test func serverBotWithoutALocalMatchGetsItsOwnIsolatedSetupPath() {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+
+        #expect(fixture.model.configPath == fixture.fileWriter.applicationSupportDirectory
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent(electricSheep.id, isDirectory: true)
+            .appendingPathComponent("Bots", isDirectory: true)
+            .appendingPathComponent("evaos-code-review-bot", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+            .standardizedFileURL.path)
+        #expect(fixture.model.isOnboardingPresented)
+    }
+
+    @MainActor
+    @Test func repeatedNewBotPlanDoesNotReuseThePendingConfigPath() throws {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
+        let firstPath = try #require(fixture.model.pendingNewBotPlan?.bot.localConfigPath)
+
+        fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
+        let secondPath = try #require(fixture.model.pendingNewBotPlan?.bot.localConfigPath)
+
+        #expect(secondPath != firstPath)
+        #expect(secondPath.contains("electric-sheep-secondary-2"))
+    }
+
+    private func bot(
+        id: String,
+        slug: String,
+        configPath: String?,
+        status: DesktopBotStatus = .verified
+    ) -> DesktopBotInstallation {
+        DesktopBotInstallation(
+            id: id,
+            appID: 4_184_532,
+            appSlug: slug,
+            mode: .byo,
+            githubInstallationID: 72_001,
+            githubAccountLogin: "electricsheephq",
+            status: status,
+            localConfigPath: configPath
+        )
+    }
+
+    private func workspace(
+        id: String,
+        name: String,
+        bots: [DesktopBotInstallation]
+    ) -> DesktopAccountWorkspace {
+        DesktopAccountWorkspace(
+            id: id,
+            kind: .organization,
+            name: name,
+            role: .admin,
+            entitlement: .internalAdmin,
+            bots: bots
+        )
     }
 }

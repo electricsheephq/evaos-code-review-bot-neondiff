@@ -64,6 +64,35 @@ package struct DesktopBotInstallation: Identifiable, Codable, Equatable, Sendabl
     package var isAvailableOnThisMac: Bool {
         localConfigPath != nil
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, appID, appSlug, mode, githubInstallationID, githubAccountLogin, status
+    }
+
+    /// `localConfigPath` is local-only evidence discovered on this Mac. It is
+    /// absent from the wire representation so a service cannot select a path.
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        appID = try container.decode(Int64.self, forKey: .appID)
+        appSlug = try container.decode(String.self, forKey: .appSlug)
+        mode = try container.decode(DesktopBotMode.self, forKey: .mode)
+        githubInstallationID = try container.decodeIfPresent(Int64.self, forKey: .githubInstallationID)
+        githubAccountLogin = try container.decodeIfPresent(String.self, forKey: .githubAccountLogin)
+        status = try container.decode(DesktopBotStatus.self, forKey: .status)
+        localConfigPath = nil
+    }
+
+    package func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(appID, forKey: .appID)
+        try container.encode(appSlug, forKey: .appSlug)
+        try container.encode(mode, forKey: .mode)
+        try container.encodeIfPresent(githubInstallationID, forKey: .githubInstallationID)
+        try container.encodeIfPresent(githubAccountLogin, forKey: .githubAccountLogin)
+        try container.encode(status, forKey: .status)
+    }
 }
 
 package struct DesktopLocalBotCandidate: Equatable, Sendable {
@@ -133,6 +162,22 @@ package struct DesktopAccountWorkspace: Identifiable, Codable, Equatable, Sendab
         }
         return result
     }
+
+    /// Compares only the server-authoritative account and installation fields.
+    /// Local config discovery may enrich a catalog without changing authority.
+    package func hasSameAuthority(as other: DesktopAccountWorkspace) -> Bool {
+        func authorityOnly(_ workspace: DesktopAccountWorkspace) -> DesktopAccountWorkspace {
+            var result = workspace
+            result.bots = workspace.bots.map { bot in
+                var authoritativeBot = bot
+                authoritativeBot.localConfigPath = nil
+                return authoritativeBot
+            }.sorted { $0.id < $1.id }
+            return result
+        }
+
+        return authorityOnly(self) == authorityOnly(other)
+    }
 }
 
 package enum DesktopAccountWorkspaceCatalog: Equatable, Sendable {
@@ -194,7 +239,8 @@ package struct DesktopNewBotPlan: Equatable, Sendable {
         account: DesktopAccountWorkspace,
         appSlug: String,
         applicationSupportDirectory: URL,
-        occupiedConfigPaths: Set<String>
+        occupiedConfigPaths: Set<String>,
+        fileExists: (URL) -> Bool = { _ in false }
     ) throws -> DesktopNewBotPlan {
         guard account.role != nil else {
             throw DesktopNewBotPlanError.accountMembershipRequired
@@ -215,7 +261,8 @@ package struct DesktopNewBotPlan: Equatable, Sendable {
             .appendingPathComponent("config.local.json")
             .standardizedFileURL.path
         var suffix = 2
-        while occupiedConfigPaths.contains(candidate) {
+        while occupiedConfigPaths.contains(candidate)
+            || fileExists(URL(filePath: candidate)) {
             candidate = baseDirectory
                 .appendingPathComponent("\(appSlug)-\(suffix)", isDirectory: true)
                 .appendingPathComponent("config.local.json")

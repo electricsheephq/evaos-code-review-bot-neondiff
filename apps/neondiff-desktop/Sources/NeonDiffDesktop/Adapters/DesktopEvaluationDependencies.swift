@@ -90,6 +90,7 @@ private struct EvaluationClock: DesktopClock {
 
 private struct EvaluationFileWriter: DesktopFileWriting {
     let applicationSupportDirectory = URL(filePath: "/fixture/NeonDiffDesktop", directoryHint: .isDirectory)
+    func fileExists(at url: URL) -> Bool { false }
     func write(_ data: Data, to url: URL) throws {}
 }
 

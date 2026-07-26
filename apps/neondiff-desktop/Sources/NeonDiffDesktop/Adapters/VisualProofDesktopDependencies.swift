@@ -94,6 +94,7 @@ private struct VisualProofClock: DesktopClock {
 private struct VisualProofFileWriter: DesktopFileWriting {
     let applicationSupportDirectory = URL(filePath: "/visual-proof/NeonDiffDesktop", directoryHint: .isDirectory)
 
+    func fileExists(at url: URL) -> Bool { false }
     func write(_ data: Data, to url: URL) throws {}
 }
 

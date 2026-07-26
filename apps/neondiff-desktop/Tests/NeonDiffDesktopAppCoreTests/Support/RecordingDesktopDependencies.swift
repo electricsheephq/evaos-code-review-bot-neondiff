@@ -243,6 +243,13 @@ final class TemporaryFileWriter: DesktopFileWriting, @unchecked Sendable {
 
     var writes: [RecordedFileWrite] { recordedWrites.read { $0 } }
 
+    func fileExists(at url: URL) -> Bool {
+        let destination = url.standardizedFileURL
+        return recordedWrites.read { writes in
+            writes.contains { $0.url.standardizedFileURL == destination }
+        } || FileManager.default.fileExists(atPath: destination.path)
+    }
+
     func write(_ data: Data, to url: URL) throws {
         let destination = url.standardizedFileURL
         let rootPath = applicationSupportDirectory.path

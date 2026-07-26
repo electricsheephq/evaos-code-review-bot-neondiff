@@ -119,6 +119,8 @@ final class ScriptedGitHubAuthenticator: GitHubDesktopAuthenticating, @unchecked
         var refreshTokens: [String] = []
         var fetchedAccessTokens: [String] = []
         var listedAccessTokens: [String] = []
+        var suspendRefresh: Bool
+        var suspendedRefreshContinuations: [CheckedContinuation<Void, Never>] = []
     }
 
     private let state: ModelFixtureLocked<State>
@@ -134,14 +136,16 @@ final class ScriptedGitHubAuthenticator: GitHubDesktopAuthenticating, @unchecked
         pollResults: [GitHubDeviceAuthorizationPollResult] = [],
         refreshedToken: GitHubUserToken = GitHubUserToken(accessToken: "fixture-refreshed-token"),
         user: GitHubAuthenticatedUser = GitHubAuthenticatedUser(login: "fixture-user"),
-        repositories: [GitHubDiscoveredRepository] = []
+        repositories: [GitHubDiscoveredRepository] = [],
+        suspendRefresh: Bool = false
     ) {
         state = ModelFixtureLocked(State(
             deviceCode: deviceCode,
             pollResults: pollResults,
             refreshedToken: refreshedToken,
             user: user,
-            repositories: repositories
+            repositories: repositories,
+            suspendRefresh: suspendRefresh
         ))
     }
 
@@ -170,7 +174,26 @@ final class ScriptedGitHubAuthenticator: GitHubDesktopAuthenticating, @unchecked
 
     func refreshUserToken(clientId: String, refreshToken: String) async throws -> GitHubUserToken {
         state.update { $0.refreshTokens.append(refreshToken) }
+        if state.read(\.suspendRefresh) {
+            await withCheckedContinuation { continuation in
+                let shouldResume = state.update { state -> Bool in
+                    guard state.suspendRefresh else { return true }
+                    state.suspendedRefreshContinuations.append(continuation)
+                    return false
+                }
+                if shouldResume { continuation.resume() }
+            }
+        }
         return state.read(\.refreshedToken)
+    }
+
+    func resumeSuspendedRefreshes() {
+        let continuations = state.update { state -> [CheckedContinuation<Void, Never>] in
+            state.suspendRefresh = false
+            defer { state.suspendedRefreshContinuations.removeAll() }
+            return state.suspendedRefreshContinuations
+        }
+        continuations.forEach { $0.resume() }
     }
 
     func fetchCurrentUser(accessToken: String) async throws -> GitHubAuthenticatedUser {
