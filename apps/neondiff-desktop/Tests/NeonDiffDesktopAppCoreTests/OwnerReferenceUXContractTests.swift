@@ -282,6 +282,17 @@ import Testing
         #expect(overview.contains("Restoring this Mac"))
         #expect(overview.contains("CHECKING LOCAL SETUP"))
         #expect(sidebar.contains("CHECKING THIS MAC"))
+        #expect(sidebar.contains("private var accountMutationDisabled: Bool"))
+        #expect(
+            sidebar.components(separatedBy: ".disabled(accountMutationDisabled)").count >= 6
+        )
+        #expect(
+            sidebar.contains(
+                "accountMutationDisabled\n"
+                    + "                                || bot.status == .revoked\n"
+                    + "                                || bot.status == .suspended"
+            )
+        )
         #expect(overview.contains("design: .rounded"))
         for title in ["GITHUB APP", "PROVIDER", "LICENSE", "REPOSITORY"] {
             #expect(overview.contains(title))

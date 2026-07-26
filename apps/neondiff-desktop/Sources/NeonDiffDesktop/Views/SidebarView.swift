@@ -154,6 +154,7 @@ struct SidebarView: View {
                 } label: {
                     Label("CONNECT NEONDIFF ACCOUNT", systemImage: "person.crop.circle.badge.plus")
                 }
+                .disabled(accountMutationDisabled)
                 .accessibilityIdentifier("neondiff-account-connect")
             } else {
                 Text("ACCOUNT LINK UNAVAILABLE")
@@ -174,6 +175,7 @@ struct SidebarView: View {
                 } label: {
                     Label("RECONNECT ACCOUNT", systemImage: "arrow.clockwise")
                 }
+                .disabled(accountMutationDisabled)
                 .accessibilityIdentifier("neondiff-account-reconnect")
             }
         case .loaded:
@@ -185,6 +187,7 @@ struct SidebarView: View {
                     } label: {
                         Label("CONNECT ACCOUNT", systemImage: "person.crop.circle.badge.plus")
                     }
+                    .disabled(accountMutationDisabled)
                     .accessibilityIdentifier("neondiff-account-connect-empty")
                 }
             } else {
@@ -199,6 +202,7 @@ struct SidebarView: View {
                                 : account.kind == .organization ? "building.2" : "person"
                         )
                     }
+                    .disabled(accountMutationDisabled)
                     .accessibilityIdentifier("neondiff-account-option-\(account.id)")
                 }
 
@@ -220,7 +224,11 @@ struct SidebarView: View {
                                     : bot.isAvailableOnThisMac ? "laptopcomputer" : "app.badge"
                             )
                         }
-                        .disabled(bot.status == .revoked || bot.status == .suspended)
+                        .disabled(
+                            accountMutationDisabled
+                                || bot.status == .revoked
+                                || bot.status == .suspended
+                        )
                         .accessibilityIdentifier("neondiff-bot-option-\(bot.id)")
                     }
                     Button {
@@ -229,6 +237,7 @@ struct SidebarView: View {
                     } label: {
                         Label("NEW BOT", systemImage: "plus.circle")
                     }
+                    .disabled(accountMutationDisabled)
                     .accessibilityIdentifier("neondiff-new-bot")
                 }
                 if accountLinkAvailable {
@@ -238,6 +247,7 @@ struct SidebarView: View {
                     } label: {
                         Label("REFRESH ACCOUNTS", systemImage: "arrow.clockwise")
                     }
+                    .disabled(accountMutationDisabled)
                     .accessibilityIdentifier("neondiff-account-refresh")
                 }
             }
@@ -246,6 +256,10 @@ struct SidebarView: View {
 
     private var selectedAccountName: String? {
         accountCatalog.accounts.first { $0.id == accountSelection.accountID }?.name.uppercased()
+    }
+
+    private var accountMutationDisabled: Bool {
+        readiness.isRestoring
     }
 }
 
