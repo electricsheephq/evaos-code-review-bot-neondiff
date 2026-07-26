@@ -133,6 +133,9 @@ import NeonDiffDesktopCore
         #expect(model.customerSurfaceStatus == "RESTORING")
 
         await model.waitForAccountLinkOperation()
+        for _ in 0..<50 where model.isConfigInspectInProgress {
+            await Task.yield()
+        }
 
         #expect(!model.isAutomaticAccountWorkspaceRefreshInProgress)
         #expect(!model.isSetupMutationBlocked)

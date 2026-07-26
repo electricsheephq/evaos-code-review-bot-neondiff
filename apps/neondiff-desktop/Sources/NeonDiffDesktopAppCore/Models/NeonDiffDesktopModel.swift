@@ -2492,11 +2492,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func storeProviderKey() {
-        guard canEditProviderConfiguration else {
-            lastError = isSetupMutationBlocked
-                ? "Retry account verification before changing provider setup."
-                : (providerVerificationSafetyLatchMessage
-                    ?? "Wait for provider verification cleanup before changing config.")
+        guard !isSetupMutationBlocked else {
+            lastError = "Retry account verification before changing provider setup."
             return
         }
         guard providerVerificationSafetyLatchMessage == nil else {
@@ -2747,11 +2744,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func clearProviderKey() {
-        guard canEditProviderConfiguration else {
-            lastError = isSetupMutationBlocked
-                ? "Retry account verification before changing provider setup."
-                : (providerVerificationSafetyLatchMessage
-                    ?? "Wait for provider verification cleanup before changing config.")
+        guard !isSetupMutationBlocked else {
+            lastError = "Retry account verification before changing provider setup."
             return
         }
         guard providerVerificationSafetyLatchMessage == nil else {
