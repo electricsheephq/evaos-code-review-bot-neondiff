@@ -330,6 +330,24 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return storedAppID == String(bot.appID)
     }
 
+    package var existingLocalBotBYOGitHubVerificationStatus: String {
+        guard existingLocalBotIdentityReady,
+              let bot = selectedBotInstallation
+        else {
+            return "The selected existing bot identity is not verified for this local config."
+        }
+        guard let storedAppID = storedBYOGitHubAppId else {
+            return "No app-owned Keychain App ID is stored for current-access verification."
+        }
+        guard storedAppID == String(bot.appID) else {
+            return "The stored App ID does not match the selected existing bot. Select the matching bot or replace that bot's Keychain credential."
+        }
+        guard byoGitHubPrivateKeyStored else {
+            return "The App ID matches, but its app-owned private key is missing from Keychain."
+        }
+        return byoGitHubCredentialStatus
+    }
+
     package var managedGitHubStatusText: String {
         switch managedGitHubConnectionState {
         case .quarantined:

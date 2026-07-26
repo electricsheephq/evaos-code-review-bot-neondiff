@@ -147,6 +147,33 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func existingBYOBotExplainsAppIDMismatchWithoutBlamingAMissingKey() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.pendingBYOGitHubAppId = "999999"
+        fixture.model.pendingBYOGitHubAppPrivateKey = existingBotFixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(authMode: "zcode-app-config"))
+
+        #expect(!fixture.model.existingLocalBotBYOGitHubVerificationAvailable)
+        #expect(
+            fixture.model.existingLocalBotBYOGitHubVerificationStatus
+                .contains("does not match")
+        )
+        #expect(
+            !fixture.model.existingLocalBotBYOGitHubVerificationStatus
+                .contains("not available")
+        )
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
     @Test func noKeyProviderDoesNotInventAKeyRequirement() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,

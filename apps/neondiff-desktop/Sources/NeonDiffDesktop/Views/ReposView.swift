@@ -353,11 +353,7 @@ struct ReposView: View {
                         .accessibilityIdentifier("neondiff-existing-byo-github-verify")
                     }
 
-                    Text(
-                        model.existingLocalBotBYOGitHubVerificationAvailable
-                            ? model.byoGitHubCredentialStatus
-                            : "The existing App identity is matched, but its app-owned Keychain credential is not available for current-access verification on this Mac."
-                    )
+                    Text(model.existingLocalBotBYOGitHubVerificationStatus)
                     .font(.caption)
                     .foregroundStyle(
                         model.byoGitHubCredentialsVerified

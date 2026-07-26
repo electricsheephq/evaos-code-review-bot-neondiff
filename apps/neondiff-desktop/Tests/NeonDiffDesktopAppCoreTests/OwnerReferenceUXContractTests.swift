@@ -136,6 +136,7 @@ import Testing
         #expect(repos.contains("will not copy, migrate, or ask you to re-enter"))
         #expect(repos.contains("neondiff-existing-byo-github-verify"))
         #expect(repos.contains("model.verifyBYOGitHubAppCredentials()"))
+        #expect(repos.contains("model.existingLocalBotBYOGitHubVerificationStatus"))
         #expect(provider.contains("model.selectedProviderRequiresAPIKey"))
         #expect(provider.contains("APP CONFIG LOADED"))
         #expect(provider.contains(
