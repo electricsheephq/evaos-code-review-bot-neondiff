@@ -110,7 +110,8 @@ public enum ConfigInspectParser {
         let providers = ProviderSettings(
             zcodeModel: zcode?["model"] as? String ?? "GLM-5.2",
             zcodeCliPath: zcode?["cliPath"] as? String ?? "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
-            zcodeAppConfigPath: zcode?["appConfigPath"] as? String ?? "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+            zcodeAppConfigPath: zcode?["appConfigPath"] as? String
+                ?? ProviderSettings.defaultZCodeAppConfigPath,
             openAICompatibleEndpoint: desktop?["openAICompatibleEndpoint"] as? String ?? "http://localhost:8000/v1",
             providerKeyStored: providerKeyStored,
             selectedProviderId: selectedProviderId,

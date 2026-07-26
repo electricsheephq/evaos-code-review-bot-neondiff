@@ -124,6 +124,12 @@ public struct ProviderRegistryTarget: Identifiable, Equatable, Sendable {
 }
 
 public struct ProviderSettings: Equatable {
+    public static var defaultZCodeAppConfigPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/zcode/config.json")
+            .path
+    }
+
     public var zcodeModel: String
     public var zcodeCliPath: String
     public var zcodeAppConfigPath: String
@@ -135,7 +141,7 @@ public struct ProviderSettings: Equatable {
     public init(
         zcodeModel: String = "GLM-5.2",
         zcodeCliPath: String = "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
-        zcodeAppConfigPath: String = "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+        zcodeAppConfigPath: String = ProviderSettings.defaultZCodeAppConfigPath,
         openAICompatibleEndpoint: String = "http://localhost:8000/v1",
         providerKeyStored: Bool = false,
         selectedProviderId: String = "zcode-glm",

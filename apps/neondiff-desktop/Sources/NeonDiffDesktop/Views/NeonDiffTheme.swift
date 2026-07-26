@@ -254,11 +254,23 @@ struct NDBrandWordmark: View {
     var size: CGFloat
     @Environment(\.colorScheme) private var colorScheme
     private static let resourceBundle: Bundle = {
-#if SWIFT_PACKAGE
-        Bundle.module
-#else
-        Bundle.main
-#endif
+        let bundleName = "NeonDiffDesktop_NeonDiffDesktop"
+        if let packagedURL = Bundle.main.url(
+            forResource: bundleName,
+            withExtension: "bundle"
+        ), let packagedBundle = Bundle(url: packagedURL) {
+            return packagedBundle
+        }
+
+        let swiftPMURL = Bundle.main.bundleURL.appendingPathComponent(
+            "\(bundleName).bundle",
+            isDirectory: true
+        )
+        if let swiftPMBundle = Bundle(url: swiftPMURL) {
+            return swiftPMBundle
+        }
+
+        return Bundle.main
     }()
     private static let image: NSImage? = {
         guard let url = resourceBundle.url(

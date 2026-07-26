@@ -3,6 +3,24 @@ import Testing
 @testable import NeonDiffDesktopAppCore
 
 @Suite struct OwnerReferenceUXContractTests {
+    @Test func packagedWordmarkNeverUsesACompiledSwiftPMBuildPath() throws {
+        let theme = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("Sources/NeonDiffDesktop/Views/NeonDiffTheme.swift")
+        )
+
+        let packagedLookup = try #require(theme.range(of: "Bundle.main.url("))
+        let swiftPMSiblingLookup = try #require(
+            theme.range(of: "Bundle.main.bundleURL.appendingPathComponent(")
+        )
+
+        #expect(packagedLookup.lowerBound < swiftPMSiblingLookup.lowerBound)
+        #expect(theme.contains(#"let bundleName = "NeonDiffDesktop_NeonDiffDesktop""#))
+        #expect(theme.contains(#"withExtension: "bundle""#))
+        #expect(theme.contains("return packagedBundle"))
+        #expect(!theme.contains("Bundle.module"))
+    }
+
     @Test func setupUsesAnEscapableIntegratedPanelInsteadOfAModalSheet() throws {
         let views = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
@@ -82,7 +100,7 @@ import Testing
         #expect(theme.contains("@Environment(\\.isEnabled) private var isEnabled"))
         #expect(theme.contains(".opacity(isEnabled ? 1 : 0.38)"))
         #expect(theme.contains("NDBrandWordmark"))
-        #expect(theme.contains("#if SWIFT_PACKAGE"))
+        #expect(!theme.contains("Bundle.module"))
         #expect(theme.contains("Bundle.main"))
         #expect(theme.contains("interfaceBorder"))
         #expect(!theme.contains(".fill(Color.black.opacity(0.38))"))
