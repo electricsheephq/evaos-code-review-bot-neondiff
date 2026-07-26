@@ -114,6 +114,11 @@ struct ContentView: View {
         .onExitCommand {
             model.dismissOnboardingPanel()
         }
+        .task {
+            if model.accountLinkAvailable {
+                model.refreshAccountWorkspacesOnLaunch()
+            }
+        }
     }
 }
 
@@ -171,11 +176,15 @@ private struct ReferenceShellLayout: View {
                         SidebarView(
                             selection: $model.selectedSection,
                             readiness: DesktopSetupReadiness(model: model),
+                            accountLinkAvailable: model.accountLinkAvailable,
                             accountCatalog: model.accountWorkspaceCatalog,
                             accountSelection: model.accountWorkspaceSelection,
                             selectAccount: model.selectAccountWorkspace,
                             selectBot: model.selectBotInstallation,
-                            beginNewBot: { model.beginNewBot() }
+                            beginNewBot: { model.beginNewBot() },
+                            connectAccount: model.connectNeonDiffAccount,
+                            cancelAccountLink: model.cancelAccountLink,
+                            refreshAccounts: model.refreshAccountWorkspaces
                         )
                             .frame(width: proxy.size.width < 980 ? 204 : 242)
                         .evaluationAccessibilityRegion(

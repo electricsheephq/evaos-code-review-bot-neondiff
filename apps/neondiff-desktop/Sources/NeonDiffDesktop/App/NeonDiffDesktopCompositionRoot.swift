@@ -24,6 +24,14 @@ enum NeonDiffDesktopCompositionRoot {
         let githubBroker = productionBoundary.managedGitHubBrokerOrigin.flatMap {
             try? GitHubBrokerClient(baseURL: $0)
         }
+        let accountLink = productionBoundary.accountLinkBrokerOrigin.flatMap { origin in
+            productionBoundary.accountConnectURL.flatMap { connectURL in
+                try? GitHubBrokerClient(
+                    baseURL: origin,
+                    accountConnectURL: connectURL
+                )
+            }
+        }
         if productionBoundary.managedGitHubBrokerOrigin != nil, githubBroker == nil {
             productionBoundary = .quarantined
         }
@@ -39,6 +47,7 @@ enum NeonDiffDesktopCompositionRoot {
             secretStore: keychain,
             githubAuthenticator: GitHubDeviceAuthClient(),
             githubBroker: githubBroker,
+            accountLink: accountLink,
             productionBoundary: productionBoundary,
             cliWorkingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
         ))

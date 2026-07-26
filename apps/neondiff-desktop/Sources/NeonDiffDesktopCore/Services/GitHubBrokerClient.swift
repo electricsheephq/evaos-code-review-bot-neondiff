@@ -302,6 +302,9 @@ public enum GitHubBrokerReason: String, Sendable {
     case entitlementSeatExhausted = "entitlement_seat_exhausted"
     case entitlementReplayConflict = "entitlement_replay_conflict"
     case entitlementServiceUnavailable = "entitlement_service_unavailable"
+    case accountLinkRequired = "account_link_required"
+    case accountIdentityUnverified = "account_identity_unverified"
+    case accountAuthorityUnavailable = "account_authority_unavailable"
     case rateLimited = "rate_limited"
     case brokerUnavailable = "broker_unavailable"
 }
@@ -403,6 +406,133 @@ public struct GitHubBrokerRepositoryPage: Equatable, Sendable {
     }
 }
 
+public struct NeonDiffAccountLinkConnection: Equatable, Sendable {
+    public let connectURL: URL
+    public let state: String
+    public let expiresAt: Date
+
+    public init(connectURL: URL, state: String, expiresAt: Date) {
+        self.connectURL = connectURL
+        self.state = state
+        self.expiresAt = expiresAt
+    }
+}
+
+public enum NeonDiffAccountKind: String, Codable, Equatable, Sendable {
+    case personal
+    case organization
+}
+
+public enum NeonDiffAccountRole: String, Codable, Equatable, Sendable {
+    case owner
+    case admin
+    case member
+}
+
+public enum NeonDiffAccountEntitlement: String, Codable, Equatable, Sendable {
+    case publicFree = "public_free"
+    case paid
+    case internalAdmin = "internal_admin"
+    case trial
+    case none
+}
+
+public enum NeonDiffAccountBotMode: String, Codable, Equatable, Sendable {
+    case byo
+    case managed
+}
+
+public enum NeonDiffAccountBotStatus: String, Codable, Equatable, Sendable {
+    case pending
+    case verified
+    case suspended
+    case revoked
+}
+
+public struct NeonDiffAccountBot: Codable, Equatable, Sendable {
+    public let id: String
+    public let appID: Int64
+    public let appSlug: String
+    public let mode: NeonDiffAccountBotMode
+    public let githubInstallationID: Int64?
+    public let githubAccountLogin: String?
+    public let status: NeonDiffAccountBotStatus
+
+    public init(
+        id: String,
+        appID: Int64,
+        appSlug: String,
+        mode: NeonDiffAccountBotMode,
+        githubInstallationID: Int64?,
+        githubAccountLogin: String?,
+        status: NeonDiffAccountBotStatus
+    ) {
+        self.id = id
+        self.appID = appID
+        self.appSlug = appSlug
+        self.mode = mode
+        self.githubInstallationID = githubInstallationID
+        self.githubAccountLogin = githubAccountLogin
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, appSlug, mode, githubAccountLogin, status
+        case appID = "appId"
+        case githubInstallationID = "githubInstallationId"
+    }
+}
+
+public struct NeonDiffAccountWorkspace: Codable, Equatable, Sendable {
+    public let id: String
+    public let kind: NeonDiffAccountKind
+    public let name: String
+    public let role: NeonDiffAccountRole
+    public let entitlement: NeonDiffAccountEntitlement
+    public let bots: [NeonDiffAccountBot]
+
+    public init(
+        id: String,
+        kind: NeonDiffAccountKind,
+        name: String,
+        role: NeonDiffAccountRole,
+        entitlement: NeonDiffAccountEntitlement,
+        bots: [NeonDiffAccountBot]
+    ) {
+        self.id = id
+        self.kind = kind
+        self.name = name
+        self.role = role
+        self.entitlement = entitlement
+        self.bots = bots
+    }
+}
+
+public struct NeonDiffAccountWorkspaceSnapshot: Equatable, Sendable {
+    public let accounts: [NeonDiffAccountWorkspace]
+
+    public init(accounts: [NeonDiffAccountWorkspace]) {
+        self.accounts = accounts
+    }
+}
+
+public protocol NeonDiffAccountLinkConnecting: Sendable {
+    func registerAccountLinkIdentity(identity: GitHubBrokerDeviceIdentity) async throws
+    func startAccountLink(identity: GitHubBrokerDeviceIdentity) async throws -> NeonDiffAccountLinkConnection
+    func loadAccountWorkspaces(
+        identity: GitHubBrokerDeviceIdentity,
+        state: String?
+    ) async throws -> NeonDiffAccountWorkspaceSnapshot
+}
+
+public extension NeonDiffAccountLinkConnecting {
+    func loadAccountWorkspaces(
+        identity: GitHubBrokerDeviceIdentity
+    ) async throws -> NeonDiffAccountWorkspaceSnapshot {
+        try await loadAccountWorkspaces(identity: identity, state: nil)
+    }
+}
+
 public protocol GitHubBrokerConnecting: Sendable {
     func register(identity: GitHubBrokerDeviceIdentity) async throws
     func startConnection(identity: GitHubBrokerDeviceIdentity) async throws -> GitHubBrokerConnection
@@ -455,24 +585,96 @@ public struct GitHubInstallationAccessGrant: Sendable, CustomStringConvertible, 
     public var debugDescription: String { description }
 }
 
-public struct GitHubBrokerClient: GitHubBrokerConnecting, Sendable {
+public struct GitHubBrokerClient: GitHubBrokerConnecting, NeonDiffAccountLinkConnecting, Sendable {
     public static let maximumResponseBytes = 64 * 1024
 
     private let baseURL: URL
+    private let accountConnectURL: URL
     private let transport: any GitHubBrokerTransporting
     private let now: @Sendable () -> Date
 
     public init(
         baseURL: URL,
+        accountConnectURL: URL = URL(string: "https://www.neondiff.com/desktop/connect")!,
         transport: any GitHubBrokerTransporting = URLSessionGitHubBrokerTransport(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) throws {
-        guard Self.isValidBaseURL(baseURL) else {
+        guard Self.isValidBaseURL(baseURL),
+              Self.isValidAccountConnectURL(accountConnectURL)
+        else {
             throw GitHubBrokerClientError.invalidBaseURL
         }
         self.baseURL = baseURL
+        self.accountConnectURL = accountConnectURL
         self.transport = transport
         self.now = now
+    }
+
+    public func registerAccountLinkIdentity(identity: GitHubBrokerDeviceIdentity) async throws {
+        let response: RegisterResponse = try await post(
+            path: "/account/device/register",
+            body: [
+                "publicKeyJwk": [
+                    "kty": identity.publicKeyJWK.kty,
+                    "crv": identity.publicKeyJWK.crv,
+                    "x": identity.publicKeyJWK.x,
+                    "y": identity.publicKeyJWK.y
+                ]
+            ],
+            credential: nil
+        )
+        guard response.status == "registered", response.deviceId == identity.deviceId else {
+            throw GitHubBrokerClientError.identityMismatch
+        }
+    }
+
+    public func startAccountLink(
+        identity: GitHubBrokerDeviceIdentity
+    ) async throws -> NeonDiffAccountLinkConnection {
+        let response: AccountLinkStartResponse = try await post(
+            path: "/account/connect/start",
+            body: [:],
+            credential: try identity.makeCredential(now: now())
+        )
+        guard response.status == "account_connect_started",
+              Self.isOpaqueAccountState(response.state),
+              let connectURL = URL(string: response.connectUrl),
+              Self.isTrustedAccountConnectURL(
+                  connectURL,
+                  expected: accountConnectURL,
+                  state: response.state
+              ),
+              let expiresAt = parseBrokerDate(response.expiresAt),
+              expiresAt > now(),
+              expiresAt.timeIntervalSince(now()) <= 10 * 60 + 5
+        else {
+            throw GitHubBrokerClientError.invalidResponse
+        }
+        return NeonDiffAccountLinkConnection(
+            connectURL: connectURL,
+            state: response.state,
+            expiresAt: expiresAt
+        )
+    }
+
+    public func loadAccountWorkspaces(
+        identity: GitHubBrokerDeviceIdentity,
+        state: String? = nil
+    ) async throws -> NeonDiffAccountWorkspaceSnapshot {
+        if let state, !Self.isOpaqueAccountState(state) {
+            throw GitHubBrokerClientError.invalidRequest
+        }
+        let response: AccountWorkspaceResponse = try await post(
+            path: "/account/workspaces",
+            body: state.map { ["state": $0] } ?? [:],
+            credential: try identity.makeCredential(now: now())
+        )
+        guard response.status == "ready",
+              Self.isValidAccountWorkspaces(response.accounts)
+        else {
+            throw GitHubBrokerClientError.scopeMismatch
+        }
+        return NeonDiffAccountWorkspaceSnapshot(accounts: response.accounts)
     }
 
     public func register(identity: GitHubBrokerDeviceIdentity) async throws {
@@ -745,6 +947,84 @@ public struct GitHubBrokerClient: GitHubBrokerConnecting, Sendable {
             && (url.path.isEmpty || url.path == "/")
     }
 
+    private static func isValidAccountConnectURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https"
+            && url.host?.isEmpty == false
+            && url.user == nil
+            && url.password == nil
+            && url.query == nil
+            && url.fragment == nil
+            && url.path == "/desktop/connect"
+    }
+
+    private static func isTrustedAccountConnectURL(
+        _ url: URL,
+        expected: URL,
+        state: String
+    ) -> Bool {
+        guard sameOrigin(url, expected),
+              url.path == expected.path,
+              url.user == nil,
+              url.password == nil,
+              url.fragment == nil,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.queryItems?.count == 1,
+              components.queryItems?.first?.name == "state",
+              components.queryItems?.first?.value == state
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func isOpaqueAccountState(_ value: String) -> Bool {
+        value.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil
+    }
+
+    private static func isValidAccountWorkspaces(
+        _ accounts: [NeonDiffAccountWorkspace]
+    ) -> Bool {
+        guard accounts.count <= 100,
+              Set(accounts.map(\.id)).count == accounts.count
+        else {
+            return false
+        }
+        return accounts.allSatisfy { account in
+            Self.isUUIDIdentifier(account.id)
+                && Self.isBoundedDisplayName(account.name, maximum: 200)
+                && account.bots.count <= 100
+                && Set(account.bots.map(\.id)).count == account.bots.count
+                && account.bots.allSatisfy { bot in
+                    Self.isUUIDIdentifier(bot.id)
+                        && bot.appID > 0
+                        && bot.appSlug.range(
+                            of: "^[a-z0-9][a-z0-9-]{0,99}$",
+                            options: .regularExpression
+                        ) != nil
+                        && (bot.githubInstallationID.map { $0 > 0 } ?? true)
+                        && (bot.githubAccountLogin.map {
+                            Self.isBoundedIdentifier($0, maximum: 100)
+                        } ?? true)
+                }
+        }
+    }
+
+    private static func isBoundedIdentifier(_ value: String, maximum: Int) -> Bool {
+        value.isEmpty == false
+            && value.utf8.count <= maximum
+            && value.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+    }
+
+    private static func isUUIDIdentifier(_ value: String) -> Bool {
+        UUID(uuidString: value)?.uuidString.caseInsensitiveCompare(value) == .orderedSame
+    }
+
+    private static func isBoundedDisplayName(_ value: String, maximum: Int) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            && value.utf8.count <= maximum
+            && value.rangeOfCharacter(from: .newlines) == nil
+    }
+
     private static func sameOrigin(_ left: URL, _ right: URL) -> Bool {
         left.scheme?.lowercased() == right.scheme?.lowercased()
             && left.host?.lowercased() == right.host?.lowercased()
@@ -784,6 +1064,18 @@ public struct GitHubBrokerClient: GitHubBrokerConnecting, Sendable {
 private struct RegisterResponse: Decodable {
     let status: String
     let deviceId: String
+}
+
+private struct AccountLinkStartResponse: Decodable {
+    let status: String
+    let connectUrl: String
+    let state: String
+    let expiresAt: String
+}
+
+private struct AccountWorkspaceResponse: Decodable {
+    let status: String
+    let accounts: [NeonDiffAccountWorkspace]
 }
 
 private struct StartResponse: Decodable {

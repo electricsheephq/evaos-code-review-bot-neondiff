@@ -126,7 +126,7 @@ private final class EvaluationProviderVerifier: DesktopProviderVerifying, @unche
     }
 }
 
-private final class EvaluationSecretStore: DesktopSecretStoring {
+private final class EvaluationSecretStore: DesktopSecretStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var accounts: Set<String>
 

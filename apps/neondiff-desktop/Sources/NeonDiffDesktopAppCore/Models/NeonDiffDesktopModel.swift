@@ -163,6 +163,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var accountWorkspaceCatalog: DesktopAccountWorkspaceCatalog = .idle
     @Published package private(set) var accountWorkspaceSelection = DesktopAccountWorkspaceSelection()
     @Published package private(set) var accountWorkspaceStatus = "Sign in to load your personal and organization accounts."
+    @Published package private(set) var isAccountLinkInProgress = false
     @Published package private(set) var pendingNewBotPlan: DesktopNewBotPlan?
 
     // Issue #612 — native purchase-to-activation state. Restored from preferences
@@ -380,6 +381,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var managedGitHubConnectionTask: Task<Void, Never>?
+    private var accountLinkTask: Task<Void, Never>?
+    private var mostRecentAccountLinkTask: Task<Void, Never>?
+    private var accountLinkGeneration: UInt64 = 0
+    private var attemptedAutomaticAccountWorkspaceRefresh = false
     private var pendingManagedGitHubAuthorization: PendingManagedGitHubAuthorization?
     private var githubRepositoryRefreshGate = GitHubLatestRequestGate()
     private var controlCenterLoadedSnapshot: DesktopControlCenterSnapshot?
@@ -468,6 +473,321 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var selectedBotInstallation: DesktopBotInstallation? {
         guard let botID = accountWorkspaceSelection.botID else { return nil }
         return selectedAccountWorkspace?.bots.first { $0.id == botID }
+    }
+
+    package var accountLinkAvailable: Bool {
+        dependencies.productionBoundary.accountLinkBrokerOrigin != nil
+            && dependencies.accountLink != nil
+    }
+
+    package func connectNeonDiffAccount() {
+        guard !isAccountLinkInProgress else { return }
+        guard dependencies.productionBoundary.accountLinkBrokerOrigin != nil,
+              let accountLink = dependencies.accountLink
+        else {
+            accountWorkspaceCatalog = .failed("NeonDiff account linking is unavailable in this build.")
+            accountWorkspaceStatus = "NeonDiff account linking is unavailable in this build."
+            return
+        }
+
+        accountLinkTask?.cancel()
+        accountLinkGeneration &+= 1
+        let generation = accountLinkGeneration
+        isAccountLinkInProgress = true
+        accountWorkspaceCatalog = .loading
+        accountWorkspaceStatus = "Opening a secure NeonDiff sign-in in your browser…"
+        let task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let secretStore = self.dependencies.secretStore
+                let identity = try await Self.loadAccountLinkDeviceIdentity(
+                    secretStore: secretStore,
+                    createIfMissing: true
+                )
+                try Task.checkCancellation()
+                guard self.isCurrentAccountLink(generation) else { return }
+                try await accountLink.registerAccountLinkIdentity(identity: identity)
+                try Task.checkCancellation()
+                guard self.isCurrentAccountLink(generation) else { return }
+                let connection = try await accountLink.startAccountLink(identity: identity)
+                try Task.checkCancellation()
+                guard self.isCurrentAccountLink(generation) else { return }
+                guard self.dependencies.urlOpener.open(connection.connectURL) else {
+                    throw AccountLinkModelError.browserOpenFailed
+                }
+                self.accountWorkspaceStatus = "Finish sign-in in your browser. NeonDiff will continue automatically."
+
+                var attempt = 0
+                var retryDelaySeconds = 1.0
+                let maximumAttempts = 80
+                while self.dependencies.clock.now < connection.expiresAt,
+                      attempt < maximumAttempts {
+                    try Task.checkCancellation()
+                    guard self.isCurrentAccountLink(generation) else { return }
+                    do {
+                        let snapshot = try await accountLink.loadAccountWorkspaces(
+                            identity: identity,
+                            state: connection.state
+                        )
+                        try Task.checkCancellation()
+                        guard self.isCurrentAccountLink(generation) else { return }
+                        self.applyAccountLinkSnapshot(snapshot)
+                        self.isAccountLinkInProgress = false
+                        self.accountLinkTask = nil
+                        return
+                    } catch GitHubBrokerClientError.server(reason: .accountLinkRequired) {
+                        attempt += 1
+                        let remaining = connection.expiresAt.timeIntervalSince(
+                            self.dependencies.clock.now
+                        )
+                        guard remaining > 0 else { break }
+                        try await self.dependencies.clock.sleep(
+                            for: .seconds(min(retryDelaySeconds, remaining))
+                        )
+                        retryDelaySeconds = min(retryDelaySeconds * 2, 8)
+                    } catch GitHubBrokerClientError.server(reason: .rateLimited) {
+                        attempt += 1
+                        retryDelaySeconds = 8
+                        let remaining = connection.expiresAt.timeIntervalSince(
+                            self.dependencies.clock.now
+                        )
+                        guard remaining > 0 else { break }
+                        try await self.dependencies.clock.sleep(
+                            for: .seconds(min(retryDelaySeconds, remaining))
+                        )
+                    }
+                }
+                throw AccountLinkModelError.expired
+            } catch is CancellationError {
+                guard self.isCurrentAccountLink(generation) else { return }
+                self.isAccountLinkInProgress = false
+                self.accountLinkTask = nil
+            } catch {
+                self.applyAccountLinkFailure(error, generation: generation)
+            }
+        }
+        accountLinkTask = task
+        mostRecentAccountLinkTask = task
+    }
+
+    package func refreshAccountWorkspacesOnLaunch() {
+        guard !attemptedAutomaticAccountWorkspaceRefresh else { return }
+        attemptedAutomaticAccountWorkspaceRefresh = true
+        refreshAccountWorkspaces()
+    }
+
+    package func cancelAccountLink() {
+        accountLinkGeneration &+= 1
+        accountLinkTask?.cancel()
+        accountLinkTask = nil
+        isAccountLinkInProgress = false
+        accountWorkspaceCatalog = .idle
+        accountWorkspaceStatus = "Account connection cancelled. You can continue locally or reconnect later."
+        lastError = nil
+    }
+
+    /// Refreshes an already-linked device without creating or rotating its
+    /// Keychain identity. A missing identity remains an explicit connect state.
+    package func refreshAccountWorkspaces() {
+        guard !isAccountLinkInProgress else { return }
+        guard dependencies.productionBoundary.accountLinkBrokerOrigin != nil,
+              let accountLink = dependencies.accountLink
+        else {
+            accountWorkspaceCatalog = .failed("NeonDiff account linking is unavailable in this build.")
+            accountWorkspaceStatus = "NeonDiff account linking is unavailable in this build."
+            return
+        }
+
+        accountLinkTask?.cancel()
+        accountLinkGeneration &+= 1
+        let generation = accountLinkGeneration
+        isAccountLinkInProgress = true
+        accountWorkspaceCatalog = .loading
+        accountWorkspaceStatus = "Refreshing authorized NeonDiff accounts…"
+        let task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let secretStore = self.dependencies.secretStore
+                let identity = try await Self.loadAccountLinkDeviceIdentity(
+                    secretStore: secretStore,
+                    createIfMissing: false
+                )
+                try Task.checkCancellation()
+                guard self.isCurrentAccountLink(generation) else { return }
+                let snapshot = try await accountLink.loadAccountWorkspaces(identity: identity)
+                try Task.checkCancellation()
+                guard self.isCurrentAccountLink(generation) else { return }
+                self.applyAccountLinkSnapshot(snapshot)
+                self.isAccountLinkInProgress = false
+                self.accountLinkTask = nil
+            } catch is CancellationError {
+                guard self.isCurrentAccountLink(generation) else { return }
+                self.isAccountLinkInProgress = false
+                self.accountLinkTask = nil
+            } catch GitHubBrokerDeviceIdentityError.storedIdentityMissing {
+                guard self.isCurrentAccountLink(generation) else { return }
+                self.isAccountLinkInProgress = false
+                self.accountLinkTask = nil
+                self.accountWorkspaceCatalog = .idle
+                self.accountWorkspaceStatus = "Connect your NeonDiff account to load personal and organization workspaces."
+            } catch is GitHubBrokerDeviceIdentityError {
+                guard self.isCurrentAccountLink(generation) else { return }
+                self.isAccountLinkInProgress = false
+                self.accountLinkTask = nil
+                let message = "The saved NeonDiff account link is unavailable. Reconnect to recover safely."
+                self.accountWorkspaceCatalog = .failed(message)
+                self.accountWorkspaceStatus = message
+                self.lastError = message
+            } catch {
+                self.applyAccountLinkFailure(error, generation: generation)
+            }
+        }
+        accountLinkTask = task
+        mostRecentAccountLinkTask = task
+    }
+
+    package func waitForAccountLinkOperation() async {
+        await (accountLinkTask ?? mostRecentAccountLinkTask)?.value
+    }
+
+    private func applyAccountLinkSnapshot(_ snapshot: NeonDiffAccountWorkspaceSnapshot) {
+        let localCandidates = currentLocalBotCandidates(snapshot: snapshot)
+        let accounts = snapshot.accounts.map { account in
+            DesktopAccountWorkspace(
+                id: account.id,
+                kind: DesktopAccountKind(rawValue: account.kind.rawValue)!,
+                name: account.name,
+                role: DesktopAccountRole(rawValue: account.role.rawValue),
+                entitlement: DesktopAccountEntitlement(rawValue: account.entitlement.rawValue)!,
+                bots: account.bots.map { bot in
+                    DesktopBotInstallation(
+                        id: bot.id,
+                        appID: bot.appID,
+                        appSlug: bot.appSlug,
+                        mode: DesktopBotMode(rawValue: bot.mode.rawValue)!,
+                        githubInstallationID: bot.githubInstallationID,
+                        githubAccountLogin: bot.githubAccountLogin,
+                        status: DesktopBotStatus(rawValue: bot.status.rawValue)!,
+                        localConfigPath: nil
+                    )
+                }
+            ).merging(localCandidates: localCandidates)
+        }
+        applyAccountWorkspaceCatalog(.loaded(accounts))
+
+        if selectedBotInstallation == nil,
+           let localBot = selectedAccountWorkspace?.bots.first(where: {
+               $0.status == .verified && $0.localConfigPath != nil
+           }) {
+            selectBotInstallation(localBot.id)
+        }
+        accountWorkspaceStatus = accounts.isEmpty
+            ? "No authorized NeonDiff accounts were returned."
+            : "Account authority verified."
+        lastError = nil
+    }
+
+    private func currentLocalBotCandidates(
+        snapshot: NeonDiffAccountWorkspaceSnapshot
+    ) -> [DesktopLocalBotCandidate] {
+        guard dependencies.fileWriter.fileExists(at: URL(filePath: configPath)) else {
+            return []
+        }
+
+        if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil,
+           let installationID = Self.savedManagedGitHubInstallationId(
+               preferences: dependencies.preferences
+           ) {
+            let managedMatches = snapshot.accounts.flatMap(\.bots).filter {
+                $0.mode == .managed
+                    && $0.githubInstallationID == Int64(installationID)
+                    && $0.status == .verified
+                    && $0.githubAccountLogin?.isEmpty == false
+            }
+            guard managedMatches.count == 1,
+                  let managed = managedMatches.first,
+                  let githubAccountLogin = managed.githubAccountLogin
+            else {
+                return []
+            }
+            return [DesktopLocalBotCandidate(
+                appID: managed.appID,
+                appSlug: managed.appSlug,
+                githubAccountLogin: githubAccountLogin,
+                configPath: URL(filePath: configPath).standardizedFileURL.path
+            )]
+        }
+
+        guard let rawAppID = dependencies.preferences.string(forKey: byoGitHubAppIdPreferenceKey),
+              let appID = Int64(rawAppID),
+              appID > 0
+        else {
+            return []
+        }
+
+        let matches = snapshot.accounts.flatMap(\.bots).filter {
+            $0.appID == appID
+                && $0.status == .verified
+                && $0.githubAccountLogin?.isEmpty == false
+        }
+        guard matches.count == 1, let matchedBot = matches.first else {
+            return []
+        }
+        guard let githubAccountLogin = matchedBot.githubAccountLogin else {
+            return []
+        }
+        return [DesktopLocalBotCandidate(
+            appID: appID,
+            appSlug: matchedBot.appSlug,
+            githubAccountLogin: githubAccountLogin,
+            configPath: URL(filePath: configPath).standardizedFileURL.path
+        )]
+    }
+
+    private func applyAccountLinkFailure(_ error: Error, generation: UInt64) {
+        guard isCurrentAccountLink(generation) else { return }
+        isAccountLinkInProgress = false
+        accountLinkTask = nil
+        let message: String
+        switch error {
+        case AccountLinkModelError.browserOpenFailed:
+            message = "NeonDiff could not open the secure account page. Retry or open it from a different browser."
+        case AccountLinkModelError.expired,
+             GitHubBrokerClientError.server(reason: .stateExpired):
+            message = "The account connection expired. Start again when ready."
+        case GitHubBrokerClientError.server(reason: .accountLinkRequired):
+            message = "Connect your NeonDiff account to load personal and organization workspaces."
+        case GitHubBrokerClientError.server(reason: .rateLimited):
+            message = "Account linking is temporarily rate-limited. Wait a moment, then retry."
+        default:
+            message = "NeonDiff could not verify your account authority. Retry safely; local secrets were not changed."
+        }
+        accountWorkspaceCatalog = .failed(message)
+        accountWorkspaceStatus = message
+        lastError = message
+    }
+
+    private func isCurrentAccountLink(_ generation: UInt64) -> Bool {
+        accountLinkGeneration == generation
+    }
+
+    private nonisolated static func loadAccountLinkDeviceIdentity(
+        secretStore: any DesktopSecretStoring,
+        createIfMissing: Bool
+    ) async throws -> GitHubBrokerDeviceIdentity {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let store = GitHubBrokerDeviceIdentityStore(secretStore: secretStore)
+                    let identity = try createIfMissing
+                        ? store.loadOrCreate()
+                        : store.loadExisting()
+                    continuation.resume(returning: identity)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     /// Installs a server-authoritative snapshot. Accounts without a membership
@@ -3906,6 +4226,11 @@ private enum ManagedGitHubModelError: Error {
             )
         }
     }
+}
+
+private enum AccountLinkModelError: Error {
+    case browserOpenFailed
+    case expired
 }
 
 private struct PendingManagedGitHubAuthorization {

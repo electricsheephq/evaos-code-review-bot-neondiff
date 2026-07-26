@@ -14,7 +14,8 @@ import { GitHubBrokerStore } from "../src/github-broker/index.ts";
  * `upsertBinding` / `listBindingRepositories` threw "no such table" — bricking
  * every existing deployment on upgrade (it fails closed, but the broker 500s on
  * every connect/token). These tests pin the v1 -> v2 migration: the table is
- * created in place, then v3 adds account-link tables without losing bindings.
+ * created in place, v3 adds account-link tables, and v4 binds each consumed
+ * account state to the exact user it produced without losing prior data.
  */
 
 const V1_SCHEMA = `
@@ -90,7 +91,31 @@ function seedV2Database(): string {
   return path;
 }
 
-describe("github broker store v1/v2 -> v3 migration", () => {
+function seedV3Database(): string {
+  const path = seedV2Database();
+  const db = new DatabaseSync(path);
+  db.exec(`
+    create table account_connect_states (
+      state_hash text primary key,
+      device_id text not null,
+      created_at text not null,
+      expires_at text not null,
+      consumed_at text,
+      foreign key (device_id) references devices(device_id)
+    );
+    create table account_bindings (
+      device_id text primary key,
+      user_id text not null,
+      linked_at text not null,
+      foreign key (device_id) references devices(device_id)
+    );
+    pragma user_version = 3;
+  `);
+  db.close();
+  return path;
+}
+
+describe("github broker store v1/v2/v3 -> v4 migration", () => {
   it("adds binding_repositories on an existing v1 DB and a bind/list round-trips", () => {
     const path = seedV1Database();
     // Opening the store runs both required upgrades in place.
@@ -107,7 +132,7 @@ describe("github broker store v1/v2 -> v3 migration", () => {
     }
   });
 
-  it("re-opening the migrated DB is idempotent at v3 with data intact", () => {
+  it("re-opening the migrated DB is idempotent at v4 with data intact", () => {
     const path = seedV1Database();
     const first = new GitHubBrokerStore(path);
     first.upsertBinding("dev-1", 4242, "octo", ["octo/a"], new Date().toISOString());
@@ -128,6 +153,30 @@ describe("github broker store v1/v2 -> v3 migration", () => {
       const now = new Date().toISOString();
       store.createAccountConnectState("state-hash", "dev-1", now, now);
       assert.equal(store.getAccountConnectState("state-hash")?.device_id, "dev-1");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("adds exact bound-user state to an existing v3 DB", () => {
+    const path = seedV3Database();
+    const store = new GitHubBrokerStore(path);
+    try {
+      store.createAccountConnectState(
+        "state-hash",
+        "dev-1",
+        "2026-07-26T00:00:00.000Z",
+        "2026-07-26T00:10:00.000Z"
+      );
+      assert.equal(
+        store.consumeAccountConnectStateAndBind(
+          "state-hash",
+          "user-owner",
+          "2026-07-26T00:05:00.000Z"
+        ),
+        true
+      );
+      assert.equal(store.getAccountConnectState("state-hash")?.bound_user_id, "user-owner");
     } finally {
       store.close();
     }

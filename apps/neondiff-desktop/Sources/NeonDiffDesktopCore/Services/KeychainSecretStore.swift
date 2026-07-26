@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-public protocol DesktopSecretStoring {
+public protocol DesktopSecretStoring: Sendable {
     func setSecret(_ secret: String, account: String) throws
     func createSecretIfAbsent(_ secret: String, account: String) throws -> Bool
     func readSecret(account: String) throws -> String?
@@ -40,7 +40,7 @@ public enum KeychainSecretError: Error, LocalizedError {
     }
 }
 
-public final class KeychainSecretStore: DesktopSecretStoring {
+public final class KeychainSecretStore: DesktopSecretStoring, @unchecked Sendable {
     public let service: String
     private let lockRegistry = NSLock()
     private var accountLocks: [String: NSLock] = [:]

@@ -43,7 +43,7 @@ let interactiveReadQuery = KeychainSecretStore.query(
 check(interactiveReadQuery[kSecReturnData as String] as? Bool == true, "interactive reads request secret data")
 check(interactiveReadQuery[kSecUseAuthenticationContext as String] == nil, "interactive reads leave Keychain UI policy at system default")
 
-final class LegacySecretStoreFixture: DesktopSecretStoring {
+final class LegacySecretStoreFixture: DesktopSecretStoring, @unchecked Sendable {
     func setSecret(_ secret: String, account: String) throws {}
     func readSecret(account: String) throws -> String? { "legacy-fixture" }
     func containsSecret(account: String) -> Bool { true }
