@@ -690,10 +690,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func currentLocalBotCandidates(
         snapshot: NeonDiffAccountWorkspaceSnapshot
     ) -> [DesktopLocalBotCandidate] {
-        if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil,
-           let installationID = Self.savedManagedGitHubInstallationId(
-               preferences: dependencies.preferences
-           ) {
+        if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil {
+            guard let installationID = Self.savedManagedGitHubInstallationId(
+                preferences: dependencies.preferences
+            ) else {
+                return []
+            }
             guard dependencies.fileWriter.fileExists(at: URL(filePath: configPath)) else {
                 return []
             }
@@ -717,6 +719,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             )]
         }
 
+        guard dependencies.productionBoundary.byoGitHubEnabled else {
+            return []
+        }
+
         var candidates: [DesktopLocalBotCandidate] = []
         for configuration in dependencies.localBotConfigurations {
             let configurationURL = URL(filePath: configuration.configPath)
@@ -724,45 +730,25 @@ package final class NeonDiffDesktopModel: ObservableObject {
             guard dependencies.fileWriter.fileExists(at: configurationURL) else {
                 continue
             }
-            let matches = snapshot.accounts.flatMap(\.bots).filter {
-                $0.mode == .byo
-                    && $0.appID == configuration.appID
-                    && $0.status == .verified
-                    && $0.githubAccountLogin?.isEmpty == false
-            }
-            guard matches.count == 1,
-                  let matchedBot = matches.first,
-                  let githubAccountLogin = matchedBot.githubAccountLogin
-            else {
-                continue
-            }
-            candidates.append(DesktopLocalBotCandidate(
+            if let candidate = verifiedBYOLocalBotCandidate(
                 appID: configuration.appID,
-                appSlug: matchedBot.appSlug,
-                githubAccountLogin: githubAccountLogin,
-                configPath: configurationURL.path
-            ))
+                configPath: configurationURL.path,
+                snapshot: snapshot
+            ) {
+                candidates.append(candidate)
+            }
         }
 
         if dependencies.fileWriter.fileExists(at: URL(filePath: configPath)),
            let rawAppID = dependencies.preferences.string(forKey: byoGitHubAppIdPreferenceKey),
            let appID = Int64(rawAppID),
            appID > 0 {
-            let matches = snapshot.accounts.flatMap(\.bots).filter {
-                $0.mode == .byo
-                    && $0.appID == appID
-                    && $0.status == .verified
-                    && $0.githubAccountLogin?.isEmpty == false
-            }
-            if matches.count == 1,
-               let matchedBot = matches.first,
-               let githubAccountLogin = matchedBot.githubAccountLogin {
-                candidates.append(DesktopLocalBotCandidate(
-                    appID: appID,
-                    appSlug: matchedBot.appSlug,
-                    githubAccountLogin: githubAccountLogin,
-                    configPath: URL(filePath: configPath).standardizedFileURL.path
-                ))
+            if let candidate = verifiedBYOLocalBotCandidate(
+                appID: appID,
+                configPath: URL(filePath: configPath).standardizedFileURL.path,
+                snapshot: snapshot
+            ) {
+                candidates.append(candidate)
             }
         }
 
@@ -770,6 +756,31 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return candidates.filter {
             seen.insert("\($0.appID):\($0.configPath)").inserted
         }
+    }
+
+    private func verifiedBYOLocalBotCandidate(
+        appID: Int64,
+        configPath: String,
+        snapshot: NeonDiffAccountWorkspaceSnapshot
+    ) -> DesktopLocalBotCandidate? {
+        let matches = snapshot.accounts.flatMap(\.bots).filter {
+            $0.mode == .byo
+                && $0.appID == appID
+                && $0.status == .verified
+                && $0.githubAccountLogin?.isEmpty == false
+        }
+        guard matches.count == 1,
+              let matchedBot = matches.first,
+              let githubAccountLogin = matchedBot.githubAccountLogin
+        else {
+            return nil
+        }
+        return DesktopLocalBotCandidate(
+            appID: appID,
+            appSlug: matchedBot.appSlug,
+            githubAccountLogin: githubAccountLogin,
+            configPath: configPath
+        )
     }
 
     private func applyAccountLinkFailure(_ error: Error, generation: UInt64) {

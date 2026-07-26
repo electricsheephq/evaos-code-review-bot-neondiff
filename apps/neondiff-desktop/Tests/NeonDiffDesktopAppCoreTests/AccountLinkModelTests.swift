@@ -165,6 +165,100 @@ import NeonDiffDesktopCore
         })
     }
 
+    @Test func ambiguousDiscoveredBYOAppAcrossAccountsNeverAttachesTheLocalConfig() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent(
+                "neondiff-account-discovered-ambiguous-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let fileWriter = TemporaryFileWriter(root: root)
+        let configURL = root.appendingPathComponent("existing-worker.json")
+        try fileWriter.write(Data("{}".utf8), to: configURL)
+        let snapshot = NeonDiffAccountWorkspaceSnapshot(accounts: [
+            AccountLinkFixtures.workspace(
+                id: "11111111-1111-4111-8111-111111111111",
+                name: "Personal",
+                login: "100yenadmin",
+                botID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            ),
+            AccountLinkFixtures.workspace(
+                id: "22222222-2222-4222-8222-222222222222",
+                name: "Electric Sheep",
+                login: "electricsheephq",
+                botID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+            )
+        ])
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: MemoryPreferences(),
+            clock: TestClock(),
+            fileWriter: fileWriter,
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: AccountLinkMemorySecretStore(),
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [.success(snapshot)]),
+            productionBoundary: .testAccountLink,
+            localBotConfigurations: [
+                DesktopLocalBotConfiguration(
+                    appID: 4242,
+                    configPath: configURL.path
+                )
+            ]
+        ))
+
+        model.connectNeonDiffAccount()
+        await model.waitForAccountLinkOperation()
+
+        #expect(model.accountWorkspaceCatalog.accounts.flatMap(\.bots).allSatisfy {
+            $0.localConfigPath == nil
+        })
+        #expect(model.configPath != configURL.path)
+    }
+
+    @Test func managedOnlyBuildNeverAttachesDiscoveredBYOConfiguration() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent(
+                "neondiff-account-managed-no-byo-fallback-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let fileWriter = TemporaryFileWriter(root: root)
+        let configURL = root.appendingPathComponent("legacy-byo-worker.json")
+        try fileWriter.write(Data("{}".utf8), to: configURL)
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: MemoryPreferences(),
+            clock: TestClock(),
+            fileWriter: fileWriter,
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: AccountLinkMemorySecretStore(),
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [
+                .success(AccountLinkFixtures.electricSheep)
+            ]),
+            productionBoundary: .testManagedAccountLink,
+            localBotConfigurations: [
+                DesktopLocalBotConfiguration(
+                    appID: 4242,
+                    configPath: configURL.path
+                )
+            ]
+        ))
+
+        model.connectNeonDiffAccount()
+        await model.waitForAccountLinkOperation()
+
+        #expect(model.accountWorkspaceCatalog.accounts.flatMap(\.bots).allSatisfy {
+            $0.localConfigPath == nil
+        })
+        #expect(model.configPath != configURL.path)
+    }
+
     @Test func managedInstallationReconcilesOnlyByItsSavedInstallationID() async throws {
         let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
             .appendingPathComponent("neondiff-account-managed-\(UUID().uuidString)", isDirectory: true)
