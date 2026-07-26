@@ -18,6 +18,12 @@ struct ActivationStateView: View {
             if model.existingAccountEntitlementSummaryReady,
                let entitlement = model.selectedAccountEntitlementLabel {
                 existingAccountEntitlement(entitlement, palette: palette)
+            } else if model.existingAccountEntitlementNeedsCurrentAccessVerification,
+                      let entitlement = model.selectedAccountEntitlementLabel {
+                existingAccountEntitlementNeedsVerification(
+                    entitlement,
+                    palette: palette
+                )
             } else {
                 activationFlow(palette: palette)
             }
@@ -97,6 +103,47 @@ struct ActivationStateView: View {
         .overlay(Rectangle().stroke(palette.borderPrimary, lineWidth: 1))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("neondiff.activation.existing-account")
+    }
+
+    private func existingAccountEntitlementNeedsVerification(
+        _ entitlement: String,
+        palette: NDPalette
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Activation")
+                .ndSectionLabel(palette)
+
+            Text("Account entitlement active")
+                .font(.system(.headline, design: .monospaced).weight(.bold))
+                .foregroundStyle(palette.accentPrimary)
+
+            LabeledContent("Account entitlement", value: entitlement)
+                .font(NDFont.mono)
+                .foregroundStyle(palette.textPrimary)
+
+            Text("Current review access needs reverification")
+                .font(NDFont.label)
+                .foregroundStyle(palette.warning)
+
+            Text("NeonDiff still blocks new work until the exact GitHub App and repository access are reverified for this launch.")
+                .font(NDFont.mono)
+                .foregroundStyle(palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button("Review repository access") {
+                model.selectedSection = .repos
+            }
+            .buttonStyle(NDBracketButtonStyle())
+            .accessibilityIdentifier("neondiff.activation.existing-account-reverify")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Rectangle().fill(palette.surface))
+        .overlay(Rectangle().stroke(palette.borderPrimary, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(
+            "neondiff.activation.existing-account-verification-required"
+        )
     }
 
     private func keyField(palette: NDPalette) -> some View {

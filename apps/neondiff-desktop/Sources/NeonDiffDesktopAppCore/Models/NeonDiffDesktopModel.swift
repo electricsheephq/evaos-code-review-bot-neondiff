@@ -240,6 +240,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return true
     }
 
+    /// The selected existing bot has server-authoritative account entitlement,
+    /// but current-launch repository access still needs proof. This is a
+    /// customer-facing recovery state only; it never unlocks useful work.
+    package var existingAccountEntitlementNeedsCurrentAccessVerification: Bool {
+        guard existingLocalBotIdentityReady,
+              let accountEntitlement = selectedAccountWorkspace?.entitlement
+        else {
+            return false
+        }
+        if case .none = accountEntitlement { return false }
+        return !existingAccountEntitlementSummaryReady
+    }
+
     package var productionUsefulWorkAvailable: Bool {
         guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
             return false
