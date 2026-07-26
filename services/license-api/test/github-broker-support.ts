@@ -215,6 +215,7 @@ export async function startBroker(
     deviceRegisterRateLimiter?: RateLimiter;
     tokenRateLimiter?: RateLimiter;
     connectRateLimiter?: RateLimiter;
+    accountAuthority?: unknown;
   } = {}
 ): Promise<BrokerHarness> {
   const licenseStore = options.licenseStore ?? new LicenseStore(":memory:");
@@ -234,7 +235,16 @@ export async function startBroker(
       deviceRegisterRateLimiter: options.deviceRegisterRateLimiter,
       tokenRateLimiter: options.tokenRateLimiter,
       connectRateLimiter: options.connectRateLimiter
-    }
+    },
+    ...(options.accountAuthority
+      ? {
+          accountLink: {
+            dbPath: ":memory:",
+            authority: options.accountAuthority,
+            now: nowFn
+          }
+        }
+      : {})
   } as never);
   return {
     url: started.url,

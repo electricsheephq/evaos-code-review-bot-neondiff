@@ -16,6 +16,9 @@ export type BrokerReason =
   | "installation_uninstalled"
   | "installation_suspended"
   | "installation_authorization_unverified"
+  | "account_link_required"
+  | "account_identity_unverified"
+  | "account_authority_unavailable"
   | "repo_outside_installation"
   | "repo_outside_authorization"
   | "repo_renamed_or_transferred"
@@ -43,6 +46,9 @@ const REASON_STATUS: Record<BrokerReason, number> = {
   installation_uninstalled: 409,
   installation_suspended: 409,
   installation_authorization_unverified: 403,
+  account_link_required: 403,
+  account_identity_unverified: 403,
+  account_authority_unavailable: 503,
   repo_outside_installation: 403,
   repo_outside_authorization: 403,
   repo_renamed_or_transferred: 409,
