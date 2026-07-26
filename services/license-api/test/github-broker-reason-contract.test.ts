@@ -19,7 +19,10 @@ const ENTITLEMENT_REASON_STATUS: Array<[BrokerReason, number]> = [
   ["entitlement_seat_exhausted", 409],
   ["entitlement_replay_conflict", 409],
   ["entitlement_service_unavailable", 503],
-  ["visibility_unknown", 403]
+  ["visibility_unknown", 403],
+  ["account_link_required", 403],
+  ["account_identity_unverified", 403],
+  ["account_authority_unavailable", 503]
 ];
 
 describe("github broker #614 typed reason-code contract", () => {

@@ -14,7 +14,7 @@ import { GitHubBrokerStore } from "../src/github-broker/index.ts";
  * `upsertBinding` / `listBindingRepositories` threw "no such table" — bricking
  * every existing deployment on upgrade (it fails closed, but the broker 500s on
  * every connect/token). These tests pin the v1 -> v2 migration: the table is
- * created in place, a bind/list round-trips, and re-opening is idempotent.
+ * created in place, then v3 adds account-link tables without losing bindings.
  */
 
 const V1_SCHEMA = `
@@ -72,10 +72,28 @@ function seedV1Database(): string {
   return path;
 }
 
-describe("github broker store v1 -> v2 migration", () => {
+function seedV2Database(): string {
+  const path = seedV1Database();
+  const db = new DatabaseSync(path);
+  db.exec(`
+    create table binding_repositories (
+      device_id text not null,
+      installation_id integer not null,
+      full_name text not null,
+      primary key (device_id, installation_id, full_name),
+      foreign key (device_id, installation_id)
+        references installation_bindings(device_id, installation_id) on delete cascade
+    );
+    pragma user_version = 2;
+  `);
+  db.close();
+  return path;
+}
+
+describe("github broker store v1/v2 -> v3 migration", () => {
   it("adds binding_repositories on an existing v1 DB and a bind/list round-trips", () => {
     const path = seedV1Database();
-    // Opening the store runs ensureSchema, which must migrate v1 -> v2 in place.
+    // Opening the store runs both required upgrades in place.
     const store = new GitHubBrokerStore(path);
     try {
       // The migrated table now exists (this threw "no such table" before the fix),
@@ -89,7 +107,7 @@ describe("github broker store v1 -> v2 migration", () => {
     }
   });
 
-  it("re-opening the migrated DB is idempotent (stays at v2, data intact)", () => {
+  it("re-opening the migrated DB is idempotent at v3 with data intact", () => {
     const path = seedV1Database();
     const first = new GitHubBrokerStore(path);
     first.upsertBinding("dev-1", 4242, "octo", ["octo/a"], new Date().toISOString());
@@ -100,6 +118,58 @@ describe("github broker store v1 -> v2 migration", () => {
       assert.deepEqual(second.listBindingRepositories("dev-1", 4242), ["octo/a"]);
     } finally {
       second.close();
+    }
+  });
+
+  it("adds account-link tables to an existing v2 DB", () => {
+    const path = seedV2Database();
+    const store = new GitHubBrokerStore(path);
+    try {
+      const now = new Date().toISOString();
+      store.createAccountConnectState("state-hash", "dev-1", now, now);
+      assert.equal(store.getAccountConnectState("state-hash")?.device_id, "dev-1");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("prunes expired and old consumed account-link states during state creation", () => {
+    const path = seedV2Database();
+    const store = new GitHubBrokerStore(path);
+    try {
+      store.createAccountConnectState(
+        "expired-state",
+        "dev-1",
+        "2026-07-24T00:00:00.000Z",
+        "2026-07-24T00:10:00.000Z"
+      );
+      store.createAccountConnectState(
+        "consumed-state",
+        "dev-1",
+        "2026-07-24T00:00:00.000Z",
+        "2026-07-30T00:00:00.000Z"
+      );
+      assert.equal(
+        store.consumeAccountConnectStateAndBind(
+          "consumed-state",
+          "user-owner",
+          "2026-07-24T00:05:00.000Z"
+        ),
+        true
+      );
+
+      store.createAccountConnectState(
+        "current-state",
+        "dev-1",
+        "2026-07-26T00:00:00.000Z",
+        "2026-07-26T00:10:00.000Z"
+      );
+
+      assert.equal(store.getAccountConnectState("expired-state"), undefined);
+      assert.equal(store.getAccountConnectState("consumed-state"), undefined);
+      assert.equal(store.getAccountConnectState("current-state")?.device_id, "dev-1");
+    } finally {
+      store.close();
     }
   });
 });
