@@ -383,7 +383,7 @@ private struct DetailView: View {
             VStack(spacing: 0) {
                 OperatorSectionHeader(
                     title: model.selectedSection.title,
-                    status: model.isOnboardingPresented ? "SETUP REQUIRED" : model.status.healthState
+                    status: model.customerSurfaceStatus
                 )
                     .padding(.horizontal, 22)
                     .padding(.top, 18)

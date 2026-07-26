@@ -170,11 +170,11 @@ struct ActivationStateView: View {
         palette: NDPalette
     ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("This Mac needs activation")
+            Text("Native app authorization required")
                 .font(.system(.headline, design: .monospaced).weight(.bold))
                 .foregroundStyle(palette.textPrimary)
 
-            Text("The selected account already has an active entitlement. Use its existing NeonDiff Activation Key to verify this Mac; no new purchase is required.")
+            Text("The selected account is active and the existing local worker stays in place. Use its existing NeonDiff Activation Key to authorize the native app for the selected repository; no new purchase is required.")
                 .font(NDFont.mono)
                 .foregroundStyle(palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

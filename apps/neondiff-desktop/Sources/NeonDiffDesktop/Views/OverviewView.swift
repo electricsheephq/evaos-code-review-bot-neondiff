@@ -4,6 +4,7 @@ import NeonDiffDesktopCore
 
 @MainActor
 struct DesktopSetupReadiness {
+    let isRestoring: Bool
     let github: Bool
     let provider: Bool
     let license: Bool
@@ -13,6 +14,7 @@ struct DesktopSetupReadiness {
     let canRunDryRun: Bool
 
     init(model: NeonDiffDesktopModel) {
+        isRestoring = model.isExistingLocalBotRestoreInProgress
         github = model.githubSetupReady
         provider = model.providerSetupReady
         let publicRepositoryLicenseNotRequired = model.selectedManagedGitHubRepository
@@ -63,9 +65,14 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "GITHUB APP",
                         systemImage: "link",
-                        status: readiness.github ? "CONNECTED" : "NOT CONNECTED",
+                        status: readiness.isRestoring
+                            ? "CHECKING"
+                            : (readiness.github ? "CONNECTED" : "NOT CONNECTED"),
                         isReady: readiness.github,
-                        actionTitle: readiness.github ? "VIEW" : "CONNECT"
+                        actionTitle: readiness.isRestoring
+                            ? "WAIT"
+                            : (readiness.github ? "VIEW" : "CONNECT"),
+                        isDisabled: readiness.isRestoring
                     ) {
                         model.reopenOnboarding(at: .welcome)
                     }
@@ -73,9 +80,14 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "PROVIDER",
                         systemImage: "cloud",
-                        status: readiness.provider ? "CONFIGURED" : "SETUP REQUIRED",
+                        status: readiness.isRestoring
+                            ? "CHECKING"
+                            : (readiness.provider ? "CONFIGURED" : "SETUP REQUIRED"),
                         isReady: readiness.provider,
-                        actionTitle: readiness.provider ? "MANAGE" : "SET UP"
+                        actionTitle: readiness.isRestoring
+                            ? "WAIT"
+                            : (readiness.provider ? "MANAGE" : "SET UP"),
+                        isDisabled: readiness.isRestoring
                     ) {
                         model.selectedSection = .providers
                     }
@@ -83,9 +95,10 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "LICENSE",
                         systemImage: "key",
-                        status: readiness.licenseStatus,
+                        status: readiness.isRestoring ? "CHECKING" : readiness.licenseStatus,
                         isReady: readiness.license,
-                        actionTitle: "VIEW"
+                        actionTitle: readiness.isRestoring ? "WAIT" : "VIEW",
+                        isDisabled: readiness.isRestoring
                     ) {
                         model.selectedSection = .license
                     }
@@ -93,9 +106,14 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "REPOSITORY",
                         systemImage: "chevron.left.forwardslash.chevron.right",
-                        status: readiness.repository ? "APPLIED" : "NOT APPLIED",
+                        status: readiness.isRestoring
+                            ? "CHECKING"
+                            : (readiness.repository ? "APPLIED" : "NOT APPLIED"),
                         isReady: readiness.repository,
-                        actionTitle: readiness.repository ? "MANAGE" : "ADD"
+                        actionTitle: readiness.isRestoring
+                            ? "WAIT"
+                            : (readiness.repository ? "MANAGE" : "ADD"),
+                        isDisabled: readiness.isRestoring
                     ) {
                         model.selectedSection = .repos
                     }
@@ -160,7 +178,9 @@ struct OverviewView: View {
                 .foregroundStyle(palette.textPrimary.opacity(0.78))
 
             HStack(spacing: 10) {
-                Text("\(readiness.completedCount) OF \(readiness.totalCount) READY")
+                Text(readiness.isRestoring
+                    ? "CHECKING LOCAL SETUP"
+                    : "\(readiness.completedCount) OF \(readiness.totalCount) READY")
                     .font(.system(.caption2, design: .monospaced).weight(.semibold))
                     .foregroundStyle(palette.textSecondary)
 
@@ -185,6 +205,9 @@ struct OverviewView: View {
     }
 
     private func heroTitle(_ readiness: DesktopSetupReadiness) -> String {
+        if readiness.isRestoring {
+            return "Restoring this Mac"
+        }
         if readiness.canRunDryRun {
             return "Ready for a dry run"
         }
@@ -195,6 +218,9 @@ struct OverviewView: View {
     }
 
     private func heroDetail(_ readiness: DesktopSetupReadiness) -> String {
+        if readiness.isRestoring {
+            return "Checking your authorized account, existing bot, and local configuration before showing setup actions."
+        }
         if readiness.canRunDryRun {
             return "Start with a dry run before any live GitHub post."
         }
@@ -209,18 +235,20 @@ struct OverviewView: View {
         readiness: DesktopSetupReadiness
     ) -> some View {
         ReferenceHomePanel(title: "// REPOSITORY", palette: palette) {
-            Text(readiness.repositoryName)
+            Text(readiness.isRestoring ? "Checking existing bot…" : readiness.repositoryName)
                 .font(.system(.title3, design: .monospaced).weight(.medium))
                 .foregroundStyle(
                     readiness.repository ? palette.accentPrimary : palette.textSecondary
                 )
                 .lineLimit(1)
 
-            Text(readiness.repository
-                ? (readiness.canRunDryRun
-                    ? "Applied and ready for a dry-run review."
-                    : "Applied in the selected local bot config.")
-                : "Choose and apply one repository to begin.")
+            Text(readiness.isRestoring
+                ? "Reading the selected bot’s applied repository configuration."
+                : (readiness.repository
+                    ? (readiness.canRunDryRun
+                        ? "Applied and ready for a dry-run review."
+                        : "Applied in the selected local bot config.")
+                    : "Choose and apply one repository to begin."))
                 .font(.callout)
                 .foregroundStyle(palette.textSecondary)
 
@@ -228,11 +256,14 @@ struct OverviewView: View {
                 model.selectedSection = .repos
             } label: {
                 Label(
-                    readiness.repository ? "Manage Repository" : "Add Repository",
+                    readiness.isRestoring
+                        ? "Checking Repository"
+                        : (readiness.repository ? "Manage Repository" : "Add Repository"),
                     systemImage: "plus.circle"
                 )
             }
             .buttonStyle(ReferenceOutlineButtonStyle())
+            .disabled(readiness.isRestoring)
         }
         .frame(maxWidth: .infinity, minHeight: 174, alignment: .topLeading)
     }
@@ -251,11 +282,13 @@ struct OverviewView: View {
                     Text("Welcome to NeonDiff")
                         .font(.system(.callout, design: .monospaced).weight(.medium))
                         .foregroundStyle(palette.textPrimary)
-                    Text(readiness.canRunDryRun
-                        ? "Setup is ready for a dry run."
-                        : (readiness.isComplete
-                            ? "Existing bot setup detected on this Mac."
-                            : "Let’s finish your setup."))
+                    Text(readiness.isRestoring
+                        ? "Restoring existing bot setup on this Mac."
+                        : (readiness.canRunDryRun
+                            ? "Setup is ready for a dry run."
+                            : (readiness.isComplete
+                                ? "Existing bot setup detected on this Mac."
+                                : "Let’s finish your setup.")))
                         .font(.callout)
                         .foregroundStyle(palette.textSecondary)
                 }
@@ -343,6 +376,7 @@ private struct ReferenceReadinessCard: View {
     let status: String
     let isReady: Bool
     let actionTitle: String
+    let isDisabled: Bool
     let action: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -383,6 +417,7 @@ private struct ReferenceReadinessCard: View {
                 }
             }
             .buttonStyle(ReferenceOutlineButtonStyle())
+            .disabled(isDisabled)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

@@ -164,6 +164,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set) var accountWorkspaceSelection = DesktopAccountWorkspaceSelection()
     @Published package private(set) var accountWorkspaceStatus = "Sign in to load your personal and organization accounts."
     @Published package private(set) var isAccountLinkInProgress = false
+    @Published package private(set) var isAutomaticAccountWorkspaceRefreshInProgress = false
     @Published package private(set) var pendingNewBotPlan: DesktopNewBotPlan?
 
     // Issue #612 — native purchase-to-activation state. Restored from preferences
@@ -700,6 +701,36 @@ package final class NeonDiffDesktopModel: ObservableObject {
         existingLocalBotIdentityReady
     }
 
+    /// During launch, do not render the empty first-run state while an
+    /// authorized account/local-bot intersection or its config is still being
+    /// restored. This is presentation state only and grants no review
+    /// authorization.
+    package var isExistingLocalBotRestoreInProgress: Bool {
+        isAutomaticAccountWorkspaceRefreshInProgress
+            || (existingLocalBotIdentityReady && isConfigInspectInProgress)
+    }
+
+    /// Customer chrome should never present the internal sentinel `unknown` as
+    /// if it were a meaningful product state.
+    package var customerSurfaceStatus: String {
+        if isOnboardingPresented {
+            return "SETUP REQUIRED"
+        }
+        if isExistingLocalBotRestoreInProgress {
+            return "RESTORING"
+        }
+        if status.healthState != DaemonStatus.unknown.healthState {
+            return status.healthState
+        }
+        if existingLocalBotSetupReady {
+            return "SETUP CONFIGURED"
+        }
+        if existingLocalBotIdentityReady {
+            return "SETUP INCOMPLETE"
+        }
+        return "NOT CHECKED"
+    }
+
     package var selectedProviderRequiresAPIKey: Bool {
         providers.selectedRegistryTarget?.authMode == "api-key-env"
     }
@@ -816,7 +847,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func refreshAccountWorkspacesOnLaunch() {
         guard !attemptedAutomaticAccountWorkspaceRefresh else { return }
+        guard !isAccountLinkInProgress else { return }
         attemptedAutomaticAccountWorkspaceRefresh = true
+        isAutomaticAccountWorkspaceRefreshInProgress = true
+        if !dependencies.preferences.bool(forKey: onboardingCompletedKey) {
+            isOnboardingPresented = false
+        }
         refreshAccountWorkspaces()
     }
 
@@ -828,6 +864,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         accountWorkspaceCatalog = .idle
         accountWorkspaceStatus = "Account connection cancelled. You can continue locally or reconnect later."
         lastError = nil
+        finishAutomaticAccountWorkspaceRefresh()
     }
 
     /// Refreshes an already-linked device without creating or rotating its
@@ -839,6 +876,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             accountWorkspaceCatalog = .failed("NeonDiff account linking is unavailable in this build.")
             accountWorkspaceStatus = "NeonDiff account linking is unavailable in this build."
+            finishAutomaticAccountWorkspaceRefresh()
             return
         }
 
@@ -864,16 +902,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 self.applyAccountLinkSnapshot(snapshot)
                 self.isAccountLinkInProgress = false
                 self.accountLinkTask = nil
+                self.finishAutomaticAccountWorkspaceRefresh()
             } catch is CancellationError {
                 guard self.isCurrentAccountLink(generation) else { return }
                 self.isAccountLinkInProgress = false
                 self.accountLinkTask = nil
+                self.finishAutomaticAccountWorkspaceRefresh()
             } catch GitHubBrokerDeviceIdentityError.storedIdentityMissing {
                 guard self.isCurrentAccountLink(generation) else { return }
                 self.isAccountLinkInProgress = false
                 self.accountLinkTask = nil
                 self.accountWorkspaceCatalog = .idle
                 self.accountWorkspaceStatus = "Connect your NeonDiff account to load personal and organization workspaces."
+                self.finishAutomaticAccountWorkspaceRefresh()
             } catch is GitHubBrokerDeviceIdentityError {
                 guard self.isCurrentAccountLink(generation) else { return }
                 self.isAccountLinkInProgress = false
@@ -882,8 +923,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 self.accountWorkspaceCatalog = .failed(message)
                 self.accountWorkspaceStatus = message
                 self.lastError = message
+                self.finishAutomaticAccountWorkspaceRefresh()
             } catch {
                 self.applyAccountLinkFailure(error, generation: generation)
+                self.finishAutomaticAccountWorkspaceRefresh()
             }
         }
         accountLinkTask = task
@@ -929,6 +972,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
             ? "No authorized NeonDiff accounts were returned."
             : "Account authority verified."
         lastError = nil
+    }
+
+    private func finishAutomaticAccountWorkspaceRefresh() {
+        guard isAutomaticAccountWorkspaceRefreshInProgress else { return }
+        isAutomaticAccountWorkspaceRefreshInProgress = false
+        guard !dependencies.preferences.bool(forKey: onboardingCompletedKey) else {
+            isOnboardingPresented = false
+            return
+        }
+        isOnboardingPresented = !existingLocalBotIdentityReady
     }
 
     private func currentLocalBotCandidates(

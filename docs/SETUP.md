@@ -285,6 +285,9 @@ After account linking, the native app may find a server-verified bot whose App
 identity and GitHub account intersect an existing launchd/config candidate on
 the same Mac. In that exact case it opens a reconciliation path:
 
+- on launch, it keeps the empty onboarding path hidden while account authority
+  and the local config are being restored, then shows onboarding only if no
+  authorized local bot exists;
 - it loads the existing config and repository allowlist without overwriting it;
 - it does not ask the user to paste or migrate the worker's existing GitHub App
   private key;

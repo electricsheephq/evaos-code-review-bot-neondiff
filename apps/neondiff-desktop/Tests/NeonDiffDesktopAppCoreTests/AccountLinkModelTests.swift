@@ -76,13 +76,103 @@ import NeonDiffDesktopCore
             productionBoundary: .testAccountLink
         ))
 
-        model.refreshAccountWorkspaces()
+        model.refreshAccountWorkspacesOnLaunch()
+
+        #expect(model.isAutomaticAccountWorkspaceRefreshInProgress)
+        #expect(!model.isOnboardingPresented)
+
         await model.waitForAccountLinkOperation()
 
         #expect(secrets.mutations.isEmpty)
         #expect(accountLink.workspaceDeviceIds.isEmpty)
         #expect(model.accountWorkspaceCatalog == .idle)
         #expect(model.accountWorkspaceStatus.contains("Connect your NeonDiff account"))
+        #expect(!model.isAutomaticAccountWorkspaceRefreshInProgress)
+        #expect(model.isOnboardingPresented)
+    }
+
+    @Test func launchRefreshHidesFalseFirstRunWhileRestoringAnExistingLocalBot() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-launch-restore-\(UUID().uuidString)", isDirectory: true)
+        let fileWriter = TemporaryFileWriter(root: root)
+        let configURL = root.appendingPathComponent("existing-worker.json")
+        try fileWriter.write(Data("{}".utf8), to: configURL)
+        let secrets = AccountLinkMemorySecretStore()
+        _ = try GitHubBrokerDeviceIdentityStore(secretStore: secrets).loadOrCreate()
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: MemoryPreferences(),
+            clock: TestClock(),
+            fileWriter: fileWriter,
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: secrets,
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [
+                .success(AccountLinkFixtures.electricSheep)
+            ]),
+            productionBoundary: .testAccountLink,
+            localBotConfigurations: [
+                DesktopLocalBotConfiguration(
+                    appID: 4242,
+                    configPath: configURL.path
+                )
+            ]
+        ))
+
+        #expect(model.isOnboardingPresented)
+
+        model.refreshAccountWorkspacesOnLaunch()
+
+        #expect(model.isAutomaticAccountWorkspaceRefreshInProgress)
+        #expect(!model.isOnboardingPresented)
+        #expect(model.customerSurfaceStatus == "RESTORING")
+
+        await model.waitForAccountLinkOperation()
+
+        #expect(!model.isAutomaticAccountWorkspaceRefreshInProgress)
+        #expect(model.selectedBotInstallation?.localConfigPath == configURL.path)
+        #expect(model.existingLocalBotIdentityReady)
+        #expect(!model.isOnboardingPresented)
+        #expect(model.customerSurfaceStatus == "SETUP INCOMPLETE")
+    }
+
+    @Test func launchRefreshPresentsOnboardingAfterProvingNoLocalBotExists() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-launch-new-\(UUID().uuidString)", isDirectory: true)
+        let secrets = AccountLinkMemorySecretStore()
+        _ = try GitHubBrokerDeviceIdentityStore(secretStore: secrets).loadOrCreate()
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: MemoryPreferences(),
+            clock: TestClock(),
+            fileWriter: TemporaryFileWriter(root: root),
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: secrets,
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [
+                .success(AccountLinkFixtures.electricSheep)
+            ]),
+            productionBoundary: .testAccountLink
+        ))
+
+        model.refreshAccountWorkspacesOnLaunch()
+
+        #expect(model.isAutomaticAccountWorkspaceRefreshInProgress)
+        #expect(!model.isOnboardingPresented)
+        #expect(model.customerSurfaceStatus == "RESTORING")
+
+        await model.waitForAccountLinkOperation()
+
+        #expect(!model.isAutomaticAccountWorkspaceRefreshInProgress)
+        #expect(model.selectedBotInstallation?.localConfigPath == nil)
+        #expect(model.isOnboardingPresented)
+        #expect(model.customerSurfaceStatus == "SETUP REQUIRED")
     }
 
     @Test func accountLinkCanBeCancelledWithoutBlockingTheRestOfTheApp() async {
