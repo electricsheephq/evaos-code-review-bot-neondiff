@@ -158,8 +158,11 @@ export function createComposedAccountAuthority(
         throw new Error("account authority redirect refused");
       }
       if (!response.ok) throw new Error("account authority request failed");
-      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-      if (!contentType.includes("application/json")) {
+      const mediaType = response.headers.get("content-type")
+        ?.split(";", 1)[0]
+        ?.trim()
+        .toLowerCase();
+      if (mediaType !== "application/json") {
         throw new Error("account authority response is not JSON");
       }
       const body = await boundedJson(response);

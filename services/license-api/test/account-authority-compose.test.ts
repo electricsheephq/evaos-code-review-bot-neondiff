@@ -124,6 +124,9 @@ describe("composed Lovable account authority", () => {
     for (const response of [
       Response.json({ status: "ready", userId: "22222222-2222-4222-8222-222222222222", ...workspaceSnapshot }),
       new Response(null, { status: 302, headers: { location: "https://evil.example" } }),
+      new Response(JSON.stringify({ status: "ready", userId: USER_ID, ...workspaceSnapshot }), {
+        headers: { "content-type": "application/jsonp" }
+      }),
       Response.json({ status: "ready", userId: USER_ID, ...duplicateBotSnapshot }),
       Response.json({
         status: "ready",
