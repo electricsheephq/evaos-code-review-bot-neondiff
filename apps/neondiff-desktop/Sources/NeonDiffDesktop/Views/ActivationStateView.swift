@@ -20,7 +20,7 @@ struct ActivationStateView: View {
                 existingAccountEntitlement(entitlement, palette: palette)
             } else if model.existingAccountEntitlementNeedsCurrentAccessVerification,
                       let entitlement = model.selectedAccountEntitlementLabel {
-                existingAccountEntitlementNeedsVerification(
+                existingAccountEntitlementRecovery(
                     entitlement,
                     palette: palette
                 )
@@ -144,6 +144,19 @@ struct ActivationStateView: View {
         .accessibilityIdentifier(
             "neondiff.activation.existing-account-verification-required"
         )
+    }
+
+    private func existingAccountEntitlementRecovery(
+        _ entitlement: String,
+        palette: NDPalette
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            existingAccountEntitlementNeedsVerification(
+                entitlement,
+                palette: palette
+            )
+            activationFlow(palette: palette)
+        }
     }
 
     private func keyField(palette: NDPalette) -> some View {

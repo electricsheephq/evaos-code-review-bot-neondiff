@@ -219,6 +219,7 @@ import Testing
         #expect(activation.contains("neondiff.activation.existing-account"))
         #expect(activation.contains("model.existingAccountEntitlementSummaryReady"))
         #expect(activation.contains("model.existingAccountEntitlementNeedsCurrentAccessVerification"))
+        #expect(activation.contains("existingAccountEntitlementRecovery("))
         #expect(activation.contains("Review repository access"))
         #expect(activation.contains("model.reviewExistingBotRepositoryAccess()"))
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
