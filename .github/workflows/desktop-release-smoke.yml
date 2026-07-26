@@ -65,7 +65,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: neondiff-desktop-unsigned-app
-          path: apps/neondiff-desktop/dist/release-smoke/NeonDiffDesktop.app.zip
+          path: apps/neondiff-desktop/dist/release-smoke/NeonDiff.app.zip
           if-no-files-found: error
           retention-days: 14
 

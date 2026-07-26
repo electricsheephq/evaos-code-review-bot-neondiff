@@ -72,6 +72,54 @@ import Testing
         #expect(buildScript.contains("NeonDiff.icns"))
     }
 
+    @Test func customerFacingReleaseNameIsSimplyNeonDiff() throws {
+        let root = sourceBoundaryPackageRoot()
+        let app = try sourceBoundaryText(
+            at: root.appendingPathComponent(
+                "Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift"
+            )
+        )
+        let window = try sourceBoundaryText(
+            at: root.appendingPathComponent(
+                "Sources/NeonDiffDesktop/Support/NeonWindowConfigurator.swift"
+            )
+        )
+        let content = try sourceBoundaryText(
+            at: root.appendingPathComponent(
+                "Sources/NeonDiffDesktop/Views/ContentView.swift"
+            )
+        )
+        let project = try sourceBoundaryText(
+            at: root.appendingPathComponent("NeonDiffDesktop.xcodeproj/project.pbxproj")
+        )
+        let bundler = try sourceBoundaryText(
+            at: root.appendingPathComponent("script/build_and_run.sh")
+        )
+        let releaseProof = try sourceBoundaryText(
+            at: root.appendingPathComponent("script/release-proof.sh")
+        )
+
+        #expect(app.contains(#"WindowGroup("NeonDiff")"#))
+        #expect(app.contains(#"Button("Quit NeonDiff")"#))
+        #expect(app.contains(#"Button("Close NeonDiff Window")"#))
+        #expect(window.contains(#"window.title = "NeonDiff""#))
+        #expect(content.contains(#".accessibilityLabel("NeonDiff root")"#))
+        #expect(project.contains(#"INFOPLIST_KEY_CFBundleDisplayName = NeonDiff;"#))
+        #expect(project.contains(#"INFOPLIST_KEY_CFBundleName = NeonDiff;"#))
+        #expect(project.contains(#"PRODUCT_NAME = NeonDiffDesktop;"#))
+
+        #expect(bundler.contains(#"APP_NAME="NeonDiff""#))
+        #expect(bundler.contains(#"PRODUCT_NAME="NeonDiffDesktop""#))
+        #expect(bundler.contains(#"<string>$PRODUCT_NAME</string>"#))
+        #expect(bundler.contains(#"<string>$APP_NAME</string>"#))
+        #expect(bundler.contains(#"BUNDLE_ID="com.electricsheephq.NeonDiffDesktop""#))
+
+        #expect(releaseProof.contains(#"APP_NAME="NeonDiff""#))
+        #expect(releaseProof.contains(#"EXECUTABLE_NAME="NeonDiffDesktop""#))
+        #expect(releaseProof.contains(#"ARTIFACT_NAME="NeonDiff.app.zip""#))
+        #expect(releaseProof.contains(#"ditto "$SOURCE_APP_BUNDLE" "$APP_BUNDLE""#))
+    }
+
     @Test func setupUsesAnEscapableIntegratedPanelInsteadOfAModalSheet() throws {
         let views = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)

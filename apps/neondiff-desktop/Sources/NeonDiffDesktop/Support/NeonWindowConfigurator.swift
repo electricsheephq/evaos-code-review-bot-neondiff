@@ -54,7 +54,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
     private func configure(window: NSWindow?, coordinator: Coordinator) {
         guard let window else { return }
 
-        window.title = "NeonDiff Desktop"
+        window.title = "NeonDiff"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true

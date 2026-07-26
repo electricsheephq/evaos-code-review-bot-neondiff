@@ -332,7 +332,7 @@ private struct EvaluationRootAccessibilityMarker: View {
         Color.clear
             .frame(width: 1, height: 1)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("NeonDiff Desktop root")
+            .accessibilityLabel("NeonDiff root")
             .accessibilityIdentifier(identifier)
             .allowsHitTesting(false)
     }

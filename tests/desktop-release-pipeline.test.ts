@@ -90,7 +90,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).toMatch(/actions\/upload-artifact@[0-9a-f]{40}/);
     expect(workflow).not.toMatch(/actions\/checkout@v4/);
     expect(workflow).not.toMatch(/actions\/upload-artifact@v4/);
-    expect(workflow).toMatch(/NeonDiffDesktop\.app\.zip/);
+    expect(workflow).toMatch(/NeonDiff\.app\.zip/);
     expect(workflow).toMatch(/desktop-release-smoke-metadata\.json/);
     expect(workflow).toMatch(/NEONDIFF_DESKTOP_UI_LAUNCH/);
     expect(workflow).toMatch(/NEONDIFF_DESKTOP_ARTIFACT_CLASSIFICATION/);
