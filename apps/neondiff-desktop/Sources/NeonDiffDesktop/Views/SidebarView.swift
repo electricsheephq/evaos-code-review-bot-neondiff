@@ -16,6 +16,7 @@ struct SidebarView: View {
     let cancelAccountLink: () -> Void
     let refreshAccounts: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isAccountPopoverPresented = false
 
     var body: some View {
         let palette = NDPalette(scheme: colorScheme)
@@ -95,35 +96,39 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func accountMenu(palette: NDPalette) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                NDBrandWordmark(size: 22)
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
+        Button {
+            isAccountPopoverPresented.toggle()
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    NDBrandWordmark(size: 22)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(palette.textSecondary)
+                }
+                Text(selectedAccountName ?? "AI CODE REVIEW SYSTEM")
+                    .font(.system(.caption2, design: .monospaced).weight(.medium))
+                    .tracking(0.9)
                     .foregroundStyle(palette.textSecondary)
-            }
-            Text(selectedAccountName ?? "AI CODE REVIEW SYSTEM")
-                .font(.system(.caption2, design: .monospaced).weight(.medium))
-                .tracking(0.9)
-                .foregroundStyle(palette.textSecondary)
-                .lineLimit(1)
-        }
-        .contentShape(Rectangle())
-        .accessibilityHidden(true)
-        .overlay {
-            Menu {
-                accountMenuEntries
-            } label: {
-                Color.clear
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .lineLimit(1)
                     .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .accessibilityLabel("NeonDiff account and bot menu")
-            .accessibilityIdentifier("neondiff-account-menu")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("NeonDiff account and bot menu")
+        .accessibilityIdentifier("neondiff-account-menu")
+        .popover(isPresented: $isAccountPopoverPresented, arrowEdge: .leading) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("// ACCOUNT / BOT")
+                    .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(palette.accentPrimary)
+                Divider()
+                accountMenuEntries
+            }
+            .padding(16)
+            .frame(minWidth: 280, maxWidth: 360, alignment: .leading)
+            .background(palette.surface)
         }
     }
 
