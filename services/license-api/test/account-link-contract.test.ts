@@ -267,6 +267,51 @@ describe("Lovable account link contract", () => {
     assert.equal(identityCalls, 1);
   });
 
+  test("rate-limits workspace refreshes before calling the Supabase authority", async () => {
+    let workspaceCalls = 0;
+    const harness = await startBroker({
+      accountWorkspaceRateLimiter: new RateLimiter({ maxPerWindow: 1, windowMs: 60_000 }),
+      accountAuthority: {
+        connectOrigin: CONNECT_ORIGIN,
+        async verifyAccessToken() {
+          return "user-owner";
+        },
+        async loadWorkspaceSnapshot() {
+          workspaceCalls += 1;
+          return workspaceSnapshot;
+        }
+      }
+    });
+    harnesses.push(harness);
+    const device = await makeDevice();
+    await registerAccountDevice(harness.url, device);
+    const start = await post(harness.url, "/account/connect/start", {}, bearer(await device.sign()));
+    await post(
+      harness.url,
+      "/account/connect/complete",
+      { state: start.json.state },
+      bearer("lovable-user-token")
+    );
+
+    const first = await post(
+      harness.url,
+      "/account/workspaces",
+      {},
+      bearer(await device.sign())
+    );
+    const throttled = await post(
+      harness.url,
+      "/account/workspaces",
+      {},
+      bearer(await device.sign())
+    );
+
+    assert.equal(first.status, 200);
+    assert.equal(throttled.status, 429);
+    assert.equal(throttled.json.reason, "rate_limited");
+    assert.equal(workspaceCalls, 1);
+  });
+
   test("permits CORS only for the configured NeonDiff connect origin", async () => {
     const harness = await startBroker({
       accountAuthority: {
@@ -344,6 +389,50 @@ describe("Lovable account link contract", () => {
     const unavailable = await post(disabled.url, "/account/connect/start", {});
     assert.equal(unavailable.status, 503);
     assert.equal(unavailable.json.reason, "account_authority_unavailable");
+  });
+
+  test("state that expires during identity verification is not consumed or bound", async () => {
+    let clock = new Date("2026-07-26T06:00:00.000Z");
+    const harness = await startBroker({
+      clock: () => clock,
+      accountAuthority: {
+        connectOrigin: CONNECT_ORIGIN,
+        async verifyAccessToken() {
+          clock = new Date("2026-07-26T06:10:00.001Z");
+          return "user-owner";
+        },
+        async loadWorkspaceSnapshot() {
+          return workspaceSnapshot;
+        }
+      }
+    });
+    harnesses.push(harness);
+    const device = await makeDevice();
+    await registerAccountDevice(harness.url, device);
+    const start = await post(
+      harness.url,
+      "/account/connect/start",
+      {},
+      bearer(await device.sign({ now: clock }))
+    );
+
+    const expired = await post(
+      harness.url,
+      "/account/connect/complete",
+      { state: start.json.state },
+      bearer("lovable-user-token")
+    );
+    const workspace = await post(
+      harness.url,
+      "/account/workspaces",
+      {},
+      bearer(await device.sign({ now: clock }))
+    );
+
+    assert.equal(expired.status, 409);
+    assert.equal(expired.json.reason, "state_expired");
+    assert.equal(workspace.status, 403);
+    assert.equal(workspace.json.reason, "account_link_required");
   });
 });
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +10,8 @@ import {
 
 const BASE_ENV = {
   ACCOUNT_LINK_ENABLED: "true",
-  ACCOUNT_LINK_DB_PATH: "/data/account-link.sqlite",
+  ACCOUNT_LINK_DB_PATH: "/data/github-broker.sqlite",
+  GITHUB_BROKER_DB_PATH: "/data/github-broker.sqlite",
   ACCOUNT_LINK_CONNECT_ORIGIN: "https://www.neondiff.com/desktop/connect",
   ACCOUNT_LINK_SUPABASE_URL: "https://project.supabase.co",
   ACCOUNT_LINK_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_fixture",
@@ -37,7 +38,7 @@ describe("account-link runtime configuration", () => {
     assert.doesNotMatch(JSON.stringify(result), /sb_publishable_fixture/);
   });
 
-  test("ready configuration is separate from the license database", () => {
+  test("ready configuration uses the independently replicated GitHub broker database", () => {
     const same = loadAccountLinkRuntimeConfig(
       { ...BASE_ENV, ACCOUNT_LINK_DB_PATH: "/data/license.sqlite" },
       "/data/license.sqlite"
@@ -48,10 +49,25 @@ describe("account-link runtime configuration", () => {
       reason: "must_differ_from_license_db"
     });
 
+    const unreplicated = loadAccountLinkRuntimeConfig(
+      { ...BASE_ENV, ACCOUNT_LINK_DB_PATH: "/data/account-link.sqlite" },
+      "/data/license.sqlite"
+    );
+    assert.deepEqual(unreplicated, {
+      status: "invalid",
+      setting: "ACCOUNT_LINK_DB_PATH",
+      reason: "must_match_github_broker_db"
+    });
+
     const dir = mkdtempSync(join(tmpdir(), "account-link-config-"));
     try {
+      const brokerPath = join(dir, "github-broker.sqlite");
       const ready = loadAccountLinkRuntimeConfig(
-        { ...BASE_ENV, ACCOUNT_LINK_DB_PATH: join(dir, "account-link.sqlite") },
+        {
+          ...BASE_ENV,
+          ACCOUNT_LINK_DB_PATH: brokerPath,
+          GITHUB_BROKER_DB_PATH: brokerPath
+        },
         join(dir, "license.sqlite")
       );
       assert.equal(ready.status, "ready");
@@ -59,6 +75,18 @@ describe("account-link runtime configuration", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("production entrypoint keeps enabled account-link state on the broker replica", () => {
+    const entrypoint = readFileSync(new URL("../docker-entrypoint.sh", import.meta.url), "utf8");
+    const litestream = readFileSync(new URL("../litestream-broker.yml", import.meta.url), "utf8");
+    const fly = readFileSync(new URL("../fly.toml", import.meta.url), "utf8");
+
+    assert.match(entrypoint, /ACCOUNT_LINK_ENABLED/);
+    assert.match(entrypoint, /ACCOUNT_LINK_DB_PATH/);
+    assert.match(entrypoint, /GITHUB_BROKER_REPLICA_URL is unset; refusing to enable account linking/);
+    assert.match(litestream, /path: \$\{GITHUB_BROKER_DB_PATH\}/);
+    assert.match(fly, /ACCOUNT_LINK_DB_PATH = "\/data\/github-broker\.sqlite"/);
   });
 
   test("rejects symlink and hard-link aliases of the license database", () => {

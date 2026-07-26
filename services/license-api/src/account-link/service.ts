@@ -42,6 +42,7 @@ export interface AccountLinkServiceOptions {
   registerRateLimiter?: RateLimiter;
   connectRateLimiter?: RateLimiter;
   completeRateLimiter?: RateLimiter;
+  workspaceRateLimiter?: RateLimiter;
 }
 
 /** B0-safe account linking; independent from the managed GitHub App runtime. */
@@ -52,6 +53,7 @@ export class AccountLinkService {
   private readonly registerRateLimiter: RateLimiter;
   private readonly connectRateLimiter: RateLimiter;
   private readonly completeRateLimiter: RateLimiter;
+  private readonly workspaceRateLimiter: RateLimiter;
 
   constructor(options: AccountLinkServiceOptions) {
     this.store = options.store;
@@ -63,6 +65,8 @@ export class AccountLinkService {
       options.connectRateLimiter ?? new RateLimiter({ maxPerWindow: 30, windowMs: 60_000 });
     this.completeRateLimiter =
       options.completeRateLimiter ?? new RateLimiter({ maxPerWindow: 10, windowMs: 60_000 });
+    this.workspaceRateLimiter =
+      options.workspaceRateLimiter ?? new RateLimiter({ maxPerWindow: 30, windowMs: 60_000 });
   }
 
   get connectOrigin(): string {
@@ -144,7 +148,15 @@ export class AccountLinkService {
         "the signed-in account identity could not be verified"
       );
     }
-    if (!this.store.consumeAccountConnectStateAndBind(stateHash, userId, at.toISOString())) {
+    const completedAt = this.now();
+    if (Date.parse(stored.expires_at) <= completedAt.getTime()) {
+      throw new BrokerError("state_expired", "account link state has expired");
+    }
+    if (!this.store.consumeAccountConnectStateAndBind(
+      stateHash,
+      userId,
+      completedAt.toISOString()
+    )) {
       throw new BrokerError("state_replayed", "account link state was already used");
     }
     return { status: "account_linked" };
@@ -158,6 +170,12 @@ export class AccountLinkService {
     const binding = this.store.getAccountBinding(deviceId);
     if (!binding) {
       throw new BrokerError("account_link_required", "link a signed-in NeonDiff account first");
+    }
+    if (!this.workspaceRateLimiter.allow(
+      hash(`account-workspaces:${deviceId}`),
+      at.getTime()
+    )) {
+      throw new BrokerError("rate_limited", "too many account workspace refreshes");
     }
     try {
       return {

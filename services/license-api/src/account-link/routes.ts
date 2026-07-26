@@ -25,6 +25,7 @@ export interface AccountLinkDeps {
   registerRateLimiter?: RateLimiter;
   connectRateLimiter?: RateLimiter;
   completeRateLimiter?: RateLimiter;
+  workspaceRateLimiter?: RateLimiter;
 }
 
 export function isAccountLinkPath(path: string | undefined): boolean {
@@ -39,7 +40,8 @@ export function createAccountLinkService(deps: AccountLinkDeps): AccountLinkServ
     now: deps.now,
     registerRateLimiter: deps.registerRateLimiter,
     connectRateLimiter: deps.connectRateLimiter,
-    completeRateLimiter: deps.completeRateLimiter
+    completeRateLimiter: deps.completeRateLimiter,
+    workspaceRateLimiter: deps.workspaceRateLimiter
   });
 }
 

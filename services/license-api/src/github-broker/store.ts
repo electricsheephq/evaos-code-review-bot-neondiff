@@ -342,16 +342,20 @@ export class GitHubBrokerStore {
     this.db.exec("begin immediate");
     try {
       const state = this.getAccountConnectState(stateHash);
-      if (!state || state.consumed_at) {
+      if (
+        !state
+        || state.consumed_at
+        || Date.parse(state.expires_at) <= Date.parse(consumedAt)
+      ) {
         this.db.exec("rollback");
         return false;
       }
       const info = this.db
         .prepare(
           `update account_connect_states set consumed_at = ?
-           where state_hash = ? and consumed_at is null`
+           where state_hash = ? and consumed_at is null and expires_at > ?`
         )
-        .run(consumedAt, stateHash);
+        .run(consumedAt, stateHash, consumedAt);
       if (Number(info.changes) === 0) {
         this.db.exec("rollback");
         return false;

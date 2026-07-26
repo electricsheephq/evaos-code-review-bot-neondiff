@@ -66,7 +66,9 @@ package struct DesktopBotInstallation: Identifiable, Codable, Equatable, Sendabl
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, appID, appSlug, mode, githubInstallationID, githubAccountLogin, status
+        case id, appSlug, mode, githubAccountLogin, status
+        case appID = "appId"
+        case githubInstallationID = "githubInstallationId"
     }
 
     /// `localConfigPath` is local-only evidence discovered on this Mac. It is

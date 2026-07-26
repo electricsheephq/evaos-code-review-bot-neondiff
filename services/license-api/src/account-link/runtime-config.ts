@@ -6,6 +6,7 @@ import type { AccountAuthority, AccountWorkspaceSnapshot } from "./service.js";
 
 const SETTINGS = [
   "ACCOUNT_LINK_DB_PATH",
+  "GITHUB_BROKER_DB_PATH",
   "ACCOUNT_LINK_CONNECT_ORIGIN",
   "ACCOUNT_LINK_SUPABASE_URL",
   "ACCOUNT_LINK_SUPABASE_PUBLISHABLE_KEY",
@@ -41,6 +42,13 @@ export function loadAccountLinkRuntimeConfig(
   if (!isAbsolute(dbPath)) return invalid("ACCOUNT_LINK_DB_PATH", "must_be_absolute");
   if (sameFileIdentity(dbPath, licenseDbPath)) {
     return invalid("ACCOUNT_LINK_DB_PATH", "must_differ_from_license_db");
+  }
+  const brokerDbPath = required(values, "GITHUB_BROKER_DB_PATH");
+  if (!isAbsolute(brokerDbPath)) {
+    return invalid("GITHUB_BROKER_DB_PATH", "must_be_absolute");
+  }
+  if (!sameFileIdentity(dbPath, brokerDbPath)) {
+    return invalid("ACCOUNT_LINK_DB_PATH", "must_match_github_broker_db");
   }
 
   const connectOrigin = normalizedHttpsUrl(
