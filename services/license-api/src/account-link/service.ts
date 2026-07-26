@@ -171,6 +171,10 @@ export class AccountLinkService {
   ): Promise<Record<string, unknown>> {
     const at = this.now();
     const deviceId = await authenticateDevice(this.store, authorization, at);
+    const binding = this.store.getAccountBinding(deviceId);
+    if (!binding) {
+      throw new BrokerError("account_link_required", "link a signed-in NeonDiff account first");
+    }
     const requestedState = optionalState(body);
     if (requestedState) {
       const state = this.store.getAccountConnectState(hash(requestedState));
@@ -178,6 +182,7 @@ export class AccountLinkService {
         !state
         || state.device_id !== deviceId
         || state.consumed_at === null
+        || state.bound_user_id !== binding.user_id
         || Date.parse(state.expires_at) <= at.getTime()
       ) {
         throw new BrokerError(
@@ -185,10 +190,6 @@ export class AccountLinkService {
           "finish this account link before loading workspaces"
         );
       }
-    }
-    const binding = this.store.getAccountBinding(deviceId);
-    if (!binding) {
-      throw new BrokerError("account_link_required", "link a signed-in NeonDiff account first");
     }
     if (!this.workspaceRateLimiter.allow(
       hash(`account-workspaces:${deviceId}`),

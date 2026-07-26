@@ -158,6 +158,61 @@ describe("Lovable account link contract", () => {
     assert.deepEqual(loadedUserIds, ["second-user"]);
   });
 
+  test("out-of-order reconnect completions cannot return another state account", async () => {
+    const loadedUserIds: string[] = [];
+    const harness = await startBroker({
+      accountAuthority: {
+        connectOrigin: CONNECT_ORIGIN,
+        async verifyAccessToken(token: string) {
+          if (token === "first-user-token") return "first-user";
+          if (token === "second-user-token") return "second-user";
+          return null;
+        },
+        async loadWorkspaceSnapshot(userId: string) {
+          loadedUserIds.push(userId);
+          return workspaceSnapshot;
+        }
+      }
+    });
+    harnesses.push(harness);
+    const device = await makeDevice();
+    await registerAccountDevice(harness.url, device);
+    const first = await post(harness.url, "/account/connect/start", {}, bearer(await device.sign()));
+    const second = await post(harness.url, "/account/connect/start", {}, bearer(await device.sign()));
+
+    await post(
+      harness.url,
+      "/account/connect/complete",
+      { state: first.json.state },
+      bearer("first-user-token")
+    );
+    await post(
+      harness.url,
+      "/account/connect/complete",
+      { state: second.json.state },
+      bearer("second-user-token")
+    );
+
+    const stalePoll = await post(
+      harness.url,
+      "/account/workspaces",
+      { state: first.json.state },
+      bearer(await device.sign())
+    );
+    assert.equal(stalePoll.status, 403);
+    assert.equal(stalePoll.json.reason, "account_link_required");
+    assert.deepEqual(loadedUserIds, []);
+
+    const currentPoll = await post(
+      harness.url,
+      "/account/workspaces",
+      { state: second.json.state },
+      bearer(await device.sign())
+    );
+    assert.equal(currentPoll.status, 200);
+    assert.deepEqual(loadedUserIds, ["second-user"]);
+  });
+
   test("link state is single-use", async () => {
     const harness = await startBroker({
       accountAuthority: {
