@@ -231,6 +231,7 @@ import Testing
         #expect(activity.contains("model.githubSetupReady"))
         #expect(activity.contains("GitHub connection ready"))
         #expect(activity.contains("Not checked yet — choose Refresh Activity"))
+        #expect(activity.contains("Check failed —"))
         #expect(activity.contains("DisclosureGroup"))
         #expect(activity.contains("// ADVANCED DIAGNOSTICS"))
         #expect(settings.contains("Signed update, rollback, and installed-app proof"))

@@ -5,6 +5,7 @@ import NeonDiffDesktopCore
 @MainActor
 struct DesktopSetupReadiness {
     let isRestoring: Bool
+    let isRestoreFailed: Bool
     let github: Bool
     let provider: Bool
     let license: Bool
@@ -15,6 +16,7 @@ struct DesktopSetupReadiness {
 
     init(model: NeonDiffDesktopModel) {
         isRestoring = model.isExistingLocalBotRestoreInProgress
+        isRestoreFailed = model.accountWorkspaceRestoreFailed
         github = model.githubSetupReady
         provider = model.providerSetupReady
         let publicRepositoryLicenseNotRequired = model.selectedManagedGitHubRepository
@@ -67,14 +69,22 @@ struct OverviewView: View {
                         systemImage: "link",
                         status: readiness.isRestoring
                             ? "CHECKING"
-                            : (readiness.github ? "CONNECTED" : "NOT CONNECTED"),
+                            : (readiness.isRestoreFailed
+                                ? "CHECK FAILED"
+                            : (readiness.github ? "CONNECTED" : "NOT CONNECTED")),
                         isReady: readiness.github,
                         actionTitle: readiness.isRestoring
                             ? "WAIT"
-                            : (readiness.github ? "VIEW" : "CONNECT"),
+                            : (readiness.isRestoreFailed
+                                ? "RETRY"
+                            : (readiness.github ? "VIEW" : "CONNECT")),
                         isDisabled: readiness.isRestoring
                     ) {
-                        model.reopenOnboarding(at: .welcome)
+                        if readiness.isRestoreFailed {
+                            model.refreshAccountWorkspaces()
+                        } else {
+                            model.reopenOnboarding(at: .welcome)
+                        }
                     }
 
                     ReferenceReadinessCard(
@@ -82,12 +92,16 @@ struct OverviewView: View {
                         systemImage: "cloud",
                         status: readiness.isRestoring
                             ? "CHECKING"
-                            : (readiness.provider ? "CONFIGURED" : "SETUP REQUIRED"),
+                            : (readiness.isRestoreFailed
+                                ? "WAITING FOR ACCOUNT"
+                            : (readiness.provider ? "CONFIGURED" : "SETUP REQUIRED")),
                         isReady: readiness.provider,
                         actionTitle: readiness.isRestoring
                             ? "WAIT"
-                            : (readiness.provider ? "MANAGE" : "SET UP"),
-                        isDisabled: readiness.isRestoring
+                            : (readiness.isRestoreFailed
+                                ? "WAIT"
+                            : (readiness.provider ? "MANAGE" : "SET UP")),
+                        isDisabled: readiness.isRestoring || readiness.isRestoreFailed
                     ) {
                         model.selectedSection = .providers
                     }
@@ -95,10 +109,14 @@ struct OverviewView: View {
                     ReferenceReadinessCard(
                         title: "LICENSE",
                         systemImage: "key",
-                        status: readiness.isRestoring ? "CHECKING" : readiness.licenseStatus,
+                        status: readiness.isRestoring
+                            ? "CHECKING"
+                            : (readiness.isRestoreFailed
+                                ? "WAITING FOR ACCOUNT"
+                                : readiness.licenseStatus),
                         isReady: readiness.license,
-                        actionTitle: readiness.isRestoring ? "WAIT" : "VIEW",
-                        isDisabled: readiness.isRestoring
+                        actionTitle: readiness.isRestoring || readiness.isRestoreFailed ? "WAIT" : "VIEW",
+                        isDisabled: readiness.isRestoring || readiness.isRestoreFailed
                     ) {
                         model.selectedSection = .license
                     }
@@ -108,12 +126,16 @@ struct OverviewView: View {
                         systemImage: "chevron.left.forwardslash.chevron.right",
                         status: readiness.isRestoring
                             ? "CHECKING"
-                            : (readiness.repository ? "APPLIED" : "NOT APPLIED"),
+                            : (readiness.isRestoreFailed
+                                ? "WAITING FOR ACCOUNT"
+                            : (readiness.repository ? "APPLIED" : "NOT APPLIED")),
                         isReady: readiness.repository,
                         actionTitle: readiness.isRestoring
                             ? "WAIT"
-                            : (readiness.repository ? "MANAGE" : "ADD"),
-                        isDisabled: readiness.isRestoring
+                            : (readiness.isRestoreFailed
+                                ? "WAIT"
+                            : (readiness.repository ? "MANAGE" : "ADD")),
+                        isDisabled: readiness.isRestoring || readiness.isRestoreFailed
                     ) {
                         model.selectedSection = .repos
                     }
@@ -180,7 +202,9 @@ struct OverviewView: View {
             HStack(spacing: 10) {
                 Text(readiness.isRestoring
                     ? "CHECKING LOCAL SETUP"
-                    : "\(readiness.completedCount) OF \(readiness.totalCount) READY")
+                    : (readiness.isRestoreFailed
+                        ? "ACCOUNT CHECK FAILED"
+                    : "\(readiness.completedCount) OF \(readiness.totalCount) READY"))
                     .font(.system(.caption2, design: .monospaced).weight(.semibold))
                     .foregroundStyle(palette.textSecondary)
 
@@ -208,6 +232,9 @@ struct OverviewView: View {
         if readiness.isRestoring {
             return "Restoring this Mac"
         }
+        if readiness.isRestoreFailed {
+            return "Account check needs retry"
+        }
         if readiness.canRunDryRun {
             return "Ready for a dry run"
         }
@@ -220,6 +247,9 @@ struct OverviewView: View {
     private func heroDetail(_ readiness: DesktopSetupReadiness) -> String {
         if readiness.isRestoring {
             return "Checking your authorized account, existing bot, and local configuration before showing setup actions."
+        }
+        if readiness.isRestoreFailed {
+            return "NeonDiff could not verify the saved account. Retry safely; local setup and secrets were not changed."
         }
         if readiness.canRunDryRun {
             return "Start with a dry run before any live GitHub post."
@@ -235,7 +265,9 @@ struct OverviewView: View {
         readiness: DesktopSetupReadiness
     ) -> some View {
         ReferenceHomePanel(title: "// REPOSITORY", palette: palette) {
-            Text(readiness.isRestoring ? "Checking existing bot…" : readiness.repositoryName)
+            Text(readiness.isRestoring
+                ? "Checking existing bot…"
+                : (readiness.isRestoreFailed ? "Account check required" : readiness.repositoryName))
                 .font(.system(.title3, design: .monospaced).weight(.medium))
                 .foregroundStyle(
                     readiness.repository ? palette.accentPrimary : palette.textSecondary
@@ -244,11 +276,13 @@ struct OverviewView: View {
 
             Text(readiness.isRestoring
                 ? "Reading the selected bot’s applied repository configuration."
+                : (readiness.isRestoreFailed
+                    ? "Retry account verification before changing local setup."
                 : (readiness.repository
                     ? (readiness.canRunDryRun
                         ? "Applied and ready for a dry-run review."
                         : "Applied in the selected local bot config.")
-                    : "Choose and apply one repository to begin."))
+                    : "Choose and apply one repository to begin.")))
                 .font(.callout)
                 .foregroundStyle(palette.textSecondary)
 
@@ -258,12 +292,14 @@ struct OverviewView: View {
                 Label(
                     readiness.isRestoring
                         ? "Checking Repository"
-                        : (readiness.repository ? "Manage Repository" : "Add Repository"),
+                        : (readiness.isRestoreFailed
+                            ? "Waiting for Account"
+                        : (readiness.repository ? "Manage Repository" : "Add Repository")),
                     systemImage: "plus.circle"
                 )
             }
             .buttonStyle(ReferenceOutlineButtonStyle())
-            .disabled(readiness.isRestoring)
+            .disabled(readiness.isRestoring || readiness.isRestoreFailed)
         }
         .frame(maxWidth: .infinity, minHeight: 174, alignment: .topLeading)
     }
@@ -284,11 +320,13 @@ struct OverviewView: View {
                         .foregroundStyle(palette.textPrimary)
                     Text(readiness.isRestoring
                         ? "Restoring existing bot setup on this Mac."
+                        : (readiness.isRestoreFailed
+                            ? "Account verification failed. Retry without reconfiguring the local worker."
                         : (readiness.canRunDryRun
                             ? "Setup is ready for a dry run."
                             : (readiness.isComplete
                                 ? "Existing bot setup detected on this Mac."
-                                : "Let’s finish your setup.")))
+                                : "Let’s finish your setup."))))
                         .font(.callout)
                         .foregroundStyle(palette.textSecondary)
                 }

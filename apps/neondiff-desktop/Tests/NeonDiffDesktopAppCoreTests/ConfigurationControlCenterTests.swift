@@ -70,6 +70,8 @@ import NeonDiffDesktopCore
 
         #expect(fixture.model.lastError?.contains(sensitive) != true)
         #expect(fixture.model.logText.contains(sensitive) == false)
+        #expect(fixture.model.statusRefreshFailureMessage != nil)
+        #expect(fixture.model.status == .unknown)
         #expect(fixture.cli.calls[0].standardInput == nil)
     }
 

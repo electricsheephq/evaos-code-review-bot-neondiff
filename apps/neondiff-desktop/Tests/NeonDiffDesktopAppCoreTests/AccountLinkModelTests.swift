@@ -127,16 +127,64 @@ import NeonDiffDesktopCore
         model.refreshAccountWorkspacesOnLaunch()
 
         #expect(model.isAutomaticAccountWorkspaceRefreshInProgress)
+        #expect(model.isSetupMutationBlocked)
+        #expect(!model.canEditProviderConfiguration)
         #expect(!model.isOnboardingPresented)
         #expect(model.customerSurfaceStatus == "RESTORING")
 
         await model.waitForAccountLinkOperation()
 
         #expect(!model.isAutomaticAccountWorkspaceRefreshInProgress)
+        #expect(!model.isSetupMutationBlocked)
         #expect(model.selectedBotInstallation?.localConfigPath == configURL.path)
         #expect(model.existingLocalBotIdentityReady)
         #expect(!model.isOnboardingPresented)
         #expect(model.customerSurfaceStatus == "SETUP INCOMPLETE")
+    }
+
+    @Test func launchRefreshFailureStaysInRetryStateInsteadOfClaimingFirstRun() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-launch-failure-\(UUID().uuidString)", isDirectory: true)
+        let secrets = AccountLinkMemorySecretStore()
+        let cli = RecordingCLIExecutor()
+        _ = try GitHubBrokerDeviceIdentityStore(secretStore: secrets).loadOrCreate()
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: cli,
+            dashboard: RecordingDashboardLauncher(),
+            preferences: MemoryPreferences(),
+            clock: TestClock(),
+            fileWriter: TemporaryFileWriter(root: root),
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: secrets,
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [
+                .failure(.server(reason: .accountAuthorityUnavailable))
+            ]),
+            productionBoundary: .testAccountLink
+        ))
+
+        model.refreshAccountWorkspacesOnLaunch()
+        await model.waitForAccountLinkOperation()
+
+        #expect(!model.isOnboardingPresented)
+        #expect(model.accountWorkspaceRestoreFailed)
+        #expect(model.isSetupMutationBlocked)
+        #expect(!model.canEditProviderConfiguration)
+        #expect(model.customerSurfaceStatus == "ACCOUNT CHECK FAILED")
+
+        let existingRepository = RepoMonitor(
+            name: "electricsheephq/evaos-code-review-bot",
+            enabled: true,
+            profile: "selected"
+        )
+        model.repos = [existingRepository]
+        model.toggleRepoAllowlist(existingRepository)
+        model.inspectConfig()
+
+        #expect(model.repos.first?.enabled == true)
+        #expect(cli.calls.isEmpty)
     }
 
     @Test func launchRefreshPresentsOnboardingAfterProvingNoLocalBotExists() async throws {

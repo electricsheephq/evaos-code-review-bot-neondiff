@@ -98,6 +98,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
     @Published package var launchdLabel: String
     @Published package var status: DaemonStatus = .unknown
+    @Published package private(set) var statusRefreshFailureMessage: String?
     @Published package var repos: [RepoMonitor] = [] {
         didSet {
             let oldAllowlist = oldValue.filter(\.enabled).map(\.name).sorted()
@@ -278,6 +279,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package var productionUsefulWorkAvailable: Bool {
         guard dependencies.productionBoundary.nativeActivationBrokerVerified else {
+            return false
+        }
+        guard !isSetupMutationBlocked else {
             return false
         }
         guard !isConfigPatchInProgress else {
@@ -710,6 +714,30 @@ package final class NeonDiffDesktopModel: ObservableObject {
             || (existingLocalBotIdentityReady && isConfigInspectInProgress)
     }
 
+    /// A saved account identity failed to refresh. Keep this distinct from a
+    /// proven first-run state so a transient authority failure cannot invite
+    /// the customer to overwrite an existing setup.
+    package var accountWorkspaceRestoreFailed: Bool {
+        guard attemptedAutomaticAccountWorkspaceRefresh,
+              !isAutomaticAccountWorkspaceRefreshInProgress,
+              !isOnboardingPresented
+        else {
+            return false
+        }
+        if case .failed = accountWorkspaceCatalog {
+            return true
+        }
+        return false
+    }
+
+    /// Customer setup writes remain closed while existing account/config truth
+    /// is being restored or when that restore needs an explicit retry.
+    package var isSetupMutationBlocked: Bool {
+        isExistingLocalBotRestoreInProgress
+            || accountWorkspaceRestoreFailed
+            || isAccountLinkInProgress
+    }
+
     /// Customer chrome should never present the internal sentinel `unknown` as
     /// if it were a meaningful product state.
     package var customerSurfaceStatus: String {
@@ -718,6 +746,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         if isExistingLocalBotRestoreInProgress {
             return "RESTORING"
+        }
+        if accountWorkspaceRestoreFailed {
+            return "ACCOUNT CHECK FAILED"
         }
         if status.healthState != DaemonStatus.unknown.healthState {
             return status.healthState
@@ -864,19 +895,22 @@ package final class NeonDiffDesktopModel: ObservableObject {
         accountWorkspaceCatalog = .idle
         accountWorkspaceStatus = "Account connection cancelled. You can continue locally or reconnect later."
         lastError = nil
-        finishAutomaticAccountWorkspaceRefresh()
+        finishAutomaticAccountWorkspaceRefresh(presentsOnboardingIfNeeded: false)
     }
 
     /// Refreshes an already-linked device without creating or rotating its
     /// Keychain identity. A missing identity remains an explicit connect state.
     package func refreshAccountWorkspaces() {
         guard !isAccountLinkInProgress else { return }
+        if accountWorkspaceRestoreFailed {
+            isAutomaticAccountWorkspaceRefreshInProgress = true
+        }
         guard dependencies.productionBoundary.accountLinkBrokerOrigin != nil,
               let accountLink = dependencies.accountLink
         else {
             accountWorkspaceCatalog = .failed("NeonDiff account linking is unavailable in this build.")
             accountWorkspaceStatus = "NeonDiff account linking is unavailable in this build."
-            finishAutomaticAccountWorkspaceRefresh()
+            finishAutomaticAccountWorkspaceRefresh(presentsOnboardingIfNeeded: false)
             return
         }
 
@@ -902,19 +936,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 self.applyAccountLinkSnapshot(snapshot)
                 self.isAccountLinkInProgress = false
                 self.accountLinkTask = nil
-                self.finishAutomaticAccountWorkspaceRefresh()
+                self.finishAutomaticAccountWorkspaceRefresh(presentsOnboardingIfNeeded: true)
             } catch is CancellationError {
                 guard self.isCurrentAccountLink(generation) else { return }
                 self.isAccountLinkInProgress = false
                 self.accountLinkTask = nil
-                self.finishAutomaticAccountWorkspaceRefresh()
+                self.finishAutomaticAccountWorkspaceRefresh(presentsOnboardingIfNeeded: false)
             } catch GitHubBrokerDeviceIdentityError.storedIdentityMissing {
                 guard self.isCurrentAccountLink(generation) else { return }
                 self.isAccountLinkInProgress = false
                 self.accountLinkTask = nil
                 self.accountWorkspaceCatalog = .idle
                 self.accountWorkspaceStatus = "Connect your NeonDiff account to load personal and organization workspaces."
-                self.finishAutomaticAccountWorkspaceRefresh()
+                self.finishAutomaticAccountWorkspaceRefresh(presentsOnboardingIfNeeded: true)
             } catch is GitHubBrokerDeviceIdentityError {
                 guard self.isCurrentAccountLink(generation) else { return }
                 self.isAccountLinkInProgress = false
@@ -923,10 +957,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 self.accountWorkspaceCatalog = .failed(message)
                 self.accountWorkspaceStatus = message
                 self.lastError = message
-                self.finishAutomaticAccountWorkspaceRefresh()
+                self.finishAutomaticAccountWorkspaceRefresh(presentsOnboardingIfNeeded: false)
             } catch {
                 self.applyAccountLinkFailure(error, generation: generation)
-                self.finishAutomaticAccountWorkspaceRefresh()
+                self.finishAutomaticAccountWorkspaceRefresh(presentsOnboardingIfNeeded: false)
             }
         }
         accountLinkTask = task
@@ -974,10 +1008,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         lastError = nil
     }
 
-    private func finishAutomaticAccountWorkspaceRefresh() {
+    private func finishAutomaticAccountWorkspaceRefresh(
+        presentsOnboardingIfNeeded: Bool
+    ) {
         guard isAutomaticAccountWorkspaceRefreshInProgress else { return }
         isAutomaticAccountWorkspaceRefreshInProgress = false
         guard !dependencies.preferences.bool(forKey: onboardingCompletedKey) else {
+            isOnboardingPresented = false
+            return
+        }
+        guard presentsOnboardingIfNeeded else {
             isOnboardingPresented = false
             return
         }
@@ -1166,7 +1206,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     resetWorkspaceBoundRuntimeState()
                     if let localConfigPath = selectedBot.localConfigPath {
                         configPath = localConfigPath
-                        inspectConfig()
+                        inspectConfig(
+                            allowDuringAccountRestore: isAccountLinkInProgress
+                        )
                     } else {
                         configPath = isolatedBotConfigPath(
                             accountID: selectedAccount.id,
@@ -1235,7 +1277,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         if let localConfigPath = bot.localConfigPath {
             configPath = localConfigPath
             accountWorkspaceStatus = "Local bot selected. Verify its config and GitHub binding before use."
-            inspectConfig()
+            inspectConfig(
+                allowDuringAccountRestore: isAccountLinkInProgress
+            )
         } else {
             configPath = isolatedBotConfigPath(
                 accountID: account.id,
@@ -1590,7 +1634,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var canEditProviderConfiguration: Bool {
-        !isProviderVerificationInProgress
+        !isSetupMutationBlocked
+            && !isProviderVerificationInProgress
             && !isProviderVerificationCancelling
             && providerVerificationSafetyLatchMessage == nil
     }
@@ -1661,6 +1706,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func refreshStatus() {
         persistLocalSettings()
+        statusRefreshFailureMessage = nil
         runCLI(arguments: ["daemon", "status", "--config", configPath, "--launchd-label", launchdLabel], displayCommand: statusCommand)
     }
 
@@ -1745,8 +1791,27 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func inspectConfig() {
-        guard canEditProviderConfiguration, !isConfigPatchInProgress, !isConfigInspectInProgress else { return }
-        runCLI(arguments: ["config", "inspect", "--config", configPath], displayCommand: configInspectCommand)
+        inspectConfig(allowDuringAccountRestore: false)
+    }
+
+    private func inspectConfig(allowDuringAccountRestore: Bool) {
+        guard allowDuringAccountRestore || !isSetupMutationBlocked else {
+            lastError = "Retry account verification before reading or changing local setup."
+            return
+        }
+        guard !isProviderVerificationInProgress,
+              !isProviderVerificationCancelling,
+              providerVerificationSafetyLatchMessage == nil,
+              !isConfigPatchInProgress,
+              !isConfigInspectInProgress
+        else {
+            return
+        }
+        runCLI(
+            arguments: ["config", "inspect", "--config", configPath],
+            displayCommand: configInspectCommand,
+            allowsSetupMutationDuringRestore: allowDuringAccountRestore
+        )
     }
 
     package func initializeConfigForOnboarding() {
@@ -1942,6 +2007,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func toggleRepoAllowlist(_ repo: RepoMonitor) {
         guard !managedGitHubAvailable else {
             lastError = "Managed mode keeps exactly one server-bound repository selected. Choose it from the verified repository list."
+            return
+        }
+        guard canEditProviderConfiguration else {
+            lastError = isSetupMutationBlocked
+                ? "Retry account verification before changing repository setup."
+                : (providerVerificationSafetyLatchMessage
+                    ?? "Wait for provider verification cleanup before changing config.")
             return
         }
         guard let index = repos.firstIndex(where: { $0.id == repo.id }) else { return }
@@ -2420,6 +2492,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func storeProviderKey() {
+        guard canEditProviderConfiguration else {
+            lastError = isSetupMutationBlocked
+                ? "Retry account verification before changing provider setup."
+                : (providerVerificationSafetyLatchMessage
+                    ?? "Wait for provider verification cleanup before changing config.")
+            return
+        }
         guard providerVerificationSafetyLatchMessage == nil else {
             lastError = providerVerificationSafetyLatchMessage
             return
@@ -2445,6 +2524,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func storeBYOGitHubAppCredentials() {
         defer { pendingBYOGitHubAppPrivateKey = "" }
+        guard !isSetupMutationBlocked else {
+            lastError = "Retry account verification before changing GitHub App setup."
+            byoGitHubCredentialStatus = lastError ?? "Account check required"
+            return
+        }
         byoGitHubCredentialRevision &+= 1
         invalidateBYOGitHubVerificationContext()
         guard byoGitHubCredentialOnboardingAvailable else {
@@ -2481,6 +2565,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func clearBYOGitHubAppCredentials() {
         pendingBYOGitHubAppPrivateKey = ""
+        guard !isSetupMutationBlocked else {
+            pendingBYOGitHubAppId = ""
+            lastError = "Retry account verification before changing GitHub App setup."
+            byoGitHubCredentialStatus = lastError ?? "Account check required"
+            return
+        }
         pendingBYOGitHubAppId = ""
         byoGitHubCredentialRevision &+= 1
         invalidateBYOGitHubVerificationContext()
@@ -2500,6 +2590,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyBYOGitHubAppCredentials() {
+        guard !isSetupMutationBlocked else {
+            lastError = "Retry account verification before verifying GitHub App setup."
+            byoGitHubCredentialStatus = lastError ?? "Account check required"
+            return
+        }
         guard byoGitHubCredentialOnboardingAvailable else {
             lastError = "Customer-owned GitHub App verification is unavailable in this build."
             byoGitHubCredentialStatus = lastError ?? "Unavailable"
@@ -2652,6 +2747,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func clearProviderKey() {
+        guard canEditProviderConfiguration else {
+            lastError = isSetupMutationBlocked
+                ? "Retry account verification before changing provider setup."
+                : (providerVerificationSafetyLatchMessage
+                    ?? "Wait for provider verification cleanup before changing config.")
+            return
+        }
         guard providerVerificationSafetyLatchMessage == nil else {
             lastError = providerVerificationSafetyLatchMessage
             return
@@ -3254,7 +3356,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         displayCommand: DesktopCommand,
         controlCenterOperation: ControlCenterOperation? = nil,
         providerPatchProof: PendingProviderPatchProof? = nil,
-        repoPatchProof: PendingRepoPatchProof? = nil
+        repoPatchProof: PendingRepoPatchProof? = nil,
+        allowsSetupMutationDuringRestore: Bool = false
     ) {
         if let providerVerificationSafetyLatchMessage {
             lastError = providerVerificationSafetyLatchMessage
@@ -3267,6 +3370,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let isConfigInspectCommand = arguments.count >= 2 && arguments[0] == "config" && arguments[1] == "inspect"
         let isConfigInitializeCommand = arguments.first == "init"
         let isConfigOperation = isConfigInitializeCommand || isConfigPatchCommand || isConfigInspectCommand
+        let isDaemonStatusCommand = arguments.count >= 2
+            && arguments[0] == "daemon"
+            && arguments[1] == "status"
+        if isConfigOperation
+            && isSetupMutationBlocked
+            && !allowsSetupMutationDuringRestore {
+            lastError = "Retry account verification before reading or changing local setup."
+            clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
+            clearPendingRepoPatchProof(ifOwnedBy: repoPatchProof)
+            if controlCenterOperation != nil { isControlCenterOperationInProgress = false }
+            return
+        }
         if isConfigOperation
             && (isProviderVerificationInProgress || isProviderVerificationCancelling) {
             lastError = "Wait for provider verification cleanup before changing config."
@@ -3311,6 +3426,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         launchdLabel: launchdLabel,
                         isConfigInspectCommand: isConfigInspectCommand,
                         isConfigInitializeCommand: isConfigInitializeCommand,
+                        isDaemonStatusCommand: isDaemonStatusCommand,
                         controlCenterOperation: controlCenterOperation,
                         providerPatchProof: providerPatchProof,
                         repoPatchProof: repoPatchProof
@@ -3329,6 +3445,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     }
                     self.lastError = NeonDiffRedactor.redact(error.localizedDescription)
                     self.logText = self.lastError ?? "Unknown CLI error"
+                    if isDaemonStatusCommand {
+                        self.statusRefreshFailureMessage = self.lastError
+                            ?? "Local worker status check failed."
+                    }
                     if isConfigInitializeCommand {
                         self.isConfigInitializationInProgress = false
                         self.configInitializationStatus = self.lastError ?? "Local config initialization failed."
@@ -3964,6 +4084,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         launchdLabel: String,
         isConfigInspectCommand: Bool,
         isConfigInitializeCommand: Bool = false,
+        isDaemonStatusCommand: Bool = false,
         controlCenterOperation: ControlCenterOperation? = nil,
         providerPatchProof: PendingProviderPatchProof? = nil,
         repoPatchProof: PendingRepoPatchProof? = nil
@@ -4244,10 +4365,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
         if let parsed = DaemonStatusParser.parse(result.stdout, launchdLabel: launchdLabel, fallbackCommand: fallbackCommand) {
             status = parsed.0
+            statusRefreshFailureMessage = nil
             onboardingFlow.daemonBootstrapChecked = true
             if !parsed.1.isEmpty {
                 repos = parsed.1
             }
+        } else if isDaemonStatusCommand {
+            statusRefreshFailureMessage = lastError
+                ?? "Local worker returned an invalid status response."
         }
     }
 

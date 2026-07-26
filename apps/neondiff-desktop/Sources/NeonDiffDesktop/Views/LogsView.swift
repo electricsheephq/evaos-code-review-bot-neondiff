@@ -101,6 +101,9 @@ struct LogsView: View {
         if model.isExistingLocalBotRestoreInProgress {
             return "Checking the selected bot’s local worker"
         }
+        if let failure = model.statusRefreshFailureMessage {
+            return "Check failed — \(failure)"
+        }
         if model.status == .unknown {
             return "Not checked yet — choose Refresh Activity"
         }
