@@ -142,6 +142,15 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(bundler).toContain('find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents');
   });
 
+  it("removes machine-local absolute runtime search paths from release bundles", () => {
+    const bundler = read("apps/neondiff-desktop/script/build_and_run.sh");
+
+    expect(bundler).toContain("sanitize_release_rpaths");
+    expect(bundler).toContain('install_name_tool -delete_rpath "$rpath" "$APP_BINARY"');
+    expect(bundler).toContain("assert_portable_release_rpaths");
+    expect(bundler).toContain("release bundle contains a non-portable absolute LC_RPATH");
+  });
+
   it("documents the desktop smoke artifact as non-release proof", () => {
     const docPath = "apps/neondiff-desktop/docs/desktop-release-smoke.md";
 
