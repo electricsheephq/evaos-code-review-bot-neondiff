@@ -70,6 +70,14 @@ import NeonDiffDesktopCore
         #expect(merged.bots[0].localConfigPath == nil)
     }
 
+    @Test func serverCatalogCannotInjectALocalConfigPath() throws {
+        let data = Data(#"{"id":"bot-remote","appID":4184532,"appSlug":"evaos-code-review-bot","mode":"byo","githubInstallationID":72001,"githubAccountLogin":"electricsheephq","status":"verified","localConfigPath":"/tmp/server-controlled.json"}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(DesktopBotInstallation.self, from: data)
+
+        #expect(decoded.localConfigPath == nil)
+    }
+
     @Test func newBotUsesADistinctPendingIdentityAndNeverReusesExistingConfig() throws {
         let existingPath = "/Users/test/Library/Application Support/NeonDiff/config.local.json"
         let plan = try DesktopNewBotPlan.make(
@@ -191,6 +199,66 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func reselectingTheCurrentBotPreservesVerifiedRuntimeState() {
+        let localBot = bot(
+            id: "bot-local",
+            slug: "local-bot",
+            configPath: "/fixture/local-bot/config.local.json"
+        )
+        let account = workspace(id: "account-a", name: "Account A", bots: [localBot])
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+        fixture.model.selectBotInstallation(localBot.id)
+        fixture.model.repos = [RepoMonitor(name: "account-a/private", enabled: true)]
+        fixture.model.providers.providerKeyStored = true
+
+        fixture.model.selectBotInstallation(localBot.id)
+
+        #expect(fixture.model.repos == [RepoMonitor(name: "account-a/private", enabled: true)])
+        #expect(fixture.model.providers.providerKeyStored)
+    }
+
+    @MainActor
+    @Test func catalogLocalPathLossInvalidatesSelectedBotRuntimeState() {
+        let localBot = bot(
+            id: "bot-local",
+            slug: "local-bot",
+            configPath: "/fixture/local-bot/config.local.json"
+        )
+        let account = workspace(id: "account-a", name: "Account A", bots: [localBot])
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+        fixture.model.selectBotInstallation(localBot.id)
+        fixture.model.repos = [RepoMonitor(name: "account-a/private", enabled: true)]
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(
+                id: account.id,
+                name: account.name,
+                bots: [bot(id: localBot.id, slug: localBot.appSlug, configPath: nil)]
+            )
+        ]))
+
+        #expect(fixture.model.repos.isEmpty)
+        #expect(fixture.model.configPath.contains("Accounts/account-a/Bots/local-bot/config.local.json"))
+        #expect(fixture.model.isOnboardingPresented)
+    }
+
+    @MainActor
+    @Test func unchangedCatalogRefreshPreservesAPendingNewBotPlan() throws {
+        let fixture = ModelDependencyFixture()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        fixture.model.beginNewBot(appSlug: "electric-sheep-secondary")
+        let original = try #require(fixture.model.pendingNewBotPlan)
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+
+        #expect(fixture.model.pendingNewBotPlan == original)
+        #expect(fixture.model.accountWorkspaceSelection.botID == original.bot.id)
+        #expect(fixture.model.configPath == original.bot.localConfigPath)
+    }
+
+    @MainActor
     @Test func switchingWorkspaceClearsConfigAuthorizationOnboardingProofAndTransientGitHubInput() {
         let localBot = bot(
             id: "bot-local",
@@ -209,6 +277,9 @@ import NeonDiffDesktopCore
         fixture.model.onboardingFlow.licenseActivation = .activated
         fixture.model.pendingBYOGitHubAppId = "4184532"
         fixture.model.pendingBYOGitHubAppPrivateKey = "fixture-private-key"
+        fixture.model.pendingActivationKey = "NDL-OLD-WORKSPACE-123456"
+        fixture.model.pendingIssueRepoName = "account-a/old"
+        fixture.model.controlCenter.pollIntervalMs += 1
         fixture.model.githubAuthorizationCode = GitHubDeviceAuthorizationCode(
             deviceCode: "fixture-device-code",
             userCode: "ABCD-EFGH",
@@ -226,6 +297,9 @@ import NeonDiffDesktopCore
         #expect(fixture.model.onboardingFlow.licenseActivation == .servicePending)
         #expect(fixture.model.pendingBYOGitHubAppId.isEmpty)
         #expect(fixture.model.pendingBYOGitHubAppPrivateKey.isEmpty)
+        #expect(fixture.model.pendingActivationKey.isEmpty)
+        #expect(fixture.model.pendingIssueRepoName.isEmpty)
+        #expect(fixture.model.controlCenter == DesktopControlCenterSettings())
         #expect(fixture.model.githubAuthorizationCode == nil)
         #expect(!fixture.model.isGitHubAuthorizationInProgress)
         #expect(!fixture.model.isGitHubRepositoryRefreshInProgress)

@@ -307,6 +307,37 @@ import NeonDiffDesktopCore
         #expect(model.onboardingFlow.licenseActivation != .activated)
     }
 
+    @Test func staleResultAfterWorkspaceSwitchIsDropped() async {
+        let keychain = RecordingKeychain()
+        let gate = GatedActivationClient()
+        let model = makeModel(secretStore: keychain, client: gate)
+        let accountA = DesktopAccountWorkspace(
+            id: "account-a", kind: .organization, name: "Account A", role: .admin,
+            entitlement: .paid, bots: []
+        )
+        let accountB = DesktopAccountWorkspace(
+            id: "account-b", kind: .organization, name: "Account B", role: .admin,
+            entitlement: .paid, bots: []
+        )
+        model.applyAccountWorkspaceCatalog(.loaded([accountA, accountB]))
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-GOOD-0123456789"
+        model.provideExistingActivationKey()
+
+        let task = Task { await model.submitActivation() }
+        var spins = 0
+        while model.activationState != .activationPending && spins < 10_000 {
+            await Task.yield(); spins += 1
+        }
+        model.selectAccountWorkspace(accountB.id)
+        gate.release(activeSummary())
+        await task.value
+
+        #expect(model.selectedAccountWorkspace?.id == accountB.id)
+        #expect(model.activationState != .active)
+        #expect(model.onboardingFlow.licenseActivation != .activated)
+    }
+
     /// Thread 7: a keyReady state restored without a Keychain item must return to
     /// key entry, not get stuck on Activating.
     @Test func missingKeyDuringActivationReturnsToKeyEntry() async {

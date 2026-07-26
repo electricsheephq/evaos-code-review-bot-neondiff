@@ -105,11 +105,13 @@ struct SidebarView: View {
                 .lineLimit(1)
         }
         .contentShape(Rectangle())
+        .accessibilityHidden(true)
         .overlay {
             Menu {
                 accountMenuEntries
             } label: {
                 Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

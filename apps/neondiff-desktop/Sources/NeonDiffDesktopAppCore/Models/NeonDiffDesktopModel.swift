@@ -473,6 +473,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// Installs a server-authoritative snapshot. Accounts without a membership
     /// are filtered by the catalog and can never become selectable client-side.
     package func applyAccountWorkspaceCatalog(_ catalog: DesktopAccountWorkspaceCatalog) {
+        let previousSelectedBot = selectedBotInstallation
         accountWorkspaceCatalog = catalog
         guard !catalog.accounts.isEmpty else {
             accountWorkspaceSelection = DesktopAccountWorkspaceSelection()
@@ -484,6 +485,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
         if let selectedAccountID = accountWorkspaceSelection.accountID,
            let selectedAccount = catalog.accounts.first(where: { $0.id == selectedAccountID }) {
             if let selectedBotID = accountWorkspaceSelection.botID {
+                if let pendingNewBotPlan,
+                   pendingNewBotPlan.accountID == selectedAccountID,
+                   pendingNewBotPlan.bot.id == selectedBotID {
+                    accountWorkspaceStatus = "New bot setup remains local until its server registration is verified."
+                    return
+                }
                 guard let selectedBot = selectedAccount.bots.first(where: {
                     $0.id == selectedBotID
                         && ($0.status == .verified || $0.status == .pending)
@@ -495,11 +502,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     accountWorkspaceStatus = "The selected bot is no longer authorized. Choose another bot or create a new one."
                     return
                 }
-                if let localConfigPath = selectedBot.localConfigPath,
-                   localConfigPath != configPath {
+                if previousSelectedBot?.localConfigPath != selectedBot.localConfigPath {
                     resetWorkspaceBoundRuntimeState()
-                    configPath = localConfigPath
-                    inspectConfig()
+                    if let localConfigPath = selectedBot.localConfigPath {
+                        configPath = localConfigPath
+                        inspectConfig()
+                    } else {
+                        configPath = isolatedBotConfigPath(
+                            accountID: selectedAccount.id,
+                            appSlug: selectedBot.appSlug
+                        )
+                        accountWorkspaceStatus = "This bot is not configured on this Mac. Complete setup before use."
+                        reopenOnboarding(at: .welcome)
+                        return
+                    }
                 }
             }
             accountWorkspaceStatus = "Account authority verified."
@@ -550,6 +566,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             accountWorkspaceStatus = "That bot is not authorized for the selected account."
             return
         }
+        guard accountWorkspaceSelection.botID != botID else { return }
 
         resetWorkspaceBoundRuntimeState()
         accountWorkspaceSelection.selectBot(botID)
@@ -618,6 +635,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// and reverified for the new context before useful work is available.
     private func resetWorkspaceBoundRuntimeState() {
         workspaceContextGeneration &+= 1
+        activationRequestGeneration &+= 1
         githubAuthorizationTask?.cancel()
         githubAuthorizationTask = nil
         githubRepositoryRefreshTask?.cancel()
@@ -640,6 +658,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         isConfigInspectInProgress = false
         isControlCenterOperationInProgress = false
         configPath = unselectedWorkspaceConfigPath
+        controlCenter = DesktopControlCenterSettings()
+        pendingIssueRepoName = ""
         invalidateProviderConfigAuthorization()
         invalidateControlCenterAuthorization("Workspace changed. Load the selected bot config before editing.")
         invalidateProviderVerificationContext(
@@ -659,6 +679,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         providerVerificationStatus = "Verify the selected account's provider credential when ready."
         activationVerifiedThisLaunch = false
         activationVerifiedRepositoryThisLaunch = nil
+        activationState = ActivationStateMachine.initialState
+        dependencies.preferences.set(activationState.rawValue, forKey: activationStateKey)
+        activationKeyRedactedPrefix = nil
+        pendingActivationKey = ""
         appliedRepoSelection = nil
         pendingRepoName = ""
         pendingProviderKey = ""
@@ -1394,6 +1418,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard !isGitHubRepositoryRefreshInProgress, !isGitHubAuthorizationInProgress else { return }
         githubRepositoryRefreshTask?.cancel()
         let requestGeneration = githubRepositoryRefreshGate.begin()
+        let requestWorkspaceGeneration = workspaceContextGeneration
         isGitHubRepositoryRefreshInProgress = true
         githubRepositoryRefreshTask = Task { [weak self] in
             guard let self else { return }
@@ -1406,8 +1431,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             do {
                 githubAuthorizationStatus = "refreshing repositories"
                 githubRecovery = nil
-                let accessToken = try await gitHubAccessTokenForAPI()
+                let accessToken = try await gitHubAccessTokenForAPI(
+                    workspaceGeneration: requestWorkspaceGeneration
+                )
+                guard isCurrentWorkspace(requestWorkspaceGeneration) else { return }
                 let user = try await dependencies.githubAuthenticator.fetchCurrentUser(accessToken: accessToken)
+                guard isCurrentWorkspace(requestWorkspaceGeneration) else { return }
                 let discovered = try await dependencies.githubAuthenticator.listAccessibleRepositories(accessToken: accessToken)
                 guard !Task.isCancelled, githubRepositoryRefreshGate.isCurrent(requestGeneration) else { return }
                 applyGitHubDiscovery(user: user, discovered: discovered)
@@ -1848,7 +1877,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             credentialRevision: byoGitHubCredentialRevision,
             cliPath: cliPath,
             configPath: configPath,
-            repositories: repos.filter(\.enabled).map(\.name).sorted()
+            repositories: repos.filter(\.enabled).map(\.name).sorted(),
+            workspaceGeneration: workspaceContextGeneration
         )
         var standardInput = Data(privateKey.utf8)
         let executablePath = cliPath
@@ -1875,6 +1905,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    guard self.isCurrentWorkspace(verificationContext.workspaceGeneration) else { return }
                     self.isBYOGitHubVerificationInProgress = false
                     self.byoGitHubCredentialsVerified = false
                     self.lastError = "Customer-owned GitHub App verification failed safely."
@@ -1889,6 +1920,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         _ result: CLIRunResult,
         expectedContext: BYOGitHubVerificationContext
     ) {
+        guard isCurrentWorkspace(expectedContext.workspaceGeneration) else { return }
         isBYOGitHubVerificationInProgress = false
         let currentContext = storedBYOGitHubAppId.map { appId in
             BYOGitHubVerificationContext(
@@ -1896,7 +1928,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 credentialRevision: byoGitHubCredentialRevision,
                 cliPath: cliPath,
                 configPath: configPath,
-                repositories: repos.filter(\.enabled).map(\.name).sorted()
+                repositories: repos.filter(\.enabled).map(\.name).sorted(),
+                workspaceGeneration: workspaceContextGeneration
             )
         }
         guard currentContext == expectedContext else {
@@ -2774,26 +2807,33 @@ package final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    private func gitHubAccessTokenForAPI() async throws -> String {
+    private func gitHubAccessTokenForAPI(workspaceGeneration: UInt64) async throws -> String {
+        guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
         guard let accessToken = try dependencies.secretStore.readSecret(account: githubUserTokenAccount), !accessToken.isEmpty else {
+            guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
             clearStoredGitHubAuthorization(status: "connect GitHub first")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("Connect GitHub before refreshing accessible repositories.")
         }
         guard let expiresAt = readGitHubStoredDate(account: githubTokenExpiresAtAccount) else {
+            guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
             return accessToken
         }
         if expiresAt > dependencies.clock.now.addingTimeInterval(60) {
+            guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
             return accessToken
         }
         guard let clientId = github.clientId?.trimmingCharacters(in: .whitespacesAndNewlines), !clientId.isEmpty else {
+            guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
             clearStoredGitHubAuthorization(status: "authorization expired; reconnect GitHub")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization expired and the public client ID is missing. Reconnect GitHub after loading config.")
         }
         guard let refreshToken = try dependencies.secretStore.readSecret(account: githubRefreshTokenAccount), !refreshToken.isEmpty else {
+            guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
             clearStoredGitHubAuthorization(status: "authorization expired; reconnect GitHub")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization expired. Reconnect GitHub.")
         }
         if let refreshExpiresAt = readGitHubStoredDate(account: githubRefreshTokenExpiresAtAccount), refreshExpiresAt <= dependencies.clock.now {
+            guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
             clearStoredGitHubAuthorization(status: "refresh expired; reconnect GitHub")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub refresh token expired. Reconnect GitHub.")
         }
@@ -2802,10 +2842,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
         do {
             refreshedToken = try await dependencies.githubAuthenticator.refreshUserToken(clientId: clientId, refreshToken: refreshToken)
         } catch {
+            guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
             clearStoredGitHubAuthorization(status: "refresh failed; reconnect GitHub")
             throw GitHubDesktopAuthorizationStateError.reconnectRequired("GitHub authorization refresh failed. Reconnect GitHub.")
         }
+        guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
         try storeGitHubToken(refreshedToken)
+        guard isCurrentWorkspace(workspaceGeneration) else { throw CancellationError() }
         githubAuthorizationStatus = "GitHub authorization refreshed"
         return refreshedToken.accessToken
     }
@@ -3798,6 +3841,7 @@ private struct BYOGitHubVerificationContext: Equatable, Sendable {
     let cliPath: String
     let configPath: String
     let repositories: [String]
+    let workspaceGeneration: UInt64
 }
 
 private let licenseKeyAccount = "license/default"

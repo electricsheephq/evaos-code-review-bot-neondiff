@@ -64,6 +64,35 @@ package struct DesktopBotInstallation: Identifiable, Codable, Equatable, Sendabl
     package var isAvailableOnThisMac: Bool {
         localConfigPath != nil
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, appID, appSlug, mode, githubInstallationID, githubAccountLogin, status
+    }
+
+    /// `localConfigPath` is local-only evidence discovered on this Mac. It is
+    /// absent from the wire representation so a service cannot select a path.
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        appID = try container.decode(Int64.self, forKey: .appID)
+        appSlug = try container.decode(String.self, forKey: .appSlug)
+        mode = try container.decode(DesktopBotMode.self, forKey: .mode)
+        githubInstallationID = try container.decodeIfPresent(Int64.self, forKey: .githubInstallationID)
+        githubAccountLogin = try container.decodeIfPresent(String.self, forKey: .githubAccountLogin)
+        status = try container.decode(DesktopBotStatus.self, forKey: .status)
+        localConfigPath = nil
+    }
+
+    package func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(appID, forKey: .appID)
+        try container.encode(appSlug, forKey: .appSlug)
+        try container.encode(mode, forKey: .mode)
+        try container.encodeIfPresent(githubInstallationID, forKey: .githubInstallationID)
+        try container.encodeIfPresent(githubAccountLogin, forKey: .githubAccountLogin)
+        try container.encode(status, forKey: .status)
+    }
 }
 
 package struct DesktopLocalBotCandidate: Equatable, Sendable {
