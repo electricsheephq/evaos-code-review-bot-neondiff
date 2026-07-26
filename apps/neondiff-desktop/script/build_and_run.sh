@@ -125,6 +125,10 @@ if [ -f "$ROOT_DIR/THIRD_PARTY_NOTICES.md" ]; then
   cp "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$APP_RESOURCES/THIRD_PARTY_NOTICES.md"
 fi
 
+cp "$ROOT_DIR/Sources/NeonDiffDesktop/Resources/NeonDiff.icns" "$APP_RESOURCES/NeonDiff.icns"
+cp "$ROOT_DIR/Sources/NeonDiffDesktop/Resources/NeonDiff-Light.icns" "$APP_RESOURCES/NeonDiff-Light.icns"
+cp "$ROOT_DIR/Sources/NeonDiffDesktop/Resources/NeonDiff-Dark.icns" "$APP_RESOURCES/NeonDiff-Dark.icns"
+
 SPARKLE_FRAMEWORK="$(find "$BUILD_DIR" "$ROOT_DIR/.build" -path "*/Sparkle.framework" -type d -print -quit 2>/dev/null || true)"
 if otool -L "$APP_BINARY" | grep -q "Sparkle.framework"; then
   if [ -z "$SPARKLE_FRAMEWORK" ]; then
@@ -150,6 +154,8 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>NeonDiff Desktop</string>
+  <key>CFBundleIconFile</key>
+  <string>NeonDiff.icns</string>
   <key>CFBundleShortVersionString</key>
   <string>$SHORT_VERSION</string>
   <key>CFBundleVersion</key>
@@ -209,6 +215,10 @@ case "$MODE" in
     ;;
   --bundle-check|bundle-check|release-bundle-check)
     /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
+    test -f "$APP_RESOURCES/NeonDiff.icns"
+    test -f "$APP_RESOURCES/NeonDiff-Light.icns"
+    test -f "$APP_RESOURCES/NeonDiff-Dark.icns"
+    test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$INFO_PLIST")" = "NeonDiff.icns"
     if [ "$BUILD_CONFIGURATION" = "release" ]; then
       "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
     fi
