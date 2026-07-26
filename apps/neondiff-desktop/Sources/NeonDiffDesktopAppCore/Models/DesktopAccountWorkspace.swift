@@ -215,7 +215,8 @@ package struct DesktopNewBotPlan: Equatable, Sendable {
             .appendingPathComponent("config.local.json")
             .standardizedFileURL.path
         var suffix = 2
-        while occupiedConfigPaths.contains(candidate) {
+        while occupiedConfigPaths.contains(candidate)
+            || FileManager.default.fileExists(atPath: candidate) {
             candidate = baseDirectory
                 .appendingPathComponent("\(appSlug)-\(suffix)", isDirectory: true)
                 .appendingPathComponent("config.local.json")
