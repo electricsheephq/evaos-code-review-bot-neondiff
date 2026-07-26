@@ -49,7 +49,8 @@ enum NeonDiffDesktopCompositionRoot {
             githubBroker: githubBroker,
             accountLink: accountLink,
             productionBoundary: productionBoundary,
-            cliWorkingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
+            cliWorkingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory(),
+            localBotConfigurations: LaunchAgentLocalBotConfigurationDiscovery.discover()
         ))
     }
 }

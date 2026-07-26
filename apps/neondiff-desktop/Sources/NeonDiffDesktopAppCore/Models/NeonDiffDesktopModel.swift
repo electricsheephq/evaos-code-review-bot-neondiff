@@ -690,14 +690,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func currentLocalBotCandidates(
         snapshot: NeonDiffAccountWorkspaceSnapshot
     ) -> [DesktopLocalBotCandidate] {
-        guard dependencies.fileWriter.fileExists(at: URL(filePath: configPath)) else {
-            return []
-        }
-
         if dependencies.productionBoundary.managedGitHubBrokerOrigin != nil,
            let installationID = Self.savedManagedGitHubInstallationId(
                preferences: dependencies.preferences
            ) {
+            guard dependencies.fileWriter.fileExists(at: URL(filePath: configPath)) else {
+                return []
+            }
             let managedMatches = snapshot.accounts.flatMap(\.bots).filter {
                 $0.mode == .managed
                     && $0.githubInstallationID == Int64(installationID)
@@ -718,30 +717,59 @@ package final class NeonDiffDesktopModel: ObservableObject {
             )]
         }
 
-        guard let rawAppID = dependencies.preferences.string(forKey: byoGitHubAppIdPreferenceKey),
-              let appID = Int64(rawAppID),
-              appID > 0
-        else {
-            return []
+        var candidates: [DesktopLocalBotCandidate] = []
+        for configuration in dependencies.localBotConfigurations {
+            let configurationURL = URL(filePath: configuration.configPath)
+                .standardizedFileURL
+            guard dependencies.fileWriter.fileExists(at: configurationURL) else {
+                continue
+            }
+            let matches = snapshot.accounts.flatMap(\.bots).filter {
+                $0.mode == .byo
+                    && $0.appID == configuration.appID
+                    && $0.status == .verified
+                    && $0.githubAccountLogin?.isEmpty == false
+            }
+            guard matches.count == 1,
+                  let matchedBot = matches.first,
+                  let githubAccountLogin = matchedBot.githubAccountLogin
+            else {
+                continue
+            }
+            candidates.append(DesktopLocalBotCandidate(
+                appID: configuration.appID,
+                appSlug: matchedBot.appSlug,
+                githubAccountLogin: githubAccountLogin,
+                configPath: configurationURL.path
+            ))
         }
 
-        let matches = snapshot.accounts.flatMap(\.bots).filter {
-            $0.appID == appID
-                && $0.status == .verified
-                && $0.githubAccountLogin?.isEmpty == false
+        if dependencies.fileWriter.fileExists(at: URL(filePath: configPath)),
+           let rawAppID = dependencies.preferences.string(forKey: byoGitHubAppIdPreferenceKey),
+           let appID = Int64(rawAppID),
+           appID > 0 {
+            let matches = snapshot.accounts.flatMap(\.bots).filter {
+                $0.mode == .byo
+                    && $0.appID == appID
+                    && $0.status == .verified
+                    && $0.githubAccountLogin?.isEmpty == false
+            }
+            if matches.count == 1,
+               let matchedBot = matches.first,
+               let githubAccountLogin = matchedBot.githubAccountLogin {
+                candidates.append(DesktopLocalBotCandidate(
+                    appID: appID,
+                    appSlug: matchedBot.appSlug,
+                    githubAccountLogin: githubAccountLogin,
+                    configPath: URL(filePath: configPath).standardizedFileURL.path
+                ))
+            }
         }
-        guard matches.count == 1, let matchedBot = matches.first else {
-            return []
+
+        var seen = Set<String>()
+        return candidates.filter {
+            seen.insert("\($0.appID):\($0.configPath)").inserted
         }
-        guard let githubAccountLogin = matchedBot.githubAccountLogin else {
-            return []
-        }
-        return [DesktopLocalBotCandidate(
-            appID: appID,
-            appSlug: matchedBot.appSlug,
-            githubAccountLogin: githubAccountLogin,
-            configPath: URL(filePath: configPath).standardizedFileURL.path
-        )]
     }
 
     private func applyAccountLinkFailure(_ error: Error, generation: UInt64) {

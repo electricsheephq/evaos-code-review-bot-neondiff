@@ -216,6 +216,45 @@ import NeonDiffDesktopCore
         #expect(model.selectedBotInstallation?.localConfigPath == configURL.path)
     }
 
+    @Test func verifiedBYOBotDiscoversTheKnownLocalLaunchAgentConfigWithoutClientAuthority() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-local-discovery-\(UUID().uuidString)", isDirectory: true)
+        let fileWriter = TemporaryFileWriter(root: root)
+        let configURL = root.appendingPathComponent("existing-worker.json")
+        try fileWriter.write(Data("{}".utf8), to: configURL)
+        let preferences = MemoryPreferences()
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: preferences,
+            clock: TestClock(),
+            fileWriter: fileWriter,
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: AccountLinkMemorySecretStore(),
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [
+                .success(AccountLinkFixtures.electricSheep)
+            ]),
+            productionBoundary: .testAccountLink,
+            localBotConfigurations: [
+                DesktopLocalBotConfiguration(
+                    appID: 4242,
+                    configPath: configURL.path
+                )
+            ]
+        ))
+
+        model.connectNeonDiffAccount()
+        await model.waitForAccountLinkOperation()
+
+        #expect(model.selectedBotInstallation?.appSlug == "evaos-code-review-bot")
+        #expect(model.selectedBotInstallation?.localConfigPath == configURL.path)
+        #expect(model.configPath == configURL.path)
+        #expect(preferences.string(forKey: "neondiff.byoGitHubAppId") == nil)
+    }
+
     @Test func cancelledAccountLinkCannotInstallALateWorkspaceResult() async {
         let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
             .appendingPathComponent("neondiff-account-late-\(UUID().uuidString)", isDirectory: true)

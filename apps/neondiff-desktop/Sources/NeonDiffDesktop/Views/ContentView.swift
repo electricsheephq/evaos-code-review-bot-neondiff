@@ -179,6 +179,7 @@ private struct ReferenceShellLayout: View {
                             accountLinkAvailable: model.accountLinkAvailable,
                             accountCatalog: model.accountWorkspaceCatalog,
                             accountSelection: model.accountWorkspaceSelection,
+                            accountStatus: model.accountWorkspaceStatus,
                             selectAccount: model.selectAccountWorkspace,
                             selectBot: model.selectBotInstallation,
                             beginNewBot: { model.beginNewBot() },
