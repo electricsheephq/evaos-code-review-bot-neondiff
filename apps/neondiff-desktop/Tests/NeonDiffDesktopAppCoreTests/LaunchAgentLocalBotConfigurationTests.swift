@@ -24,12 +24,17 @@ import Testing
         let parsed = DesktopLaunchAgentBotConfigurationParser.parse(
             data: data,
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
-            configExists: { $0 == configURL }
+            configExists: { $0 == configURL },
+            workingDirectoryExists: {
+                $0 == URL(filePath: "/Volumes/LEXAR/repos/evaos-code-review-bot")
+                    .standardizedFileURL
+            }
         )
 
         #expect(parsed == DesktopLocalBotConfiguration(
             appID: 4_184_532,
-            configPath: configURL.path
+            configPath: configURL.path,
+            workingDirectory: "/Volumes/LEXAR/repos/evaos-code-review-bot"
         ))
     }
 
@@ -52,12 +57,14 @@ import Testing
         #expect(DesktopLaunchAgentBotConfigurationParser.parse(
             data: wrongLabel,
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
-            configExists: { _ in true }
+            configExists: { _ in true },
+            workingDirectoryExists: { _ in true }
         ) == nil)
         #expect(DesktopLaunchAgentBotConfigurationParser.parse(
             data: conflictingIDs,
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
-            configExists: { _ in true }
+            configExists: { _ in true },
+            workingDirectoryExists: { _ in true }
         ) == nil)
         #expect(DesktopLaunchAgentBotConfigurationParser.parse(
             data: try propertyList(
@@ -66,7 +73,29 @@ import Testing
                 arguments: ["neondiff", "--config", configURL.path]
             ),
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
-            configExists: { _ in false }
+            configExists: { _ in false },
+            workingDirectoryExists: { _ in true }
+        ) == nil)
+        #expect(DesktopLaunchAgentBotConfigurationParser.parse(
+            data: try propertyList(
+                label: "com.electricsheephq.evaos-code-review-bot",
+                environment: ["EVAOS_REVIEW_BOT_APP_ID": "4184532"],
+                arguments: ["neondiff", "--config", configURL.path],
+                workingDirectory: "relative/path"
+            ),
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            configExists: { _ in true },
+            workingDirectoryExists: { _ in true }
+        ) == nil)
+        #expect(DesktopLaunchAgentBotConfigurationParser.parse(
+            data: try propertyList(
+                label: "com.electricsheephq.evaos-code-review-bot",
+                environment: ["EVAOS_REVIEW_BOT_APP_ID": "4184532"],
+                arguments: ["neondiff", "--config", configURL.path]
+            ),
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            configExists: { _ in true },
+            workingDirectoryExists: { _ in false }
         ) == nil)
     }
 
@@ -86,20 +115,64 @@ import Testing
         #expect(DesktopLaunchAgentBotConfigurationParser.parse(
             data: duplicateConfig,
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
-            configExists: { _ in true }
+            configExists: { _ in true },
+            workingDirectoryExists: { _ in true }
         ) == nil)
+    }
+
+    @Test func resolvesOnlyOneExactLocalConfigToItsVerifiedWorkingDirectory() {
+        let configuration = DesktopLocalBotConfiguration(
+            appID: 4_184_532,
+            configPath: "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json",
+            workingDirectory: "/Volumes/LEXAR/repos/evaos-code-review-bot"
+        )
+        let fallback = URL(filePath: "/fallback")
+
+        #expect(DesktopLocalBotWorkingDirectoryResolver.resolve(
+            arguments: [
+                "daemon",
+                "status",
+                "--config",
+                configuration.configPath,
+                "--launchd-label",
+                "com.electricsheephq.evaos-code-review-bot"
+            ],
+            localBotConfigurations: [configuration],
+            fallback: fallback
+        ) == URL(filePath: configuration.workingDirectory!).standardizedFileURL)
+
+        #expect(DesktopLocalBotWorkingDirectoryResolver.resolve(
+            arguments: [
+                "daemon",
+                "status",
+                "--config",
+                configuration.configPath,
+                "--config",
+                configuration.configPath
+            ],
+            localBotConfigurations: [configuration],
+            fallback: fallback
+        ) == fallback)
+
+        #expect(DesktopLocalBotWorkingDirectoryResolver.resolve(
+            arguments: ["daemon", "status", "--config", "/other/config.json"],
+            localBotConfigurations: [configuration],
+            fallback: fallback
+        ) == fallback)
     }
 
     private func propertyList(
         label: String,
         environment: [String: String],
-        arguments: [String]
+        arguments: [String],
+        workingDirectory: String = "/Volumes/LEXAR/repos/evaos-code-review-bot"
     ) throws -> Data {
         try PropertyListSerialization.data(
             fromPropertyList: [
                 "Label": label,
                 "EnvironmentVariables": environment,
-                "ProgramArguments": arguments
+                "ProgramArguments": arguments,
+                "WorkingDirectory": workingDirectory
             ],
             format: .xml,
             options: 0
