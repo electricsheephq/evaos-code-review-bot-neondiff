@@ -160,8 +160,8 @@ export NEONDIFF_DESKTOP_BUILD="<build>"
 export NEONDIFF_SPARKLE_PUBLIC_ED_KEY="<owner-provided-public-key>"
 export NEONDIFF_SPARKLE_FEED_URL="<owner-approved-feed-url>"
 
-script/build_and_run.sh build
-script/build_and_run.sh bundle-check
+script/build_and_run.sh release-build
+script/build_and_run.sh release-bundle-check
 ```
 
 Expected output artifact:

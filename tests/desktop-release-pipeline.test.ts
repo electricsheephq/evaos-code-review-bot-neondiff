@@ -244,4 +244,11 @@ mv "$NEONDIFF_RPATH_STATE.next" "$NEONDIFF_RPATH_STATE"
     expect(docs).toMatch(/visible smoke/i);
     expect(docs).not.toMatch(/\b(codesign|notarytool|stapler|spctl)\b/);
   });
+
+  it("documents release-mode bundle commands for the Developer ID flow", () => {
+    const runbook = read("apps/neondiff-desktop/docs/mac-release-runbook.md");
+
+    expect(runbook).toContain("script/build_and_run.sh release-build");
+    expect(runbook).toContain("script/build_and_run.sh release-bundle-check");
+  });
 });
