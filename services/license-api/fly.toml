@@ -21,6 +21,7 @@ primary_region = "iad"  # placeholder — set to wherever the fleet/owner is clo
   LITESTREAM_SYNC_INTERVAL = "1s"
   LICENSE_LITESTREAM_REQUIRED = "true"
   GITHUB_BROKER_DB_PATH = "/data/github-broker.sqlite"
+  ACCOUNT_LINK_DB_PATH = "/data/github-broker.sqlite"
   GITHUB_BROKER_LITESTREAM_CONFIG = "/etc/litestream-broker.yml"
   # LICENSE_REPLICA_URL is intentionally not committed here. The owner sets
   # the object-store replica URL and provider credentials via `flyctl secrets`

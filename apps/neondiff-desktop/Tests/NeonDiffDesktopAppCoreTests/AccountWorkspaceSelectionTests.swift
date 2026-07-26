@@ -71,11 +71,13 @@ import NeonDiffDesktopCore
     }
 
     @Test func serverCatalogCannotInjectALocalConfigPath() throws {
-        let data = Data(#"{"id":"bot-remote","appID":4184532,"appSlug":"evaos-code-review-bot","mode":"byo","githubInstallationID":72001,"githubAccountLogin":"electricsheephq","status":"verified","localConfigPath":"/tmp/server-controlled.json"}"#.utf8)
+        let data = Data(#"{"id":"bot-remote","appId":4184532,"appSlug":"evaos-code-review-bot","mode":"byo","githubInstallationId":72001,"githubAccountLogin":"electricsheephq","status":"verified","localConfigPath":"/tmp/server-controlled.json"}"#.utf8)
 
         let decoded = try JSONDecoder().decode(DesktopBotInstallation.self, from: data)
 
         #expect(decoded.localConfigPath == nil)
+        #expect(decoded.appID == 4_184_532)
+        #expect(decoded.githubInstallationID == 72_001)
     }
 
     @Test func newBotUsesADistinctPendingIdentityAndNeverReusesExistingConfig() throws {

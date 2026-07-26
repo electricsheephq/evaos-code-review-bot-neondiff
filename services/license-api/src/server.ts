@@ -4,6 +4,7 @@ import { createGitHubActionsOidcVerifier } from "./oidc-lifecycle.js";
 import { RateLimiter } from "./service.js";
 import { loadGitHubBrokerRuntimeConfig } from "./github-broker/runtime-config.js";
 import { createLicenseStoreEntitlementResolver } from "./github-broker/license-entitlement.js";
+import { loadAccountLinkRuntimeConfig } from "./account-link/runtime-config.js";
 
 /**
  * Production entrypoint. SQLite lives on a mounted volume in deploy
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
   const trustFlyProxyHeaders = Boolean(process.env.FLY_APP_NAME?.trim());
   const store = new LicenseStore(dbPath);
   const githubBrokerRuntime = loadGitHubBrokerRuntimeConfig(process.env, dbPath);
+  const accountLinkRuntime = loadAccountLinkRuntimeConfig(process.env, dbPath);
   if (githubBrokerRuntime.status === "invalid") {
     // Setting name + fixed reason are public-safe. Never log the submitted value.
     // The license API remains available while every broker route fails closed
@@ -26,6 +28,13 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.error(
       `github broker unavailable: ${githubBrokerRuntime.setting} ${githubBrokerRuntime.reason}`
+    );
+  }
+  if (accountLinkRuntime.status === "invalid") {
+    // Setting name + fixed reason only; never log Supabase keys or submitted values.
+    // eslint-disable-next-line no-console
+    console.error(
+      `account link unavailable: ${accountLinkRuntime.setting} ${accountLinkRuntime.reason}`
     );
   }
   const { url } = await startLicenseServer({
@@ -39,6 +48,9 @@ async function main(): Promise<void> {
       windowMs: 60_000
     }),
     lifecycleOidcVerifier: createGitHubActionsOidcVerifier(),
+    ...(accountLinkRuntime.status === "ready"
+      ? { accountLink: accountLinkRuntime.deps }
+      : {}),
     ...(githubBrokerRuntime.status === "ready"
       ? {
           githubBroker: {

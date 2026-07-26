@@ -43,6 +43,12 @@ import {
   isGitHubBrokerPath,
   type GitHubBrokerDeps
 } from "./github-broker/index.js";
+import {
+  createAccountLinkService,
+  handleAccountLinkRequest,
+  isAccountLinkPath,
+  type AccountLinkDeps
+} from "./account-link/index.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const CANONICAL_GITHUB_REPOSITORY_PATTERN =
@@ -63,6 +69,8 @@ export interface LicenseHttpOptions {
   now?: () => Date;
   /** Managed GitHub App authorization broker (#613). Omitted → broker routes 503. */
   githubBroker?: GitHubBrokerDeps;
+  /** Lovable account linking is independent from the managed GitHub App lane. */
+  accountLink?: AccountLinkDeps;
 }
 
 type Handler = (store: LicenseStore, req: LicenseRequest, now: Date) => ServiceResult;
@@ -92,12 +100,26 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
   const githubBrokerService = options.githubBroker
     ? createGitHubBrokerService(options.githubBroker)
     : undefined;
+  const accountLinkService = options.accountLink
+    ? createAccountLinkService(options.accountLink)
+    : undefined;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method === "GET" && req.url === "/healthz") {
       return writeJson(res, 200, { status: "ok" });
     }
     const path = req.url?.split("?")[0];
+    if (isAccountLinkPath(path)) {
+      if (!accountLinkService) {
+        const unavailable = new BrokerError(
+          "account_authority_unavailable",
+          "account linking is not configured"
+        );
+        return writeJson(res, unavailable.httpStatus, unavailable.body());
+      }
+      const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
+      return handleAccountLinkRequest(accountLinkService, req, res, { sourceAddress });
+    }
     if (isGitHubBrokerPath(path)) {
       if (!githubBrokerService) {
         // Fail closed with the broker's typed contract so clients (and tests) can

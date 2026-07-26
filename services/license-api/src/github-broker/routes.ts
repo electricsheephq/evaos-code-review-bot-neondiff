@@ -135,7 +135,10 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
-  res.writeHead(status, { "Content-Type": "application/json" });
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store"
+  });
   res.end(payload);
 }
 

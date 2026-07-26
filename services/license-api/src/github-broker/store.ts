@@ -13,8 +13,9 @@ import { DatabaseSync } from "node:sqlite";
  * states, installation bindings, and an append-only decision ledger. No tokens,
  * private keys, source, or diffs are ever stored.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
+const ACCOUNT_CONNECT_CONSUMED_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 /**
  * The per-repo authorized-set table. Extracted so a fresh bootstrap and the
@@ -29,6 +30,24 @@ const BINDING_REPOSITORIES_TABLE = `
     primary key (device_id, installation_id, full_name),
     foreign key (device_id, installation_id)
       references installation_bindings(device_id, installation_id) on delete cascade
+  );
+`;
+
+const ACCOUNT_LINK_TABLES = `
+  create table account_connect_states (
+    state_hash text primary key,
+    device_id text not null,
+    created_at text not null,
+    expires_at text not null,
+    consumed_at text,
+    foreign key (device_id) references devices(device_id)
+  );
+
+  create table account_bindings (
+    device_id text primary key,
+    user_id text not null,
+    linked_at text not null,
+    foreign key (device_id) references devices(device_id)
   );
 `;
 
@@ -60,6 +79,8 @@ const SCHEMA = `
   );
 
   ${BINDING_REPOSITORIES_TABLE.trim()}
+
+  ${ACCOUNT_LINK_TABLES.trim()}
 
   create table decision_ledger (
     id integer primary key autoincrement,
@@ -94,6 +115,20 @@ export interface InstallationBindingRow {
   created_at: string;
 }
 
+export interface AccountConnectStateRow {
+  state_hash: string;
+  device_id: string;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+}
+
+export interface AccountBindingRow {
+  device_id: string;
+  user_id: string;
+  linked_at: string;
+}
+
 export interface DecisionLedgerRow {
   id: number;
   device_id: string;
@@ -121,7 +156,7 @@ export class GitHubBrokerStore {
   private ensureSchema(): void {
     const version = this.readUserVersion();
     if (version === SCHEMA_VERSION) return;
-    if (version !== 0 && version !== 1) {
+    if (version !== 0 && version !== 1 && version !== 2) {
       throw new Error(`unsupported github broker schema version ${version}`);
     }
     this.db.exec("begin immediate");
@@ -135,12 +170,16 @@ export class GitHubBrokerStore {
       if (current === 0) {
         // Fresh bootstrap: the full schema (already includes binding_repositories).
         this.db.exec(SCHEMA);
-      } else {
+      } else if (current === 1) {
         // v1 -> v2 upgrade: base v1 shipped installation_bindings WITHOUT the
         // per-repo authorized-set table, so an existing broker DB must gain it in
         // place — otherwise upsertBinding/listBindingRepositories hit "no such
         // table". Idempotent and crash-safe under the same writer transaction.
         this.db.exec(BINDING_REPOSITORIES_TABLE);
+        this.db.exec(ACCOUNT_LINK_TABLES);
+      } else {
+        // v2 -> v3 adds the account-link state and device/user binding tables.
+        this.db.exec(ACCOUNT_LINK_TABLES);
       }
       this.db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
       this.db.exec("commit");
@@ -258,6 +297,89 @@ export class GitHubBrokerStore {
       .prepare("select full_name from binding_repositories where device_id = ? and installation_id = ?")
       .all(deviceId, installationId) as Array<{ full_name: string }>;
     return rows.map((row) => row.full_name);
+  }
+
+  createAccountConnectState(
+    stateHash: string,
+    deviceId: string,
+    createdAt: string,
+    expiresAt: string
+  ): void {
+    const createdAtMs = Date.parse(createdAt);
+    if (Number.isFinite(createdAtMs)) {
+      const consumedCutoff = new Date(
+        createdAtMs - ACCOUNT_CONNECT_CONSUMED_RETENTION_MS
+      ).toISOString();
+      this.db
+        .prepare(
+          `delete from account_connect_states
+           where expires_at <= ?
+              or (consumed_at is not null and consumed_at <= ?)`
+        )
+        .run(createdAt, consumedCutoff);
+    }
+    this.db
+      .prepare(
+        `insert into account_connect_states
+         (state_hash, device_id, created_at, expires_at)
+         values (?, ?, ?, ?)`
+      )
+      .run(stateHash, deviceId, createdAt, expiresAt);
+  }
+
+  getAccountConnectState(stateHash: string): AccountConnectStateRow | undefined {
+    return this.db
+      .prepare("select * from account_connect_states where state_hash = ?")
+      .get(stateHash) as AccountConnectStateRow | undefined;
+  }
+
+  /** Atomically consume a one-shot account state and bind its device to one user. */
+  consumeAccountConnectStateAndBind(
+    stateHash: string,
+    userId: string,
+    consumedAt: string
+  ): boolean {
+    this.db.exec("begin immediate");
+    try {
+      const state = this.getAccountConnectState(stateHash);
+      if (
+        !state
+        || state.consumed_at
+        || Date.parse(state.expires_at) <= Date.parse(consumedAt)
+      ) {
+        this.db.exec("rollback");
+        return false;
+      }
+      const info = this.db
+        .prepare(
+          `update account_connect_states set consumed_at = ?
+           where state_hash = ? and consumed_at is null and expires_at > ?`
+        )
+        .run(consumedAt, stateHash, consumedAt);
+      if (Number(info.changes) === 0) {
+        this.db.exec("rollback");
+        return false;
+      }
+      this.db
+        .prepare(
+          `insert into account_bindings (device_id, user_id, linked_at)
+           values (?, ?, ?)
+           on conflict (device_id)
+           do update set user_id = excluded.user_id, linked_at = excluded.linked_at`
+        )
+        .run(state.device_id, userId, consumedAt);
+      this.db.exec("commit");
+      return true;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  getAccountBinding(deviceId: string): AccountBindingRow | undefined {
+    return this.db
+      .prepare("select * from account_bindings where device_id = ?")
+      .get(deviceId) as AccountBindingRow | undefined;
   }
 
   /** Append a public-safe decision row. Never carries repo content or key material. */
