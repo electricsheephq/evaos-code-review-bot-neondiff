@@ -46,10 +46,31 @@ for mode in light dark; do
   set_name=AppIcon-Light.iconset
   [ "$mode" = dark ] && set_name=AppIcon-Dark.iconset
   set_path="$ROOT/app-icon/$mode/$set_name"
-  jq -e . "$set_path/Contents.json" >/dev/null
+  jq -e '
+    (.images | length) == 10
+    and ([.images[].filename] | unique | length) == 10
+    and ([.images[] | [.filename, .idiom, .scale, .size]] == [
+      ["icon_16x16.png", "mac", "1x", "16x16"],
+      ["icon_16x16@2x.png", "mac", "2x", "16x16"],
+      ["icon_32x32.png", "mac", "1x", "32x32"],
+      ["icon_32x32@2x.png", "mac", "2x", "32x32"],
+      ["icon_128x128.png", "mac", "1x", "128x128"],
+      ["icon_128x128@2x.png", "mac", "2x", "128x128"],
+      ["icon_256x256.png", "mac", "1x", "256x256"],
+      ["icon_256x256@2x.png", "mac", "2x", "256x256"],
+      ["icon_512x512.png", "mac", "1x", "512x512"],
+      ["icon_512x512@2x.png", "mac", "2x", "512x512"]
+    ])
+  ' "$set_path/Contents.json" >/dev/null
   check_pixels 16 16 "app-icon/$mode/$set_name/icon_16x16.png"
+  check_pixels 32 32 "app-icon/$mode/$set_name/icon_16x16@2x.png"
   check_pixels 32 32 "app-icon/$mode/$set_name/icon_32x32.png"
+  check_pixels 64 64 "app-icon/$mode/$set_name/icon_32x32@2x.png"
   check_pixels 128 128 "app-icon/$mode/$set_name/icon_128x128.png"
+  check_pixels 256 256 "app-icon/$mode/$set_name/icon_128x128@2x.png"
+  check_pixels 256 256 "app-icon/$mode/$set_name/icon_256x256.png"
+  check_pixels 512 512 "app-icon/$mode/$set_name/icon_256x256@2x.png"
+  check_pixels 512 512 "app-icon/$mode/$set_name/icon_512x512.png"
   check_pixels 1024 1024 "app-icon/$mode/$set_name/icon_512x512@2x.png"
 done
 
