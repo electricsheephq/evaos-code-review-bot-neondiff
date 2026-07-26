@@ -53,6 +53,28 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func existingEntitlementRecoveryExitsOnboardingAndOpensRepositories() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(authMode: "zcode-app-config"))
+        fixture.model.onboardingFlow.currentStep = .license
+        fixture.model.isOnboardingPresented = true
+
+        fixture.model.reviewExistingBotRepositoryAccess()
+
+        #expect(fixture.model.selectedSection == .repos)
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(fixture.model.onboardingFlow.currentStep == .license)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
     @Test func publicFreeEntitlementIsDisplayedWithoutUnlockingUsefulWork() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,

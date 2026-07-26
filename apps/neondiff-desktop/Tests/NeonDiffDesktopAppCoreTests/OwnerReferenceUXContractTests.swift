@@ -220,7 +220,7 @@ import Testing
         #expect(activation.contains("model.existingAccountEntitlementSummaryReady"))
         #expect(activation.contains("model.existingAccountEntitlementNeedsCurrentAccessVerification"))
         #expect(activation.contains("Review repository access"))
-        #expect(activation.contains("model.selectedSection = .repos"))
+        #expect(activation.contains("model.reviewExistingBotRepositoryAccess()"))
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
         #expect(activity.contains("model.githubSetupReady"))
         #expect(activity.contains("GitHub connection ready"))

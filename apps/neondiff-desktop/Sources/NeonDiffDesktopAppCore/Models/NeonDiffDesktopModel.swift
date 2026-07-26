@@ -3159,6 +3159,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         isOnboardingPresented = true
     }
 
+    package func reviewExistingBotRepositoryAccess() {
+        guard existingAccountEntitlementNeedsCurrentAccessVerification else {
+            return
+        }
+        selectedSection = .repos
+        isOnboardingPresented = false
+    }
+
     package func copyCommand(_ command: DesktopCommand) {
         _ = dependencies.clipboard.write(command.commandLine)
         lastCommandLine = command.commandLine

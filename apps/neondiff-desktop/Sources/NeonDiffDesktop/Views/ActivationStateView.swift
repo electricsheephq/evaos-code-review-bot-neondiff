@@ -131,7 +131,7 @@ struct ActivationStateView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Button("Review repository access") {
-                model.selectedSection = .repos
+                model.reviewExistingBotRepositoryAccess()
             }
             .buttonStyle(NDBracketButtonStyle())
             .accessibilityIdentifier("neondiff.activation.existing-account-reverify")
