@@ -23,10 +23,12 @@ public enum DaemonStatusParser {
         let launchd = effective["launchd"] as? [String: Any]
         let launchdState = (launchd?["state"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasCurrentDaemonStatusSignature =
+            statusPayload != nil
+            && json["command"] as? String == "daemon status"
+            && json["operation"] as? String == "status"
         let currentEnvelopeRuntimeOk: Bool? = {
-            guard statusPayload != nil,
-                  json["command"] as? String == "daemon status",
-                  json["operation"] as? String == "status",
+            guard hasCurrentDaemonStatusSignature,
                   effectiveOk != nil,
                   let launchdState,
                   currentDaemonLaunchdStates.contains(launchdState),
@@ -59,10 +61,9 @@ public enum DaemonStatusParser {
                     gateResults[$0] == true
                 })
         }()
-        let isCurrentDaemonStatusEnvelope = currentEnvelopeRuntimeOk != nil
-        let hasSubstantiveStatusShape = reportedRuntimeOk != nil
-            || reportedHealthState?.isEmpty == false
-            || isCurrentDaemonStatusEnvelope
+        let hasSubstantiveStatusShape = hasCurrentDaemonStatusSignature
+            ? currentEnvelopeRuntimeOk != nil
+            : reportedRuntimeOk != nil || reportedHealthState?.isEmpty == false
         guard hasSubstantiveStatusShape else {
             return nil
         }

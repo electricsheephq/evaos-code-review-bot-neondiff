@@ -185,6 +185,8 @@ import NeonDiffDesktopCore
           "ok": true,
           "command": "daemon status",
           "operation": "status",
+          "runtimeOk": true,
+          "healthState": "runtime_ok",
           "status": {
             "ok": true,
             "launchd": {
