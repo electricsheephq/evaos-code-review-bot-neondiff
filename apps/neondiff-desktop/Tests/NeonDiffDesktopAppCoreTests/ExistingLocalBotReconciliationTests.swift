@@ -572,6 +572,7 @@ import NeonDiffDesktopCore
                     workingDirectory: "/fixture/evaos-code-review-bot"
                 )
             ],
+            localBotExecutionConfigPaths: [configPath],
             productionBoundary: .testAccountLink
         )
         fixture.model.applyAccountWorkspaceCatalog(.loaded([
@@ -622,6 +623,48 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func publicBotDiscoveryWithoutAnExecutionContextStaysInRecovery() async throws {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: existingBotConfig(
+                        authMode: "zcode-app-config",
+                        repositories: ["electricsheephq/WorldOS"]
+                    ),
+                    stderr: ""
+                ))
+            ],
+            localBotConfigurations: [
+                DesktopLocalBotConfiguration(
+                    appID: 4_184_532,
+                    configPath: configPath,
+                    workingDirectory: "/fixture/evaos-code-review-bot"
+                )
+            ],
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        await fixture.cli.waitUntilCallCount(1)
+        for _ in 0..<20 where fixture.model.isConfigInspectInProgress {
+            await Task.yield()
+        }
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: ["electricsheephq/WorldOS"]
+        ))
+
+        #expect(!fixture.model.existingLocalAgentAccessAvailable)
+        #expect(
+            fixture.model.existingLocalBotBYOGitHubVerificationStatus
+                .contains("recovery")
+        )
+    }
+
+    @MainActor
     @Test func selectedTargetUnlocksScopedReviewButNotMultiRepoDaemonStart() async throws {
         let targetRepository = "electricsheephq/evaos-code-review-bot-neondiff"
         let otherRepository = "electricsheephq/WorldOS"
@@ -648,12 +691,22 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"review-pr","dryRun":true,"useZCode":false,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0}}"#,
+                    stdout: #"{"ok":true,"command":"review-pr","dryRun":true,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0,"skippedProcessed":0}}"#,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 1,
+                    stdout: #"{"ok":false,"command":"review-pr","dryRun":false,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":0,"failed":0,"skippedProcessed":1}}"#,
                     stderr: ""
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"review-pr","dryRun":false,"useZCode":false,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0}}"#,
+                    stdout: #"{"ok":true,"command":"review-pr","dryRun":true,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0,"skippedProcessed":0}}"#,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"review-pr","dryRun":false,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0,"skippedProcessed":0}}"#,
                     stderr: ""
                 ))
             ],
@@ -666,6 +719,7 @@ import NeonDiffDesktopCore
                     workingDirectory: "/fixture/evaos-code-review-bot"
                 )
             ],
+            localBotExecutionConfigPaths: [configPath],
             productionBoundary: boundary
         )
         fixture.model.applyAccountWorkspaceCatalog(.loaded([
@@ -710,11 +764,33 @@ import NeonDiffDesktopCore
             await Task.yield()
         }
 
+        #expect(!fixture.model.scopedLiveReviewConfirmationAvailable)
+        #expect(fixture.model.scopedReviewStatus.contains("failed closed"))
+
+        fixture.model.runScopedDryReview()
+        await fixture.cli.waitUntilCallCount(5)
+        for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
+            await Task.yield()
+        }
+        fixture.model.runScopedLiveReview()
+        await fixture.cli.waitUntilCallCount(6)
+        for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
+            await Task.yield()
+        }
+
         let liveCall = try #require(fixture.cli.calls.last)
-        #expect(liveCall.arguments.contains("--head-sha"))
-        #expect(liveCall.arguments.contains(headSHA))
-        #expect(liveCall.arguments.contains("--confirm"))
-        #expect(liveCall.arguments.contains("false"))
+        #expect(liveCall.arguments == [
+            "review-pr",
+            "--config", configPath,
+            "--repo", targetRepository,
+            "--pr", "685",
+            "--head-sha", headSHA,
+            "--expected-config-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--dry-run", "false",
+            "--confirm", "true",
+            "--zcode", "true"
+        ])
         #expect(fixture.model.scopedReviewStatus.contains("posted"))
     }
 

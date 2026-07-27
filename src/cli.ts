@@ -2053,6 +2053,9 @@ async function main(): Promise<void> {
       }
     }
     const useZCode = args.zcode !== "false";
+    const expectedConfigRevision = args["expected-config-revision"]
+      ? parseSingleArg(args["expected-config-revision"], "--expected-config-revision")
+      : undefined;
     let pullNumber: number | undefined;
     try {
       pullNumber = args.pr ? parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr") : undefined;
@@ -2076,7 +2079,12 @@ async function main(): Promise<void> {
         repo,
         pullNumber,
         useZCode,
-        expectedHeadSha: reviewPrExpectedHeadSha
+        expectedHeadSha: reviewPrExpectedHeadSha,
+        expectedConfigRevision,
+        processedHeadPolicy:
+          command === "review-pr" && !dryRun && reviewPrExpectedHeadSha
+            ? "approved_dry_run"
+            : "normal"
       },
       commandName: command,
       admitImpl: async () => {
@@ -3304,7 +3312,8 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--repo", description: "Repo to review, owner/name (required)." },
       { name: "--pr", description: "Pull request number to review (required)." },
       { name: "--dry-run", description: "true (default) or false; false requires --confirm true." },
-      { name: "--confirm", description: "Must be true to allow --dry-run false." }
+      { name: "--confirm", description: "Must be true to allow --dry-run false." },
+      { name: "--expected-config-revision", description: "Optional lowercase SHA-256 config revision pin for dry and live execution." }
     ]
   },
   "run-once": {

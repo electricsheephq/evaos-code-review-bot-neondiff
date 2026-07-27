@@ -115,6 +115,7 @@ package struct DesktopAppDependencies {
     package let productionBoundary: DesktopProductionBoundary
     package let cliWorkingDirectory: URL?
     package let localBotConfigurations: [DesktopLocalBotConfiguration]
+    package let localBotExecutionConfigPaths: [String]
 
     package init(
         clipboard: any DesktopClipboard,
@@ -131,7 +132,8 @@ package struct DesktopAppDependencies {
         accountLink: (any NeonDiffAccountLinkConnecting)? = nil,
         productionBoundary: DesktopProductionBoundary,
         cliWorkingDirectory: URL? = nil,
-        localBotConfigurations: [DesktopLocalBotConfiguration] = []
+        localBotConfigurations: [DesktopLocalBotConfiguration] = [],
+        localBotExecutionConfigPaths: [String] = []
     ) {
         self.clipboard = clipboard
         self.urlOpener = urlOpener
@@ -148,5 +150,6 @@ package struct DesktopAppDependencies {
         self.productionBoundary = productionBoundary
         self.cliWorkingDirectory = cliWorkingDirectory
         self.localBotConfigurations = localBotConfigurations
+        self.localBotExecutionConfigPaths = localBotExecutionConfigPaths
     }
 }

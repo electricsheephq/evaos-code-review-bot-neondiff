@@ -11,6 +11,7 @@ import {
   type CommandDecision
 } from "./commands.js";
 import { loadConfig, type BotConfig } from "./config.js";
+import { loadConfigAtRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
 import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
@@ -194,6 +195,8 @@ export interface RunOnceOptions {
   repo?: string;
   pullNumber?: number;
   expectedHeadSha?: string;
+  expectedConfigRevision?: string;
+  processedHeadPolicy?: "normal" | "approved_dry_run";
   useZCode?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
 }
@@ -340,7 +343,22 @@ export function assertExpectedReviewPrHead(input: {
 }
 
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
-  const config = loadConfig(options.configPath);
+  let config: BotConfig;
+  if (options.expectedConfigRevision !== undefined) {
+    if (!/^[a-f0-9]{64}$/.test(options.expectedConfigRevision)) {
+      throw new Error("review-pr expected config revision must be a lowercase SHA-256 value");
+    }
+    if (!options.configPath) {
+      throw new Error("review-pr expected config revision requires a config path");
+    }
+    const loaded = loadConfigAtRevision(options.configPath);
+    if (loaded.revision !== options.expectedConfigRevision) {
+      throw new Error("review-pr config revision changed; run a new dry review before posting");
+    }
+    config = loaded.config;
+  } else {
+    config = loadConfig(options.configPath);
+  }
   const result: RunOnceResult = {
     reposScanned: 0,
     pullsSeen: 0,
@@ -421,6 +439,9 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             useZCode: options.useZCode ?? true,
             budget,
             licenseAdmission,
+            ...(options.processedHeadPolicy
+              ? { processedHeadPolicy: options.processedHeadPolicy }
+              : {}),
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
@@ -1315,7 +1336,7 @@ export interface ReviewPullInput {
   dryRun: boolean;
   useZCode: boolean;
   budget?: ReviewRunBudget;
-  processedHeadPolicy?: "normal" | "retry_failed_head";
+  processedHeadPolicy?: "normal" | "approved_dry_run" | "retry_failed_head";
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
@@ -1340,6 +1361,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  const approvedDryRunTransition =
+    input.processedHeadPolicy === "approved_dry_run" &&
+    processed?.status === "dry_run";
   const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
@@ -1554,6 +1578,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !manualReviewRequested &&
+    !approvedDryRunTransition &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1929,7 +1954,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       // be able to replace that failed/deferred row after a successful provider retry.
       allowProcessedOwnerSupersession: commandReviewRequested ||
         (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
-        input.processedHeadPolicy === "retry_failed_head"
+        input.processedHeadPolicy === "approved_dry_run" ||
+        input.processedHeadPolicy === "retry_failed_head",
+      ...(input.processedHeadPolicy === "approved_dry_run"
+        ? { requiredProcessedStatusForSupersession: "dry_run" as const }
+        : {})
     });
     if (headClaimAttempt.status === "blocked") {
       if (headClaimAttempt.reason === "active_claim") {

@@ -191,6 +191,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set) var activationVerifiedThisLaunch = false
     private var activationVerifiedRepositoryThisLaunch: String?
     private var appliedRepoSelection: AppliedRepoSelection?
+    private var scopedReviewTask: Task<Void, Never>?
     private var scopedDryRunApproval: ScopedReviewApproval?
 
     package var productionActivationBoundaryMessage: String {
@@ -399,10 +400,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var scopedLiveReviewConfirmationAvailable: Bool {
-        guard productionUsefulWorkAvailable,
+        guard scopedReviewExecutionAvailable,
               !isScopedReviewInProgress,
               let approval = scopedDryRunApproval,
-              let pullNumber = Int(pendingReviewPullNumber),
+              let pullNumber = positivePendingReviewPullNumber,
               let selectedReviewRepository
         else {
             return false
@@ -411,8 +412,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 == .orderedSame
             && approval.pullNumber == pullNumber
             && approval.configPath == configPath
+            && approval.configRevision == providerLoadedRevision
             && approval.workspaceGeneration == workspaceContextGeneration
             && isValidGitHubCommitSHA(approval.headSHA)
+    }
+
+    package var scopedReviewExecutionAvailable: Bool {
+        productionUsefulWorkAvailable && existingLocalAgentAccessAvailable
     }
 
     /// Stopping an already-running daemon is a safety remediation, not useful
@@ -503,10 +509,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard existingLocalBotIdentityReady,
               byoGitHubCredentialOnboardingAvailable,
               cliPath == "neondiff",
-              let bot = selectedBotInstallation
+              matchingLocalBotConfigurationAvailable
         else {
             return false
         }
+        return dependencies.localBotExecutionConfigPaths.contains { path in
+            normalizedPath(path) == normalizedPath(configPath)
+        }
+    }
+
+    private var matchingLocalBotConfigurationAvailable: Bool {
+        guard let bot = selectedBotInstallation else { return false }
         return dependencies.localBotConfigurations.contains { configuration in
             configuration.appID == bot.appID
                 && normalizedPath(configuration.configPath)
@@ -527,6 +540,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         if cliPath != "neondiff" {
             return "Reset the CLI setting to neondiff before reusing an existing local agent. Custom executables never receive its credential environment."
+        }
+        if matchingLocalBotConfigurationAvailable {
+            return "The local agent needs recovery before reuse because its credential-safe execution context is unavailable."
         }
         guard let storedAppID = storedBYOGitHubAppId else {
             return "No app-owned Keychain App ID is stored for current-access verification."
@@ -1495,6 +1511,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         _ = githubRepositoryRefreshGate.begin()
         managedGitHubConnectionTask?.cancel()
         managedGitHubConnectionTask = nil
+        scopedReviewTask?.cancel()
+        scopedReviewTask = nil
         pendingManagedGitHubAuthorization = nil
         isGitHubAuthorizationInProgress = false
         isGitHubRepositoryRefreshInProgress = false
@@ -1937,10 +1955,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard requireScopedReviewAuthorization() else { return }
         guard !isScopedReviewInProgress else { return }
         guard let repository = selectedReviewRepository,
-              let pullNumber = positivePendingReviewPullNumber
+              let pullNumber = positivePendingReviewPullNumber,
+              let configRevision = providerLoadedRevision
         else {
-            lastError = "Enter a positive pull request number."
-            scopedReviewStatus = lastError ?? "Pull request required"
+            lastError = positivePendingReviewPullNumber == nil
+                ? "Enter a positive pull request number."
+                : "Reload the selected configuration before running a review."
+            scopedReviewStatus = lastError ?? "Review setup required"
             return
         }
 
@@ -1949,6 +1970,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             pullNumber: pullNumber,
             headSHA: "",
             configPath: configPath,
+            configRevision: configRevision,
             workspaceGeneration: workspaceContextGeneration
         )
         let arguments = [
@@ -1956,8 +1978,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             "--config", configPath,
             "--repo", repository,
             "--pr", String(pullNumber),
+            "--expected-config-revision", configRevision,
             "--dry-run", "true",
-            "--zcode", "false"
+            "--zcode", "true"
         ]
         let executablePath = cliPath
         let cli = dependencies.cli
@@ -1971,10 +1994,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             "--config", shellQuote(configPath),
             "--repo", shellQuote(repository),
             "--pr", String(pullNumber),
-            "--dry-run true --zcode false"
+            "--expected-config-revision", shellQuote(configRevision),
+            "--dry-run true --zcode true"
         ].joined(separator: " ")
 
-        Task.detached {
+        scopedReviewTask = Task.detached {
             do {
                 let result = try await cli.run(
                     executablePath: executablePath,
@@ -1994,6 +2018,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         context.workspaceGeneration
                     ) else { return }
                     self.isScopedReviewInProgress = false
+                    self.scopedReviewTask = nil
                     self.invalidateScopedReviewApproval()
                     self.lastError = "The scoped dry review failed safely."
                     self.scopedReviewStatus =
@@ -2020,9 +2045,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             "--repo", approval.repo,
             "--pr", String(approval.pullNumber),
             "--head-sha", approval.headSHA,
+            "--expected-config-revision", approval.configRevision,
             "--dry-run", "false",
             "--confirm", "true",
-            "--zcode", "false"
+            "--zcode", "true"
         ]
         let executablePath = cliPath
         let cli = dependencies.cli
@@ -2036,10 +2062,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             "--repo", shellQuote(approval.repo),
             "--pr", String(approval.pullNumber),
             "--head-sha", shellQuote(approval.headSHA),
-            "--dry-run false --confirm true --zcode false"
+            "--expected-config-revision", shellQuote(approval.configRevision),
+            "--dry-run false --confirm true --zcode true"
         ].joined(separator: " ")
 
-        Task.detached {
+        scopedReviewTask = Task.detached {
             do {
                 let result = try await cli.run(
                     executablePath: executablePath,
@@ -2059,9 +2086,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         approval.workspaceGeneration
                     ) else { return }
                     self.isScopedReviewInProgress = false
+                    self.scopedReviewTask = nil
+                    self.invalidateScopedReviewApproval()
                     self.lastError = "The scoped live review failed safely."
                     self.scopedReviewStatus =
-                        "Live review failed. Verify GitHub before retrying."
+                        "Live review failed. Check GitHub, then run a new dry review before retrying."
                 }
             }
         }
@@ -3143,6 +3172,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
             logText = "Stale GitHub App verification evidence was discarded."
             return
         }
+        let expectedCredentialSource: String
+        switch expectedContext.source {
+        case .keychainStdin:
+            expectedCredentialSource = "stdin"
+        case .existingLocalAgent:
+            expectedCredentialSource = "configured"
+        }
         guard result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let report = try? JSONDecoder().decode(BYOGitHubDoctorReport.self, from: data),
@@ -3152,11 +3188,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
               reportedRepositories == expectedRepositories,
               report.ok,
               report.command == "doctor github",
-              report.appCredentials.source == (
-                  expectedContext.source == .keychainStdin
-                      ? "stdin"
-                      : "configured"
-              ),
+              report.appCredentials.source == expectedCredentialSource,
               report.appCredentials.appIdConfigured,
               report.appCredentials.privateKeyConfigured,
               report.github.canPostAsApp,
@@ -3836,10 +3868,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
             }
             return false
         }
+        guard existingLocalAgentAccessAvailable else {
+            lastError =
+                "Connect a verified local NeonDiff agent before running a scoped review."
+            scopedReviewStatus = lastError ?? "Local agent required"
+            return false
+        }
         return true
     }
 
-    private var positivePendingReviewPullNumber: Int? {
+    package var positivePendingReviewPullNumber: Int? {
         let trimmed = pendingReviewPullNumber
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let value = Int(trimmed), value > 0 else { return nil }
@@ -3854,6 +3892,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         isScopedReviewInProgress = false
+        scopedReviewTask = nil
         guard currentScopedReviewCoordinatesMatch(expectedContext),
               result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
@@ -3882,6 +3921,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             pullNumber: report.scope.pullNumber,
             headSHA: report.scope.headSha.lowercased(),
             configPath: expectedContext.configPath,
+            configRevision: expectedContext.configRevision,
             workspaceGeneration: expectedContext.workspaceGeneration
         )
         scopedDryRunApproval = approval
@@ -3899,6 +3939,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         isScopedReviewInProgress = false
+        scopedReviewTask = nil
         guard currentScopedReviewCoordinatesMatch(expectedApproval),
               scopedDryRunApproval == expectedApproval,
               result.exitCode == 0,
@@ -3910,6 +3951,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
               report.ok,
               report.command == "review-pr",
               !report.dryRun,
+              report.result.reviewed == 1,
+              report.result.skippedProcessed == 0,
               report.scope.repo.caseInsensitiveCompare(expectedApproval.repo)
                   == .orderedSame,
               report.scope.pullNumber == expectedApproval.pullNumber,
@@ -3921,7 +3964,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 "GitHub did not confirm a live review for the exact approved head."
             scopedReviewStatus =
                 "Live review failed closed. Re-run the dry review before retrying."
-            invalidateScopedReviewApproval()
+            invalidateScopedReviewApproval(preserveStatus: true)
             return
         }
 
@@ -3939,7 +3982,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
               let selectedReviewRepository,
               selectedReviewRepository.caseInsensitiveCompare(approval.repo)
                   == .orderedSame,
-              positivePendingReviewPullNumber == approval.pullNumber
+              positivePendingReviewPullNumber == approval.pullNumber,
+              providerLoadedRevision == approval.configRevision
         else {
             return false
         }
@@ -5393,6 +5437,7 @@ private struct ScopedReviewApproval: Equatable, Sendable {
     let pullNumber: Int
     let headSHA: String
     let configPath: String
+    let configRevision: String
     let workspaceGeneration: UInt64
 }
 
@@ -5403,10 +5448,30 @@ private struct ScopedReviewCommandReport: Decodable {
         let headSha: String
     }
 
+    struct Result: Decodable {
+        let reviewed: Int
+        let skippedProcessed: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case reviewed
+            case skippedProcessed
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            reviewed = try values.decode(Int.self, forKey: .reviewed)
+            skippedProcessed = try values.decodeIfPresent(
+                Int.self,
+                forKey: .skippedProcessed
+            ) ?? 0
+        }
+    }
+
     let ok: Bool
     let command: String
     let dryRun: Bool
     let scope: Scope
+    let result: Result
 }
 
 private let licenseKeyAccount = "license/default"

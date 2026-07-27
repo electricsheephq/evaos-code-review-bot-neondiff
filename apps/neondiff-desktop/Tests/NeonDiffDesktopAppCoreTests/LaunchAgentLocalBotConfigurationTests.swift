@@ -243,6 +243,29 @@ import Testing
         ) == nil)
     }
 
+    @Test func rejectsSameLabelCredentialPlistForAnUnrelatedCommand() throws {
+        let configPath = "/tmp/neondiff.json"
+        let data = try propertyList(
+            label: "com.electricsheephq.evaos-code-review-bot",
+            environment: [
+                "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+                "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": "/Users/test/app.pem"
+            ],
+            arguments: [
+                "/usr/bin/python3",
+                "/tmp/unrelated.py",
+                "--config",
+                configPath
+            ]
+        )
+
+        #expect(DesktopLaunchAgentExecutionContextParser.parse(
+            data: data,
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { _ in true }
+        ) == nil)
+    }
+
     private func propertyList(
         label: String,
         environment: [String: String],

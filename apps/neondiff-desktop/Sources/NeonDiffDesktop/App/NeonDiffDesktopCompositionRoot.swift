@@ -58,7 +58,10 @@ enum NeonDiffDesktopCompositionRoot {
             accountLink: accountLink,
             productionBoundary: productionBoundary,
             cliWorkingDirectory: cliWorkingDirectory,
-            localBotConfigurations: localBotConfigurations
+            localBotConfigurations: localBotConfigurations,
+            localBotExecutionConfigPaths: localBotExecutionContexts.map(
+                \.configPath
+            )
         ))
     }
 }

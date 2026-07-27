@@ -2424,6 +2424,38 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("allows an approved dry-to-live claim only while the processed row is still dry_run", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-head-claim-dry-to-live-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const dryHead = { repo: "r/x", pullNumber: 33, headSha: "sha-dry-to-live" };
+    store.recordProcessed({ ...dryHead, status: "dry_run", event: "COMMENT" });
+
+    expect(store.tryClaimReviewHead({
+      ...dryHead,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      now: new Date("2026-07-06T00:00:01.000Z")
+    })).toBeDefined();
+
+    const postedHead = { repo: "r/x", pullNumber: 34, headSha: "sha-already-posted" };
+    store.recordProcessed({
+      ...postedHead,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/r/x/pull/34#pullrequestreview-prior"
+    });
+    expect(store.tryClaimReviewHead({
+      ...postedHead,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      now: new Date("2026-07-06T00:00:02.000Z")
+    })).toBeUndefined();
+    store.close();
+  });
+
   it("retires the per-head claim and refuses ordinary re-claim after the review is recorded (#295)", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-retire-"));
     roots.push(root);

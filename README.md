@@ -173,11 +173,13 @@ disable, or rewrite the worker's other repositories. The app may reuse the
 exact matched LaunchAgent's App ID and private-key file coordinate only inside
 the child process for that config; it never copies the key into the app,
 Keychain, arguments, logs, or UI. Overview can then run `review-pr` for one
-selected repository and pull request. Live posting remains disabled until that
-exact target returns a successful dry-run head and the user confirms the pinned
-head. For that multi-repository worker, daemon-wide start remains blocked. The
-selection and dry-run approval fail closed if the config, target, pull request,
-workspace, or head changes.
+selected repository and pull request through the configured provider. Live
+posting remains disabled until that exact target and config revision return a
+successful dry-run head and the user confirms the pinned head. A transport
+failure revokes that approval instead of permitting a blind retry. For that
+multi-repository worker, daemon-wide start remains blocked. The selection and
+dry-run approval fail closed if the config, target, pull request, workspace, or
+head changes.
 During launch it shows a bounded restoring state while that authorized
 account/bot/config intersection is checked; it does not flash empty first-run
 setup or claim that the existing configuration is missing.

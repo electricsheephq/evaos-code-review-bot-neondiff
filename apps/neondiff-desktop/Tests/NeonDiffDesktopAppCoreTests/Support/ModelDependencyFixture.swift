@@ -239,6 +239,7 @@ struct ModelDependencyFixture {
         preferenceBools: [String: Bool] = [:],
         preferenceStrings: [String: String] = [:],
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
+        localBotExecutionConfigPaths: [String] = [],
         productionBoundary: DesktopProductionBoundary = .testVerified
     ) {
         clipboard = RecordingClipboard(result: clipboardResult)
@@ -274,7 +275,8 @@ struct ModelDependencyFixture {
             githubAuthenticator: githubAuthenticator,
             githubBroker: githubBroker,
             productionBoundary: productionBoundary,
-            localBotConfigurations: localBotConfigurations
+            localBotConfigurations: localBotConfigurations,
+            localBotExecutionConfigPaths: localBotExecutionConfigPaths
         ), activationLicenseClient: activationLicenseClient)
     }
 

@@ -154,6 +154,7 @@ export interface ReviewHeadClaimInput {
   now?: Date;
   ownerPid?: number;
   allowProcessedOwnerSupersession?: boolean;
+  requiredProcessedStatusForSupersession?: ProcessedStatus;
 }
 
 export type ReviewHeadClaimAttempt =
@@ -1568,11 +1569,16 @@ export class ReviewStateStore {
         this.db.exec("commit");
         return { status: "blocked", reason: "active_claim" };
       }
-      if (!input.allowProcessedOwnerSupersession) {
-        const processed = this.db
-          .prepare("select 1 from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1")
-          .get(input.repo, input.pullNumber, input.headSha);
-        if (processed) {
+      const processed = this.db
+        .prepare("select status from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1")
+        .get(input.repo, input.pullNumber, input.headSha) as { status: ProcessedStatus } | undefined;
+      if (processed) {
+        const allowed = input.allowProcessedOwnerSupersession &&
+          (
+            input.requiredProcessedStatusForSupersession === undefined ||
+            processed.status === input.requiredProcessedStatusForSupersession
+          );
+        if (!allowed) {
           this.db.exec("commit");
           return { status: "blocked", reason: "processed" };
         }

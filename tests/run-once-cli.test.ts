@@ -136,6 +136,32 @@ describe("run-once CLI reporting", () => {
     expect(runOnceCliExitCode(result)).toBe(1);
   });
 
+  it("fails a scoped live command that did not post exactly one review", () => {
+    const result = runOnceResult({
+      reposScanned: 1,
+      pullsSeen: 1,
+      reviewed: 0,
+      skippedProcessed: 1,
+      scopedPull: {
+        repo: "owner/repo",
+        pullNumber: 123,
+        headSha: "head-123",
+        title: "already processed",
+        url: "https://github.com/owner/repo/pull/123"
+      }
+    });
+
+    expect(runOnceCliExitCode(result, { dryRun: false })).toBe(1);
+    expect(buildRunOnceCliReport({
+      result,
+      dryRun: false,
+      useZCode: true,
+      repo: "owner/repo",
+      pullNumber: 123,
+      commandName: "review-pr"
+    }).ok).toBe(false);
+  });
+
   it.each([
     ["posted_stale_head", 0, true],
     ["posted_head_unverified", 1, false],
@@ -422,6 +448,47 @@ describe("run-once CLI reporting", () => {
           reviewed: 0,
           skippedPolicy: 1,
           policySkips: [{ repo: "owner/skipped", reason: "repo_profile_disabled" }]
+        }
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails before review work when the pinned config revision changed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "neondiff-review-pr-config-revision-"));
+    try {
+      const configPath = join(dir, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["owner/skipped"],
+        workRoot: join(dir, "runtime"),
+        statePath: join(dir, "state.sqlite"),
+        evidenceDir: join(dir, "evidence"),
+        repoProfiles: {
+          repos: {
+            "owner/skipped": { enabled: false }
+          }
+        }
+      })}\n`);
+
+      const result = await runOnceCliCommand({
+        options: {
+          configPath,
+          repo: "owner/skipped",
+          pullNumber: 123,
+          expectedConfigRevision: "0".repeat(64),
+          dryRun: false,
+          useZCode: true
+        },
+        commandName: "review-pr"
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.output)).toMatchObject({
+        ok: false,
+        command: "review-pr",
+        error: {
+          message: "review-pr config revision changed; run a new dry review before posting"
         }
       });
     } finally {

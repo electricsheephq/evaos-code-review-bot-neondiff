@@ -416,6 +416,45 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("permits one exact live review to supersede its matching dry-run row", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-dry-to-live-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(416, "f".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Approved dry-to-live finding")]);
+    const github = githubForPull(pull, files);
+
+    const dryResult = await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    });
+    const liveResult = await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      processedHeadPolicy: "approved_dry_run"
+    });
+
+    expect(dryResult).toBe("reviewed");
+    expect(liveResult).toBe("reviewed");
+    expect(createdReviews).toHaveLength(1);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "posted"
+    });
+    state.close();
+  });
+
   it("uses the single-prompt path when overflow chunk is configured but the prompt fits", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-within-chunk-config-"));
     roots.push(root);

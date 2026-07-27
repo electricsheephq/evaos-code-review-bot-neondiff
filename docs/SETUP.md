@@ -302,9 +302,11 @@ the same Mac. In that exact case it opens a reconciliation path:
   copying its private key. The key file must be a current-user-owned regular
   file with no group/other permissions. Only its file path—not its key bytes—is
   supplied as a child-process environment coordinate for the exact config;
-- Overview runs one repository/PR-scoped dry review first. A live review is
-  enabled only for the returned 40-character head SHA and requires explicit
-  confirmation (see [Run A Dry-Run Review](#5-run-a-dry-run-review));
+- Overview runs one provider-backed repository/PR-scoped dry review first. A
+  live review is enabled only for that config revision and the returned
+  40-character head SHA, and requires explicit confirmation (see
+  [Run A Dry-Run Review](#5-run-a-dry-run-review)); a transport failure revokes
+  the approval and requires a new dry review;
   daemon-wide start stays blocked for multi-repository workers;
 - it keeps new work blocked until the exact current GitHub/repository and
   entitlement checks required by the release path pass.

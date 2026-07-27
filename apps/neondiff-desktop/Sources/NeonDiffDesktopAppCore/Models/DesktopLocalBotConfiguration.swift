@@ -59,8 +59,18 @@ package enum DesktopLaunchAgentBotConfigurationParser {
         let root = propertyList as? [String: Any],
         root["Label"] as? String == expectedLabel,
         let environment = root["EnvironmentVariables"] as? [String: Any],
-        let arguments = root["ProgramArguments"] as? [String]
+        let arguments = root["ProgramArguments"] as? [String],
+        let rawWorkingDirectory = root["WorkingDirectory"] as? String,
+        rawWorkingDirectory.hasPrefix("/")
         else {
+            return nil
+        }
+        let workingDirectoryURL = URL(filePath: rawWorkingDirectory)
+            .standardizedFileURL
+        guard approvedNeonDiffDaemonInvocation(
+            arguments,
+            workingDirectory: workingDirectoryURL
+        ) else {
             return nil
         }
 
@@ -107,13 +117,6 @@ package enum DesktopLaunchAgentBotConfigurationParser {
         let configURL = URL(filePath: rawConfigPath).standardizedFileURL
         guard configExists(configURL) else { return nil }
 
-        guard let rawWorkingDirectory = root["WorkingDirectory"] as? String,
-              rawWorkingDirectory.hasPrefix("/")
-        else {
-            return nil
-        }
-        let workingDirectoryURL = URL(filePath: rawWorkingDirectory)
-            .standardizedFileURL
         guard workingDirectoryExists(workingDirectoryURL) else { return nil }
 
         return DesktopLocalBotConfiguration(
@@ -147,8 +150,18 @@ package enum DesktopLaunchAgentExecutionContextParser {
         let root = propertyList as? [String: Any],
         root["Label"] as? String == expectedLabel,
         let environment = root["EnvironmentVariables"] as? [String: Any],
-        let arguments = root["ProgramArguments"] as? [String]
+        let arguments = root["ProgramArguments"] as? [String],
+        let rawWorkingDirectory = root["WorkingDirectory"] as? String,
+        rawWorkingDirectory.hasPrefix("/")
         else {
+            return nil
+        }
+        let workingDirectoryURL = URL(filePath: rawWorkingDirectory)
+            .standardizedFileURL
+        guard approvedNeonDiffDaemonInvocation(
+            arguments,
+            workingDirectory: workingDirectoryURL
+        ) else {
             return nil
         }
 
@@ -217,6 +230,37 @@ package enum DesktopLaunchAgentExecutionContextParser {
         }
         return values.first
     }
+}
+
+private func approvedNeonDiffDaemonInvocation(
+    _ arguments: [String],
+    workingDirectory: URL
+) -> Bool {
+    guard !arguments.isEmpty else { return false }
+    let executableName = URL(filePath: arguments[0]).lastPathComponent
+    if executableName == "neondiff" {
+        return arguments.count >= 2 && arguments[1] == "daemon"
+    }
+    guard executableName == "node", arguments.count >= 3 else {
+        return false
+    }
+
+    let sourceRunner = workingDirectory
+        .appendingPathComponent("node_modules/tsx/dist/cli.mjs")
+        .standardizedFileURL.path
+    if arguments.count >= 4,
+       URL(filePath: arguments[1]).standardizedFileURL.path == sourceRunner,
+       arguments[2] == "src/cli.ts",
+       arguments[3] == "daemon"
+    {
+        return true
+    }
+
+    let bundledCLI = workingDirectory
+        .appendingPathComponent("dist/cli.js")
+        .standardizedFileURL.path
+    return URL(filePath: arguments[1]).standardizedFileURL.path == bundledCLI
+        && arguments[2] == "daemon"
 }
 
 package enum DesktopLocalBotWorkingDirectoryResolver {

@@ -422,10 +422,10 @@ struct OverviewView: View {
         }
         .buttonStyle(ReferenceOutlineButtonStyle())
         .disabled(
-            !model.productionUsefulWorkAvailable
+            !model.scopedReviewExecutionAvailable
                 || !model.providerSetupReady
                 || model.isScopedReviewInProgress
-                || Int(model.pendingReviewPullNumber) == nil
+                || model.positivePendingReviewPullNumber == nil
         )
         .accessibilityIdentifier("neondiff-scoped-review-dry")
 

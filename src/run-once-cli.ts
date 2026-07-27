@@ -63,7 +63,15 @@ export function buildRunOnceCliReport(input: {
 }
 
 export function runOnceCliExitCode(result: RunOnceResult, input: { dryRun?: boolean } = {}): 0 | 1 {
-  return result.failed > 0 || (!input.dryRun && Boolean(result.scopedPull) && (result.skippedLicenseGate ?? 0) > 0) ? 1 : 0;
+  const scopedLiveDidNotPost =
+    !input.dryRun &&
+    Boolean(result.scopedPull) &&
+    result.reviewed !== 1;
+  return result.failed > 0 ||
+    scopedLiveDidNotPost ||
+    (!input.dryRun && Boolean(result.scopedPull) && (result.skippedLicenseGate ?? 0) > 0)
+    ? 1
+    : 0;
 }
 
 export function serializeRunOnceCliReport(report: RunOnceCliReport): string {

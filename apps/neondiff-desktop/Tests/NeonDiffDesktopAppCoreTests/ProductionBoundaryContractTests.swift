@@ -249,6 +249,18 @@ import Testing
         #expect(source.contains("neondiff-onboarding-byo-github-verify"))
     }
 
+    @Test func onboardingDaemonActionsUseTheDaemonSpecificReadinessGate() throws {
+        let onboardingView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift")
+        let source = try sourceBoundaryText(at: onboardingView)
+
+        #expect(
+            source.components(
+                separatedBy: ".disabled(!model.productionDaemonStartAvailable)"
+            ).count - 1 == 2
+        )
+    }
+
     @Test func b0OverviewExposesDryFirstPinnedLiveReviewActions() throws {
         let viewsDirectory = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
