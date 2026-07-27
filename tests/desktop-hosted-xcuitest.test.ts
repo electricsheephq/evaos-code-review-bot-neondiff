@@ -763,7 +763,7 @@ releaseTabbedAlternative()
     expect(onboarding).toContain("#if DEBUG");
     expect(onboarding).toContain("hostedOnboardingEvaluationRegion");
     expect(workflow).toMatch(
-      /name: Hosted XCUITest smoke\s+timeout-minutes: 25/
+      /name: Hosted XCUITest smoke\s+timeout-minutes: 18/
     );
   });
 
