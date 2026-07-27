@@ -12,8 +12,12 @@ public enum DaemonStatusParser {
         let statusPayload = json["status"] as? [String: Any]
         let effective = statusPayload ?? json
         let reportedRuntimeOk = json["runtimeOk"] as? Bool ?? effective["runtimeOk"] as? Bool
-        let reportedHealthState = (effective["healthState"] as? String)
+        let rawReportedHealthState = (effective["healthState"] as? String)
             ?? (json["healthState"] as? String)
+        let reportedHealthState = rawReportedHealthState.flatMap { state in
+            let normalized = state.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalized.isEmpty ? nil : normalized
+        }
         let wrapperOk = json["ok"] as? Bool
         let effectiveOk = effective["ok"] as? Bool
         let launchd = effective["launchd"] as? [String: Any]

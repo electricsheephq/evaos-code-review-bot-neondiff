@@ -57,6 +57,7 @@ import NeonDiffDesktopCore
           "operation": "status",
           "status": {
             "ok": false,
+            "healthState": "",
             "checkedAt": "2026-07-27T02:14:31.507Z",
             "launchd": {
               "state": "running"
@@ -83,6 +84,7 @@ import NeonDiffDesktopCore
 
         #expect(fixture.model.status.healthState == "runtime_blocked")
         #expect(fixture.model.status.runtimeOk == false)
+        #expect(fixture.model.lastError == nil)
         #expect(fixture.model.statusRefreshFailureMessage == nil)
         #expect(fixture.model.customerSurfaceStatus == "WORKER ATTENTION")
         #expect(
