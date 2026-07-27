@@ -958,6 +958,14 @@ function canonicalProspectivePath(path: string): string {
 }
 
 async function acquireRunLease(path: string): Promise<number> {
+  try {
+    const fd = openSync(path, "wx", 0o600);
+    writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`);
+    return fd;
+  } catch (error) {
+    if (!isAlreadyExistsError(error)) throw error;
+  }
+
   const coordinator = createServer((socket) => socket.destroy());
   const coordinationPort = phase1LeaseCoordinationPort(path);
   await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -982,23 +990,22 @@ async function acquireRunLease(path: string): Promise<number> {
       return fd;
     } catch (error) {
       if (!isAlreadyExistsError(error)) throw error;
-      const prior = parseJson<{ pid?: number }>(path);
-      if (typeof prior.pid === "number" && isProcessAlive(prior.pid)) throw new Error(`Phase 1 output has an active exclusive run lease held by PID ${prior.pid}`);
-      // Every conforming writer must own the crash-released loopback
-      // coordinator before replacing the canonical lease. Build the new lease
-      // under a unique name, then atomically replace the verified-stale path;
-      // there is no check/remove/reopen window on the canonical path.
-      const replacementPath = `${path}.${process.pid}.${randomUUID()}.replacement`;
-      const fd = openSync(replacementPath, "wx", 0o600);
-      try {
-        writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
-        renameSync(replacementPath, path);
-        return fd;
-      } catch (replacementError) {
-        closeSync(fd);
-        rmSync(replacementPath, { force: true });
-        throw replacementError;
-      }
+    }
+    const prior = parseJson<{ pid?: number }>(path);
+    if (typeof prior.pid === "number" && isProcessAlive(prior.pid)) throw new Error(`Phase 1 output has an active exclusive run lease held by PID ${prior.pid}`);
+    // Every conforming stale-lock recovery writer must own the crash-released
+    // loopback coordinator before replacing the canonical lease. Fresh writers
+    // are already serialized by the initial O_EXCL create above.
+    const replacementPath = `${path}.${process.pid}.${randomUUID()}.replacement`;
+    const fd = openSync(replacementPath, "wx", 0o600);
+    try {
+      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
+      renameSync(replacementPath, path);
+      return fd;
+    } catch (replacementError) {
+      closeSync(fd);
+      rmSync(replacementPath, { force: true });
+      throw replacementError;
     }
   } finally {
     await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
