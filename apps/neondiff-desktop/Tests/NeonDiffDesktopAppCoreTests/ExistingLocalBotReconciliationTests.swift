@@ -272,6 +272,98 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func repositoryChangeDuringActivationReturnsToRetryableState() async {
+        let firstRepository = "electricsheephq/WorldOS"
+        let client = ExistingBotGatedActivationClient()
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            activationLicenseClient: client,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [
+                firstRepository,
+                "electricsheephq/evaos-code-review-bot-neondiff"
+            ]
+        ))
+        fixture.model.selectBYOReviewRepository(fullName: firstRepository)
+        fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        let activation = Task {
+            await fixture.model.submitActivation()
+        }
+        #expect(await client.waitUntilStarted())
+        fixture.model.configPath = "/fixture/another-bot.json"
+
+        #expect(fixture.model.activationState == .keyReady)
+        client.release(.active(.init(
+            status: .active,
+            repoVisibilityScope: "private",
+            privateRepoAllowed: true,
+            updateEntitlement: true,
+            expiresAt: nil,
+            plan: "beta",
+            seats: 1
+        )))
+        await activation.value
+
+        #expect(fixture.model.activationState == .keyReady)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+    }
+
+    @MainActor
+    @Test func definitiveActivationRejectionDoesNotPinRepositoryTarget() async {
+        let firstRepository = "electricsheephq/WorldOS"
+        let secondRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            activationLicenseClient: ExistingBotRejectedActivationClient(),
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [firstRepository, secondRepository]
+        ))
+        fixture.model.selectBYOReviewRepository(fullName: firstRepository)
+        fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        await fixture.model.submitActivation()
+        fixture.model.selectBYOReviewRepository(fullName: secondRepository)
+
+        #expect(fixture.model.activationState == .invalid)
+        #expect(fixture.model.selectedBYOReviewRepository == secondRepository)
+    }
+
+    @MainActor
+    @Test func stagedRepositoryCannotBecomeActivationTargetBeforeApply() {
+        let appliedRepository = "electricsheephq/WorldOS"
+        let stagedRepository = "electricsheephq/unapplied"
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [
+                appliedRepository,
+                "electricsheephq/evaos-code-review-bot-neondiff"
+            ]
+        ))
+        fixture.model.selectBYOReviewRepository(fullName: appliedRepository)
+        fixture.model.pendingRepoName = stagedRepository
+        fixture.model.addPendingRepoToAllowlist()
+
+        fixture.model.selectBYOReviewRepository(fullName: stagedRepository)
+
+        #expect(fixture.model.selectedBYOReviewRepository == appliedRepository)
+        #expect(fixture.model.lastError?.contains("Apply") == true)
+        #expect(!fixture.model.canSelectBYOReviewRepository(fullName: stagedRepository))
+    }
+
+    @MainActor
     @Test func multiRepoWorkerExplainsRuntimeScopeBlockAfterTargetSelection() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -735,6 +827,16 @@ private struct ExistingBotActiveActivationClient: ActivationLicenseClienting {
 
     func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
         try await activate(key: key)
+    }
+}
+
+private struct ExistingBotRejectedActivationClient: ActivationLicenseClienting {
+    func activate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+        .invalid
+    }
+
+    func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+        .invalid
     }
 }
 

@@ -2110,6 +2110,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Choose an enabled repository from the applied worker configuration."
             return
         }
+        guard isAppliedBYOReviewRepository(repository.name) else {
+            lastError = "Apply and read back this repository in the current worker config before using it as the activation target."
+            return
+        }
         if activationState == .activationPending {
             lastError = "Activation is already in progress for \(selectedBYOReviewRepository ?? repository.name). Wait for it to finish or cancel before changing the target."
             return
@@ -2146,6 +2150,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                   $0.enabled
                       && $0.name.caseInsensitiveCompare(fullName) == .orderedSame
               }),
+              isAppliedBYOReviewRepository(fullName),
               activationState != .activationPending
         else {
             return false
@@ -3288,6 +3293,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         let activationRepository = selectedReviewRepository
+        if byoGitHubCredentialOnboardingAvailable {
+            guard let activationRepository,
+                  isAppliedBYOReviewRepository(activationRepository)
+            else {
+                applyActivationEvent(.activationServiceError)
+                lastError = "Apply and read back the selected Review Target before activating."
+                return
+            }
+        }
         guard let client = activationLicenseClient else {
             // No CLI-backed validation available (default): never invoke the
             // file-persisting CLI. Land in a retryable state instead.
@@ -3368,7 +3382,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil
             lastError = "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
-        case .expired, .revoked, .invalid, .offline, .serviceError, .malformed:
+        case .expired, .revoked, .invalid:
+            activationVerifiedThisLaunch = false
+            activationVerifiedRepositoryThisLaunch = nil
+            dependencies.preferences.set("", forKey: activationRepositoryKey)
+            lastError = activationPresentation.cause
+        case .offline, .serviceError, .malformed:
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil
             // Cause copy comes from the typed state presentation — never a raw
@@ -4266,6 +4285,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
         selectedBYOReviewRepository = repositories.onlyElement
     }
 
+    private func isAppliedBYOReviewRepository(_ fullName: String) -> Bool {
+        guard let appliedRepoSelection,
+              appliedRepoSelection.configPath == configPath
+        else {
+            return false
+        }
+        return appliedRepoSelection.repositories.contains {
+            $0.caseInsensitiveCompare(fullName) == .orderedSame
+        }
+    }
+
     private func applyCLIResult(
         _ result: CLIRunResult,
         fallbackCommand: String,
@@ -4692,6 +4722,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private func invalidateActivationForRepositoryChange() {
         activationRequestGeneration &+= 1
+        if activationState == .activationPending {
+            applyActivationEvent(.checkoutCancelled)
+            onboardingFlow.licenseActivation = .servicePending
+            lastError = "Repository context changed during activation. Review the current target, then retry safely."
+        }
         guard activationVerifiedThisLaunch
                 || activationVerifiedRepositoryThisLaunch != nil
         else {
