@@ -223,11 +223,15 @@ import Testing
         #expect(activation.contains("Review repository access"))
         #expect(activation.contains("model.reviewExistingBotRepositoryAccess()"))
         #expect(activation.contains("existingAccountActivationRecovery("))
+        #expect(activation.contains("Native app authorization required"))
+        #expect(activation.contains("existing local worker stays in place"))
         #expect(activation.contains("Use existing activation key"))
         #expect(activation.contains("model.applyActivationEvent(.checkoutUnavailable)"))
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
         #expect(activity.contains("model.githubSetupReady"))
         #expect(activity.contains("GitHub connection ready"))
+        #expect(activity.contains("Not checked yet — choose Refresh Activity"))
+        #expect(activity.contains("Check failed —"))
         #expect(activity.contains("DisclosureGroup"))
         #expect(activity.contains("// ADVANCED DIAGNOSTICS"))
         #expect(settings.contains("Signed update, rollback, and installed-app proof"))
@@ -276,13 +280,27 @@ import Testing
         #expect(!chrome.contains("ChromeCircuitBackdrop"))
         #expect(overview.contains("Ready for a dry run"))
         #expect(overview.contains("Existing bot configured"))
+        #expect(overview.contains("Restoring this Mac"))
+        #expect(overview.contains("CHECKING LOCAL SETUP"))
+        #expect(sidebar.contains("CHECKING THIS MAC"))
+        #expect(sidebar.contains("private var accountMutationDisabled: Bool"))
+        #expect(
+            sidebar.components(separatedBy: ".disabled(accountMutationDisabled)").count >= 6
+        )
+        #expect(
+            sidebar.contains(
+                "accountMutationDisabled\n"
+                    + "                                || bot.status == .revoked\n"
+                    + "                                || bot.status == .suspended"
+            )
+        )
         #expect(overview.contains("design: .rounded"))
         for title in ["GITHUB APP", "PROVIDER", "LICENSE", "REPOSITORY"] {
             #expect(overview.contains(title))
         }
         #expect(overview.contains("ReferenceReadinessCard"))
         #expect(overview.contains("model.reopenOnboarding(at: .welcome)"))
-        #expect(overview.contains("status: readiness.licenseStatus"))
+        #expect(overview.contains("readiness.licenseStatus"))
         #expect(overview.contains(#""PUBLIC · FREE""#))
         #expect(overview.contains("model.licenseSetupReady"))
         #expect(overview.contains("model.productionUsefulWorkAvailable"))
@@ -297,6 +315,7 @@ import Testing
         #expect(overview.contains(#"systemImage: "link""#))
         #expect(!overview.contains(#"systemImage: "arrow.triangle.branch""#))
         #expect(!overview.contains(#"systemImage: "mark-github""#))
+        #expect(overview.contains(".disabled(isDisabled)"))
         #expect(theme.contains("@Environment(\\.isEnabled) private var isEnabled"))
         #expect(theme.contains(".opacity(isEnabled ? 1 : 0.38)"))
         #expect(theme.contains("NDBrandWordmark"))
@@ -305,7 +324,7 @@ import Testing
         #expect(theme.contains("interfaceBorder"))
         #expect(!theme.contains(".fill(Color.black.opacity(0.38))"))
         #expect(chrome.contains("setupShadowColor"))
-        #expect(chrome.contains(#"status: model.isOnboardingPresented ? "SETUP REQUIRED" : model.status.healthState"#))
+        #expect(chrome.contains("status: model.customerSurfaceStatus"))
         #expect(!chrome.contains("Text(updateController.badgeText.uppercased())"))
         #expect(app.contains(#"@AppStorage("neondiff.appearance")"#))
         #expect(app.contains("toggleAppearance"))

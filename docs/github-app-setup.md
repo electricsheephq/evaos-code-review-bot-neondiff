@@ -107,7 +107,9 @@ integration proof under #630.
 If account linking finds a server-verified bot whose exact App identity and
 GitHub account match a local launchd/config candidate on this Mac, NeonDiff
 shows that existing connection instead of presenting clean-install credential
-entry. It does not copy, rotate, or migrate the worker private key. This
+entry. While the launch check is running, the app shows a restoring state rather
+than empty setup cards or a false first-run wizard. It does not copy, rotate, or
+migrate the worker private key. This
 reconciliation proves account/bot/config setup only: current App access and
 repository-scoped entitlement must still pass before a new dry or live review.
 Local config alone never establishes membership, installation authority, or

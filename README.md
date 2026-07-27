@@ -166,6 +166,9 @@ authoritative account/bot intersection instead of asking the user to initialize
 or re-enter the existing worker credentials. It may show GitHub, provider,
 entitlement, and repository setup as configured while still requiring fresh,
 repository-scoped GitHub and activation verification before new review work.
+During launch it shows a bounded restoring state while that authorized
+account/bot/config intersection is checked; it does not flash empty first-run
+setup or claim that the existing configuration is missing.
 Local config alone can never invent account membership or unlock a review.
 This source composition is not proof that the production broker is enabled,
 that billing is live, or that a signed customer artifact exists. Update,

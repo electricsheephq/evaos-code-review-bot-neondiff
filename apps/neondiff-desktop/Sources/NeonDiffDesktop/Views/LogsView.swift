@@ -36,7 +36,7 @@ struct LogsView: View {
                 )
                 activityRow(
                     title: "Local worker",
-                    detail: model.status.healthState,
+                    detail: localWorkerDetail,
                     ready: model.status.runtimeOk == true
                 )
             }
@@ -95,6 +95,19 @@ struct LogsView: View {
             return "GitHub connection ready"
         }
         return "Setup or account selection required"
+    }
+
+    private var localWorkerDetail: String {
+        if model.isExistingLocalBotRestoreInProgress {
+            return "Checking the selected bot’s local worker"
+        }
+        if let failure = model.statusRefreshFailureMessage {
+            return "Check failed — \(failure)"
+        }
+        if model.status == .unknown {
+            return "Not checked yet — choose Refresh Activity"
+        }
+        return model.status.healthState
     }
 
     private func activityRow(
