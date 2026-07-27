@@ -16,6 +16,9 @@ import NeonDiffDesktopCore
             "runtimeOk": false,
             "healthState": "runtime_blocked",
             "checkedAt": "2026-07-27T00:36:22.385Z",
+            "launchd": {
+              "state": "not_running"
+            },
             "summary": {
               "failedQueueJobs": 2
             }
@@ -40,7 +43,47 @@ import NeonDiffDesktopCore
         #expect(fixture.model.customerSurfaceStatus == "WORKER ATTENTION")
         #expect(
             fixture.model.customerLocalWorkerStatusDetail
-                == "Running, but review gates need attention"
+                == "Review worker needs attention — open Advanced Diagnostics"
+        )
+    }
+
+    @Test func structuredStatusErrorRemainsActionableAndFailClosed() {
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.isOnboardingPresented = false
+        let response = #"""
+        {
+          "ok": false,
+          "command": "daemon status",
+          "error": {
+            "code": "config_invalid",
+            "message": "The selected config could not be loaded."
+          }
+        }
+        """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 1, stdout: response, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+
+        #expect(fixture.model.status == .unknown)
+        #expect(
+            fixture.model.lastError
+                == "Local worker status check failed. Retry or open Advanced Diagnostics."
+        )
+        #expect(
+            fixture.model.statusRefreshFailureMessage
+                == "Local worker status check failed. Retry or open Advanced Diagnostics."
+        )
+        #expect(fixture.model.logText.contains("config_invalid"))
+        #expect(fixture.model.customerSurfaceStatus == "NOT CHECKED")
+        #expect(
+            fixture.model.customerLocalWorkerStatusDetail
+                == "Status check failed — retry"
         )
     }
 }

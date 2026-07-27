@@ -782,7 +782,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         return switch status.healthState {
         case "runtime_ok": "Running and ready"
-        case "runtime_blocked": "Running, but review gates need attention"
+        case "runtime_blocked":
+            "Review worker needs attention — open Advanced Diagnostics"
         case "coverage_blocked": "Review coverage needs attention"
         default:
             status.healthState
@@ -4401,8 +4402,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 repos = parsed.1
             }
         } else if isDaemonStatusCommand {
-            statusRefreshFailureMessage = lastError
-                ?? "Local worker returned an invalid status response."
+            let message = "Local worker status check failed. Retry or open Advanced Diagnostics."
+            lastError = message
+            statusRefreshFailureMessage = message
         }
     }
 

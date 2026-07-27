@@ -11,6 +11,14 @@ public enum DaemonStatusParser {
 
         let statusPayload = json["status"] as? [String: Any]
         let effective = statusPayload ?? json
+        let hasDirectStatusShape = effective["runtimeOk"] != nil
+            || effective["healthState"] != nil
+            || effective["checkedAt"] != nil
+            || effective["launchd"] != nil
+            || effective["monitoredRepos"] != nil
+        guard statusPayload != nil || hasDirectStatusShape else {
+            return nil
+        }
         let wrapperOk = json["ok"] as? Bool
         let effectiveOk = effective["ok"] as? Bool
         let launchd = effective["launchd"] as? [String: Any]

@@ -239,7 +239,7 @@ import Testing
         #expect(activity.contains("model.customerLocalWorkerStatusDetail"))
         #expect(model.contains("Not checked yet — choose Refresh Activity"))
         #expect(model.contains("Status check failed — retry"))
-        #expect(model.contains("Running, but review gates need attention"))
+        #expect(model.contains("Review worker needs attention — open Advanced Diagnostics"))
         #expect(activity.contains("DisclosureGroup"))
         #expect(activity.contains("// ADVANCED DIAGNOSTICS"))
         #expect(settings.contains("Signed update, rollback, and installed-app proof"))
