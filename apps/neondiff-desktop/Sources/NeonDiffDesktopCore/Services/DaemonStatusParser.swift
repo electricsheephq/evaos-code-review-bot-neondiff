@@ -16,7 +16,7 @@ public enum DaemonStatusParser {
             || effective["checkedAt"] != nil
             || effective["launchd"] != nil
             || effective["monitoredRepos"] != nil
-        guard statusPayload != nil || hasDirectStatusShape else {
+        guard hasDirectStatusShape else {
             return nil
         }
         let wrapperOk = json["ok"] as? Bool

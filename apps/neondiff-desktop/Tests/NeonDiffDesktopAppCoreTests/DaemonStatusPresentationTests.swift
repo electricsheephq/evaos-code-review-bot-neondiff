@@ -50,6 +50,18 @@ import NeonDiffDesktopCore
     @Test func structuredStatusErrorRemainsActionableAndFailClosed() {
         let fixture = ModelDependencyFixture(suspendCLIRuns: true)
         fixture.model.isOnboardingPresented = false
+        let healthyResponse = #"""
+        {
+          "ok": true,
+          "command": "daemon status",
+          "status": {
+            "ok": true,
+            "runtimeOk": true,
+            "healthState": "runtime_ok",
+            "checkedAt": "2026-07-27T00:35:00.000Z"
+          }
+        }
+        """#
         let response = #"""
         {
           "ok": false,
@@ -60,6 +72,16 @@ import NeonDiffDesktopCore
           }
         }
         """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: healthyResponse, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+        #expect(fixture.model.status.runtimeOk == true)
 
         fixture.model.applyCLIResultForTesting(
             CLIRunResult(exitCode: 1, stdout: response, stderr: ""),
@@ -85,5 +107,33 @@ import NeonDiffDesktopCore
             fixture.model.customerLocalWorkerStatusDetail
                 == "Status check failed — retry"
         )
+    }
+
+    @Test func emptyNestedStatusEnvelopeFailsClosed() {
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.isOnboardingPresented = false
+        let response = #"""
+        {
+          "ok": true,
+          "command": "daemon status",
+          "status": {}
+        }
+        """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: response, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+
+        #expect(fixture.model.status == .unknown)
+        #expect(
+            fixture.model.statusRefreshFailureMessage
+                == "Local worker status check failed. Retry or open Advanced Diagnostics."
+        )
+        #expect(fixture.model.customerSurfaceStatus == "NOT CHECKED")
     }
 }

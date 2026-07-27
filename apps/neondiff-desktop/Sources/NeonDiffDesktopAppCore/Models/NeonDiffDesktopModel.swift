@@ -4403,6 +4403,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             }
         } else if isDaemonStatusCommand {
             let message = "Local worker status check failed. Retry or open Advanced Diagnostics."
+            status = .unknown
+            onboardingFlow.daemonBootstrapChecked = false
             lastError = message
             statusRefreshFailureMessage = message
         }
