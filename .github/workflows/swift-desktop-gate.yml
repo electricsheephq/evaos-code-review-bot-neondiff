@@ -204,7 +204,9 @@ jobs:
       - name: Swift build
         working-directory: apps/neondiff-desktop
         timeout-minutes: 5
-        run: swift build -c debug --product NeonDiffDesktop
+        run: |
+          swift build -c debug --product NeonDiffDesktop
+          swift build -c release --product NeonDiffDesktop
 
       - name: Swift fixture support build
         if: >-

@@ -74,9 +74,9 @@ describe("Swift CI velocity policy", () => {
       "apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/ConfigInspectParser.swift"
     ]).lanes).toEqual({
       core: true,
-      fixtureChecks: false,
+      fixtureChecks: true,
       appCore: true,
-      evaluationSupport: false,
+      evaluationSupport: true,
       hostedXCUITest: false
     });
 
@@ -101,6 +101,16 @@ describe("Swift CI velocity policy", () => {
     });
 
     expect(swiftAffected([
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopEvaluationSupport/DesktopEvaluationFixture.swift"
+    ]).lanes).toEqual({
+      core: false,
+      fixtureChecks: true,
+      appCore: false,
+      evaluationSupport: true,
+      hostedXCUITest: false
+    });
+
+    expect(swiftAffected([
       ".github/workflows/swift-desktop-gate.yml"
     ]).lanes).toEqual({
       core: true,
@@ -120,6 +130,7 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/name:\s*Swift Fixture checks\s+[^]*?timeout-minutes:\s*[1-9]/);
     expect(gate).toMatch(/name:\s*Swift AppCore tests\s+[^]*?timeout-minutes:\s*[1-9]/);
     expect(gate).toMatch(/name:\s*Swift EvaluationSupport tests\s+[^]*?timeout-minutes:\s*[1-9]/);
+    expect(gate).toMatch(/name:\s*Swift build\s+[^]*?swift build -c debug --product NeonDiffDesktop[^]*?swift build -c release --product NeonDiffDesktop/);
     expect(gate).not.toContain("Swift core, AppCore, and evaluation-support tests");
 
     expect(gate).toMatch(/swift-desktop-xcuitest:/);

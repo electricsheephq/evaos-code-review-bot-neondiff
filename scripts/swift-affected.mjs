@@ -78,7 +78,13 @@ function lanesForPath(file) {
     normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopCore/")
     || normalized.startsWith("apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/")
   ) {
-    return { ...EMPTY_LANES, core: true, appCore: true };
+    return {
+      ...EMPTY_LANES,
+      core: true,
+      fixtureChecks: true,
+      appCore: true,
+      evaluationSupport: true
+    };
   }
 
   if (
@@ -92,7 +98,7 @@ function lanesForPath(file) {
     normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopEvaluationSupport/")
     || normalized.startsWith("apps/neondiff-desktop/Tests/NeonDiffDesktopEvaluationSupportTests/")
   ) {
-    return { ...EMPTY_LANES, evaluationSupport: true };
+    return { ...EMPTY_LANES, fixtureChecks: true, evaluationSupport: true };
   }
 
   if (
