@@ -314,6 +314,46 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func ambiguousActivationPinBlocksReconciledDifferentRepositoryRetry() async {
+        let firstRepository = "electricsheephq/WorldOS"
+        let secondRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let client = ExistingBotGatedActivationClient()
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            activationLicenseClient: client,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [firstRepository, secondRepository]
+        ))
+        fixture.model.selectBYOReviewRepository(fullName: firstRepository)
+        fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        let activation = Task {
+            await fixture.model.submitActivation()
+        }
+        #expect(await client.waitUntilStarted())
+        fixture.model.configPath = "/fixture/another-bot.json"
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [secondRepository]
+        ))
+        client.release(.offline)
+        await activation.value
+
+        #expect(fixture.model.activationState == .keyReady)
+        #expect(fixture.model.selectedBYOReviewRepository == secondRepository)
+
+        await fixture.model.submitActivation()
+
+        #expect(client.callCount == 1)
+        #expect(fixture.model.activationState == .serviceError)
+        #expect(fixture.model.lastError?.contains(firstRepository) == true)
+    }
+
+    @MainActor
     @Test func definitiveActivationRejectionDoesNotPinRepositoryTarget() async {
         let firstRepository = "electricsheephq/WorldOS"
         let secondRepository = "electricsheephq/evaos-code-review-bot-neondiff"
@@ -848,9 +888,21 @@ private final class ExistingBotGatedActivationClient:
     private var continuation: CheckedContinuation<ActivationClientOutcome, Never>?
     private var startedContinuation: CheckedContinuation<Void, Never>?
     private var started = false
+    private var activationCount = 0
+
+    var callCount: Int {
+        lock.withLock { activationCount }
+    }
 
     func activate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
-        await withCheckedContinuation { continuation in
+        let shouldGate = lock.withLock {
+            activationCount += 1
+            return activationCount == 1
+        }
+        guard shouldGate else {
+            return .offline
+        }
+        return await withCheckedContinuation { continuation in
             let startedContinuation = lock.withLock {
                 started = true
                 self.continuation = continuation

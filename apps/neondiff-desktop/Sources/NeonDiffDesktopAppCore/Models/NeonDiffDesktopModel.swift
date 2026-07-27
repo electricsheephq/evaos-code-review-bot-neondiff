@@ -3301,6 +3301,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 lastError = "Apply and read back the selected Review Target before activating."
                 return
             }
+            if let activatedRepository,
+               activatedRepository.caseInsensitiveCompare(activationRepository)
+                   != .orderedSame {
+                applyActivationEvent(.activationServiceError)
+                lastError = "This device may already be bound to \(activatedRepository) from an earlier activation attempt. Retry with that Review Target or complete a verified deactivate/rebind before switching repositories."
+                return
+            }
         }
         guard let client = activationLicenseClient else {
             // No CLI-backed validation available (default): never invoke the
