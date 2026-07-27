@@ -990,22 +990,22 @@ async function acquireRunLease(path: string): Promise<number> {
       return fd;
     } catch (error) {
       if (!isAlreadyExistsError(error)) throw error;
-    }
-    const prior = parseJson<{ pid?: number }>(path);
-    if (typeof prior.pid === "number" && isProcessAlive(prior.pid)) throw new Error(`Phase 1 output has an active exclusive run lease held by PID ${prior.pid}`);
-    // Every conforming stale-lock recovery writer must own the crash-released
-    // loopback coordinator before replacing the canonical lease. Fresh writers
-    // are already serialized by the initial O_EXCL create above.
-    const replacementPath = `${path}.${process.pid}.${randomUUID()}.replacement`;
-    const fd = openSync(replacementPath, "wx", 0o600);
-    try {
-      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
-      renameSync(replacementPath, path);
-      return fd;
-    } catch (replacementError) {
-      closeSync(fd);
-      rmSync(replacementPath, { force: true });
-      throw replacementError;
+      const prior = parseJson<{ pid?: number }>(path);
+      if (typeof prior.pid === "number" && isProcessAlive(prior.pid)) throw new Error(`Phase 1 output has an active exclusive run lease held by PID ${prior.pid}`);
+      // Every conforming stale-lock recovery writer must own the crash-released
+      // loopback coordinator before replacing the canonical lease. Fresh writers
+      // are already serialized by the initial O_EXCL create above.
+      const replacementPath = `${path}.${process.pid}.${randomUUID()}.replacement`;
+      const fd = openSync(replacementPath, "wx", 0o600);
+      try {
+        writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString(), recovered: true })}\n`);
+        renameSync(replacementPath, path);
+        return fd;
+      } catch (replacementError) {
+        closeSync(fd);
+        rmSync(replacementPath, { force: true });
+        throw replacementError;
+      }
     }
   } finally {
     await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
