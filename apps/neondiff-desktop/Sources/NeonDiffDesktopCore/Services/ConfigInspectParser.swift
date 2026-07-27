@@ -112,6 +112,7 @@ public enum ConfigInspectParser {
             zcodeCliPath: zcode?["cliPath"] as? String ?? "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
             zcodeAppConfigPath: zcode?["appConfigPath"] as? String
                 ?? ProviderSettings.defaultZCodeAppConfigPath,
+            zcodeProviderId: zcode?["providerId"] as? String ?? selectedProviderId,
             openAICompatibleEndpoint: desktop?["openAICompatibleEndpoint"] as? String ?? "http://localhost:8000/v1",
             providerKeyStored: providerKeyStored,
             selectedProviderId: selectedProviderId,

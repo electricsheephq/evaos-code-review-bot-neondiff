@@ -540,6 +540,23 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func scopedReviewRejectsAProviderDifferentFromTheOneZCodeWillExecute() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(
+            existingBotConfig(
+                authMode: "zcode-app-config",
+                zcodeProviderId: "different-provider"
+            )
+        )
+
+        #expect(fixture.model.providerSetupReady)
+        #expect(!fixture.model.scopedReviewProviderReady)
+    }
+
+    @MainActor
     @Test func selectedExistingBYOBotReusesKeychainCredentialForReverification() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -1147,6 +1164,7 @@ import NeonDiffDesktopCore
     private func existingBotConfig(
         authMode: String,
         repositories: [String] = ["electricsheephq/WorldOS"],
+        zcodeProviderId: String = "zcode-glm",
         revision: String = String(repeating: "a", count: 64)
     ) -> String {
         let adapter = authMode == "zcode-app-config" ? "zcode" : "openai-compatible"
@@ -1160,6 +1178,12 @@ import NeonDiffDesktopCore
           "revision": "\#(revision)",
           "config": {
             "pilotRepos": [\#(repositoryJSON)],
+            "zcode": {
+              "providerId": "\#(zcodeProviderId)",
+              "model": "GLM-5.2",
+              "cliPath": "zcode",
+              "appConfigPath": "zcode.json"
+            },
             "providers": {
               "defaultProviderId": "zcode-glm",
               "providers": {

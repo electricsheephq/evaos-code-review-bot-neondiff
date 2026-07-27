@@ -562,6 +562,7 @@ export function renderLocalDashboardHtml(status: LocalDashboardStatusContract): 
         });
         const json = await response.json();
         output.textContent = JSON.stringify(json, null, 2);
+        if (response.ok && json.ok) window.location.reload();
       } catch (error) {
         output.textContent = JSON.stringify({ ok: false, error: String(error) }, null, 2);
       } finally {
@@ -681,8 +682,9 @@ export async function startLocalDashboardServer(input: {
   requireActiveProductionLicense?: typeof requireActiveProductionLicense;
 }): Promise<LocalDashboardServerHandle> {
   let latestVerification: ProviderApiKeyVerificationResult | undefined;
+  let statusConfig = input.config;
   let status = await buildLocalDashboardStatus({
-    config: input.config,
+    config: statusConfig,
     configPath: input.configPath,
     configExists: input.configExists,
     launchdLabel: input.launchdLabel,
@@ -693,7 +695,7 @@ export async function startLocalDashboardServer(input: {
       const url = new URL(request.url ?? "/", `http://${input.host ?? "127.0.0.1"}`);
       if (request.method === "GET" && url.pathname === "/") {
         status = await buildLocalDashboardStatus({
-          config: input.config,
+          config: statusConfig,
           configPath: input.configPath,
           configExists: input.configExists,
           launchdLabel: input.launchdLabel,
@@ -704,7 +706,7 @@ export async function startLocalDashboardServer(input: {
       }
       if (request.method === "GET" && url.pathname === "/api/status") {
         status = await buildLocalDashboardStatus({
-          config: input.config,
+          config: statusConfig,
           configPath: input.configPath,
           configExists: input.configExists,
           launchdLabel: input.launchdLabel,
@@ -763,6 +765,9 @@ export async function startLocalDashboardServer(input: {
                   "Reload the dashboard and repeat provider verification against the current configuration."
                 ]
               };
+          if (currentRevision === configSnapshot.revision) {
+            statusConfig = configSnapshot.config;
+          }
         } else {
           latestVerification = verification;
         }

@@ -793,6 +793,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var scopedReviewProviderReady: Bool {
         providerSetupReady
             && providers.selectedRegistryTarget?.authMode == "zcode-app-config"
+            && providers.zcodeProviderId == providers.selectedProviderId
     }
 
     /// Account entitlement is server authority for the selected existing bot's
