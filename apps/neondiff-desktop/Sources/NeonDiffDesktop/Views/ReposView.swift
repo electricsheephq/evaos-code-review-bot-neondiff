@@ -367,7 +367,7 @@ struct ReposView: View {
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                 }
 
-                Text("This connection comes from a server-verified account/bot record matched to the exact local config on this Mac. NeonDiff reuses that worker only for an exact scoped command; it will not copy, migrate, print, or ask you to re-enter the private key.")
+                Text("This connection comes from a server-verified account/bot record matched to the exact local config on this Mac. NeonDiff reuses that worker only for an exact scoped command; it will not copy, migrate, or ask you to re-enter the private key, and it will never print it.")
                     .operatorBodyText()
                     .fixedSize(horizontal: false, vertical: true)
 
