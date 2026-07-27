@@ -362,6 +362,23 @@ export function buildReviewApprovalRevision(input: {
     .digest("hex");
 }
 
+export function assertReviewApprovalRevisionCurrent(input: {
+  approvedRevision: string;
+  sourceConfigRevision: string;
+  useZCode: boolean;
+  zcodeAppConfigPath: string;
+}): void {
+  const currentRevision = buildReviewApprovalRevision({
+    configRevision: input.sourceConfigRevision,
+    useZCode: input.useZCode,
+    zcodeAppConfigPath: input.zcodeAppConfigPath
+  });
+  if (currentRevision === input.approvedRevision) return;
+  throw new Error(
+    "review-pr provider configuration changed; run a new dry review before posting"
+  );
+}
+
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   let config: BotConfig;
   if (options.expectedConfigRevision !== undefined) {
@@ -464,6 +481,9 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             useZCode: options.useZCode ?? true,
             ...(reviewApprovalRevision
               ? { configRevision: reviewApprovalRevision }
+              : {}),
+            ...(options.expectedConfigRevision
+              ? { sourceConfigRevision: options.expectedConfigRevision }
               : {}),
             budget,
             licenseAdmission,
@@ -1390,6 +1410,7 @@ export interface ReviewPullInput {
   dryRun: boolean;
   useZCode: boolean;
   configRevision?: string;
+  sourceConfigRevision?: string;
   budget?: ReviewRunBudget;
   processedHeadPolicy?: "normal" | "approved_dry_run" | "retry_failed_head";
   commandCommentId?: number;
@@ -1859,6 +1880,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_context_budget";
     }
 
+    const assertApprovedProviderConfigCurrent = (): void => {
+      if (!input.configRevision || !input.sourceConfigRevision) return;
+      assertReviewApprovalRevisionCurrent({
+        approvedRevision: input.configRevision,
+        sourceConfigRevision: input.sourceConfigRevision,
+        useZCode: input.useZCode,
+        zcodeAppConfigPath: config.zcode.appConfigPath
+      });
+    };
+    assertApprovedProviderConfigCurrent();
     const zcodeExecution = await runReviewWithContextBudget({
       config,
       github,
@@ -1872,6 +1903,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       useZCode: input.useZCode,
       evidenceDir
     });
+    assertApprovedProviderConfigCurrent();
     if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
     if (zcodeExecution.status === "skipped_context_budget") return "skipped_context_budget";
     const zcodeResult = zcodeExecution.result;
@@ -1915,6 +1947,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       worktreePath: worktree.path,
       evidenceDir
     });
+    assertApprovedProviderConfigCurrent();
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
     }
@@ -2019,6 +2052,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
+    assertApprovedProviderConfigCurrent();
     if (input.dryRun) {
       // Dry-run posts nothing public, but its durable proof must not replace an
       // active or completed live review. The state transaction admits this row

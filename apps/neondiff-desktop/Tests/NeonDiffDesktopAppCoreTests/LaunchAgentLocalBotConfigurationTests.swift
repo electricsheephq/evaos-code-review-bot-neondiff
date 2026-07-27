@@ -276,7 +276,8 @@ import Testing
             "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH": privateKeyPath,
             "NODE_OPTIONS": "--use-system-ca"
         ])
-        #expect(context?.executablePath == nil)
+        #expect(context?.executablePath == "/opt/homebrew/bin/node")
+        #expect(context?.argumentPrefix == ["\(workingDirectory)/dist/src/cli.js"])
 
         var unsafeEnvironment = baseEnvironment
         unsafeEnvironment["NODE_OPTIONS"] = "--require /tmp/injected.js"
@@ -290,6 +291,42 @@ import Testing
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
             privateKeyPathIsSafe: { _ in true }
         ) == nil)
+    }
+
+    @Test func preservesTheAcceptedSourceRunnerInvocationForDesktopCommands() throws {
+        let workingDirectory = "/Volumes/LEXAR/repos/evaos-code-review-bot"
+        let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
+        let privateKeyPath = "/Users/test/.config/neondiff/app.pem"
+        let nodePath = "/opt/homebrew/bin/node"
+        let sourceRunner = "\(workingDirectory)/node_modules/tsx/dist/cli.mjs"
+        let context = DesktopLaunchAgentExecutionContextParser.parse(
+            data: try propertyList(
+                label: "com.electricsheephq.evaos-code-review-bot",
+                environment: [
+                    "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+                    "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": privateKeyPath
+                ],
+                arguments: [
+                    nodePath,
+                    sourceRunner,
+                    "src/cli.ts",
+                    "daemon",
+                    "--config",
+                    configPath
+                ],
+                workingDirectory: workingDirectory
+            ),
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { $0.path == privateKeyPath }
+        )
+
+        #expect(context?.executablePath == nodePath)
+        #expect(context?.argumentPrefix == [sourceRunner, "src/cli.ts"])
+        #expect(DesktopLocalBotExecutionContextResolver.resolveArguments(
+            executablePath: "neondiff",
+            arguments: ["review-pr", "--config", configPath],
+            executionContexts: [context!]
+        ) == [sourceRunner, "src/cli.ts", "review-pr", "--config", configPath])
     }
 
     @Test func rejectsUnsafeOrConflictingExistingWorkerCredentialCoordinates() throws {

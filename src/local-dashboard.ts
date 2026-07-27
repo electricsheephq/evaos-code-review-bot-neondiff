@@ -158,7 +158,8 @@ export async function buildLocalDashboardStatus(input: {
   const scopedReviewProviderReady =
     selectedProvider?.enabled === true &&
     selectedProvider.authMode === "zcode-app-config" &&
-    input.providerVerification?.providerId === selectedProviderId;
+    input.providerVerification?.providerId === selectedProviderId &&
+    input.config.zcode.providerId === selectedProviderId;
   const quotedConfigPath = shellQuoteCommandArg(input.configPath);
   const firstReviewCommand = verifiedConfigRevision && scopedReviewProviderReady
     ? `neondiff review-pr --config ${quotedConfigPath} --repo owner/repo --pr 123 `

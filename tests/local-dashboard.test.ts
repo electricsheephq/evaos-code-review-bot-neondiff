@@ -381,6 +381,12 @@ describe("local HTML dashboard", () => {
     const revision = "a".repeat(64);
     const status = await buildLocalDashboardStatus({
       config: loadConfigFromObject({
+        zcode: {
+          providerId: "zcode-glm",
+          cliPath: "zcode",
+          appConfigPath: "zcode.json",
+          model: "GLM-5.2"
+        },
         providers: {
           defaultProviderId: "zcode-glm",
           providers: {
@@ -390,7 +396,12 @@ describe("local HTML dashboard", () => {
               displayName: "GLM through ZCode",
               model: "GLM-5.2",
               authMode: "zcode-app-config",
-              capabilities: { review: true }
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
             }
           }
         }
@@ -418,6 +429,67 @@ describe("local HTML dashboard", () => {
       `--expected-config-revision ${revision}`
     );
     expect(status.firstReviewPreview.command).toContain("--zcode true");
+  });
+
+  it("withholds review when the verified default provider differs from ZCode execution", async () => {
+    const status = await buildLocalDashboardStatus({
+      config: loadConfigFromObject({
+        zcode: {
+          providerId: "zcode-execution",
+          cliPath: "zcode",
+          appConfigPath: "zcode.json",
+          model: "GLM-5.2"
+        },
+        providers: {
+          defaultProviderId: "zcode-verified",
+          providers: {
+            "zcode-verified": {
+              enabled: true,
+              adapter: "zcode",
+              displayName: "Verified provider",
+              model: "GLM-5.2",
+              authMode: "zcode-app-config",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            },
+            "zcode-execution": {
+              enabled: true,
+              adapter: "zcode",
+              displayName: "Execution provider",
+              model: "GLM-5.2",
+              authMode: "zcode-app-config",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            }
+          }
+        }
+      }),
+      configPath: "config.local.json",
+      configExists: true,
+      providerVerification: {
+        ok: true,
+        command: "providers verify",
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        providerId: "zcode-verified",
+        state: "healthy",
+        mode: "metadata_only",
+        detail: "verified",
+        redacted: true,
+        troubleshooting: [],
+        configRevision: "c".repeat(64)
+      }
+    });
+
+    expect(status.firstReviewPreview.available).toBe(false);
+    expect(status.firstReviewPreview.command).toContain("providers doctor");
   });
 
   it("automatically refreshes dashboard state after successful provider verification", async () => {

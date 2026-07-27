@@ -29,15 +29,18 @@ package struct DesktopLocalBotConfiguration: Equatable, Sendable {
 package struct DesktopLocalBotExecutionContext: Equatable, Sendable {
     package let configPath: String
     package let executablePath: String?
+    package let argumentPrefix: [String]
     package let environmentOverrides: [String: String]
 
     package init(
         configPath: String,
         executablePath: String? = nil,
+        argumentPrefix: [String] = [],
         environmentOverrides: [String: String]
     ) {
         self.configPath = configPath
         self.executablePath = executablePath
+        self.argumentPrefix = argumentPrefix
         self.environmentOverrides = environmentOverrides
     }
 }
@@ -218,14 +221,36 @@ package enum DesktopLaunchAgentExecutionContextParser {
             environmentOverrides["NODE_OPTIONS"] = nodeOptions
         }
 
-        let directExecutablePath =
-            URL(filePath: arguments[0]).lastPathComponent == "neondiff"
-                && arguments[0] != "neondiff"
-            ? URL(filePath: arguments[0]).standardizedFileURL.path
-            : nil
+        let executableName = URL(filePath: arguments[0]).lastPathComponent
+        let directExecutablePath: String?
+        let argumentPrefix: [String]
+        if executableName == "neondiff" {
+            directExecutablePath = arguments[0] == "neondiff"
+                ? nil
+                : URL(filePath: arguments[0]).standardizedFileURL.path
+            argumentPrefix = []
+        } else {
+            directExecutablePath = arguments[0].hasPrefix("/")
+                ? URL(filePath: arguments[0]).standardizedFileURL.path
+                : arguments[0]
+            let sourceRunner = workingDirectoryURL
+                .appendingPathComponent("node_modules/tsx/dist/cli.mjs")
+                .standardizedFileURL.path
+            if arguments.count >= 4,
+               URL(filePath: arguments[1]).standardizedFileURL.path == sourceRunner,
+               arguments[2] == "src/cli.ts"
+            {
+                argumentPrefix = [sourceRunner, "src/cli.ts"]
+            } else {
+                argumentPrefix = [
+                    URL(filePath: arguments[1]).standardizedFileURL.path
+                ]
+            }
+        }
         return DesktopLocalBotExecutionContext(
             configPath: configPath,
             executablePath: directExecutablePath,
+            argumentPrefix: argumentPrefix,
             environmentOverrides: environmentOverrides
         )
     }
@@ -340,6 +365,21 @@ package enum DesktopLocalBotExecutionContextResolver {
             arguments: arguments,
             executionContexts: executionContexts
         )?.executablePath
+    }
+
+    package static func resolveArguments(
+        executablePath: String,
+        arguments: [String],
+        executionContexts: [DesktopLocalBotExecutionContext]
+    ) -> [String] {
+        guard let context = matchingContext(
+            executablePath: executablePath,
+            arguments: arguments,
+            executionContexts: executionContexts
+        ) else {
+            return arguments
+        }
+        return context.argumentPrefix + arguments
     }
 
     private static func matchingContext(

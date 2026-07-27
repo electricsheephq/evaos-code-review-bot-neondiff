@@ -39,13 +39,18 @@ struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
                 arguments: arguments,
                 executionContexts: localBotExecutionContexts
             ) ?? executablePath
+        let resolvedArguments = DesktopLocalBotExecutionContextResolver.resolveArguments(
+            executablePath: executablePath,
+            arguments: arguments,
+            executionContexts: localBotExecutionContexts
+        )
         let client = NeonDiffCLIClient(
             executablePath: resolvedExecutablePath,
             workingDirectory: workingDirectory,
             environmentOverrides: environmentOverrides
         )
         return try await client.runCancellable(
-            arguments: arguments,
+            arguments: resolvedArguments,
             standardInput: standardInput,
             timeout: timeout
         )

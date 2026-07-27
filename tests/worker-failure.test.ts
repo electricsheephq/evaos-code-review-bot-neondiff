@@ -12,6 +12,7 @@ import { testLicenseAdmission } from "./helpers/license-admission.js";
 import {
   buildRepoMemoryContext,
   buildReviewApprovalRevision,
+  assertReviewApprovalRevisionCurrent,
   buildGitNexusContext,
   buildGitHubRelatedContext,
   buildSkillPackContext,
@@ -219,6 +220,34 @@ describe("worker review failures", () => {
       useZCode: false,
       zcodeAppConfigPath: zcodeConfigPath
     })).toBe(configRevision);
+  });
+
+  it("rejects a changed ZCode config before an approved review can continue", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-revision-current-"));
+    roots.push(root);
+    const zcodeConfigPath = join(root, "zcode.json");
+    const sourceConfigRevision = "b".repeat(64);
+    writeFileSync(zcodeConfigPath, "{\"provider\":\"glm\",\"endpoint\":\"one\"}\n");
+    const approvedRevision = buildReviewApprovalRevision({
+      configRevision: sourceConfigRevision,
+      useZCode: true,
+      zcodeAppConfigPath: zcodeConfigPath
+    })!;
+
+    expect(() => assertReviewApprovalRevisionCurrent({
+      approvedRevision,
+      sourceConfigRevision,
+      useZCode: true,
+      zcodeAppConfigPath: zcodeConfigPath
+    })).not.toThrow();
+
+    writeFileSync(zcodeConfigPath, "{\"provider\":\"glm\",\"endpoint\":\"two\"}\n");
+    expect(() => assertReviewApprovalRevisionCurrent({
+      approvedRevision,
+      sourceConfigRevision,
+      useZCode: true,
+      zcodeAppConfigPath: zcodeConfigPath
+    })).toThrow("review-pr provider configuration changed; run a new dry review before posting");
   });
 
   it("records ZCode hard timeouts with bounded retry metadata instead of anonymous failure text", () => {
