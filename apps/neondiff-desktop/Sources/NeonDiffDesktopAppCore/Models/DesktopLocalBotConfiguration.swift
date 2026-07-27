@@ -28,13 +28,16 @@ package struct DesktopLocalBotConfiguration: Equatable, Sendable {
 /// an exact `--config` invocation that matches this context.
 package struct DesktopLocalBotExecutionContext: Equatable, Sendable {
     package let configPath: String
+    package let executablePath: String?
     package let environmentOverrides: [String: String]
 
     package init(
         configPath: String,
+        executablePath: String? = nil,
         environmentOverrides: [String: String]
     ) {
         self.configPath = configPath
+        self.executablePath = executablePath
         self.environmentOverrides = environmentOverrides
     }
 }
@@ -215,8 +218,14 @@ package enum DesktopLaunchAgentExecutionContextParser {
             environmentOverrides["NODE_OPTIONS"] = nodeOptions
         }
 
+        let directExecutablePath =
+            URL(filePath: arguments[0]).lastPathComponent == "neondiff"
+                && arguments[0] != "neondiff"
+            ? URL(filePath: arguments[0]).standardizedFileURL.path
+            : nil
         return DesktopLocalBotExecutionContext(
             configPath: configPath,
+            executablePath: directExecutablePath,
             environmentOverrides: environmentOverrides
         )
     }
@@ -249,6 +258,9 @@ private func approvedNeonDiffDaemonInvocation(
     guard !arguments.isEmpty else { return false }
     let executableName = URL(filePath: arguments[0]).lastPathComponent
     if executableName == "neondiff" {
+        guard arguments[0] == "neondiff" || arguments[0].hasPrefix("/") else {
+            return false
+        }
         return arguments.count >= 2 && arguments[1] == "daemon"
     }
     guard executableName == "node", arguments.count >= 3 else {
@@ -311,10 +323,34 @@ package enum DesktopLocalBotExecutionContextResolver {
         arguments: [String],
         executionContexts: [DesktopLocalBotExecutionContext]
     ) -> [String: String] {
-        guard executablePath == "neondiff" else { return [:] }
+        matchingContext(
+            executablePath: executablePath,
+            arguments: arguments,
+            executionContexts: executionContexts
+        )?.environmentOverrides ?? [:]
+    }
+
+    package static func resolveExecutablePath(
+        executablePath: String,
+        arguments: [String],
+        executionContexts: [DesktopLocalBotExecutionContext]
+    ) -> String? {
+        matchingContext(
+            executablePath: executablePath,
+            arguments: arguments,
+            executionContexts: executionContexts
+        )?.executablePath
+    }
+
+    private static func matchingContext(
+        executablePath: String,
+        arguments: [String],
+        executionContexts: [DesktopLocalBotExecutionContext]
+    ) -> DesktopLocalBotExecutionContext? {
+        guard executablePath == "neondiff" else { return nil }
         let commandIsAllowed = arguments.first == "review-pr"
             || Array(arguments.prefix(2)) == ["doctor", "github"]
-        guard commandIsAllowed else { return [:] }
+        guard commandIsAllowed else { return nil }
         let configIndexes = arguments.indices.filter {
             arguments[$0] == "--config"
         }
@@ -322,16 +358,16 @@ package enum DesktopLocalBotExecutionContextResolver {
               let configIndex = configIndexes.first,
               arguments.index(after: configIndex) < arguments.endIndex
         else {
-            return [:]
+            return nil
         }
 
         let rawConfigPath = arguments[arguments.index(after: configIndex)]
-        guard rawConfigPath.hasPrefix("/") else { return [:] }
+        guard rawConfigPath.hasPrefix("/") else { return nil }
         let configPath = URL(filePath: rawConfigPath).standardizedFileURL.path
         let matches = executionContexts.filter {
             URL(filePath: $0.configPath).standardizedFileURL.path == configPath
         }
-        guard matches.count == 1 else { return [:] }
-        return matches[0].environmentOverrides
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 }

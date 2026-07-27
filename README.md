@@ -269,10 +269,12 @@ neondiff review-pr \
   --config config.local.json \
   --repo owner/name \
   --pr 123 \
+  --expected-config-revision <verified-config-revision> \
   --dry-run true \
-  --zcode false
+  --zcode true
 ```
 
+Use the exact `configRevision` returned by the successful provider verification.
 Inspect the JSON result and evidence path. Only switch to `--dry-run false`
 after setup checks, focused tests, and the relevant GitHub issue record the
 exact repo, PR, head SHA, config path, and public-safe evidence.

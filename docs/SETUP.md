@@ -413,10 +413,12 @@ neondiff review-pr \
   --config config.local.json \
   --repo owner/name \
   --pr 123 \
+  --expected-config-revision <verified-config-revision> \
   --dry-run true \
-  --zcode false
+  --zcode true
 ```
 
+Use the exact `configRevision` returned by the successful provider verification.
 Do not run with `--dry-run false` until dry-run evidence, focused tests, and
 the relevant issue explicitly approve the exact repo, PR, head SHA, and config
 path.

@@ -59,6 +59,7 @@ export interface ProcessedReviewRecord {
   pullNumber: number;
   headSha: string;
   status: ProcessedStatus;
+  configRevision?: string;
   event?: ReviewEvent;
   reviewUrl?: string;
   error?: string;
@@ -155,6 +156,7 @@ export interface ReviewHeadClaimInput {
   ownerPid?: number;
   allowProcessedOwnerSupersession?: boolean;
   requiredProcessedStatusForSupersession?: ProcessedStatus;
+  requiredProcessedConfigRevisionForSupersession?: string;
 }
 
 export type ReviewHeadClaimAttempt =
@@ -548,6 +550,7 @@ export class ReviewStateStore {
         pull_number integer not null,
         head_sha text not null,
         status text not null,
+        config_revision text,
         event text,
         review_url text,
         error text,
@@ -814,6 +817,7 @@ export class ReviewStateStore {
         owner_pid integer
       );
     `);
+    this.ensureProcessedReviewColumns();
     this.ensureIssueEnrichmentBodyHashColumn();
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
@@ -881,7 +885,7 @@ export class ReviewStateStore {
   getProcessedReview(repo: string, pullNumber: number, headSha: string): StoredProcessedReviewRecord | undefined {
     const row = this.db
       .prepare(
-        `select repo, pull_number, head_sha, status, event, review_url, error, created_at
+        `select repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at
          from processed_reviews
          where repo = ? and pull_number = ? and head_sha = ?
          limit 1`
@@ -893,7 +897,7 @@ export class ReviewStateStore {
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[] {
     const rows = this.db
       .prepare(
-        `select repo, pull_number, head_sha, status, event, review_url, error, created_at
+        `select repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at
          from processed_reviews
          where repo = ? and pull_number = ?
          order by datetime(created_at) desc`
@@ -908,14 +912,15 @@ export class ReviewStateStore {
       this.db
         .prepare(
           `insert or replace into processed_reviews
-            (repo, pull_number, head_sha, status, event, review_url, error, created_at)
-           values (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+            (repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
         )
         .run(
           record.repo,
           record.pullNumber,
           record.headSha,
           record.status,
+          record.configRevision ?? null,
           record.event ?? null,
           record.reviewUrl ?? null,
           record.error ?? null
@@ -951,23 +956,24 @@ export class ReviewStateStore {
         .get(record.repo, record.pullNumber, record.headSha);
       const processed = this.db
         .prepare(
-          "select 1 from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
+          "select status from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
         )
-        .get(record.repo, record.pullNumber, record.headSha);
-      if (activeClaim || processed) {
+        .get(record.repo, record.pullNumber, record.headSha) as { status: ProcessedStatus } | undefined;
+      if (activeClaim || (processed && processed.status !== "dry_run")) {
         this.db.exec("commit");
         return false;
       }
       this.db
         .prepare(
-          `insert into processed_reviews
-            (repo, pull_number, head_sha, status, event, review_url, error, created_at)
-           values (?, ?, ?, 'dry_run', ?, null, null, ?)`
+          `insert or replace into processed_reviews
+            (repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at)
+           values (?, ?, ?, 'dry_run', ?, ?, null, null, ?)`
         )
         .run(
           record.repo,
           record.pullNumber,
           record.headSha,
+          record.configRevision ?? null,
           record.event ?? null,
           recordedAt
         );
@@ -1617,13 +1623,22 @@ export class ReviewStateStore {
         return { status: "blocked", reason: "active_claim" };
       }
       const processed = this.db
-        .prepare("select status from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1")
-        .get(input.repo, input.pullNumber, input.headSha) as { status: ProcessedStatus } | undefined;
+        .prepare(
+          "select status, config_revision from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
+        )
+        .get(input.repo, input.pullNumber, input.headSha) as {
+          status: ProcessedStatus;
+          config_revision: string | null;
+        } | undefined;
       if (processed) {
         const allowed = input.allowProcessedOwnerSupersession &&
           (
             input.requiredProcessedStatusForSupersession === undefined ||
             processed.status === input.requiredProcessedStatusForSupersession
+          ) &&
+          (
+            input.requiredProcessedConfigRevisionForSupersession === undefined ||
+            processed.config_revision === input.requiredProcessedConfigRevisionForSupersession
           );
         if (!allowed) {
           this.db.exec("commit");
@@ -3521,6 +3536,15 @@ export class ReviewStateStore {
     this.db.close();
   }
 
+  private ensureProcessedReviewColumns(): void {
+    const columns = this.db
+      .prepare("pragma table_info(processed_reviews)")
+      .all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "config_revision")) {
+      this.db.exec("alter table processed_reviews add column config_revision text");
+    }
+  }
+
   private ensureIssueEnrichmentBodyHashColumn(): void {
     const columns = this.db.prepare("pragma table_info(issue_enrichment_records)").all() as unknown as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "body_hash")) {
@@ -3995,6 +4019,7 @@ interface ProcessedReviewRow {
   pull_number: number;
   head_sha: string;
   status: ProcessedStatus;
+  config_revision?: string | null;
   event: ReviewEvent | null;
   review_url: string | null;
   error: string | null;
@@ -4197,6 +4222,7 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     pullNumber: row.pull_number,
     headSha: row.head_sha,
     status: row.status,
+    ...(row.config_revision ? { configRevision: row.config_revision } : {}),
     ...(row.event ? { event: row.event } : {}),
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),

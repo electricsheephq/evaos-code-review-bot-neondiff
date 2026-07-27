@@ -213,6 +213,36 @@ import Testing
         ).isEmpty)
     }
 
+    @Test func preservesTheExactDirectCLIExecutableFromTheExistingLaunchAgent() throws {
+        let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
+        let executablePath = "/Users/test/.nvm/versions/node/v24.0.0/bin/neondiff"
+        let privateKeyPath = "/Users/test/.config/neondiff/app.pem"
+        let context = DesktopLaunchAgentExecutionContextParser.parse(
+            data: try propertyList(
+                label: "com.electricsheephq.evaos-code-review-bot",
+                environment: [
+                    "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+                    "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": privateKeyPath
+                ],
+                arguments: [
+                    executablePath,
+                    "daemon",
+                    "--config",
+                    configPath
+                ]
+            ),
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { $0.path == privateKeyPath }
+        )
+
+        #expect(context?.executablePath == executablePath)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: ["review-pr", "--config", configPath],
+            executionContexts: [context!]
+        ) == executablePath)
+    }
+
     @Test func acceptsPackagedCLIAndPreservesOnlyTheExactSystemCAOption() throws {
         let workingDirectory = "/Volumes/LEXAR/repos/evaos-code-review-bot"
         let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
@@ -245,6 +275,7 @@ import Testing
             "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH": privateKeyPath,
             "NODE_OPTIONS": "--use-system-ca"
         ])
+        #expect(context?.executablePath == nil)
 
         var unsafeEnvironment = baseEnvironment
         unsafeEnvironment["NODE_OPTIONS"] = "--require /tmp/injected.js"

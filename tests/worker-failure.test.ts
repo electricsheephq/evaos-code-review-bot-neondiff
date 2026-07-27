@@ -77,6 +77,42 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("preserves an approved dry proof after a live transport failure so a fresh dry run can replace it", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-live-failure-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1223, "head-approved-dry");
+    const revision = "a".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run",
+      configRevision: revision,
+      event: "COMMENT"
+    });
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("createReview transport failed"),
+      preserveExistingDryRun: true
+    });
+
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision: revision
+    });
+    state.close();
+  });
+
   it("records ZCode hard timeouts with bounded retry metadata instead of anonymous failure text", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-zcode-timeout-"));
     roots.push(root);

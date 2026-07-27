@@ -2495,6 +2495,48 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("binds dry-to-live claims to the exact config revision and permits a fresh dry proof after failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dry-proof-revision-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "r/x", pullNumber: 38, headSha: "sha-revision-bound" };
+    const revisionA = "a".repeat(64);
+    const revisionB = "b".repeat(64);
+
+    expect(store.tryRecordDryRun({
+      ...head,
+      event: "COMMENT",
+      configRevision: revisionA
+    })).toBe(true);
+    expect(store.tryClaimReviewHead({
+      ...head,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      requiredProcessedConfigRevisionForSupersession: revisionB
+    })).toBeUndefined();
+    const claim = store.tryClaimReviewHead({
+      ...head,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      requiredProcessedConfigRevisionForSupersession: revisionA
+    });
+    expect(claim).toBeDefined();
+
+    store.releaseReviewHeadClaim(claim!.claimId);
+    expect(store.tryRecordDryRun({
+      ...head,
+      event: "COMMENT",
+      configRevision: revisionB
+    })).toBe(true);
+    expect(store.getProcessedReview(head.repo, head.pullNumber, head.headSha)).toMatchObject({
+      status: "dry_run",
+      configRevision: revisionB
+    });
+    store.close();
+  });
+
   it("retires the per-head claim and refuses ordinary re-claim after the review is recorded (#295)", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-retire-"));
     roots.push(root);

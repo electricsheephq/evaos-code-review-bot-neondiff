@@ -423,6 +423,7 @@ describe("worker context budget preflight", () => {
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(416, "f".repeat(40));
     const files = [pullFile("src/a.ts", 200)];
+    const configRevision = "a".repeat(64);
     zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Approved dry-to-live finding")]);
     const github = githubForPull(pull, files);
 
@@ -433,7 +434,8 @@ describe("worker context budget preflight", () => {
       repo: "electricsheephq/WorldOS",
       pull,
       dryRun: true,
-      useZCode: true
+      useZCode: true,
+      configRevision
     });
     const liveResult = await reviewPull({
       config,
@@ -443,6 +445,7 @@ describe("worker context budget preflight", () => {
       pull,
       dryRun: false,
       useZCode: true,
+      configRevision,
       processedHeadPolicy: "approved_dry_run"
     });
 

@@ -437,6 +437,9 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             pull,
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
+            ...(options.expectedConfigRevision
+              ? { configRevision: options.expectedConfigRevision }
+              : {}),
             budget,
             licenseAdmission,
             ...(options.processedHeadPolicy
@@ -449,7 +452,15 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             result.skippedProviderCooldown += 1;
             continue;
           }
-          recordFailedReview({ config, state, repo, pull, error });
+          recordFailedReview({
+            config,
+            state,
+            repo,
+            pull,
+            error,
+            preserveExistingDryRun:
+              options.processedHeadPolicy === "approved_dry_run"
+          });
           result.failed += 1;
           continue;
         }
@@ -1335,6 +1346,7 @@ export interface ReviewPullInput {
   pull: PullRequestSummary;
   dryRun: boolean;
   useZCode: boolean;
+  configRevision?: string;
   budget?: ReviewRunBudget;
   processedHeadPolicy?: "normal" | "approved_dry_run" | "retry_failed_head";
   commandCommentId?: number;
@@ -1363,7 +1375,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
   const approvedDryRunTransition =
     input.processedHeadPolicy === "approved_dry_run" &&
-    processed?.status === "dry_run";
+    processed?.status === "dry_run" &&
+    input.configRevision !== undefined &&
+    processed.configRevision === input.configRevision;
   const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
@@ -1943,6 +1957,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         repo,
         pullNumber: pull.number,
         headSha: pull.head.sha,
+        ...(input.configRevision ? { configRevision: input.configRevision } : {}),
         event: plan.event
       });
       if (!recorded) return "skipped_processed";
@@ -1964,7 +1979,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         input.processedHeadPolicy === "approved_dry_run" ||
         input.processedHeadPolicy === "retry_failed_head",
       ...(input.processedHeadPolicy === "approved_dry_run"
-        ? { requiredProcessedStatusForSupersession: "dry_run" as const }
+        ? {
+            requiredProcessedStatusForSupersession: "dry_run" as const,
+            requiredProcessedConfigRevisionForSupersession: input.configRevision
+          }
         : {})
     });
     if (headClaimAttempt.status === "blocked") {
@@ -3218,6 +3236,7 @@ export function recordFailedReview(input: {
   pull: PullRequestSummary;
   error: unknown;
   writeErrorEvidence?: boolean;
+  preserveExistingDryRun?: boolean;
 }): string {
   const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
   const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
@@ -3237,13 +3256,15 @@ export function recordFailedReview(input: {
       recordedAt: new Date().toISOString()
     });
   }
-  input.state.recordProcessed({
-    repo: input.repo,
-    pullNumber: input.pull.number,
-    headSha: input.pull.head.sha,
-    status: "failed",
-    error: errorMessage
-  });
+  if (!(input.preserveExistingDryRun && previous?.status === "dry_run")) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "failed",
+      error: errorMessage
+    });
+  }
   return errorMessage;
 }
 

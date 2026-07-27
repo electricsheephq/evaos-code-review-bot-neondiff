@@ -33,8 +33,14 @@ struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
             arguments: arguments,
             executionContexts: localBotExecutionContexts
         )
+        let resolvedExecutablePath =
+            DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+                executablePath: executablePath,
+                arguments: arguments,
+                executionContexts: localBotExecutionContexts
+            ) ?? executablePath
         let client = NeonDiffCLIClient(
-            executablePath: executablePath,
+            executablePath: resolvedExecutablePath,
             workingDirectory: workingDirectory,
             environmentOverrides: environmentOverrides
         )
