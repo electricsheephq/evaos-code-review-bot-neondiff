@@ -400,7 +400,8 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     if (args._[1] === "github") {
       const credentials = await resolveDoctorGitHubCredentials(args, process.stdin);
-      const result = await buildDoctorGithubReport(config, credentials);
+      const requestedRepo = args.repo ? parseSingleArg(args.repo, "--repo") : undefined;
+      const result = await buildDoctorGithubReport(config, credentials, requestedRepo);
       console.log(stringifyRedactedJson(result));
       if (!result.ok) process.exitCode = 1;
       return;
@@ -2499,8 +2500,9 @@ function validateReviewPrRepoAllowed(config: ReturnType<typeof loadConfig>, repo
 }
 
 function canonicalRepoNameForCli(repo: string): string {
-  const [owner, name] = repo.split("/");
-  return `${owner?.toLowerCase() ?? ""}/${name?.toLowerCase() ?? ""}`;
+  const [owner, name, extra] = repo.trim().split("/");
+  if (extra !== undefined || !owner || !name) return "";
+  return `${owner.toLowerCase()}/${name.toLowerCase()}`;
 }
 
 function validateInitForceTarget(configPath: string): string | undefined {
@@ -2963,7 +2965,11 @@ type DoctorGitHubCredentialOverride = {
   source: "stdin";
 };
 
-async function buildDoctorGithubReport(config: BotConfig, credentials?: DoctorGitHubCredentialOverride) {
+async function buildDoctorGithubReport(
+  config: BotConfig,
+  credentials?: DoctorGitHubCredentialOverride,
+  requestedRepo?: string
+) {
   const github = new GitHubApi(credentials
     ? {
         ...config.github,
@@ -2972,7 +2978,7 @@ async function buildDoctorGithubReport(config: BotConfig, credentials?: DoctorGi
         privateKeyPath: undefined
       }
     : config.github);
-  const monitoredRepos = listReposToScan(config);
+  const monitoredRepos = resolveDoctorGitHubRepos(config, requestedRepo);
   const readChecks = [];
   let activeRepoChecks = 0;
   const appCredentialsConfigured = github.canPostAsApp();
@@ -3040,9 +3046,15 @@ async function buildDoctorGithubReport(config: BotConfig, credentials?: DoctorGi
     }
   }
 
-  const issueReadChecks = await collectIssueEnrichmentReadChecks(config, github);
-  const issueEnrichment = buildIssueEnrichmentStatus({
+  const issueReadChecks = await collectIssueEnrichmentReadChecks(
     config,
+    github,
+    requestedRepo ? monitoredRepos : undefined
+  );
+  const issueEnrichment = buildIssueEnrichmentStatus({
+    config: requestedRepo
+      ? scopeDoctorIssueEnrichmentConfig(config, monitoredRepos)
+      : config,
     canPostAsApp: appCredentialsConfigured,
     issueReadChecks
   });
@@ -3094,6 +3106,64 @@ async function buildDoctorGithubReport(config: BotConfig, credentials?: DoctorGi
       ...(activeRepoChecks > 0 ? [] : ["Add at least one enabled repo to pilotRepos or repoProfiles before using this as an install proof."]),
       ...(readChecks.some((check) => !check.ok) ? ["Confirm the GitHub App is installed on selected repositories with the required repository permissions."] : [])
     ]
+  };
+}
+
+function resolveDoctorGitHubRepos(config: BotConfig, requestedRepo?: string): string[] {
+  const configuredRepos = listReposToScan(config);
+  if (!requestedRepo) return configuredRepos;
+
+  const requestedCanonical = canonicalRepoNameForCli(requestedRepo);
+  if (!requestedCanonical) {
+    throw new Error("doctor github --repo must be exactly one GitHub owner/repo name");
+  }
+  const configuredRepo = configuredRepos.find(
+    (repo) => canonicalRepoNameForCli(repo) === requestedCanonical
+  );
+  if (!configuredRepo) {
+    throw new Error(
+      `doctor github --repo must be present in configured repos: ${configuredRepos.join(", ") || "(none)"}`
+    );
+  }
+  const policy = resolveRepoProfile(config, configuredRepo);
+  if (!policy.allowed) {
+    throw new Error(`doctor github --repo is blocked by repo policy: ${policy.reason}`);
+  }
+  return [configuredRepo];
+}
+
+function scopeDoctorIssueEnrichmentConfig(config: BotConfig, monitoredRepos: string[]): BotConfig {
+  const issueEnrichment = config.issueEnrichment;
+  if (!issueEnrichment) return config;
+
+  const monitored = new Set(monitoredRepos.map(canonicalRepoNameForCli));
+  const allowlist = issueEnrichment.allowlist.filter((repo) =>
+    monitored.has(canonicalRepoNameForCli(repo))
+  );
+  if (allowlist.length === 0) {
+    return {
+      ...config,
+      issueEnrichment: {
+        ...issueEnrichment,
+        enabled: false,
+        allowlist: [],
+        repos: {}
+      }
+    };
+  }
+
+  const repos = Object.fromEntries(
+    Object.entries(issueEnrichment.repos ?? {}).filter(([repo]) =>
+      monitored.has(canonicalRepoNameForCli(repo))
+    )
+  );
+  return {
+    ...config,
+    issueEnrichment: {
+      ...issueEnrichment,
+      allowlist,
+      repos
+    }
   };
 }
 
@@ -3204,13 +3274,16 @@ function licenseGateDecisionForVisibility(
 
 async function collectIssueEnrichmentReadChecks(
   config: BotConfig,
-  github: GitHubApi
+  github: GitHubApi,
+  repoScope?: string[]
 ): Promise<IssueEnrichmentRepoReadCheck[]> {
   const issueConfig = config.issueEnrichment;
   if (!issueConfig || issueConfig.allowlist.length === 0) return [];
   const canRead = github.canPostAsApp() || Boolean(config.github.token);
   const checks: IssueEnrichmentRepoReadCheck[] = [];
+  const scopedRepos = repoScope?.map(canonicalRepoNameForCli);
   for (const repo of issueConfig.allowlist) {
+    if (scopedRepos && !scopedRepos.includes(canonicalRepoNameForCli(repo))) continue;
     const policy = resolveIssueEnrichmentRepoPolicy(issueConfig, repo);
     if (!policy.allowed) {
       checks.push({ repo, ok: true, skippedByPolicy: policy.reason });

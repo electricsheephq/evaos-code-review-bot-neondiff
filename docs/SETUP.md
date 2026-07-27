@@ -373,10 +373,12 @@ Keychain, select and apply one repository, and verify that installation without
 an operator editing local files. For a reconciled existing worker with a
 multi-repository allowlist, choose one **Review Target** in the repository
 table; this binds activation without changing the worker's other configured
-repositories. The native app can run one scoped dry review through the exact
-matched local agent, then offer a confirmed live post pinned to that dry-run
-head. It still does not start the multi-repository daemon or rewrite its
-allowlist. The managed B1 broker remains a separate path.
+repositories. Current-access verification uses `doctor github --repo` for that
+one selected target, while the default CLI command without `--repo` continues
+to inspect the complete configured allowlist. The native app can run one scoped
+dry review through the exact matched local agent, then offer a confirmed live
+post pinned to that dry-run head. It still does not start the multi-repository
+daemon or rewrite its allowlist. The managed B1 broker remains a separate path.
 The dashboard shows license status, GitHub App status, daemon status, and
 provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing

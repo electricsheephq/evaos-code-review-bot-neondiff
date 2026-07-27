@@ -155,7 +155,7 @@ directory:
 
 ```bash
 NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.json"
-neondiff doctor github --config "$NATIVE_CONFIG" --json
+neondiff doctor github --config "$NATIVE_CONFIG" --repo owner/repo --json
 ```
 
 CLI-first and non-Mac setups may instead use the checkout-local path documented
@@ -165,10 +165,13 @@ in [SETUP.md](SETUP.md):
 neondiff doctor github --config config.local.json --json
 ```
 
-The command verifies App credential presence, App installation visibility, and
-repo read access for the enabled repos in your local config. It does not run
-ZCode, call a model provider, post comments, print tokens, or print the private
-key path.
+The scoped command verifies App credential presence, App installation
+visibility, and repo read access for that exact configured repository. The
+native app uses this form when a reconciled existing worker has a larger
+allowlist, so current-access proof remains bounded to the selected Review Target
+without rewriting the worker. Omit `--repo` for the CLI-first full-allowlist
+doctor. Neither form runs ZCode, calls a model provider, posts comments, prints
+tokens, or prints the private key path.
 
 Before starting a long-running daemon, also follow the worktree-cleanup setup in
 [SETUP.md](SETUP.md): install the full `lsof` utility, and keep the configured

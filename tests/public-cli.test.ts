@@ -1320,7 +1320,7 @@ exit 1
     });
   });
 
-  it("doctor github proves App installation reads without printing secrets", async () => {
+  it("doctor github can scope App installation proof to one configured repo", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-"));
     roots.push(root);
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -1365,7 +1365,7 @@ exit 1
       const address = server.address() as AddressInfo;
       const configPath = join(root, "config.json");
       writeFileSync(configPath, `${JSON.stringify({
-        pilotRepos: ["acme/demo"],
+        pilotRepos: ["acme/demo", "acme/other"],
         workRoot: join(root, "runtime"),
         statePath: join(root, "state.sqlite"),
         evidenceDir: join(root, "evidence"),
@@ -1384,19 +1384,31 @@ exit 1
         },
         issueEnrichment: {
           enabled: true,
-          postIssueComment: false,
-          allowlist: ["acme/demo"],
+          postIssueComment: true,
+          allowlist: ["acme/demo", "acme/other"],
           maxIssuesPerCycle: 1,
-          maxCommentsPerCycle: 0,
+          maxCommentsPerCycle: 1,
           cooldownMs: 3_600_000,
           burstWindowMs: 3_600_000,
           maxIssuesPerBurst: 3,
           lookbackMs: 600_000,
-          processExistingOpenIssuesOnActivation: false
+          processExistingOpenIssuesOnActivation: false,
+          repos: {
+            "acme/demo": {
+              maxIssuesPerCycle: 1,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 1,
+              lookbackMs: 600_000
+            }
+          }
         }
       })}\n`);
 
-      const { stdout } = await runCli(["doctor", "github", "--config", configPath], {
+      const { stdout } = await runCli([
+        "doctor", "github", "--config", configPath, "--repo", "acme/demo"
+      ], {
         env: {
           NEONDIFF_GITHUB_APP_ID: "12345",
           NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: privateKeyPath
@@ -1407,6 +1419,7 @@ exit 1
       expect(output).toMatchObject({
         ok: true,
         command: "doctor github",
+        monitoredRepos: ["acme/demo"],
         activeRepoChecks: 1,
         appCredentials: {
           appIdConfigured: true,
@@ -1434,7 +1447,9 @@ exit 1
         }
       });
       expect(output.issueEnrichment).toMatchObject({
-        state: "dry_run_only",
+        state: "ready",
+        allowlist: ["acme/demo"],
+        liveThresholdsMissingRepos: [],
         readChecks: [
           {
             repo: "acme/demo",
@@ -1461,6 +1476,8 @@ exit 1
         "github",
         "--config",
         configPath,
+        "--repo",
+        "acme/demo",
         "--github-app-id",
         "12345",
         "--github-app-private-key-stdin",
@@ -1495,6 +1512,39 @@ exit 1
     } finally {
       await closeServer(server);
     }
+  });
+
+  it("doctor github rejects malformed, unconfigured, and policy-disabled repository scopes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-scope-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/demo", "acme/disabled"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      repoProfiles: {
+        repos: {
+          "acme/disabled": { enabled: false }
+        }
+      }
+    })}\n`);
+
+    await expect(runCli([
+      "doctor", "github", "--config", configPath, "--repo", "acme/demo/extra"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("must be exactly one GitHub owner/repo name")
+    });
+    await expect(runCli([
+      "doctor", "github", "--config", configPath, "--repo", "acme/unconfigured"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("must be present in configured repos")
+    });
+    await expect(runCli([
+      "doctor", "github", "--config", configPath, "--repo", "acme/disabled"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("is blocked by repo policy")
+    });
   });
 
   it("doctor github rejects an invalid App ID before consuming an open secret stdin", async () => {

@@ -3101,9 +3101,22 @@ package final class NeonDiffDesktopModel: ObservableObject {
             byoGitHubCredentialStatus = lastError ?? "Local agent unavailable"
             return
         }
+        guard let targetRepository = selectedBYOReviewRepository,
+              repos.contains(where: {
+                  $0.enabled
+                      && $0.name.caseInsensitiveCompare(targetRepository)
+                          == .orderedSame
+              })
+        else {
+            lastError =
+                "Select one configured review target before verifying current App access."
+            byoGitHubCredentialStatus = lastError ?? "Review target required"
+            return
+        }
         let arguments = [
             "doctor", "github",
             "--config", configPath,
+            "--repo", targetRepository,
             "--json"
         ]
         let verificationContext = BYOGitHubVerificationContext(
@@ -3112,7 +3125,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             credentialRevision: byoGitHubCredentialRevision,
             cliPath: cliPath,
             configPath: configPath,
-            repositories: repos.filter(\.enabled).map(\.name).sorted(),
+            repositories: [targetRepository],
             workspaceGeneration: workspaceContextGeneration
         )
         let executablePath = cliPath
@@ -3120,7 +3133,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         isBYOGitHubVerificationInProgress = true
         byoGitHubCredentialsVerified = false
         lastError = nil
-        lastCommandLine = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --json"
+        lastCommandLine =
+            "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --repo \(shellQuote(targetRepository)) --json"
         byoGitHubCredentialStatus =
             "Verifying current App installation access through the exact existing local agent…"
 
@@ -3178,16 +3192,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
             }
         case .existingLocalAgent:
             currentContext = existingLocalAgentAccessAvailable
-                ? selectedBotInstallation.map { bot in
-                    BYOGitHubVerificationContext(
-                        appId: String(bot.appID),
-                        source: .existingLocalAgent,
-                        credentialRevision: byoGitHubCredentialRevision,
-                        cliPath: cliPath,
-                        configPath: configPath,
-                        repositories: repos.filter(\.enabled).map(\.name).sorted(),
-                        workspaceGeneration: workspaceContextGeneration
-                    )
+                ? selectedBotInstallation.flatMap { bot in
+                    selectedBYOReviewRepository.map { targetRepository in
+                        BYOGitHubVerificationContext(
+                            appId: String(bot.appID),
+                            source: .existingLocalAgent,
+                            credentialRevision: byoGitHubCredentialRevision,
+                            cliPath: cliPath,
+                            configPath: configPath,
+                            repositories: [targetRepository],
+                            workspaceGeneration: workspaceContextGeneration
+                        )
+                    }
                 }
                 : nil
         }
