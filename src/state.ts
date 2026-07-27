@@ -120,6 +120,7 @@ export interface RepoActivationRecord {
 export const ACTIVATION_BASELINE_EXISTING_HEAD_ERROR = "activation_baseline_existing_head";
 export const EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR = "exact_authorization_already_consumed";
 export const POST_REVIEW_HEAD_UNVERIFIED_ERROR = "post_review_head_unverified";
+export const APPROVED_DRY_RUN_LIVE_CLAIM_ERROR = "approved_dry_run_consumed_for_live_post";
 export const REVIEW_POSTED_HEAD_CHANGED_ERROR = "review_posted_head_changed";
 
 export function isActivationBaselineProcessedReview(
@@ -157,6 +158,7 @@ export interface ReviewHeadClaimInput {
   allowProcessedOwnerSupersession?: boolean;
   requiredProcessedStatusForSupersession?: ProcessedStatus;
   requiredProcessedConfigRevisionForSupersession?: string;
+  consumeProcessedApprovalOnAcquire?: boolean;
 }
 
 export type ReviewHeadClaimAttempt =
@@ -1650,6 +1652,32 @@ export class ReviewStateStore {
           "insert into review_head_claims (repo, pull_number, head_sha, claim_id, owner_pid, claimed_at, expires_at) values (?, ?, ?, ?, ?, ?, ?)"
         )
         .run(input.repo, input.pullNumber, input.headSha, claimId, ownerPid, claimedAt, expiresAt);
+      if (input.consumeProcessedApprovalOnAcquire) {
+        if (
+          input.requiredProcessedStatusForSupersession === undefined ||
+          input.requiredProcessedConfigRevisionForSupersession === undefined
+        ) {
+          throw new Error("consuming a processed approval requires exact status and configuration revision");
+        }
+        const consumed = this.db
+          .prepare(
+            `update processed_reviews
+             set status = 'skipped', error = ?, created_at = datetime('now')
+             where repo = ? and pull_number = ? and head_sha = ?
+               and status = ? and config_revision = ?`
+          )
+          .run(
+            APPROVED_DRY_RUN_LIVE_CLAIM_ERROR,
+            input.repo,
+            input.pullNumber,
+            input.headSha,
+            input.requiredProcessedStatusForSupersession,
+            input.requiredProcessedConfigRevisionForSupersession
+          );
+        if (consumed.changes !== 1) {
+          throw new Error("processed approval changed before it could be consumed");
+        }
+      }
       this.db.exec("commit");
       return { status: "acquired", claim: { claimId, expiresAt, ownerPid } };
     } catch (error) {

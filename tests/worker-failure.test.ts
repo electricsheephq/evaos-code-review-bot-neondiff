@@ -114,6 +114,51 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("keeps a consumed live approval non-retryable after post transport failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-consumed-live-failure-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1225, "head-consumed-approved-dry");
+    const revision = "b".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision: revision,
+      event: "COMMENT",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("createReview transport failed"),
+      preserveExistingDryRun: true
+    });
+
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      configRevision: revision,
+      error: expect.stringContaining("approved_dry_run_consumed_for_live_post")
+    });
+    expect(() => prepareFailedHeadRetry({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      livePull: pull
+    })).toThrow("not failed/provider-cooldown");
+    state.close();
+  });
+
   it("never replaces a durable posted receipt with a generic failure row", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-posted-receipt-"));
     roots.push(root);

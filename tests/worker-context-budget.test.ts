@@ -591,6 +591,27 @@ describe("worker context budget preflight", () => {
     expect((caught as Error).message).toContain(
       "review posted but its durable receipt could not be recorded"
     );
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      configRevision,
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+    expect(await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "approved_dry_run"
+    })).toBe("skipped_processed");
+    expect(createdReviews).toHaveLength(1);
     persistence.mockRestore();
     expect(recoverPostedReviewReceipt({
       state,

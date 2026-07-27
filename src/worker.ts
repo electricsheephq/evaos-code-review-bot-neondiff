@@ -85,6 +85,7 @@ import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skil
 import { writeSecureFileSync } from "./temp-files.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  APPROVED_DRY_RUN_LIVE_CLAIM_ERROR,
   EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
   POST_REVIEW_HEAD_UNVERIFIED_ERROR,
   REVIEW_POSTED_HEAD_CHANGED_ERROR,
@@ -2038,7 +2039,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       ...(input.processedHeadPolicy === "approved_dry_run"
         ? {
             requiredProcessedStatusForSupersession: "dry_run" as const,
-            requiredProcessedConfigRevisionForSupersession: input.configRevision
+            requiredProcessedConfigRevisionForSupersession: input.configRevision,
+            consumeProcessedApprovalOnAcquire: true
           }
         : {})
     });
@@ -3320,6 +3322,21 @@ export function recordFailedReview(input: {
     previousError: previous?.error,
     timeoutMs: input.config.zcode.timeoutMs ?? 180_000
   }) ?? rawErrorMessage;
+  if (
+    previous?.status === "skipped" &&
+    previous.error?.startsWith(APPROVED_DRY_RUN_LIVE_CLAIM_ERROR)
+  ) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "skipped",
+      ...(previous.configRevision ? { configRevision: previous.configRevision } : {}),
+      ...(previous.event ? { event: previous.event } : {}),
+      error: `${APPROVED_DRY_RUN_LIVE_CLAIM_ERROR}; post_error=${errorMessage}`
+    });
+    return errorMessage;
+  }
   if (input.writeErrorEvidence !== false) {
     mkdirSync(evidenceDir, { recursive: true });
     writeRedactedJson(join(evidenceDir, "review-error.json"), {
