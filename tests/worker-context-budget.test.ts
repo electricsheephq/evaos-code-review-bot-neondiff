@@ -672,6 +672,62 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("fails closed without throwing when posted-review receipt recovery cannot persist", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-recovered-receipt-persistence-failed-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(420, "d".repeat(40));
+    mkdirSync(join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha
+    ), { recursive: true });
+    const error = Object.assign(new Error("receipt persistence failed"), {
+      reviewAlreadyPosted: true,
+      receipt: {
+        event: "COMMENT" as const,
+        reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/420#pullrequestreview-1",
+        preserveExistingBlocking: false
+      }
+    });
+    const getPull = vi.fn(async () => pullSummary(420, pull.head.sha));
+    const persistence = vi.spyOn(state, "recordProcessed").mockImplementation(() => {
+      throw new Error("state write still unavailable");
+    });
+
+    await expect(recoverPostedReviewReceiptForCurrentHead({
+      config,
+      github: { getPull },
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error
+    })).resolves.toBe("posted_head_unverified");
+    expect(getPull).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "post-receipt-recovery-persistence-failed.json"
+    ), "utf8"))).toMatchObject({
+      reason: "post_receipt_recovery_persistence_failed",
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 420,
+      expectedHeadSha: pull.head.sha,
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/420#pullrequestreview-1",
+      error: "state write still unavailable"
+    });
+    persistence.mockRestore();
+    state.close();
+  });
+
   it("withholds current-head success when recovered receipt head verification is unavailable", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-recovered-receipt-unverified-head-"));
     roots.push(root);

@@ -3552,12 +3552,26 @@ export async function recoverPostedReviewReceiptForCurrentHead(input: {
     priorPosted.event === "REQUEST_CHANGES" &&
     !priorPosted.error
   );
-  recoverPostedReviewReceipt(input);
-
   const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, {
     action: "none",
     shouldReview: false
   });
+  try {
+    recoverPostedReviewReceipt(input);
+  } catch (recoveryError) {
+    writeRedactedJsonBestEffort(join(evidenceDir, "post-receipt-recovery-persistence-failed.json"), {
+      reason: "post_receipt_recovery_persistence_failed",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      reviewUrl: receipt?.reviewUrl,
+      error: redactSecrets(
+        recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
+      ).slice(0, 300)
+    });
+    return "posted_head_unverified";
+  }
+
   let liveHeadSha: string | undefined;
   let lookupError: unknown;
   try {
