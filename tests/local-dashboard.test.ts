@@ -366,6 +366,14 @@ describe("local HTML dashboard", () => {
     expect(verification.ok).toBe(true);
     expect(verification.configRevision).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(verification)).not.toContain(fakeKey);
+
+    const statusResponse = await fetch(new URL("/api/status", handle.url));
+    const status = await statusResponse.json() as {
+      config: { exists: boolean; source: string };
+      providers: { defaultProviderId: string };
+    };
+    expect(status.config).toEqual({ path: configPath, exists: true, source: "file" });
+    expect(status.providers.defaultProviderId).toBe("openai-compatible");
   });
 
   it("renders status from the same changed config snapshot that provider verification accepted", async () => {

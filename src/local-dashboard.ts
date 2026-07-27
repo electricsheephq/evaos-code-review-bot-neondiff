@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
-import type { BotConfig } from "./config.js";
+import { loadConfigFromObject, type BotConfig } from "./config.js";
 import { loadConfigAtRevision } from "./config-cli.js";
 import { getLicenseStatus, type LicenseStatusResult } from "./license.js";
 import { isAuthenticProductionLicenseAdmission, requireActiveProductionLicense } from "./license-admission.js";
@@ -684,10 +684,11 @@ export async function startLocalDashboardServer(input: {
 }): Promise<LocalDashboardServerHandle> {
   let latestVerification: ProviderApiKeyVerificationResult | undefined;
   let statusConfig = input.config;
+  let statusConfigExists = input.configExists;
   let status = await buildLocalDashboardStatus({
     config: statusConfig,
     configPath: input.configPath,
-    configExists: input.configExists,
+    configExists: statusConfigExists,
     launchdLabel: input.launchdLabel,
     providerVerification: latestVerification
   });
@@ -698,7 +699,7 @@ export async function startLocalDashboardServer(input: {
         status = await buildLocalDashboardStatus({
           config: statusConfig,
           configPath: input.configPath,
-          configExists: input.configExists,
+          configExists: statusConfigExists,
           launchdLabel: input.launchdLabel,
           providerVerification: latestVerification
         });
@@ -709,7 +710,7 @@ export async function startLocalDashboardServer(input: {
         status = await buildLocalDashboardStatus({
           config: statusConfig,
           configPath: input.configPath,
-          configExists: input.configExists,
+          configExists: statusConfigExists,
           launchdLabel: input.launchdLabel,
           providerVerification: latestVerification
         });
@@ -747,15 +748,35 @@ export async function startLocalDashboardServer(input: {
         const configSnapshot = existsSync(input.configPath)
           ? loadConfigAtRevision(input.configPath)
           : undefined;
+        if (!configSnapshot) {
+          statusConfig = loadConfigFromObject({});
+          statusConfigExists = false;
+          latestVerification = redactedVerification({
+            ok: false,
+            command: "dashboard verify-provider",
+            checkedAt: new Date().toISOString(),
+            providerId: readOptionalString(body, "providerId")
+              ?? input.config.providers!.defaultProviderId,
+            state: "blocked",
+            mode: "metadata_only",
+            detail: "The NeonDiff config file is missing. Initialize or restore it before provider verification.",
+            redacted: true,
+            troubleshooting: [
+              "Initialize or restore the config file, reload the dashboard, and repeat provider verification."
+            ]
+          });
+          writeResponse(response, 422, "application/json; charset=utf-8", stringifyRedactedJson(latestVerification));
+          return;
+        }
         const verification = await verifyProviderApiKey({
-          config: configSnapshot?.config ?? input.config,
+          config: configSnapshot.config,
           providerId: readOptionalString(body, "providerId"),
           apiKey: readOptionalString(body, "apiKey"),
           allowRemoteSmoke: readOptionalBoolean(body, "allowRemoteSmoke") || input.allowRemoteSmoke === true
         });
-        if (configSnapshot) {
-          const currentRevision = loadConfigAtRevision(input.configPath).revision;
-          latestVerification = currentRevision === configSnapshot.revision
+        {
+          const currentSnapshot = loadConfigAtRevision(input.configPath);
+          latestVerification = currentSnapshot.revision === configSnapshot.revision
             ? { ...verification, configRevision: configSnapshot.revision }
             : {
                 ...verification,
@@ -766,11 +787,12 @@ export async function startLocalDashboardServer(input: {
                   "Reload the dashboard and repeat provider verification against the current configuration."
                 ]
               };
-          if (currentRevision === configSnapshot.revision) {
+          statusConfigExists = true;
+          if (currentSnapshot.revision === configSnapshot.revision) {
             statusConfig = configSnapshot.config;
+          } else {
+            statusConfig = currentSnapshot.config;
           }
-        } else {
-          latestVerification = verification;
         }
         writeResponse(response, latestVerification.ok ? 200 : 422, "application/json; charset=utf-8", stringifyRedactedJson(latestVerification));
         return;

@@ -396,7 +396,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// review. A multi-repository worker cannot be started from the native app
     /// until its runtime scope can be narrowed without rewriting the allowlist.
     package var productionDaemonStartAvailable: Bool {
-        productionUsefulWorkAvailable && reviewTargetRuntimeReady
+        productionUsefulWorkAvailable
+            && reviewTargetRuntimeReady
+            && scopedReviewProviderReady
     }
 
     package var scopedLiveReviewConfirmationAvailable: Bool {

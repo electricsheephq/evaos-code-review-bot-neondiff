@@ -557,6 +557,23 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func scopedReviewRejectsAMissingExplicitZCodeProviderBinding() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(
+            existingBotConfig(
+                authMode: "zcode-app-config",
+                zcodeProviderId: nil
+            )
+        )
+
+        #expect(fixture.model.providerSetupReady)
+        #expect(!fixture.model.scopedReviewProviderReady)
+    }
+
+    @MainActor
     @Test func selectedExistingBYOBotReusesKeychainCredentialForReverification() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -1041,6 +1058,34 @@ import NeonDiffDesktopCore
         }
         #expect(fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.providerSetupReady)
+        #expect(fixture.model.productionDaemonStartAvailable)
+
+        fixture.loadConfig(existingBotConfig(
+            authMode: "api-key-env",
+            repositories: [repository]
+        ))
+        fixture.model.providers.providerKeyStored = true
+        fixture.model.providerVerification = ProviderVerificationSnapshot(
+            ok: true,
+            command: "providers verify",
+            providerId: "zcode-glm",
+            checkedAt: "2026-07-27T00:00:00Z",
+            state: .healthy,
+            mode: "live",
+            detail: "Provider accepted current verification.",
+            troubleshooting: [],
+            configRevision: String(repeating: "a", count: 64)
+        )
+
+        #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.providerSetupReady)
+        #expect(!fixture.model.scopedReviewProviderReady)
+        #expect(!fixture.model.productionDaemonStartAvailable)
+
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [repository]
+        ))
 
         fixture.model.onboardingFlow.currentStep = .done
         fixture.model.advanceOnboarding()
@@ -1169,10 +1214,13 @@ import NeonDiffDesktopCore
     private func existingBotConfig(
         authMode: String,
         repositories: [String] = ["electricsheephq/WorldOS"],
-        zcodeProviderId: String = "zcode-glm",
+        zcodeProviderId: String? = "zcode-glm",
         revision: String = String(repeating: "a", count: 64)
     ) -> String {
         let adapter = authMode == "zcode-app-config" ? "zcode" : "openai-compatible"
+        let zcodeProviderEntry = zcodeProviderId.map {
+            #""providerId": "\#($0)","#
+        } ?? ""
         let repositoryJSON = repositories
             .map { "\"\($0)\"" }
             .joined(separator: ", ")
@@ -1184,7 +1232,7 @@ import NeonDiffDesktopCore
           "config": {
             "pilotRepos": [\#(repositoryJSON)],
             "zcode": {
-              "providerId": "\#(zcodeProviderId)",
+              \#(zcodeProviderEntry)
               "model": "GLM-5.2",
               "cliPath": "zcode",
               "appConfigPath": "zcode.json"
@@ -1322,6 +1370,12 @@ private func existingBotConfigResult(
           "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "config": {
             "pilotRepos": ["\#(repository)"],
+            "zcode": {
+              "providerId": "zcode-glm",
+              "model": "GLM-5.2",
+              "cliPath": "zcode",
+              "appConfigPath": "zcode.json"
+            },
             "providers": {
               "defaultProviderId": "zcode-glm",
               "providers": {
