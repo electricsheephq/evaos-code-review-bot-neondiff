@@ -40,7 +40,11 @@ struct ActivationStateView: View {
                 .font(.system(.headline, design: .monospaced).weight(.bold))
                 .foregroundStyle(presentation.isSuccess ? palette.accentPrimary : palette.textPrimary)
 
-            Text(presentation.cause)
+            Text(
+                model.activationTargetSelectionRequired
+                    ? "Choose one Review Target in Repositories before activating. The existing worker allowlist will remain unchanged."
+                    : presentation.cause
+            )
                 .font(NDFont.mono)
                 .foregroundStyle(palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -50,7 +54,13 @@ struct ActivationStateView: View {
             }
 
             HStack(spacing: 12) {
-                if let recovery = presentation.recovery {
+                if model.activationTargetSelectionRequired {
+                    Button("Choose review target") {
+                        model.reviewActivationTargetSelection()
+                    }
+                    .buttonStyle(NDBracketButtonStyle())
+                    .accessibilityIdentifier("neondiff.activation.choose-review-target")
+                } else if let recovery = presentation.recovery {
                     Button(recovery.label) {
                         Task { await model.performActivationRecovery() }
                     }

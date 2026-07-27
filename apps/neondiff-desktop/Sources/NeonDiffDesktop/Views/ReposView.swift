@@ -192,6 +192,29 @@ struct ReposView: View {
                         .disabled(model.managedGitHubAvailable)
                         .accessibilityIdentifier("neondiff-repo-toggle-\(repo.name)")
                     }
+                    TableColumn("Review Target") { repo in
+                        if model.byoGitHubCredentialOnboardingAvailable {
+                            let isSelected = model.selectedBYOReviewRepository?
+                                .caseInsensitiveCompare(repo.name) == .orderedSame
+                            Button {
+                                model.selectBYOReviewRepository(fullName: repo.name)
+                            } label: {
+                                Image(systemName: isSelected ? "scope" : "circle")
+                                    .foregroundStyle(
+                                        isSelected
+                                            ? NeonDiffTheme.accent
+                                            : NeonDiffTheme.textSecondary
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!repo.enabled)
+                            .accessibilityLabel("Use \(repo.name) as the review target")
+                            .accessibilityIdentifier("neondiff-repo-review-target-\(repo.name)")
+                        } else {
+                            Text("—")
+                                .foregroundStyle(NeonDiffTheme.textSecondary)
+                        }
+                    }
                     TableColumn("Profile", value: \.profile)
                     TableColumn("Access") { repo in
                         if let cue = model.githubAccessCue(for: repo) {
@@ -221,6 +244,20 @@ struct ReposView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .frame(height: 360)
+
+                if model.byoGitHubCredentialOnboardingAvailable {
+                    if let selectedRepository = model.selectedBYOReviewRepository {
+                        Text("Native activation and the next review are bound to \(selectedRepository). The existing worker allowlist remains unchanged.")
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.accent)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if model.repos.filter(\.enabled).count > 1 {
+                        Text("Choose one Review Target above before activation. This does not remove or disable any repository in the existing worker.")
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
 
                 if !model.managedGitHubAvailable {
                     HStack(spacing: 10) {

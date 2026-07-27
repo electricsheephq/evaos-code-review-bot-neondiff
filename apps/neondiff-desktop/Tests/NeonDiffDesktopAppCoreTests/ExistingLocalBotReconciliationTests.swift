@@ -121,6 +121,114 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func persistedReviewTargetActivatesWithoutCollapsingExistingMultiRepoAllowlist() async throws {
+        let targetRepository = "electricsheephq/WorldOS"
+        let otherRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let boundary = DesktopProductionBoundary.resolve(infoDictionary: [
+            "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+            "NeonDiffBYOGitHubEnabled": true
+        ])
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: """
+                {"command":"license activate","ok":true,"status":"active","source":"api",
+                 "checkedAt":"2026-07-27T00:00:00.000Z",
+                 "entitlement":{"status":"active","repoVisibilityScope":"private",
+                 "privateRepoAllowed":true,"updateEntitlement":true}}
+                """,
+                stderr: ""
+            ))],
+            preferenceStrings: [
+                "neondiff.byoReviewRepository.v1": targetRepository
+            ],
+            productionBoundary: boundary
+        )
+        fixture.preferences.set(
+            fixture.model.configPath,
+            forKey: "neondiff.byoReviewRepositoryConfigPath.v1"
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [targetRepository, otherRepository]
+        ))
+        fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        await fixture.model.submitActivation()
+
+        let call = try #require(fixture.cli.calls.first)
+        #expect(call.arguments.contains("--repo"))
+        #expect(call.arguments.contains(targetRepository))
+        #expect(!call.arguments.contains(otherRepository))
+        #expect(fixture.model.repos.filter(\.enabled).count == 2)
+        #expect(fixture.model.currentRepositoryActivationReady)
+        #expect(fixture.model.activationState == .active)
+    }
+
+    @MainActor
+    @Test func selectingReviewTargetPersistsExactConfigContextWithoutChangingAllowlist() {
+        let firstRepository = "electricsheephq/WorldOS"
+        let targetRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [firstRepository, targetRepository]
+        ))
+        let enabledBefore = fixture.model.repos.filter(\.enabled).map(\.name)
+
+        fixture.model.selectBYOReviewRepository(fullName: targetRepository)
+
+        #expect(fixture.model.selectedBYOReviewRepository == targetRepository)
+        #expect(fixture.model.selectedReviewRepository == targetRepository)
+        #expect(fixture.model.repos.filter(\.enabled).map(\.name) == enabledBefore)
+        #expect(
+            fixture.preferences.string(
+                forKey: "neondiff.byoReviewRepository.v1"
+            ) == targetRepository
+        )
+        #expect(
+            fixture.preferences.string(
+                forKey: "neondiff.byoReviewRepositoryConfigPath.v1"
+            ) == fixture.model.configPath
+        )
+    }
+
+    @MainActor
+    @Test func persistedReviewTargetFromAnotherConfigFailsClosed() async {
+        let targetRepository = "electricsheephq/WorldOS"
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            preferenceStrings: [
+                "neondiff.byoReviewRepository.v1": targetRepository,
+                "neondiff.byoReviewRepositoryConfigPath.v1": "/fixture/another-bot.json"
+            ],
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [
+                targetRepository,
+                "electricsheephq/evaos-code-review-bot-neondiff"
+            ]
+        ))
+        fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        await fixture.model.submitActivation()
+
+        #expect(fixture.model.selectedBYOReviewRepository == nil)
+        #expect(fixture.cli.calls.isEmpty)
+        #expect(fixture.model.activationState == .serviceError)
+        #expect(fixture.model.activationTargetSelectionRequired)
+        #expect(fixture.model.lastError?.contains("Choose one Review Target") == true)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+    }
+
+    @MainActor
     @Test func apiKeyProviderStillRequiresItsAppOwnedKeyOrVerification() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -475,15 +583,21 @@ import NeonDiffDesktopCore
         )
     }
 
-    private func existingBotConfig(authMode: String) -> String {
+    private func existingBotConfig(
+        authMode: String,
+        repositories: [String] = ["electricsheephq/WorldOS"]
+    ) -> String {
         let adapter = authMode == "zcode-app-config" ? "zcode" : "openai-compatible"
+        let repositoryJSON = repositories
+            .map { "\"\($0)\"" }
+            .joined(separator: ", ")
         return #"""
         {
           "ok": true,
           "command": "config inspect",
           "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "config": {
-            "pilotRepos": ["electricsheephq/WorldOS"],
+            "pilotRepos": [\#(repositoryJSON)],
             "providers": {
               "defaultProviderId": "zcode-glm",
               "providers": {

@@ -115,6 +115,13 @@ repository-scoped entitlement must still pass before a new dry or live review.
 Local config alone never establishes membership, installation authority, or
 review authorization.
 
+An existing worker may already monitor several GitHub App-authorized
+repositories. NeonDiff preserves that allowlist and requires one explicit
+**Review Target** in the native repository table. The Activation Key request and
+the next review bind to that target only. The target selection is scoped to the
+exact local config path and does not edit, remove, or disable the worker's other
+repositories.
+
 Keep the private key and local config out of git. A typical shell setup is:
 
 ```bash

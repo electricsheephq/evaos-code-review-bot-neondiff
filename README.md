@@ -166,6 +166,12 @@ authoritative account/bot intersection instead of asking the user to initialize
 or re-enter the existing worker credentials. It may show GitHub, provider,
 entitlement, and repository setup as configured while still requiring fresh,
 repository-scoped GitHub and activation verification before new review work.
+If that existing worker monitors more than one repository, the native app keeps
+the full allowlist intact and asks the user to choose one **Review Target**.
+Native activation and the next review bind to that exact target; selecting it
+does not remove, disable, or rewrite the worker's other repositories. The
+selection is restored only for the same local config path and fails closed if
+that config or repository is no longer current.
 During launch it shows a bounded restoring state while that authorized
 account/bot/config intersection is checked; it does not flash empty first-run
 setup or claim that the existing configuration is missing.

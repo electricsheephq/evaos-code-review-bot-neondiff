@@ -31,8 +31,10 @@ struct DesktopSetupReadiness {
             ? "PUBLIC · FREE"
             : (licenseIsActive ? "ACTIVE" : "ACTIVATION REQUIRED")
         repository = model.repositorySetupReady
-        repositoryName = model.selectedManagedGitHubRepository
-            ?? model.repos.first(where: \.enabled)?.name
+        repositoryName = model.selectedReviewRepository
+            ?? (model.repos.filter(\.enabled).count > 1
+                ? "Choose review target"
+                : model.repos.first(where: \.enabled)?.name)
             ?? "owner/repository"
         canRunDryRun = model.productionUsefulWorkAvailable
             && model.providerSetupReady
