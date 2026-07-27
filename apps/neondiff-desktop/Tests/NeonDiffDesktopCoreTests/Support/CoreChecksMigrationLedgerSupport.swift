@@ -31,7 +31,7 @@ let legacyCoreChecksScenarioInventory: [LegacyCoreChecksScenario: LegacyCoreChec
     .detachedCommandLaunchContracts: .init(assertionCount: 4, sortedMessageSHA256: "d2256a821d4f0eecfba2db5484b48e617ae10a09a007626268a76e82dbb70ddb"),
     .githubRecoveryRepositoryAndRateLimitContracts: .init(assertionCount: 29, sortedMessageSHA256: "bc27311a9264ba1b20622afabc316a78e48f1ea8539bff071564faaebf8a4092"),
     .configInspectAndPatchContracts: .init(assertionCount: 27, sortedMessageSHA256: "c963178d0c437cf22ab1e5cec966440761ac87c1730a9c5cd2ddc3107932393c"),
-    .providerRegistryParsingAndPatchContracts: .init(assertionCount: 12, sortedMessageSHA256: "6e1aedf761fbafb911a260182d8e81110ab90f26ad1f26d26dfd8faf190529ef"),
+    .providerRegistryParsingAndPatchContracts: .init(assertionCount: 13, sortedMessageSHA256: "6bb85adae3951f123b8f4754bd23e0c0c7fffc33ea55cc8cdff83b71964f6713"),
     .providerVerificationTransportAndStrictEnvelopeContracts: .init(assertionCount: 37, sortedMessageSHA256: "27b74eecdf695f4be3fca3d9bf1090c8c41a2d27b1ca20e0e3ad47e6da28199e"),
     .canonicalRedactorCorpusContracts: .init(assertionCount: 195, sortedMessageSHA256: "b1af4e9101e9255b709cf93af983827cb367a7f37d1993940f004b0da2591c41"),
     .providerVerificationEscapingAndBudgetContracts: .init(assertionCount: 20, sortedMessageSHA256: "aabd8511ab77476e062c96210aee2ccafabaae2489d31fb44a7545313af56f1a")
@@ -63,9 +63,9 @@ final class LegacyCoreChecksAggregate: @unchecked Sendable {
             #expect(values.count == expected?.assertionCount, Comment("scenario \(scenario.rawValue) assertion count"))
             #expect(coreChecksSHA256(values.sorted()) == expected?.sortedMessageSHA256, Comment("scenario \(scenario.rawValue) message inventory"))
         }
-        #expect(messages.count == 393)
-        #expect(Set(messages).count == 299)
-        #expect(coreChecksSHA256(messages.sorted()) == "3b058009d4feec1492e1f9d55e1f1de2bf44461c45046936f8171a9fcec168ce")
+        #expect(messages.count == 394)
+        #expect(Set(messages).count == 300)
+        #expect(coreChecksSHA256(messages.sorted()) == "9ae56c81aaf49619e16d11a7f94ce462005cdf2a27907713fbc0b60ec077dfbc")
     }
 }
 
