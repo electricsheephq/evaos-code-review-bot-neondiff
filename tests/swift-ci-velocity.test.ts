@@ -8,7 +8,20 @@ function read(path: string): string {
 
 const retiredCoreChecksTarget = ["NeonDiffDesktopCore", "Checks"].join("");
 
-function swiftAffected(files: string[]): { affected: boolean; matched: string[]; files: string[] } {
+type SwiftLanes = {
+  core: boolean;
+  fixtureChecks: boolean;
+  appCore: boolean;
+  evaluationSupport: boolean;
+  hostedXCUITest: boolean;
+};
+
+function swiftAffected(files: string[]): {
+  affected: boolean;
+  matched: string[];
+  files: string[];
+  lanes: SwiftLanes;
+} {
   return JSON.parse(execFileSync("node", ["scripts/swift-affected.mjs", "--files", ...files], { encoding: "utf8" }));
 }
 
@@ -56,6 +69,79 @@ describe("Swift CI velocity policy", () => {
     });
   });
 
+  it("classifies the smallest safe Swift target lanes and fails workflow changes open", () => {
+    expect(swiftAffected([
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopCore/Services/ConfigInspectParser.swift"
+    ]).lanes).toEqual({
+      core: true,
+      fixtureChecks: true,
+      appCore: true,
+      evaluationSupport: true,
+      hostedXCUITest: false
+    });
+
+    expect(swiftAffected([
+      "apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests/ManagedGitHubOnboardingTests.swift"
+    ]).lanes).toEqual({
+      core: false,
+      fixtureChecks: false,
+      appCore: true,
+      evaluationSupport: false,
+      hostedXCUITest: false
+    });
+
+    expect(swiftAffected([
+      "apps/neondiff-desktop/UITests/NeonDiffDesktopUITests.swift"
+    ]).lanes).toEqual({
+      core: false,
+      fixtureChecks: false,
+      appCore: false,
+      evaluationSupport: false,
+      hostedXCUITest: true
+    });
+
+    expect(swiftAffected([
+      "apps/neondiff-desktop/Sources/NeonDiffDesktopEvaluationSupport/DesktopEvaluationFixture.swift"
+    ]).lanes).toEqual({
+      core: false,
+      fixtureChecks: true,
+      appCore: false,
+      evaluationSupport: true,
+      hostedXCUITest: false
+    });
+
+    expect(swiftAffected([
+      ".github/workflows/swift-desktop-gate.yml"
+    ]).lanes).toEqual({
+      core: true,
+      fixtureChecks: true,
+      appCore: true,
+      evaluationSupport: true,
+      hostedXCUITest: true
+    });
+  });
+
+  it("bounds and shards the fast and stable-candidate Mac gates", () => {
+    const gate = read(".github/workflows/swift-desktop-gate.yml");
+
+    expect(gate).toMatch(/swift-desktop-fast:/);
+    expect(gate).toMatch(/name:\s*Swift desktop fast/);
+    expect(gate).toMatch(/name:\s*Swift Core tests\s+[^]*?timeout-minutes:\s*[1-9]/);
+    expect(gate).toMatch(/name:\s*Swift Fixture checks\s+[^]*?timeout-minutes:\s*[1-9]/);
+    expect(gate).toMatch(/name:\s*Swift AppCore tests\s+[^]*?timeout-minutes:\s*[1-9]/);
+    expect(gate).toMatch(/name:\s*Swift EvaluationSupport tests\s+[^]*?timeout-minutes:\s*[1-9]/);
+    expect(gate).toMatch(/name:\s*Swift build\s+[^]*?swift build -c debug --product NeonDiffDesktop[^]*?swift build -c release --product NeonDiffDesktop/);
+    expect(gate).not.toContain("Swift core, AppCore, and evaluation-support tests");
+
+    expect(gate).toMatch(/swift-desktop-xcuitest:/);
+    expect(gate).toMatch(/name:\s*Swift desktop hosted XCUITest/);
+    expect(gate).toMatch(/swift-desktop-release-boundaries:/);
+    expect(gate).toMatch(/name:\s*Swift desktop release boundaries/);
+    expect(gate).toMatch(/full_candidate:/);
+    expect(gate).toMatch(/name:\s*Swift desktop candidate gate/);
+    expect(gate).toContain("neondiff-desktop-xcresult-${{ github.event.pull_request.head.sha || github.sha }}");
+  });
+
   it("ships an always-reporting Swift desktop gate and a scheduled/manual Swift CodeQL workflow", () => {
     expect(existsSync(".github/workflows/swift-desktop-gate.yml")).toBe(true);
     expect(existsSync(".github/workflows/codeql-swift-path-aware.yml")).toBe(true);
@@ -70,16 +156,18 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/name:\s*Swift desktop impact/);
     expect(gate).toMatch(/runs-on:\s*ubuntu-latest/);
     expect(gate).toMatch(/outputs:\s*\n\s*affected:/);
-    expect(gate).toMatch(/swift-desktop-smoke:/);
-    expect(gate).toMatch(/name:\s*Swift desktop smoke/);
+    expect(gate).toMatch(/swift-desktop-fast:/);
+    expect(gate).toMatch(/name:\s*Swift desktop fast/);
     expect(gate).toMatch(/needs:\s*swift-desktop-impact/);
-    expect(gate).toMatch(/if:\s*needs\.swift-desktop-impact\.outputs\.affected == 'true'/);
+    expect(gate).toMatch(/needs\.swift-desktop-impact\.outputs\.affected == 'true'/);
     expect(gate).toMatch(/runs-on:\s*macos-15/);
     expect(gate).toMatch(/swift-desktop-gate:/);
     expect(gate).toMatch(/Swift desktop gate/);
-    expect(gate).toMatch(/needs:\s*\n\s*-\s*swift-desktop-impact\n\s*-\s*swift-desktop-smoke/);
+    expect(gate).toMatch(
+      /needs:\s*\n\s*-\s*swift-desktop-impact\n\s*-\s*swift-desktop-fast\n\s*-\s*swift-desktop-candidate-gate/
+    );
     expect(gate).toMatch(/if:\s*always\(\)/);
-    expect(gate).toMatch(/No Swift desktop files changed; macOS smoke correctly skipped/);
+    expect(gate).toMatch(/No Swift desktop files changed; Mac jobs correctly skipped/);
     expect(gate).toMatch(/scripts\/swift-affected\.mjs/);
     expect(gate).toMatch(/No Swift desktop files changed/);
     expect(gate).toMatch(/swift build --target NeonDiffDesktopKeychainChecks/);
@@ -101,8 +189,9 @@ describe("Swift CI velocity policy", () => {
     expect(gate).toMatch(/BASE_REF:/);
     expect(gate).toMatch(/PULL_HEAD_SHA:/);
     expect(gate).toMatch(/payload && payload\.affected === true/);
-    expect(gate).toMatch(/console\.log\('false'\)/);
-    expect(gate).toMatch(/base ref unavailable; fail open/);
+    expect(gate).toMatch(/'affected=true'/);
+    expect(gate).toMatch(/'core=true'/);
+    expect(gate).toMatch(/--files \.github\/workflows\/swift-desktop-gate\.yml/);
 
     expect(codeql).toMatch(/name:\s*Swift CodeQL Path-Aware/);
     expect(codeql).not.toMatch(/pull_request:/);
@@ -148,7 +237,6 @@ describe("Swift CI velocity policy", () => {
     expect(swiftCodeQLPolicy).toMatch(/about 25m48s/);
     expect(swiftCodeQLPolicy).toMatch(/about 22m30s/);
     expect(gate).toMatch(/no PR\/push path filter/);
-    expect(gate).toMatch(/before ref unavailable; fail open/);
   });
 
   it("requires nonzero Swift test discovery before running each filtered suite", () => {
