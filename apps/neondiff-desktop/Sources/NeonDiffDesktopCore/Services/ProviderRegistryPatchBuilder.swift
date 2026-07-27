@@ -18,13 +18,17 @@ public enum ProviderRegistryPatchBuilder {
             .isEmpty
             ? providers.zcodeModel
             : target.model
+        var zcodePatch: [String: Any] = [
+            "cliPath": providers.zcodeCliPath,
+            "appConfigPath": providers.zcodeAppConfigPath,
+            "model": providers.zcodeModel
+        ]
+        if target.authMode == "zcode-app-config" {
+            zcodePatch["model"] = selectedModel
+            zcodePatch["providerId"] = target.id
+        }
         let patch: [String: Any] = [
-            "zcode": [
-                "cliPath": providers.zcodeCliPath,
-                "appConfigPath": providers.zcodeAppConfigPath,
-                "model": selectedModel,
-                "providerId": target.id
-            ],
+            "zcode": zcodePatch,
             "providers": [
                 "defaultProviderId": target.id,
                 "providers": [

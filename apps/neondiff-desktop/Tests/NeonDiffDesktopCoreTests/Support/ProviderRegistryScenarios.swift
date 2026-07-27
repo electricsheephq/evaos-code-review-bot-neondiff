@@ -25,17 +25,35 @@ import Darwin
         let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
         let selectedProviderPatch = providerPatchEntries?["gateway"] as? [String: Any]
         context.expect(selectedProviderPatch?["baseUrl"] as? String == "https://saved.example/v1", "provider patch uses the selected saved registry target")
-        context.expect(providerPatchZCode?["providerId"] as? String == "gateway", "provider patch binds ZCode execution to the selected verified provider")
-        context.expect(providerPatchZCode?["model"] as? String == "saved-model", "provider patch binds ZCode execution to the selected verified model")
+        context.expect(providerPatchZCode?["providerId"] == nil, "direct provider patch preserves the existing ZCode execution provider")
+        context.expect(providerPatchZCode?["model"] as? String == "zcode-model", "direct provider patch preserves the existing ZCode execution model")
         context.expect(!providerPatchText.contains("https://legacy.example/v1"), "legacy desktop endpoint cannot enter the provider registry patch")
         context.expect(
             Set(providerPatchObject?.keys.map { $0 } ?? []) == Set(["zcode", "providers"])
-                && Set(providerPatchZCode?.keys.map { $0 } ?? []) == Set(["cliPath", "appConfigPath", "model", "providerId"])
+                && Set(providerPatchZCode?.keys.map { $0 } ?? []) == Set(["cliPath", "appConfigPath", "model"])
                 && Set(providerPatchRegistry?.keys.map { $0 } ?? []) == Set(["defaultProviderId", "providers"])
                 && Set(providerPatchEntries?.keys.map { $0 } ?? []) == Set(["gateway"])
                 && Set(selectedProviderPatch?.keys.map { $0 } ?? []) == Set(["baseUrl", "model"]),
             "provider registry patch contains only the explicit non-secret schema"
         )
+    }
+
+    let zcodeManagedSnapshot = ConfigInspectParser.parse(
+        #"{"ok":true,"command":"config inspect","revision":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","config":{"zcode":{"model":"zcode-model","cliPath":"zcode","appConfigPath":"zcode.json","providerId":"prior-zcode"},"providers":{"defaultProviderId":"zcode","providers":{"zcode":{"enabled":true,"adapter":"zcode","displayName":"ZCode","model":"zcode-model","authMode":"zcode-app-config"}}}}}"#,
+        providerKeyStored: false,
+        licenseKeyStored: false
+    )
+    if let providerSettings = zcodeManagedSnapshot?.providers {
+        let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
+        let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
+        let providerPatchZCode = providerPatchObject?["zcode"] as? [String: Any]
+        context.expect(
+            providerPatchZCode?["providerId"] as? String == "zcode"
+                && providerPatchZCode?["model"] as? String == "zcode-model",
+            "ZCode-managed provider patch binds the exact selected execution provider and model"
+        )
+    } else {
+        context.expect(false, "ZCode-managed registry snapshot remains parseable")
     }
 
     let emptyModelSnapshot = ConfigInspectParser.parse(
