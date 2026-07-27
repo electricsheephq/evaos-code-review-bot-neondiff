@@ -604,13 +604,15 @@ import NeonDiffDesktopCore
 
     @MainActor
     @Test func selectedExistingBYOBotPrefersItsExactLocalAgentOverStoredKeychainMaterial() async throws {
-        let repositories = [
-            "electricsheephq/WorldOS",
+        let targetRepository =
             "electricsheephq/evaos-code-review-bot-neondiff"
+        let otherRepository = "electricsheephq/WorldOS"
+        let repositories = [
+            otherRepository,
+            targetRepository
         ]
-        let readChecks = repositories.map { repository in
-            #"{"repo":"\#(repository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
-        }.joined(separator: ",")
+        let readChecks =
+            #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
         let fixture = ModelDependencyFixture(
             cliOutcomes: [
                 .success(CLIRunResult(
@@ -651,6 +653,7 @@ import NeonDiffDesktopCore
             authMode: "zcode-app-config",
             repositories: repositories
         ))
+        fixture.model.selectBYOReviewRepository(fullName: targetRepository)
         fixture.model.pendingBYOGitHubAppId = "4184532"
         fixture.model.pendingBYOGitHubAppPrivateKey = existingBotFixturePrivateKey
         fixture.model.storeBYOGitHubAppCredentials()
@@ -670,9 +673,11 @@ import NeonDiffDesktopCore
         #expect(call.arguments == [
             "doctor", "github",
             "--config", configPath,
+            "--repo", targetRepository,
             "--json"
         ])
         #expect(call.standardInput == nil)
+        #expect(fixture.model.repos.filter(\.enabled).count == 2)
         #expect(fixture.model.byoGitHubCredentialsVerified)
         #expect(
             fixture.model.existingLocalBotBYOGitHubVerificationStatus

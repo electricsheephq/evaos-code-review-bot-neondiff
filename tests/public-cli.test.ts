@@ -1320,7 +1320,7 @@ exit 1
     });
   });
 
-  it("doctor github proves App installation reads without printing secrets", async () => {
+  it("doctor github can scope App installation proof to one configured repo", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-"));
     roots.push(root);
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -1365,7 +1365,7 @@ exit 1
       const address = server.address() as AddressInfo;
       const configPath = join(root, "config.json");
       writeFileSync(configPath, `${JSON.stringify({
-        pilotRepos: ["acme/demo"],
+        pilotRepos: ["acme/demo", "acme/other"],
         workRoot: join(root, "runtime"),
         statePath: join(root, "state.sqlite"),
         evidenceDir: join(root, "evidence"),
@@ -1396,7 +1396,9 @@ exit 1
         }
       })}\n`);
 
-      const { stdout } = await runCli(["doctor", "github", "--config", configPath], {
+      const { stdout } = await runCli([
+        "doctor", "github", "--config", configPath, "--repo", "acme/demo"
+      ], {
         env: {
           NEONDIFF_GITHUB_APP_ID: "12345",
           NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: privateKeyPath
@@ -1407,6 +1409,7 @@ exit 1
       expect(output).toMatchObject({
         ok: true,
         command: "doctor github",
+        monitoredRepos: ["acme/demo"],
         activeRepoChecks: 1,
         appCredentials: {
           appIdConfigured: true,
@@ -1461,6 +1464,8 @@ exit 1
         "github",
         "--config",
         configPath,
+        "--repo",
+        "acme/demo",
         "--github-app-id",
         "12345",
         "--github-app-private-key-stdin",

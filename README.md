@@ -168,7 +168,9 @@ entitlement, and repository setup as configured while still requiring fresh,
 repository-scoped GitHub and activation verification before new review work.
 If that existing worker monitors more than one repository, the native app keeps
 the full allowlist intact and asks the user to choose one **Review Target**.
-Native activation binds to that exact target; selecting it does not remove,
+Native activation and current-access verification bind to that exact target;
+the app uses the bounded `doctor github --repo owner/repo` form rather than
+rescanning the worker's complete allowlist. Selecting it does not remove,
 disable, or rewrite the worker's other repositories. The app may reuse the
 exact matched LaunchAgent's App ID and private-key file coordinate only inside
 the child process for that config; it never copies the key into the app,
