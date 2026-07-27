@@ -476,6 +476,43 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("does not let a daemon dry-run overwrite an already posted head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-dry-posted-head-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(418, "d".repeat(40));
+    const github = githubForPull(pull, [pullFile("src/a.ts", 200)]);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/418#pullrequestreview-1"
+    });
+
+    expect(await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    })).toBe("skipped_processed");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/418#pullrequestreview-1"
+    });
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
   it("marks a post-success receipt persistence failure as already posted", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-post-receipt-failure-"));
     roots.push(root);
