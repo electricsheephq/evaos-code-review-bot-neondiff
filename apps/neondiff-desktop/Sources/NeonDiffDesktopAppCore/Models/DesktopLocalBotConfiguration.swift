@@ -202,12 +202,22 @@ package enum DesktopLaunchAgentExecutionContextParser {
         guard rawConfigPath.hasPrefix("/") else { return nil }
         let configPath = URL(filePath: rawConfigPath).standardizedFileURL.path
 
+        var environmentOverrides = [
+            "NEONDIFF_GITHUB_APP_ID": appID,
+            "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH": privateKeyURL.path
+        ]
+        if let rawNodeOptions = environment["NODE_OPTIONS"] {
+            guard let nodeOptions = rawNodeOptions as? String,
+                  nodeOptions == "--use-system-ca"
+            else {
+                return nil
+            }
+            environmentOverrides["NODE_OPTIONS"] = nodeOptions
+        }
+
         return DesktopLocalBotExecutionContext(
             configPath: configPath,
-            environmentOverrides: [
-                "NEONDIFF_GITHUB_APP_ID": appID,
-                "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH": privateKeyURL.path
-            ]
+            environmentOverrides: environmentOverrides
         )
     }
 
@@ -257,7 +267,7 @@ private func approvedNeonDiffDaemonInvocation(
     }
 
     let bundledCLI = workingDirectory
-        .appendingPathComponent("dist/cli.js")
+        .appendingPathComponent("dist/src/cli.js")
         .standardizedFileURL.path
     return URL(filePath: arguments[1]).standardizedFileURL.path == bundledCLI
         && arguments[2] == "daemon"

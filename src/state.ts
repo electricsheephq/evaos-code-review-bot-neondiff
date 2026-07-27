@@ -932,6 +932,53 @@ export class ReviewStateStore {
     }
   }
 
+  tryRecordDryRun(
+    record: Omit<ProcessedReviewRecord, "status" | "reviewUrl" | "error">,
+    now: Date = new Date()
+  ): boolean {
+    this.db.exec("begin immediate");
+    try {
+      const recordedAt = now.toISOString();
+      this.db
+        .prepare(
+          "delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ? and expires_at <= ?"
+        )
+        .run(record.repo, record.pullNumber, record.headSha, recordedAt);
+      const activeClaim = this.db
+        .prepare(
+          "select 1 from review_head_claims where repo = ? and pull_number = ? and head_sha = ? limit 1"
+        )
+        .get(record.repo, record.pullNumber, record.headSha);
+      const processed = this.db
+        .prepare(
+          "select 1 from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
+        )
+        .get(record.repo, record.pullNumber, record.headSha);
+      if (activeClaim || processed) {
+        this.db.exec("commit");
+        return false;
+      }
+      this.db
+        .prepare(
+          `insert into processed_reviews
+            (repo, pull_number, head_sha, status, event, review_url, error, created_at)
+           values (?, ?, ?, 'dry_run', ?, null, null, ?)`
+        )
+        .run(
+          record.repo,
+          record.pullNumber,
+          record.headSha,
+          record.event ?? null,
+          recordedAt
+        );
+      this.db.exec("commit");
+      return true;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
   recordFindingOutcomeLabel(record: FindingOutcomeLabelRecord): void {
     this.writeFindingOutcomeLabel(record);
   }

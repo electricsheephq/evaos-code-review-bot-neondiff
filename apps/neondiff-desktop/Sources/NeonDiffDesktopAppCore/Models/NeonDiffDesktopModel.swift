@@ -3903,6 +3903,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
               report.ok,
               report.command == "review-pr",
               report.dryRun,
+              report.result.reviewed == 1,
+              report.result.skippedProcessed == 0,
               report.scope.repo.caseInsensitiveCompare(expectedContext.repo)
                   == .orderedSame,
               report.scope.pullNumber == expectedContext.pullNumber,

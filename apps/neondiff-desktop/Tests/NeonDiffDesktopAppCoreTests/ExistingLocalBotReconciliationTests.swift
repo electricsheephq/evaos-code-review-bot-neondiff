@@ -691,6 +691,11 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
+                    stdout: #"{"ok":true,"command":"review-pr","dryRun":true,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":0,"failed":0,"skippedProcessed":1}}"#,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
                     stdout: #"{"ok":true,"command":"review-pr","dryRun":true,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0,"skippedProcessed":0}}"#,
                     stderr: ""
                 )),
@@ -755,11 +760,20 @@ import NeonDiffDesktopCore
             await Task.yield()
         }
 
+        #expect(!fixture.model.scopedLiveReviewConfirmationAvailable)
+        #expect(fixture.model.scopedReviewStatus.contains("failed closed"))
+
+        fixture.model.runScopedDryReview()
+        await fixture.cli.waitUntilCallCount(4)
+        for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
+            await Task.yield()
+        }
+
         #expect(fixture.model.scopedDryRunHeadSHA == headSHA)
         #expect(fixture.model.scopedLiveReviewConfirmationAvailable)
 
         fixture.model.runScopedLiveReview()
-        await fixture.cli.waitUntilCallCount(4)
+        await fixture.cli.waitUntilCallCount(5)
         for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
             await Task.yield()
         }
@@ -768,12 +782,12 @@ import NeonDiffDesktopCore
         #expect(fixture.model.scopedReviewStatus.contains("failed closed"))
 
         fixture.model.runScopedDryReview()
-        await fixture.cli.waitUntilCallCount(5)
+        await fixture.cli.waitUntilCallCount(6)
         for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
             await Task.yield()
         }
         fixture.model.runScopedLiveReview()
-        await fixture.cli.waitUntilCallCount(6)
+        await fixture.cli.waitUntilCallCount(7)
         for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
             await Task.yield()
         }

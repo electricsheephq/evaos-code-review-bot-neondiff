@@ -1936,9 +1936,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
     if (input.dryRun) {
-      // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
-      // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
-      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event: plan.event });
+      // Dry-run posts nothing public, but its durable proof must not replace an
+      // active or completed live review. The state transaction admits this row
+      // only while the exact head remains unclaimed and unprocessed.
+      const recorded = state.tryRecordDryRun({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        event: plan.event
+      });
+      if (!recorded) return "skipped_processed";
       return manualReviewRequested ? "reviewed_command" : "reviewed";
     }
 

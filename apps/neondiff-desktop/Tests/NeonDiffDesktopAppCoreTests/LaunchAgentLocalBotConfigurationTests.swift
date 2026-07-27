@@ -213,6 +213,53 @@ import Testing
         ).isEmpty)
     }
 
+    @Test func acceptsPackagedCLIAndPreservesOnlyTheExactSystemCAOption() throws {
+        let workingDirectory = "/Volumes/LEXAR/repos/evaos-code-review-bot"
+        let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
+        let privateKeyPath = "/Users/test/.config/neondiff/app.pem"
+        let baseEnvironment = [
+            "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+            "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": privateKeyPath,
+            "NODE_OPTIONS": "--use-system-ca"
+        ]
+        let arguments = [
+            "/opt/homebrew/bin/node",
+            "\(workingDirectory)/dist/src/cli.js",
+            "daemon",
+            "--config",
+            configPath
+        ]
+
+        let context = DesktopLaunchAgentExecutionContextParser.parse(
+            data: try propertyList(
+                label: "com.electricsheephq.evaos-code-review-bot",
+                environment: baseEnvironment,
+                arguments: arguments,
+                workingDirectory: workingDirectory
+            ),
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { $0.path == privateKeyPath }
+        )
+        #expect(context?.environmentOverrides == [
+            "NEONDIFF_GITHUB_APP_ID": "4184532",
+            "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH": privateKeyPath,
+            "NODE_OPTIONS": "--use-system-ca"
+        ])
+
+        var unsafeEnvironment = baseEnvironment
+        unsafeEnvironment["NODE_OPTIONS"] = "--require /tmp/injected.js"
+        #expect(DesktopLaunchAgentExecutionContextParser.parse(
+            data: try propertyList(
+                label: "com.electricsheephq.evaos-code-review-bot",
+                environment: unsafeEnvironment,
+                arguments: arguments,
+                workingDirectory: workingDirectory
+            ),
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { _ in true }
+        ) == nil)
+    }
+
     @Test func rejectsUnsafeOrConflictingExistingWorkerCredentialCoordinates() throws {
         let configPath = "/tmp/neondiff.json"
         let baseEnvironment = [

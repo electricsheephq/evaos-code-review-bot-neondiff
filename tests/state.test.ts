@@ -2456,6 +2456,45 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("records a dry proof only while the head is unclaimed and unprocessed", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dry-proof-claim-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const openHead = { repo: "r/x", pullNumber: 35, headSha: "sha-open-dry" };
+    expect(store.tryRecordDryRun({ ...openHead, event: "COMMENT" })).toBe(true);
+    expect(store.getProcessedReview(openHead.repo, openHead.pullNumber, openHead.headSha)).toMatchObject({
+      status: "dry_run"
+    });
+
+    const claimedHead = { repo: "r/x", pullNumber: 36, headSha: "sha-claimed-before-dry" };
+    const claim = store.tryClaimReviewHead({
+      ...claimedHead,
+      claimTtlMs: 900_000,
+      now: new Date("2026-07-06T00:00:01.000Z")
+    });
+    expect(claim).toBeDefined();
+    expect(store.tryRecordDryRun(
+      { ...claimedHead, event: "COMMENT" },
+      new Date("2026-07-06T00:00:02.000Z")
+    )).toBe(false);
+    expect(store.getProcessedReview(
+      claimedHead.repo,
+      claimedHead.pullNumber,
+      claimedHead.headSha
+    )).toBeUndefined();
+
+    const postedHead = { repo: "r/x", pullNumber: 37, headSha: "sha-posted-before-dry" };
+    store.recordProcessed({ ...postedHead, status: "posted", event: "COMMENT" });
+    expect(store.tryRecordDryRun({ ...postedHead, event: "COMMENT" })).toBe(false);
+    expect(store.getProcessedReview(
+      postedHead.repo,
+      postedHead.pullNumber,
+      postedHead.headSha
+    )).toMatchObject({ status: "posted" });
+    store.close();
+  });
+
   it("retires the per-head claim and refuses ordinary re-claim after the review is recorded (#295)", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-retire-"));
     roots.push(root);
