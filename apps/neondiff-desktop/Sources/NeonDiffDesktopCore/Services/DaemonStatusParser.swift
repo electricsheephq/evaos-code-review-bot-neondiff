@@ -11,6 +11,14 @@ public enum DaemonStatusParser {
 
         let statusPayload = json["status"] as? [String: Any]
         let effective = statusPayload ?? json
+        let reportedRuntimeOk = json["runtimeOk"] as? Bool ?? effective["runtimeOk"] as? Bool
+        let reportedHealthState = (effective["healthState"] as? String)
+            ?? (json["healthState"] as? String)
+        let hasSubstantiveStatusShape = reportedRuntimeOk != nil
+            || reportedHealthState?.isEmpty == false
+        guard hasSubstantiveStatusShape else {
+            return nil
+        }
         let wrapperOk = json["ok"] as? Bool
         let effectiveOk = effective["ok"] as? Bool
         let launchd = effective["launchd"] as? [String: Any]
@@ -21,13 +29,12 @@ public enum DaemonStatusParser {
             ?? []
         let repos = monitoredRepos.map { RepoMonitor(name: $0, enabled: true) }
         let ok = wrapperOk ?? effectiveOk ?? false
-        let healthState = (effective["healthState"] as? String)
-            ?? (json["healthState"] as? String)
+        let healthState = reportedHealthState
             ?? (ok ? "runtime_ok" : "runtime_blocked")
         let launchdLabel = launchdLabel ?? launchd?["label"] as? String
         let status = DaemonStatus(
             ok: ok,
-            runtimeOk: json["runtimeOk"] as? Bool ?? effective["runtimeOk"] as? Bool ?? ok,
+            runtimeOk: reportedRuntimeOk ?? ok,
             healthState: healthState,
             checkedAt: effective["checkedAt"] as? String ?? json["checkedAt"] as? String,
             monitoredRepos: monitoredRepos,

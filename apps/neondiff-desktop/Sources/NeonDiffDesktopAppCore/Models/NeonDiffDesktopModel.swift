@@ -751,7 +751,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return "ACCOUNT CHECK FAILED"
         }
         if status.healthState != DaemonStatus.unknown.healthState {
-            return status.healthState
+            return switch status.healthState {
+            case "runtime_ok": "WORKER READY"
+            case "runtime_blocked": "WORKER ATTENTION"
+            case "coverage_blocked": "COVERAGE ATTENTION"
+            default:
+                status.healthState
+                    .replacingOccurrences(of: "_", with: " ")
+                    .uppercased()
+            }
         }
         if existingLocalBotSetupReady {
             return "SETUP CONFIGURED"
@@ -760,6 +768,28 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return "SETUP INCOMPLETE"
         }
         return "NOT CHECKED"
+    }
+
+    package var customerLocalWorkerStatusDetail: String {
+        if isExistingLocalBotRestoreInProgress {
+            return "Checking the selected bot’s local worker"
+        }
+        if statusRefreshFailureMessage != nil {
+            return "Status check failed — retry"
+        }
+        if status == .unknown {
+            return "Not checked yet — choose Refresh Activity"
+        }
+        return switch status.healthState {
+        case "runtime_ok": "Running and ready"
+        case "runtime_blocked":
+            "Review worker needs attention — open Advanced Diagnostics"
+        case "coverage_blocked": "Review coverage needs attention"
+        default:
+            status.healthState
+                .replacingOccurrences(of: "_", with: " ")
+                .capitalized
+        }
     }
 
     package var selectedProviderRequiresAPIKey: Bool {
@@ -4360,13 +4390,23 @@ package final class NeonDiffDesktopModel: ObservableObject {
         if let parsed = DaemonStatusParser.parse(result.stdout, launchdLabel: launchdLabel, fallbackCommand: fallbackCommand) {
             status = parsed.0
             statusRefreshFailureMessage = nil
+            if isDaemonStatusCommand {
+                // A valid status envelope may intentionally use a nonzero exit
+                // when one or more runtime gates need attention. Keep the full
+                // redacted envelope in `logText` for Advanced Diagnostics, but
+                // do not surface that JSON as a generic customer error.
+                lastError = nil
+            }
             onboardingFlow.daemonBootstrapChecked = true
             if !parsed.1.isEmpty {
                 repos = parsed.1
             }
         } else if isDaemonStatusCommand {
-            statusRefreshFailureMessage = lastError
-                ?? "Local worker returned an invalid status response."
+            let message = "Local worker status check failed. Retry or open Advanced Diagnostics."
+            status = .unknown
+            onboardingFlow.daemonBootstrapChecked = false
+            lastError = message
+            statusRefreshFailureMessage = message
         }
     }
 
@@ -4375,14 +4415,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         fallbackCommand: String,
         configPath: String,
         launchdLabel: String,
-        isConfigInspectCommand: Bool
+        isConfigInspectCommand: Bool,
+        isDaemonStatusCommand: Bool = false
     ) {
         applyCLIResult(
             result,
             fallbackCommand: fallbackCommand,
             configPath: configPath,
             launchdLabel: launchdLabel,
-            isConfigInspectCommand: isConfigInspectCommand
+            isConfigInspectCommand: isConfigInspectCommand,
+            isDaemonStatusCommand: isDaemonStatusCommand
         )
     }
 
