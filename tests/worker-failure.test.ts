@@ -391,6 +391,52 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("keeps a consumed live approval recoverable when post rate limiting starts a cooldown", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-consumed-approved-provider-cooldown-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1236, "head-consumed-approved-rate-limit");
+    const revision = "c".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision: revision,
+      event: "COMMENT",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+
+    expect(recordProviderRateLimitCooldownIfNeeded({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("GitHub createReview rate limit reached"),
+      now: new Date("2026-07-01T00:00:00.000Z"),
+      preserveExistingDryRun: true
+    })).toBe(true);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      configRevision: revision,
+      error: expect.stringMatching(
+        /^approved_dry_run_consumed_for_live_post; post_error=/
+      )
+    });
+    expect(state.getActiveRepoProviderCooldown(
+      "electricsheephq/WorldOS",
+      new Date("2026-07-01T00:01:00.000Z")
+    )).toMatchObject({
+      reason: "provider_request_rate_limit"
+    });
+    state.close();
+  });
+
   it("degrades oversized repo-memory packets to no-memory context", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-repo-memory-budget-"));
     roots.push(root);

@@ -153,10 +153,17 @@ export async function buildLocalDashboardStatus(input: {
     /^[a-f0-9]{64}$/.test(candidateConfigRevision)
     ? candidateConfigRevision
     : undefined;
-  const firstReviewCommand = verifiedConfigRevision
-    ? "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 "
+  const selectedProviderId = input.config.providers!.defaultProviderId;
+  const selectedProvider = input.config.providers!.providers[selectedProviderId];
+  const scopedReviewProviderReady =
+    selectedProvider?.enabled === true &&
+    selectedProvider.authMode === "zcode-app-config" &&
+    input.providerVerification?.providerId === selectedProviderId;
+  const quotedConfigPath = shellQuoteCommandArg(input.configPath);
+  const firstReviewCommand = verifiedConfigRevision && scopedReviewProviderReady
+    ? `neondiff review-pr --config ${quotedConfigPath} --repo owner/repo --pr 123 `
       + `--expected-config-revision ${verifiedConfigRevision} --zcode true --dry-run true`
-    : "neondiff providers doctor --config config.local.json --json";
+    : `neondiff providers doctor --config ${quotedConfigPath} --json`;
 
   return redactedStatus({
     ok,
@@ -174,8 +181,8 @@ export async function buildLocalDashboardStatus(input: {
       options: buildProviderOptions(input.config.providers!)
     },
     firstReviewPreview: {
-      available: ok && Boolean(verifiedConfigRevision),
-      detail: ok && verifiedConfigRevision
+      available: ok && Boolean(verifiedConfigRevision) && scopedReviewProviderReady,
+      detail: ok && verifiedConfigRevision && scopedReviewProviderReady
         ? "Configuration looks ready for a dry-run PR review."
         : ok
           ? "Verify the provider configuration before running a review."
@@ -184,6 +191,12 @@ export async function buildLocalDashboardStatus(input: {
     },
     proofBoundary: "Local dashboard readiness only; this does not prove signed desktop release, appcast, notarization, or live review quality."
   });
+}
+
+function shellQuoteCommandArg(value: string): string {
+  return /^[A-Za-z0-9_./:=@%+-]+$/.test(value)
+    ? value
+    : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInput): Promise<ProviderApiKeyVerificationResult> {

@@ -3398,6 +3398,21 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
     cooldownUntil,
     reason: classification.reason
   });
+  if (
+    input.preserveExistingDryRun &&
+    previous?.status === "skipped" &&
+    previous.error?.startsWith(APPROVED_DRY_RUN_LIVE_CLAIM_ERROR)
+  ) {
+    recordFailedReview({
+      config: input.config,
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      error: input.error,
+      preserveExistingDryRun: true
+    });
+    return true;
+  }
   if (!(input.preserveExistingDryRun && previous?.status === "dry_run")) {
     recordProviderCooldownSkip({
       state: input.state,

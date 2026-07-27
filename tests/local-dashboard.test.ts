@@ -73,7 +73,7 @@ describe("local HTML dashboard", () => {
     expect(html).toContain("Provider");
     expect(html).toContain("openai-compatible");
     expect(status.firstReviewPreview.command).toBe(
-      "neondiff providers doctor --config config.local.json --json"
+      "neondiff providers doctor --config /Volumes/LEXAR/Codex/neondiff/config.local.json --json"
     );
     expect(status.firstReviewPreview.command).not.toContain("<");
   });
@@ -295,10 +295,55 @@ describe("local HTML dashboard", () => {
       firstReviewPreview: { available: boolean; command: string };
     };
     expect(status.firstReviewPreview.available).toBe(false);
-    expect(status.firstReviewPreview.command).toContain(
-      `--expected-config-revision ${verification.configRevision}`
+    expect(status.firstReviewPreview.command).toBe(
+      `neondiff providers doctor --config ${configPath} --json`
     );
+    expect(status.firstReviewPreview.command).not.toContain("review-pr");
     expect(JSON.stringify({ verification, status })).not.toContain(fakeKey);
+  });
+
+  it("binds the ZCode review preview to the verified configured path", async () => {
+    const configPath = "/tmp/NeonDiff Config/config.local.json";
+    const revision = "a".repeat(64);
+    const status = await buildLocalDashboardStatus({
+      config: loadConfigFromObject({
+        providers: {
+          defaultProviderId: "zcode-glm",
+          providers: {
+            "zcode-glm": {
+              enabled: true,
+              adapter: "zcode",
+              displayName: "GLM through ZCode",
+              model: "GLM-5.2",
+              authMode: "zcode-app-config",
+              capabilities: { review: true }
+            }
+          }
+        }
+      }),
+      configPath,
+      configExists: true,
+      providerVerification: {
+        ok: true,
+        command: "providers verify",
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        providerId: "zcode-glm",
+        state: "configured_unverified",
+        mode: "metadata_only",
+        detail: "verified ZCode app configuration",
+        redacted: true,
+        troubleshooting: [],
+        configRevision: revision
+      }
+    });
+
+    expect(status.firstReviewPreview.command).toContain(
+      "review-pr --config '/tmp/NeonDiff Config/config.local.json'"
+    );
+    expect(status.firstReviewPreview.command).toContain(
+      `--expected-config-revision ${revision}`
+    );
+    expect(status.firstReviewPreview.command).toContain("--zcode true");
   });
 
   it("withholds a review command for a malformed verification revision", async () => {
