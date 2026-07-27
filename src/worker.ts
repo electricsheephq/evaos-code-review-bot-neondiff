@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
@@ -11,7 +12,7 @@ import {
   type CommandDecision
 } from "./commands.js";
 import { loadConfig, type BotConfig } from "./config.js";
-import { loadConfigAtRevision } from "./config-cli.js";
+import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
 import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
@@ -342,6 +343,23 @@ export function assertExpectedReviewPrHead(input: {
   );
 }
 
+export function buildReviewApprovalRevision(input: {
+  configRevision?: string;
+  useZCode: boolean;
+  zcodeAppConfigPath: string;
+}): string | undefined {
+  if (!input.configRevision) return undefined;
+  if (!input.useZCode) return input.configRevision;
+  const zcodeRevision = readConfigRevision(input.zcodeAppConfigPath);
+  return createHash("sha256")
+    .update("neondiff-review-approval-v1")
+    .update("\0")
+    .update(input.configRevision)
+    .update("\0")
+    .update(zcodeRevision)
+    .digest("hex");
+}
+
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   let config: BotConfig;
   if (options.expectedConfigRevision !== undefined) {
@@ -359,6 +377,11 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   } else {
     config = loadConfig(options.configPath);
   }
+  const reviewApprovalRevision = buildReviewApprovalRevision({
+    configRevision: options.expectedConfigRevision,
+    useZCode: options.useZCode ?? true,
+    zcodeAppConfigPath: config.zcode.appConfigPath
+  });
   const result: RunOnceResult = {
     reposScanned: 0,
     pullsSeen: 0,
@@ -437,8 +460,8 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             pull,
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
-            ...(options.expectedConfigRevision
-              ? { configRevision: options.expectedConfigRevision }
+            ...(reviewApprovalRevision
+              ? { configRevision: reviewApprovalRevision }
               : {}),
             budget,
             licenseAdmission,
@@ -448,7 +471,17 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
-          if (recordProviderRateLimitCooldownIfNeeded({ config, state, repo, pull, error })) {
+          const preserveApprovedDryRun =
+            options.processedHeadPolicy === "approved_dry_run" &&
+            !reviewWasAlreadyPosted(error);
+          if (recordProviderRateLimitCooldownIfNeeded({
+            config,
+            state,
+            repo,
+            pull,
+            error,
+            preserveExistingDryRun: preserveApprovedDryRun
+          })) {
             result.skippedProviderCooldown += 1;
             continue;
           }
@@ -458,8 +491,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             repo,
             pull,
             error,
-            preserveExistingDryRun:
-              options.processedHeadPolicy === "approved_dry_run"
+            preserveExistingDryRun: preserveApprovedDryRun
           });
           result.failed += 1;
           continue;
@@ -1371,6 +1403,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     recordLicenseAdmissionBlock({ config, state, repo, pull, decision: visibilityDecision.decision });
     return "skipped_license_gate";
   }
+  if (
+    input.processedHeadPolicy === "approved_dry_run" &&
+    input.configRevision === undefined
+  ) {
+    throw new Error(
+      "approved dry-run transition requires an exact configuration revision"
+    );
+  }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
   const approvedDryRunTransition =
@@ -2190,32 +2230,36 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
-    if (reviewEventResolution.consumed) {
-      if (
-        reviewEventResolution.authorization.status !== "eligible" ||
-        !review.html_url
-      ) {
-        throw new Error("consumed owner authorization did not produce a durable review receipt");
+    try {
+      if (reviewEventResolution.consumed) {
+        if (
+          reviewEventResolution.authorization.status !== "eligible" ||
+          !review.html_url
+        ) {
+          throw new Error("consumed owner authorization did not produce a durable review receipt");
+        }
+        state.recordAuthorizedReviewPosted({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          commentId: reviewEventResolution.authorization.commentId,
+          author: reviewEventResolution.authorization.author,
+          event: plan.event,
+          reviewUrl: review.html_url,
+          preserveExistingBlocking: preservedPriorBlockingRow
+        });
+      } else if (!preservedPriorBlockingRow) {
+        state.recordProcessed({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          event: plan.event,
+          reviewUrl: review.html_url
+        });
       }
-      state.recordAuthorizedReviewPosted({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        commentId: reviewEventResolution.authorization.commentId,
-        author: reviewEventResolution.authorization.author,
-        event: plan.event,
-        reviewUrl: review.html_url,
-        preserveExistingBlocking: preservedPriorBlockingRow
-      });
-    } else if (!preservedPriorBlockingRow) {
-      state.recordProcessed({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        status: "posted",
-        event: plan.event,
-        reviewUrl: review.html_url
-      });
+    } catch (error) {
+      throw new ReviewPostPersistenceError(error);
     }
     writeRedactedJsonBestEffort(join(evidenceDir, "posted-review.json"), {
       event: plan.event,
@@ -3256,7 +3300,10 @@ export function recordFailedReview(input: {
       recordedAt: new Date().toISOString()
     });
   }
-  if (!(input.preserveExistingDryRun && previous?.status === "dry_run")) {
+  if (
+    previous?.status !== "posted" &&
+    !(input.preserveExistingDryRun && previous?.status === "dry_run")
+  ) {
     input.state.recordProcessed({
       repo: input.repo,
       pullNumber: input.pull.number,
@@ -3275,6 +3322,7 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   pull: PullRequestSummary;
   error: unknown;
   now?: Date;
+  preserveExistingDryRun?: boolean;
 }): boolean {
   if (!input.config.providerCooldown.enabled) return false;
   const classification = classifyProviderError(input.error);
@@ -3291,17 +3339,42 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
     cooldownUntil,
     reason: classification.reason
   });
-  recordProviderCooldownSkip({
-    state: input.state,
-    repo: input.repo,
-    pull: input.pull,
-    cooldownUntil: cooldownUntil.toISOString(),
-    reason: classification.reason,
-    ...(classification.category === "overloaded" ? { retryAttempt } : {}),
-    ...(classification.category === "overloaded" && classification.providerCode ? { providerCode: classification.providerCode } : {}),
-    ...(classification.category === "overloaded" && classification.retryAfterMs ? { retryAfterMs: classification.retryAfterMs } : {})
-  });
+  if (!(input.preserveExistingDryRun && previous?.status === "dry_run")) {
+    recordProviderCooldownSkip({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      cooldownUntil: cooldownUntil.toISOString(),
+      reason: classification.reason,
+      ...(classification.category === "overloaded" ? { retryAttempt } : {}),
+      ...(classification.category === "overloaded" && classification.providerCode ? { providerCode: classification.providerCode } : {}),
+      ...(classification.category === "overloaded" && classification.retryAfterMs ? { retryAfterMs: classification.retryAfterMs } : {})
+    });
+  }
   return true;
+}
+
+class ReviewPostPersistenceError extends Error {
+  readonly reviewAlreadyPosted = true;
+
+  constructor(cause: unknown) {
+    super(
+      `review posted but its durable receipt could not be recorded: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause }
+    );
+    this.name = "ReviewPostPersistenceError";
+  }
+}
+
+export function reviewWasAlreadyPosted(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "reviewAlreadyPosted" in error &&
+    (error as { reviewAlreadyPosted?: unknown }).reviewAlreadyPosted === true
+  );
 }
 
 /**

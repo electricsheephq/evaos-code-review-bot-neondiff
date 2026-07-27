@@ -43,7 +43,7 @@ import Testing
         let wrongLabel = try propertyList(
             label: "com.example.other",
             environment: ["EVAOS_REVIEW_BOT_APP_ID": "4184532"],
-            arguments: ["neondiff", "--config", configURL.path]
+            arguments: ["neondiff", "daemon", "--config", configURL.path]
         )
         let conflictingIDs = try propertyList(
             label: "com.electricsheephq.evaos-code-review-bot",
@@ -51,7 +51,7 @@ import Testing
                 "EVAOS_REVIEW_BOT_APP_ID": "4184532",
                 "NEONDIFF_GITHUB_APP_ID": "4332113"
             ],
-            arguments: ["neondiff", "--config", configURL.path]
+            arguments: ["neondiff", "daemon", "--config", configURL.path]
         )
 
         #expect(DesktopLaunchAgentBotConfigurationParser.parse(
@@ -70,7 +70,7 @@ import Testing
             data: try propertyList(
                 label: "com.electricsheephq.evaos-code-review-bot",
                 environment: ["EVAOS_REVIEW_BOT_APP_ID": "4184532"],
-                arguments: ["neondiff", "--config", configURL.path]
+                arguments: ["neondiff", "daemon", "--config", configURL.path]
             ),
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
             configExists: { _ in false },
@@ -80,7 +80,7 @@ import Testing
             data: try propertyList(
                 label: "com.electricsheephq.evaos-code-review-bot",
                 environment: ["EVAOS_REVIEW_BOT_APP_ID": "4184532"],
-                arguments: ["neondiff", "--config", configURL.path],
+                arguments: ["neondiff", "daemon", "--config", configURL.path],
                 workingDirectory: "relative/path"
             ),
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
@@ -91,7 +91,7 @@ import Testing
             data: try propertyList(
                 label: "com.electricsheephq.evaos-code-review-bot",
                 environment: ["EVAOS_REVIEW_BOT_APP_ID": "4184532"],
-                arguments: ["neondiff", "--config", configURL.path]
+                arguments: ["neondiff", "daemon", "--config", configURL.path]
             ),
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
             configExists: { _ in true },
@@ -106,6 +106,7 @@ import Testing
             environment: ["EVAOS_REVIEW_BOT_APP_ID": "4184532"],
             arguments: [
                 "neondiff",
+                "daemon",
                 "--config",
                 configURL.path,
                 "--config"
@@ -300,7 +301,7 @@ import Testing
         let data = try propertyList(
             label: "com.electricsheephq.evaos-code-review-bot",
             environment: baseEnvironment,
-            arguments: ["neondiff", "--config", configPath]
+            arguments: ["neondiff", "daemon", "--config", configPath]
         )
         #expect(DesktopLaunchAgentExecutionContextParser.parse(
             data: data,
@@ -314,7 +315,7 @@ import Testing
             data: try propertyList(
                 label: "com.electricsheephq.evaos-code-review-bot",
                 environment: conflicting,
-                arguments: ["neondiff", "--config", configPath]
+                arguments: ["neondiff", "daemon", "--config", configPath]
             ),
             expectedLabel: "com.electricsheephq.evaos-code-review-bot",
             privateKeyPathIsSafe: { _ in true }

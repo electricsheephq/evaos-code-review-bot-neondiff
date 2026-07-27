@@ -5,53 +5,59 @@ import Darwin
 enum LaunchAgentLocalBotConfigurationDiscovery {
     static let defaultLabel = "com.electricsheephq.evaos-code-review-bot"
 
-    static func discover(
+    struct Snapshot {
+        let configurations: [DesktopLocalBotConfiguration]
+        let executionContexts: [DesktopLocalBotExecutionContext]
+    }
+
+    static func discoverSnapshot(
         label: String = defaultLabel,
         fileManager: FileManager = .default
-    ) -> [DesktopLocalBotConfiguration] {
+    ) -> Snapshot {
         let launchAgentURL = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
             .appendingPathComponent("\(label).plist")
             .standardizedFileURL
-        guard let data = try? Data(contentsOf: launchAgentURL, options: .mappedIfSafe),
-              let configuration = DesktopLaunchAgentBotConfigurationParser.parse(
-                  data: data,
-                  expectedLabel: label,
-                  configExists: { fileManager.fileExists(atPath: $0.path) },
-                  workingDirectoryExists: {
-                      var isDirectory: ObjCBool = false
-                      return fileManager.fileExists(
-                          atPath: $0.path,
-                          isDirectory: &isDirectory
-                      ) && isDirectory.boolValue
-                  }
-              )
-        else {
-            return []
+        guard let data = try? Data(contentsOf: launchAgentURL, options: .mappedIfSafe) else {
+            return Snapshot(configurations: [], executionContexts: [])
         }
-        return [configuration]
+        let configuration = DesktopLaunchAgentBotConfigurationParser.parse(
+            data: data,
+            expectedLabel: label,
+            configExists: { fileManager.fileExists(atPath: $0.path) },
+            workingDirectoryExists: {
+                var isDirectory: ObjCBool = false
+                return fileManager.fileExists(
+                    atPath: $0.path,
+                    isDirectory: &isDirectory
+                ) && isDirectory.boolValue
+            }
+        )
+        let context = DesktopLaunchAgentExecutionContextParser.parse(
+            data: data,
+            expectedLabel: label,
+            privateKeyPathIsSafe: { url in
+                isSafePrivateKeyFile(url, fileManager: fileManager)
+            }
+        )
+        return Snapshot(
+            configurations: configuration.map { [$0] } ?? [],
+            executionContexts: context.map { [$0] } ?? []
+        )
+    }
+
+    static func discover(
+        label: String = defaultLabel,
+        fileManager: FileManager = .default
+    ) -> [DesktopLocalBotConfiguration] {
+        discoverSnapshot(label: label, fileManager: fileManager).configurations
     }
 
     static func discoverExecutionContexts(
         label: String = defaultLabel,
         fileManager: FileManager = .default
     ) -> [DesktopLocalBotExecutionContext] {
-        let launchAgentURL = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-            .appendingPathComponent("\(label).plist")
-            .standardizedFileURL
-        guard let data = try? Data(contentsOf: launchAgentURL, options: .mappedIfSafe),
-              let context = DesktopLaunchAgentExecutionContextParser.parse(
-                  data: data,
-                  expectedLabel: label,
-                  privateKeyPathIsSafe: { url in
-                      isSafePrivateKeyFile(url, fileManager: fileManager)
-                  }
-              )
-        else {
-            return []
-        }
-        return [context]
+        discoverSnapshot(label: label, fileManager: fileManager).executionContexts
     }
 
     private static func isSafePrivateKeyFile(

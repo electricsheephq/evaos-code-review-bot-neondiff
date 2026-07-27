@@ -47,9 +47,13 @@ export function buildRunOnceCliReport(input: {
   pullNumber?: number;
   commandName?: "run-once" | "review-pr";
 }): RunOnceCliReport {
+  const commandName = input.commandName ?? "run-once";
   return {
-    ok: runOnceCliExitCode(input.result, { dryRun: input.dryRun }) === 0,
-    command: input.commandName ?? "run-once",
+    ok: runOnceCliExitCode(input.result, {
+      dryRun: input.dryRun,
+      commandName
+    }) === 0,
+    command: commandName,
     dryRun: input.dryRun,
     useZCode: input.useZCode,
     scope: {
@@ -62,8 +66,15 @@ export function buildRunOnceCliReport(input: {
   };
 }
 
-export function runOnceCliExitCode(result: RunOnceResult, input: { dryRun?: boolean } = {}): 0 | 1 {
+export function runOnceCliExitCode(
+  result: RunOnceResult,
+  input: {
+    dryRun?: boolean;
+    commandName?: "run-once" | "review-pr";
+  } = {}
+): 0 | 1 {
   const scopedLiveDidNotPost =
+    input.commandName === "review-pr" &&
     !input.dryRun &&
     Boolean(result.scopedPull) &&
     result.reviewed !== 1;
@@ -119,7 +130,10 @@ export async function runOnceCliCommand(input: {
   return {
     report,
     output: serializeRunOnceCliReport(report),
-    exitCode: runOnceCliExitCode(result, { dryRun: input.options.dryRun })
+    exitCode: runOnceCliExitCode(result, {
+      dryRun: input.options.dryRun,
+      commandName: input.commandName ?? "run-once"
+    })
   };
 }
 

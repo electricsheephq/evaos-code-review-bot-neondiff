@@ -151,7 +151,10 @@ describe("run-once CLI reporting", () => {
       }
     });
 
-    expect(runOnceCliExitCode(result, { dryRun: false })).toBe(1);
+    expect(runOnceCliExitCode(result, {
+      dryRun: false,
+      commandName: "review-pr"
+    })).toBe(1);
     expect(buildRunOnceCliReport({
       result,
       dryRun: false,
@@ -160,6 +163,30 @@ describe("run-once CLI reporting", () => {
       pullNumber: 123,
       commandName: "review-pr"
     }).ok).toBe(false);
+  });
+
+  it("does not apply review-pr exact-one semantics to a broad run-once scan", () => {
+    const result = runOnceResult({
+      reposScanned: 2,
+      pullsSeen: 2,
+      reviewed: 2,
+      scopedPull: {
+        repo: "owner/repo",
+        pullNumber: 123,
+        headSha: "head-123",
+        title: "one pull in a broader sweep",
+        url: "https://github.com/owner/repo/pull/123"
+      }
+    });
+
+    expect(runOnceCliExitCode(result, {
+      dryRun: false,
+      commandName: "run-once"
+    })).toBe(0);
+    expect(runOnceCliExitCode(result, {
+      dryRun: false,
+      commandName: "review-pr"
+    })).toBe(1);
   });
 
   it.each([

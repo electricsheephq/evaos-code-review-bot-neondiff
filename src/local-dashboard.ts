@@ -145,6 +145,8 @@ export async function buildLocalDashboardStatus(input: {
     : buildProviderStatusItem(input.config.providers!, checkedAt);
   const items = { license, githubApp, daemon, provider };
   const ok = Object.values(items).every((item) => item.state === "healthy" || item.state === "degraded");
+  const verifiedConfigRevision =
+    input.providerVerification?.configRevision ?? "<run-neondiff-providers-verify-first>";
 
   return redactedStatus({
     ok,
@@ -166,7 +168,9 @@ export async function buildLocalDashboardStatus(input: {
       detail: ok
         ? "Configuration looks ready for a dry-run PR review."
         : "Complete blocked setup items before running a review.",
-      command: "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true"
+      command:
+        "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 "
+        + `--expected-config-revision ${verifiedConfigRevision} --zcode true --dry-run true`
     },
     proofBoundary: "Local dashboard readiness only; this does not prove signed desktop release, appcast, notarization, or live review quality."
   });

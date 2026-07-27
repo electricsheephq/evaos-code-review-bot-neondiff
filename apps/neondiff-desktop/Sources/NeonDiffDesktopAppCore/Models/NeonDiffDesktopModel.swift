@@ -3053,6 +3053,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyExistingLocalBotGitHubAccess() {
+        if existingLocalAgentAccessAvailable,
+           selectedBotInstallation != nil
+        {
+            verifyGitHubAccessThroughExistingLocalAgent()
+            return
+        }
         if let bot = selectedBotInstallation,
            let storedAppID = storedBYOGitHubAppId,
            storedAppID == String(bot.appID),
@@ -3061,6 +3067,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             verifyBYOGitHubAppCredentials()
             return
         }
+        verifyGitHubAccessThroughExistingLocalAgent()
+    }
+
+    private func verifyGitHubAccessThroughExistingLocalAgent() {
         guard !isSetupMutationBlocked else {
             lastError = "Retry account verification before verifying GitHub App setup."
             byoGitHubCredentialStatus = lastError ?? "Account check required"
@@ -3074,7 +3084,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
             byoGitHubCredentialStatus = lastError ?? "Local agent unavailable"
             return
         }
-
         let arguments = [
             "doctor", "github",
             "--config", configPath,

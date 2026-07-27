@@ -540,7 +540,7 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
-    @Test func selectedExistingBYOBotReverifiesThroughItsExactLocalAgentWithoutCredentialRepaste() async throws {
+    @Test func selectedExistingBYOBotPrefersItsExactLocalAgentOverStoredKeychainMaterial() async throws {
         let repositories = [
             "electricsheephq/WorldOS",
             "electricsheephq/evaos-code-review-bot-neondiff"
@@ -588,11 +588,14 @@ import NeonDiffDesktopCore
             authMode: "zcode-app-config",
             repositories: repositories
         ))
+        fixture.model.pendingBYOGitHubAppId = "4184532"
+        fixture.model.pendingBYOGitHubAppPrivateKey = existingBotFixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
 
         #expect(fixture.model.existingLocalAgentAccessAvailable)
         #expect(fixture.model.existingLocalBotBYOGitHubVerificationAvailable)
-        #expect(!fixture.model.byoGitHubAppIdStored)
-        #expect(!fixture.model.byoGitHubPrivateKeyStored)
+        #expect(fixture.model.byoGitHubAppIdStored)
+        #expect(fixture.model.byoGitHubPrivateKeyStored)
 
         fixture.model.verifyExistingLocalBotGitHubAccess()
         await fixture.cli.waitUntilCallCount(2)
@@ -711,6 +714,11 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
+                    stdout: #"{"ok":true,"command":"review-pr","dryRun":true,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0,"skippedProcessed":0}}"#,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
                     stdout: #"{"ok":true,"command":"review-pr","dryRun":false,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":685,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/685"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0,"skippedProcessed":0}}"#,
                     stderr: ""
                 ))
@@ -786,8 +794,28 @@ import NeonDiffDesktopCore
         for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
             await Task.yield()
         }
+        #expect(fixture.model.scopedLiveReviewConfirmationAvailable)
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [otherRepository, targetRepository],
+            revision: String(repeating: "b", count: 64)
+        ))
+        #expect(!fixture.model.scopedLiveReviewConfirmationAvailable)
         fixture.model.runScopedLiveReview()
+        await Task.yield()
+        #expect(fixture.cli.calls.count == 6)
+
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [otherRepository, targetRepository]
+        ))
+        fixture.model.runScopedDryReview()
         await fixture.cli.waitUntilCallCount(7)
+        for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
+            await Task.yield()
+        }
+        fixture.model.runScopedLiveReview()
+        await fixture.cli.waitUntilCallCount(8)
         for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
             await Task.yield()
         }
@@ -1089,7 +1117,8 @@ import NeonDiffDesktopCore
 
     private func existingBotConfig(
         authMode: String,
-        repositories: [String] = ["electricsheephq/WorldOS"]
+        repositories: [String] = ["electricsheephq/WorldOS"],
+        revision: String = String(repeating: "a", count: 64)
     ) -> String {
         let adapter = authMode == "zcode-app-config" ? "zcode" : "openai-compatible"
         let repositoryJSON = repositories
@@ -1099,7 +1128,7 @@ import NeonDiffDesktopCore
         {
           "ok": true,
           "command": "config inspect",
-          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "revision": "\#(revision)",
           "config": {
             "pilotRepos": [\#(repositoryJSON)],
             "providers": {

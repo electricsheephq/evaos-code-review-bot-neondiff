@@ -36,9 +36,10 @@ enum NeonDiffDesktopCompositionRoot {
             productionBoundary = .quarantined
         }
         let cliWorkingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
-        let localBotConfigurations = LaunchAgentLocalBotConfigurationDiscovery.discover()
-        let localBotExecutionContexts =
-            LaunchAgentLocalBotConfigurationDiscovery.discoverExecutionContexts()
+        let localBotSnapshot =
+            LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot()
+        let localBotConfigurations = localBotSnapshot.configurations
+        let localBotExecutionContexts = localBotSnapshot.executionContexts
         return NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: AppKitClipboard(),
             urlOpener: AppKitURLOpener(),

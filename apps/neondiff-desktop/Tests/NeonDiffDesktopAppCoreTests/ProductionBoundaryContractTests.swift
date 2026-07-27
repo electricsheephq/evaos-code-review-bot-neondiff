@@ -259,6 +259,11 @@ import Testing
                 separatedBy: ".disabled(!model.productionDaemonStartAvailable)"
             ).count - 1 == 2
         )
+        #expect(
+            source.components(
+                separatedBy: ".disabled(!model.productionUsefulWorkAvailable)"
+            ).count - 1 == 1
+        )
     }
 
     @Test func b0OverviewExposesDryFirstPinnedLiveReviewActions() throws {

@@ -120,7 +120,12 @@ vi.mock("../src/walkthrough.js", async (importOriginal) => {
   };
 });
 
-const { localDateFolder, prepareFailedHeadRetry, reviewPull: reviewPullImpl } = await import("../src/worker.js");
+const {
+  localDateFolder,
+  prepareFailedHeadRetry,
+  reviewPull: reviewPullImpl,
+  reviewWasAlreadyPosted
+} = await import("../src/worker.js");
 const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
   ...input,
   pull: {
@@ -437,6 +442,19 @@ describe("worker context budget preflight", () => {
       useZCode: true,
       configRevision
     });
+    await expect(reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      processedHeadPolicy: "approved_dry_run"
+    })).rejects.toThrow(
+      "approved dry-run transition requires an exact configuration revision"
+    );
+    expect(createdReviews).toHaveLength(0);
     const liveResult = await reviewPull({
       config,
       github,
@@ -455,6 +473,59 @@ describe("worker context budget preflight", () => {
     expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
       status: "posted"
     });
+    state.close();
+  });
+
+  it("marks a post-success receipt persistence failure as already posted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-post-receipt-failure-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(417, "e".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    const configRevision = "c".repeat(64);
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Posted before receipt failure")]);
+    const github = githubForPull(pull, files);
+
+    await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision
+    });
+    const persistence = vi.spyOn(state, "recordProcessed")
+      .mockImplementationOnce(() => {
+        throw new Error("state receipt unavailable");
+      });
+
+    let caught: unknown;
+    try {
+      await reviewPull({
+        config,
+        github,
+        state,
+        repo: "electricsheephq/WorldOS",
+        pull,
+        dryRun: false,
+        useZCode: true,
+        configRevision,
+        processedHeadPolicy: "approved_dry_run"
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(createdReviews).toHaveLength(1);
+    expect(reviewWasAlreadyPosted(caught)).toBe(true);
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain(
+      "review posted but its durable receipt could not be recorded"
+    );
+    persistence.mockRestore();
     state.close();
   });
 
