@@ -136,4 +136,34 @@ import NeonDiffDesktopCore
         )
         #expect(fixture.model.customerSurfaceStatus == "NOT CHECKED")
     }
+
+    @Test func timestampOnlyNestedStatusEnvelopeFailsClosed() {
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.isOnboardingPresented = false
+        let response = #"""
+        {
+          "ok": true,
+          "command": "daemon status",
+          "status": {
+            "checkedAt": "2026-07-27T00:35:00.000Z"
+          }
+        }
+        """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: response, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+
+        #expect(fixture.model.status == .unknown)
+        #expect(
+            fixture.model.statusRefreshFailureMessage
+                == "Local worker status check failed. Retry or open Advanced Diagnostics."
+        )
+        #expect(fixture.model.customerSurfaceStatus == "NOT CHECKED")
+    }
 }
