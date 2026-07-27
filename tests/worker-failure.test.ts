@@ -11,6 +11,8 @@ import type { PullRequestSummary } from "../src/types.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 import {
   buildRepoMemoryContext,
+  buildReviewApprovalRevision,
+  assertReviewApprovalRevisionCurrent,
   buildGitNexusContext,
   buildGitHubRelatedContext,
   buildSkillPackContext,
@@ -75,6 +77,177 @@ describe("worker review failures", () => {
     expect(evidence).toContain("ETIMEDOUT");
     expect(evidence).not.toContain("ghp_fake_token");
     state.close();
+  });
+
+  it("preserves an approved dry proof after a live transport failure so a fresh dry run can replace it", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-live-failure-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1223, "head-approved-dry");
+    const revision = "a".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run",
+      configRevision: revision,
+      event: "COMMENT"
+    });
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("createReview transport failed"),
+      preserveExistingDryRun: true
+    });
+
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision: revision
+    });
+    state.close();
+  });
+
+  it("keeps a consumed live approval non-retryable after post transport failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-consumed-live-failure-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1225, "head-consumed-approved-dry");
+    const revision = "b".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision: revision,
+      event: "COMMENT",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("createReview transport failed"),
+      preserveExistingDryRun: true
+    });
+
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      configRevision: revision,
+      error: expect.stringContaining("approved_dry_run_consumed_for_live_post")
+    });
+    expect(() => prepareFailedHeadRetry({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      livePull: pull
+    })).toThrow("not failed/provider-cooldown");
+    state.close();
+  });
+
+  it("never replaces a durable posted receipt with a generic failure row", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-posted-receipt-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1224, "head-posted");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1224#pullrequestreview-1"
+    });
+
+    recordFailedReview({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("later bookkeeping failed")
+    });
+
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/1224#pullrequestreview-1"
+    });
+    state.close();
+  });
+
+  it("binds approved ZCode reviews to both the NeonDiff and external provider configs", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-revision-"));
+    roots.push(root);
+    const zcodeConfigPath = join(root, "zcode.json");
+    const configRevision = "a".repeat(64);
+    writeFileSync(zcodeConfigPath, "{\"provider\":\"glm\",\"endpoint\":\"one\"}\n");
+    const first = buildReviewApprovalRevision({
+      configRevision,
+      useZCode: true,
+      zcodeAppConfigPath: zcodeConfigPath
+    });
+    writeFileSync(zcodeConfigPath, "{\"provider\":\"glm\",\"endpoint\":\"two\"}\n");
+    const second = buildReviewApprovalRevision({
+      configRevision,
+      useZCode: true,
+      zcodeAppConfigPath: zcodeConfigPath
+    });
+
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+    expect(second).toMatch(/^[a-f0-9]{64}$/);
+    expect(second).not.toBe(first);
+    expect(buildReviewApprovalRevision({
+      configRevision,
+      useZCode: false,
+      zcodeAppConfigPath: zcodeConfigPath
+    })).toBe(configRevision);
+  });
+
+  it("rejects a changed ZCode config before an approved review can continue", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-revision-current-"));
+    roots.push(root);
+    const zcodeConfigPath = join(root, "zcode.json");
+    const sourceConfigRevision = "b".repeat(64);
+    writeFileSync(zcodeConfigPath, "{\"provider\":\"glm\",\"endpoint\":\"one\"}\n");
+    const approvedRevision = buildReviewApprovalRevision({
+      configRevision: sourceConfigRevision,
+      useZCode: true,
+      zcodeAppConfigPath: zcodeConfigPath
+    })!;
+
+    expect(() => assertReviewApprovalRevisionCurrent({
+      approvedRevision,
+      sourceConfigRevision,
+      useZCode: true,
+      zcodeAppConfigPath: zcodeConfigPath
+    })).not.toThrow();
+
+    writeFileSync(zcodeConfigPath, "{\"provider\":\"glm\",\"endpoint\":\"two\"}\n");
+    expect(() => assertReviewApprovalRevisionCurrent({
+      approvedRevision,
+      sourceConfigRevision,
+      useZCode: true,
+      zcodeAppConfigPath: zcodeConfigPath
+    })).toThrow("review-pr provider configuration changed; run a new dry review before posting");
   });
 
   it("records ZCode hard timeouts with bounded retry metadata instead of anonymous failure text", () => {
@@ -200,6 +373,94 @@ describe("worker review failures", () => {
       error: "provider_rate_limit_cooldown_until=2026-07-01T00:01:30.000Z; reason=provider_request_rate_limit"
     });
     expect(state.getActiveRepoProviderCooldown("electricsheephq/WorldOS", new Date("2026-07-01T00:01:00.000Z"))).toMatchObject({
+      reason: "provider_request_rate_limit"
+    });
+    state.close();
+  });
+
+  it("keeps the approved dry-run row retryable while recording a repository cooldown", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-provider-cooldown-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1235, "head-approved-rate-limit");
+    const revision = "b".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run",
+      configRevision: revision,
+      event: "COMMENT"
+    });
+
+    expect(recordProviderRateLimitCooldownIfNeeded({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("ProviderBusinessError: [1302][Rate limit reached for requests]"),
+      now: new Date("2026-07-01T00:00:00.000Z"),
+      preserveExistingDryRun: true
+    })).toBe(true);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision: revision
+    });
+    expect(state.getActiveRepoProviderCooldown(
+      "electricsheephq/WorldOS",
+      new Date("2026-07-01T00:01:00.000Z")
+    )).toMatchObject({
+      reason: "provider_request_rate_limit"
+    });
+    state.close();
+  });
+
+  it("keeps a consumed live approval recoverable when post rate limiting starts a cooldown", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-consumed-approved-provider-cooldown-"));
+    roots.push(root);
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = minimalConfig(root);
+    const pull = pullSummary(1236, "head-consumed-approved-rate-limit");
+    const revision = "c".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision: revision,
+      event: "COMMENT",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+
+    expect(recordProviderRateLimitCooldownIfNeeded({
+      config,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: new Error("GitHub createReview rate limit reached"),
+      now: new Date("2026-07-01T00:00:00.000Z"),
+      preserveExistingDryRun: true
+    })).toBe(true);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      configRevision: revision,
+      error: expect.stringMatching(
+        /^approved_dry_run_consumed_for_live_post; post_error=/
+      )
+    });
+    expect(state.getActiveRepoProviderCooldown(
+      "electricsheephq/WorldOS",
+      new Date("2026-07-01T00:01:00.000Z")
+    )).toMatchObject({
       reason: "provider_request_rate_limit"
     });
     state.close();

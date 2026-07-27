@@ -724,7 +724,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(fixture.cli.calls.isEmpty)
     }
 
-    @Test func daemonRequiresExactManagedSelectionToBeAppliedAndReadBack() async {
+    @Test func daemonRequiresExactManagedSelectionToBeAppliedAndReadBack() async throws {
         let broker = ScriptedGitHubBroker()
         let fixture = ModelDependencyFixture(
             githubBroker: broker,
@@ -745,6 +745,9 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         fixture.model.applyRepoAllowlistPatch()
         await fixture.waitForConfigPatchToFinish()
         #expect(fixture.model.productionUsefulWorkAvailable)
+        fixture.loadConfig(managedConfigInspectJSON(repository: "electric/public"))
+        try #require(fixture.model.scopedReviewProviderReady)
+        try #require(fixture.model.productionDaemonStartAvailable)
 
         fixture.model.startDaemon()
         await fixture.cli.waitUntilCallCount(2)
@@ -816,5 +819,9 @@ private func managedRepoPatchJSON(repository: String, wrote: Bool = true) -> Str
     let revisionAfter = wrote
         ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    return #"{"ok":true,"command":"config patch","dryRun":false,"wrote":\#(wrote),"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"\#(revisionAfter)","config":{"pilotRepos":["\#(repository)"]}}"#
+    return #"{"ok":true,"command":"config patch","dryRun":false,"wrote":\#(wrote),"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"\#(revisionAfter)","config":{"pilotRepos":["\#(repository)"],"zcode":{"providerId":"zcode-glm","model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"zcode","displayName":"ZCode GLM","baseUrl":"","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#
+}
+
+private func managedConfigInspectJSON(repository: String) -> String {
+    #"{"ok":true,"command":"config inspect","revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["\#(repository)"],"zcode":{"providerId":"zcode-glm","model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"zcode","displayName":"ZCode GLM","baseUrl":"","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#
 }

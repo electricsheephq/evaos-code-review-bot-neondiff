@@ -133,6 +133,7 @@ public struct ProviderSettings: Equatable {
     public var zcodeModel: String
     public var zcodeCliPath: String
     public var zcodeAppConfigPath: String
+    public var zcodeProviderId: String
     public var openAICompatibleEndpoint: String
     public var providerKeyStored: Bool
     public var selectedProviderId: String
@@ -142,6 +143,7 @@ public struct ProviderSettings: Equatable {
         zcodeModel: String = "GLM-5.2",
         zcodeCliPath: String = "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
         zcodeAppConfigPath: String = ProviderSettings.defaultZCodeAppConfigPath,
+        zcodeProviderId: String = "zcode-glm",
         openAICompatibleEndpoint: String = "http://localhost:8000/v1",
         providerKeyStored: Bool = false,
         selectedProviderId: String = "zcode-glm",
@@ -150,6 +152,7 @@ public struct ProviderSettings: Equatable {
         self.zcodeModel = zcodeModel
         self.zcodeCliPath = zcodeCliPath
         self.zcodeAppConfigPath = zcodeAppConfigPath
+        self.zcodeProviderId = zcodeProviderId
         self.openAICompatibleEndpoint = openAICompatibleEndpoint
         self.providerKeyStored = providerKeyStored
         self.selectedProviderId = selectedProviderId

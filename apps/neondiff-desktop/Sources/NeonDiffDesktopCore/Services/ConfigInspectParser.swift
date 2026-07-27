@@ -112,6 +112,11 @@ public enum ConfigInspectParser {
             zcodeCliPath: zcode?["cliPath"] as? String ?? "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
             zcodeAppConfigPath: zcode?["appConfigPath"] as? String
                 ?? ProviderSettings.defaultZCodeAppConfigPath,
+            // A legacy config without an explicit execution provider is not
+            // bound. Do not invent equality with the selected registry entry:
+            // the ZCode runtime may otherwise choose a different enabled
+            // provider for a private diff.
+            zcodeProviderId: zcode?["providerId"] as? String ?? "",
             openAICompatibleEndpoint: desktop?["openAICompatibleEndpoint"] as? String ?? "http://localhost:8000/v1",
             providerKeyStored: providerKeyStored,
             selectedProviderId: selectedProviderId,

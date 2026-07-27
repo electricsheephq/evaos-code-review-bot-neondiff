@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProviderApiKeyVerificationInput } from "../src/local-dashboard.js";
 import { runProvidersVerifyCommand } from "../src/providers-verify-command.js";
+import { configRevision } from "../src/config-cli.js";
 import { ReviewStateStore } from "../src/state.js";
 import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 import {
@@ -2731,6 +2732,65 @@ exit 1
       "false"
     ])).rejects.toMatchObject({
       stdout: expect.stringContaining("repo must be present in configured repos")
+    });
+  });
+
+  it("requires an exact config revision before review-pr can create an approval", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-pr-revision-required-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+
+    await expect(runCli([
+      "review-pr",
+      "--config",
+      configPath,
+      "--repo",
+      "owner/repo",
+      "--pr",
+      "123",
+      "--dry-run",
+      "true",
+      "--zcode",
+      "true"
+    ])).rejects.toMatchObject({
+      stdout: expect.stringContaining("requires --expected-config-revision")
+    });
+  });
+
+  it("rejects provider-disabled review-pr runs before they can authorize a live review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-pr-provider-required-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const configText = `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    })}\n`;
+    writeFileSync(configPath, configText);
+
+    await expect(runCli([
+      "review-pr",
+      "--config",
+      configPath,
+      "--repo",
+      "owner/repo",
+      "--pr",
+      "123",
+      "--expected-config-revision",
+      configRevision(configText),
+      "--dry-run",
+      "true",
+      "--zcode",
+      "false"
+    ])).rejects.toMatchObject({
+      stdout: expect.stringContaining("requires --zcode true")
     });
   });
 

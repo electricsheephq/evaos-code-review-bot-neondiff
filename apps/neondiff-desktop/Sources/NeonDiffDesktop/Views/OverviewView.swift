@@ -58,6 +58,7 @@ struct DesktopSetupReadiness {
 struct OverviewView: View {
     @ObservedObject var model: NeonDiffDesktopModel
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isLiveReviewConfirmationPresented = false
 
     var body: some View {
         let nd = NDPalette(scheme: colorScheme)
@@ -149,6 +150,11 @@ struct OverviewView: View {
                     }
                 }
 
+                if model.byoGitHubCredentialOnboardingAvailable,
+                   model.selectedReviewRepository != nil {
+                    scopedReviewPanel(palette: nd)
+                }
+
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 14) {
                         repositoryPanel(palette: nd, readiness: readiness)
@@ -189,6 +195,24 @@ struct OverviewView: View {
         .background(nd.background)
         .accessibilityIdentifier("neondiff-overview-outer-scroll")
         .scrollContentBackground(.hidden)
+        .confirmationDialog(
+            "Post this live GitHub review?",
+            isPresented: $isLiveReviewConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            if let repository = model.selectedReviewRepository,
+               let headSHA = model.scopedDryRunHeadSHA {
+                Button(
+                    "Post \(repository)#\(model.pendingReviewPullNumber) at \(headSHA.prefix(12))",
+                    role: .destructive
+                ) {
+                    model.runScopedLiveReview()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Only the exact repository, pull request, and commit proven by the latest dry run will be posted.")
+        }
     }
 
     private func hero(palette: NDPalette, readiness: DesktopSetupReadiness) -> some View {
@@ -352,6 +376,69 @@ struct OverviewView: View {
         .frame(maxWidth: .infinity, minHeight: 174, alignment: .topLeading)
     }
 
+    private func scopedReviewPanel(palette: NDPalette) -> some View {
+        ReferenceHomePanel(title: "// RUN A REVIEW", palette: palette) {
+            if let repository = model.selectedReviewRepository {
+                Text(repository)
+                    .font(.system(.callout, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(palette.textPrimary)
+                    .lineLimit(1)
+            }
+
+            Text("Start with a dry run. NeonDiff will enable live posting only for the exact pull request head returned by that run.")
+                .font(.callout)
+                .foregroundStyle(palette.textSecondary)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { scopedReviewControls }
+                VStack(alignment: .leading, spacing: 10) { scopedReviewControls }
+            }
+
+            Text(model.scopedReviewStatus)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(
+                    model.lastError == nil ? palette.textSecondary : palette.danger
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("neondiff-scoped-review-status")
+        }
+    }
+
+    @ViewBuilder
+    private var scopedReviewControls: some View {
+        TextField("PR number", text: $model.pendingReviewPullNumber)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 130)
+            .accessibilityLabel("Pull request number")
+            .accessibilityIdentifier("neondiff-scoped-review-pr")
+
+        Button {
+            model.runScopedDryReview()
+        } label: {
+            Label(
+                model.isScopedReviewInProgress ? "Running…" : "Run Dry Review",
+                systemImage: "checkmark.shield"
+            )
+        }
+        .buttonStyle(ReferenceOutlineButtonStyle())
+        .disabled(
+            !model.scopedReviewExecutionAvailable
+                || !model.providerSetupReady
+                || model.isScopedReviewInProgress
+                || model.positivePendingReviewPullNumber == nil
+        )
+        .accessibilityIdentifier("neondiff-scoped-review-dry")
+
+        Button {
+            isLiveReviewConfirmationPresented = true
+        } label: {
+            Label("Post Live Review", systemImage: "paperplane")
+        }
+        .buttonStyle(ReferenceOutlineButtonStyle())
+        .disabled(!model.scopedLiveReviewConfirmationAvailable)
+        .accessibilityIdentifier("neondiff-scoped-review-live")
+    }
+
     private func advancedDiagnostics(palette: NDPalette) -> some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 14) {
@@ -408,7 +495,7 @@ struct OverviewView: View {
         Button { model.previewStartDaemon() } label: {
             Label("Preview Start", systemImage: "play.circle")
         }
-        .disabled(!model.productionUsefulWorkAvailable)
+        .disabled(!model.productionDaemonStartAvailable)
         .accessibilityIdentifier("neondiff-preview-start-daemon")
 
         Button { model.previewStopDaemon() } label: {

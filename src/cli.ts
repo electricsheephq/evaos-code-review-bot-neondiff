@@ -2053,6 +2053,9 @@ async function main(): Promise<void> {
       }
     }
     const useZCode = args.zcode !== "false";
+    const expectedConfigRevision = args["expected-config-revision"]
+      ? parseSingleArg(args["expected-config-revision"], "--expected-config-revision")
+      : undefined;
     let pullNumber: number | undefined;
     try {
       pullNumber = args.pr ? parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr") : undefined;
@@ -2069,6 +2072,26 @@ async function main(): Promise<void> {
       }
       throw error;
     }
+    if (command === "review-pr" && !expectedConfigRevision) {
+      console.log(JSON.stringify({
+        ok: false,
+        command: "review-pr",
+        ...(repo ? { repo } : {}),
+        error: "review-pr requires --expected-config-revision for dry and live review approval"
+      }, null, 2));
+      process.exitCode = 1;
+      return;
+    }
+    if (command === "review-pr" && !useZCode) {
+      console.log(JSON.stringify({
+        ok: false,
+        command: "review-pr",
+        ...(repo ? { repo } : {}),
+        error: "review-pr requires --zcode true so the approved dry run and live review execute the same provider path"
+      }, null, 2));
+      process.exitCode = 1;
+      return;
+    }
     const result = await runOnceCliCommand({
       options: {
         configPath: args.config,
@@ -2076,7 +2099,14 @@ async function main(): Promise<void> {
         repo,
         pullNumber,
         useZCode,
-        expectedHeadSha: reviewPrExpectedHeadSha
+        expectedHeadSha: reviewPrExpectedHeadSha,
+        expectedConfigRevision,
+        processedHeadPolicy:
+          command === "review-pr" && !dryRun && reviewPrExpectedHeadSha
+            ? "approved_dry_run"
+            : command === "review-pr" && dryRun
+              ? "refresh_dry_run"
+              : "normal"
       },
       commandName: command,
       admitImpl: async () => {
@@ -2414,7 +2444,7 @@ function runInitCommand(args: ParsedArgs): {
     ...(backupPath ? { backupPath } : {}),
     recommendedCommands: [
       `neondiff doctor --config ${configPath} --json`,
-      `neondiff review-pr --config ${configPath} --repo owner/name --pr 123 --dry-run true --zcode false`,
+      `neondiff review-pr --config ${configPath} --repo owner/name --pr 123 --expected-config-revision <verified-config-revision> --dry-run true --zcode true`,
       `neondiff status --config ${configPath} --json`
     ],
   };
@@ -3056,7 +3086,7 @@ async function buildDoctorGithubReport(config: BotConfig, credentials?: DoctorGi
       privateRepoDataStaysLocal: true
     },
     nextCommands: [
-      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
+      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --expected-config-revision <verified-config-revision> --dry-run true --zcode true",
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff"
     ],
     troubleshooting: [
@@ -3304,7 +3334,9 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--repo", description: "Repo to review, owner/name (required)." },
       { name: "--pr", description: "Pull request number to review (required)." },
       { name: "--dry-run", description: "true (default) or false; false requires --confirm true." },
-      { name: "--confirm", description: "Must be true to allow --dry-run false." }
+      { name: "--confirm", description: "Must be true to allow --dry-run false." },
+      { name: "--expected-config-revision", description: "Required lowercase SHA-256 config revision from provider verification for dry and live execution." },
+      { name: "--zcode", description: "Must be true so dry and live reviews execute the same provider path." }
     ]
   },
   "run-once": {
@@ -3489,7 +3521,7 @@ function buildHelp(command?: string) {
       "neondiff license deactivate --config config.local.json --json",
       "neondiff doctor --config config.local.json --json",
       "neondiff doctor github --config config.local.json --json",
-      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
+      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --expected-config-revision <verified-config-revision> --dry-run true --zcode true",
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff",
       "neondiff daemon start --launchd-label com.example.neondiff --dry-run true",
       "neondiff daemon stop --launchd-label com.example.neondiff --dry-run true",

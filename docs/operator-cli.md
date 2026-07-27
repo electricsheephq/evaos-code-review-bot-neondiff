@@ -240,10 +240,13 @@ evaos-review-bot status --config config.local.json
 - `init --config <path>`: copy `config.example.json` to a local config path
   without embedding credentials. Refuses to overwrite unless `--force true` is
   supplied.
-- `review-pr --repo <owner/name> --pr <number> --dry-run true`: public alias for
-  the existing scoped `run-once` review command. Live posting through this
-  public alias requires `--dry-run false --confirm true` after the exact repo,
-  PR, head SHA, and config path are approved.
+- `review-pr --config <path> --repo <owner/name> --pr <number>
+  --expected-config-revision <verified-revision> --zcode true --dry-run true`:
+  public alias for the existing scoped `run-once` review command. Use the exact
+  `configRevision` returned by successful provider verification; the command
+  fails closed if the config or ZCode provider binding changes. Live posting
+  through this public alias requires `--dry-run false --confirm true` after the
+  exact repo, PR, head SHA, config path, and revision are approved.
 - `daemon start|stop|status`: JSON-first macOS launchd controls. On Linux and
   other non-Darwin platforms these subcommands fail closed with
   `serviceManager: "systemd"` and a pointer to [docs/systemd.md](systemd.md)

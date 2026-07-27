@@ -616,7 +616,7 @@ struct OnboardingWizardView: View {
                             Button { model.startDaemon() } label: {
                                 Label("Start/Restart", systemImage: "play.circle")
                             }
-                            .disabled(!model.productionUsefulWorkAvailable)
+                            .disabled(!model.productionDaemonStartAvailable)
                             Button { model.stopDaemon() } label: {
                                 Label("Stop", systemImage: "stop.circle")
                             }
@@ -627,7 +627,7 @@ struct OnboardingWizardView: View {
                             Button { model.previewStartDaemon() } label: {
                                 Label("Preview Start", systemImage: "eye")
                             }
-                            .disabled(!model.productionUsefulWorkAvailable)
+                            .disabled(!model.productionDaemonStartAvailable)
                             Button { model.copyCommand(model.statusCommand) } label: {
                                 Label("Copy Status", systemImage: "doc.on.doc")
                             }

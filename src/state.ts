@@ -59,6 +59,7 @@ export interface ProcessedReviewRecord {
   pullNumber: number;
   headSha: string;
   status: ProcessedStatus;
+  configRevision?: string;
   event?: ReviewEvent;
   reviewUrl?: string;
   error?: string;
@@ -119,6 +120,14 @@ export interface RepoActivationRecord {
 export const ACTIVATION_BASELINE_EXISTING_HEAD_ERROR = "activation_baseline_existing_head";
 export const EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR = "exact_authorization_already_consumed";
 export const POST_REVIEW_HEAD_UNVERIFIED_ERROR = "post_review_head_unverified";
+export const APPROVED_DRY_RUN_LIVE_CLAIM_ERROR = "approved_dry_run_consumed_for_live_post";
+
+export function isRetryableApprovedDryRunPrePostFailure(
+  record: Pick<ProcessedReviewRecord, "status" | "error"> | undefined
+): boolean {
+  return record?.status === "skipped" &&
+    record.error?.startsWith(`${APPROVED_DRY_RUN_LIVE_CLAIM_ERROR}; post_error=`) === true;
+}
 export const REVIEW_POSTED_HEAD_CHANGED_ERROR = "review_posted_head_changed";
 
 export function isActivationBaselineProcessedReview(
@@ -154,6 +163,9 @@ export interface ReviewHeadClaimInput {
   now?: Date;
   ownerPid?: number;
   allowProcessedOwnerSupersession?: boolean;
+  requiredProcessedStatusForSupersession?: ProcessedStatus;
+  requiredProcessedConfigRevisionForSupersession?: string;
+  consumeProcessedApprovalOnAcquire?: boolean;
 }
 
 export type ReviewHeadClaimAttempt =
@@ -547,6 +559,7 @@ export class ReviewStateStore {
         pull_number integer not null,
         head_sha text not null,
         status text not null,
+        config_revision text,
         event text,
         review_url text,
         error text,
@@ -813,6 +826,7 @@ export class ReviewStateStore {
         owner_pid integer
       );
     `);
+    this.ensureProcessedReviewColumns();
     this.ensureIssueEnrichmentBodyHashColumn();
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
@@ -880,7 +894,7 @@ export class ReviewStateStore {
   getProcessedReview(repo: string, pullNumber: number, headSha: string): StoredProcessedReviewRecord | undefined {
     const row = this.db
       .prepare(
-        `select repo, pull_number, head_sha, status, event, review_url, error, created_at
+        `select repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at
          from processed_reviews
          where repo = ? and pull_number = ? and head_sha = ?
          limit 1`
@@ -892,7 +906,7 @@ export class ReviewStateStore {
   listProcessedReviewsForPull(repo: string, pullNumber: number): StoredProcessedReviewRecord[] {
     const rows = this.db
       .prepare(
-        `select repo, pull_number, head_sha, status, event, review_url, error, created_at
+        `select repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at
          from processed_reviews
          where repo = ? and pull_number = ?
          order by datetime(created_at) desc`
@@ -907,14 +921,15 @@ export class ReviewStateStore {
       this.db
         .prepare(
           `insert or replace into processed_reviews
-            (repo, pull_number, head_sha, status, event, review_url, error, created_at)
-           values (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+            (repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at)
+           values (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
         )
         .run(
           record.repo,
           record.pullNumber,
           record.headSha,
           record.status,
+          record.configRevision ?? null,
           record.event ?? null,
           record.reviewUrl ?? null,
           record.error ?? null
@@ -925,6 +940,62 @@ export class ReviewStateStore {
         .prepare("delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ?")
         .run(record.repo, record.pullNumber, record.headSha);
       this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  tryRecordDryRun(
+    record: Omit<ProcessedReviewRecord, "status" | "reviewUrl" | "error">,
+    now: Date = new Date()
+  ): boolean {
+    this.db.exec("begin immediate");
+    try {
+      const recordedAt = now.toISOString();
+      this.db
+        .prepare(
+          "delete from review_head_claims where repo = ? and pull_number = ? and head_sha = ? and expires_at <= ?"
+        )
+        .run(record.repo, record.pullNumber, record.headSha, recordedAt);
+      const activeClaim = this.db
+        .prepare(
+          "select 1 from review_head_claims where repo = ? and pull_number = ? and head_sha = ? limit 1"
+        )
+        .get(record.repo, record.pullNumber, record.headSha);
+      const processed = this.db
+        .prepare(
+          "select status, error from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
+        )
+        .get(record.repo, record.pullNumber, record.headSha) as Pick<
+          ProcessedReviewRecord,
+          "status" | "error"
+        > | undefined;
+      if (
+        activeClaim ||
+        (processed &&
+          processed.status !== "dry_run" &&
+          !isRetryableApprovedDryRunPrePostFailure(processed))
+      ) {
+        this.db.exec("commit");
+        return false;
+      }
+      this.db
+        .prepare(
+          `insert or replace into processed_reviews
+            (repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at)
+           values (?, ?, ?, 'dry_run', ?, ?, null, null, ?)`
+        )
+        .run(
+          record.repo,
+          record.pullNumber,
+          record.headSha,
+          record.configRevision ?? null,
+          record.event ?? null,
+          recordedAt
+        );
+      this.db.exec("commit");
+      return true;
     } catch (error) {
       this.db.exec("rollback");
       throw error;
@@ -1568,11 +1639,25 @@ export class ReviewStateStore {
         this.db.exec("commit");
         return { status: "blocked", reason: "active_claim" };
       }
-      if (!input.allowProcessedOwnerSupersession) {
-        const processed = this.db
-          .prepare("select 1 from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1")
-          .get(input.repo, input.pullNumber, input.headSha);
-        if (processed) {
+      const processed = this.db
+        .prepare(
+          "select status, config_revision from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
+        )
+        .get(input.repo, input.pullNumber, input.headSha) as {
+          status: ProcessedStatus;
+          config_revision: string | null;
+        } | undefined;
+      if (processed) {
+        const allowed = input.allowProcessedOwnerSupersession &&
+          (
+            input.requiredProcessedStatusForSupersession === undefined ||
+            processed.status === input.requiredProcessedStatusForSupersession
+          ) &&
+          (
+            input.requiredProcessedConfigRevisionForSupersession === undefined ||
+            processed.config_revision === input.requiredProcessedConfigRevisionForSupersession
+          );
+        if (!allowed) {
           this.db.exec("commit");
           return { status: "blocked", reason: "processed" };
         }
@@ -1582,6 +1667,32 @@ export class ReviewStateStore {
           "insert into review_head_claims (repo, pull_number, head_sha, claim_id, owner_pid, claimed_at, expires_at) values (?, ?, ?, ?, ?, ?, ?)"
         )
         .run(input.repo, input.pullNumber, input.headSha, claimId, ownerPid, claimedAt, expiresAt);
+      if (input.consumeProcessedApprovalOnAcquire) {
+        if (
+          input.requiredProcessedStatusForSupersession === undefined ||
+          input.requiredProcessedConfigRevisionForSupersession === undefined
+        ) {
+          throw new Error("consuming a processed approval requires exact status and configuration revision");
+        }
+        const consumed = this.db
+          .prepare(
+            `update processed_reviews
+             set status = 'skipped', error = ?, created_at = datetime('now')
+             where repo = ? and pull_number = ? and head_sha = ?
+               and status = ? and config_revision = ?`
+          )
+          .run(
+            APPROVED_DRY_RUN_LIVE_CLAIM_ERROR,
+            input.repo,
+            input.pullNumber,
+            input.headSha,
+            input.requiredProcessedStatusForSupersession,
+            input.requiredProcessedConfigRevisionForSupersession
+          );
+        if (consumed.changes !== 1) {
+          throw new Error("processed approval changed before it could be consumed");
+        }
+      }
       this.db.exec("commit");
       return { status: "acquired", claim: { claimId, expiresAt, ownerPid } };
     } catch (error) {
@@ -3468,6 +3579,15 @@ export class ReviewStateStore {
     this.db.close();
   }
 
+  private ensureProcessedReviewColumns(): void {
+    const columns = this.db
+      .prepare("pragma table_info(processed_reviews)")
+      .all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "config_revision")) {
+      this.db.exec("alter table processed_reviews add column config_revision text");
+    }
+  }
+
   private ensureIssueEnrichmentBodyHashColumn(): void {
     const columns = this.db.prepare("pragma table_info(issue_enrichment_records)").all() as unknown as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "body_hash")) {
@@ -3942,6 +4062,7 @@ interface ProcessedReviewRow {
   pull_number: number;
   head_sha: string;
   status: ProcessedStatus;
+  config_revision?: string | null;
   event: ReviewEvent | null;
   review_url: string | null;
   error: string | null;
@@ -4144,6 +4265,7 @@ function mapProcessedReviewRow(row: ProcessedReviewRow): StoredProcessedReviewRe
     pullNumber: row.pull_number,
     headSha: row.head_sha,
     status: row.status,
+    ...(row.config_revision ? { configRevision: row.config_revision } : {}),
     ...(row.event ? { event: row.event } : {}),
     ...(row.review_url ? { reviewUrl: row.review_url } : {}),
     ...(row.error ? { error: row.error } : {}),

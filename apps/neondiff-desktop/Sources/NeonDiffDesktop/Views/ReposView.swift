@@ -326,7 +326,7 @@ struct ReposView: View {
             .operatorPanel()
 
             OperatorSection("Boundary") {
-                Text("Repo changes are written through `config patch` only; the desktop does not post reviews or bypass daemon gates.")
+                Text("Repo changes are written through `config patch` only. A review runs only from Overview after an exact repository and pull request are selected; live posting requires a successful dry run and explicit confirmation.")
                     .operatorBodyText()
                     .accessibilityIdentifier("neondiff-repos-boundary")
             }
@@ -367,7 +367,7 @@ struct ReposView: View {
                     .foregroundStyle(NeonDiffTheme.textPrimary)
                 }
 
-                Text("This connection comes from a server-verified account/bot record matched to the exact local config on this Mac. NeonDiff will not copy, migrate, or ask you to re-enter the existing worker private key.")
+                Text("This connection comes from a server-verified account/bot record matched to the exact local config on this Mac. NeonDiff reuses that worker only for an exact scoped command; it will not copy, migrate, or ask you to re-enter the private key, and it will never print it.")
                     .operatorBodyText()
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -386,7 +386,7 @@ struct ReposView: View {
                                 ? NeonDiffTheme.accent
                                 : NeonDiffTheme.warning
                         )
-                        Button { model.verifyBYOGitHubAppCredentials() } label: {
+                        Button { model.verifyExistingLocalBotGitHubAccess() } label: {
                             Label(
                                 model.isBYOGitHubVerificationInProgress
                                     ? "Verifying…"

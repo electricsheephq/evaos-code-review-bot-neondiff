@@ -169,10 +169,17 @@ repository-scoped GitHub and activation verification before new review work.
 If that existing worker monitors more than one repository, the native app keeps
 the full allowlist intact and asks the user to choose one **Review Target**.
 Native activation binds to that exact target; selecting it does not remove,
-disable, or rewrite the worker's other repositories. Until a targeted runtime
-handoff is available, native review and daemon controls remain blocked for a
-multi-repository worker. The selection is restored only for the same local
-config path and fails closed if that config or repository is no longer current.
+disable, or rewrite the worker's other repositories. The app may reuse the
+exact matched LaunchAgent's App ID and private-key file coordinate only inside
+the child process for that config; it never copies the key into the app,
+Keychain, arguments, logs, or UI. Overview can then run `review-pr` for one
+selected repository and pull request through the configured provider. Live
+posting remains disabled until that exact target and config revision return a
+successful dry-run head and the user confirms the pinned head. A transport
+failure revokes that approval instead of permitting a blind retry. For that
+multi-repository worker, daemon-wide start remains blocked. The selection and
+dry-run approval fail closed if the config, target, pull request, workspace, or
+head changes.
 During launch it shows a bounded restoring state while that authorized
 account/bot/config intersection is checked; it does not flash empty first-run
 setup or claim that the existing configuration is missing.
@@ -262,10 +269,12 @@ neondiff review-pr \
   --config config.local.json \
   --repo owner/name \
   --pr 123 \
+  --expected-config-revision <verified-config-revision> \
   --dry-run true \
-  --zcode false
+  --zcode true
 ```
 
+Use the exact `configRevision` returned by the successful provider verification.
 Inspect the JSON result and evidence path. Only switch to `--dry-run false`
 after setup checks, focused tests, and the relevant GitHub issue record the
 exact repo, PR, head SHA, config path, and public-safe evidence.

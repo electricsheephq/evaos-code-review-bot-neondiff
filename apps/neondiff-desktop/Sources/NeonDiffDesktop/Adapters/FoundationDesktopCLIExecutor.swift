@@ -4,13 +4,16 @@ import NeonDiffDesktopCore
 
 struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
     private let localBotConfigurations: [DesktopLocalBotConfiguration]
+    private let localBotExecutionContexts: [DesktopLocalBotExecutionContext]
     private let defaultWorkingDirectory: URL?
 
     init(
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
+        localBotExecutionContexts: [DesktopLocalBotExecutionContext] = [],
         defaultWorkingDirectory: URL? = NeonDiffCLIResolver.defaultWorkingDirectory()
     ) {
         self.localBotConfigurations = localBotConfigurations
+        self.localBotExecutionContexts = localBotExecutionContexts
         self.defaultWorkingDirectory = defaultWorkingDirectory
     }
 
@@ -25,12 +28,29 @@ struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
             localBotConfigurations: localBotConfigurations,
             fallback: defaultWorkingDirectory
         )
-        let client = NeonDiffCLIClient(
+        let environmentOverrides = DesktopLocalBotExecutionContextResolver.resolve(
             executablePath: executablePath,
-            workingDirectory: workingDirectory
+            arguments: arguments,
+            executionContexts: localBotExecutionContexts
+        )
+        let resolvedExecutablePath =
+            DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+                executablePath: executablePath,
+                arguments: arguments,
+                executionContexts: localBotExecutionContexts
+            ) ?? executablePath
+        let resolvedArguments = DesktopLocalBotExecutionContextResolver.resolveArguments(
+            executablePath: executablePath,
+            arguments: arguments,
+            executionContexts: localBotExecutionContexts
+        )
+        let client = NeonDiffCLIClient(
+            executablePath: resolvedExecutablePath,
+            workingDirectory: workingDirectory,
+            environmentOverrides: environmentOverrides
         )
         return try await client.runCancellable(
-            arguments: arguments,
+            arguments: resolvedArguments,
             standardInput: standardInput,
             timeout: timeout
         )

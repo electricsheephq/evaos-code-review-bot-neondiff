@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
@@ -11,6 +12,7 @@ import {
   type CommandDecision
 } from "./commands.js";
 import { loadConfig, type BotConfig } from "./config.js";
+import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
 import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
@@ -83,6 +85,8 @@ import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skil
 import { writeSecureFileSync } from "./temp-files.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  APPROVED_DRY_RUN_LIVE_CLAIM_ERROR,
+  isRetryableApprovedDryRunPrePostFailure,
   EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
   POST_REVIEW_HEAD_UNVERIFIED_ERROR,
   REVIEW_POSTED_HEAD_CHANGED_ERROR,
@@ -194,6 +198,8 @@ export interface RunOnceOptions {
   repo?: string;
   pullNumber?: number;
   expectedHeadSha?: string;
+  expectedConfigRevision?: string;
+  processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run";
   useZCode?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
 }
@@ -339,8 +345,62 @@ export function assertExpectedReviewPrHead(input: {
   );
 }
 
+export function buildReviewApprovalRevision(input: {
+  configRevision?: string;
+  useZCode: boolean;
+  zcodeAppConfigPath: string;
+}): string | undefined {
+  if (!input.configRevision) return undefined;
+  if (!input.useZCode) return input.configRevision;
+  const zcodeRevision = readConfigRevision(input.zcodeAppConfigPath);
+  return createHash("sha256")
+    .update("neondiff-review-approval-v1")
+    .update("\0")
+    .update(input.configRevision)
+    .update("\0")
+    .update(zcodeRevision)
+    .digest("hex");
+}
+
+export function assertReviewApprovalRevisionCurrent(input: {
+  approvedRevision: string;
+  sourceConfigRevision: string;
+  useZCode: boolean;
+  zcodeAppConfigPath: string;
+}): void {
+  const currentRevision = buildReviewApprovalRevision({
+    configRevision: input.sourceConfigRevision,
+    useZCode: input.useZCode,
+    zcodeAppConfigPath: input.zcodeAppConfigPath
+  });
+  if (currentRevision === input.approvedRevision) return;
+  throw new Error(
+    "review-pr provider configuration changed; run a new dry review before posting"
+  );
+}
+
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
-  const config = loadConfig(options.configPath);
+  let config: BotConfig;
+  if (options.expectedConfigRevision !== undefined) {
+    if (!/^[a-f0-9]{64}$/.test(options.expectedConfigRevision)) {
+      throw new Error("review-pr expected config revision must be a lowercase SHA-256 value");
+    }
+    if (!options.configPath) {
+      throw new Error("review-pr expected config revision requires a config path");
+    }
+    const loaded = loadConfigAtRevision(options.configPath);
+    if (loaded.revision !== options.expectedConfigRevision) {
+      throw new Error("review-pr config revision changed; run a new dry review before posting");
+    }
+    config = loaded.config;
+  } else {
+    config = loadConfig(options.configPath);
+  }
+  const reviewApprovalRevision = buildReviewApprovalRevision({
+    configRevision: options.expectedConfigRevision,
+    useZCode: options.useZCode ?? true,
+    zcodeAppConfigPath: config.zcode.appConfigPath
+  });
   const result: RunOnceResult = {
     reposScanned: 0,
     pullsSeen: 0,
@@ -419,16 +479,54 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             pull,
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
+            ...(reviewApprovalRevision
+              ? { configRevision: reviewApprovalRevision }
+              : {}),
+            ...(options.expectedConfigRevision
+              ? { sourceConfigRevision: options.expectedConfigRevision }
+              : {}),
             budget,
             licenseAdmission,
+            ...(options.processedHeadPolicy
+              ? { processedHeadPolicy: options.processedHeadPolicy }
+              : {}),
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
-          if (recordProviderRateLimitCooldownIfNeeded({ config, state, repo, pull, error })) {
+          const recoveredStatus = await recoverPostedReviewReceiptForCurrentHead({
+            config,
+            github,
+            state,
+            repo,
+            pull,
+            error
+          });
+          if (recoveredStatus) {
+            applyReviewPullResultToRunOnceResult(result, recoveredStatus);
+            continue;
+          }
+          const preserveApprovedDryRun =
+            options.processedHeadPolicy === "approved_dry_run" &&
+            !reviewWasAlreadyPosted(error);
+          if (recordProviderRateLimitCooldownIfNeeded({
+            config,
+            state,
+            repo,
+            pull,
+            error,
+            preserveExistingDryRun: preserveApprovedDryRun
+          })) {
             result.skippedProviderCooldown += 1;
             continue;
           }
-          recordFailedReview({ config, state, repo, pull, error });
+          recordFailedReview({
+            config,
+            state,
+            repo,
+            pull,
+            error,
+            preserveExistingDryRun: preserveApprovedDryRun
+          });
           result.failed += 1;
           continue;
         }
@@ -1314,8 +1412,10 @@ export interface ReviewPullInput {
   pull: PullRequestSummary;
   dryRun: boolean;
   useZCode: boolean;
+  configRevision?: string;
+  sourceConfigRevision?: string;
   budget?: ReviewRunBudget;
-  processedHeadPolicy?: "normal" | "retry_failed_head";
+  processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run" | "retry_failed_head";
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
@@ -1338,8 +1438,33 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     recordLicenseAdmissionBlock({ config, state, repo, pull, decision: visibilityDecision.decision });
     return "skipped_license_gate";
   }
+  if (
+    input.processedHeadPolicy === "approved_dry_run" &&
+    input.configRevision === undefined
+  ) {
+    throw new Error(
+      "approved dry-run transition requires an exact configuration revision"
+    );
+  }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  const retryableApprovedDryRunPrePostFailure =
+    input.dryRun && isRetryableApprovedDryRunPrePostFailure(processed);
+  const refreshableDryRun =
+    input.dryRun &&
+    input.processedHeadPolicy === "refresh_dry_run" &&
+    processed?.status === "dry_run";
+  const approvedDryRunTransition =
+    input.processedHeadPolicy === "approved_dry_run" &&
+    processed?.status === "dry_run" &&
+    input.configRevision !== undefined &&
+    processed.configRevision === input.configRevision;
+  if (
+    input.processedHeadPolicy === "approved_dry_run" &&
+    !approvedDryRunTransition
+  ) {
+    return "skipped_processed";
+  }
   const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
@@ -1554,6 +1679,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !manualReviewRequested &&
+    !approvedDryRunTransition &&
+    !retryableApprovedDryRunPrePostFailure &&
+    !refreshableDryRun &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1573,13 +1701,21 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     ? state.getActiveRepoProviderCooldown(repo)
     : undefined;
   if (activeCooldown && input.processedHeadPolicy !== "retry_failed_head") {
-    recordProviderCooldownSkip({
-      state,
-      repo,
-      pull,
-      cooldownUntil: activeCooldown.cooldownUntil,
-      reason: activeCooldown.reason
-    });
+    if (
+      !retryableApprovedDryRunPrePostFailure &&
+      !(
+        processed?.status === "dry_run" &&
+        (approvedDryRunTransition || refreshableDryRun)
+      )
+    ) {
+      recordProviderCooldownSkip({
+        state,
+        repo,
+        pull,
+        cooldownUntil: activeCooldown.cooldownUntil,
+        reason: activeCooldown.reason
+      });
+    }
     return "skipped_provider_cooldown";
   }
   if (input.processedHeadPolicy === "retry_failed_head") {
@@ -1750,6 +1886,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_context_budget";
     }
 
+    const assertApprovedProviderConfigCurrent = (): void => {
+      if (!input.configRevision || !input.sourceConfigRevision) return;
+      assertReviewApprovalRevisionCurrent({
+        approvedRevision: input.configRevision,
+        sourceConfigRevision: input.sourceConfigRevision,
+        useZCode: input.useZCode,
+        zcodeAppConfigPath: config.zcode.appConfigPath
+      });
+    };
+    assertApprovedProviderConfigCurrent();
     const zcodeExecution = await runReviewWithContextBudget({
       config,
       github,
@@ -1763,6 +1909,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       useZCode: input.useZCode,
       evidenceDir
     });
+    assertApprovedProviderConfigCurrent();
     if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
     if (zcodeExecution.status === "skipped_context_budget") return "skipped_context_budget";
     const zcodeResult = zcodeExecution.result;
@@ -1806,6 +1953,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       worktreePath: worktree.path,
       evidenceDir
     });
+    assertApprovedProviderConfigCurrent();
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
     }
@@ -1910,10 +2058,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
+    assertApprovedProviderConfigCurrent();
     if (input.dryRun) {
-      // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
-      // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
-      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event: plan.event });
+      // Dry-run posts nothing public, but its durable proof must not replace an
+      // active or completed live review. The state transaction admits this row
+      // only while the exact head remains unclaimed and unprocessed.
+      const recorded = state.tryRecordDryRun({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        ...(input.configRevision ? { configRevision: input.configRevision } : {}),
+        event: plan.event
+      });
+      if (!recorded) return "skipped_processed";
       return manualReviewRequested ? "reviewed_command" : "reviewed";
     }
 
@@ -1929,7 +2086,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       // be able to replace that failed/deferred row after a successful provider retry.
       allowProcessedOwnerSupersession: commandReviewRequested ||
         (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
-        input.processedHeadPolicy === "retry_failed_head"
+        input.processedHeadPolicy === "approved_dry_run" ||
+        input.processedHeadPolicy === "retry_failed_head",
+      ...(input.processedHeadPolicy === "approved_dry_run"
+        ? {
+            requiredProcessedStatusForSupersession: "dry_run" as const,
+            requiredProcessedConfigRevisionForSupersession: input.configRevision,
+            consumeProcessedApprovalOnAcquire: true
+          }
+        : {})
     });
     if (headClaimAttempt.status === "blocked") {
       if (headClaimAttempt.reason === "active_claim") {
@@ -2136,31 +2301,48 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
-    if (reviewEventResolution.consumed) {
-      if (
-        reviewEventResolution.authorization.status !== "eligible" ||
-        !review.html_url
-      ) {
-        throw new Error("consumed owner authorization did not produce a durable review receipt");
+    try {
+      if (reviewEventResolution.consumed) {
+        if (
+          reviewEventResolution.authorization.status !== "eligible" ||
+          !review.html_url
+        ) {
+          throw new Error("consumed owner authorization did not produce a durable review receipt");
+        }
+        state.recordAuthorizedReviewPosted({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          commentId: reviewEventResolution.authorization.commentId,
+          author: reviewEventResolution.authorization.author,
+          event: plan.event,
+          reviewUrl: review.html_url,
+          preserveExistingBlocking: preservedPriorBlockingRow
+        });
+      } else if (!preservedPriorBlockingRow) {
+        state.recordProcessed({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          event: plan.event,
+          reviewUrl: review.html_url
+        });
       }
-      state.recordAuthorizedReviewPosted({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        commentId: reviewEventResolution.authorization.commentId,
-        author: reviewEventResolution.authorization.author,
+    } catch (error) {
+      throw new ReviewPostPersistenceError(error, {
         event: plan.event,
-        reviewUrl: review.html_url,
-        preserveExistingBlocking: preservedPriorBlockingRow
-      });
-    } else if (!preservedPriorBlockingRow) {
-      state.recordProcessed({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        status: "posted",
-        event: plan.event,
-        reviewUrl: review.html_url
+        reviewUrl: review.html_url ?? `${pull.html_url}#pullrequestreview-${review.id}`,
+        preserveExistingBlocking: preservedPriorBlockingRow,
+        ...(reviewEventResolution.consumed &&
+          reviewEventResolution.authorization.status === "eligible"
+          ? {
+              authorization: {
+                commentId: reviewEventResolution.authorization.commentId,
+                author: reviewEventResolution.authorization.author
+              }
+            }
+          : {})
       });
     }
     writeRedactedJsonBestEffort(join(evidenceDir, "posted-review.json"), {
@@ -3182,6 +3364,7 @@ export function recordFailedReview(input: {
   pull: PullRequestSummary;
   error: unknown;
   writeErrorEvidence?: boolean;
+  preserveExistingDryRun?: boolean;
 }): string {
   const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
   const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
@@ -3191,6 +3374,21 @@ export function recordFailedReview(input: {
     previousError: previous?.error,
     timeoutMs: input.config.zcode.timeoutMs ?? 180_000
   }) ?? rawErrorMessage;
+  if (
+    previous?.status === "skipped" &&
+    previous.error?.startsWith(APPROVED_DRY_RUN_LIVE_CLAIM_ERROR)
+  ) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "skipped",
+      ...(previous.configRevision ? { configRevision: previous.configRevision } : {}),
+      ...(previous.event ? { event: previous.event } : {}),
+      error: `${APPROVED_DRY_RUN_LIVE_CLAIM_ERROR}; post_error=${errorMessage}`
+    });
+    return errorMessage;
+  }
   if (input.writeErrorEvidence !== false) {
     mkdirSync(evidenceDir, { recursive: true });
     writeRedactedJson(join(evidenceDir, "review-error.json"), {
@@ -3201,13 +3399,18 @@ export function recordFailedReview(input: {
       recordedAt: new Date().toISOString()
     });
   }
-  input.state.recordProcessed({
-    repo: input.repo,
-    pullNumber: input.pull.number,
-    headSha: input.pull.head.sha,
-    status: "failed",
-    error: errorMessage
-  });
+  if (
+    previous?.status !== "posted" &&
+    !(input.preserveExistingDryRun && previous?.status === "dry_run")
+  ) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "failed",
+      error: errorMessage
+    });
+  }
   return errorMessage;
 }
 
@@ -3218,6 +3421,7 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   pull: PullRequestSummary;
   error: unknown;
   now?: Date;
+  preserveExistingDryRun?: boolean;
 }): boolean {
   if (!input.config.providerCooldown.enabled) return false;
   const classification = classifyProviderError(input.error);
@@ -3234,17 +3438,202 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
     cooldownUntil,
     reason: classification.reason
   });
-  recordProviderCooldownSkip({
-    state: input.state,
-    repo: input.repo,
-    pull: input.pull,
-    cooldownUntil: cooldownUntil.toISOString(),
-    reason: classification.reason,
-    ...(classification.category === "overloaded" ? { retryAttempt } : {}),
-    ...(classification.category === "overloaded" && classification.providerCode ? { providerCode: classification.providerCode } : {}),
-    ...(classification.category === "overloaded" && classification.retryAfterMs ? { retryAfterMs: classification.retryAfterMs } : {})
-  });
+  if (
+    input.preserveExistingDryRun &&
+    previous?.status === "skipped" &&
+    previous.error?.startsWith(APPROVED_DRY_RUN_LIVE_CLAIM_ERROR)
+  ) {
+    recordFailedReview({
+      config: input.config,
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      error: input.error,
+      preserveExistingDryRun: true
+    });
+    return true;
+  }
+  if (!(input.preserveExistingDryRun && previous?.status === "dry_run")) {
+    recordProviderCooldownSkip({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      cooldownUntil: cooldownUntil.toISOString(),
+      reason: classification.reason,
+      ...(classification.category === "overloaded" ? { retryAttempt } : {}),
+      ...(classification.category === "overloaded" && classification.providerCode ? { providerCode: classification.providerCode } : {}),
+      ...(classification.category === "overloaded" && classification.retryAfterMs ? { retryAfterMs: classification.retryAfterMs } : {})
+    });
+  }
   return true;
+}
+
+interface PostedReviewReceipt {
+  event: ReviewEvent;
+  reviewUrl: string;
+  preserveExistingBlocking: boolean;
+  authorization?: {
+    commentId: number;
+    author: string;
+  };
+}
+
+class ReviewPostPersistenceError extends Error {
+  readonly reviewAlreadyPosted = true;
+  readonly receipt: PostedReviewReceipt;
+
+  constructor(cause: unknown, receipt: PostedReviewReceipt) {
+    super(
+      `review posted but its durable receipt could not be recorded: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause }
+    );
+    this.name = "ReviewPostPersistenceError";
+    this.receipt = receipt;
+  }
+}
+
+export function reviewWasAlreadyPosted(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "reviewAlreadyPosted" in error &&
+    (error as { reviewAlreadyPosted?: unknown }).reviewAlreadyPosted === true
+  );
+}
+
+export function recoverPostedReviewReceipt(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  error: unknown;
+}): boolean {
+  if (!reviewWasAlreadyPosted(input.error)) return false;
+  const receipt = (input.error as { receipt?: PostedReviewReceipt }).receipt;
+  if (!receipt?.reviewUrl || !receipt.event) {
+    throw new Error("review posted but its recovery receipt is incomplete");
+  }
+  if (receipt.authorization) {
+    input.state.recordAuthorizedReviewPosted({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      commentId: receipt.authorization.commentId,
+      author: receipt.authorization.author,
+      event: receipt.event,
+      reviewUrl: receipt.reviewUrl,
+      preserveExistingBlocking: receipt.preserveExistingBlocking
+    });
+  } else if (!receipt.preserveExistingBlocking) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "posted",
+      event: receipt.event,
+      reviewUrl: receipt.reviewUrl
+    });
+  }
+  return true;
+}
+
+export async function recoverPostedReviewReceiptForCurrentHead(input: {
+  config: BotConfig;
+  github: Pick<GitHubApi, "getPull">;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  error: unknown;
+}): Promise<ReviewPullResult | undefined> {
+  if (!reviewWasAlreadyPosted(input.error)) return undefined;
+  const receipt = (input.error as { receipt?: PostedReviewReceipt }).receipt;
+  const priorPosted = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  const preservedPriorVerifiedBlockingRow = Boolean(
+    receipt?.preserveExistingBlocking &&
+    priorPosted?.status === "posted" &&
+    priorPosted.event === "REQUEST_CHANGES" &&
+    !priorPosted.error
+  );
+  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, {
+    action: "none",
+    shouldReview: false
+  });
+  try {
+    recoverPostedReviewReceipt(input);
+  } catch (recoveryError) {
+    writeRedactedJsonBestEffort(join(evidenceDir, "post-receipt-recovery-persistence-failed.json"), {
+      reason: "post_receipt_recovery_persistence_failed",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      reviewUrl: receipt?.reviewUrl,
+      error: redactSecrets(
+        recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
+      ).slice(0, 300)
+    });
+    return "posted_head_unverified";
+  }
+
+  let liveHeadSha: string | undefined;
+  let lookupError: unknown;
+  try {
+    liveHeadSha = (await input.github.getPull(input.repo, input.pull.number)).head.sha;
+  } catch (error) {
+    lookupError = error;
+  }
+
+  const uncertaintyReason = lookupError
+    ? POST_REVIEW_HEAD_UNVERIFIED_ERROR
+    : liveHeadSha !== input.pull.head.sha
+      ? REVIEW_POSTED_HEAD_CHANGED_ERROR
+      : undefined;
+  if (!uncertaintyReason) return "reviewed";
+
+  if (lookupError) {
+    writeRedactedJsonBestEffort(join(evidenceDir, "post-receipt-recovery-head-lookup-failed.json"), {
+      reason: "post_receipt_recovery_head_lookup_failed",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      reviewUrl: receipt?.reviewUrl,
+      error: redactSecrets(lookupError instanceof Error ? lookupError.message : String(lookupError)).slice(0, 300)
+    });
+  } else {
+    writeRedactedJsonBestEffort(join(evidenceDir, "head-changed-during-receipt-recovery.json"), {
+      reason: "head_changed_during_receipt_recovery",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      liveHeadSha,
+      reviewUrl: receipt?.reviewUrl
+    });
+  }
+
+  if (!preservedPriorVerifiedBlockingRow) {
+    const durablePosted = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+    if (durablePosted?.status === "posted") {
+      input.state.recordProcessed({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        status: "posted",
+        ...(durablePosted.event ? { event: durablePosted.event } : {}),
+        ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
+        error: uncertaintyReason
+      });
+      input.state.recordReviewReadiness({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        state: lookupError ? "failed" : "stale",
+        reason: uncertaintyReason,
+        ...(durablePosted.event ? { event: durablePosted.event } : {}),
+        ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {})
+      });
+    }
+  }
+  return lookupError ? "posted_head_unverified" : "posted_stale_head";
 }
 
 /**

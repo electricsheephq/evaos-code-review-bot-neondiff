@@ -269,8 +269,9 @@ neondiff review-pr \
   --config "$work_dir/config.local.json" \
   --repo owner/name \
   --pr 123 \
+  --expected-config-revision "<verified-config-revision>" \
   --dry-run true \
-  --zcode false
+  --zcode true
 ```
 
 Evidence to capture:

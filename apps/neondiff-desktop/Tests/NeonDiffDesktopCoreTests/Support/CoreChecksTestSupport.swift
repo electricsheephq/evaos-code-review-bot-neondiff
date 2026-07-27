@@ -111,6 +111,15 @@ final class CoreCLIFixture {
           printf '{"ok":false}\n'
           exit 2
         fi
+        if [[ "$1" == "environment-check" ]]; then
+          if [[ "$NEONDIFF_GITHUB_APP_ID" == "4184532" ]] && \
+             [[ "$NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH" == "/fixture/app.pem" ]]; then
+            printf '{"ok":true,"environment":"present"}\n'
+            exit 0
+          fi
+          printf '{"ok":false,"environment":"missing"}\n'
+          exit 3
+        fi
         printf '{"command":"%s","args":%d}\n' "$1" "$#"
         """.write(to: cliURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cliURL.path)

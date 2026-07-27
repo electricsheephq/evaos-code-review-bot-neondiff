@@ -120,7 +120,14 @@ vi.mock("../src/walkthrough.js", async (importOriginal) => {
   };
 });
 
-const { localDateFolder, prepareFailedHeadRetry, reviewPull: reviewPullImpl } = await import("../src/worker.js");
+const {
+  localDateFolder,
+  prepareFailedHeadRetry,
+  recoverPostedReviewReceipt,
+  recoverPostedReviewReceiptForCurrentHead,
+  reviewPull: reviewPullImpl,
+  reviewWasAlreadyPosted
+} = await import("../src/worker.js");
 const reviewPull = (input: Parameters<typeof reviewPullImpl>[0]) => reviewPullImpl({
   ...input,
   pull: {
@@ -413,6 +420,605 @@ describe("worker context budget preflight", () => {
     const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, pull.head.sha);
     const reviewPlan = JSON.parse(readFileSync(join(evidenceDir, "review-plan.json"), "utf8"));
     expect(reviewPlan.comments).toHaveLength(1);
+    state.close();
+  });
+
+  it("permits one exact live review to supersede its matching dry-run row", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-dry-to-live-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(416, "f".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    const configRevision = "a".repeat(64);
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Approved dry-to-live finding")]);
+    const github = githubForPull(pull, files);
+
+    const dryResult = await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision
+    });
+    await expect(reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      processedHeadPolicy: "approved_dry_run"
+    })).rejects.toThrow(
+      "approved dry-run transition requires an exact configuration revision"
+    );
+    expect(createdReviews).toHaveLength(0);
+    const liveResult = await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "approved_dry_run"
+    });
+
+    expect(dryResult).toBe("reviewed");
+    expect(liveResult).toBe("reviewed");
+    expect(createdReviews).toHaveLength(1);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "posted"
+    });
+    state.close();
+  });
+
+  it("refuses an approved live review when no matching dry-run receipt exists", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-live-without-dry-run-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(420, "8".repeat(40));
+    const configRevision = "b".repeat(64);
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "approved_dry_run"
+    })).toBe("skipped_processed");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toBeUndefined();
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
+  it("does not let a daemon dry-run overwrite an already posted head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-dry-posted-head-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(418, "d".repeat(40));
+    const github = githubForPull(pull, [pullFile("src/a.ts", 200)]);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/418#pullrequestreview-1"
+    });
+
+    expect(await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    })).toBe("skipped_processed");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/418#pullrequestreview-1"
+    });
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
+  it("marks a post-success receipt persistence failure as already posted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-post-receipt-failure-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(417, "e".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    const configRevision = "c".repeat(64);
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Posted before receipt failure")]);
+    const github = githubForPull(pull, files);
+
+    await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision
+    });
+    const persistence = vi.spyOn(state, "recordProcessed")
+      .mockImplementationOnce(() => {
+        throw new Error("state receipt unavailable");
+      });
+
+    let caught: unknown;
+    try {
+      await reviewPull({
+        config,
+        github,
+        state,
+        repo: "electricsheephq/WorldOS",
+        pull,
+        dryRun: false,
+        useZCode: true,
+        configRevision,
+        processedHeadPolicy: "approved_dry_run"
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(createdReviews).toHaveLength(1);
+    expect(reviewWasAlreadyPosted(caught)).toBe(true);
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain(
+      "review posted but its durable receipt could not be recorded"
+    );
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      configRevision,
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+    expect(await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "approved_dry_run"
+    })).toBe("skipped_processed");
+    expect(createdReviews).toHaveLength(1);
+    persistence.mockRestore();
+    expect(recoverPostedReviewReceipt({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: caught
+    })).toBe(true);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/417#pullrequestreview-1"
+    });
+    state.close();
+  });
+
+  it("withholds current-head success when a recovered review receipt belongs to a stale head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-recovered-receipt-stale-head-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(419, "a".repeat(40));
+    const error = Object.assign(new Error("receipt persistence failed"), {
+      reviewAlreadyPosted: true,
+      receipt: {
+        event: "COMMENT" as const,
+        reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/419#pullrequestreview-1",
+        preserveExistingBlocking: false
+      }
+    });
+
+    const result = await recoverPostedReviewReceiptForCurrentHead({
+      config,
+      github: {
+        getPull: async () => pullSummary(419, "b".repeat(40))
+      },
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error
+    });
+
+    expect(result).toBe("posted_stale_head");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/419#pullrequestreview-1",
+      error: "review_posted_head_changed"
+    });
+    state.close();
+  });
+
+  it("fails closed without throwing when posted-review receipt recovery cannot persist", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-recovered-receipt-persistence-failed-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(420, "d".repeat(40));
+    mkdirSync(join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha
+    ), { recursive: true });
+    const error = Object.assign(new Error("receipt persistence failed"), {
+      reviewAlreadyPosted: true,
+      receipt: {
+        event: "COMMENT" as const,
+        reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/420#pullrequestreview-1",
+        preserveExistingBlocking: false
+      }
+    });
+    const getPull = vi.fn(async () => pullSummary(420, pull.head.sha));
+    const persistence = vi.spyOn(state, "recordProcessed").mockImplementation(() => {
+      throw new Error("state write still unavailable");
+    });
+
+    await expect(recoverPostedReviewReceiptForCurrentHead({
+      config,
+      github: { getPull },
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error
+    })).resolves.toBe("posted_head_unverified");
+    expect(getPull).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "post-receipt-recovery-persistence-failed.json"
+    ), "utf8"))).toMatchObject({
+      reason: "post_receipt_recovery_persistence_failed",
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 420,
+      expectedHeadSha: pull.head.sha,
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/420#pullrequestreview-1",
+      error: "state write still unavailable"
+    });
+    persistence.mockRestore();
+    state.close();
+  });
+
+  it("withholds current-head success when recovered receipt head verification is unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-recovered-receipt-unverified-head-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(420, "c".repeat(40));
+    const lookupSecret = ["ghp", "recovery", "lookup", "secret"].join("_");
+    mkdirSync(join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha
+    ), { recursive: true });
+    const error = Object.assign(new Error("receipt persistence failed"), {
+      reviewAlreadyPosted: true,
+      receipt: {
+        event: "COMMENT" as const,
+        reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/420#pullrequestreview-1",
+        preserveExistingBlocking: false
+      }
+    });
+
+    const result = await recoverPostedReviewReceiptForCurrentHead({
+      config,
+      github: {
+        getPull: async () => { throw new Error(`lookup failed ${lookupSecret}`); }
+      },
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error
+    });
+
+    expect(result).toBe("posted_head_unverified");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      error: "post_review_head_unverified"
+    });
+    const incident = JSON.parse(readFileSync(join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "post-receipt-recovery-head-lookup-failed.json"
+    ), "utf8"));
+    expect(JSON.stringify(incident)).not.toContain(lookupSecret);
+    state.close();
+  });
+
+  it("permits a fresh dry proof after a consumed live approval fails before posting", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-consumed-live-failed-before-post-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(421, "7".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    const configRevision = "d".repeat(64);
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Fresh approval after failed live post")]);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision,
+      event: "COMMENT",
+      error: "approved_dry_run_consumed_for_live_post; post_error=provider transport failed before posting"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision
+    })).toBe("reviewed");
+    expect(createdReviews).toHaveLength(0);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision
+    });
+    state.close();
+  });
+
+  it("does not replace an uncertain post-success receipt with a fresh dry proof", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-consumed-live-post-uncertain-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(422, "6".repeat(40));
+    const configRevision = "e".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision,
+      event: "COMMENT",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision
+    })).toBe("skipped_processed");
+    expect(createdReviews).toHaveLength(0);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+    state.close();
+  });
+
+  it("preserves an approved dry-run receipt while the repository provider cooldown is active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-dry-run-active-cooldown-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.providerCooldown.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(419, "9".repeat(40));
+    const configRevision = "a".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run",
+      configRevision
+    });
+    state.recordRepoProviderCooldown({
+      repo: "electricsheephq/WorldOS",
+      cooldownUntil: new Date("2999-01-01T00:00:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "approved_dry_run"
+    })).toBe("skipped_provider_cooldown");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision
+    });
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
+  it("preserves a retryable consumed approval while a replacement dry run is provider-cooled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retryable-approval-active-cooldown-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.providerCooldown.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(424, "6".repeat(40));
+    const configRevision = "c".repeat(64);
+    const retryableError = "approved_dry_run_consumed_for_live_post; post_error=provider transport failed before posting";
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision,
+      error: retryableError
+    });
+    state.recordRepoProviderCooldown({
+      repo: "electricsheephq/WorldOS",
+      cooldownUntil: new Date("2999-01-01T00:00:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "refresh_dry_run"
+    })).toBe("skipped_provider_cooldown");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      configRevision,
+      error: retryableError
+    });
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
+  it("deduplicates ordinary daemon dry runs for an unchanged processed head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-dry-run-dedup-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(425, "7".repeat(40));
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    })).toBe("skipped_processed");
+    expect(zcodePrompts).toHaveLength(0);
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
+  it("admits a fresh dry proof after a pre-claim live failure leaves the prior dry receipt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-refresh-approved-dry-run-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(423, "5".repeat(40));
+    const oldRevision = "a".repeat(64);
+    const newRevision = "b".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run",
+      configRevision: oldRevision
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision: newRevision,
+      processedHeadPolicy: "refresh_dry_run"
+    })).toBe("reviewed");
+    expect(createdReviews).toHaveLength(0);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision: newRevision
+    });
     state.close();
   });
 
