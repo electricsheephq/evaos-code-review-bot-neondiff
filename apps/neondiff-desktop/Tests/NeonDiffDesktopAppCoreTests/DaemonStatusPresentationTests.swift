@@ -64,9 +64,45 @@ import NeonDiffDesktopCore
             },
             "gates": [
               {
+                "name": "launchd_running",
+                "ok": true
+              },
+              {
+                "name": "launchd_config",
+                "ok": true
+              },
+              {
+                "name": "launchd_node_system_ca",
+                "ok": true
+              },
+              {
+                "name": "live_db_no_errors",
+                "ok": true
+              },
+              {
+                "name": "provider_cooldown_backlog",
+                "ok": true
+              },
+              {
                 "name": "queue_no_failed_jobs",
                 "ok": false,
                 "detail": "2 failed durable queue job(s)"
+              },
+              {
+                "name": "queue_no_zcode_timeout_failed_jobs",
+                "ok": true
+              },
+              {
+                "name": "queue_no_stale_review_leases",
+                "ok": true
+              },
+              {
+                "name": "queue_no_retryable_provider_deferred_jobs",
+                "ok": true
+              },
+              {
+                "name": "daemon_heartbeat_recent",
+                "ok": true
               }
             ]
           }
@@ -91,6 +127,91 @@ import NeonDiffDesktopCore
             fixture.model.customerLocalWorkerStatusDetail
                 == "Review worker needs attention — open Advanced Diagnostics"
         )
+    }
+
+    @Test func releaseReadinessFailureDoesNotMislabelAHealthyWorker() {
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.isOnboardingPresented = false
+        let response = #"""
+        {
+          "ok": false,
+          "command": "daemon status",
+          "operation": "status",
+          "status": {
+            "ok": false,
+            "checkedAt": "2026-07-27T02:14:31.507Z",
+            "launchd": {
+              "state": "running"
+            },
+            "gates": [
+              {"name": "clean_checkout", "ok": false},
+              {"name": "release_branch", "ok": false},
+              {"name": "launchd_running", "ok": true},
+              {"name": "launchd_config", "ok": true},
+              {"name": "launchd_node_system_ca", "ok": true},
+              {"name": "live_db_no_errors", "ok": true},
+              {"name": "provider_cooldown_backlog", "ok": true},
+              {"name": "queue_no_failed_jobs", "ok": true},
+              {"name": "queue_no_zcode_timeout_failed_jobs", "ok": true},
+              {"name": "queue_no_stale_review_leases", "ok": true},
+              {"name": "queue_no_retryable_provider_deferred_jobs", "ok": true},
+              {"name": "daemon_heartbeat_recent", "ok": true}
+            ]
+          }
+        }
+        """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 1, stdout: response, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+
+        #expect(fixture.model.status.healthState == "runtime_ok")
+        #expect(fixture.model.status.runtimeOk == true)
+        #expect(fixture.model.statusRefreshFailureMessage == nil)
+        #expect(fixture.model.customerSurfaceStatus == "WORKER READY")
+        #expect(fixture.model.customerLocalWorkerStatusDetail == "Running and ready")
+    }
+
+    @Test func malformedCurrentStatusEnvelopeFailsClosed() {
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.isOnboardingPresented = false
+        let response = #"""
+        {
+          "ok": true,
+          "command": "daemon status",
+          "operation": "status",
+          "status": {
+            "ok": true,
+            "launchd": {
+              "state": "invalid"
+            },
+            "gates": [
+              {}
+            ]
+          }
+        }
+        """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: response, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+
+        #expect(fixture.model.status == .unknown)
+        #expect(
+            fixture.model.statusRefreshFailureMessage
+                == "Local worker status check failed. Retry or open Advanced Diagnostics."
+        )
+        #expect(fixture.model.customerSurfaceStatus == "NOT CHECKED")
     }
 
     @Test func structuredStatusErrorRemainsActionableAndFailClosed() {

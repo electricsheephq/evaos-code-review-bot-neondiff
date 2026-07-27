@@ -23,13 +23,43 @@ public enum DaemonStatusParser {
         let launchd = effective["launchd"] as? [String: Any]
         let launchdState = (launchd?["state"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let isCurrentDaemonStatusEnvelope =
-            statusPayload != nil
-            && json["command"] as? String == "daemon status"
-            && json["operation"] as? String == "status"
-            && effectiveOk != nil
-            && launchdState?.isEmpty == false
-            && effective["gates"] is [[String: Any]]
+        let currentEnvelopeRuntimeOk: Bool? = {
+            guard statusPayload != nil,
+                  json["command"] as? String == "daemon status",
+                  json["operation"] as? String == "status",
+                  effectiveOk != nil,
+                  let launchdState,
+                  currentDaemonLaunchdStates.contains(launchdState),
+                  let gateRows = effective["gates"] as? [[String: Any]],
+                  !gateRows.isEmpty
+            else {
+                return nil
+            }
+
+            var gateResults: [String: Bool] = [:]
+            for row in gateRows {
+                guard let rawName = row["name"] as? String,
+                      let ok = row["ok"] as? Bool
+                else {
+                    return nil
+                }
+                let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty, gateResults[name] == nil else {
+                    return nil
+                }
+                gateResults[name] = ok
+            }
+            guard currentDaemonWorkerGateNames.allSatisfy({
+                gateResults[$0] != nil
+            }) else {
+                return nil
+            }
+            return launchdState == "running"
+                && currentDaemonWorkerGateNames.allSatisfy({
+                    gateResults[$0] == true
+                })
+        }()
+        let isCurrentDaemonStatusEnvelope = currentEnvelopeRuntimeOk != nil
         let hasSubstantiveStatusShape = reportedRuntimeOk != nil
             || reportedHealthState?.isEmpty == false
             || isCurrentDaemonStatusEnvelope
@@ -44,11 +74,9 @@ public enum DaemonStatusParser {
         let repos = monitoredRepos.map { RepoMonitor(name: $0, enabled: true) }
         let ok = wrapperOk ?? effectiveOk ?? false
         let runtimeOk = reportedRuntimeOk
-            ?? (isCurrentDaemonStatusEnvelope ? effectiveOk : nil)
+            ?? currentEnvelopeRuntimeOk
             ?? ok
-        let inferredHealthOk = isCurrentDaemonStatusEnvelope
-            ? (effectiveOk ?? false)
-            : ok
+        let inferredHealthOk = currentEnvelopeRuntimeOk ?? ok
         let healthState = reportedHealthState
             ?? (inferredHealthOk ? "runtime_ok" : "runtime_blocked")
         let launchdLabel = launchdLabel ?? launchd?["label"] as? String
@@ -64,3 +92,22 @@ public enum DaemonStatusParser {
         return (status, repos)
     }
 }
+
+private let currentDaemonLaunchdStates: Set<String> = [
+    "running",
+    "not_running",
+    "unknown"
+]
+
+private let currentDaemonWorkerGateNames: Set<String> = [
+    "launchd_running",
+    "launchd_config",
+    "launchd_node_system_ca",
+    "live_db_no_errors",
+    "provider_cooldown_backlog",
+    "queue_no_failed_jobs",
+    "queue_no_zcode_timeout_failed_jobs",
+    "queue_no_stale_review_leases",
+    "queue_no_retryable_provider_deferred_jobs",
+    "daemon_heartbeat_recent"
+]
