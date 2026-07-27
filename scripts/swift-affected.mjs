@@ -39,8 +39,102 @@ const SWIFT_WORKFLOW_FILES = new Set([
   ".github/workflows/swift-desktop-gate.yml"
 ]);
 
+const EMPTY_LANES = Object.freeze({
+  core: false,
+  fixtureChecks: false,
+  appCore: false,
+  evaluationSupport: false,
+  hostedXCUITest: false
+});
+
+const ALL_LANES = Object.freeze({
+  core: true,
+  fixtureChecks: true,
+  appCore: true,
+  evaluationSupport: true,
+  hostedXCUITest: true
+});
+
+function normalizedPath(file) {
+  return file.replaceAll("\\", "/").replace(/^\.\/+/, "").trim();
+}
+
+function lanesForPath(file) {
+  const normalized = normalizedPath(file);
+  if (!isSwiftRelevantPath(normalized)) return EMPTY_LANES;
+
+  if (
+    SWIFT_WORKFLOW_FILES.has(normalized)
+    || SWIFT_ROOT_FILES.has(normalized)
+    || normalized === "apps/neondiff-desktop/Package.swift"
+    || normalized === "apps/neondiff-desktop/Package.resolved"
+    || normalized.startsWith("apps/neondiff-desktop/script/")
+    || normalized.startsWith("apps/neondiff-desktop/scripts/")
+  ) {
+    return ALL_LANES;
+  }
+
+  if (
+    normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopCore/")
+    || normalized.startsWith("apps/neondiff-desktop/Tests/NeonDiffDesktopCoreTests/")
+  ) {
+    return { ...EMPTY_LANES, core: true, appCore: true };
+  }
+
+  if (
+    normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopAppCore/")
+    || normalized.startsWith("apps/neondiff-desktop/Tests/NeonDiffDesktopAppCoreTests/")
+  ) {
+    return { ...EMPTY_LANES, appCore: true };
+  }
+
+  if (
+    normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopEvaluationSupport/")
+    || normalized.startsWith("apps/neondiff-desktop/Tests/NeonDiffDesktopEvaluationSupportTests/")
+  ) {
+    return { ...EMPTY_LANES, evaluationSupport: true };
+  }
+
+  if (
+    normalized.startsWith("apps/neondiff-desktop/UITests/")
+    || normalized.startsWith("apps/neondiff-desktop/NeonDiffDesktop.xcodeproj/")
+    || normalized === "apps/neondiff-desktop/NeonDiffDesktop.xctestplan"
+  ) {
+    return { ...EMPTY_LANES, hostedXCUITest: true };
+  }
+
+  if (normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktop/")) {
+    return {
+      ...EMPTY_LANES,
+      fixtureChecks: true,
+      appCore: true,
+      hostedXCUITest: true
+    };
+  }
+
+  if (
+    normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopFixture")
+    || normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopGeometry")
+    || normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopReachability")
+    || normalized.startsWith("apps/neondiff-desktop/Sources/NeonDiffDesktopSettledGeometry")
+    || normalized.startsWith("apps/neondiff-desktop/Checks/")
+    || normalized.startsWith("apps/neondiff-desktop/fixtures/ui/")
+  ) {
+    return {
+      ...EMPTY_LANES,
+      fixtureChecks: true,
+      evaluationSupport: true,
+      hostedXCUITest: true
+    };
+  }
+
+  // An unclassified desktop path fails open to every lane. Adding a new
+  // target must never silently reduce required CI coverage.
+  return ALL_LANES;
+}
+
 export function isSwiftRelevantPath(file) {
-  const normalized = file.replaceAll("\\", "/").replace(/^\.\/+/, "").trim();
+  const normalized = normalizedPath(file);
   if (!normalized) return false;
   if (SWIFT_ROOT_FILES.has(normalized)) return true;
   if (SWIFT_WORKFLOW_FILES.has(normalized)) return true;
@@ -49,13 +143,21 @@ export function isSwiftRelevantPath(file) {
 
 export function summarizeSwiftAffected(files) {
   const normalizedFiles = files
-    .map((file) => file.replaceAll("\\", "/").replace(/^\.\/+/, "").trim())
+    .map(normalizedPath)
     .filter(Boolean);
   const matched = normalizedFiles.filter(isSwiftRelevantPath);
+  const lanes = matched.reduce((summary, file) => {
+    const classified = lanesForPath(file);
+    for (const lane of Object.keys(summary)) {
+      summary[lane] ||= classified[lane];
+    }
+    return summary;
+  }, { ...EMPTY_LANES });
   return {
     affected: matched.length > 0,
     matched,
-    files: normalizedFiles
+    files: normalizedFiles,
+    lanes
   };
 }
 

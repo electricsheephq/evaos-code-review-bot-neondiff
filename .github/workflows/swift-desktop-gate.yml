@@ -9,6 +9,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      full_candidate:
+        description: Run the exact-head hosted XCUITest and release-boundary candidate gates
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -23,6 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       affected: ${{ steps.impact.outputs.affected }}
+      core: ${{ steps.impact.outputs.core }}
+      fixture_checks: ${{ steps.impact.outputs.fixture_checks }}
+      app_core: ${{ steps.impact.outputs.app_core }}
+      evaluation_support: ${{ steps.impact.outputs.evaluation_support }}
+      hosted_xcuitest: ${{ steps.impact.outputs.hosted_xcuitest }}
+      full_candidate: ${{ steps.impact.outputs.full_candidate }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -44,10 +56,14 @@ jobs:
           PULL_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CURRENT_SHA: ${{ github.sha }}
           BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_REF: ${{ github.ref }}
+          REQUEST_FULL_CANDIDATE: ${{ inputs.full_candidate }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo '{"affected":true,"matched":["manual dispatch"],"files":["manual dispatch"]}' > swift-impact.json
+            node scripts/swift-affected.mjs \
+              --files .github/workflows/swift-desktop-gate.yml \
+              > swift-impact.json
           elif [ "$EVENT_NAME" = "pull_request" ]; then
             git fetch --no-tags origin "$BASE_REF" || true
             if [ -n "$BASE_REF" ] && git cat-file -e "origin/$BASE_REF^{commit}" 2>/dev/null; then
@@ -56,7 +72,9 @@ jobs:
                 --head "$PULL_HEAD_SHA" \
                 > swift-impact.json
             else
-              echo '{"affected":true,"matched":["base ref unavailable; fail open"],"files":["base ref unavailable; fail open"]}' > swift-impact.json
+              node scripts/swift-affected.mjs \
+                --files .github/workflows/swift-desktop-gate.yml \
+                > swift-impact.json
             fi
           else
             BEFORE="$BEFORE_SHA"
@@ -71,37 +89,67 @@ jobs:
                   --head "$CURRENT_SHA" \
                   > swift-impact.json
               else
-                echo '{"affected":true,"matched":["before ref unavailable; fail open"],"files":["before ref unavailable; fail open"]}' > swift-impact.json
+                node scripts/swift-affected.mjs \
+                  --files .github/workflows/swift-desktop-gate.yml \
+                  > swift-impact.json
               fi
             fi
           fi
           cat swift-impact.json
-          AFFECTED="$(node <<'NODE'
+          node <<'NODE'
           const fs = require('fs');
+          const output = process.env.GITHUB_OUTPUT;
           try {
             const payload = JSON.parse(fs.readFileSync('swift-impact.json', 'utf8'));
-            console.log(payload && payload.affected === true ? 'true' : 'false');
+            const lanes = payload && payload.lanes ? payload.lanes : {};
+            const values = {
+              affected: payload && payload.affected === true,
+              core: lanes.core === true,
+              fixture_checks: lanes.fixtureChecks === true,
+              app_core: lanes.appCore === true,
+              evaluation_support: lanes.evaluationSupport === true,
+              hosted_xcuitest: lanes.hostedXCUITest === true,
+            };
+            fs.appendFileSync(output, Object.entries(values)
+              .map(([key, value]) => `${key}=${value ? 'true' : 'false'}`)
+              .join('\n') + '\n');
           } catch {
-            console.log('false');
+            fs.appendFileSync(output, [
+              'affected=true',
+              'core=true',
+              'fixture_checks=true',
+              'app_core=true',
+              'evaluation_support=true',
+              'hosted_xcuitest=true',
+            ].join('\n') + '\n');
           }
           NODE
-          )"
-          echo "affected=$AFFECTED" >> "$GITHUB_OUTPUT"
+
+          FULL_CANDIDATE=false
+          if [ "$EVENT_NAME" = "push" ] && [ "$CURRENT_REF" = "refs/heads/main" ]; then
+            FULL_CANDIDATE=true
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$REQUEST_FULL_CANDIDATE" = "true" ]; then
+            FULL_CANDIDATE=true
+          fi
+          echo "full_candidate=$FULL_CANDIDATE" >> "$GITHUB_OUTPUT"
           {
             echo "## Swift desktop impact"
             echo
-            echo "\`affected=$AFFECTED\`"
+            echo "\`full_candidate=$FULL_CANDIDATE\`"
             echo
             echo "\`\`\`json"
             cat swift-impact.json
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  swift-desktop-smoke:
-    name: Swift desktop smoke
+  swift-desktop-fast:
+    name: Swift desktop fast
     needs: swift-desktop-impact
-    if: needs.swift-desktop-impact.outputs.affected == 'true'
+    if: >-
+      needs.swift-desktop-impact.outputs.affected == 'true'
+      || needs.swift-desktop-impact.outputs.full_candidate == 'true'
     runs-on: macos-15
+    timeout-minutes: 10
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
@@ -155,22 +203,75 @@ jobs:
 
       - name: Swift build
         working-directory: apps/neondiff-desktop
+        timeout-minutes: 5
+        run: swift build -c debug --product NeonDiffDesktop
+
+      - name: Swift fixture support build
+        if: >-
+          needs.swift-desktop-impact.outputs.fixture_checks == 'true'
+          || needs.swift-desktop-impact.outputs.evaluation_support == 'true'
+          || needs.swift-desktop-impact.outputs.full_candidate == 'true'
+        working-directory: apps/neondiff-desktop
+        timeout-minutes: 5
         run: |
-          swift build -c debug --product NeonDiffDesktop
           swift build -c debug --product NeonDiffDesktopSettledGeometryCapture
           swift build -c debug --product NeonDiffDesktopGeometryChecks
-          swift build -c release --product NeonDiffDesktop
 
-      - name: Swift core, AppCore, and evaluation-support tests
+      - name: Swift Core tests
+        if: >-
+          needs.swift-desktop-impact.outputs.core == 'true'
+          || needs.swift-desktop-impact.outputs.full_candidate == 'true'
         working-directory: apps/neondiff-desktop
+        timeout-minutes: 8
+        run: time scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests
+
+      - name: Swift Fixture checks
+        if: >-
+          needs.swift-desktop-impact.outputs.fixture_checks == 'true'
+          || needs.swift-desktop-impact.outputs.full_candidate == 'true'
+        working-directory: apps/neondiff-desktop
+        timeout-minutes: 5
+        run: time swift run NeonDiffDesktopFixtureChecks
+
+      - name: Swift AppCore tests
+        if: >-
+          needs.swift-desktop-impact.outputs.app_core == 'true'
+          || needs.swift-desktop-impact.outputs.full_candidate == 'true'
+        working-directory: apps/neondiff-desktop
+        timeout-minutes: 8
+        run: time scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests
+
+      - name: Swift EvaluationSupport tests
+        if: >-
+          needs.swift-desktop-impact.outputs.evaluation_support == 'true'
+          || needs.swift-desktop-impact.outputs.full_candidate == 'true'
+        working-directory: apps/neondiff-desktop
+        timeout-minutes: 8
+        run: time scripts/run-required-swift-test-suite.sh NeonDiffDesktopEvaluationSupportTests
+
+  swift-desktop-xcuitest:
+    name: Swift desktop hosted XCUITest
+    needs: swift-desktop-impact
+    if: needs.swift-desktop-impact.outputs.full_candidate == 'true'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Record pinned Xcode toolchain
         run: |
-          scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests
-          swift run NeonDiffDesktopFixtureChecks
-          scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests
-          scripts/run-required-swift-test-suite.sh NeonDiffDesktopEvaluationSupportTests
+          set -euo pipefail
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          xcodebuild -version | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Hosted XCUITest smoke
-        timeout-minutes: 25
+        timeout-minutes: 18
         env:
           PROOF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           DERIVED_DATA: ${{ runner.temp }}/neondiff-desktop-derived-data
@@ -208,8 +309,55 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  swift-desktop-release-boundaries:
+    name: Swift desktop release boundaries
+    needs: swift-desktop-impact
+    if: needs.swift-desktop-impact.outputs.full_candidate == 'true'
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact candidate head and Xcode
+        env:
+          PROOF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PROOF_SHA"
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          xcodebuild -version | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build Node scanner
+        run: npm run build
+
+      - name: Node and Foundation secret-rule differential
+        run: npm run check:secret-rule-differential
+
+      - name: Swift candidate build
+        working-directory: apps/neondiff-desktop
+        timeout-minutes: 8
+        run: |
+          swift build -c debug --product NeonDiffDesktop
+          swift build -c release --product NeonDiffDesktop
+
       - name: Secret corpus production-artifact boundary
         shell: bash
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           debug_bin="$(cd apps/neondiff-desktop && swift build -c debug --show-bin-path)"
@@ -228,14 +376,17 @@ jobs:
 
       - name: Build app bundle
         working-directory: apps/neondiff-desktop
+        timeout-minutes: 5
         run: script/build_and_run.sh build
 
       - name: Bundle check
         working-directory: apps/neondiff-desktop
+        timeout-minutes: 3
         run: script/build_and_run.sh bundle-check
 
       - name: Archive Release fixture boundary
         shell: bash
+        timeout-minutes: 8
         env:
           PROOF_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           RELEASE_ARCHIVE: ${{ runner.temp }}/NeonDiffDesktop-release.xcarchive
@@ -252,6 +403,7 @@ jobs:
 
       - name: Evaluation fixture production-artifact boundary
         shell: bash
+        timeout-minutes: 5
         env:
           RELEASE_ARCHIVE: ${{ runner.temp }}/NeonDiffDesktop-release.xcarchive
         run: |
@@ -271,28 +423,33 @@ jobs:
             "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app" \
             "$RELEASE_ARCHIVE"
 
-  swift-desktop-gate:
-    name: Swift desktop gate
+  swift-desktop-candidate-gate:
+    name: Swift desktop candidate gate
     needs:
       - swift-desktop-impact
-      - swift-desktop-smoke
+      - swift-desktop-fast
+      - swift-desktop-xcuitest
+      - swift-desktop-release-boundaries
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Report Swift desktop gate status
+      - name: Report Swift desktop candidate gate status
         shell: bash
         env:
           IMPACT_RESULT: ${{ needs.swift-desktop-impact.result }}
-          SMOKE_RESULT: ${{ needs.swift-desktop-smoke.result }}
-          AFFECTED: ${{ needs.swift-desktop-impact.outputs.affected }}
+          FAST_RESULT: ${{ needs.swift-desktop-fast.result }}
+          XCUITEST_RESULT: ${{ needs.swift-desktop-xcuitest.result }}
+          RELEASE_RESULT: ${{ needs.swift-desktop-release-boundaries.result }}
+          FULL_CANDIDATE: ${{ needs.swift-desktop-impact.outputs.full_candidate }}
         run: |
           set -euo pipefail
           {
-            echo "## Swift desktop gate"
+            echo "## Swift desktop candidate gate"
             echo
-            echo "- impact job: \`$IMPACT_RESULT\`"
-            echo "- affected: \`${AFFECTED:-unknown}\`"
-            echo "- macOS smoke job: \`$SMOKE_RESULT\`"
+            echo "- requested: \`${FULL_CANDIDATE:-unknown}\`"
+            echo "- fast: \`$FAST_RESULT\`"
+            echo "- hosted XCUITest: \`$XCUITEST_RESULT\`"
+            echo "- release boundaries: \`$RELEASE_RESULT\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$IMPACT_RESULT" != "success" ]; then
@@ -300,18 +457,69 @@ jobs:
             exit 1
           fi
 
-          if [ "${AFFECTED:-false}" = "true" ]; then
-            if [ "$SMOKE_RESULT" != "success" ]; then
-              echo "Swift desktop files changed, but macOS smoke did not pass."
-              exit 1
-            fi
-            echo "Swift desktop files changed; macOS smoke passed."
+          if [ "${FULL_CANDIDATE:-false}" = "true" ]; then
+            test "$FAST_RESULT" = "success"
+            test "$XCUITEST_RESULT" = "success"
+            test "$RELEASE_RESULT" = "success"
+            echo "Exact-head Swift desktop candidate gate passed."
             exit 0
           fi
 
-          if [ "$SMOKE_RESULT" != "skipped" ]; then
-            echo "No Swift desktop files changed, but macOS smoke was not skipped."
+          test "$XCUITEST_RESULT" = "skipped"
+          test "$RELEASE_RESULT" = "skipped"
+          echo "Full candidate was not requested; candidate-only jobs correctly skipped."
+
+  swift-desktop-gate:
+    name: Swift desktop gate
+    needs:
+      - swift-desktop-impact
+      - swift-desktop-fast
+      - swift-desktop-candidate-gate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report Swift desktop gate status
+        shell: bash
+        env:
+          IMPACT_RESULT: ${{ needs.swift-desktop-impact.result }}
+          FAST_RESULT: ${{ needs.swift-desktop-fast.result }}
+          CANDIDATE_RESULT: ${{ needs.swift-desktop-candidate-gate.result }}
+          AFFECTED: ${{ needs.swift-desktop-impact.outputs.affected }}
+          FULL_CANDIDATE: ${{ needs.swift-desktop-impact.outputs.full_candidate }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Swift desktop gate"
+            echo
+            echo "- impact job: \`$IMPACT_RESULT\`"
+            echo "- affected: \`${AFFECTED:-unknown}\`"
+            echo "- full candidate: \`${FULL_CANDIDATE:-unknown}\`"
+            echo "- fast Mac job: \`$FAST_RESULT\`"
+            echo "- candidate gate: \`$CANDIDATE_RESULT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$IMPACT_RESULT" != "success" ]; then
+            echo "Swift desktop impact detection failed."
             exit 1
           fi
 
-          echo "No Swift desktop files changed; macOS smoke correctly skipped."
+          if [ "$CANDIDATE_RESULT" != "success" ]; then
+            echo "Swift desktop candidate gate did not report success."
+            exit 1
+          fi
+
+          if [ "${AFFECTED:-false}" = "true" ] || [ "${FULL_CANDIDATE:-false}" = "true" ]; then
+            if [ "$FAST_RESULT" != "success" ]; then
+              echo "Swift desktop work was required, but the fast Mac job did not pass."
+              exit 1
+            fi
+            echo "Required Swift desktop fast and candidate gates passed."
+            exit 0
+          fi
+
+          if [ "$FAST_RESULT" != "skipped" ]; then
+            echo "No Swift desktop files changed, but the fast Mac job was not skipped."
+            exit 1
+          fi
+
+          echo "No Swift desktop files changed; Mac jobs correctly skipped."
