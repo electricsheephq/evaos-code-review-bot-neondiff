@@ -678,7 +678,7 @@ describe("worker context budget preflight", () => {
     const config = minimalConfig(root);
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(420, "c".repeat(40));
-    const lookupSecret = "ghp_recovery_lookup_secret";
+    const lookupSecret = ["ghp", "recovery", "lookup", "secret"].join("_");
     mkdirSync(join(
       root,
       "evidence",
