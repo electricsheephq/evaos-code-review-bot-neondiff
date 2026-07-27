@@ -124,6 +124,7 @@ const {
   localDateFolder,
   prepareFailedHeadRetry,
   recoverPostedReviewReceipt,
+  recoverPostedReviewReceiptForCurrentHead,
   reviewPull: reviewPullImpl,
   reviewWasAlreadyPosted
 } = await import("../src/worker.js");
@@ -628,6 +629,103 @@ describe("worker context budget preflight", () => {
       event: "COMMENT",
       reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/417#pullrequestreview-1"
     });
+    state.close();
+  });
+
+  it("withholds current-head success when a recovered review receipt belongs to a stale head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-recovered-receipt-stale-head-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(419, "a".repeat(40));
+    const error = Object.assign(new Error("receipt persistence failed"), {
+      reviewAlreadyPosted: true,
+      receipt: {
+        event: "COMMENT" as const,
+        reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/419#pullrequestreview-1",
+        preserveExistingBlocking: false
+      }
+    });
+
+    const result = await recoverPostedReviewReceiptForCurrentHead({
+      config,
+      github: {
+        getPull: async () => pullSummary(419, "b".repeat(40))
+      },
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error
+    });
+
+    expect(result).toBe("posted_stale_head");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/419#pullrequestreview-1",
+      error: "review_posted_head_changed"
+    });
+    state.close();
+  });
+
+  it("withholds current-head success when recovered receipt head verification is unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-recovered-receipt-unverified-head-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(420, "c".repeat(40));
+    const lookupSecret = "ghp_recovery_lookup_secret";
+    mkdirSync(join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha
+    ), { recursive: true });
+    const error = Object.assign(new Error("receipt persistence failed"), {
+      reviewAlreadyPosted: true,
+      receipt: {
+        event: "COMMENT" as const,
+        reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/420#pullrequestreview-1",
+        preserveExistingBlocking: false
+      }
+    });
+
+    const result = await recoverPostedReviewReceiptForCurrentHead({
+      config,
+      github: {
+        getPull: async () => { throw new Error(`lookup failed ${lookupSecret}`); }
+      },
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error
+    });
+
+    expect(result).toBe("posted_head_unverified");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      error: "post_review_head_unverified"
+    });
+    const incident = JSON.parse(readFileSync(join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "post-receipt-recovery-head-lookup-failed.json"
+    ), "utf8"));
+    expect(JSON.stringify(incident)).not.toContain(lookupSecret);
     state.close();
   });
 

@@ -493,13 +493,16 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
-          if (recoverPostedReviewReceipt({
+          const recoveredStatus = await recoverPostedReviewReceiptForCurrentHead({
+            config,
+            github,
             state,
             repo,
             pull,
             error
-          })) {
-            result.reviewed += 1;
+          });
+          if (recoveredStatus) {
+            applyReviewPullResultToRunOnceResult(result, recoveredStatus);
             continue;
           }
           const preserveApprovedDryRun =
@@ -3530,6 +3533,90 @@ export function recoverPostedReviewReceipt(input: {
     });
   }
   return true;
+}
+
+export async function recoverPostedReviewReceiptForCurrentHead(input: {
+  config: BotConfig;
+  github: Pick<GitHubApi, "getPull">;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  error: unknown;
+}): Promise<ReviewPullResult | undefined> {
+  if (!reviewWasAlreadyPosted(input.error)) return undefined;
+  const receipt = (input.error as { receipt?: PostedReviewReceipt }).receipt;
+  const priorPosted = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  const preservedPriorVerifiedBlockingRow = Boolean(
+    receipt?.preserveExistingBlocking &&
+    priorPosted?.status === "posted" &&
+    priorPosted.event === "REQUEST_CHANGES" &&
+    !priorPosted.error
+  );
+  recoverPostedReviewReceipt(input);
+
+  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, {
+    action: "none",
+    shouldReview: false
+  });
+  let liveHeadSha: string | undefined;
+  let lookupError: unknown;
+  try {
+    liveHeadSha = (await input.github.getPull(input.repo, input.pull.number)).head.sha;
+  } catch (error) {
+    lookupError = error;
+  }
+
+  const uncertaintyReason = lookupError
+    ? POST_REVIEW_HEAD_UNVERIFIED_ERROR
+    : liveHeadSha !== input.pull.head.sha
+      ? REVIEW_POSTED_HEAD_CHANGED_ERROR
+      : undefined;
+  if (!uncertaintyReason) return "reviewed";
+
+  if (lookupError) {
+    writeRedactedJsonBestEffort(join(evidenceDir, "post-receipt-recovery-head-lookup-failed.json"), {
+      reason: "post_receipt_recovery_head_lookup_failed",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      reviewUrl: receipt?.reviewUrl,
+      error: redactSecrets(lookupError instanceof Error ? lookupError.message : String(lookupError)).slice(0, 300)
+    });
+  } else {
+    writeRedactedJsonBestEffort(join(evidenceDir, "head-changed-during-receipt-recovery.json"), {
+      reason: "head_changed_during_receipt_recovery",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      liveHeadSha,
+      reviewUrl: receipt?.reviewUrl
+    });
+  }
+
+  if (!preservedPriorVerifiedBlockingRow) {
+    const durablePosted = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+    if (durablePosted?.status === "posted") {
+      input.state.recordProcessed({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        status: "posted",
+        ...(durablePosted.event ? { event: durablePosted.event } : {}),
+        ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
+        error: uncertaintyReason
+      });
+      input.state.recordReviewReadiness({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        state: lookupError ? "failed" : "stale",
+        reason: uncertaintyReason,
+        ...(durablePosted.event ? { event: durablePosted.event } : {}),
+        ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {})
+      });
+    }
+  }
+  return lookupError ? "posted_head_unverified" : "posted_stale_head";
 }
 
 /**
