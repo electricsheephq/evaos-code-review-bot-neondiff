@@ -909,6 +909,80 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("preserves a retryable consumed approval while a replacement dry run is provider-cooled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-retryable-approval-active-cooldown-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.providerCooldown.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(424, "6".repeat(40));
+    const configRevision = "c".repeat(64);
+    const retryableError = "approved_dry_run_consumed_for_live_post; post_error=provider transport failed before posting";
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision,
+      error: retryableError
+    });
+    state.recordRepoProviderCooldown({
+      repo: "electricsheephq/WorldOS",
+      cooldownUntil: new Date("2999-01-01T00:00:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "refresh_dry_run"
+    })).toBe("skipped_provider_cooldown");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      configRevision,
+      error: retryableError
+    });
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
+  it("deduplicates ordinary daemon dry runs for an unchanged processed head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-dry-run-dedup-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(425, "7".repeat(40));
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    })).toBe("skipped_processed");
+    expect(zcodePrompts).toHaveLength(0);
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
   it("admits a fresh dry proof after a pre-claim live failure leaves the prior dry receipt", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-refresh-approved-dry-run-"));
     roots.push(root);
@@ -933,7 +1007,8 @@ describe("worker context budget preflight", () => {
       pull,
       dryRun: true,
       useZCode: true,
-      configRevision: newRevision
+      configRevision: newRevision,
+      processedHeadPolicy: "refresh_dry_run"
     })).toBe("reviewed");
     expect(createdReviews).toHaveLength(0);
     expect(state.getProcessedReview(

@@ -2104,7 +2104,9 @@ async function main(): Promise<void> {
         processedHeadPolicy:
           command === "review-pr" && !dryRun && reviewPrExpectedHeadSha
             ? "approved_dry_run"
-            : "normal"
+            : command === "review-pr" && dryRun
+              ? "refresh_dry_run"
+              : "normal"
       },
       commandName: command,
       admitImpl: async () => {

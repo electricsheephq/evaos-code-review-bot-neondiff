@@ -199,7 +199,7 @@ export interface RunOnceOptions {
   pullNumber?: number;
   expectedHeadSha?: string;
   expectedConfigRevision?: string;
-  processedHeadPolicy?: "normal" | "approved_dry_run";
+  processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run";
   useZCode?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
 }
@@ -1415,7 +1415,7 @@ export interface ReviewPullInput {
   configRevision?: string;
   sourceConfigRevision?: string;
   budget?: ReviewRunBudget;
-  processedHeadPolicy?: "normal" | "approved_dry_run" | "retry_failed_head";
+  processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run" | "retry_failed_head";
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
@@ -1451,7 +1451,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const retryableApprovedDryRunPrePostFailure =
     input.dryRun && isRetryableApprovedDryRunPrePostFailure(processed);
   const refreshableDryRun =
-    input.dryRun && processed?.status === "dry_run";
+    input.dryRun &&
+    input.processedHeadPolicy === "refresh_dry_run" &&
+    processed?.status === "dry_run";
   const approvedDryRunTransition =
     input.processedHeadPolicy === "approved_dry_run" &&
     processed?.status === "dry_run" &&
@@ -1700,6 +1702,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     : undefined;
   if (activeCooldown && input.processedHeadPolicy !== "retry_failed_head") {
     if (
+      !retryableApprovedDryRunPrePostFailure &&
       !(
         processed?.status === "dry_run" &&
         (approvedDryRunTransition || refreshableDryRun)
