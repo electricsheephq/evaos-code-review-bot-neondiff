@@ -11,15 +11,16 @@ public enum DaemonStatusParser {
 
         let statusPayload = json["status"] as? [String: Any]
         let effective = statusPayload ?? json
-        let reportedRuntimeOk = json["runtimeOk"] as? Bool ?? effective["runtimeOk"] as? Bool
+        let reportedRuntimeOk = strictJSONBool(json["runtimeOk"])
+            ?? strictJSONBool(effective["runtimeOk"])
         let rawReportedHealthState = (effective["healthState"] as? String)
             ?? (json["healthState"] as? String)
         let reportedHealthState = rawReportedHealthState.flatMap { state in
             let normalized = state.trimmingCharacters(in: .whitespacesAndNewlines)
             return normalized.isEmpty ? nil : normalized
         }
-        let wrapperOk = json["ok"] as? Bool
-        let effectiveOk = effective["ok"] as? Bool
+        let wrapperOk = strictJSONBool(json["ok"])
+        let effectiveOk = strictJSONBool(effective["ok"])
         let launchd = effective["launchd"] as? [String: Any]
         let launchdState = (launchd?["state"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -41,7 +42,7 @@ public enum DaemonStatusParser {
             var gateResults: [String: Bool] = [:]
             for row in gateRows {
                 guard let rawName = row["name"] as? String,
-                      let ok = row["ok"] as? Bool
+                      let ok = strictJSONBool(row["ok"])
                 else {
                     return nil
                 }
@@ -74,12 +75,16 @@ public enum DaemonStatusParser {
             ?? []
         let repos = monitoredRepos.map { RepoMonitor(name: $0, enabled: true) }
         let ok = wrapperOk ?? effectiveOk ?? false
-        let runtimeOk = reportedRuntimeOk
-            ?? currentEnvelopeRuntimeOk
-            ?? ok
-        let inferredHealthOk = currentEnvelopeRuntimeOk ?? ok
-        let healthState = reportedHealthState
-            ?? (inferredHealthOk ? "runtime_ok" : "runtime_blocked")
+        let runtimeOk: Bool
+        let healthState: String
+        if hasCurrentDaemonStatusSignature, let currentEnvelopeRuntimeOk {
+            runtimeOk = currentEnvelopeRuntimeOk
+            healthState = currentEnvelopeRuntimeOk ? "runtime_ok" : "runtime_blocked"
+        } else {
+            runtimeOk = reportedRuntimeOk ?? ok
+            healthState = reportedHealthState
+                ?? (ok ? "runtime_ok" : "runtime_blocked")
+        }
         let launchdLabel = launchdLabel ?? launchd?["label"] as? String
         let status = DaemonStatus(
             ok: ok,
@@ -92,6 +97,15 @@ public enum DaemonStatusParser {
         )
         return (status, repos)
     }
+}
+
+private func strictJSONBool(_ value: Any?) -> Bool? {
+    guard let number = value as? NSNumber,
+          CFGetTypeID(number) == CFBooleanGetTypeID()
+    else {
+        return nil
+    }
+    return number.boolValue
 }
 
 private let currentDaemonLaunchdStates: Set<String> = [

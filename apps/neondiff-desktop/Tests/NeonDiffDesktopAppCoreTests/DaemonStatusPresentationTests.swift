@@ -129,6 +129,99 @@ import NeonDiffDesktopCore
         )
     }
 
+    @Test func currentDaemonStatusRejectsNumericGateBooleans() {
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.isOnboardingPresented = false
+        let response = #"""
+        {
+          "ok": true,
+          "command": "daemon status",
+          "operation": "status",
+          "status": {
+            "ok": true,
+            "launchd": {
+              "state": "running"
+            },
+            "gates": [
+              {"name": "launchd_running", "ok": 1},
+              {"name": "launchd_config", "ok": 1},
+              {"name": "launchd_node_system_ca", "ok": 1},
+              {"name": "live_db_no_errors", "ok": 1},
+              {"name": "provider_cooldown_backlog", "ok": 1},
+              {"name": "queue_no_failed_jobs", "ok": 1},
+              {"name": "queue_no_zcode_timeout_failed_jobs", "ok": 1},
+              {"name": "queue_no_stale_review_leases", "ok": 1},
+              {"name": "queue_no_retryable_provider_deferred_jobs", "ok": 1},
+              {"name": "daemon_heartbeat_recent", "ok": 1}
+            ]
+          }
+        }
+        """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: response, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+
+        #expect(fixture.model.status == .unknown)
+        #expect(
+            fixture.model.statusRefreshFailureMessage
+                == "Local worker status check failed. Retry or open Advanced Diagnostics."
+        )
+        #expect(fixture.model.customerSurfaceStatus == "NOT CHECKED")
+    }
+
+    @Test func currentDaemonStatusIgnoresContradictoryLegacyHealthFields() {
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.isOnboardingPresented = false
+        let response = #"""
+        {
+          "ok": false,
+          "command": "daemon status",
+          "operation": "status",
+          "runtimeOk": true,
+          "healthState": "runtime_ok",
+          "status": {
+            "ok": false,
+            "runtimeOk": true,
+            "healthState": "runtime_ok",
+            "launchd": {
+              "state": "running"
+            },
+            "gates": [
+              {"name": "launchd_running", "ok": true},
+              {"name": "launchd_config", "ok": true},
+              {"name": "launchd_node_system_ca", "ok": true},
+              {"name": "live_db_no_errors", "ok": true},
+              {"name": "provider_cooldown_backlog", "ok": true},
+              {"name": "queue_no_failed_jobs", "ok": false},
+              {"name": "queue_no_zcode_timeout_failed_jobs", "ok": true},
+              {"name": "queue_no_stale_review_leases", "ok": true},
+              {"name": "queue_no_retryable_provider_deferred_jobs", "ok": true},
+              {"name": "daemon_heartbeat_recent", "ok": true}
+            ]
+          }
+        }
+        """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 1, stdout: response, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+
+        #expect(fixture.model.status.runtimeOk == false)
+        #expect(fixture.model.status.healthState == "runtime_blocked")
+        #expect(fixture.model.customerSurfaceStatus == "WORKER ATTENTION")
+    }
+
     @Test func releaseReadinessFailureDoesNotMislabelAHealthyWorker() {
         let fixture = ModelDependencyFixture(suspendCLIRuns: true)
         fixture.model.isOnboardingPresented = false
