@@ -471,6 +471,15 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
+          if (recoverPostedReviewReceipt({
+            state,
+            repo,
+            pull,
+            error
+          })) {
+            result.reviewed += 1;
+            continue;
+          }
           const preserveApprovedDryRun =
             options.processedHeadPolicy === "approved_dry_run" &&
             !reviewWasAlreadyPosted(error);
@@ -1652,13 +1661,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     ? state.getActiveRepoProviderCooldown(repo)
     : undefined;
   if (activeCooldown && input.processedHeadPolicy !== "retry_failed_head") {
-    recordProviderCooldownSkip({
-      state,
-      repo,
-      pull,
-      cooldownUntil: activeCooldown.cooldownUntil,
-      reason: activeCooldown.reason
-    });
+    if (!(approvedDryRunTransition && processed?.status === "dry_run")) {
+      recordProviderCooldownSkip({
+        state,
+        repo,
+        pull,
+        cooldownUntil: activeCooldown.cooldownUntil,
+        reason: activeCooldown.reason
+      });
+    }
     return "skipped_provider_cooldown";
   }
   if (input.processedHeadPolicy === "retry_failed_head") {
@@ -2259,7 +2270,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         });
       }
     } catch (error) {
-      throw new ReviewPostPersistenceError(error);
+      throw new ReviewPostPersistenceError(error, {
+        event: plan.event,
+        reviewUrl: review.html_url ?? `${pull.html_url}#pullrequestreview-${review.id}`,
+        preserveExistingBlocking: preservedPriorBlockingRow,
+        ...(reviewEventResolution.consumed &&
+          reviewEventResolution.authorization.status === "eligible"
+          ? {
+              authorization: {
+                commentId: reviewEventResolution.authorization.commentId,
+                author: reviewEventResolution.authorization.author
+              }
+            }
+          : {})
+      });
     }
     writeRedactedJsonBestEffort(join(evidenceDir, "posted-review.json"), {
       event: plan.event,
@@ -3354,10 +3378,21 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   return true;
 }
 
+interface PostedReviewReceipt {
+  event: ReviewEvent;
+  reviewUrl: string;
+  preserveExistingBlocking: boolean;
+  authorization?: {
+    commentId: number;
+    author: string;
+  };
+}
+
 class ReviewPostPersistenceError extends Error {
   readonly reviewAlreadyPosted = true;
+  readonly receipt: PostedReviewReceipt;
 
-  constructor(cause: unknown) {
+  constructor(cause: unknown, receipt: PostedReviewReceipt) {
     super(
       `review posted but its durable receipt could not be recorded: ${
         cause instanceof Error ? cause.message : String(cause)
@@ -3365,6 +3400,7 @@ class ReviewPostPersistenceError extends Error {
       { cause }
     );
     this.name = "ReviewPostPersistenceError";
+    this.receipt = receipt;
   }
 }
 
@@ -3375,6 +3411,41 @@ export function reviewWasAlreadyPosted(error: unknown): boolean {
     "reviewAlreadyPosted" in error &&
     (error as { reviewAlreadyPosted?: unknown }).reviewAlreadyPosted === true
   );
+}
+
+export function recoverPostedReviewReceipt(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  error: unknown;
+}): boolean {
+  if (!reviewWasAlreadyPosted(input.error)) return false;
+  const receipt = (input.error as { receipt?: PostedReviewReceipt }).receipt;
+  if (!receipt?.reviewUrl || !receipt.event) {
+    throw new Error("review posted but its recovery receipt is incomplete");
+  }
+  if (receipt.authorization) {
+    input.state.recordAuthorizedReviewPosted({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      commentId: receipt.authorization.commentId,
+      author: receipt.authorization.author,
+      event: receipt.event,
+      reviewUrl: receipt.reviewUrl,
+      preserveExistingBlocking: receipt.preserveExistingBlocking
+    });
+  } else if (!receipt.preserveExistingBlocking) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "posted",
+      event: receipt.event,
+      reviewUrl: receipt.reviewUrl
+    });
+  }
+  return true;
 }
 
 /**

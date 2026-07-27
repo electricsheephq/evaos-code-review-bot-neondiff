@@ -123,6 +123,7 @@ vi.mock("../src/walkthrough.js", async (importOriginal) => {
 const {
   localDateFolder,
   prepareFailedHeadRetry,
+  recoverPostedReviewReceipt,
   reviewPull: reviewPullImpl,
   reviewWasAlreadyPosted
 } = await import("../src/worker.js");
@@ -563,6 +564,65 @@ describe("worker context budget preflight", () => {
       "review posted but its durable receipt could not be recorded"
     );
     persistence.mockRestore();
+    expect(recoverPostedReviewReceipt({
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      error: caught
+    })).toBe(true);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/electricsheephq/WorldOS/pull/417#pullrequestreview-1"
+    });
+    state.close();
+  });
+
+  it("preserves an approved dry-run receipt while the repository provider cooldown is active", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-dry-run-active-cooldown-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.providerCooldown.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(419, "9".repeat(40));
+    const configRevision = "a".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run",
+      configRevision
+    });
+    state.recordRepoProviderCooldown({
+      repo: "electricsheephq/WorldOS",
+      cooldownUntil: new Date("2999-01-01T00:00:00.000Z"),
+      reason: "provider_request_rate_limit"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "approved_dry_run"
+    })).toBe("skipped_provider_cooldown");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision
+    });
+    expect(createdReviews).toHaveLength(0);
     state.close();
   });
 

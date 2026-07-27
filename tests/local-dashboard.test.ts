@@ -72,6 +72,10 @@ describe("local HTML dashboard", () => {
     expect(html).toContain("Daemon");
     expect(html).toContain("Provider");
     expect(html).toContain("openai-compatible");
+    expect(status.firstReviewPreview.command).toBe(
+      "neondiff providers doctor --config config.local.json --json"
+    );
+    expect(status.firstReviewPreview.command).not.toContain("<");
   });
 
   it("reports GitHub App client-id readiness without exposing user tokens", async () => {
