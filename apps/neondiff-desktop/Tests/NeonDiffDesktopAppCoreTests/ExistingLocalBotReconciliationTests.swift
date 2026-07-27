@@ -762,7 +762,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"electricsheephq/WorldOS","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true},{"repo":"electricsheephq/evaos-code-review-bot-neondiff","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
                     stderr: ""
                 )),
                 .success(CLIRunResult(
@@ -831,6 +831,12 @@ import NeonDiffDesktopCore
             await Task.yield()
         }
 
+        #expect(fixture.cli.calls[1].arguments == [
+            "doctor", "github",
+            "--config", configPath,
+            "--repo", targetRepository,
+            "--json"
+        ])
         #expect(fixture.model.productionUsefulWorkAvailable)
         #expect(!fixture.model.productionDaemonStartAvailable)
 
