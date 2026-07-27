@@ -1427,6 +1427,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     processed?.status === "dry_run" &&
     input.configRevision !== undefined &&
     processed.configRevision === input.configRevision;
+  if (
+    input.processedHeadPolicy === "approved_dry_run" &&
+    !approvedDryRunTransition
+  ) {
+    return "skipped_processed";
+  }
   const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&

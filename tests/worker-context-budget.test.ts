@@ -477,6 +477,34 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("refuses an approved live review when no matching dry-run receipt exists", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-live-without-dry-run-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(420, "8".repeat(40));
+    const configRevision = "b".repeat(64);
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      configRevision,
+      processedHeadPolicy: "approved_dry_run"
+    })).toBe("skipped_processed");
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toBeUndefined();
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
   it("does not let a daemon dry-run overwrite an already posted head", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-dry-posted-head-"));
     roots.push(root);

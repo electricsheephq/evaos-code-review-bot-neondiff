@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -226,6 +226,104 @@ describe("local HTML dashboard", () => {
       })
     });
     expect(JSON.stringify(result)).not.toContain(fakeKey);
+  });
+
+  it("returns the stable config revision after browser provider verification", async () => {
+    const modelServer = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/v1/models") {
+        response.end(JSON.stringify({ data: [{ id: "local-review-model" }] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: "not found" }));
+    });
+    servers.push(modelServer);
+    await listen(modelServer);
+    const address = modelServer.address() as AddressInfo;
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dashboard-config-revision-"));
+    const configPath = join(root, "config.local.json");
+    const configObject = {
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            adapter: "openai-compatible",
+            displayName: "Local Review",
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            model: "local-review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "LOCAL_REVIEW_API_KEY",
+            capabilities: { local: true }
+          }
+        }
+      }
+    };
+    writeFileSync(configPath, JSON.stringify(configObject));
+    const handle = await startLocalDashboardServer({
+      config: loadConfigFromObject(configObject),
+      configPath,
+      configExists: true,
+      openBrowser: false,
+      port: 0,
+      requireActiveProductionLicense: admittedProviderVerification
+    });
+    servers.push(handle.server);
+    const fakeKey = ["sk", "dashboard-revision-1234567890"].join("-");
+
+    const verifyResponse = await fetch(new URL("/api/provider/verify", handle.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        providerId: "openai-compatible",
+        apiKey: fakeKey,
+        allowRemoteSmoke: false
+      })
+    });
+    const verification = await verifyResponse.json() as {
+      ok: boolean;
+      configRevision?: string;
+    };
+    expect(verifyResponse.status).toBe(200);
+    expect(verification.ok).toBe(true);
+    expect(verification.configRevision).toMatch(/^[a-f0-9]{64}$/);
+
+    const statusResponse = await fetch(new URL("/api/status", handle.url));
+    const status = await statusResponse.json() as {
+      firstReviewPreview: { available: boolean; command: string };
+    };
+    expect(status.firstReviewPreview.available).toBe(false);
+    expect(status.firstReviewPreview.command).toContain(
+      `--expected-config-revision ${verification.configRevision}`
+    );
+    expect(JSON.stringify({ verification, status })).not.toContain(fakeKey);
+  });
+
+  it("withholds a review command for a malformed verification revision", async () => {
+    const status = await buildLocalDashboardStatus({
+      config: loadConfigFromObject({}),
+      configPath: "config.local.json",
+      configExists: true,
+      providerVerification: {
+        ok: true,
+        command: "providers verify",
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        providerId: "zcode-glm",
+        state: "healthy",
+        mode: "metadata_only",
+        detail: "verified",
+        redacted: true,
+        troubleshooting: [],
+        configRevision: "not-a-sha"
+      }
+    });
+
+    expect(status.firstReviewPreview.available).toBe(false);
+    expect(status.firstReviewPreview.command).toBe(
+      "neondiff providers doctor --config config.local.json --json"
+    );
   });
 
   it("serves HTML status but blocks provider verification before activation", async () => {

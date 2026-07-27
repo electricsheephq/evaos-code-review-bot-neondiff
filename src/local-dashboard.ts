@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import type { BotConfig } from "./config.js";
+import { loadConfigAtRevision } from "./config-cli.js";
 import { getLicenseStatus, type LicenseStatusResult } from "./license.js";
 import { isAuthenticProductionLicenseAdmission, requireActiveProductionLicense } from "./license-admission.js";
 import { writeSecureFileSync } from "./temp-files.js";
@@ -145,7 +146,13 @@ export async function buildLocalDashboardStatus(input: {
     : buildProviderStatusItem(input.config.providers!, checkedAt);
   const items = { license, githubApp, daemon, provider };
   const ok = Object.values(items).every((item) => item.state === "healthy" || item.state === "degraded");
-  const verifiedConfigRevision = input.providerVerification?.configRevision;
+  const candidateConfigRevision = input.providerVerification?.ok
+    ? input.providerVerification.configRevision
+    : undefined;
+  const verifiedConfigRevision = candidateConfigRevision &&
+    /^[a-f0-9]{64}$/.test(candidateConfigRevision)
+    ? candidateConfigRevision
+    : undefined;
   const firstReviewCommand = verifiedConfigRevision
     ? "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 "
       + `--expected-config-revision ${verifiedConfigRevision} --zcode true --dry-run true`
@@ -721,12 +728,31 @@ export async function startLocalDashboardServer(input: {
           return;
         }
         const body = await readJsonBody(request);
-        latestVerification = await verifyProviderApiKey({
-          config: input.config,
+        const configSnapshot = input.configExists && existsSync(input.configPath)
+          ? loadConfigAtRevision(input.configPath)
+          : undefined;
+        const verification = await verifyProviderApiKey({
+          config: configSnapshot?.config ?? input.config,
           providerId: readOptionalString(body, "providerId"),
           apiKey: readOptionalString(body, "apiKey"),
           allowRemoteSmoke: readOptionalBoolean(body, "allowRemoteSmoke") || input.allowRemoteSmoke === true
         });
+        if (configSnapshot) {
+          const currentRevision = loadConfigAtRevision(input.configPath).revision;
+          latestVerification = currentRevision === configSnapshot.revision
+            ? { ...verification, configRevision: configSnapshot.revision }
+            : {
+                ...verification,
+                ok: false,
+                state: "blocked",
+                detail: "Configuration changed during provider verification. Reload and verify again.",
+                troubleshooting: [
+                  "Reload the dashboard and repeat provider verification against the current configuration."
+                ]
+              };
+        } else {
+          latestVerification = verification;
+        }
         writeResponse(response, latestVerification.ok ? 200 : 422, "application/json; charset=utf-8", stringifyRedactedJson(latestVerification));
         return;
       }
