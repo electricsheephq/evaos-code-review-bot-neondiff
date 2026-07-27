@@ -300,11 +300,12 @@ the same Mac. In that exact case it opens a reconciliation path:
   that target is restored only for the same config path;
 - it can reverify and invoke the exact matched LaunchAgent configuration without
   copying its private key. The key file must be a current-user-owned regular
-  file with no group/other permissions and is passed to the CLI only as a
-  child-process environment coordinate for the exact config;
+  file with no group/other permissions. Only its file path—not its key bytes—is
+  supplied as a child-process environment coordinate for the exact config;
 - Overview runs one repository/PR-scoped dry review first. A live review is
   enabled only for the returned 40-character head SHA and requires explicit
-  confirmation; daemon-wide start stays blocked for multi-repository workers;
+  confirmation (see [Run A Dry-Run Review](#5-run-a-dry-run-review));
+  daemon-wide start stays blocked for multi-repository workers;
 - it keeps new work blocked until the exact current GitHub/repository and
   entitlement checks required by the release path pass.
 
@@ -339,9 +340,11 @@ The relative `config.local.json` examples elsewhere in this guide remain the
 separate CLI-first/operator path; they do not inspect the native app's config.
 
 The private key must be one unencrypted RSA PKCS#1 or PKCS#8 PEM no larger than
-64 KiB. Do not put it in arguments, environment variables, config, logs, or
-evidence. A passing doctor proves only current installation/repository read
-access for the configured allowlist; it does not execute or post a review.
+64 KiB. Do not put the private-key bytes in arguments, environment variables,
+config, logs, or evidence. The reconciled-existing-worker path may supply only
+the already-configured private-key file path to the exact child process. A
+passing doctor proves only current installation/repository read access for the
+configured allowlist; it does not execute or post a review.
 
 Check:
 

@@ -175,7 +175,7 @@ the child process for that config; it never copies the key into the app,
 Keychain, arguments, logs, or UI. Overview can then run `review-pr` for one
 selected repository and pull request. Live posting remains disabled until that
 exact target returns a successful dry-run head and the user confirms the pinned
-head. Daemon-wide start remains blocked for a multi-repository worker. The
+head. For that multi-repository worker, daemon-wide start remains blocked. The
 selection and dry-run approval fail closed if the config, target, pull request,
 workspace, or head changes.
 During launch it shows a bounded restoring state while that authorized
