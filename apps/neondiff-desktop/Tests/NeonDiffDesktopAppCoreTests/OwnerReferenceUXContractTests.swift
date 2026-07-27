@@ -217,6 +217,10 @@ import Testing
         #expect(repos.contains("model.existingLocalBotBYOGitHubVerificationStatus"))
         #expect(repos.contains("model.canSelectBYOReviewRepository(fullName: repo.name)"))
         #expect(repos.contains("native review controls remain blocked"))
+        #expect(repos.contains("\"\\(repo.name) is the review target\""))
+        #expect(repos.contains(".accessibilityValue(isSelected ? \"Selected\" : \"Not selected\")"))
+        #expect(repos.contains(".accessibilityAddTraits(isSelected ? .isSelected : [])"))
+        #expect(repos.contains("else if model.activationTargetSelectionRequired"))
         #expect(overview.contains(
             "targetSelectionRequired = model.activationTargetSelectionRequired"
         ))

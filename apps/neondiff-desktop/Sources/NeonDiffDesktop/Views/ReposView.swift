@@ -208,7 +208,13 @@ struct ReposView: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(!model.canSelectBYOReviewRepository(fullName: repo.name))
-                            .accessibilityLabel("Use \(repo.name) as the review target")
+                            .accessibilityLabel(
+                                isSelected
+                                    ? "\(repo.name) is the review target"
+                                    : "Use \(repo.name) as the review target"
+                            )
+                            .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                            .accessibilityAddTraits(isSelected ? .isSelected : [])
                             .accessibilityIdentifier("neondiff-repo-review-target-\(repo.name)")
                         } else {
                             Text("—")
@@ -251,7 +257,7 @@ struct ReposView: View {
                             .font(.caption)
                             .foregroundStyle(NeonDiffTheme.accent)
                             .fixedSize(horizontal: false, vertical: true)
-                    } else if model.repos.filter(\.enabled).count > 1 {
+                    } else if model.activationTargetSelectionRequired {
                         Text("Choose one Review Target above before activation. This does not remove or disable any repository in the existing worker.")
                             .font(.caption)
                             .foregroundStyle(NeonDiffTheme.warning)
