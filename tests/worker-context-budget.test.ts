@@ -631,6 +631,86 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("permits a fresh dry proof after a consumed live approval fails before posting", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-consumed-live-failed-before-post-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(421, "7".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    const configRevision = "d".repeat(64);
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Fresh approval after failed live post")]);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision,
+      event: "COMMENT",
+      error: "approved_dry_run_consumed_for_live_post; post_error=provider transport failed before posting"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision
+    })).toBe("reviewed");
+    expect(createdReviews).toHaveLength(0);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision
+    });
+    state.close();
+  });
+
+  it("does not replace an uncertain post-success receipt with a fresh dry proof", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-consumed-live-post-uncertain-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(422, "6".repeat(40));
+    const configRevision = "e".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      configRevision,
+      event: "COMMENT",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision
+    })).toBe("skipped_processed");
+    expect(createdReviews).toHaveLength(0);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "skipped",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+    state.close();
+  });
+
   it("preserves an approved dry-run receipt while the repository provider cooldown is active", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-approved-dry-run-active-cooldown-"));
     roots.push(root);

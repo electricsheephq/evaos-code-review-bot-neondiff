@@ -121,6 +121,13 @@ export const ACTIVATION_BASELINE_EXISTING_HEAD_ERROR = "activation_baseline_exis
 export const EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR = "exact_authorization_already_consumed";
 export const POST_REVIEW_HEAD_UNVERIFIED_ERROR = "post_review_head_unverified";
 export const APPROVED_DRY_RUN_LIVE_CLAIM_ERROR = "approved_dry_run_consumed_for_live_post";
+
+export function isRetryableApprovedDryRunPrePostFailure(
+  record: Pick<ProcessedReviewRecord, "status" | "error"> | undefined
+): boolean {
+  return record?.status === "skipped" &&
+    record.error?.startsWith(`${APPROVED_DRY_RUN_LIVE_CLAIM_ERROR}; post_error=`) === true;
+}
 export const REVIEW_POSTED_HEAD_CHANGED_ERROR = "review_posted_head_changed";
 
 export function isActivationBaselineProcessedReview(
@@ -958,10 +965,18 @@ export class ReviewStateStore {
         .get(record.repo, record.pullNumber, record.headSha);
       const processed = this.db
         .prepare(
-          "select status from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
+          "select status, error from processed_reviews where repo = ? and pull_number = ? and head_sha = ? limit 1"
         )
-        .get(record.repo, record.pullNumber, record.headSha) as { status: ProcessedStatus } | undefined;
-      if (activeClaim || (processed && processed.status !== "dry_run")) {
+        .get(record.repo, record.pullNumber, record.headSha) as Pick<
+          ProcessedReviewRecord,
+          "status" | "error"
+        > | undefined;
+      if (
+        activeClaim ||
+        (processed &&
+          processed.status !== "dry_run" &&
+          !isRetryableApprovedDryRunPrePostFailure(processed))
+      ) {
         this.db.exec("commit");
         return false;
       }

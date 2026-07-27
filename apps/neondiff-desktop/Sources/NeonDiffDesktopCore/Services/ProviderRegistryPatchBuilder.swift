@@ -17,7 +17,8 @@ public enum ProviderRegistryPatchBuilder {
             "zcode": [
                 "cliPath": providers.zcodeCliPath,
                 "appConfigPath": providers.zcodeAppConfigPath,
-                "model": providers.zcodeModel
+                "model": target.model,
+                "providerId": target.id
             ],
             "providers": [
                 "defaultProviderId": target.id,

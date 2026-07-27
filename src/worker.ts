@@ -86,6 +86,7 @@ import { writeSecureFileSync } from "./temp-files.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
   APPROVED_DRY_RUN_LIVE_CLAIM_ERROR,
+  isRetryableApprovedDryRunPrePostFailure,
   EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
   POST_REVIEW_HEAD_UNVERIFIED_ERROR,
   REVIEW_POSTED_HEAD_CHANGED_ERROR,
@@ -1423,6 +1424,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  const retryableApprovedDryRunPrePostFailure =
+    input.dryRun && isRetryableApprovedDryRunPrePostFailure(processed);
   const approvedDryRunTransition =
     input.processedHeadPolicy === "approved_dry_run" &&
     processed?.status === "dry_run" &&
@@ -1649,6 +1652,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     input.processedHeadPolicy !== "retry_failed_head" &&
     !manualReviewRequested &&
     !approvedDryRunTransition &&
+    !retryableApprovedDryRunPrePostFailure &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
