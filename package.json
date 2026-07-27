@@ -39,7 +39,7 @@
   },
   "scripts": {
     "build": "node scripts/prepare-build-output.mjs && tsc -p tsconfig.build.json",
-    "postbuild": "chmod +x dist/src/cli.js && node scripts/generate-secret-rules.mjs --check-node",
+    "postbuild": "chmod +x dist/src/cli.js && node scripts/generate-secret-rules.mjs --check-node && node scripts/check-phase1-verified-loader.mjs",
     "cli": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
