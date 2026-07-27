@@ -188,6 +188,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var customerRuntimeBoundaryMessage: String {
+        if byoGitHubCredentialOnboardingAvailable,
+           repos.filter(\.enabled).count > 1 {
+            let target = selectedBYOReviewRepository.map {
+                "Activation can be verified for \($0), but "
+            } ?? "Choose one Review Target for activation. "
+            return "\(target)the existing worker still monitors multiple repositories. Native useful-work controls remain blocked until the runtime can be scoped without rewriting that worker."
+        }
         if existingLocalBotSetupReady {
             return "Existing setup is configured. Before new work, reverify the current GitHub App access and repository-scoped entitlement for this launch."
         }
@@ -209,9 +216,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             == activationVerifiedRepositoryThisLaunch.lowercased()
     }
 
-    /// The one repository the native app will activate and use for the next
-    /// review. Existing BYO workers may monitor many repositories; choosing this
-    /// target must never collapse or rewrite that worker allowlist.
+    /// The repository the native app will activate. Existing BYO workers may
+    /// monitor many repositories; choosing this target must never collapse or
+    /// rewrite that worker allowlist. Runtime review scoping is a separate gate.
     package var selectedReviewRepository: String? {
         if managedGitHubAvailable {
             return selectedManagedGitHubRepository
@@ -228,6 +235,22 @@ package final class NeonDiffDesktopModel: ObservableObject {
         byoGitHubCredentialOnboardingAvailable
             && selectedBYOReviewRepository == nil
             && repos.filter(\.enabled).count > 1
+    }
+
+    package var reviewTargetRuntimeReady: Bool {
+        guard byoGitHubCredentialOnboardingAvailable else {
+            return true
+        }
+        let enabledRepositories = uniqueSortedRepoNames(
+            repos.filter(\.enabled).map(\.name)
+        )
+        guard let selectedBYOReviewRepository else {
+            return false
+        }
+        return enabledRepositories.count == 1
+            && enabledRepositories[0].caseInsensitiveCompare(
+                selectedBYOReviewRepository
+            ) == .orderedSame
     }
 
     /// Existing-account entitlement is useful setup context, but it must not
@@ -313,7 +336,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             guard byoGitHubCredentialOnboardingAvailable,
                   byoGitHubCredentialsVerified,
                   repositoryConfigurationReady,
-                  currentRepositoryActivationReady
+                  currentRepositoryActivationReady,
+                  reviewTargetRuntimeReady
             else { return false }
         }
         guard dependencies.productionBoundary.managedGitHubBrokerOrigin != nil else {
@@ -2086,6 +2110,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Choose an enabled repository from the applied worker configuration."
             return
         }
+        if activationState == .activationPending {
+            lastError = "Activation is already in progress for \(selectedBYOReviewRepository ?? repository.name). Wait for it to finish or cancel before changing the target."
+            return
+        }
+        if let activatedRepository,
+           activatedRepository.caseInsensitiveCompare(repository.name)
+               != .orderedSame {
+            lastError = "This device activation is bound to \(activatedRepository). Target rebinding is not supported in this beta; keep that target selected until a verified deactivate/rebind flow is available."
+            return
+        }
         guard selectedBYOReviewRepository?.caseInsensitiveCompare(repository.name)
                 != .orderedSame
         else {
@@ -2103,6 +2137,24 @@ package final class NeonDiffDesktopModel: ObservableObject {
         )
         lastError = nil
         logText = "\(repository.name) selected as the native review target. The existing worker allowlist was not changed."
+    }
+
+    package func canSelectBYOReviewRepository(fullName: String) -> Bool {
+        guard byoGitHubCredentialOnboardingAvailable,
+              !managedGitHubAvailable,
+              repos.contains(where: {
+                  $0.enabled
+                      && $0.name.caseInsensitiveCompare(fullName) == .orderedSame
+              }),
+              activationState != .activationPending
+        else {
+            return false
+        }
+        guard let activatedRepository else {
+            return true
+        }
+        return activatedRepository.caseInsensitiveCompare(fullName)
+            == .orderedSame
     }
 
     package func githubAccessCue(for repo: RepoMonitor) -> GitHubRepositoryAccessCue? {
@@ -3235,6 +3287,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Choose one Review Target in Repositories before activating. The existing worker allowlist will remain unchanged."
             return
         }
+        let activationRepository = selectedReviewRepository
         guard let client = activationLicenseClient else {
             // No CLI-backed validation available (default): never invoke the
             // file-persisting CLI. Land in a retryable state instead.
@@ -3257,6 +3310,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "No stored \(ActivationTerminology.activationKey) to activate. Enter it again."
             return
         }
+        // Pin the device to the attempted repository before the network await.
+        // A cancelled or lost response may still have bound the server, so
+        // switching targets remains blocked until a verified rebind exists.
+        if let activationRepository {
+            dependencies.preferences.set(
+                activationRepository,
+                forKey: activationRepositoryKey
+            )
+        }
         let outcome: ActivationClientOutcome
         do {
             outcome = try await client.activate(key: ActivationKeyMaterial(rawKey))
@@ -3267,7 +3329,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard generation == activationRequestGeneration else { return }
         let resolved = resolveActivationOutcome(outcome)
         applyActivationEvent(ActivationLicenseOutcomeMapping.event(for: resolved))
-        applyActivationOutcomeSideEffects(resolved)
+        applyActivationOutcomeSideEffects(
+            resolved,
+            repository: activationRepository
+        )
     }
 
     /// A 200-`active` response can still be public-only or `privateRepoAllowed=false`,
@@ -3281,7 +3346,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return outcome
     }
 
-    private func applyActivationOutcomeSideEffects(_ outcome: ActivationClientOutcome) {
+    private func applyActivationOutcomeSideEffects(
+        _ outcome: ActivationClientOutcome,
+        repository: String?
+    ) {
         switch outcome {
         case .active(let summary):
             activationVerifiedThisLaunch = true
@@ -3290,12 +3358,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             let plan = summary.plan.map { " · \($0)" } ?? ""
             license.entitlement = "active (\(scope)\(plan))"
             logText = "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
-            if let repository = selectedReviewRepository {
-                activationVerifiedRepositoryThisLaunch = repository
+            activationVerifiedRepositoryThisLaunch = repository
+            if let repository {
                 dependencies.preferences.set(repository, forKey: activationRepositoryKey)
-            } else {
-                activationVerifiedRepositoryThisLaunch = nil
-                dependencies.preferences.set("", forKey: activationRepositoryKey)
             }
             // Let onboarding finish through the native handoff (Continue enables).
             onboardingFlow.licenseActivation = .activated
@@ -4623,6 +4688,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func invalidateActivationForRepositoryChange() {
+        activationRequestGeneration &+= 1
         guard activationVerifiedThisLaunch
                 || activationVerifiedRepositoryThisLaunch != nil
         else {

@@ -11,6 +11,7 @@ struct DesktopSetupReadiness {
     let license: Bool
     let licenseStatus: String
     let repository: Bool
+    let targetSelectionRequired: Bool
     let repositoryName: String
     let canRunDryRun: Bool
 
@@ -30,7 +31,8 @@ struct DesktopSetupReadiness {
         licenseStatus = publicRepositoryLicenseNotRequired
             ? "PUBLIC · FREE"
             : (licenseIsActive ? "ACTIVE" : "ACTIVATION REQUIRED")
-        repository = model.repositorySetupReady
+        targetSelectionRequired = model.activationTargetSelectionRequired
+        repository = model.repositorySetupReady && !targetSelectionRequired
         repositoryName = model.selectedReviewRepository
             ?? (model.repos.filter(\.enabled).count > 1
                 ? "Choose review target"
@@ -130,13 +132,17 @@ struct OverviewView: View {
                             ? "CHECKING"
                             : (readiness.isRestoreFailed
                                 ? "WAITING FOR ACCOUNT"
-                            : (readiness.repository ? "APPLIED" : "NOT APPLIED")),
+                            : (readiness.targetSelectionRequired
+                                ? "TARGET REQUIRED"
+                                : (readiness.repository ? "APPLIED" : "NOT APPLIED"))),
                         isReady: readiness.repository,
                         actionTitle: readiness.isRestoring
                             ? "WAIT"
                             : (readiness.isRestoreFailed
                                 ? "WAIT"
-                            : (readiness.repository ? "MANAGE" : "ADD")),
+                            : (readiness.targetSelectionRequired
+                                ? "CHOOSE"
+                                : (readiness.repository ? "MANAGE" : "ADD"))),
                         isDisabled: readiness.isRestoring || readiness.isRestoreFailed
                     ) {
                         model.selectedSection = .repos
@@ -280,11 +286,13 @@ struct OverviewView: View {
                 ? "Reading the selected bot’s applied repository configuration."
                 : (readiness.isRestoreFailed
                     ? "Retry account verification before changing local setup."
+                : (readiness.targetSelectionRequired
+                    ? "Choose one Review Target; the applied worker allowlist remains unchanged."
                 : (readiness.repository
                     ? (readiness.canRunDryRun
                         ? "Applied and ready for a dry-run review."
                         : "Applied in the selected local bot config.")
-                    : "Choose and apply one repository to begin.")))
+                    : "Choose and apply one repository to begin."))))
                 .font(.callout)
                 .foregroundStyle(palette.textSecondary)
 
@@ -296,7 +304,9 @@ struct OverviewView: View {
                         ? "Checking Repository"
                         : (readiness.isRestoreFailed
                             ? "Waiting for Account"
-                        : (readiness.repository ? "Manage Repository" : "Add Repository")),
+                        : (readiness.targetSelectionRequired
+                            ? "Choose Review Target"
+                            : (readiness.repository ? "Manage Repository" : "Add Repository"))),
                     systemImage: "plus.circle"
                 )
             }

@@ -207,7 +207,7 @@ struct ReposView: View {
                                     )
                             }
                             .buttonStyle(.plain)
-                            .disabled(!repo.enabled)
+                            .disabled(!model.canSelectBYOReviewRepository(fullName: repo.name))
                             .accessibilityLabel("Use \(repo.name) as the review target")
                             .accessibilityIdentifier("neondiff-repo-review-target-\(repo.name)")
                         } else {
@@ -247,7 +247,7 @@ struct ReposView: View {
 
                 if model.byoGitHubCredentialOnboardingAvailable {
                     if let selectedRepository = model.selectedBYOReviewRepository {
-                        Text("Native activation and the next review are bound to \(selectedRepository). The existing worker allowlist remains unchanged.")
+                        Text("Native activation is bound to \(selectedRepository). The existing worker allowlist remains unchanged. When that worker monitors multiple repositories, native review controls remain blocked until the runtime can be scoped to this target safely.")
                             .font(.caption)
                             .foregroundStyle(NeonDiffTheme.accent)
                             .fixedSize(horizontal: false, vertical: true)

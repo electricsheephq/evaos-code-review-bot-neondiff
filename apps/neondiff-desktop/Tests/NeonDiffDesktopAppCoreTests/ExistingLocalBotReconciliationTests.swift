@@ -229,6 +229,78 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func activationAttemptLocksReviewTargetUntilServerBindingCanBeChangedSafely() async {
+        let firstRepository = "electricsheephq/WorldOS"
+        let secondRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let client = ExistingBotGatedActivationClient()
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            activationLicenseClient: client,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [firstRepository, secondRepository]
+        ))
+        fixture.model.selectBYOReviewRepository(fullName: firstRepository)
+        fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
+        fixture.model.provideExistingActivationKey()
+
+        let activation = Task {
+            await fixture.model.submitActivation()
+        }
+        #expect(await client.waitUntilStarted())
+        fixture.model.selectBYOReviewRepository(fullName: secondRepository)
+        #expect(fixture.model.selectedBYOReviewRepository == firstRepository)
+        #expect(fixture.model.lastError?.contains("in progress") == true)
+        client.release(.active(.init(
+            status: .active,
+            repoVisibilityScope: "private",
+            privateRepoAllowed: true,
+            updateEntitlement: true,
+            expiresAt: nil,
+            plan: "beta",
+            seats: 1
+        )))
+        await activation.value
+
+        #expect(fixture.model.selectedBYOReviewRepository == firstRepository)
+        #expect(fixture.model.currentRepositoryActivationReady)
+        fixture.model.selectBYOReviewRepository(fullName: secondRepository)
+        #expect(fixture.model.selectedBYOReviewRepository == firstRepository)
+        #expect(fixture.model.lastError?.contains("bound") == true)
+    }
+
+    @MainActor
+    @Test func multiRepoWorkerExplainsRuntimeScopeBlockAfterTargetSelection() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [
+                "electricsheephq/WorldOS",
+                "electricsheephq/evaos-code-review-bot-neondiff"
+            ]
+        ))
+        fixture.model.selectBYOReviewRepository(
+            fullName: "electricsheephq/WorldOS"
+        )
+
+        #expect(
+            fixture.model.customerRuntimeBoundaryMessage
+                .contains("multiple repositories")
+        )
+        #expect(!fixture.model.reviewTargetRuntimeReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
     @Test func apiKeyProviderStillRequiresItsAppOwnedKeyOrVerification() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -632,6 +704,58 @@ private struct ExistingBotActiveActivationClient: ActivationLicenseClienting {
 
     func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
         try await activate(key: key)
+    }
+}
+
+private final class ExistingBotGatedActivationClient:
+    ActivationLicenseClienting,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ActivationClientOutcome, Never>?
+    private var startedContinuation: CheckedContinuation<Void, Never>?
+    private var started = false
+
+    func activate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+        await withCheckedContinuation { continuation in
+            let startedContinuation = lock.withLock {
+                started = true
+                self.continuation = continuation
+                let startedContinuation = self.startedContinuation
+                self.startedContinuation = nil
+                return startedContinuation
+            }
+            startedContinuation?.resume()
+        }
+    }
+
+    func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+        try await activate(key: key)
+    }
+
+    func waitUntilStarted() async -> Bool {
+        await withCheckedContinuation { continuation in
+            let alreadyStarted = lock.withLock {
+                if started {
+                    return true
+                }
+                startedContinuation = continuation
+                return false
+            }
+            if alreadyStarted {
+                continuation.resume()
+            }
+        }
+        return true
+    }
+
+    func release(_ outcome: ActivationClientOutcome) {
+        let pending = lock.withLock {
+            let pending = continuation
+            continuation = nil
+            return pending
+        }
+        pending?.resume(returning: outcome)
     }
 }
 

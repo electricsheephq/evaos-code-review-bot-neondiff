@@ -173,6 +173,9 @@ import Testing
         let activity = try sourceBoundaryText(
             at: views.appendingPathComponent("LogsView.swift")
         )
+        let overview = try sourceBoundaryText(
+            at: views.appendingPathComponent("OverviewView.swift")
+        )
         let model = try sourceBoundaryText(
             at: sourceBoundaryPackageRoot()
                 .appendingPathComponent(
@@ -212,6 +215,13 @@ import Testing
         #expect(repos.contains("neondiff-existing-byo-github-verify"))
         #expect(repos.contains("model.verifyBYOGitHubAppCredentials()"))
         #expect(repos.contains("model.existingLocalBotBYOGitHubVerificationStatus"))
+        #expect(repos.contains("model.canSelectBYOReviewRepository(fullName: repo.name)"))
+        #expect(repos.contains("native review controls remain blocked"))
+        #expect(overview.contains(
+            "targetSelectionRequired = model.activationTargetSelectionRequired"
+        ))
+        #expect(overview.contains("\"TARGET REQUIRED\""))
+        #expect(overview.contains("\"Choose Review Target\""))
         #expect(provider.contains("model.selectedProviderRequiresAPIKey"))
         #expect(provider.contains("APP CONFIG LOADED"))
         #expect(provider.contains(
