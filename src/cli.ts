@@ -2500,8 +2500,9 @@ function validateReviewPrRepoAllowed(config: ReturnType<typeof loadConfig>, repo
 }
 
 function canonicalRepoNameForCli(repo: string): string {
-  const [owner, name] = repo.split("/");
-  return `${owner?.toLowerCase() ?? ""}/${name?.toLowerCase() ?? ""}`;
+  const [owner, name, extra] = repo.trim().split("/");
+  if (extra !== undefined || !owner || !name) return "";
+  return `${owner.toLowerCase()}/${name.toLowerCase()}`;
 }
 
 function validateInitForceTarget(configPath: string): string | undefined {
@@ -3051,7 +3052,9 @@ async function buildDoctorGithubReport(
     requestedRepo ? monitoredRepos : undefined
   );
   const issueEnrichment = buildIssueEnrichmentStatus({
-    config,
+    config: requestedRepo
+      ? scopeDoctorIssueEnrichmentConfig(config, monitoredRepos)
+      : config,
     canPostAsApp: appCredentialsConfigured,
     issueReadChecks
   });
@@ -3111,6 +3114,9 @@ function resolveDoctorGitHubRepos(config: BotConfig, requestedRepo?: string): st
   if (!requestedRepo) return configuredRepos;
 
   const requestedCanonical = canonicalRepoNameForCli(requestedRepo);
+  if (!requestedCanonical) {
+    throw new Error("doctor github --repo must be exactly one GitHub owner/repo name");
+  }
   const configuredRepo = configuredRepos.find(
     (repo) => canonicalRepoNameForCli(repo) === requestedCanonical
   );
@@ -3124,6 +3130,41 @@ function resolveDoctorGitHubRepos(config: BotConfig, requestedRepo?: string): st
     throw new Error(`doctor github --repo is blocked by repo policy: ${policy.reason}`);
   }
   return [configuredRepo];
+}
+
+function scopeDoctorIssueEnrichmentConfig(config: BotConfig, monitoredRepos: string[]): BotConfig {
+  const issueEnrichment = config.issueEnrichment;
+  if (!issueEnrichment) return config;
+
+  const monitored = new Set(monitoredRepos.map(canonicalRepoNameForCli));
+  const allowlist = issueEnrichment.allowlist.filter((repo) =>
+    monitored.has(canonicalRepoNameForCli(repo))
+  );
+  if (allowlist.length === 0) {
+    return {
+      ...config,
+      issueEnrichment: {
+        ...issueEnrichment,
+        enabled: false,
+        allowlist: [],
+        repos: {}
+      }
+    };
+  }
+
+  const repos = Object.fromEntries(
+    Object.entries(issueEnrichment.repos ?? {}).filter(([repo]) =>
+      monitored.has(canonicalRepoNameForCli(repo))
+    )
+  );
+  return {
+    ...config,
+    issueEnrichment: {
+      ...issueEnrichment,
+      allowlist,
+      repos
+    }
+  };
 }
 
 async function resolveDoctorGitHubCredentials(
