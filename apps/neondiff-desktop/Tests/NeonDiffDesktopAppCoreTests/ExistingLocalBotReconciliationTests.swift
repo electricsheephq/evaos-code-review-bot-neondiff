@@ -301,6 +301,37 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func staleConfigInspectCannotReplaceCurrentRepositoryState() {
+        let firstConfigPath = "/fixture/first-bot.json"
+        let currentConfigPath = "/fixture/current-bot.json"
+        let firstRepository = "electricsheephq/WorldOS"
+        let currentRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.configPath = firstConfigPath
+        let staleResult = existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [firstRepository]
+        )
+        fixture.loadConfig(staleResult)
+        fixture.model.configPath = currentConfigPath
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [currentRepository]
+        ))
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 0, stdout: staleResult, stderr: ""),
+            fallbackCommand: "config inspect",
+            configPath: firstConfigPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: true
+        )
+
+        #expect(fixture.model.configPath == currentConfigPath)
+        #expect(fixture.model.repos.filter(\.enabled).map(\.name) == [currentRepository])
+    }
+
+    @MainActor
     @Test func apiKeyProviderStillRequiresItsAppOwnedKeyOrVerification() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,

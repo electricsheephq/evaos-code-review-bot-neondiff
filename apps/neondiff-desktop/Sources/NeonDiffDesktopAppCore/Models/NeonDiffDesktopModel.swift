@@ -4278,6 +4278,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         providerPatchProof: PendingProviderPatchProof? = nil,
         repoPatchProof: PendingRepoPatchProof? = nil
     ) {
+        guard !isConfigInspectCommand || self.configPath == configPath else {
+            return
+        }
         if let providerPatchProof,
            pendingProviderPatchProof?.id != providerPatchProof.id {
             return
