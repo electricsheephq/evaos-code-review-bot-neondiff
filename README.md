@@ -169,10 +169,15 @@ repository-scoped GitHub and activation verification before new review work.
 If that existing worker monitors more than one repository, the native app keeps
 the full allowlist intact and asks the user to choose one **Review Target**.
 Native activation binds to that exact target; selecting it does not remove,
-disable, or rewrite the worker's other repositories. Until a targeted runtime
-handoff is available, native review and daemon controls remain blocked for a
-multi-repository worker. The selection is restored only for the same local
-config path and fails closed if that config or repository is no longer current.
+disable, or rewrite the worker's other repositories. The app may reuse the
+exact matched LaunchAgent's App ID and private-key file coordinate only inside
+the child process for that config; it never copies the key into the app,
+Keychain, arguments, logs, or UI. Overview can then run `review-pr` for one
+selected repository and pull request. Live posting remains disabled until that
+exact target returns a successful dry-run head and the user confirms the pinned
+head. Daemon-wide start remains blocked for a multi-repository worker. The
+selection and dry-run approval fail closed if the config, target, pull request,
+workspace, or head changes.
 During launch it shows a bounded restoring state while that authorized
 account/bot/config intersection is checked; it does not flash empty first-run
 setup or claim that the existing configuration is missing.

@@ -67,6 +67,24 @@ import Darwin
     context.expect(standardInputResult.stdout.contains("\"receivedBytes\":22"), "CLI standard-input transport returns only redacted metadata")
     context.expect(!standardInputResult.stdout.contains("fixture-provider-value"), "CLI output never echoes standard input")
 
+    let environmentClient = NeonDiffCLIClient(
+        executablePath: localCLI.path,
+        workingDirectory: tempRoot,
+        environmentOverrides: [
+            "NEONDIFF_GITHUB_APP_ID": "4184532",
+            "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH": "/fixture/app.pem"
+        ]
+    )
+    let environmentResult = try environmentClient.run(
+        arguments: ["environment-check"],
+        standardInput: nil,
+        timeout: 5
+    )
+    context.expect(
+        environmentResult.exitCode == 0
+            && environmentResult.stdout.contains("\"environment\":\"present\""),
+        "CLI process receives only the explicit normalized environment overrides"
+    )
 
       return context.assertions
   }

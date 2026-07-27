@@ -77,15 +77,21 @@ public final class NeonDiffCLICancellation: @unchecked Sendable {
 public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable {
     private let executablePath: String
     private let workingDirectory: URL?
+    private let environmentOverrides: [String: String]
     private let standardInputPipeFactory: () -> Pipe
     private let monotonicNow: () -> DispatchTime
     private let standardInputWriter: (Int32, UnsafeRawPointer?, Int) -> Int
     private let beforeProcessLaunch: () -> Void
     private let afterProcessLaunch: () -> Void
 
-    public init(executablePath: String, workingDirectory: URL? = nil) {
+    public init(
+        executablePath: String,
+        workingDirectory: URL? = nil,
+        environmentOverrides: [String: String] = [:]
+    ) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
+        self.environmentOverrides = environmentOverrides
         self.standardInputPipeFactory = { Pipe() }
         self.monotonicNow = { DispatchTime.now() }
         self.standardInputWriter = { descriptor, buffer, count in
@@ -98,6 +104,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
     @_spi(Testing) public init(
         executablePath: String,
         workingDirectory: URL? = nil,
+        environmentOverrides: [String: String] = [:],
         standardInputPipeFactory: @escaping () -> Pipe = { Pipe() },
         monotonicNow: @escaping () -> DispatchTime = { DispatchTime.now() },
         standardInputWriter: @escaping (Int32, UnsafeRawPointer?, Int) -> Int = { descriptor, buffer, count in
@@ -108,6 +115,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
     ) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
+        self.environmentOverrides = environmentOverrides
         self.standardInputPipeFactory = standardInputPipeFactory
         self.monotonicNow = monotonicNow
         self.standardInputWriter = standardInputWriter
@@ -170,7 +178,9 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = [executablePath] + arguments
         }
-        process.environment = guiSafeEnvironment()
+        process.environment = guiSafeEnvironment().merging(environmentOverrides) {
+            _, override in override
+        }
         if let workingDirectory {
             process.currentDirectoryURL = workingDirectory
         }

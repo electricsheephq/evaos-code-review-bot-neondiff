@@ -120,9 +120,12 @@ repositories. NeonDiff preserves that allowlist and requires one explicit
 **Review Target** in the native repository table. The Activation Key request
 binds to that target only. The target selection is scoped to the exact local
 config path and does not edit, remove, or disable the worker's other
-repositories. Native review and daemon controls stay blocked for a
-multi-repository worker until the runtime can be scoped to that target without
-rewriting the worker configuration.
+repositories. For an exact matched LaunchAgent, the app may pass the existing
+App ID and private-key file coordinate only to the child CLI process for that
+config; it does not read, copy, print, or store the key. Overview runs one
+repository/PR-scoped dry review, records the returned head SHA, and requires
+explicit confirmation before a live post pinned to that head. Daemon-wide start
+stays blocked for a multi-repository worker.
 
 Keep the private key and local config out of git. A typical shell setup is:
 

@@ -37,11 +37,14 @@ enum NeonDiffDesktopCompositionRoot {
         }
         let cliWorkingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
         let localBotConfigurations = LaunchAgentLocalBotConfigurationDiscovery.discover()
+        let localBotExecutionContexts =
+            LaunchAgentLocalBotConfigurationDiscovery.discoverExecutionContexts()
         return NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: AppKitClipboard(),
             urlOpener: AppKitURLOpener(),
             cli: FoundationDesktopCLIExecutor(
                 localBotConfigurations: localBotConfigurations,
+                localBotExecutionContexts: localBotExecutionContexts,
                 defaultWorkingDirectory: cliWorkingDirectory
             ),
             dashboard: FoundationDesktopDashboardLauncher(),

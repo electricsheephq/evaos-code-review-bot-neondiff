@@ -21,6 +21,24 @@ package struct DesktopLocalBotConfiguration: Equatable, Sendable {
     }
 }
 
+/// Process-only coordinates for invoking an already-configured local worker.
+///
+/// The private-key path is never exposed to the model or UI. The desktop
+/// composition root may pass these normalized environment overrides only to
+/// an exact `--config` invocation that matches this context.
+package struct DesktopLocalBotExecutionContext: Equatable, Sendable {
+    package let configPath: String
+    package let environmentOverrides: [String: String]
+
+    package init(
+        configPath: String,
+        environmentOverrides: [String: String]
+    ) {
+        self.configPath = configPath
+        self.environmentOverrides = environmentOverrides
+    }
+}
+
 package enum DesktopLaunchAgentBotConfigurationParser {
     private static let supportedAppIDKeys = [
         "NEONDIFF_GITHUB_APP_ID",
@@ -106,6 +124,101 @@ package enum DesktopLaunchAgentBotConfigurationParser {
     }
 }
 
+package enum DesktopLaunchAgentExecutionContextParser {
+    private static let appIDKeys = [
+        "NEONDIFF_GITHUB_APP_ID",
+        "EVAOS_REVIEW_BOT_APP_ID"
+    ]
+    private static let privateKeyPathKeys = [
+        "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
+        "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH"
+    ]
+
+    package static func parse(
+        data: Data,
+        expectedLabel: String,
+        privateKeyPathIsSafe: (URL) -> Bool
+    ) -> DesktopLocalBotExecutionContext? {
+        guard let propertyList = try? PropertyListSerialization.propertyList(
+            from: data,
+            options: [],
+            format: nil
+        ),
+        let root = propertyList as? [String: Any],
+        root["Label"] as? String == expectedLabel,
+        let environment = root["EnvironmentVariables"] as? [String: Any],
+        let arguments = root["ProgramArguments"] as? [String]
+        else {
+            return nil
+        }
+
+        let appIDs = values(
+            for: appIDKeys,
+            in: environment
+        )
+        guard let appID = oneConsistentValue(appIDs),
+              !appID.isEmpty,
+              appID.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+              Int64(appID).map({ $0 > 0 }) == true
+        else {
+            return nil
+        }
+
+        let privateKeyPaths = values(
+            for: privateKeyPathKeys,
+            in: environment
+        )
+        guard let rawPrivateKeyPath = oneConsistentValue(privateKeyPaths),
+              rawPrivateKeyPath.hasPrefix("/")
+        else {
+            return nil
+        }
+        let privateKeyURL = URL(filePath: rawPrivateKeyPath).standardizedFileURL
+        guard privateKeyPathIsSafe(privateKeyURL) else { return nil }
+
+        let configIndexes = arguments.indices.filter {
+            arguments[$0] == "--config"
+        }
+        guard configIndexes.count == 1,
+              let configIndex = configIndexes.first,
+              arguments.index(after: configIndex) < arguments.endIndex
+        else {
+            return nil
+        }
+        let rawConfigPath = arguments[arguments.index(after: configIndex)]
+        guard rawConfigPath.hasPrefix("/") else { return nil }
+        let configPath = URL(filePath: rawConfigPath).standardizedFileURL.path
+
+        return DesktopLocalBotExecutionContext(
+            configPath: configPath,
+            environmentOverrides: [
+                "NEONDIFF_GITHUB_APP_ID": appID,
+                "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH": privateKeyURL.path
+            ]
+        )
+    }
+
+    private static func values(
+        for keys: [String],
+        in environment: [String: Any]
+    ) -> [String]? {
+        let presentKeys = keys.filter { environment[$0] != nil }
+        guard !presentKeys.isEmpty else { return nil }
+        let values = presentKeys.compactMap { environment[$0] as? String }
+        guard values.count == presentKeys.count else { return nil }
+        return values
+    }
+
+    private static func oneConsistentValue(_ values: [String]?) -> String? {
+        guard let values,
+              Set(values).count == 1
+        else {
+            return nil
+        }
+        return values.first
+    }
+}
+
 package enum DesktopLocalBotWorkingDirectoryResolver {
     package static func resolve(
         arguments: [String],
@@ -135,5 +248,36 @@ package enum DesktopLocalBotWorkingDirectoryResolver {
             return fallback
         }
         return URL(filePath: workingDirectory).standardizedFileURL
+    }
+}
+
+package enum DesktopLocalBotExecutionContextResolver {
+    package static func resolve(
+        executablePath: String,
+        arguments: [String],
+        executionContexts: [DesktopLocalBotExecutionContext]
+    ) -> [String: String] {
+        guard executablePath == "neondiff" else { return [:] }
+        let commandIsAllowed = arguments.first == "review-pr"
+            || Array(arguments.prefix(2)) == ["doctor", "github"]
+        guard commandIsAllowed else { return [:] }
+        let configIndexes = arguments.indices.filter {
+            arguments[$0] == "--config"
+        }
+        guard configIndexes.count == 1,
+              let configIndex = configIndexes.first,
+              arguments.index(after: configIndex) < arguments.endIndex
+        else {
+            return [:]
+        }
+
+        let rawConfigPath = arguments[arguments.index(after: configIndex)]
+        guard rawConfigPath.hasPrefix("/") else { return [:] }
+        let configPath = URL(filePath: rawConfigPath).standardizedFileURL.path
+        let matches = executionContexts.filter {
+            URL(filePath: $0.configPath).standardizedFileURL.path == configPath
+        }
+        guard matches.count == 1 else { return [:] }
+        return matches[0].environmentOverrides
     }
 }

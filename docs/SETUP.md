@@ -297,8 +297,14 @@ the same Mac. In that exact case it opens a reconciliation path:
   not as missing NeonDiff Keychain API keys;
 - if the worker allowlist contains multiple repositories, it keeps every entry
   unchanged and requires one explicit **Review Target** for native activation;
-  that target is restored only for the same config path, while native review
-  and daemon controls remain blocked until runtime scoping is available;
+  that target is restored only for the same config path;
+- it can reverify and invoke the exact matched LaunchAgent configuration without
+  copying its private key. The key file must be a current-user-owned regular
+  file with no group/other permissions and is passed to the CLI only as a
+  child-process environment coordinate for the exact config;
+- Overview runs one repository/PR-scoped dry review first. A live review is
+  enabled only for the returned 40-character head SHA and requires explicit
+  confirmation; daemon-wide start stays blocked for multi-repository workers;
 - it keeps new work blocked until the exact current GitHub/repository and
   entitlement checks required by the release path pass.
 
@@ -362,9 +368,10 @@ Keychain, select and apply one repository, and verify that installation without
 an operator editing local files. For a reconciled existing worker with a
 multi-repository allowlist, choose one **Review Target** in the repository
 table; this binds activation without changing the worker's other configured
-repositories. Native review and daemon controls remain blocked for that
-multi-repository worker until the runtime can be scoped safely. The managed B1
-broker remains a separate path.
+repositories. The native app can run one scoped dry review through the exact
+matched local agent, then offer a confirmed live post pinned to that dry-run
+head. It still does not start the multi-repository daemon or rewrite its
+allowlist. The managed B1 broker remains a separate path.
 The dashboard shows license status, GitHub App status, daemon status, and
 provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing

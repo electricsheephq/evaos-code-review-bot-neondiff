@@ -161,6 +161,88 @@ import Testing
         ) == fallback)
     }
 
+    @Test func normalizesExistingWorkerCredentialCoordinatesForOneExactConfig() throws {
+        let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
+        let privateKeyURL = URL(filePath: "/Users/test/.config/neondiff/app.pem")
+            .standardizedFileURL
+        let data = try propertyList(
+            label: "com.electricsheephq.evaos-code-review-bot",
+            environment: [
+                "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+                "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": privateKeyURL.path
+            ],
+            arguments: ["neondiff", "daemon", "--config", configPath]
+        )
+
+        let context = DesktopLaunchAgentExecutionContextParser.parse(
+            data: data,
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { $0 == privateKeyURL }
+        )
+
+        #expect(context == DesktopLocalBotExecutionContext(
+            configPath: configPath,
+            environmentOverrides: [
+                "NEONDIFF_GITHUB_APP_ID": "4184532",
+                "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH": privateKeyURL.path
+            ]
+        ))
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "neondiff",
+            arguments: ["review-pr", "--config", configPath, "--repo", "owner/repo"],
+            executionContexts: [context!]
+        ) == context?.environmentOverrides)
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "neondiff",
+            arguments: [
+                "review-pr",
+                "--config", configPath,
+                "--config", configPath
+            ],
+            executionContexts: [context!]
+        ).isEmpty)
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "/tmp/untrusted-neondiff",
+            arguments: ["review-pr", "--config", configPath],
+            executionContexts: [context!]
+        ).isEmpty)
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "neondiff",
+            arguments: ["config", "inspect", "--config", configPath],
+            executionContexts: [context!]
+        ).isEmpty)
+    }
+
+    @Test func rejectsUnsafeOrConflictingExistingWorkerCredentialCoordinates() throws {
+        let configPath = "/tmp/neondiff.json"
+        let baseEnvironment = [
+            "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+            "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": "/Users/test/app.pem"
+        ]
+        let data = try propertyList(
+            label: "com.electricsheephq.evaos-code-review-bot",
+            environment: baseEnvironment,
+            arguments: ["neondiff", "--config", configPath]
+        )
+        #expect(DesktopLaunchAgentExecutionContextParser.parse(
+            data: data,
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { _ in false }
+        ) == nil)
+
+        var conflicting = baseEnvironment
+        conflicting["NEONDIFF_GITHUB_APP_ID"] = "4332113"
+        #expect(DesktopLaunchAgentExecutionContextParser.parse(
+            data: try propertyList(
+                label: "com.electricsheephq.evaos-code-review-bot",
+                environment: conflicting,
+                arguments: ["neondiff", "--config", configPath]
+            ),
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { _ in true }
+        ) == nil)
+    }
+
     private func propertyList(
         label: String,
         environment: [String: String],

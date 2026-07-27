@@ -150,6 +150,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set) var byoGitHubCredentialsVerified = false
     @Published package private(set) var isBYOGitHubVerificationInProgress = false
     @Published package private(set) var byoGitHubCredentialStatus = "Customer-owned GitHub App credentials are not stored."
+    @Published package var pendingReviewPullNumber = "" {
+        didSet {
+            guard pendingReviewPullNumber != oldValue else { return }
+            invalidateScopedReviewApproval()
+        }
+    }
+    @Published package private(set) var isScopedReviewInProgress = false
+    @Published package private(set) var scopedDryRunHeadSHA: String?
+    @Published package private(set) var scopedReviewStatus = "Verify current access before running a dry review."
     @Published package var logText = "No logs loaded."
     @Published package var lastError: String?
     @Published package var lastCommandLine = ""
@@ -182,6 +191,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set) var activationVerifiedThisLaunch = false
     private var activationVerifiedRepositoryThisLaunch: String?
     private var appliedRepoSelection: AppliedRepoSelection?
+    private var scopedDryRunApproval: ScopedReviewApproval?
 
     package var productionActivationBoundaryMessage: String {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
@@ -337,7 +347,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                   byoGitHubCredentialsVerified,
                   repositoryConfigurationReady,
                   currentRepositoryActivationReady,
-                  reviewTargetRuntimeReady
+                  scopedReviewTargetReady
             else { return false }
         }
         guard dependencies.productionBoundary.managedGitHubBrokerOrigin != nil else {
@@ -367,6 +377,42 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case .unknown:
             return false
         }
+    }
+
+    /// A scoped `review-pr` command always carries one exact repository and PR.
+    /// It can therefore use an explicitly selected repository from an existing
+    /// multi-repository worker without widening or rewriting that worker.
+    package var scopedReviewTargetReady: Bool {
+        guard let selectedReviewRepository else { return false }
+        return repos.contains {
+            $0.enabled
+                && $0.name.caseInsensitiveCompare(selectedReviewRepository)
+                    == .orderedSame
+        }
+    }
+
+    /// Starting the long-running daemon remains stricter than one scoped
+    /// review. A multi-repository worker cannot be started from the native app
+    /// until its runtime scope can be narrowed without rewriting the allowlist.
+    package var productionDaemonStartAvailable: Bool {
+        productionUsefulWorkAvailable && reviewTargetRuntimeReady
+    }
+
+    package var scopedLiveReviewConfirmationAvailable: Bool {
+        guard productionUsefulWorkAvailable,
+              !isScopedReviewInProgress,
+              let approval = scopedDryRunApproval,
+              let pullNumber = Int(pendingReviewPullNumber),
+              let selectedReviewRepository
+        else {
+            return false
+        }
+        return approval.repo.caseInsensitiveCompare(selectedReviewRepository)
+                == .orderedSame
+            && approval.pullNumber == pullNumber
+            && approval.configPath == configPath
+            && approval.workspaceGeneration == workspaceContextGeneration
+            && isValidGitHubCommitSHA(approval.headSHA)
     }
 
     /// Stopping an already-running daemon is a safety remediation, not useful
@@ -439,6 +485,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var existingLocalBotBYOGitHubVerificationAvailable: Bool {
+        if existingLocalAgentAccessAvailable {
+            return true
+        }
         guard existingLocalBotIdentityReady,
               byoGitHubCredentialOnboardingAvailable,
               byoGitHubPrivateKeyStored,
@@ -450,11 +499,34 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return storedAppID == String(bot.appID)
     }
 
+    package var existingLocalAgentAccessAvailable: Bool {
+        guard existingLocalBotIdentityReady,
+              byoGitHubCredentialOnboardingAvailable,
+              cliPath == "neondiff",
+              let bot = selectedBotInstallation
+        else {
+            return false
+        }
+        return dependencies.localBotConfigurations.contains { configuration in
+            configuration.appID == bot.appID
+                && normalizedPath(configuration.configPath)
+                    == normalizedPath(configPath)
+        }
+    }
+
     package var existingLocalBotBYOGitHubVerificationStatus: String {
         guard existingLocalBotIdentityReady,
               let bot = selectedBotInstallation
         else {
             return "The selected existing bot identity is not verified for this local config."
+        }
+        if existingLocalAgentAccessAvailable {
+            return byoGitHubCredentialsVerified
+                ? "Verified through the existing local agent for this launch."
+                : "The exact existing local agent is ready for current-access verification. Its private key will not be copied or printed."
+        }
+        if cliPath != "neondiff" {
+            return "Reset the CLI setting to neondiff before reusing an existing local agent. Custom executables never receive its credential environment."
         }
         guard let storedAppID = storedBYOGitHubAppId else {
             return "No app-owned Keychain App ID is stored for current-access verification."
@@ -1433,6 +1505,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         pendingBYOGitHubAppPrivateKey = ""
         byoGitHubCredentialRevision &+= 1
         isBYOGitHubVerificationInProgress = false
+        isScopedReviewInProgress = false
+        pendingReviewPullNumber = ""
+        invalidateScopedReviewApproval()
         isConfigInitializationInProgress = false
         isConfigPatchInProgress = false
         isConfigInspectInProgress = false
@@ -1840,7 +1915,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func previewStartDaemon() {
-        guard requireProductionUsefulWorkAuthorization() else { return }
+        guard requireProductionDaemonStartAuthorization() else { return }
         runCLI(arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: startDaemonDryRunCommand)
     }
 
@@ -1850,12 +1925,146 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func startDaemon() {
-        guard requireProductionUsefulWorkAuthorization() else { return }
+        guard requireProductionDaemonStartAuthorization() else { return }
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
             displayCommand: startDaemonCommand
         )
+    }
+
+    package func runScopedDryReview() {
+        guard requireScopedReviewAuthorization() else { return }
+        guard !isScopedReviewInProgress else { return }
+        guard let repository = selectedReviewRepository,
+              let pullNumber = positivePendingReviewPullNumber
+        else {
+            lastError = "Enter a positive pull request number."
+            scopedReviewStatus = lastError ?? "Pull request required"
+            return
+        }
+
+        let context = ScopedReviewApproval(
+            repo: repository,
+            pullNumber: pullNumber,
+            headSHA: "",
+            configPath: configPath,
+            workspaceGeneration: workspaceContextGeneration
+        )
+        let arguments = [
+            "review-pr",
+            "--config", configPath,
+            "--repo", repository,
+            "--pr", String(pullNumber),
+            "--dry-run", "true",
+            "--zcode", "false"
+        ]
+        let executablePath = cliPath
+        let cli = dependencies.cli
+        invalidateScopedReviewApproval()
+        isScopedReviewInProgress = true
+        lastError = nil
+        scopedReviewStatus =
+            "Running a dry review for \(repository)#\(pullNumber)…"
+        lastCommandLine = [
+            shellQuote(cliPath), "review-pr",
+            "--config", shellQuote(configPath),
+            "--repo", shellQuote(repository),
+            "--pr", String(pullNumber),
+            "--dry-run true --zcode false"
+        ].joined(separator: " ")
+
+        Task.detached {
+            do {
+                let result = try await cli.run(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    standardInput: nil,
+                    timeout: 600
+                )
+                await MainActor.run {
+                    self.applyScopedDryReviewResult(
+                        result,
+                        expectedContext: context
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.isCurrentWorkspace(
+                        context.workspaceGeneration
+                    ) else { return }
+                    self.isScopedReviewInProgress = false
+                    self.invalidateScopedReviewApproval()
+                    self.lastError = "The scoped dry review failed safely."
+                    self.scopedReviewStatus =
+                        "Dry review failed. No GitHub review was posted."
+                }
+            }
+        }
+    }
+
+    package func runScopedLiveReview() {
+        guard requireScopedReviewAuthorization() else { return }
+        guard scopedLiveReviewConfirmationAvailable,
+              let approval = scopedDryRunApproval
+        else {
+            lastError =
+                "Run a successful dry review for this exact repository and pull request before posting."
+            scopedReviewStatus = lastError ?? "Dry review required"
+            return
+        }
+
+        let arguments = [
+            "review-pr",
+            "--config", approval.configPath,
+            "--repo", approval.repo,
+            "--pr", String(approval.pullNumber),
+            "--head-sha", approval.headSHA,
+            "--dry-run", "false",
+            "--confirm", "true",
+            "--zcode", "false"
+        ]
+        let executablePath = cliPath
+        let cli = dependencies.cli
+        isScopedReviewInProgress = true
+        lastError = nil
+        scopedReviewStatus =
+            "Posting the approved review for \(approval.repo)#\(approval.pullNumber) at \(approval.headSHA.prefix(12))…"
+        lastCommandLine = [
+            shellQuote(cliPath), "review-pr",
+            "--config", shellQuote(approval.configPath),
+            "--repo", shellQuote(approval.repo),
+            "--pr", String(approval.pullNumber),
+            "--head-sha", shellQuote(approval.headSHA),
+            "--dry-run false --confirm true --zcode false"
+        ].joined(separator: " ")
+
+        Task.detached {
+            do {
+                let result = try await cli.run(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    standardInput: nil,
+                    timeout: 600
+                )
+                await MainActor.run {
+                    self.applyScopedLiveReviewResult(
+                        result,
+                        expectedApproval: approval
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.isCurrentWorkspace(
+                        approval.workspaceGeneration
+                    ) else { return }
+                    self.isScopedReviewInProgress = false
+                    self.lastError = "The scoped live review failed safely."
+                    self.scopedReviewStatus =
+                        "Live review failed. Verify GitHub before retrying."
+                }
+            }
+        }
     }
 
     package func stopDaemon() {
@@ -2129,6 +2338,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return
         }
+        invalidateScopedReviewApproval()
         invalidateActivationForRepositoryChange()
         selectedBYOReviewRepository = repository.name
         dependencies.preferences.set(
@@ -2770,6 +2980,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let safeCommand = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --github-app-id \(shellQuote(appId)) --github-app-private-key-stdin true --json < [secure Keychain input]"
         let verificationContext = BYOGitHubVerificationContext(
             appId: appId,
+            source: .keychainStdin,
             credentialRevision: byoGitHubCredentialRevision,
             cliPath: cliPath,
             configPath: configPath,
@@ -2812,21 +3023,118 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
+    package func verifyExistingLocalBotGitHubAccess() {
+        if let bot = selectedBotInstallation,
+           let storedAppID = storedBYOGitHubAppId,
+           storedAppID == String(bot.appID),
+           byoGitHubPrivateKeyStored
+        {
+            verifyBYOGitHubAppCredentials()
+            return
+        }
+        guard !isSetupMutationBlocked else {
+            lastError = "Retry account verification before verifying GitHub App setup."
+            byoGitHubCredentialStatus = lastError ?? "Account check required"
+            return
+        }
+        guard !isBYOGitHubVerificationInProgress else { return }
+        guard existingLocalAgentAccessAvailable,
+              let bot = selectedBotInstallation
+        else {
+            lastError = "The selected bot does not match one exact configured local agent."
+            byoGitHubCredentialStatus = lastError ?? "Local agent unavailable"
+            return
+        }
+
+        let arguments = [
+            "doctor", "github",
+            "--config", configPath,
+            "--json"
+        ]
+        let verificationContext = BYOGitHubVerificationContext(
+            appId: String(bot.appID),
+            source: .existingLocalAgent,
+            credentialRevision: byoGitHubCredentialRevision,
+            cliPath: cliPath,
+            configPath: configPath,
+            repositories: repos.filter(\.enabled).map(\.name).sorted(),
+            workspaceGeneration: workspaceContextGeneration
+        )
+        let executablePath = cliPath
+        let cli = dependencies.cli
+        isBYOGitHubVerificationInProgress = true
+        byoGitHubCredentialsVerified = false
+        lastError = nil
+        lastCommandLine = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --json"
+        byoGitHubCredentialStatus =
+            "Verifying current App installation access through the exact existing local agent…"
+
+        Task.detached {
+            do {
+                let result = try await cli.run(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    standardInput: nil,
+                    timeout: 30
+                )
+                await MainActor.run {
+                    self.applyBYOGitHubVerificationResult(
+                        result,
+                        expectedContext: verificationContext
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.isCurrentWorkspace(
+                        verificationContext.workspaceGeneration
+                    ) else { return }
+                    self.isBYOGitHubVerificationInProgress = false
+                    self.byoGitHubCredentialsVerified = false
+                    self.lastError =
+                        "Existing local agent GitHub verification failed safely."
+                    self.byoGitHubCredentialStatus =
+                        self.lastError ?? "Verification failed"
+                    self.logText =
+                        "The existing local agent did not produce authoritative installation/repository proof. No credential was copied."
+                }
+            }
+        }
+    }
+
     private func applyBYOGitHubVerificationResult(
         _ result: CLIRunResult,
         expectedContext: BYOGitHubVerificationContext
     ) {
         guard isCurrentWorkspace(expectedContext.workspaceGeneration) else { return }
         isBYOGitHubVerificationInProgress = false
-        let currentContext = storedBYOGitHubAppId.map { appId in
-            BYOGitHubVerificationContext(
-                appId: appId,
-                credentialRevision: byoGitHubCredentialRevision,
-                cliPath: cliPath,
-                configPath: configPath,
-                repositories: repos.filter(\.enabled).map(\.name).sorted(),
-                workspaceGeneration: workspaceContextGeneration
-            )
+        let currentContext: BYOGitHubVerificationContext?
+        switch expectedContext.source {
+        case .keychainStdin:
+            currentContext = storedBYOGitHubAppId.map { appId in
+                BYOGitHubVerificationContext(
+                    appId: appId,
+                    source: .keychainStdin,
+                    credentialRevision: byoGitHubCredentialRevision,
+                    cliPath: cliPath,
+                    configPath: configPath,
+                    repositories: repos.filter(\.enabled).map(\.name).sorted(),
+                    workspaceGeneration: workspaceContextGeneration
+                )
+            }
+        case .existingLocalAgent:
+            currentContext = existingLocalAgentAccessAvailable
+                ? selectedBotInstallation.map { bot in
+                    BYOGitHubVerificationContext(
+                        appId: String(bot.appID),
+                        source: .existingLocalAgent,
+                        credentialRevision: byoGitHubCredentialRevision,
+                        cliPath: cliPath,
+                        configPath: configPath,
+                        repositories: repos.filter(\.enabled).map(\.name).sorted(),
+                        workspaceGeneration: workspaceContextGeneration
+                    )
+                }
+                : nil
         }
         guard currentContext == expectedContext else {
             byoGitHubCredentialsVerified = false
@@ -2844,7 +3152,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
               reportedRepositories == expectedRepositories,
               report.ok,
               report.command == "doctor github",
-              report.appCredentials.source == "stdin",
+              report.appCredentials.source == (
+                  expectedContext.source == .keychainStdin
+                      ? "stdin"
+                      : "configured"
+              ),
               report.appCredentials.appIdConfigured,
               report.appCredentials.privateKeyConfigured,
               report.github.canPostAsApp,
@@ -2870,11 +3182,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }.joined(separator: ", ")
         byoGitHubCredentialsVerified = true
         lastError = nil
-        byoGitHubCredentialStatus = "Verified App installation access for \(repositories). Worker dry/live review has not run yet."
-        logText = "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
+        byoGitHubCredentialStatus = expectedContext.source == .existingLocalAgent
+            ? "Verified existing local agent App installation access for \(repositories). Worker dry/live review has not run yet."
+            : "Verified App installation access for \(repositories). Worker dry/live review has not run yet."
+        logText = expectedContext.source == .existingLocalAgent
+            ? "Existing local agent GitHub App installation and repository access verified. No credential was copied and no review was executed or posted."
+            : "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
     }
 
     private func invalidateBYOGitHubVerificationContext() {
+        invalidateScopedReviewApproval()
         guard byoGitHubCredentialOnboardingAvailable else { return }
         byoGitHubCredentialsVerified = false
         guard !isBYOGitHubVerificationInProgress else { return }
@@ -3492,6 +3809,161 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return false
         }
         return true
+    }
+
+    @discardableResult
+    private func requireProductionDaemonStartAuthorization() -> Bool {
+        guard productionDaemonStartAvailable else {
+            lastError = reviewTargetRuntimeReady
+                ? "Verify the selected repository, provider, and entitlement before starting the worker."
+                : "This existing worker monitors multiple repositories. Run a scoped review from NeonDiff; daemon-wide start remains blocked."
+            logText = lastError ?? "Daemon start is unavailable."
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    private func requireScopedReviewAuthorization() -> Bool {
+        guard requireProductionUsefulWorkAuthorization(),
+              providerSetupReady
+        else {
+            if providerSetupReady == false {
+                lastError =
+                    "Verify the selected provider before running a review."
+                scopedReviewStatus =
+                    lastError ?? "Provider verification required"
+            }
+            return false
+        }
+        return true
+    }
+
+    private var positivePendingReviewPullNumber: Int? {
+        let trimmed = pendingReviewPullNumber
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(trimmed), value > 0 else { return nil }
+        return value
+    }
+
+    private func applyScopedDryReviewResult(
+        _ result: CLIRunResult,
+        expectedContext: ScopedReviewApproval
+    ) {
+        guard isCurrentWorkspace(expectedContext.workspaceGeneration) else {
+            return
+        }
+        isScopedReviewInProgress = false
+        guard currentScopedReviewCoordinatesMatch(expectedContext),
+              result.exitCode == 0,
+              let data = result.stdout.data(using: .utf8),
+              let report = try? JSONDecoder().decode(
+                  ScopedReviewCommandReport.self,
+                  from: data
+              ),
+              report.ok,
+              report.command == "review-pr",
+              report.dryRun,
+              report.scope.repo.caseInsensitiveCompare(expectedContext.repo)
+                  == .orderedSame,
+              report.scope.pullNumber == expectedContext.pullNumber,
+              isValidGitHubCommitSHA(report.scope.headSha)
+        else {
+            invalidateScopedReviewApproval()
+            lastError =
+                "The dry review did not produce exact repository, pull request, and head proof."
+            scopedReviewStatus =
+                "Dry review failed closed. No live review is authorized."
+            return
+        }
+
+        let approval = ScopedReviewApproval(
+            repo: report.scope.repo,
+            pullNumber: report.scope.pullNumber,
+            headSHA: report.scope.headSha.lowercased(),
+            configPath: expectedContext.configPath,
+            workspaceGeneration: expectedContext.workspaceGeneration
+        )
+        scopedDryRunApproval = approval
+        scopedDryRunHeadSHA = approval.headSHA
+        lastError = nil
+        scopedReviewStatus =
+            "Dry review complete for \(approval.repo)#\(approval.pullNumber) at \(approval.headSHA.prefix(12)). Confirm to post this exact head."
+    }
+
+    private func applyScopedLiveReviewResult(
+        _ result: CLIRunResult,
+        expectedApproval: ScopedReviewApproval
+    ) {
+        guard isCurrentWorkspace(expectedApproval.workspaceGeneration) else {
+            return
+        }
+        isScopedReviewInProgress = false
+        guard currentScopedReviewCoordinatesMatch(expectedApproval),
+              scopedDryRunApproval == expectedApproval,
+              result.exitCode == 0,
+              let data = result.stdout.data(using: .utf8),
+              let report = try? JSONDecoder().decode(
+                  ScopedReviewCommandReport.self,
+                  from: data
+              ),
+              report.ok,
+              report.command == "review-pr",
+              !report.dryRun,
+              report.scope.repo.caseInsensitiveCompare(expectedApproval.repo)
+                  == .orderedSame,
+              report.scope.pullNumber == expectedApproval.pullNumber,
+              report.scope.headSha.caseInsensitiveCompare(
+                  expectedApproval.headSHA
+              ) == .orderedSame
+        else {
+            lastError =
+                "GitHub did not confirm a live review for the exact approved head."
+            scopedReviewStatus =
+                "Live review failed closed. Re-run the dry review before retrying."
+            invalidateScopedReviewApproval()
+            return
+        }
+
+        lastError = nil
+        scopedReviewStatus =
+            "Review posted for \(expectedApproval.repo)#\(expectedApproval.pullNumber) at \(expectedApproval.headSHA.prefix(12))."
+        invalidateScopedReviewApproval(preserveStatus: true)
+    }
+
+    private func currentScopedReviewCoordinatesMatch(
+        _ approval: ScopedReviewApproval
+    ) -> Bool {
+        guard approval.workspaceGeneration == workspaceContextGeneration,
+              approval.configPath == configPath,
+              let selectedReviewRepository,
+              selectedReviewRepository.caseInsensitiveCompare(approval.repo)
+                  == .orderedSame,
+              positivePendingReviewPullNumber == approval.pullNumber
+        else {
+            return false
+        }
+        return true
+    }
+
+    private func isValidGitHubCommitSHA(_ value: String) -> Bool {
+        value.utf8.count == 40
+            && value.utf8.allSatisfy {
+                ($0 >= 48 && $0 <= 57)
+                    || ($0 >= 65 && $0 <= 70)
+                    || ($0 >= 97 && $0 <= 102)
+            }
+    }
+
+    private func invalidateScopedReviewApproval(
+        preserveStatus: Bool = false
+    ) {
+        scopedDryRunApproval = nil
+        scopedDryRunHeadSHA = nil
+        if !preserveStatus && !isScopedReviewInProgress {
+            scopedReviewStatus =
+                "Run a dry review before posting an exact pull request head."
+        }
     }
 
     @discardableResult
@@ -4902,12 +5374,39 @@ private struct BYOGitHubDoctorReport: Decodable {
 }
 
 private struct BYOGitHubVerificationContext: Equatable, Sendable {
+    enum CredentialSource: Equatable, Sendable {
+        case keychainStdin
+        case existingLocalAgent
+    }
+
     let appId: String
+    let source: CredentialSource
     let credentialRevision: UInt64
     let cliPath: String
     let configPath: String
     let repositories: [String]
     let workspaceGeneration: UInt64
+}
+
+private struct ScopedReviewApproval: Equatable, Sendable {
+    let repo: String
+    let pullNumber: Int
+    let headSHA: String
+    let configPath: String
+    let workspaceGeneration: UInt64
+}
+
+private struct ScopedReviewCommandReport: Decodable {
+    struct Scope: Decodable {
+        let repo: String
+        let pullNumber: Int
+        let headSha: String
+    }
+
+    let ok: Bool
+    let command: String
+    let dryRun: Bool
+    let scope: Scope
 }
 
 private let licenseKeyAccount = "license/default"

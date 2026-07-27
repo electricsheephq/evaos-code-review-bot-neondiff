@@ -249,6 +249,25 @@ import Testing
         #expect(source.contains("neondiff-onboarding-byo-github-verify"))
     }
 
+    @Test func b0OverviewExposesDryFirstPinnedLiveReviewActions() throws {
+        let viewsDirectory = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
+        let overview = try sourceBoundaryText(
+            at: viewsDirectory.appendingPathComponent("OverviewView.swift")
+        )
+        let repos = try sourceBoundaryText(
+            at: viewsDirectory.appendingPathComponent("ReposView.swift")
+        )
+
+        #expect(overview.contains("model.runScopedDryReview()"))
+        #expect(overview.contains("neondiff-scoped-review-dry"))
+        #expect(overview.contains("model.scopedLiveReviewConfirmationAvailable"))
+        #expect(overview.contains("model.runScopedLiveReview()"))
+        #expect(overview.contains("confirmationDialog("))
+        #expect(overview.contains("neondiff-scoped-review-live"))
+        #expect(repos.contains("model.verifyExistingLocalBotGitHubAccess()"))
+    }
+
     @Test func activationEnabledLicenseViewHidesLegacyCredentialAndFalseBoundary() throws {
         let licenseView = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Views/LicenseView.swift")
