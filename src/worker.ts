@@ -1426,6 +1426,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
   const retryableApprovedDryRunPrePostFailure =
     input.dryRun && isRetryableApprovedDryRunPrePostFailure(processed);
+  const refreshableDryRun =
+    input.dryRun && processed?.status === "dry_run";
   const approvedDryRunTransition =
     input.processedHeadPolicy === "approved_dry_run" &&
     processed?.status === "dry_run" &&
@@ -1653,6 +1655,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     !manualReviewRequested &&
     !approvedDryRunTransition &&
     !retryableApprovedDryRunPrePostFailure &&
+    !refreshableDryRun &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1672,7 +1675,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     ? state.getActiveRepoProviderCooldown(repo)
     : undefined;
   if (activeCooldown && input.processedHeadPolicy !== "retry_failed_head") {
-    if (!(approvedDryRunTransition && processed?.status === "dry_run")) {
+    if (
+      !(
+        processed?.status === "dry_run" &&
+        (approvedDryRunTransition || refreshableDryRun)
+      )
+    ) {
       recordProviderCooldownSkip({
         state,
         repo,

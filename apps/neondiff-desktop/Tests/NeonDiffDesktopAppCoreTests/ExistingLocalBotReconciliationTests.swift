@@ -511,6 +511,35 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func scopedReviewRequiresTheProviderConfigurationUsedByZCode() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(authMode: "api-key-env"))
+        fixture.model.providers.providerKeyStored = true
+        fixture.model.providerVerification = ProviderVerificationSnapshot(
+            ok: true,
+            command: "providers verify",
+            providerId: "zcode-glm",
+            checkedAt: "2026-07-27T00:00:00Z",
+            state: .healthy,
+            mode: "live",
+            detail: "Provider accepted current verification.",
+            troubleshooting: [],
+            configRevision: String(repeating: "a", count: 64)
+        )
+
+        #expect(fixture.model.providerSetupReady)
+        #expect(!fixture.model.scopedReviewProviderReady)
+
+        fixture.loadConfig(existingBotConfig(authMode: "zcode-app-config"))
+
+        #expect(fixture.model.providerSetupReady)
+        #expect(fixture.model.scopedReviewProviderReady)
+    }
+
+    @MainActor
     @Test func selectedExistingBYOBotReusesKeychainCredentialForReverification() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,

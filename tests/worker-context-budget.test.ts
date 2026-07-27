@@ -755,6 +755,44 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("admits a fresh dry proof after a pre-claim live failure leaves the prior dry receipt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-refresh-approved-dry-run-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(423, "5".repeat(40));
+    const oldRevision = "a".repeat(64);
+    const newRevision = "b".repeat(64);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "dry_run",
+      configRevision: oldRevision
+    });
+
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/a.ts", 200)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      configRevision: newRevision
+    })).toBe("reviewed");
+    expect(createdReviews).toHaveLength(0);
+    expect(state.getProcessedReview(
+      "electricsheephq/WorldOS",
+      pull.number,
+      pull.head.sha
+    )).toMatchObject({
+      status: "dry_run",
+      configRevision: newRevision
+    });
+    state.close();
+  });
+
   it("uses the single-prompt path when overflow chunk is configured but the prompt fits", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-within-chunk-config-"));
     roots.push(root);

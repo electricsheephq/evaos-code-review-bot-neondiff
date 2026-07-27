@@ -418,7 +418,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var scopedReviewExecutionAvailable: Bool {
-        productionUsefulWorkAvailable && existingLocalAgentAccessAvailable
+        productionUsefulWorkAvailable
+            && existingLocalAgentAccessAvailable
+            && scopedReviewProviderReady
     }
 
     /// Stopping an already-running daemon is a safety remediation, not useful
@@ -781,6 +783,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         default:
             return false
         }
+    }
+
+    /// The current scoped-review bridge executes ZCode, so its authorization
+    /// must be bound to the same app configuration ZCode will read. A provider
+    /// verified through NeonDiff's separate API-key adapter remains valid for
+    /// provider setup, but cannot authorize this bridge until direct adapter
+    /// execution is supported.
+    package var scopedReviewProviderReady: Bool {
+        providerSetupReady
+            && providers.selectedRegistryTarget?.authMode == "zcode-app-config"
     }
 
     /// Account entitlement is server authority for the selected existing bot's
@@ -3866,15 +3878,21 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     @discardableResult
     private func requireScopedReviewAuthorization() -> Bool {
-        guard requireProductionUsefulWorkAuthorization(),
-              providerSetupReady
-        else {
-            if providerSetupReady == false {
-                lastError =
-                    "Verify the selected provider before running a review."
-                scopedReviewStatus =
-                    lastError ?? "Provider verification required"
-            }
+        guard requireProductionUsefulWorkAuthorization() else {
+            return false
+        }
+        guard providerSetupReady else {
+            lastError =
+                "Verify the selected provider before running a review."
+            scopedReviewStatus =
+                lastError ?? "Provider verification required"
+            return false
+        }
+        guard scopedReviewProviderReady else {
+            lastError =
+                "Scoped reviews currently require a provider backed by the verified ZCode app configuration."
+            scopedReviewStatus =
+                lastError ?? "ZCode provider configuration required"
             return false
         }
         guard existingLocalAgentAccessAvailable else {
