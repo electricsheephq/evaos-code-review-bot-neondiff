@@ -295,6 +295,10 @@ the same Mac. In that exact case it opens a reconciliation path:
   current-launch review authorization;
 - it treats `zcode-app-config` and `none` provider auth modes as config-backed,
   not as missing NeonDiff Keychain API keys;
+- if the worker allowlist contains multiple repositories, it keeps every entry
+  unchanged and requires one explicit **Review Target** for native activation;
+  that target is restored only for the same config path, while native review
+  and daemon controls remain blocked until runtime scoping is available;
 - it keeps new work blocked until the exact current GitHub/repository and
   entitlement checks required by the release path pass.
 
@@ -355,7 +359,12 @@ on non-Mac platforms. The local HTML dashboard is the operator/diagnostic surfac
 it drives. On Mac, the native macOS app is the human first-run product surface.
 The exact B0 bundle lets the customer store the customer-owned App key in
 Keychain, select and apply one repository, and verify that installation without
-an operator editing local files. The managed B1 broker remains a separate path.
+an operator editing local files. For a reconciled existing worker with a
+multi-repository allowlist, choose one **Review Target** in the repository
+table; this binds activation without changing the worker's other configured
+repositories. Native review and daemon controls remain blocked for that
+multi-repository worker until the runtime can be scoped safely. The managed B1
+broker remains a separate path.
 The dashboard shows license status, GitHub App status, daemon status, and
 provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing

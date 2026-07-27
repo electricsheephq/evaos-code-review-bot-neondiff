@@ -229,7 +229,9 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
             productionBoundary: boundary
         )
         #expect(fixture.model.activationHandoffEnabled)
-        fixture.model.repos = [RepoMonitor(name: "electric/private", enabled: true)]
+        fixture.loadConfig(
+            #"{"ok":true,"command":"config inspect","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"pilotRepos":["electric/private"]}}"#
+        )
         fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
         fixture.model.provideExistingActivationKey()
 
