@@ -302,6 +302,72 @@ describe("local HTML dashboard", () => {
     expect(JSON.stringify({ verification, status })).not.toContain(fakeKey);
   });
 
+  it("tracks a config created after the dashboard starts", async () => {
+    const modelServer = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/v1/models") {
+        response.end(JSON.stringify({ data: [{ id: "late-model" }] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: "not found" }));
+    });
+    servers.push(modelServer);
+    await listen(modelServer);
+    const address = modelServer.address() as AddressInfo;
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dashboard-late-config-"));
+    const configPath = join(root, "config.local.json");
+    const startupConfig = loadConfigFromObject({});
+    const handle = await startLocalDashboardServer({
+      config: startupConfig,
+      configPath,
+      configExists: false,
+      openBrowser: false,
+      port: 0,
+      requireActiveProductionLicense: admittedProviderVerification
+    });
+    servers.push(handle.server);
+
+    const currentConfig = {
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            adapter: "openai-compatible",
+            displayName: "Late Provider",
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            model: "late-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "LATE_PROVIDER_API_KEY",
+            capabilities: { local: true }
+          }
+        }
+      }
+    };
+    writeFileSync(configPath, JSON.stringify(currentConfig));
+    const fakeKey = ["sk", "dashboard-late-config-1234567890"].join("-");
+    const verifyResponse = await fetch(new URL("/api/provider/verify", handle.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        providerId: "openai-compatible",
+        apiKey: fakeKey,
+        allowRemoteSmoke: false
+      })
+    });
+    const verification = await verifyResponse.json() as {
+      ok: boolean;
+      configRevision?: string;
+    };
+
+    expect(verifyResponse.status).toBe(200);
+    expect(verification.ok).toBe(true);
+    expect(verification.configRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(verification)).not.toContain(fakeKey);
+  });
+
   it("renders status from the same changed config snapshot that provider verification accepted", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-dashboard-config-snapshot-"));
     const configPath = join(root, "config.local.json");

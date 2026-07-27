@@ -744,7 +744,7 @@ export async function startLocalDashboardServer(input: {
           return;
         }
         const body = await readJsonBody(request);
-        const configSnapshot = input.configExists && existsSync(input.configPath)
+        const configSnapshot = existsSync(input.configPath)
           ? loadConfigAtRevision(input.configPath)
           : undefined;
         const verification = await verifyProviderApiKey({

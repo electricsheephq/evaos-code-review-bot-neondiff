@@ -38,5 +38,30 @@ import Darwin
         )
     }
 
+    let emptyModelSnapshot = ConfigInspectParser.parse(
+        #"{"ok":true,"command":"config inspect","revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"zcode":{"model":"fallback-model","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"gateway","providers":{"gateway":{"enabled":true,"adapter":"openai-compatible","displayName":"Gateway","baseUrl":"https://saved.example/v1","model":"","authMode":"api-key-env"}}}}}"#,
+        providerKeyStored: true,
+        licenseKeyStored: false
+    )
+    if let providerSettings = emptyModelSnapshot?.providers {
+        let providerPatchData = try ProviderRegistryPatchBuilder.data(
+            for: providerSettings
+        )
+        let providerPatchObject = try JSONSerialization.jsonObject(
+            with: providerPatchData
+        ) as? [String: Any]
+        let providerPatchZCode = providerPatchObject?["zcode"]
+            as? [String: Any]
+        context.expect(
+            providerPatchZCode?["model"] as? String == "fallback-model",
+            "empty registry models fall back to the current ZCode model"
+        )
+    } else {
+        context.expect(
+            false,
+            "empty-model registry snapshot remains parseable for safe fallback"
+        )
+    }
+
       return context.assertions
   }

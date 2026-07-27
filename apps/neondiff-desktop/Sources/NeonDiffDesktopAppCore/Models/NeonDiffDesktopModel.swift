@@ -3080,7 +3080,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             verifyBYOGitHubAppCredentials()
             return
         }
-        verifyGitHubAccessThroughExistingLocalAgent()
+        let diagnosis = existingLocalBotBYOGitHubVerificationStatus
+        lastError = diagnosis
+        byoGitHubCredentialStatus = diagnosis
     }
 
     private func verifyGitHubAccessThroughExistingLocalAgent() {

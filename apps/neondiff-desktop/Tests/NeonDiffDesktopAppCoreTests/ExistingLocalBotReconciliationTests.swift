@@ -711,6 +711,11 @@ import NeonDiffDesktopCore
             fixture.model.existingLocalBotBYOGitHubVerificationStatus
                 .contains("recovery")
         )
+        let diagnosis =
+            fixture.model.existingLocalBotBYOGitHubVerificationStatus
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        #expect(fixture.model.lastError == diagnosis)
+        #expect(fixture.model.byoGitHubCredentialStatus == diagnosis)
     }
 
     @MainActor
