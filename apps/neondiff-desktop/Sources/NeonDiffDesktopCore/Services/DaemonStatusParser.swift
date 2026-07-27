@@ -14,14 +14,24 @@ public enum DaemonStatusParser {
         let reportedRuntimeOk = json["runtimeOk"] as? Bool ?? effective["runtimeOk"] as? Bool
         let reportedHealthState = (effective["healthState"] as? String)
             ?? (json["healthState"] as? String)
-        let hasSubstantiveStatusShape = reportedRuntimeOk != nil
-            || reportedHealthState?.isEmpty == false
-        guard hasSubstantiveStatusShape else {
-            return nil
-        }
         let wrapperOk = json["ok"] as? Bool
         let effectiveOk = effective["ok"] as? Bool
         let launchd = effective["launchd"] as? [String: Any]
+        let launchdState = (launchd?["state"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let isCurrentDaemonStatusEnvelope =
+            statusPayload != nil
+            && json["command"] as? String == "daemon status"
+            && json["operation"] as? String == "status"
+            && effectiveOk != nil
+            && launchdState?.isEmpty == false
+            && effective["gates"] is [[String: Any]]
+        let hasSubstantiveStatusShape = reportedRuntimeOk != nil
+            || reportedHealthState?.isEmpty == false
+            || isCurrentDaemonStatusEnvelope
+        guard hasSubstantiveStatusShape else {
+            return nil
+        }
 
         let monitoredRepos = (effective["monitoredRepos"] as? [String])
             ?? (json["pilotRepos"] as? [String])
@@ -29,12 +39,18 @@ public enum DaemonStatusParser {
             ?? []
         let repos = monitoredRepos.map { RepoMonitor(name: $0, enabled: true) }
         let ok = wrapperOk ?? effectiveOk ?? false
+        let runtimeOk = reportedRuntimeOk
+            ?? (isCurrentDaemonStatusEnvelope ? effectiveOk : nil)
+            ?? ok
+        let inferredHealthOk = isCurrentDaemonStatusEnvelope
+            ? (effectiveOk ?? false)
+            : ok
         let healthState = reportedHealthState
-            ?? (ok ? "runtime_ok" : "runtime_blocked")
+            ?? (inferredHealthOk ? "runtime_ok" : "runtime_blocked")
         let launchdLabel = launchdLabel ?? launchd?["label"] as? String
         let status = DaemonStatus(
             ok: ok,
-            runtimeOk: reportedRuntimeOk ?? ok,
+            runtimeOk: runtimeOk,
             healthState: healthState,
             checkedAt: effective["checkedAt"] as? String ?? json["checkedAt"] as? String,
             monitoredRepos: monitoredRepos,

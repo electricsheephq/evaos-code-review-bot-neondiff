@@ -47,6 +47,50 @@ import NeonDiffDesktopCore
         )
     }
 
+    @Test func currentDaemonStatusEnvelopeIsActionableNotAParseFailure() {
+        let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+        fixture.model.isOnboardingPresented = false
+        let response = #"""
+        {
+          "ok": false,
+          "command": "daemon status",
+          "operation": "status",
+          "status": {
+            "ok": false,
+            "checkedAt": "2026-07-27T02:14:31.507Z",
+            "launchd": {
+              "state": "running"
+            },
+            "gates": [
+              {
+                "name": "queue_no_failed_jobs",
+                "ok": false,
+                "detail": "2 failed durable queue job(s)"
+              }
+            ]
+          }
+        }
+        """#
+
+        fixture.model.applyCLIResultForTesting(
+            CLIRunResult(exitCode: 1, stdout: response, stderr: ""),
+            fallbackCommand: "neondiff daemon status",
+            configPath: fixture.model.configPath,
+            launchdLabel: fixture.model.launchdLabel,
+            isConfigInspectCommand: false,
+            isDaemonStatusCommand: true
+        )
+
+        #expect(fixture.model.status.healthState == "runtime_blocked")
+        #expect(fixture.model.status.runtimeOk == false)
+        #expect(fixture.model.statusRefreshFailureMessage == nil)
+        #expect(fixture.model.customerSurfaceStatus == "WORKER ATTENTION")
+        #expect(
+            fixture.model.customerLocalWorkerStatusDetail
+                == "Review worker needs attention — open Advanced Diagnostics"
+        )
+    }
+
     @Test func structuredStatusErrorRemainsActionableAndFailClosed() {
         let fixture = ModelDependencyFixture(suspendCLIRuns: true)
         fixture.model.isOnboardingPresented = false
