@@ -173,6 +173,12 @@ import Testing
         let activity = try sourceBoundaryText(
             at: views.appendingPathComponent("LogsView.swift")
         )
+        let model = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent(
+                    "Sources/NeonDiffDesktopAppCore/Models/NeonDiffDesktopModel.swift"
+                )
+        )
         let settings = try sourceBoundaryText(
             at: views.appendingPathComponent("SettingsPane.swift")
         )
@@ -230,8 +236,10 @@ import Testing
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
         #expect(activity.contains("model.githubSetupReady"))
         #expect(activity.contains("GitHub connection ready"))
-        #expect(activity.contains("Not checked yet — choose Refresh Activity"))
-        #expect(activity.contains("Check failed —"))
+        #expect(activity.contains("model.customerLocalWorkerStatusDetail"))
+        #expect(model.contains("Not checked yet — choose Refresh Activity"))
+        #expect(model.contains("Status check failed — retry"))
+        #expect(model.contains("Running, but review gates need attention"))
         #expect(activity.contains("DisclosureGroup"))
         #expect(activity.contains("// ADVANCED DIAGNOSTICS"))
         #expect(settings.contains("Signed update, rollback, and installed-app proof"))
