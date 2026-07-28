@@ -46,7 +46,7 @@ struct SettingsPane: View {
                             Text(updateController.statusText)
                                 .operatorBodyText()
                                 .fixedSize(horizontal: false, vertical: true)
-                            Text("Automatic updates are not configured for this candidate. Signed update, rollback, and installed-app proof remain required under #116 before release.")
+                            Text("NeonDiff revalidates update access before every signed beta feed check. A failed entitlement or signature check never installs an update.")
                                 .font(.caption)
                                 .foregroundStyle(NeonDiffTheme.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)

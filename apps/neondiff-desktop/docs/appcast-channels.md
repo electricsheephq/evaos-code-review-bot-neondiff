@@ -42,10 +42,10 @@ The appcast core models these update outcomes for fixtures and release evidence:
 - `feed_invalid`
 - `unsupported_channel`
 
-These statuses are evidence taxonomy for dry-run planning and tests. Mapping
-real Sparkle delegate errors into the desktop UI requires signed/notarized
-artifacts and hosted appcasts, so that runtime proof remains in the owner/Codex
-release lane.
+These statuses back both dry-run planning and the native updater UI. The source
+maps real Sparkle no-update, network/feed, signature/validation, cancellation,
+and generic failures into distinct customer states. A hosted signed appcast and
+installed-app run are still required before claiming runtime proof.
 
 ## Fixtures
 
@@ -62,9 +62,8 @@ Fixtures live under `apps/neondiff-desktop/fixtures/appcast/`:
 
 ## Signing Seam
 
-Real appcast signing is parked until the signed/notarized artifact and owner
-credentials are available. The future signing step should fill `ed_signature`
-from Sparkle's `sign_update` output using owner-custodied private key material.
+Real appcast signing remains a release-time step. It fills `ed_signature` from
+Sparkle's `sign_update` output using owner-custodied private key material.
 Private key values must never be committed, logged, or written to evidence.
 
 The public key and feed URL are build-time inputs documented in

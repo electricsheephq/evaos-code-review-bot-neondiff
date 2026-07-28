@@ -41,10 +41,34 @@ SHORT_VERSION="${NEONDIFF_DESKTOP_VERSION:-0.1.0}"
 BUILD_VERSION="${NEONDIFF_DESKTOP_BUILD:-1}"
 SPARKLE_FEED_URL="${NEONDIFF_SPARKLE_FEED_URL:-}"
 SPARKLE_PUBLIC_KEY="${NEONDIFF_SPARKLE_PUBLIC_ED_KEY:-}"
+SPARKLE_REQUIRED="${NEONDIFF_SPARKLE_REQUIRED:-0}"
 PAID_BETA_CONTRACT="${NEONDIFF_DESKTOP_PAID_BETA_CONTRACT:-}"
 MANAGED_GITHUB_BROKER_ENABLED="${NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED:-}"
 GITHUB_BROKER_ORIGIN="${NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN:-}"
 BYO_GITHUB_ENABLED="${NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED:-}"
+
+if [ "$SPARKLE_REQUIRED" != "0" ] && [ "$SPARKLE_REQUIRED" != "1" ]; then
+  echo "NEONDIFF_SPARKLE_REQUIRED must be 0 or 1" >&2
+  exit 2
+fi
+if { [ -n "$SPARKLE_FEED_URL" ] && [ -z "$SPARKLE_PUBLIC_KEY" ]; } \
+  || { [ -z "$SPARKLE_FEED_URL" ] && [ -n "$SPARKLE_PUBLIC_KEY" ]; }; then
+  echo "Sparkle feed and public key must be configured together" >&2
+  exit 2
+fi
+if [ -n "$SPARKLE_FEED_URL" ]; then
+  case "$SPARKLE_FEED_URL" in
+    https://*) ;;
+    *)
+      echo "NEONDIFF_SPARKLE_FEED_URL must use https" >&2
+      exit 2
+      ;;
+  esac
+fi
+if [ "$SPARKLE_REQUIRED" = "1" ] && [ -z "$SPARKLE_FEED_URL" ]; then
+  echo "A signed Sparkle feed is required for this release build" >&2
+  exit 2
+fi
 
 resolve_production_contract_mode() {
   if [ -z "$PAID_BETA_CONTRACT" ] \
@@ -189,6 +213,9 @@ esac
 if [ -n "$SPARKLE_FEED_URL" ] && [ -n "$SPARKLE_PUBLIC_KEY" ]; then
   /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $SPARKLE_FEED_URL" "$INFO_PLIST"
   /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_KEY" "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool true" "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c "Add :SUScheduledCheckInterval real 21600" "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c "Add :SUAutomaticallyUpdate bool false" "$INFO_PLIST"
 fi
 
 open_app() {
@@ -239,6 +266,13 @@ case "$MODE" in
     if otool -L "$APP_BINARY" | grep -q "Sparkle.framework"; then
       test -d "$APP_FRAMEWORKS/Sparkle.framework"
       otool -l "$APP_BINARY" | grep -q "@executable_path/../Frameworks"
+    fi
+    if [ "$SPARKLE_REQUIRED" = "1" ]; then
+      test "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$INFO_PLIST")" = "$SPARKLE_FEED_URL"
+      test "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$INFO_PLIST")" = "$SPARKLE_PUBLIC_KEY"
+      test "$(/usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' "$INFO_PLIST")" = "true"
+      test "$(/usr/libexec/PlistBuddy -c 'Print :SUScheduledCheckInterval' "$INFO_PLIST")" = "21600.000000"
+      test "$(/usr/libexec/PlistBuddy -c 'Print :SUAutomaticallyUpdate' "$INFO_PLIST")" = "false"
     fi
     ;;
   *)

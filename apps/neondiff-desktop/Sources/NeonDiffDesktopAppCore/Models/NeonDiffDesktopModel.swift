@@ -821,6 +821,40 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
+    /// Update access is evaluated at the moment Sparkle starts a check. A
+    /// current launch activation can authorize the paid beta channel directly.
+    /// Otherwise the account catalog must be a current server response; stale
+    /// or failed account state never unlocks an update. Public-free access is
+    /// limited to a verified managed public repository.
+    package var desktopUpdateAccess: DesktopUpdateAccess {
+        let accountCatalogCurrent: Bool
+        if case .loaded = accountWorkspaceCatalog {
+            accountCatalogCurrent = true
+        } else {
+            accountCatalogCurrent = false
+        }
+
+        let managedPublicRepositoryVerified: Bool
+        if hasVerifiedManagedGitHubSelection,
+           let selectedManagedGitHubRepository,
+           let repository = managedGitHubRepositories.first(where: {
+               $0.fullName == selectedManagedGitHubRepository
+           }) {
+            managedPublicRepositoryVerified = repository.visibility == .public
+        } else {
+            managedPublicRepositoryVerified = false
+        }
+
+        return DesktopUpdateAccessPolicy.evaluate(
+            productionBoundaryVerified: dependencies.productionBoundary.nativeActivationBrokerVerified,
+            accountCatalogCurrent: accountCatalogCurrent,
+            accountEntitlement: selectedAccountWorkspace?.entitlement,
+            activationVerifiedThisLaunch: activationVerifiedThisLaunch,
+            activationIsActive: activationState == .active,
+            managedPublicRepositoryVerified: managedPublicRepositoryVerified
+        )
+    }
+
     /// Successful config inspection proves that the selected local config
     /// already contains and read back its repository allowlist. BYO credential
     /// verification remains a separate current-launch work gate.

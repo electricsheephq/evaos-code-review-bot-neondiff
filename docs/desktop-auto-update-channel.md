@@ -1,10 +1,35 @@
-# Desktop Auto-Update Channel Plan
+# Desktop Auto-Update Channel
 
-Issue #116 tracks the future NeonDiff Desktop auto-update channel with signed
-artifacts, rollback, and license-aware entitlement checks. This document is a
-planning and governance contract only. It does not ship an updater, publish an
-appcast, enable artifact downloads, change live runtime config, or prove desktop
-release readiness.
+Issue #116 tracks NeonDiff Desktop's Sparkle 2 update channel with signed
+artifacts, rollback, and license-aware entitlement checks. The native source now
+contains the real Sparkle controller and release-build configuration gate. No
+hosted appcast, signed update, installed update, rollback, or public release is
+proven by source alone.
+
+## Current Implementation — 2026-07-28
+
+- The native SwiftUI executable uses the existing Sparkle 2 dependency and
+  standard updater UI.
+- Release builds can require a paired HTTPS `SUFeedURL` and `SUPublicEDKey`;
+  partial or missing required configuration fails before the bundle is built.
+- Configured builds check the beta feed every six hours and also expose a
+  manual Check for Updates action. Downloads remain user-confirmed.
+- Every check and every selected update re-evaluates update access. A current
+  paid/trial activation, a current server `internal_admin` entitlement, or a
+  verified managed public-free repository can authorize the beta channel.
+  Missing production composition, stale account state, or missing entitlement
+  fails closed.
+- The customer UI distinguishes ready, checking, update available, up to date,
+  entitlement required, network error, signature error, and generic safe
+  failure.
+- Failing-first tests cover access policy, public-free bounds, stale paid/trial
+  state, and Sparkle error classification. The existing appcast generator and
+  rollback/signature fixtures remain the publishing seam.
+
+Proof boundary: source composition and unsigned Release-configuration bundle
+proof only. #116 remains open for real public-key/feed identity, EdDSA-signed
+appcast, exact signed/notarized installed update, state-preserving rollback and
+re-update, immutable release assets, and live customer evidence.
 
 ## Durable Plan Contract
 
@@ -106,8 +131,8 @@ notes URL, and rollback target.
 
 ## Signed Artifact Rules
 
-Future implementation may use Sparkle, Tauri updater, or another updater only if
-it provides equivalent guarantees:
+The native SwiftUI path uses Sparkle 2. Any future replacement must provide
+equivalent guarantees:
 
 - artifacts are signed and verified before install
 - public verification material may live in the repo, but private signing keys
@@ -119,10 +144,9 @@ it provides equivalent guarantees:
 - signing, notarization, and updater keys are rotated or revoked through a
   documented operator path
 
-If the final shell is the SwiftUI desktop path, Sparkle-style appcast and EdDSA
-signatures are the likely default. If the final shell is Tauri, the Tauri updater
-contract may replace Sparkle if it preserves signature verification, channel
-metadata, rollback, and entitlement checks.
+Sparkle appcasts and EdDSA signatures are the selected production path. The
+private signing key remains outside source control; only the public key may be
+embedded in the app bundle.
 
 ## License-Aware Entitlement Checks
 
@@ -147,8 +171,8 @@ The desktop UI and any CLI status surface should use the same state names:
 
 ## Release Governance Gates
 
-Before any desktop updater can be marked required in
-`docs/public-release-manifest.json`, a future PR must provide evidence for:
+Before #116 can close and the public manifest can claim a working desktop update
+channel, the release lane must provide evidence for:
 
 - desktop shell choice and updater technology
 - signed artifact creation and public verification material
