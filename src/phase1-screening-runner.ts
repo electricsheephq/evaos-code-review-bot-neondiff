@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
-  constants as fsConstants,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -991,11 +990,12 @@ async function acquireRunLease(path: string): Promise<number> {
       return fd;
     } catch (error) {
       if (!isAlreadyExistsError(error)) throw error;
-      const prior = parseOpenedRunLease(path);
+      const prior = parseJson<{ pid?: number }>(path);
       if (typeof prior.pid === "number" && isProcessAlive(prior.pid)) throw new Error(`Phase 1 output has an active exclusive run lease held by PID ${prior.pid}`);
-      // Every conforming stale-lock recovery writer must own the crash-released
-      // loopback coordinator before replacing the canonical lease. Fresh writers
-      // are already serialized by the initial O_EXCL create above.
+      // Every conforming writer must own the crash-released loopback
+      // coordinator before replacing the canonical lease. Build the new lease
+      // under a unique name, then atomically replace the verified-stale path;
+      // there is no check/remove/reopen window on the canonical path.
       const replacementPath = `${path}.${process.pid}.${randomUUID()}.replacement`;
       const fd = openSync(replacementPath, "wx", 0o600);
       try {
@@ -1322,15 +1322,6 @@ function finalizeRun(outputDir: string, summary: Phase1RunSummary): Phase1RunSum
 
 function parseJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8")) as T;
-}
-
-function parseOpenedRunLease(path: string): { pid?: number } {
-  const fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-  try {
-    return JSON.parse(readFileSync(fd, "utf8")) as { pid?: number };
-  } finally {
-    closeSync(fd);
-  }
 }
 
 function fingerprint(value: unknown): string {
