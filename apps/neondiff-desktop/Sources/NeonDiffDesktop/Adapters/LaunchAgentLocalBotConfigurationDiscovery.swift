@@ -18,12 +18,20 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
             .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
             .appendingPathComponent("\(label).plist")
             .standardizedFileURL
+        let installedWorkerRoot = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support/NeonDiffDesktop/Workers",
+                isDirectory: true
+            )
+            .appendingPathComponent(label, isDirectory: true)
+            .standardizedFileURL
         guard let data = try? Data(contentsOf: launchAgentURL, options: .mappedIfSafe) else {
             return Snapshot(configurations: [], executionContexts: [])
         }
         let configuration = DesktopLaunchAgentBotConfigurationParser.parse(
             data: data,
             expectedLabel: label,
+            installedWorkerRoot: installedWorkerRoot,
             configExists: { fileManager.fileExists(atPath: $0.path) },
             workingDirectoryExists: {
                 var isDirectory: ObjCBool = false
@@ -36,6 +44,7 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
         let context = DesktopLaunchAgentExecutionContextParser.parse(
             data: data,
             expectedLabel: label,
+            installedWorkerRoot: installedWorkerRoot,
             privateKeyPathIsSafe: { url in
                 isSafePrivateKeyFile(url, fileManager: fileManager)
             }

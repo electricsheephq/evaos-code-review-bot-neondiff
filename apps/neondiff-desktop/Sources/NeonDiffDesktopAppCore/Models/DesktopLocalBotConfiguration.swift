@@ -105,6 +105,7 @@ package enum DesktopLaunchAgentBotConfigurationParser {
     package static func parse(
         data: Data,
         expectedLabel: String,
+        installedWorkerRoot: URL? = nil,
         configExists: (URL) -> Bool,
         workingDirectoryExists: (URL) -> Bool
     ) -> DesktopLocalBotConfiguration? {
@@ -126,7 +127,8 @@ package enum DesktopLaunchAgentBotConfigurationParser {
             .standardizedFileURL
         guard approvedNeonDiffDaemonInvocation(
             arguments,
-            workingDirectory: workingDirectoryURL
+            workingDirectory: workingDirectoryURL,
+            installedWorkerRoot: installedWorkerRoot
         ) else {
             return nil
         }
@@ -197,6 +199,7 @@ package enum DesktopLaunchAgentExecutionContextParser {
     package static func parse(
         data: Data,
         expectedLabel: String,
+        installedWorkerRoot: URL? = nil,
         privateKeyPathIsSafe: (URL) -> Bool
     ) -> DesktopLocalBotExecutionContext? {
         guard let propertyList = try? PropertyListSerialization.propertyList(
@@ -217,7 +220,8 @@ package enum DesktopLaunchAgentExecutionContextParser {
             .standardizedFileURL
         guard approvedNeonDiffDaemonInvocation(
             arguments,
-            workingDirectory: workingDirectoryURL
+            workingDirectory: workingDirectoryURL,
+            installedWorkerRoot: installedWorkerRoot
         ) else {
             return nil
         }
@@ -329,7 +333,8 @@ package enum DesktopLaunchAgentExecutionContextParser {
 
 private func approvedNeonDiffDaemonInvocation(
     _ arguments: [String],
-    workingDirectory: URL
+    workingDirectory: URL,
+    installedWorkerRoot: URL?
 ) -> Bool {
     guard !arguments.isEmpty else { return false }
     let executableName = URL(filePath: arguments[0]).lastPathComponent
@@ -357,8 +362,16 @@ private func approvedNeonDiffDaemonInvocation(
     let bundledCLI = workingDirectory
         .appendingPathComponent("dist/src/cli.js")
         .standardizedFileURL.path
-    return URL(filePath: arguments[1]).standardizedFileURL.path == bundledCLI
-        && arguments[2] == "daemon"
+    let candidateCLI = URL(filePath: arguments[1]).standardizedFileURL
+    guard arguments[2] == "daemon" else { return false }
+    if candidateCLI.path == bundledCLI {
+        return true
+    }
+    guard let installedWorkerRoot else { return false }
+    let installedCLI = installedWorkerRoot
+        .appendingPathComponent("current/node_modules/neondiff/dist/src/cli.js")
+        .standardizedFileURL
+    return candidateCLI == installedCLI
 }
 
 package enum DesktopLocalBotWorkingDirectoryResolver {

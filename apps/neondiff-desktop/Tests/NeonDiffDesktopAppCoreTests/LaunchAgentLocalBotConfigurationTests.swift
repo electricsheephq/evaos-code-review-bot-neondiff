@@ -293,6 +293,70 @@ import Testing
         ) == nil)
     }
 
+    @Test func acceptsOnlyTheExactInstallerManagedWorkerForTheKnownLabel() throws {
+        let label = "com.electricsheephq.evaos-code-review-bot"
+        let workingDirectory = "/Volumes/LEXAR/repos/evaos-code-review-bot"
+        let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
+        let privateKeyPath = "/Users/test/.config/neondiff/app.pem"
+        let workerRoot = URL(filePath: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers")
+            .appendingPathComponent(label, isDirectory: true)
+            .standardizedFileURL
+        let workerCLI = workerRoot
+            .appendingPathComponent("current/node_modules/neondiff/dist/src/cli.js")
+            .standardizedFileURL
+        let arguments = [
+            "/opt/homebrew/bin/node",
+            workerCLI.path,
+            "daemon",
+            "--config",
+            configPath
+        ]
+        let data = try propertyList(
+            label: label,
+            environment: [
+                "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+                "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": privateKeyPath
+            ],
+            arguments: arguments,
+            workingDirectory: workingDirectory
+        )
+
+        #expect(DesktopLaunchAgentBotConfigurationParser.parse(
+            data: data,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot,
+            configExists: { $0.path == configPath },
+            workingDirectoryExists: { $0.path == workingDirectory }
+        ) == DesktopLocalBotConfiguration(
+            appID: 4_184_532,
+            configPath: configPath,
+            workingDirectory: workingDirectory
+        ))
+
+        let context = DesktopLaunchAgentExecutionContextParser.parse(
+            data: data,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot,
+            privateKeyPathIsSafe: { $0.path == privateKeyPath }
+        )
+        #expect(context?.executablePath == "/opt/homebrew/bin/node")
+        #expect(context?.argumentPrefix == [workerCLI.path])
+
+        #expect(DesktopLaunchAgentBotConfigurationParser.parse(
+            data: data,
+            expectedLabel: label,
+            configExists: { _ in true },
+            workingDirectoryExists: { _ in true }
+        ) == nil)
+        #expect(DesktopLaunchAgentExecutionContextParser.parse(
+            data: data,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot.deletingLastPathComponent()
+                .appendingPathComponent("other-label", isDirectory: true),
+            privateKeyPathIsSafe: { _ in true }
+        ) == nil)
+    }
+
     @Test func preservesTheAcceptedSourceRunnerInvocationForDesktopCommands() throws {
         let workingDirectory = "/Volumes/LEXAR/repos/evaos-code-review-bot"
         let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
