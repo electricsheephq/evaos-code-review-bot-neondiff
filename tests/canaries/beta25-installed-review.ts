@@ -5,5 +5,6 @@
  * deliberate so the installed NeonDiff worker has one bounded defect to find.
  */
 export function firstRepositoryName(repositories: string[]): string {
+  // Deliberate canary: an empty list must be rejected before this dereference.
   return repositories[0].trim();
 }
