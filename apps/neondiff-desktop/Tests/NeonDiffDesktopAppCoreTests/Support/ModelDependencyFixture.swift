@@ -72,6 +72,10 @@ final class ScriptedDesktopCLIExecutor: DesktopCLIExecuting, @unchecked Sendable
         continuations.forEach { $0.resume() }
     }
 
+    func suspendFutureRuns() {
+        state.update { $0.suspendRuns = true }
+    }
+
     func run(
         executablePath: String,
         arguments: [String],

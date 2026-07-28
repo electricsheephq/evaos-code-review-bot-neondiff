@@ -664,6 +664,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var managedGitHubConnectionTask: Task<Void, Never>?
     private var localWorkerCompatibilityTask: Task<Void, Never>?
+    private var localWorkerReviewCompatibilityGeneration: UInt64 = 0
     private var accountLinkTask: Task<Void, Never>?
     private var mostRecentAccountLinkTask: Task<Void, Never>?
     private var accountLinkGeneration: UInt64 = 0
@@ -2163,7 +2164,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             headSHA: "",
             configPath: configPath,
             configRevision: configRevision,
-            workspaceGeneration: workspaceContextGeneration
+            workspaceGeneration: workspaceContextGeneration,
+            workerCompatibilityGeneration:
+                localWorkerReviewCompatibilityGeneration
         )
         let arguments = [
             "review-pr",
@@ -4173,7 +4176,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             headSHA: report.scope.headSha.lowercased(),
             configPath: expectedContext.configPath,
             configRevision: expectedContext.configRevision,
-            workspaceGeneration: expectedContext.workspaceGeneration
+            workspaceGeneration: expectedContext.workspaceGeneration,
+            workerCompatibilityGeneration:
+                expectedContext.workerCompatibilityGeneration
         )
         scopedDryRunApproval = approval
         scopedDryRunHeadSHA = approval.headSHA
@@ -4229,6 +4234,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         _ approval: ScopedReviewApproval
     ) -> Bool {
         guard approval.workspaceGeneration == workspaceContextGeneration,
+              approval.workerCompatibilityGeneration
+                == localWorkerReviewCompatibilityGeneration,
+              localWorkerReviewCompatibility.isCompatible,
               approval.configPath == configPath,
               let selectedReviewRepository,
               selectedReviewRepository.caseInsensitiveCompare(approval.repo)
@@ -4264,6 +4272,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func invalidateLocalWorkerReviewCompatibility() {
         localWorkerCompatibilityTask?.cancel()
         localWorkerCompatibilityTask = nil
+        localWorkerReviewCompatibilityGeneration &+= 1
         localWorkerReviewCompatibility = .unknown
         invalidateScopedReviewApproval()
     }
@@ -5704,6 +5713,7 @@ private struct ScopedReviewApproval: Equatable, Sendable {
     let configPath: String
     let configRevision: String
     let workspaceGeneration: UInt64
+    let workerCompatibilityGeneration: UInt64
 }
 
 private struct ScopedReviewCommandReport: Decodable {

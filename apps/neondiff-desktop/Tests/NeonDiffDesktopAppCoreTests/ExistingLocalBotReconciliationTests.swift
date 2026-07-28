@@ -672,6 +672,85 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func workerChangeWhileDryReviewIsRunningCannotRecreateApproval() async throws {
+        let repository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let headSHA = String(repeating: "c", count: 40)
+        let boundary = DesktopProductionBoundary.resolve(infoDictionary: [
+            "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+            "NeonDiffBYOGitHubEnabled": true
+        ])
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: existingBotConfig(
+                        authMode: "zcode-app-config",
+                        repositories: [repository]
+                    ),
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"review-pr","licenseBoundary":{"packageVersion":"1.0.4"},"usage":{"command":"review-pr","flags":[{"name":"--expected-config-revision"},{"name":"--zcode"}]}}"#,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"electricsheephq/evaos-code-review-bot-neondiff","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"review-pr","dryRun":true,"useZCode":true,"scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff","pullNumber":699,"headSha":"\#(headSHA)","url":"https://github.com/electricsheephq/evaos-code-review-bot-neondiff/pull/699"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0,"skippedProcessed":0}}"#,
+                    stderr: ""
+                ))
+            ],
+            activationLicenseClient: ExistingBotActiveActivationClient(),
+            localBotConfigurations: [
+                DesktopLocalBotConfiguration(
+                    appID: 4_184_532,
+                    configPath: configPath,
+                    workingDirectory: "/fixture/evaos-code-review-bot"
+                )
+            ],
+            localBotExecutionConfigPaths: [configPath],
+            productionBoundary: boundary
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        await fixture.cli.waitUntilCallCount(2)
+        for _ in 0..<20 where fixture.model.localWorkerReviewCompatibility == .checking {
+            await Task.yield()
+        }
+        fixture.model.selectBYOReviewRepository(fullName: repository)
+        fixture.model.pendingActivationKey = "NDL-BYO-0123456789"
+        fixture.model.provideExistingActivationKey()
+        await fixture.model.submitActivation()
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        await fixture.cli.waitUntilCallCount(3)
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+        #expect(fixture.model.scopedReviewExecutionAvailable)
+
+        fixture.cli.suspendFutureRuns()
+        fixture.model.pendingReviewPullNumber = "699"
+        fixture.model.runScopedDryReview()
+        await fixture.cli.waitUntilCallCount(4)
+        fixture.model.cliPath = "/fixture/bin/neondiff-updated"
+        fixture.cli.resumeSuspendedRuns()
+        for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
+            await Task.yield()
+        }
+
+        #expect(fixture.model.scopedDryRunHeadSHA == nil)
+        #expect(!fixture.model.scopedLiveReviewConfirmationAvailable)
+        #expect(fixture.model.localWorkerReviewCompatibility == .unknown)
+    }
+
+    @MainActor
     @Test func selectedExistingBYOBotPrefersItsExactLocalAgentOverStoredKeychainMaterial() async throws {
         let targetRepository =
             "electricsheephq/evaos-code-review-bot-neondiff"
