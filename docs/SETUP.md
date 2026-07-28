@@ -325,17 +325,51 @@ If Overview shows **Worker update required**:
 
 1. Do not run or retry a live review from another terminal. The dry-to-live
    approval contract is not proven for that worker.
-2. Use only the exact worker artifact or source commit named in the current
-   invite/release notes, and verify its published checksum or commit before
-   replacing the executable. Do not treat an unpinned `main` checkout or an npm
-   version string as release proof.
-3. Preserve the existing config, LaunchAgent label, GitHub App key file,
-   Keychain entries, provider configuration, and repository allowlist. Updating
-   the worker must not migrate or copy those secrets.
-4. Restart the same LaunchAgent using the release's documented command, return
-   to Overview, and choose **Retry Worker Check**. Dry review stays disabled
-   until the exact executable advertises both config-revision approval and the
-   matching ZCode provider path.
+2. Choose **Install / Update Local Worker**. For the invite-only B0 beta, use
+   only the private worker ZIP named in the invite. Compare both its ZIP
+   SHA-256 and the manifest SHA-256 with the values supplied separately in the
+   invite before extracting it. Do not use an unpinned `main` checkout or trust
+   the ambiguous `1.0.4` version string.
+3. Confirm `node --version` reports Node.js 26 or newer. From the extracted
+   directory, preview the checksum-bound migration using the exact LaunchAgent
+   label shown in NeonDiff Settings. The installer requires absolute artifact
+   paths:
+
+   ```bash
+   BUNDLE_DIR="$(pwd -P)"
+   node install-b0-worker-candidate.mjs update \
+     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
+     --manifest-sha256 <manifest-sha256-from-invite> \
+     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
+     --launchd-label <existing-label> \
+     --dry-run true
+   ```
+
+4. Inspect the public-safe preview, then repeat it with
+   `--dry-run false --confirm true`. The installer verifies the tarball before
+   mutation, installs into a versioned user-owned Application Support prefix,
+   preserves the existing config, LaunchAgent label/environment, GitHub App key
+   file, Keychain entries, provider state, and repository allowlist, and
+   restarts the same LaunchAgent only when it was already loaded. It never reads
+   or copies private-key bytes. Each LaunchAgent label has an isolated worker
+   version, rollback state, and install lock. A lock owned by a process that no
+   longer exists is recovered automatically; a lock with missing or invalid
+   owner metadata fails closed and must be handled with NeonDiff support.
+5. Return to Overview and choose **Retry Worker Check**. Dry review stays
+   disabled until the exact installed worker advertises both config-revision
+   approval and the matching ZCode provider path.
+
+Preview rollback before changing the active worker:
+
+```bash
+node install-b0-worker-candidate.mjs rollback \
+  --launchd-label <existing-label> \
+  --dry-run true
+```
+
+Rollback also requires `--dry-run false --confirm true`. It restores the
+previous versioned worker, or the original LaunchAgent invocation on the first
+migration, without deleting either candidate or touching customer secrets.
 
 Until an invite or immutable release names a compatible worker artifact, this
 state is a release blocker rather than a prompt to repair source files manually.

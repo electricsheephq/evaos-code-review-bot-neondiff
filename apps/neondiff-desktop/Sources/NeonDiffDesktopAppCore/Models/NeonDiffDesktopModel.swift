@@ -2138,7 +2138,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             string: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/blob/main/docs/SETUP.md#update-an-existing-local-worker"
         )!
         guard dependencies.urlOpener.open(url) else {
-            lastError = "NeonDiff could not open the local worker update guide."
+            lastError = "NeonDiff could not open the local worker installer guide."
             return
         }
         lastError = nil

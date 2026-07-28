@@ -54,6 +54,9 @@ describe("B0 access-controlled CLI candidate", () => {
       "nodeVersion",
       "activationFlags",
       "githubDoctorFlags",
+      "reviewFlags",
+      "offlineInstallPassed",
+      "bundledProductionDependencies",
       "publicNpmPublished",
       "tagCreated",
       "githubReleaseCreated",
@@ -73,6 +76,9 @@ describe("B0 access-controlled CLI candidate", () => {
     expect(script).toContain("--license-machine-id");
     expect(script).toContain("--github-app-id");
     expect(script).toContain("--github-app-private-key-stdin");
+    expect(script).toContain("--expected-config-revision");
+    expect(script).toContain("--zcode");
+    expect(script).toContain("empty-npm-cache");
     expect(script).toContain("git status --porcelain");
     expect(script).toContain("must not be a symbolic link");
     expect(script).toContain("must be private to the current user (0700)");

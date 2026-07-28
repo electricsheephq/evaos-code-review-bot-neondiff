@@ -302,7 +302,7 @@ import Testing
         #expect(!chrome.contains("ChromeCircuitBackdrop"))
         #expect(overview.contains("Ready for a dry run"))
         #expect(overview.contains("canRunDryRun = model.scopedReviewExecutionAvailable"))
-        #expect(overview.contains("View Worker Update Steps"))
+        #expect(overview.contains("Install / Update Local Worker"))
         #expect(overview.contains("Retry Worker Check"))
         #expect(overview.contains("neondiff-worker-update-guide"))
         #expect(overview.contains("neondiff-worker-retry-check"))
