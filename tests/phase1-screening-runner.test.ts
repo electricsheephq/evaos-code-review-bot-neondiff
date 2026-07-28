@@ -776,6 +776,22 @@ describe("Phase 1 screening runner", () => {
     await expect(runPhase1Screen(spec(outputDir), adapter())).rejects.toThrow(/active exclusive run lease/i);
   });
 
+  it("does not require the stale-recovery coordinator for a fresh output lease", async () => {
+    const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-fresh-lease-"));
+    const coordinator = createNetServer();
+    await new Promise<void>((resolvePromise) => coordinator.listen({
+      host: "127.0.0.1",
+      port: phase1LeaseCoordinationPort(join(outputDir, ".phase1-run.lock")),
+      exclusive: true
+    }, resolvePromise));
+    try {
+      const result = await runPhase1Screen(spec(outputDir), adapter());
+      expect(result.status).toBe("completed");
+    } finally {
+      await new Promise<void>((resolvePromise) => coordinator.close(() => resolvePromise()));
+    }
+  });
+
   it("serializes stale lease recovery through a crash-released loopback coordinator", async () => {
     const outputDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-stale-lease-"));
     writeFileSync(join(outputDir, ".phase1-run.lock"), JSON.stringify({ pid: 999_999_999 }));
@@ -783,6 +799,7 @@ describe("Phase 1 screening runner", () => {
     expect(result.status).toBe("completed");
 
     const blockedDir = mkdtempSync(join(tmpdir(), "neondiff-phase1-coordinated-lease-"));
+    writeFileSync(join(blockedDir, ".phase1-run.lock"), JSON.stringify({ pid: 999_999_999 }));
     const coordinator = createNetServer();
     await new Promise<void>((resolvePromise) => coordinator.listen({
       host: "127.0.0.1",
