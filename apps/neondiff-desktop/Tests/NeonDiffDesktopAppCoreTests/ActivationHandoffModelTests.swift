@@ -72,6 +72,7 @@ import NeonDiffDesktopCore
         preferences: MemoryPreferences = MemoryPreferences(),
         secretStore: RecordingKeychain = RecordingKeychain(),
         cli: RecordingCLIExecutor = RecordingCLIExecutor(),
+        clock: TestClock = TestClock(),
         client: (any ActivationLicenseClienting)? = nil
     ) -> NeonDiffDesktopModel {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -81,7 +82,7 @@ import NeonDiffDesktopCore
             cli: cli,
             dashboard: RecordingDashboardLauncher(),
             preferences: preferences,
-            clock: TestClock(),
+            clock: clock,
             fileWriter: TemporaryFileWriter(root: root),
             providerVerifier: RecordingProviderVerifier(),
             secretStore: secretStore,
@@ -91,9 +92,14 @@ import NeonDiffDesktopCore
         return NeonDiffDesktopModel(dependencies: dependencies, activationLicenseClient: client)
     }
 
-    private func activeSummary(scope: String = "private", privateAllowed: Bool? = true) -> ActivationClientOutcome {
+    private func activeSummary(
+        scope: String = "private",
+        privateAllowed: Bool? = true,
+        updateEntitlement: Bool = true,
+        expiresAt: String? = nil
+    ) -> ActivationClientOutcome {
         .active(.init(status: .active, repoVisibilityScope: scope, privateRepoAllowed: privateAllowed,
-                      updateEntitlement: true, expiresAt: nil, plan: "team", seats: 3))
+                      updateEntitlement: updateEntitlement, expiresAt: expiresAt, plan: "team", seats: 3))
     }
 
     private let activationKeyAccount = "license/default"
@@ -169,6 +175,61 @@ import NeonDiffDesktopCore
         #expect(model.license.entitlement.contains("active"))
         #expect(prefs.string(forKey: activationStateKey) == ActivationState.active.rawValue,
                 "active state must be persisted for resume-exact")
+    }
+
+    @Test func activeActivationWithoutUpdateEntitlementCannotUseBetaChannel() async {
+        let keychain = RecordingKeychain()
+        let model = makeModel(
+            secretStore: keychain,
+            client: FakeActivationClient(activeSummary(updateEntitlement: false))
+        )
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-NO-UPDATES-0123456789"
+        model.provideExistingActivationKey()
+        await model.submitActivation()
+
+        #expect(model.activationState == .active)
+        #expect(model.desktopUpdateAccess == .blocked(reason: .entitlementRequired))
+    }
+
+    @Test func serverAccountUpdateAuthorityExpiresAfterFiveMinutes() {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let model = makeModel(clock: clock)
+        model.applyAccountWorkspaceCatalog(.loaded([
+            DesktopAccountWorkspace(
+                id: "account-admin",
+                kind: .organization,
+                name: "ElectricSheep",
+                role: .admin,
+                entitlement: .internalAdmin,
+                bots: []
+            )
+        ]))
+
+        #expect(model.desktopUpdateAccess == .allowed(channel: .beta))
+        clock.advance(by: 301)
+        #expect(model.desktopUpdateAccess == .blocked(reason: .verificationRequired))
+    }
+
+    @Test func activationUpdateAuthorityHonorsServerExpiry() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let expiry = ISO8601DateFormatter().string(
+            from: Date(timeIntervalSince1970: 10_010)
+        )
+        let keychain = RecordingKeychain()
+        let model = makeModel(
+            secretStore: keychain,
+            clock: clock,
+            client: FakeActivationClient(activeSummary(expiresAt: expiry))
+        )
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-EXPIRING-0123456789"
+        model.provideExistingActivationKey()
+        await model.submitActivation()
+
+        #expect(model.desktopUpdateAccess == .allowed(channel: .beta))
+        clock.advance(by: 11)
+        #expect(model.desktopUpdateAccess == .blocked(reason: .verificationRequired))
     }
 
     @Test func offlineThenRetrySucceeds() async {

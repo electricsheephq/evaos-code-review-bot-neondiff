@@ -192,14 +192,31 @@ import Testing
         }
     }
 
-    @Test func updaterCannotStartBeforeNativeActivationBrokerProof() throws {
+    @Test func updaterUsesSignedFeedAndRevalidatesEntitlementBeforeEachCheck() throws {
         let updaterSource = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Support/NeonUpdateController.swift")
+        let bundleScript = sourceBoundaryPackageRoot()
+            .appendingPathComponent("script/build_and_run.sh")
         let source = try sourceBoundaryText(at: updaterSource)
+        let bundler = try sourceBoundaryText(at: bundleScript)
 
-        #expect(!source.contains("SPUStandardUpdaterController"))
-        #expect(!source.contains("startingUpdater"))
-        #expect(source.contains("Updates blocked pending native activation proof"))
+        #expect(source.contains("import Sparkle"))
+        #expect(source.contains("SPUStandardUpdaterController"))
+        #expect(source.contains("startingUpdater: false"))
+        #expect(source.contains("mayPerform updateCheck"))
+        #expect(source.contains("shouldProceedWithUpdate"))
+        #expect(source.contains("allowedChannels(for updater"))
+        #expect(source.contains("model.desktopUpdateAccess"))
+        #expect(source.contains("Update remained blocked after the current cycle"))
+        #expect(!source.contains("Updates blocked pending native activation proof"))
+        #expect(bundler.contains("NEONDIFF_SPARKLE_REQUIRED"))
+        #expect(bundler.contains("Release builds require NEONDIFF_SPARKLE_REQUIRED=1"))
+        #expect(bundler.contains("Sparkle feed and public key must not contain surrounding whitespace"))
+        #expect(bundler.contains("Sparkle feed and public key must be configured together"))
+        #expect(bundler.contains("A signed Sparkle feed is required for this release build"))
+        #expect(bundler.contains("SUEnableAutomaticChecks"))
+        #expect(bundler.contains("SUScheduledCheckInterval"))
+        #expect(bundler.contains("SUAutomaticallyUpdate"))
     }
 
     @Test func productionCompositionRootResolvesOnlyTheSignedBuildBoundary() throws {

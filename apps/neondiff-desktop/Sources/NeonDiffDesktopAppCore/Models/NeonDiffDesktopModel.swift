@@ -139,6 +139,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var isGitHubRepositoryRefreshInProgress = false
     @Published package var managedGitHubConnectionState: ManagedGitHubConnectionState = .quarantined
     @Published package var managedGitHubRepositories: [GitHubBrokerRepository] = []
+    private var managedGitHubRepositoriesVerifiedAt: Date?
     @Published package var managedGitHubInstallationCandidates: [ManagedGitHubInstallationCandidate] = []
     @Published package var selectedManagedGitHubRepository: String?
     @Published package private(set) var selectedBYOReviewRepository: String?
@@ -188,7 +189,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var activationState: ActivationState = ActivationStateMachine.initialState
     @Published package private(set) var activationKeyRedactedPrefix: String?
     @Published package var pendingActivationKey = ""
-    @Published package private(set) var activationVerifiedThisLaunch = false
+    @Published package private(set) var activationVerifiedThisLaunch = false {
+        didSet {
+            if !activationVerifiedThisLaunch {
+                activationUpdateEntitlementThisLaunch = false
+                activationUpdateAuthorityVerifiedAt = nil
+                activationUpdateAuthorityValidUntil = nil
+            }
+        }
+    }
+    private var activationUpdateEntitlementThisLaunch = false
+    private var activationUpdateAuthorityVerifiedAt: Date?
+    private var activationUpdateAuthorityValidUntil: Date?
+    private var accountWorkspaceCatalogVerifiedAt: Date?
     private var activationVerifiedRepositoryThisLaunch: String?
     private var appliedRepoSelection: AppliedRepoSelection?
     private var scopedReviewTask: Task<Void, Never>?
@@ -821,6 +834,60 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
+    /// Update access is evaluated at the moment Sparkle starts a check. A
+    /// current launch activation can authorize the paid beta channel directly.
+    /// Otherwise the account catalog must be a current server response; stale
+    /// or failed account state never unlocks an update. Public-free access is
+    /// limited to a verified managed public repository.
+    package var desktopUpdateAccess: DesktopUpdateAccess {
+        let accountCatalogCurrent: Bool
+        if case .loaded = accountWorkspaceCatalog {
+            accountCatalogCurrent = DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+                verifiedAt: accountWorkspaceCatalogVerifiedAt,
+                now: dependencies.clock.now
+            )
+        } else {
+            accountCatalogCurrent = false
+        }
+
+        let managedPublicRepositoryVerified: Bool
+        if hasVerifiedManagedGitHubSelection,
+           let selectedManagedGitHubRepository,
+           let repository = managedGitHubRepositories.first(where: {
+               $0.fullName == selectedManagedGitHubRepository
+           }) {
+            managedPublicRepositoryVerified = DesktopUpdateAccessPolicy
+                .managedPublicRepositoryIsEligible(
+                    isPublic: repository.visibility == .public,
+                    verifiedAt: managedGitHubRepositoriesVerifiedAt,
+                    now: dependencies.clock.now
+                )
+        } else {
+            managedPublicRepositoryVerified = false
+        }
+
+        let activationAuthorityCurrent: Bool
+        if let validUntil = activationUpdateAuthorityValidUntil {
+            activationAuthorityCurrent = DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+                verifiedAt: activationUpdateAuthorityVerifiedAt,
+                now: dependencies.clock.now
+            ) && dependencies.clock.now < validUntil
+        } else {
+            activationAuthorityCurrent = false
+        }
+
+        return DesktopUpdateAccessPolicy.evaluate(
+            productionBoundaryVerified: dependencies.productionBoundary.nativeActivationBrokerVerified,
+            accountCatalogCurrent: accountCatalogCurrent,
+            accountEntitlement: selectedAccountWorkspace?.entitlement,
+            activationVerifiedThisLaunch: activationVerifiedThisLaunch,
+            activationIsActive: activationState == .active,
+            activationUpdateEntitlement: activationUpdateEntitlementThisLaunch,
+            activationAuthorityCurrent: activationAuthorityCurrent,
+            managedPublicRepositoryVerified: managedPublicRepositoryVerified
+        )
+    }
+
     /// Successful config inspection proves that the selected local config
     /// already contains and read back its repository allowlist. BYO credential
     /// verification remains a separate current-launch work gate.
@@ -1352,6 +1419,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func applyAccountWorkspaceCatalog(_ catalog: DesktopAccountWorkspaceCatalog) {
         let previousSelectedAccount = selectedAccountWorkspace
         let previousSelectedBot = selectedBotInstallation
+        if case .loaded = catalog {
+            accountWorkspaceCatalogVerifiedAt = dependencies.clock.now
+        } else {
+            accountWorkspaceCatalogVerifiedAt = nil
+        }
         accountWorkspaceCatalog = catalog
         guard !catalog.accounts.isEmpty else {
             accountWorkspaceSelection = DesktopAccountWorkspaceSelection()
@@ -1559,6 +1631,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         github = GitHubConnectionStatus()
         discoveredGitHubRepos = []
         managedGitHubRepositories = []
+        managedGitHubRepositoriesVerifiedAt = nil
         managedGitHubInstallationCandidates = []
         selectedManagedGitHubRepository = nil
         selectedBYOReviewRepository = nil
@@ -2607,6 +2680,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubConnectionState = .connecting
         managedGitHubRecovery = nil
         managedGitHubRepositories = []
+        managedGitHubRepositoriesVerifiedAt = nil
         managedGitHubInstallationCandidates = []
         pendingManagedGitHubAuthorization = nil
         githubAuthorizationCode = nil
@@ -2758,6 +2832,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         invalidateRepoApplicationProof()
         managedGitHubRecovery = nil
         managedGitHubRepositories = []
+        managedGitHubRepositoriesVerifiedAt = nil
         selectedManagedGitHubRepository = nil
         lastError = nil
 
@@ -3768,6 +3843,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
     ) {
         switch outcome {
         case .active(let summary):
+            let now = dependencies.clock.now
+            activationUpdateAuthorityVerifiedAt = now
+            let freshnessDeadline = now.addingTimeInterval(300)
+            if let rawExpiry = summary.expiresAt {
+                activationUpdateAuthorityValidUntil = ISO8601DateFormatter()
+                    .date(from: rawExpiry)
+                    .map { min($0, freshnessDeadline) }
+            } else {
+                activationUpdateAuthorityValidUntil = freshnessDeadline
+            }
+            activationUpdateEntitlementThisLaunch = summary.updateEntitlement
             activationVerifiedThisLaunch = true
             lastError = nil
             let scope = summary.repoVisibilityScope
@@ -4705,6 +4791,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubRepositories = repositories.sorted {
             $0.fullName.localizedCaseInsensitiveCompare($1.fullName) == .orderedAscending
         }
+        managedGitHubRepositoriesVerifiedAt = dependencies.clock.now
         managedGitHubConnectionState = .bound(installationId: installationId)
         managedGitHubRecovery = nil
         lastError = nil
@@ -4722,6 +4809,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         githubAuthorizationCode = nil
         managedGitHubConnectionState = .failed
         managedGitHubRepositories = []
+        managedGitHubRepositoriesVerifiedAt = nil
         selectedManagedGitHubRepository = nil
         let recovery: GitHubConnectionRecovery
         if let brokerError = error as? GitHubBrokerClientError {

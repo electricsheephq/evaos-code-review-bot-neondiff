@@ -256,7 +256,7 @@ import Testing
         #expect(model.contains("Review worker needs attention — open Advanced Diagnostics"))
         #expect(activity.contains("DisclosureGroup"))
         #expect(activity.contains("// ADVANCED DIAGNOSTICS"))
-        #expect(settings.contains("Signed update, rollback, and installed-app proof"))
+        #expect(settings.contains("NeonDiff revalidates update access before every signed beta feed check"))
         #expect(!settings.contains("This dev build"))
     }
 
