@@ -12,7 +12,7 @@ import {
   readlinkSync,
   realpathSync,
   renameSync,
-  rmdirSync,
+  rmSync,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -32,6 +32,15 @@ const MAX_TARBALL_BYTES = 100 * 1024 * 1024;
 const MAX_PLIST_BYTES = 1024 * 1024;
 const STATE_FILENAME = "state.json";
 const LOCK_DIRECTORY = ".install-lock";
+const LOCK_OWNER_FILENAME = "owner.json";
+const LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const CHILD_PROCESS_OPTIONS = Object.freeze({
+  encoding: "utf8",
+  stdio: ["ignore", "pipe", "pipe"],
+  timeout: 120_000,
+  killSignal: "SIGKILL",
+  maxBuffer: 10 * 1024 * 1024
+});
 
 function fail(message) {
   throw new Error(message);
@@ -91,6 +100,13 @@ function requireLiveConfirmation(args) {
   return dryRun;
 }
 
+function requireSupportedRuntime() {
+  const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
+  if (!Number.isInteger(nodeMajor) || nodeMajor < 26) {
+    fail("worker installation requires Node.js 26 or newer");
+  }
+}
+
 function requireAbsoluteRegularFile(path, maximumSize, label, requireOwner = true) {
   if (!isAbsolute(path)) fail(`${label} path must be absolute`);
   if (!existsSync(path)) fail(`${label} file is missing`);
@@ -120,8 +136,16 @@ function pathIsInside(root, candidate) {
 }
 
 function standardPaths(label) {
+  if (!LABEL_PATTERN.test(label)) fail("launchd label is invalid");
   const home = homedir();
-  const workerRoot = join(home, "Library", "Application Support", "NeonDiffDesktop", "Workers");
+  const workerRoot = join(
+    home,
+    "Library",
+    "Application Support",
+    "NeonDiffDesktop",
+    "Workers",
+    label
+  );
   return {
     workerRoot,
     versionsRoot: join(workerRoot, "versions"),
@@ -133,10 +157,11 @@ function standardPaths(label) {
 }
 
 function parsePlist(path) {
-  const output = execFileSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", path], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"]
-  });
+  const output = execFileSync(
+    "/usr/bin/plutil",
+    ["-convert", "json", "-o", "-", path],
+    CHILD_PROCESS_OPTIONS
+  );
   try {
     return JSON.parse(output);
   } catch {
@@ -149,10 +174,10 @@ function writePlistFromTemplate(templatePath, destinationPath, launchAgent) {
   chmodSync(destinationPath, 0o600);
   execFileSync("/usr/bin/plutil", [
     "-replace", "ProgramArguments", "-json", JSON.stringify(launchAgent.ProgramArguments), destinationPath
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+  ], CHILD_PROCESS_OPTIONS);
   execFileSync("/usr/bin/plutil", [
     "-replace", "WorkingDirectory", "-string", launchAgent.WorkingDirectory, destinationPath
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+  ], CHILD_PROCESS_OPTIONS);
   const readback = parsePlist(destinationPath);
   if (
     readback.Label !== launchAgent.Label
@@ -176,8 +201,13 @@ function readState(path) {
 
 function writeState(path, state) {
   const temporary = `${path}.next-${process.pid}-${randomUUID()}`;
-  writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
+  try {
+    writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temporary, path);
+  } catch (error) {
+    safeUnlink(temporary);
+    throw error;
+  }
 }
 
 function safeUnlink(path) {
@@ -205,13 +235,11 @@ function verifyInstalledWorker(versionRoot, expectedVersion) {
   const cliPath = join(versionRoot, "node_modules", "neondiff", "dist", "src", "cli.js");
   requireAbsoluteRegularFile(cliPath, 50 * 1024 * 1024, "installed worker CLI", false);
   const version = execFileSync(process.execPath, [cliPath, "--version"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"]
+    ...CHILD_PROCESS_OPTIONS
   }).trim();
   if (version !== expectedVersion) fail("installed worker version mismatch");
   const help = JSON.parse(execFileSync(process.execPath, [cliPath, "review-pr", "--help"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"]
+    ...CHILD_PROCESS_OPTIONS
   }));
   const flags = new Set(help?.usage?.flags?.map((entry) => entry?.name));
   if (
@@ -241,13 +269,18 @@ function installVersion({ versionsRoot, versionID, tarballPath, manifestBytes, m
   const npmPath = resolveNpmPath();
   try {
     execFileSync(npmPath, [
-      "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", staging, tarballPath
-    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      "install", "--offline", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", staging, tarballPath
+    ], CHILD_PROCESS_OPTIONS);
     verifyInstalledWorker(staging, packageVersion);
     writeFileSync(join(staging, ".neondiff-candidate-manifest.json"), manifestBytes, { mode: 0o600 });
     writeFileSync(join(staging, ".neondiff-candidate-manifest.sha256"), `${manifestSHA256}\n`, { mode: 0o600 });
     renameSync(staging, versionRoot);
   } catch (error) {
+    try {
+      rmSync(staging, { recursive: true, force: true });
+    } catch {
+      fail("worker package installation failed and its staging directory could not be removed");
+    }
     fail(`worker package installation failed before activation: ${error instanceof Error ? error.message : String(error)}`);
   }
   return versionRoot;
@@ -275,7 +308,7 @@ function switchCurrent(currentLink, relativeTarget) {
 function launchdState(label) {
   const domain = `gui/${process.getuid()}`;
   const target = `${domain}/${label}`;
-  const result = spawnSync("/bin/launchctl", ["print", target], { encoding: "utf8" });
+  const result = spawnSync("/bin/launchctl", ["print", target], CHILD_PROCESS_OPTIONS);
   if (result.status === 0) return { loaded: true, domain, target };
   const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (/could not find service|service not found/i.test(detail)) {
@@ -287,30 +320,35 @@ function launchdState(label) {
 function stopIfLoaded(state) {
   if (!state.loaded) return;
   execFileSync("/bin/launchctl", ["bootout", state.target], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"]
+    ...CHILD_PROCESS_OPTIONS
   });
 }
 
 function startIfPreviouslyLoaded(state, plistPath) {
   if (!state.loaded) return;
   execFileSync("/bin/launchctl", ["bootstrap", state.domain, plistPath], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"]
+    ...CHILD_PROCESS_OPTIONS
   });
   execFileSync("/bin/launchctl", ["kickstart", "-k", state.target], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"]
+    ...CHILD_PROCESS_OPTIONS
   });
 }
 
 function stopReplacementForRecovery(state) {
   if (!state.loaded) return;
-  const result = spawnSync("/bin/launchctl", ["bootout", state.target], { encoding: "utf8" });
+  const result = spawnSync("/bin/launchctl", ["bootout", state.target], CHILD_PROCESS_OPTIONS);
   if (result.status === 0) return;
   const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (/could not find service|service not found/i.test(detail)) return;
   fail("replacement launchd job could not be stopped during recovery");
+}
+
+function attemptRecoveryStep(errors, label, operation) {
+  try {
+    operation();
+  } catch (error) {
+    errors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function mutateLaunchAgent({ plistPath, nextLaunchAgent, currentLink, nextTarget, nextState, statePath }) {
@@ -318,11 +356,11 @@ function mutateLaunchAgent({ plistPath, nextLaunchAgent, currentLink, nextTarget
   const oldCurrentTarget = currentTarget(currentLink, join(dirname(currentLink), "versions"));
   const priorState = readState(statePath);
   const stagedPlist = `${plistPath}.next-${process.pid}-${randomUUID()}`;
-  writePlistFromTemplate(plistPath, stagedPlist, nextLaunchAgent);
-  const service = launchdState(nextLaunchAgent.Label);
-  writeState(statePath, nextState);
+  let service = null;
   let plistReplaced = false;
   try {
+    writePlistFromTemplate(plistPath, stagedPlist, nextLaunchAgent);
+    service = launchdState(nextLaunchAgent.Label);
     stopIfLoaded(service);
     renameSync(stagedPlist, plistPath);
     plistReplaced = true;
@@ -332,40 +370,51 @@ function mutateLaunchAgent({ plistPath, nextLaunchAgent, currentLink, nextTarget
       unlinkSync(currentLink);
     }
     startIfPreviouslyLoaded(service, plistPath);
+    writeState(statePath, nextState);
   } catch (error) {
+    const recoveryErrors = [];
+    attemptRecoveryStep(recoveryErrors, "remove staged plist", () => safeUnlink(stagedPlist));
     if (plistReplaced) {
-      const restorePlist = `${plistPath}.restore-${process.pid}-${randomUUID()}`;
-      writeFileSync(restorePlist, originalBytes, { mode: 0o600 });
-      renameSync(restorePlist, plistPath);
-    } else {
-      safeUnlink(stagedPlist);
-    }
-    if (oldCurrentTarget) {
-      switchCurrent(currentLink, oldCurrentTarget);
-    } else if (existsSync(currentLink) && lstatSync(currentLink).isSymbolicLink()) {
-      unlinkSync(currentLink);
-    }
-    if (priorState) writeState(statePath, priorState);
-    else safeUnlink(statePath);
-    let recoveryError = null;
-    try {
-      recoverPreviouslyLoadedWorker({
-        wasLoaded: service.loaded,
-        stopReplacement() {
-          stopReplacementForRecovery(service);
-        },
-        startOriginal() {
-          startIfPreviouslyLoaded(service, plistPath);
+      attemptRecoveryStep(recoveryErrors, "restore LaunchAgent plist", () => {
+        const restorePlist = `${plistPath}.restore-${process.pid}-${randomUUID()}`;
+        try {
+          writeFileSync(restorePlist, originalBytes, { mode: 0o600 });
+          renameSync(restorePlist, plistPath);
+        } catch (caught) {
+          safeUnlink(restorePlist);
+          throw caught;
         }
       });
-    } catch (caught) {
-      recoveryError = caught;
     }
-    if (recoveryError) {
+    attemptRecoveryStep(recoveryErrors, "restore worker pointer", () => {
+      if (oldCurrentTarget) {
+        switchCurrent(currentLink, oldCurrentTarget);
+      } else if (existsSync(currentLink) && lstatSync(currentLink).isSymbolicLink()) {
+        unlinkSync(currentLink);
+      }
+    });
+    attemptRecoveryStep(recoveryErrors, "restore rollback state", () => {
+      if (priorState) writeState(statePath, priorState);
+      else safeUnlink(statePath);
+    });
+    if (service && plistReplaced) {
+      attemptRecoveryStep(recoveryErrors, "restore launchd service", () => {
+        recoverPreviouslyLoadedWorker({
+          wasLoaded: service.loaded,
+          stopReplacement() {
+            stopReplacementForRecovery(service);
+          },
+          startOriginal() {
+            startIfPreviouslyLoaded(service, plistPath);
+          }
+        });
+      });
+    }
+    if (recoveryErrors.length > 0) {
       fail(
-        `worker activation failed; disk state was restored but launchd recovery failed: ${
-          recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
-        }`
+        `worker activation failed and recovery was incomplete: ${
+          error instanceof Error ? error.message : String(error)
+        }; ${recoveryErrors.join("; ")}`
       );
     }
     fail(`worker activation failed and the prior worker was restored: ${error instanceof Error ? error.message : String(error)}`);
@@ -376,15 +425,47 @@ function mutateLaunchAgent({ plistPath, nextLaunchAgent, currentLink, nextTarget
 function withWorkerLock(paths, operation) {
   ensurePrivateDirectory(paths.workerRoot);
   ensurePrivateDirectory(paths.versionsRoot);
+  const ownerPath = join(paths.lockPath, LOCK_OWNER_FILENAME);
+  const owner = {
+    schemaVersion: 1,
+    pid: process.pid,
+    createdAt: new Date().toISOString()
+  };
   try {
     mkdirSync(paths.lockPath, { mode: 0o700 });
-  } catch {
-    fail("another NeonDiff worker install or rollback is active");
+  } catch (error) {
+    if (!error || typeof error !== "object" || error.code !== "EEXIST") {
+      fail(`worker lock could not be created: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    let existingOwner;
+    try {
+      existingOwner = JSON.parse(readFileSync(ownerPath, "utf8"));
+    } catch {
+      fail("worker lock exists without valid owner metadata; contact NeonDiff support before removing it");
+    }
+    if (!Number.isInteger(existingOwner?.pid) || existingOwner.pid <= 0) {
+      fail("worker lock owner metadata is invalid; contact NeonDiff support before removing it");
+    }
+    let ownerIsAlive = true;
+    try {
+      process.kill(existingOwner.pid, 0);
+    } catch (caught) {
+      if (caught && typeof caught === "object" && caught.code === "ESRCH") ownerIsAlive = false;
+    }
+    if (ownerIsAlive) fail("another NeonDiff worker install or rollback is active");
+    rmSync(paths.lockPath, { recursive: true, force: true });
+    mkdirSync(paths.lockPath, { mode: 0o700 });
+  }
+  try {
+    writeFileSync(ownerPath, `${JSON.stringify(owner)}\n`, { mode: 0o600 });
+  } catch (error) {
+    rmSync(paths.lockPath, { recursive: true, force: true });
+    fail(`worker lock owner metadata could not be written: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
     return operation();
   } finally {
-    rmdirSync(paths.lockPath);
+    rmSync(paths.lockPath, { recursive: true, force: true });
   }
 }
 
@@ -428,8 +509,6 @@ function update(args) {
     console.log(JSON.stringify({ ok: true, dryRun: true, ...plan.publicSummary }));
     return;
   }
-  const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] ?? "0", 10);
-  if (!Number.isInteger(nodeMajor) || nodeMajor < 26) fail("worker installation requires Node.js 26 or newer");
   const result = withWorkerLock(paths, () => {
     installVersion({
       versionsRoot: paths.versionsRoot,
@@ -495,6 +574,7 @@ function main() {
     usage();
     return;
   }
+  requireSupportedRuntime();
   const args = parseArgs(values);
   if (action === "update") update(args);
   else if (action === "rollback") rollback(args);

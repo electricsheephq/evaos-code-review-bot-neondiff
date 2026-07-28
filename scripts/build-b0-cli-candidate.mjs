@@ -175,6 +175,23 @@ function main() {
       stdio: ["ignore", "pipe", "pipe"]
     });
 
+    const productionDependencyPath = join(
+      repoRoot,
+      "node_modules",
+      "validate-npm-package-license",
+      "package.json"
+    );
+    if (!existsSync(productionDependencyPath)) {
+      fail("exact production dependency is missing from the reviewed install");
+    }
+    const productionDependency = JSON.parse(readFileSync(productionDependencyPath, "utf8"));
+    if (productionDependency.name !== "validate-npm-package-license" || productionDependency.version !== "3.0.4") {
+      fail("reviewed production dependency version is not validate-npm-package-license@3.0.4");
+    }
+    const candidatePackage = JSON.parse(readFileSync(packagePath, "utf8"));
+    candidatePackage.bundledDependencies = ["validate-npm-package-license"];
+    writeFileSync(packagePath, `${JSON.stringify(candidatePackage, null, 2)}\n`);
+
     const packOutput = execFileSync("npm", [
       "pack",
       "--json",
@@ -189,6 +206,11 @@ function main() {
     const pack = parsedPack[0];
     if (!pack || parsedPack.length !== 1 || pack.name !== "neondiff" || pack.version !== packageVersion) {
       fail("npm pack did not emit the exact requested neondiff candidate");
+    }
+    if (!Array.isArray(pack.files) || !pack.files.some(
+      (entry) => entry?.path === "node_modules/validate-npm-package-license/package.json"
+    )) {
+      fail("npm pack did not bundle the exact production dependency closure");
     }
 
     packJsonPath = join(outputDirectory, "pack.json");
@@ -206,6 +228,10 @@ function main() {
 
     execFileSync("npm", [
       "install",
+      "--offline",
+      "--cache",
+      join(installRoot, "empty-npm-cache"),
+      "--omit=dev",
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
@@ -251,7 +277,7 @@ function main() {
         candidateHead,
         protectedMainVerified: true,
         sourceTreeCleanBeforePackaging: true,
-        packageMetadataMutation: "version-only-ephemeral-restored"
+        packageMetadataMutation: "version-and-bundled-dependency-only-ephemeral-restored"
       },
       package: {
         name: "neondiff",
@@ -271,7 +297,9 @@ function main() {
         activationFlags,
         githubDoctorFlags,
         reviewFlags,
-        isolatedInstallPassed: true
+        isolatedInstallPassed: true,
+        offlineInstallPassed: true,
+        bundledProductionDependencies: ["validate-npm-package-license@3.0.4"]
       },
       distribution: {
         privateBucketTarget: PRIVATE_BUCKET_TARGET,
@@ -285,8 +313,9 @@ function main() {
       },
       proofBoundary: {
         allows: [
-          "exact clean protected-main source was packed with version-only ephemeral metadata",
-          "isolated installed CLI exposes the B0 native activation, BYO GitHub verification, and exact dry-to-live review flags"
+          "exact clean protected-main source was packed with version and bundled-dependency metadata only, then restored",
+          "the complete production dependency closure is bundled into and bound by the top-level tarball SHA-256",
+          "isolated offline-installed CLI exposes the B0 native activation, BYO GitHub verification, and exact dry-to-live review flags"
         ],
         excludes: [
           "private bucket upload or authenticated readback",

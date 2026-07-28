@@ -33,7 +33,9 @@ function candidateManifest() {
     installedCompatibility: {
       reportedVersion: packageVersion,
       reviewFlags: ["--expected-config-revision", "--zcode"],
-      isolatedInstallPassed: true
+      isolatedInstallPassed: true,
+      offlineInstallPassed: true,
+      bundledProductionDependencies: ["validate-npm-package-license@3.0.4"]
     },
     distribution: {
       privateBucketTarget: "neondiff-beta-canary",
@@ -87,6 +89,8 @@ describe("B0 worker installer", () => {
     expect(script).toContain("INSTALL.md");
     expect(script).toContain("bundleSHA256");
     expect(script).toContain("manifestSHA256");
+    expect(script).toContain("assertExactCandidateCheckout");
+    expect(script).toContain('BUNDLE_DIR="$(pwd -P)"');
     expect(script).not.toMatch(/npm publish|npm dist-tag|gh release|git tag/);
   });
 
@@ -123,6 +127,36 @@ describe("B0 worker installer", () => {
       tarballBytes: tarball,
       tarballFilename: `neondiff-${packageVersion}.tgz`
     })).toThrow("missing review capability --expected-config-revision");
+
+    const unboundDependencies = candidateManifest();
+    unboundDependencies.installedCompatibility.offlineInstallPassed = false;
+    const unboundDependencyBytes = Buffer.from(`${JSON.stringify(unboundDependencies)}\n`);
+    expect(() => validateWorkerCandidate({
+      manifestBytes: unboundDependencyBytes,
+      manifestSHA256: createHash("sha256").update(unboundDependencyBytes).digest("hex"),
+      tarballBytes: tarball,
+      tarballFilename: `neondiff-${packageVersion}.tgz`
+    })).toThrow("candidate manifest package identity is invalid");
+
+    const published = candidateManifest();
+    published.distribution.publicNpmPublished = true;
+    const publishedBytes = Buffer.from(`${JSON.stringify(published)}\n`);
+    expect(() => validateWorkerCandidate({
+      manifestBytes: publishedBytes,
+      manifestSHA256: createHash("sha256").update(publishedBytes).digest("hex"),
+      tarballBytes: tarball,
+      tarballFilename: `neondiff-${packageVersion}.tgz`
+    })).toThrow("candidate distribution boundary is invalid");
+
+    const traversal = candidateManifest();
+    traversal.package.filename = `../neondiff-${packageVersion}.tgz`;
+    const traversalBytes = Buffer.from(`${JSON.stringify(traversal)}\n`);
+    expect(() => validateWorkerCandidate({
+      manifestBytes: traversalBytes,
+      manifestSHA256: createHash("sha256").update(traversalBytes).digest("hex"),
+      tarballBytes: tarball,
+      tarballFilename: `../neondiff-${packageVersion}.tgz`
+    })).toThrow("candidate tarball SHA-256 mismatch");
   });
 
   it("plans one state-preserving LaunchAgent migration without copying secrets", () => {
@@ -149,6 +183,7 @@ describe("B0 worker installer", () => {
       "--dry-run",
       "true"
     ]);
+    expect(plan.nextLaunchAgent.WorkingDirectory).toBe(launchAgent().WorkingDirectory);
     expect(JSON.stringify(plan.publicSummary)).not.toContain("app.pem");
     expect(JSON.stringify(plan.publicSummary)).not.toContain("config.local.json");
   });
@@ -183,6 +218,48 @@ describe("B0 worker installer", () => {
     expect(rollback.nextLaunchAgent.ProgramArguments).toEqual(launchAgent().ProgramArguments);
     expect(rollback.nextLaunchAgent.WorkingDirectory).toBe(launchAgent().WorkingDirectory);
     expect(rollback.publicSummary).toMatchObject({ action: "rollback", target: "original-worker" });
+  });
+
+  it("fails closed when managed worker state is missing or belongs to another label", () => {
+    const managed = launchAgent();
+    managed.ProgramArguments = [
+      "/opt/homebrew/bin/node",
+      "/Users/test/Library/Application Support/NeonDiffDesktop/Workers/current/node_modules/neondiff/dist/src/cli.js",
+      "daemon",
+      "--config",
+      "/Users/test/.config/neondiff/config.local.json"
+    ];
+    expect(() => planWorkerUpdate({
+      launchAgent: managed,
+      expectedLabel: "com.electricsheephq.neondiff",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    })).toThrow("managed worker has no rollback state");
+
+    const first = planWorkerUpdate({
+      launchAgent: launchAgent(),
+      expectedLabel: "com.electricsheephq.neondiff",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    });
+    const otherLabelLaunchAgent = launchAgent();
+    otherLabelLaunchAgent.Label = "com.electricsheephq.neondiff.other";
+    expect(() => planWorkerUpdate({
+      launchAgent: otherLabelLaunchAgent,
+      expectedLabel: "com.electricsheephq.neondiff.other",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "b".repeat(64),
+      previousState: first.nextState
+    })).toThrow("worker state label mismatch");
   });
 
   it("carries the previous package identity through update and rollback", () => {

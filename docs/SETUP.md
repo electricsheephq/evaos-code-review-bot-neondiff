@@ -330,14 +330,17 @@ If Overview shows **Worker update required**:
    SHA-256 and the manifest SHA-256 with the values supplied separately in the
    invite before extracting it. Do not use an unpinned `main` checkout or trust
    the ambiguous `1.0.4` version string.
-3. In the extracted directory, preview the checksum-bound migration using the
-   exact LaunchAgent label shown in NeonDiff Settings:
+3. Confirm `node --version` reports Node.js 26 or newer. From the extracted
+   directory, preview the checksum-bound migration using the exact LaunchAgent
+   label shown in NeonDiff Settings. The installer requires absolute artifact
+   paths:
 
    ```bash
+   BUNDLE_DIR="$(pwd -P)"
    node install-b0-worker-candidate.mjs update \
-     --manifest neondiff-1.1.0-beta.N-b0-candidate-manifest.json \
+     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
      --manifest-sha256 <manifest-sha256-from-invite> \
-     --tarball neondiff-1.1.0-beta.N.tgz \
+     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
      --launchd-label <existing-label> \
      --dry-run true
    ```
@@ -348,7 +351,10 @@ If Overview shows **Worker update required**:
    preserves the existing config, LaunchAgent label/environment, GitHub App key
    file, Keychain entries, provider state, and repository allowlist, and
    restarts the same LaunchAgent only when it was already loaded. It never reads
-   or copies private-key bytes.
+   or copies private-key bytes. Each LaunchAgent label has an isolated worker
+   version, rollback state, and install lock. A lock owned by a process that no
+   longer exists is recovered automatically; a lock with missing or invalid
+   owner metadata fails closed and must be handled with NeonDiff support.
 5. Return to Overview and choose **Retry Worker Check**. Dry review stays
    disabled until the exact installed worker advertises both config-revision
    approval and the matching ZCode provider path.

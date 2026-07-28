@@ -46,6 +46,26 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function git(repoRoot, args) {
+  return execFileSync("git", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  }).trim();
+}
+
+function assertExactCandidateCheckout(repoRoot, candidateHead) {
+  if (git(repoRoot, ["rev-parse", "HEAD"]) !== candidateHead) {
+    fail("bundle checkout does not match the candidate head");
+  }
+  if (git(repoRoot, ["rev-parse", "refs/remotes/origin/main"]) !== candidateHead) {
+    fail("bundle candidate is not the fetched protected-main head");
+  }
+  if (git(repoRoot, ["status", "--porcelain", "--untracked-files=all"])) {
+    fail("bundle checkout must be clean");
+  }
+}
+
 function requireRegularFile(path, maximumSize, label) {
   if (!isAbsolute(path) || !existsSync(path)) fail(`${label} must be an existing absolute path`);
   const entry = lstatSync(path);
@@ -88,15 +108,17 @@ Before continuing, compare this manifest SHA-256 with the value in your invite:
 From this extracted directory, preview the exact migration:
 
 \`\`\`sh
+BUNDLE_DIR="$(pwd -P)"
 node install-b0-worker-candidate.mjs update \\
-  --manifest ${manifestFilename} \\
+  --manifest "$BUNDLE_DIR/${manifestFilename}" \\
   --manifest-sha256 ${manifestSHA256} \\
-  --tarball ${tarballFilename} \\
+  --tarball "$BUNDLE_DIR/${tarballFilename}" \\
   --launchd-label YOUR_INVITED_LAUNCHD_LABEL \\
   --dry-run true
 \`\`\`
 
-After the preview reports the expected label/version, run the same command with
+Node.js 26 or newer is required for preview, install, and rollback. After the
+preview reports the expected label/version, run the same command with
 \`--dry-run false --confirm true\`. Return to NeonDiff and choose **Retry
 Worker Check**. The existing config, GitHub App environment, provider state,
 repository allowlist, and private-key file are preserved; private-key bytes are
@@ -135,6 +157,7 @@ function main() {
     tarballBytes,
     tarballFilename: basename(tarballPath)
   });
+  assertExactCandidateCheckout(repoRoot, candidate.candidateHead);
 
   const bundleName = `neondiff-worker-${candidate.packageVersion}-${candidate.candidateHead.slice(0, 12)}`;
   const temporaryRoot = mkdtempSync(join(tmpdir(), "neondiff-b0-worker-bundle-"));
@@ -147,11 +170,13 @@ function main() {
     mkdirSync(join(bundleRoot, "lib"), { recursive: true, mode: 0o700 });
     const bundledManifest = join(bundleRoot, basename(manifestPath));
     const bundledTarball = join(bundleRoot, basename(tarballPath));
+    const bundledInstaller = join(bundleRoot, "install-b0-worker-candidate.mjs");
+    const bundledLibrary = join(bundleRoot, "lib", "b0-worker-installer.mjs");
     copyFileSync(manifestPath, bundledManifest);
     copyFileSync(tarballPath, bundledTarball);
-    copyFileSync(installerSource, join(bundleRoot, "install-b0-worker-candidate.mjs"));
-    copyFileSync(librarySource, join(bundleRoot, "lib", "b0-worker-installer.mjs"));
-    chmodSync(join(bundleRoot, "install-b0-worker-candidate.mjs"), 0o700);
+    copyFileSync(installerSource, bundledInstaller);
+    copyFileSync(librarySource, bundledLibrary);
+    chmodSync(bundledInstaller, 0o700);
     writeFileSync(
       join(bundleRoot, "INSTALL.md"),
       installGuide(candidate, basename(manifestPath), basename(tarballPath), manifestSHA256),
@@ -167,6 +192,8 @@ function main() {
       packageVersion: candidate.packageVersion,
       manifestSHA256,
       tarballSHA256: candidate.tarballSHA256,
+      installerSHA256: sha256(readFileSync(bundledInstaller)),
+      installerLibrarySHA256: sha256(readFileSync(bundledLibrary)),
       bundleFilename: basename(zipPath),
       bundleSHA256,
       privateBucketTarget: "neondiff-beta-canary",

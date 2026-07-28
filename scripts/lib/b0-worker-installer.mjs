@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -22,6 +22,11 @@ function sha256(value) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function isPathAtOrInside(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 function consistentEnvironmentValue(environment, keys, validator, label) {
@@ -144,6 +149,9 @@ export function validateWorkerCandidate({
     || !PACKAGE_VERSION_PATTERN.test(packageVersion ?? "")
     || manifest?.installedCompatibility?.reportedVersion !== packageVersion
     || manifest?.installedCompatibility?.isolatedInstallPassed !== true
+    || manifest?.installedCompatibility?.offlineInstallPassed !== true
+    || JSON.stringify(manifest?.installedCompatibility?.bundledProductionDependencies)
+      !== JSON.stringify(["validate-npm-package-license@3.0.4"])
   ) {
     fail("candidate manifest package identity is invalid");
   }
@@ -194,6 +202,20 @@ export function planWorkerUpdate({
   const { daemonArguments, configPath } = validateLaunchAgent(launchAgent, expectedLabel);
   const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
   const currentPackageRoot = join(workerRoot, "current", "node_modules", "neondiff");
+  if (previousState && previousState.launchdLabel !== expectedLabel) {
+    fail("worker state label mismatch");
+  }
+  if (
+    !previousState
+    && (
+      isPathAtOrInside(currentPackageRoot, launchAgent.WorkingDirectory)
+      || launchAgent.ProgramArguments.some(
+        (value) => isAbsolute(value) && isPathAtOrInside(currentPackageRoot, value)
+      )
+    )
+  ) {
+    fail("managed worker has no rollback state");
+  }
   const nextLaunchAgent = clone(launchAgent);
   nextLaunchAgent.ProgramArguments = [
     nodePath,
@@ -201,7 +223,7 @@ export function planWorkerUpdate({
     "daemon",
     ...daemonArguments
   ];
-  nextLaunchAgent.WorkingDirectory = currentPackageRoot;
+  nextLaunchAgent.WorkingDirectory = launchAgent.WorkingDirectory;
 
   const originalProgramArguments = previousState?.originalProgramArguments
     ?? clone(launchAgent.ProgramArguments);

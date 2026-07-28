@@ -128,6 +128,14 @@ returned head SHA, and requires explicit confirmation before a live post pinned
 to both. Any transport failure revokes approval and requires a new dry review.
 Daemon-wide start stays blocked for a multi-repository worker.
 
+If this matched local worker reports **Worker update required**, choose
+**Install / Update Local Worker** and use only the checksum-bound private B0
+bundle named in the invite. Follow the Node.js 26+, absolute-path, dry-run, and
+confirmed-mutation steps in [SETUP.md](./SETUP.md#update-an-existing-local-worker).
+The label-isolated installer preserves the existing App environment, config,
+provider state, repository allowlist, and private-key file coordinate. Preview
+rollback before confirmed rollback; neither path reads or copies key bytes.
+
 Keep the private key and local config out of git. A typical shell setup is:
 
 ```bash
