@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import NeonDiffDesktopAppCore
 
@@ -9,10 +10,25 @@ import Testing
             accountEntitlement: nil,
             activationVerifiedThisLaunch: true,
             activationIsActive: true,
+            activationUpdateEntitlement: true,
             managedPublicRepositoryVerified: false
         )
 
         #expect(access == .allowed(channel: .beta))
+    }
+
+    @Test func activeActivationWithoutUpdateEntitlementFailsClosed() {
+        let access = DesktopUpdateAccessPolicy.evaluate(
+            productionBoundaryVerified: true,
+            accountCatalogCurrent: false,
+            accountEntitlement: nil,
+            activationVerifiedThisLaunch: true,
+            activationIsActive: true,
+            activationUpdateEntitlement: false,
+            managedPublicRepositoryVerified: false
+        )
+
+        #expect(access == .blocked(reason: .entitlementRequired))
     }
 
     @Test func currentServerInternalAdminEntitlementAllowsBetaUpdates() {
@@ -100,5 +116,22 @@ import Testing
         #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 3002) == .signatureError)
         #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 4007) == .cancelled)
         #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 9999) == .failed)
+    }
+
+    @Test func accountCatalogFreshnessIsBoundedAndRejectsFutureProof() {
+        let now = Date(timeIntervalSince1970: 10_000)
+
+        #expect(DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+            verifiedAt: now.addingTimeInterval(-299),
+            now: now
+        ))
+        #expect(!DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+            verifiedAt: now.addingTimeInterval(-301),
+            now: now
+        ))
+        #expect(!DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+            verifiedAt: now.addingTimeInterval(1),
+            now: now
+        ))
     }
 }

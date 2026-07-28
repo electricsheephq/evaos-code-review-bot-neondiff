@@ -171,6 +171,12 @@ final class NeonUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate
         didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
         error: Error?
     ) {
+        if case .blocked(let reason) = model.desktopUpdateAccess {
+            runtimeStatus = .blocked(reason.customerMessage)
+            lastAction = "Update remained blocked after the current cycle"
+            objectWillChange.send()
+            return
+        }
         guard let error = error as NSError? else { return }
         switch DesktopUpdateCycleResult.classify(sparkleErrorCode: error.code) {
         case .noUpdate:

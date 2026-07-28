@@ -188,7 +188,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var activationState: ActivationState = ActivationStateMachine.initialState
     @Published package private(set) var activationKeyRedactedPrefix: String?
     @Published package var pendingActivationKey = ""
-    @Published package private(set) var activationVerifiedThisLaunch = false
+    @Published package private(set) var activationVerifiedThisLaunch = false {
+        didSet {
+            if !activationVerifiedThisLaunch {
+                activationUpdateEntitlementThisLaunch = false
+            }
+        }
+    }
+    private var activationUpdateEntitlementThisLaunch = false
+    private var accountWorkspaceCatalogVerifiedAt: Date?
     private var activationVerifiedRepositoryThisLaunch: String?
     private var appliedRepoSelection: AppliedRepoSelection?
     private var scopedReviewTask: Task<Void, Never>?
@@ -829,7 +837,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var desktopUpdateAccess: DesktopUpdateAccess {
         let accountCatalogCurrent: Bool
         if case .loaded = accountWorkspaceCatalog {
-            accountCatalogCurrent = true
+            accountCatalogCurrent = DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+                verifiedAt: accountWorkspaceCatalogVerifiedAt,
+                now: dependencies.clock.now
+            )
         } else {
             accountCatalogCurrent = false
         }
@@ -851,6 +862,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             accountEntitlement: selectedAccountWorkspace?.entitlement,
             activationVerifiedThisLaunch: activationVerifiedThisLaunch,
             activationIsActive: activationState == .active,
+            activationUpdateEntitlement: activationUpdateEntitlementThisLaunch,
             managedPublicRepositoryVerified: managedPublicRepositoryVerified
         )
     }
@@ -1386,6 +1398,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func applyAccountWorkspaceCatalog(_ catalog: DesktopAccountWorkspaceCatalog) {
         let previousSelectedAccount = selectedAccountWorkspace
         let previousSelectedBot = selectedBotInstallation
+        if case .loaded = catalog {
+            accountWorkspaceCatalogVerifiedAt = dependencies.clock.now
+        } else {
+            accountWorkspaceCatalogVerifiedAt = nil
+        }
         accountWorkspaceCatalog = catalog
         guard !catalog.accounts.isEmpty else {
             accountWorkspaceSelection = DesktopAccountWorkspaceSelection()
@@ -3802,6 +3819,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     ) {
         switch outcome {
         case .active(let summary):
+            activationUpdateEntitlementThisLaunch = summary.updateEntitlement
             activationVerifiedThisLaunch = true
             lastError = nil
             let scope = summary.repoVisibilityScope

@@ -82,9 +82,16 @@ if { [ -n "$SPARKLE_FEED_URL" ] && [ -z "$SPARKLE_PUBLIC_KEY" ]; } \
 fi
 if [ -n "$SPARKLE_FEED_URL" ]; then
   case "$SPARKLE_FEED_URL" in
-    https://*) ;;
+    https://*)
+      SPARKLE_FEED_AUTHORITY="${SPARKLE_FEED_URL#https://}"
+      SPARKLE_FEED_HOST="${SPARKLE_FEED_AUTHORITY%%[/?#]*}"
+      if [ -z "$SPARKLE_FEED_HOST" ]; then
+        echo "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a host" >&2
+        exit 2
+      fi
+      ;;
     *)
-      echo "NEONDIFF_SPARKLE_FEED_URL must use https" >&2
+      echo "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a host" >&2
       exit 2
       ;;
   esac

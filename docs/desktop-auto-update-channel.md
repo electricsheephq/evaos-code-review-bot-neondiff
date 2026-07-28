@@ -9,22 +9,28 @@ proven by source alone.
 ## Current Implementation — 2026-07-28
 
 - The native SwiftUI executable uses the existing Sparkle 2 dependency and
-  standard updater UI.
-- Release builds can require a paired HTTPS `SUFeedURL` and `SUPublicEDKey`;
-  partial or missing required configuration fails before the bundle is built.
+  standard updater UI in
+  `apps/neondiff-desktop/Sources/NeonDiffDesktop/Support/NeonUpdateController.swift`.
+- Every Release build requires a paired, nonblank HTTPS `SUFeedURL` and
+  `SUPublicEDKey`; partial, hostless, whitespace-only, missing, or explicitly
+  disabled configuration fails in
+  `apps/neondiff-desktop/script/build_and_run.sh` before the bundle is built.
 - Configured builds check the beta feed every six hours and also expose a
   manual Check for Updates action. Downloads remain user-confirmed.
 - Every check and every selected update re-evaluates update access. A current
-  paid/trial activation, a current server `internal_admin` entitlement, or a
-  verified managed public-free repository can authorize the beta channel.
-  Missing production composition, stale account state, or missing entitlement
-  fails closed.
+  paid/trial activation must explicitly include `updateEntitlement=true`.
+  A server `internal_admin` entitlement or verified managed public-free
+  repository is accepted only from an account catalog verified within five
+  minutes. Missing production composition, stale account state, or missing
+  update entitlement fails closed. The policy and focused tests live in
+  `DesktopUpdateAccess.swift` and `DesktopUpdateAccessPolicyTests.swift`.
 - The customer UI distinguishes ready, checking, update available, up to date,
-  entitlement required, network error, signature error, and generic safe
-  failure.
-- Failing-first tests cover access policy, public-free bounds, stale paid/trial
-  state, and Sparkle error classification. The existing appcast generator and
-  rollback/signature fixtures remain the publishing seam.
+  entitlement required, invalid feed, network error, signature error, and
+  generic safe failure.
+- Failing-first tests in `DesktopUpdateAccessPolicyTests.swift` cover access
+  policy, public-free bounds, stale paid/trial state, bounded account authority,
+  update-specific entitlement, and Sparkle error classification. The existing
+  appcast generator and rollback/signature fixtures remain the publishing seam.
 
 Proof boundary: source composition and unsigned Release-configuration bundle
 proof only. #116 remains open for real public-key/feed identity, EdDSA-signed

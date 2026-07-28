@@ -1,3 +1,5 @@
+import Foundation
+
 package enum DesktopUpdateChannel: String, Equatable, Sendable {
     case beta
     case stable
@@ -46,6 +48,7 @@ package enum DesktopUpdateAccessPolicy {
         accountEntitlement: DesktopAccountEntitlement?,
         activationVerifiedThisLaunch: Bool,
         activationIsActive: Bool,
+        activationUpdateEntitlement: Bool = false,
         managedPublicRepositoryVerified: Bool
     ) -> DesktopUpdateAccess {
         guard productionBoundaryVerified else {
@@ -53,7 +56,9 @@ package enum DesktopUpdateAccessPolicy {
         }
 
         if activationVerifiedThisLaunch && activationIsActive {
-            return .allowed(channel: .beta)
+            return activationUpdateEntitlement
+                ? .allowed(channel: .beta)
+                : .blocked(reason: .entitlementRequired)
         }
 
         guard accountCatalogCurrent else {
@@ -70,6 +75,16 @@ package enum DesktopUpdateAccessPolicy {
         case .publicFree, .some(.none), nil:
             return .blocked(reason: .entitlementRequired)
         }
+    }
+
+    package static func accountCatalogIsCurrent(
+        verifiedAt: Date?,
+        now: Date,
+        maximumAge: TimeInterval = 300
+    ) -> Bool {
+        guard let verifiedAt else { return false }
+        let age = now.timeIntervalSince(verifiedAt)
+        return age >= 0 && age <= maximumAge
     }
 }
 

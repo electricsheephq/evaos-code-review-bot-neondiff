@@ -207,6 +207,7 @@ import Testing
         #expect(source.contains("shouldProceedWithUpdate"))
         #expect(source.contains("allowedChannels(for updater"))
         #expect(source.contains("model.desktopUpdateAccess"))
+        #expect(source.contains("Update remained blocked after the current cycle"))
         #expect(!source.contains("Updates blocked pending native activation proof"))
         #expect(bundler.contains("NEONDIFF_SPARKLE_REQUIRED"))
         #expect(bundler.contains("Release builds require NEONDIFF_SPARKLE_REQUIRED=1"))

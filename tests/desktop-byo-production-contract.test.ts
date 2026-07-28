@@ -95,6 +95,16 @@ describe("NeonDiff desktop B0 production bundle contract", () => {
       "Sparkle feed and public key must not contain surrounding whitespace"
     );
 
+    const hostlessFeed = checkContract({
+      NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
+      NEONDIFF_SPARKLE_FEED_URL: "https:///appcast.xml",
+      NEONDIFF_SPARKLE_PUBLIC_ED_KEY: "CI_ONLY_NOT_A_RELEASE_KEY"
+    });
+    expect(hostlessFeed.status).toBe(2);
+    expect(hostlessFeed.stderr).toContain(
+      "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a host"
+    );
+
     const disabled = checkContract({
       NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
       NEONDIFF_SPARKLE_REQUIRED: "0",
