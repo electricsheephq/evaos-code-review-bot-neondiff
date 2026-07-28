@@ -139,6 +139,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var isGitHubRepositoryRefreshInProgress = false
     @Published package var managedGitHubConnectionState: ManagedGitHubConnectionState = .quarantined
     @Published package var managedGitHubRepositories: [GitHubBrokerRepository] = []
+    private var managedGitHubRepositoriesVerifiedAt: Date?
     @Published package var managedGitHubInstallationCandidates: [ManagedGitHubInstallationCandidate] = []
     @Published package var selectedManagedGitHubRepository: String?
     @Published package private(set) var selectedBYOReviewRepository: String?
@@ -192,10 +193,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         didSet {
             if !activationVerifiedThisLaunch {
                 activationUpdateEntitlementThisLaunch = false
+                activationUpdateAuthorityVerifiedAt = nil
+                activationUpdateAuthorityValidUntil = nil
             }
         }
     }
     private var activationUpdateEntitlementThisLaunch = false
+    private var activationUpdateAuthorityVerifiedAt: Date?
+    private var activationUpdateAuthorityValidUntil: Date?
     private var accountWorkspaceCatalogVerifiedAt: Date?
     private var activationVerifiedRepositoryThisLaunch: String?
     private var appliedRepoSelection: AppliedRepoSelection?
@@ -851,9 +856,24 @@ package final class NeonDiffDesktopModel: ObservableObject {
            let repository = managedGitHubRepositories.first(where: {
                $0.fullName == selectedManagedGitHubRepository
            }) {
-            managedPublicRepositoryVerified = repository.visibility == .public
+            managedPublicRepositoryVerified = DesktopUpdateAccessPolicy
+                .managedPublicRepositoryIsEligible(
+                    isPublic: repository.visibility == .public,
+                    verifiedAt: managedGitHubRepositoriesVerifiedAt,
+                    now: dependencies.clock.now
+                )
         } else {
             managedPublicRepositoryVerified = false
+        }
+
+        let activationAuthorityCurrent: Bool
+        if let validUntil = activationUpdateAuthorityValidUntil {
+            activationAuthorityCurrent = DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+                verifiedAt: activationUpdateAuthorityVerifiedAt,
+                now: dependencies.clock.now
+            ) && dependencies.clock.now < validUntil
+        } else {
+            activationAuthorityCurrent = false
         }
 
         return DesktopUpdateAccessPolicy.evaluate(
@@ -863,6 +883,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             activationVerifiedThisLaunch: activationVerifiedThisLaunch,
             activationIsActive: activationState == .active,
             activationUpdateEntitlement: activationUpdateEntitlementThisLaunch,
+            activationAuthorityCurrent: activationAuthorityCurrent,
             managedPublicRepositoryVerified: managedPublicRepositoryVerified
         )
     }
@@ -1610,6 +1631,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         github = GitHubConnectionStatus()
         discoveredGitHubRepos = []
         managedGitHubRepositories = []
+        managedGitHubRepositoriesVerifiedAt = nil
         managedGitHubInstallationCandidates = []
         selectedManagedGitHubRepository = nil
         selectedBYOReviewRepository = nil
@@ -2658,6 +2680,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubConnectionState = .connecting
         managedGitHubRecovery = nil
         managedGitHubRepositories = []
+        managedGitHubRepositoriesVerifiedAt = nil
         managedGitHubInstallationCandidates = []
         pendingManagedGitHubAuthorization = nil
         githubAuthorizationCode = nil
@@ -2809,6 +2832,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         invalidateRepoApplicationProof()
         managedGitHubRecovery = nil
         managedGitHubRepositories = []
+        managedGitHubRepositoriesVerifiedAt = nil
         selectedManagedGitHubRepository = nil
         lastError = nil
 
@@ -3819,6 +3843,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
     ) {
         switch outcome {
         case .active(let summary):
+            let now = dependencies.clock.now
+            activationUpdateAuthorityVerifiedAt = now
+            let freshnessDeadline = now.addingTimeInterval(300)
+            if let rawExpiry = summary.expiresAt {
+                activationUpdateAuthorityValidUntil = ISO8601DateFormatter()
+                    .date(from: rawExpiry)
+                    .map { min($0, freshnessDeadline) }
+            } else {
+                activationUpdateAuthorityValidUntil = freshnessDeadline
+            }
             activationUpdateEntitlementThisLaunch = summary.updateEntitlement
             activationVerifiedThisLaunch = true
             lastError = nil
@@ -4757,6 +4791,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubRepositories = repositories.sorted {
             $0.fullName.localizedCaseInsensitiveCompare($1.fullName) == .orderedAscending
         }
+        managedGitHubRepositoriesVerifiedAt = dependencies.clock.now
         managedGitHubConnectionState = .bound(installationId: installationId)
         managedGitHubRecovery = nil
         lastError = nil
@@ -4774,6 +4809,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         githubAuthorizationCode = nil
         managedGitHubConnectionState = .failed
         managedGitHubRepositories = []
+        managedGitHubRepositoriesVerifiedAt = nil
         selectedManagedGitHubRepository = nil
         let recovery: GitHubConnectionRecovery
         if let brokerError = error as? GitHubBrokerClientError {

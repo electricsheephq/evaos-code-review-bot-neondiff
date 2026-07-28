@@ -102,8 +102,23 @@ describe("NeonDiff desktop B0 production bundle contract", () => {
     });
     expect(hostlessFeed.status).toBe(2);
     expect(hostlessFeed.stderr).toContain(
-      "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a host"
+      "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a DNS host"
     );
+
+    for (const malformedFeed of [
+      "https://:443/appcast.xml",
+      "https://user@/appcast.xml"
+    ]) {
+      const malformedAuthority = checkContract({
+        NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
+        NEONDIFF_SPARKLE_FEED_URL: malformedFeed,
+        NEONDIFF_SPARKLE_PUBLIC_ED_KEY: "CI_ONLY_NOT_A_RELEASE_KEY"
+      });
+      expect(malformedAuthority.status).toBe(2);
+      expect(malformedAuthority.stderr).toContain(
+        "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a DNS host"
+      );
+    }
 
     const disabled = checkContract({
       NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",

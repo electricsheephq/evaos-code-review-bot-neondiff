@@ -84,14 +84,31 @@ if [ -n "$SPARKLE_FEED_URL" ]; then
   case "$SPARKLE_FEED_URL" in
     https://*)
       SPARKLE_FEED_AUTHORITY="${SPARKLE_FEED_URL#https://}"
-      SPARKLE_FEED_HOST="${SPARKLE_FEED_AUTHORITY%%[/?#]*}"
-      if [ -z "$SPARKLE_FEED_HOST" ]; then
-        echo "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a host" >&2
+      SPARKLE_FEED_HOSTPORT="${SPARKLE_FEED_AUTHORITY%%[/?#]*}"
+      SPARKLE_FEED_HOST="$SPARKLE_FEED_HOSTPORT"
+      if [[ "$SPARKLE_FEED_HOSTPORT" == *:* ]]; then
+        SPARKLE_FEED_HOST="${SPARKLE_FEED_HOSTPORT%%:*}"
+        SPARKLE_FEED_PORT="${SPARKLE_FEED_HOSTPORT#*:}"
+        if [ -z "$SPARKLE_FEED_PORT" ] \
+          || [[ "$SPARKLE_FEED_PORT" == *[!0-9]* ]] \
+          || [ "$SPARKLE_FEED_PORT" -lt 1 ] \
+          || [ "$SPARKLE_FEED_PORT" -gt 65535 ]; then
+          echo "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a DNS host" >&2
+          exit 2
+        fi
+      fi
+      if [ -z "$SPARKLE_FEED_HOST" ] \
+        || [[ "$SPARKLE_FEED_HOSTPORT" == *@* ]] \
+        || [[ "$SPARKLE_FEED_HOST" == .* ]] \
+        || [[ "$SPARKLE_FEED_HOST" == *. ]] \
+        || [[ "$SPARKLE_FEED_HOST" == *..* ]] \
+        || [[ "$SPARKLE_FEED_HOST" == *[!A-Za-z0-9.-]* ]]; then
+        echo "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a DNS host" >&2
         exit 2
       fi
       ;;
     *)
-      echo "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a host" >&2
+      echo "NEONDIFF_SPARKLE_FEED_URL must be an absolute https URL with a DNS host" >&2
       exit 2
       ;;
   esac

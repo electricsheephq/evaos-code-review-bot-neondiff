@@ -49,6 +49,7 @@ package enum DesktopUpdateAccessPolicy {
         activationVerifiedThisLaunch: Bool,
         activationIsActive: Bool,
         activationUpdateEntitlement: Bool = false,
+        activationAuthorityCurrent: Bool = false,
         managedPublicRepositoryVerified: Bool
     ) -> DesktopUpdateAccess {
         guard productionBoundaryVerified else {
@@ -56,6 +57,9 @@ package enum DesktopUpdateAccessPolicy {
         }
 
         if activationVerifiedThisLaunch && activationIsActive {
+            guard activationAuthorityCurrent else {
+                return .blocked(reason: .verificationRequired)
+            }
             return activationUpdateEntitlement
                 ? .allowed(channel: .beta)
                 : .blocked(reason: .entitlementRequired)
@@ -85,6 +89,14 @@ package enum DesktopUpdateAccessPolicy {
         guard let verifiedAt else { return false }
         let age = now.timeIntervalSince(verifiedAt)
         return age >= 0 && age <= maximumAge
+    }
+
+    package static func managedPublicRepositoryIsEligible(
+        isPublic: Bool,
+        verifiedAt: Date?,
+        now: Date
+    ) -> Bool {
+        isPublic && accountCatalogIsCurrent(verifiedAt: verifiedAt, now: now)
     }
 }
 

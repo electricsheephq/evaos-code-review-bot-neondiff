@@ -11,6 +11,7 @@ import Testing
             activationVerifiedThisLaunch: true,
             activationIsActive: true,
             activationUpdateEntitlement: true,
+            activationAuthorityCurrent: true,
             managedPublicRepositoryVerified: false
         )
 
@@ -25,10 +26,26 @@ import Testing
             activationVerifiedThisLaunch: true,
             activationIsActive: true,
             activationUpdateEntitlement: false,
+            activationAuthorityCurrent: true,
             managedPublicRepositoryVerified: false
         )
 
         #expect(access == .blocked(reason: .entitlementRequired))
+    }
+
+    @Test func staleActivationAuthorityFailsClosed() {
+        let access = DesktopUpdateAccessPolicy.evaluate(
+            productionBoundaryVerified: true,
+            accountCatalogCurrent: false,
+            accountEntitlement: nil,
+            activationVerifiedThisLaunch: true,
+            activationIsActive: true,
+            activationUpdateEntitlement: true,
+            activationAuthorityCurrent: false,
+            managedPublicRepositoryVerified: false
+        )
+
+        #expect(access == .blocked(reason: .verificationRequired))
     }
 
     @Test func currentServerInternalAdminEntitlementAllowsBetaUpdates() {
@@ -131,6 +148,26 @@ import Testing
         ))
         #expect(!DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
             verifiedAt: now.addingTimeInterval(1),
+            now: now
+        ))
+    }
+
+    @Test func managedPublicRepositoryRequiresCurrentVisibilityProof() {
+        let now = Date(timeIntervalSince1970: 10_000)
+
+        #expect(DesktopUpdateAccessPolicy.managedPublicRepositoryIsEligible(
+            isPublic: true,
+            verifiedAt: now.addingTimeInterval(-299),
+            now: now
+        ))
+        #expect(!DesktopUpdateAccessPolicy.managedPublicRepositoryIsEligible(
+            isPublic: true,
+            verifiedAt: now.addingTimeInterval(-301),
+            now: now
+        ))
+        #expect(!DesktopUpdateAccessPolicy.managedPublicRepositoryIsEligible(
+            isPublic: false,
+            verifiedAt: now,
             now: now
         ))
     }

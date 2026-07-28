@@ -19,12 +19,14 @@ proven by source alone.
   never proof of the real release key or appcast identity.
 - Configured builds check the beta feed every six hours and also expose a
   manual Check for Updates action. Downloads remain user-confirmed.
-- Every check and every selected update re-evaluates update access. A current
-  paid/trial activation must explicitly include `updateEntitlement=true`.
+- Every check and every selected update re-evaluates update access. A paid/trial
+  activation must explicitly include `updateEntitlement=true`, remain inside
+  its server expiry, and have been verified within five minutes.
   A server `internal_admin` entitlement or verified managed public-free
-  repository is accepted only from an account catalog verified within five
-  minutes. Missing production composition, stale account state, or missing
-  update entitlement fails closed. The policy and focused tests live in
+  repository is accepted only when both the account catalog and authoritative
+  repository visibility were verified within five minutes. Missing production
+  composition, stale authority, or missing update entitlement fails closed. The
+  policy and focused tests live in
   `DesktopUpdateAccess.swift` and `DesktopUpdateAccessPolicyTests.swift`.
 - The customer UI distinguishes ready, checking, update available, up to date,
   entitlement required, invalid feed, network error, signature error, and

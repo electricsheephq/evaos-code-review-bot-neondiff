@@ -95,10 +95,11 @@ import NeonDiffDesktopCore
     private func activeSummary(
         scope: String = "private",
         privateAllowed: Bool? = true,
-        updateEntitlement: Bool = true
+        updateEntitlement: Bool = true,
+        expiresAt: String? = nil
     ) -> ActivationClientOutcome {
         .active(.init(status: .active, repoVisibilityScope: scope, privateRepoAllowed: privateAllowed,
-                      updateEntitlement: updateEntitlement, expiresAt: nil, plan: "team", seats: 3))
+                      updateEntitlement: updateEntitlement, expiresAt: expiresAt, plan: "team", seats: 3))
     }
 
     private let activationKeyAccount = "license/default"
@@ -207,6 +208,27 @@ import NeonDiffDesktopCore
 
         #expect(model.desktopUpdateAccess == .allowed(channel: .beta))
         clock.advance(by: 301)
+        #expect(model.desktopUpdateAccess == .blocked(reason: .verificationRequired))
+    }
+
+    @Test func activationUpdateAuthorityHonorsServerExpiry() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let expiry = ISO8601DateFormatter().string(
+            from: Date(timeIntervalSince1970: 10_010)
+        )
+        let keychain = RecordingKeychain()
+        let model = makeModel(
+            secretStore: keychain,
+            clock: clock,
+            client: FakeActivationClient(activeSummary(expiresAt: expiry))
+        )
+        model.activationState = .checkoutPaused
+        model.pendingActivationKey = "NDL-EXPIRING-0123456789"
+        model.provideExistingActivationKey()
+        await model.submitActivation()
+
+        #expect(model.desktopUpdateAccess == .allowed(channel: .beta))
+        clock.advance(by: 11)
         #expect(model.desktopUpdateAccess == .blocked(reason: .verificationRequired))
     }
 
