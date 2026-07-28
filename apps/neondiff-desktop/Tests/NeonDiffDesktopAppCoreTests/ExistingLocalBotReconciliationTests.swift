@@ -677,6 +677,7 @@ import NeonDiffDesktopCore
             "--json"
         ])
         #expect(call.standardInput == nil)
+        #expect(call.timeout == 150)
         #expect(fixture.model.repos.filter(\.enabled).count == 2)
         #expect(fixture.model.byoGitHubCredentialsVerified)
         #expect(
