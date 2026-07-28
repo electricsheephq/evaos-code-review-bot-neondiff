@@ -81,6 +81,8 @@ describe("B0 access-controlled CLI candidate", () => {
     expect(script).toContain("--expected-config-revision");
     expect(script).toContain("--zcode");
     expect(script).toContain("empty-npm-cache");
+    expect(script).toMatch(/execFileSync\("npm", \[\s*"ci",\s*"--ignore-scripts"/);
+    expect(script).toContain("--allow-b0-bundled-production-closure");
     expect(script).toContain("git status --porcelain");
     expect(script).toContain("must not be a symbolic link");
     expect(script).toContain("must be private to the current user (0700)");
@@ -124,14 +126,42 @@ describe("B0 access-controlled CLI candidate", () => {
     ];
     try {
       writeFileSync(packPath, JSON.stringify([{ files: [...required, ...allowedClosure].map((path) => ({ path })) }]));
-      const allowed = spawnSync(process.execPath, ["scripts/check-packlist.mjs", packPath], { encoding: "utf8" });
+      const deniedByDefault = spawnSync(
+        process.execPath,
+        ["scripts/check-packlist.mjs", packPath],
+        { encoding: "utf8" }
+      );
+      expect(deniedByDefault.status).not.toBe(0);
+      expect(deniedByDefault.stderr).toContain("node_modules/validate-npm-package-license/package.json");
+
+      const allowed = spawnSync(process.execPath, [
+        "scripts/check-packlist.mjs",
+        packPath,
+        "--allow-b0-bundled-production-closure"
+      ], { encoding: "utf8" });
       expect(allowed.status, `${allowed.stdout}\n${allowed.stderr}`).toBe(0);
+      expect(allowed.stdout).toContain(`packlist ok: ${required.length + allowedClosure.length} files`);
+
+      writeFileSync(packPath, JSON.stringify([{
+        files: [...required.slice(1), ...allowedClosure].map((path) => ({ path }))
+      }]));
+      const missingRequired = spawnSync(process.execPath, [
+        "scripts/check-packlist.mjs",
+        packPath,
+        "--allow-b0-bundled-production-closure"
+      ], { encoding: "utf8" });
+      expect(missingRequired.status).not.toBe(0);
+      expect(missingRequired.stderr).toContain(`Missing required package file: ${required[0]}`);
 
       writeFileSync(packPath, JSON.stringify([{
         files: [...required, ...allowedClosure, "node_modules/unreviewed-package/index.js"]
           .map((path) => ({ path }))
       }]));
-      const rejected = spawnSync(process.execPath, ["scripts/check-packlist.mjs", packPath], { encoding: "utf8" });
+      const rejected = spawnSync(process.execPath, [
+        "scripts/check-packlist.mjs",
+        packPath,
+        "--allow-b0-bundled-production-closure"
+      ], { encoding: "utf8" });
       expect(rejected.status).not.toBe(0);
       expect(rejected.stderr).toContain("node_modules/unreviewed-package/index.js");
     } finally {

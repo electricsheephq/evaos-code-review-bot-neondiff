@@ -137,6 +137,14 @@ function main() {
   }
   ensureClean(repoRoot, "preflight");
   execFileSync("npm", [
+    "ci",
+    "--ignore-scripts"
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  execFileSync("npm", [
     "run",
     "build"
   ], {
@@ -215,7 +223,11 @@ function main() {
 
     packJsonPath = join(outputDirectory, "pack.json");
     writeFileSync(packJsonPath, `${JSON.stringify(parsedPack, null, 2)}\n`, { mode: 0o600 });
-    execFileSync(process.execPath, [join(repoRoot, "scripts", "check-packlist.mjs"), packJsonPath], {
+    execFileSync(process.execPath, [
+      join(repoRoot, "scripts", "check-packlist.mjs"),
+      packJsonPath,
+      "--allow-b0-bundled-production-closure"
+    ], {
       cwd: repoRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"]
