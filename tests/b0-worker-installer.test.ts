@@ -6,6 +6,7 @@ import {
   planWorkerRollback,
   planWorkerUpdate,
   recoverPreviouslyLoadedWorker,
+  retryTransientLaunchdBootstrap,
   validateWorkerCandidate
 } from "../scripts/lib/b0-worker-installer.mjs";
 
@@ -319,6 +320,58 @@ describe("B0 worker installer", () => {
         throw new Error("original restart failed");
       }
     })).toThrow("original restart failed");
+  });
+
+  it("retries the bounded launchd bootstrap I/O race before activating the worker", () => {
+    let attempts = 0;
+    const waits: number[] = [];
+    const loadedStates = [true, false];
+    const observedAttempts = retryTransientLaunchdBootstrap({
+      bootstrap() {
+        attempts += 1;
+        if (attempts < 3) {
+          throw new Error("Bootstrap failed: 5: Input/output error");
+        }
+      },
+      isLoaded() {
+        return loadedStates.shift() ?? false;
+      },
+      wait(milliseconds) {
+        waits.push(milliseconds);
+      }
+    });
+
+    expect(observedAttempts).toBe(3);
+    expect(waits).toEqual([250, 750]);
+
+    let unrelatedAttempts = 0;
+    expect(() => retryTransientLaunchdBootstrap({
+      bootstrap() {
+        unrelatedAttempts += 1;
+        throw new Error("Bootstrap failed: 1: Operation not permitted");
+      },
+      isLoaded() {
+        throw new Error("must not inspect unrelated failures");
+      },
+      wait() {
+        throw new Error("must not wait on unrelated failures");
+      }
+    })).toThrow("Operation not permitted");
+    expect(unrelatedAttempts).toBe(1);
+
+    let boundedAttempts = 0;
+    expect(() => retryTransientLaunchdBootstrap({
+      bootstrap() {
+        boundedAttempts += 1;
+        throw new Error("Bootstrap failed: 5: Input/output error");
+      },
+      isLoaded() {
+        return false;
+      },
+      wait() {},
+      delays: [1]
+    })).toThrow("Input/output error");
+    expect(boundedAttempts).toBe(2);
   });
 
   it("fails closed when rollback is requested after the original worker is already active", () => {
