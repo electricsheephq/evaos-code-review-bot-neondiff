@@ -1,5 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 const workflowPath = ".github/workflows/b0-cli-candidate.yml";
 const scriptPath = "scripts/build-b0-cli-candidate.mjs";
@@ -87,5 +89,53 @@ describe("B0 access-controlled CLI candidate", () => {
     expect(script).not.toMatch(/\bnpm dist-tag\b/);
     expect(script).not.toMatch(/\bgh release\b/);
     expect(script).not.toMatch(/\bgit tag\b/);
+  });
+
+  it("allows only the locked bundled B0 production dependency closure", () => {
+    const temporary = mkdtempSync(join(tmpdir(), "neondiff-b0-packlist-"));
+    const packPath = join(temporary, "pack.json");
+    const required = [
+      "dist/src/cli.js",
+      "README.md",
+      "LICENSE.md",
+      "SECURITY.md",
+      "CODE_OF_CONDUCT.md",
+      "config.example.json",
+      "docs/SETUP.md",
+      "docs/ci-runner.md",
+      "docs/docker.md",
+      "docs/github-app-setup.md",
+      "docs/providers.md",
+      "docs/license-boundary.md",
+      "docs/pricing.md",
+      "docs/schema/neondiff-config.schema.json",
+      "docs/systemd.md",
+      "systemd/neondiff.service.example",
+      "systemd/neondiff.user.service.example",
+      "Dockerfile",
+      "docker-compose.example.yml"
+    ];
+    const allowedClosure = [
+      "node_modules/spdx-correct/package.json",
+      "node_modules/spdx-exceptions/package.json",
+      "node_modules/spdx-expression-parse/package.json",
+      "node_modules/spdx-license-ids/package.json",
+      "node_modules/validate-npm-package-license/package.json"
+    ];
+    try {
+      writeFileSync(packPath, JSON.stringify([{ files: [...required, ...allowedClosure].map((path) => ({ path })) }]));
+      const allowed = spawnSync(process.execPath, ["scripts/check-packlist.mjs", packPath], { encoding: "utf8" });
+      expect(allowed.status, `${allowed.stdout}\n${allowed.stderr}`).toBe(0);
+
+      writeFileSync(packPath, JSON.stringify([{
+        files: [...required, ...allowedClosure, "node_modules/unreviewed-package/index.js"]
+          .map((path) => ({ path }))
+      }]));
+      const rejected = spawnSync(process.execPath, ["scripts/check-packlist.mjs", packPath], { encoding: "utf8" });
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain("node_modules/unreviewed-package/index.js");
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
   });
 });
