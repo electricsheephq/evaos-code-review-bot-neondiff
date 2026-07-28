@@ -301,6 +301,11 @@ import Testing
         #expect(chrome.contains("WindowDragRegion"))
         #expect(!chrome.contains("ChromeCircuitBackdrop"))
         #expect(overview.contains("Ready for a dry run"))
+        #expect(overview.contains("canRunDryRun = model.scopedReviewExecutionAvailable"))
+        #expect(overview.contains("View Worker Update Steps"))
+        #expect(overview.contains("Retry Worker Check"))
+        #expect(overview.contains("neondiff-worker-update-guide"))
+        #expect(overview.contains("neondiff-worker-retry-check"))
         #expect(overview.contains("Existing bot configured"))
         #expect(overview.contains("Restoring this Mac"))
         #expect(overview.contains("CHECKING LOCAL SETUP"))
@@ -325,11 +330,7 @@ import Testing
         #expect(overview.contains("readiness.licenseStatus"))
         #expect(overview.contains(#""PUBLIC · FREE""#))
         #expect(overview.contains("model.licenseSetupReady"))
-        #expect(overview.contains("model.productionUsefulWorkAvailable"))
-        #expect(overview.contains(
-            "canRunDryRun = model.productionUsefulWorkAvailable\n"
-                + "            && model.providerSetupReady"
-        ))
+        #expect(overview.contains("canRunDryRun = model.scopedReviewExecutionAvailable"))
         #expect(overview.contains("Config and secrets stay on this Mac"))
         #expect(overview.contains("Model context follows your selected provider"))
         #expect(overview.contains("model.providerSetupReady"))

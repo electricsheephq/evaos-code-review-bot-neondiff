@@ -45,6 +45,57 @@ package struct DesktopLocalBotExecutionContext: Equatable, Sendable {
     }
 }
 
+package enum DesktopLocalWorkerReviewCompatibility: Equatable, Sendable {
+    case unknown
+    case checking
+    case compatible(packageVersion: String?)
+    case incompatible
+
+    package var isCompatible: Bool {
+        if case .compatible = self { return true }
+        return false
+    }
+}
+
+package struct DesktopLocalWorkerReviewCapabilityReport: Decodable, Equatable, Sendable {
+    package struct LicenseBoundary: Decodable, Equatable, Sendable {
+        package let packageVersion: String?
+    }
+
+    package struct Usage: Decodable, Equatable, Sendable {
+        package struct Flag: Decodable, Equatable, Sendable {
+            package let name: String
+        }
+
+        package let command: String
+        package let flags: [Flag]
+    }
+
+    package let ok: Bool
+    package let command: String
+    package let licenseBoundary: LicenseBoundary?
+    package let usage: Usage
+
+    package var supportsExactDryToLiveReview: Bool {
+        guard ok,
+              command == "review-pr",
+              usage.command == "review-pr"
+        else {
+            return false
+        }
+        let names = Set(usage.flags.map(\.name))
+        return names.isSuperset(of: [
+            "--expected-config-revision",
+            "--zcode"
+        ])
+    }
+
+    package static func parse(_ stdout: String) -> Self? {
+        guard let data = stdout.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(Self.self, from: data)
+    }
+}
+
 package enum DesktopLaunchAgentBotConfigurationParser {
     private static let supportedAppIDKeys = [
         "NEONDIFF_GITHUB_APP_ID",
@@ -390,13 +441,18 @@ package enum DesktopLocalBotExecutionContextResolver {
         case executableReuse
 
         func allows(_ arguments: [String]) -> Bool {
-            let credentialCommand = arguments.first == "review-pr"
+            let reviewHelpCommand = arguments.first == "review-pr"
+                && arguments.contains("--help")
+            let credentialCommand = (
+                arguments.first == "review-pr" && !reviewHelpCommand
+            )
                 || Array(arguments.prefix(2)) == ["doctor", "github"]
             switch self {
             case .credentialEnvironment:
                 return credentialCommand
             case .executableReuse:
                 return credentialCommand
+                    || reviewHelpCommand
                     || Array(arguments.prefix(2)) == ["config", "inspect"]
             }
         }
