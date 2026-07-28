@@ -38,8 +38,7 @@ struct DesktopSetupReadiness {
                 ? "Choose review target"
                 : model.repos.first(where: \.enabled)?.name)
             ?? "owner/repository"
-        canRunDryRun = model.productionUsefulWorkAvailable
-            && model.providerSetupReady
+        canRunDryRun = model.scopedReviewExecutionAvailable
     }
 
     private var gates: [Bool] { [github, provider, license, repository] }
@@ -389,6 +388,17 @@ struct OverviewView: View {
                 .font(.callout)
                 .foregroundStyle(palette.textSecondary)
 
+            if model.localWorkerReviewUpdateRequired
+                || (model.localWorkerReviewCompatibilityCheckAvailable
+                    && !model.localWorkerReviewCompatibility.isCompatible) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { localWorkerRecoveryControls }
+                    VStack(alignment: .leading, spacing: 10) {
+                        localWorkerRecoveryControls
+                    }
+                }
+            }
+
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) { scopedReviewControls }
                 VStack(alignment: .leading, spacing: 10) { scopedReviewControls }
@@ -401,6 +411,30 @@ struct OverviewView: View {
                 )
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("neondiff-scoped-review-status")
+        }
+    }
+
+    @ViewBuilder
+    private var localWorkerRecoveryControls: some View {
+        if model.localWorkerReviewUpdateRequired {
+            Button {
+                model.openLocalWorkerUpdateGuide()
+            } label: {
+                Label("View Worker Update Steps", systemImage: "arrow.down.circle")
+            }
+            .buttonStyle(ReferenceOutlineButtonStyle())
+            .accessibilityIdentifier("neondiff-worker-update-guide")
+        }
+
+        if model.localWorkerReviewCompatibilityCheckAvailable
+            && !model.localWorkerReviewCompatibility.isCompatible {
+            Button {
+                model.checkLocalWorkerReviewCompatibility()
+            } label: {
+                Label("Retry Worker Check", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(ReferenceOutlineButtonStyle())
+            .accessibilityIdentifier("neondiff-worker-retry-check")
         }
     }
 

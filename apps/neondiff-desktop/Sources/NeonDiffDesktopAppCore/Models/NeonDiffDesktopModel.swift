@@ -88,6 +88,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             invalidateProviderConfigAuthorization()
             invalidateProviderVerificationContext()
             invalidateBYOGitHubVerificationContext()
+            invalidateLocalWorkerReviewCompatibility()
             invalidateActivationForRepositoryChange()
         }
     }
@@ -96,6 +97,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             guard cliPath != oldValue else { return }
             invalidateProviderVerificationContext()
             invalidateBYOGitHubVerificationContext()
+            invalidateLocalWorkerReviewCompatibility()
         }
     }
     @Published package var launchdLabel: String
@@ -160,6 +162,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set) var isScopedReviewInProgress = false
     @Published package private(set) var scopedDryRunHeadSHA: String?
     @Published package private(set) var scopedReviewStatus = "Verify current access before running a dry review."
+    @Published package private(set) var localWorkerReviewCompatibility: DesktopLocalWorkerReviewCompatibility = .unknown
     @Published package var logText = "No logs loaded."
     @Published package var lastError: String?
     @Published package var lastCommandLine = ""
@@ -435,7 +438,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var scopedReviewExecutionAvailable: Bool {
         productionUsefulWorkAvailable
             && existingLocalAgentAccessAvailable
+            && localWorkerReviewCompatibility.isCompatible
             && scopedReviewProviderReady
+    }
+
+    package var localWorkerReviewUpdateRequired: Bool {
+        localWorkerReviewCompatibility == .incompatible
+    }
+
+    package var localWorkerReviewCompatibilityCheckAvailable: Bool {
+        existingLocalAgentAccessAvailable
+            && localWorkerReviewCompatibility != .checking
+            && !isScopedReviewInProgress
     }
 
     /// Stopping an already-running daemon is a safety remediation, not useful
@@ -649,6 +663,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var managedGitHubConnectionTask: Task<Void, Never>?
+    private var localWorkerCompatibilityTask: Task<Void, Never>?
+    private var localWorkerReviewCompatibilityGeneration: UInt64 = 0
     private var accountLinkTask: Task<Void, Never>?
     private var mostRecentAccountLinkTask: Task<Void, Never>?
     private var accountLinkGeneration: UInt64 = 0
@@ -1598,6 +1614,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         _ = githubRepositoryRefreshGate.begin()
         managedGitHubConnectionTask?.cancel()
         managedGitHubConnectionTask = nil
+        invalidateLocalWorkerReviewCompatibility()
         scopedReviewTask?.cancel()
         scopedReviewTask = nil
         pendingManagedGitHubAuthorization = nil
@@ -2039,6 +2056,94 @@ package final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
+    package func checkLocalWorkerReviewCompatibility() {
+        guard existingLocalAgentAccessAvailable else {
+            invalidateLocalWorkerReviewCompatibility()
+            scopedReviewStatus =
+                "Connect a verified local NeonDiff agent before checking review compatibility."
+            return
+        }
+
+        localWorkerCompatibilityTask?.cancel()
+        let expectedConfigPath = configPath
+        let expectedCLIPath = cliPath
+        let expectedWorkspaceGeneration = workspaceContextGeneration
+        let cli = dependencies.cli
+        localWorkerReviewCompatibility = .checking
+        scopedReviewStatus =
+            "Checking whether the selected local worker supports exact dry-to-live review…"
+
+        localWorkerCompatibilityTask = Task { [weak self] in
+            do {
+                let result = try await cli.run(
+                    executablePath: expectedCLIPath,
+                    arguments: [
+                        "review-pr",
+                        "--help",
+                        "--config",
+                        expectedConfigPath
+                    ],
+                    standardInput: nil,
+                    timeout: 15
+                )
+                guard let self, !Task.isCancelled,
+                      self.workspaceContextGeneration == expectedWorkspaceGeneration,
+                      self.configPath == expectedConfigPath,
+                      self.cliPath == expectedCLIPath
+                else {
+                    return
+                }
+                self.localWorkerCompatibilityTask = nil
+                let report = result.exitCode == 0
+                    ? DesktopLocalWorkerReviewCapabilityReport.parse(
+                        result.stdout
+                    )
+                    : nil
+                if let report, report.supportsExactDryToLiveReview {
+                    self.localWorkerReviewCompatibility = .compatible(
+                        packageVersion: report.licenseBoundary?.packageVersion
+                    )
+                    self.lastError = nil
+                    self.scopedReviewStatus =
+                        "Local worker supports exact config-revision dry and live review."
+                } else {
+                    self.localWorkerReviewCompatibility = .incompatible
+                    self.invalidateScopedReviewApproval(preserveStatus: true)
+                    self.lastError =
+                        "This local NeonDiff worker must be updated before reviews can run."
+                    self.scopedReviewStatus =
+                        "Worker update required. View the update steps, then retry this check."
+                }
+            } catch {
+                guard let self, !Task.isCancelled,
+                      self.workspaceContextGeneration == expectedWorkspaceGeneration,
+                      self.configPath == expectedConfigPath,
+                      self.cliPath == expectedCLIPath
+                else {
+                    return
+                }
+                self.localWorkerCompatibilityTask = nil
+                self.localWorkerReviewCompatibility = .incompatible
+                self.invalidateScopedReviewApproval(preserveStatus: true)
+                self.lastError =
+                    "The local worker compatibility check failed safely."
+                self.scopedReviewStatus =
+                    "Worker check failed. View the update steps or retry the check."
+            }
+        }
+    }
+
+    package func openLocalWorkerUpdateGuide() {
+        let url = URL(
+            string: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/blob/main/docs/SETUP.md#update-an-existing-local-worker"
+        )!
+        guard dependencies.urlOpener.open(url) else {
+            lastError = "NeonDiff could not open the local worker update guide."
+            return
+        }
+        lastError = nil
+    }
+
     package func runScopedDryReview() {
         guard requireScopedReviewAuthorization() else { return }
         guard !isScopedReviewInProgress else { return }
@@ -2059,7 +2164,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             headSHA: "",
             configPath: configPath,
             configRevision: configRevision,
-            workspaceGeneration: workspaceContextGeneration
+            workspaceGeneration: workspaceContextGeneration,
+            workerCompatibilityGeneration:
+                localWorkerReviewCompatibilityGeneration
         )
         let arguments = [
             "review-pr",
@@ -4012,6 +4119,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
             scopedReviewStatus = lastError ?? "Local agent required"
             return false
         }
+        guard localWorkerReviewCompatibility.isCompatible else {
+            lastError = localWorkerReviewCompatibility == .checking
+                ? "Wait for the local worker compatibility check to finish."
+                : "Update or recheck the selected local worker before running a review."
+            scopedReviewStatus = lastError ?? "Worker compatibility required"
+            return false
+        }
         return true
     }
 
@@ -4062,7 +4176,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             headSHA: report.scope.headSha.lowercased(),
             configPath: expectedContext.configPath,
             configRevision: expectedContext.configRevision,
-            workspaceGeneration: expectedContext.workspaceGeneration
+            workspaceGeneration: expectedContext.workspaceGeneration,
+            workerCompatibilityGeneration:
+                expectedContext.workerCompatibilityGeneration
         )
         scopedDryRunApproval = approval
         scopedDryRunHeadSHA = approval.headSHA
@@ -4118,6 +4234,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         _ approval: ScopedReviewApproval
     ) -> Bool {
         guard approval.workspaceGeneration == workspaceContextGeneration,
+              approval.workerCompatibilityGeneration
+                == localWorkerReviewCompatibilityGeneration,
+              localWorkerReviewCompatibility.isCompatible,
               approval.configPath == configPath,
               let selectedReviewRepository,
               selectedReviewRepository.caseInsensitiveCompare(approval.repo)
@@ -4148,6 +4267,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
             scopedReviewStatus =
                 "Run a dry review before posting an exact pull request head."
         }
+    }
+
+    private func invalidateLocalWorkerReviewCompatibility() {
+        localWorkerCompatibilityTask?.cancel()
+        localWorkerCompatibilityTask = nil
+        localWorkerReviewCompatibilityGeneration &+= 1
+        localWorkerReviewCompatibility = .unknown
+        invalidateScopedReviewApproval()
     }
 
     @discardableResult
@@ -5156,6 +5283,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     } else {
                         controlCenterStatus = "Config loaded from a previous path. Reload the current config before editing."
                     }
+                    if existingLocalAgentAccessAvailable {
+                        checkLocalWorkerReviewCompatibility()
+                    } else {
+                        invalidateLocalWorkerReviewCompatibility()
+                    }
                 }
             }
             if commandName == "config inspect", result.exitCode != 0 || parsedSnapshot == nil {
@@ -5581,6 +5713,7 @@ private struct ScopedReviewApproval: Equatable, Sendable {
     let configPath: String
     let configRevision: String
     let workspaceGeneration: UInt64
+    let workerCompatibilityGeneration: UInt64
 }
 
 private struct ScopedReviewCommandReport: Decodable {

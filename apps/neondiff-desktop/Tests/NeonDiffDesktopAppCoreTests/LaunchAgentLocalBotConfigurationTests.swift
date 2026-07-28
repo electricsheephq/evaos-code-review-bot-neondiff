@@ -384,6 +384,70 @@ import Testing
         ) == nil)
     }
 
+    @Test func reusesTheExactSourceRunnerForCredentialFreeReviewCapabilityHelp() throws {
+        let workingDirectory = "/Volumes/LEXAR/repos/evaos-code-review-bot"
+        let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
+        let privateKeyPath = "/Users/test/.config/neondiff/app.pem"
+        let nodePath = "/opt/homebrew/bin/node"
+        let sourceRunner = "\(workingDirectory)/node_modules/tsx/dist/cli.mjs"
+        let arguments = ["review-pr", "--help", "--config", configPath]
+        let context = try #require(DesktopLaunchAgentExecutionContextParser.parse(
+            data: propertyList(
+                label: "com.electricsheephq.evaos-code-review-bot",
+                environment: [
+                    "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+                    "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": privateKeyPath
+                ],
+                arguments: [
+                    nodePath,
+                    sourceRunner,
+                    "src/cli.ts",
+                    "daemon",
+                    "--config",
+                    configPath
+                ],
+                workingDirectory: workingDirectory
+            ),
+            expectedLabel: "com.electricsheephq.evaos-code-review-bot",
+            privateKeyPathIsSafe: { $0.path == privateKeyPath }
+        ))
+
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [context]
+        ).isEmpty)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [context]
+        ) == nodePath)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveArguments(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [context]
+        ) == [sourceRunner, "src/cli.ts"] + arguments)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: ["review-pr", "--help", "--config", "/other/config.json"],
+            executionContexts: [context]
+        ) == nil)
+    }
+
+    @Test func reviewCapabilityRequiresTheExactDryToLiveFlagContract() throws {
+        let compatible = try #require(DesktopLocalWorkerReviewCapabilityReport.parse(
+            #"{"ok":true,"command":"review-pr","licenseBoundary":{"packageVersion":"1.0.4"},"usage":{"command":"review-pr","flags":[{"name":"--config"},{"name":"--expected-config-revision"},{"name":"--zcode"}]}}"#
+        ))
+        #expect(compatible.supportsExactDryToLiveReview)
+        #expect(compatible.licenseBoundary?.packageVersion == "1.0.4")
+
+        let stale = try #require(DesktopLocalWorkerReviewCapabilityReport.parse(
+            #"{"ok":true,"command":"review-pr","licenseBoundary":{"packageVersion":"1.0.4"},"usage":{"command":"review-pr","flags":[{"name":"--config"}]}}"#
+        ))
+        #expect(!stale.supportsExactDryToLiveReview)
+        #expect(DesktopLocalWorkerReviewCapabilityReport.parse("not json") == nil)
+    }
+
     @Test func rejectsUnsafeOrConflictingExistingWorkerCredentialCoordinates() throws {
         let configPath = "/tmp/neondiff.json"
         let baseEnvironment = [

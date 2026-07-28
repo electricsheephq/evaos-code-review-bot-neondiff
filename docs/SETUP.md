@@ -315,6 +315,32 @@ A local config path, launchd label, App ID, or repository name by itself is not
 authority. Suspended, revoked, pending, mismatched, or server-unrecognized bots
 remain in setup/recovery and fail closed.
 
+### Update an existing local worker
+
+The Mac app checks the exact discovered worker's `review-pr` help contract
+before enabling **Run Dry Review**. A package version alone is not sufficient:
+older and compatible technical-beta workers may both report `1.0.4`.
+
+If Overview shows **Worker update required**:
+
+1. Do not run or retry a live review from another terminal. The dry-to-live
+   approval contract is not proven for that worker.
+2. Use only the exact worker artifact or source commit named in the current
+   invite/release notes, and verify its published checksum or commit before
+   replacing the executable. Do not treat an unpinned `main` checkout or an npm
+   version string as release proof.
+3. Preserve the existing config, LaunchAgent label, GitHub App key file,
+   Keychain entries, provider configuration, and repository allowlist. Updating
+   the worker must not migrate or copy those secrets.
+4. Restart the same LaunchAgent using the release's documented command, return
+   to Overview, and choose **Retry Worker Check**. Dry review stays disabled
+   until the exact executable advertises both config-revision approval and the
+   matching ZCode provider path.
+
+Until an invite or immutable release names a compatible worker artifact, this
+state is a release blocker rather than a prompt to repair source files manually.
+The app's own Sparkle update does not update an external local worker.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and

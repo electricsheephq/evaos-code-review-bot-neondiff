@@ -99,6 +99,12 @@ describe("public NeonDiff CLI surface", () => {
       expect.objectContaining({ name: "--expected-config-revision" })
     ]));
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
+    const reviewHelp = JSON.parse((await runCli(["review-pr", "--help"])).stdout);
+    expect(reviewHelp).toMatchObject({ ok: true, command: "review-pr" });
+    expect(reviewHelp.usage.flags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--expected-config-revision" }),
+      expect.objectContaining({ name: "--zcode" })
+    ]));
     const doctorHelp = JSON.parse((await runCli(["doctor", "--help"])).stdout);
     expect(doctorHelp.usage.flags).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "--github-app-id" }),
