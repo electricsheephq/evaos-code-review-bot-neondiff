@@ -3144,7 +3144,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     executablePath: executablePath,
                     arguments: arguments,
                     standardInput: nil,
-                    timeout: 30
+                    // Current agents honor --repo and return quickly. Older
+                    // compatible local agents may ignore that filter and scan
+                    // their full configured allowlist, so keep this read-only
+                    // existing-agent probe bounded without killing valid proof.
+                    timeout: 150
                 )
                 await MainActor.run {
                     self.applyBYOGitHubVerificationResult(
