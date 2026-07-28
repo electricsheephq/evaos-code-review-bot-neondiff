@@ -958,31 +958,36 @@ function canonicalProspectivePath(path: string): string {
 }
 
 async function acquireRunLease(path: string): Promise<number> {
-  try {
-    const fd = openSync(path, "wx", 0o600);
-    writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`);
-    return fd;
-  } catch (error) {
-    if (!isAlreadyExistsError(error)) throw error;
-  }
-
   const coordinator = createServer((socket) => socket.destroy());
   const coordinationPort = phase1LeaseCoordinationPort(path);
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    const fail = (error: Error & { code?: string }) => {
-      coordinator.removeListener("listening", ready);
-      rejectPromise(new Error(error.code === "EADDRINUSE"
-        ? "Phase 1 lease acquisition is already coordinated by another writer"
-        : `Phase 1 lease coordination failed: ${errorMessage(error)}`));
-    };
-    const ready = () => {
-      coordinator.removeListener("error", fail);
-      resolvePromise();
-    };
-    coordinator.once("error", fail);
-    coordinator.once("listening", ready);
-    coordinator.listen({ host: "127.0.0.1", port: coordinationPort, exclusive: true });
-  });
+  try {
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      const fail = (error: Error & { code?: string }) => {
+        coordinator.removeListener("listening", ready);
+        rejectPromise(error);
+      };
+      const ready = () => {
+        coordinator.removeListener("error", fail);
+        resolvePromise();
+      };
+      coordinator.once("error", fail);
+      coordinator.once("listening", ready);
+      coordinator.listen({ host: "127.0.0.1", port: coordinationPort, exclusive: true });
+    });
+  } catch (error) {
+    const coordinationError = error as Error & { code?: string };
+    if (coordinationError.code !== "EADDRINUSE") {
+      throw new Error(`Phase 1 lease coordination failed: ${errorMessage(coordinationError)}`);
+    }
+    try {
+      const fd = openSync(path, "wx", 0o600);
+      writeFileSync(fd, `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`);
+      return fd;
+    } catch (leaseError) {
+      if (!isAlreadyExistsError(leaseError)) throw leaseError;
+      throw new Error("Phase 1 lease acquisition is already coordinated by another writer");
+    }
+  }
   try {
     try {
       const fd = openSync(path, "wx", 0o600);
