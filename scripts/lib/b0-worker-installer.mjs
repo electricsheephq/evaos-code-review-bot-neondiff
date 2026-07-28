@@ -11,6 +11,7 @@ const PRIVATE_KEY_KEYS = [
   "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
   "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH"
 ];
+const LAUNCHD_BOOTSTRAP_RETRY_DELAYS_MS = [250, 750, 2_000, 5_000, 10_000];
 
 function fail(message) {
   throw new Error(message);
@@ -324,4 +325,43 @@ export function recoverPreviouslyLoadedWorker({
   stopReplacement();
   startOriginal();
   return true;
+}
+
+export function retryTransientLaunchdBootstrap({
+  bootstrap,
+  isLoaded,
+  wait,
+  delays = LAUNCHD_BOOTSTRAP_RETRY_DELAYS_MS
+}) {
+  if (
+    typeof bootstrap !== "function"
+    || typeof isLoaded !== "function"
+    || typeof wait !== "function"
+    || !Array.isArray(delays)
+    || !delays.every((value) => Number.isInteger(value) && value >= 0)
+  ) {
+    fail("launchd bootstrap retry dependencies are invalid");
+  }
+  let attempts = 0;
+  while (true) {
+    attempts += 1;
+    try {
+      bootstrap();
+      return attempts;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const delay = delays[attempts - 1];
+      if (
+        delay === undefined
+        || !/bootstrap failed:\s*5:\s*input\/output error/i.test(detail)
+      ) {
+        throw error;
+      }
+      const loaded = isLoaded();
+      if (loaded !== true && loaded !== false) {
+        fail("launchd service state is ambiguous during bootstrap retry");
+      }
+      wait(delay);
+    }
+  }
 }

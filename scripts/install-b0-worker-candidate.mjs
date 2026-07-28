@@ -24,6 +24,7 @@ import {
   planWorkerRollback,
   planWorkerUpdate,
   recoverPreviouslyLoadedWorker,
+  retryTransientLaunchdBootstrap,
   validateWorkerCandidate
 } from "./lib/b0-worker-installer.mjs";
 
@@ -309,10 +310,10 @@ function launchdState(label) {
   const domain = `gui/${process.getuid()}`;
   const target = `${domain}/${label}`;
   const result = spawnSync("/bin/launchctl", ["print", target], CHILD_PROCESS_OPTIONS);
-  if (result.status === 0) return { loaded: true, domain, target };
+  if (result.status === 0) return { loaded: true, domain, target, label };
   const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (/could not find service|service not found/i.test(detail)) {
-    return { loaded: false, domain, target };
+    return { loaded: false, domain, target, label };
   }
   fail("launchd service state is ambiguous");
 }
@@ -326,8 +327,18 @@ function stopIfLoaded(state) {
 
 function startIfPreviouslyLoaded(state, plistPath) {
   if (!state.loaded) return;
-  execFileSync("/bin/launchctl", ["bootstrap", state.domain, plistPath], {
-    ...CHILD_PROCESS_OPTIONS
+  retryTransientLaunchdBootstrap({
+    bootstrap() {
+      execFileSync("/bin/launchctl", ["bootstrap", state.domain, plistPath], {
+        ...CHILD_PROCESS_OPTIONS
+      });
+    },
+    isLoaded() {
+      return launchdState(state.label).loaded;
+    },
+    wait(milliseconds) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+    }
   });
   execFileSync("/bin/launchctl", ["kickstart", "-k", state.target], {
     ...CHILD_PROCESS_OPTIONS
