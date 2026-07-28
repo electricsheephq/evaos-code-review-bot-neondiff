@@ -23,6 +23,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import {
   planWorkerRollback,
   planWorkerUpdate,
+  recoverPreviouslyLoadedWorker,
   validateWorkerCandidate
 } from "./lib/b0-worker-installer.mjs";
 
@@ -303,6 +304,15 @@ function startIfPreviouslyLoaded(state, plistPath) {
   });
 }
 
+function stopReplacementForRecovery(state) {
+  if (!state.loaded) return;
+  const result = spawnSync("/bin/launchctl", ["bootout", state.target], { encoding: "utf8" });
+  if (result.status === 0) return;
+  const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  if (/could not find service|service not found/i.test(detail)) return;
+  fail("replacement launchd job could not be stopped during recovery");
+}
+
 function mutateLaunchAgent({ plistPath, nextLaunchAgent, currentLink, nextTarget, nextState, statePath }) {
   const originalBytes = readFileSync(plistPath);
   const oldCurrentTarget = currentTarget(currentLink, join(dirname(currentLink), "versions"));
@@ -316,7 +326,11 @@ function mutateLaunchAgent({ plistPath, nextLaunchAgent, currentLink, nextTarget
     stopIfLoaded(service);
     renameSync(stagedPlist, plistPath);
     plistReplaced = true;
-    if (nextTarget) switchCurrent(currentLink, nextTarget);
+    if (nextTarget) {
+      switchCurrent(currentLink, nextTarget);
+    } else if (existsSync(currentLink) && lstatSync(currentLink).isSymbolicLink()) {
+      unlinkSync(currentLink);
+    }
     startIfPreviouslyLoaded(service, plistPath);
   } catch (error) {
     if (plistReplaced) {
@@ -333,10 +347,26 @@ function mutateLaunchAgent({ plistPath, nextLaunchAgent, currentLink, nextTarget
     }
     if (priorState) writeState(statePath, priorState);
     else safeUnlink(statePath);
+    let recoveryError = null;
     try {
-      startIfPreviouslyLoaded(service, plistPath);
-    } catch {
-      // The original plist/current pointer were restored; surface the primary failure.
+      recoverPreviouslyLoadedWorker({
+        wasLoaded: service.loaded,
+        stopReplacement() {
+          stopReplacementForRecovery(service);
+        },
+        startOriginal() {
+          startIfPreviouslyLoaded(service, plistPath);
+        }
+      });
+    } catch (caught) {
+      recoveryError = caught;
+    }
+    if (recoveryError) {
+      fail(
+        `worker activation failed; disk state was restored but launchd recovery failed: ${
+          recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
+        }`
+      );
     }
     fail(`worker activation failed and the prior worker was restored: ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -252,6 +252,9 @@ export function planWorkerRollback({ state, currentLaunchAgent, expectedLabel })
   ) {
     fail("worker rollback state is invalid");
   }
+  if (state.currentVersionID === null) {
+    fail("original worker is already active; run update to reactivate a candidate");
+  }
   if (state.previousVersionID) {
     return {
       nextLaunchAgent: clone(currentLaunchAgent),
@@ -288,4 +291,15 @@ export function planWorkerRollback({ state, currentLaunchAgent, expectedLabel })
       launchdLabel: expectedLabel
     }
   };
+}
+
+export function recoverPreviouslyLoadedWorker({
+  wasLoaded,
+  stopReplacement,
+  startOriginal
+}) {
+  if (!wasLoaded) return false;
+  stopReplacement();
+  startOriginal();
+  return true;
 }

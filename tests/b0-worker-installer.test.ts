@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   planWorkerRollback,
   planWorkerUpdate,
+  recoverPreviouslyLoadedWorker,
   validateWorkerCandidate
 } from "../scripts/lib/b0-worker-installer.mjs";
 
@@ -217,5 +218,51 @@ describe("B0 worker installer", () => {
     expect(rollback.nextState.packageVersion).toBe("1.1.0-beta.26");
     expect(rollback.nextState.previousVersionID).toBe(second.versionID);
     expect(rollback.nextState.previousPackageVersion).toBe("1.1.0-beta.27");
+  });
+
+  it("boots out a partially activated replacement before restarting the original worker", () => {
+    const calls: string[] = [];
+    recoverPreviouslyLoadedWorker({
+      wasLoaded: true,
+      stopReplacement() {
+        calls.push("stop-replacement");
+      },
+      startOriginal() {
+        calls.push("start-original");
+      }
+    });
+    expect(calls).toEqual(["stop-replacement", "start-original"]);
+
+    expect(() => recoverPreviouslyLoadedWorker({
+      wasLoaded: true,
+      stopReplacement() {
+        calls.push("stop-again");
+      },
+      startOriginal() {
+        throw new Error("original restart failed");
+      }
+    })).toThrow("original restart failed");
+  });
+
+  it("fails closed when rollback is requested after the original worker is already active", () => {
+    const update = planWorkerUpdate({
+      launchAgent: launchAgent(),
+      expectedLabel: "com.electricsheephq.neondiff",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    });
+    const firstRollback = planWorkerRollback({
+      state: update.nextState,
+      currentLaunchAgent: update.nextLaunchAgent,
+      expectedLabel: "com.electricsheephq.neondiff"
+    });
+    expect(() => planWorkerRollback({
+      state: firstRollback.nextState,
+      currentLaunchAgent: firstRollback.nextLaunchAgent,
+      expectedLabel: "com.electricsheephq.neondiff"
+    })).toThrow("original worker is already active");
   });
 });
