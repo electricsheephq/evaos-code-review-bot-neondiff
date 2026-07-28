@@ -351,7 +351,8 @@ package enum DesktopLocalBotExecutionContextResolver {
         matchingContext(
             executablePath: executablePath,
             arguments: arguments,
-            executionContexts: executionContexts
+            executionContexts: executionContexts,
+            commandAccess: .credentialEnvironment
         )?.environmentOverrides ?? [:]
     }
 
@@ -363,7 +364,8 @@ package enum DesktopLocalBotExecutionContextResolver {
         matchingContext(
             executablePath: executablePath,
             arguments: arguments,
-            executionContexts: executionContexts
+            executionContexts: executionContexts,
+            commandAccess: .executableReuse
         )?.executablePath
     }
 
@@ -375,22 +377,39 @@ package enum DesktopLocalBotExecutionContextResolver {
         guard let context = matchingContext(
             executablePath: executablePath,
             arguments: arguments,
-            executionContexts: executionContexts
+            executionContexts: executionContexts,
+            commandAccess: .executableReuse
         ) else {
             return arguments
         }
         return context.argumentPrefix + arguments
     }
 
+    private enum CommandAccess {
+        case credentialEnvironment
+        case executableReuse
+
+        func allows(_ arguments: [String]) -> Bool {
+            let credentialCommand = arguments.first == "review-pr"
+                || Array(arguments.prefix(2)) == ["doctor", "github"]
+            switch self {
+            case .credentialEnvironment:
+                return credentialCommand
+            case .executableReuse:
+                return credentialCommand
+                    || Array(arguments.prefix(2)) == ["config", "inspect"]
+            }
+        }
+    }
+
     private static func matchingContext(
         executablePath: String,
         arguments: [String],
-        executionContexts: [DesktopLocalBotExecutionContext]
+        executionContexts: [DesktopLocalBotExecutionContext],
+        commandAccess: CommandAccess
     ) -> DesktopLocalBotExecutionContext? {
         guard executablePath == "neondiff" else { return nil }
-        let commandIsAllowed = arguments.first == "review-pr"
-            || Array(arguments.prefix(2)) == ["doctor", "github"]
-        guard commandIsAllowed else { return nil }
+        guard commandAccess.allows(arguments) else { return nil }
         let configIndexes = arguments.indices.filter {
             arguments[$0] == "--config"
         }
