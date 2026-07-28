@@ -15,6 +15,8 @@ proven by source alone.
   `SUPublicEDKey`; partial, hostless, whitespace-only, missing, or explicitly
   disabled configuration fails in
   `apps/neondiff-desktop/script/build_and_run.sh` before the bundle is built.
+  This gate proves configuration shape and presence only; CI placeholders are
+  never proof of the real release key or appcast identity.
 - Configured builds check the beta feed every six hours and also expose a
   manual Check for Updates action. Downloads remain user-confirmed.
 - Every check and every selected update re-evaluates update access. A current
