@@ -42,9 +42,15 @@ jobs:
         run: swift run NeonDiffDesktopAppcastChecks
 
       - name: Build unsigned Release app bundle
+        env:
+          NEONDIFF_SPARKLE_FEED_URL: https://ci.invalid/neondiff/appcast-beta.xml
+          NEONDIFF_SPARKLE_PUBLIC_ED_KEY: CI_ONLY_NOT_A_RELEASE_KEY
         run: script/build_and_run.sh release-build
 
       - name: Check unsigned Release app bundle
+        env:
+          NEONDIFF_SPARKLE_FEED_URL: https://ci.invalid/neondiff/appcast-beta.xml
+          NEONDIFF_SPARKLE_PUBLIC_ED_KEY: CI_ONLY_NOT_A_RELEASE_KEY
         run: script/build_and_run.sh release-bundle-check
 
       - name: Enforce release-only fixture boundary

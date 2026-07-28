@@ -41,7 +41,16 @@ SHORT_VERSION="${NEONDIFF_DESKTOP_VERSION:-0.1.0}"
 BUILD_VERSION="${NEONDIFF_DESKTOP_BUILD:-1}"
 SPARKLE_FEED_URL="${NEONDIFF_SPARKLE_FEED_URL:-}"
 SPARKLE_PUBLIC_KEY="${NEONDIFF_SPARKLE_PUBLIC_ED_KEY:-}"
-SPARKLE_REQUIRED="${NEONDIFF_SPARKLE_REQUIRED:-0}"
+if [ "$BUILD_CONFIGURATION" = "release" ]; then
+  if [ "${NEONDIFF_SPARKLE_REQUIRED+x}" = "x" ] \
+    && [ "$NEONDIFF_SPARKLE_REQUIRED" != "1" ]; then
+    echo "Release builds require NEONDIFF_SPARKLE_REQUIRED=1" >&2
+    exit 2
+  fi
+  SPARKLE_REQUIRED=1
+else
+  SPARKLE_REQUIRED="${NEONDIFF_SPARKLE_REQUIRED:-0}"
+fi
 PAID_BETA_CONTRACT="${NEONDIFF_DESKTOP_PAID_BETA_CONTRACT:-}"
 MANAGED_GITHUB_BROKER_ENABLED="${NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED:-}"
 GITHUB_BROKER_ORIGIN="${NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN:-}"
@@ -49,6 +58,21 @@ BYO_GITHUB_ENABLED="${NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED:-}"
 
 if [ "$SPARKLE_REQUIRED" != "0" ] && [ "$SPARKLE_REQUIRED" != "1" ]; then
   echo "NEONDIFF_SPARKLE_REQUIRED must be 0 or 1" >&2
+  exit 2
+fi
+
+trim_surrounding_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+SPARKLE_FEED_URL_TRIMMED="$(trim_surrounding_whitespace "$SPARKLE_FEED_URL")"
+SPARKLE_PUBLIC_KEY_TRIMMED="$(trim_surrounding_whitespace "$SPARKLE_PUBLIC_KEY")"
+if [ "$SPARKLE_FEED_URL" != "$SPARKLE_FEED_URL_TRIMMED" ] \
+  || [ "$SPARKLE_PUBLIC_KEY" != "$SPARKLE_PUBLIC_KEY_TRIMMED" ]; then
+  echo "Sparkle feed and public key must not contain surrounding whitespace" >&2
   exit 2
 fi
 if { [ -n "$SPARKLE_FEED_URL" ] && [ -z "$SPARKLE_PUBLIC_KEY" ]; } \

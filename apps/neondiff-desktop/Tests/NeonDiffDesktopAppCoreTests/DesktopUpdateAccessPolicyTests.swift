@@ -93,6 +93,8 @@ import Testing
 
     @Test func sparkleErrorsMapToDistinctCustomerStates() {
         #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 1001) == .noUpdate)
+        #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 1000) == .feedInvalid)
+        #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 1002) == .feedInvalid)
         #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 2001) == .networkError)
         #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 3001) == .signatureError)
         #expect(DesktopUpdateCycleResult.classify(sparkleErrorCode: 3002) == .signatureError)

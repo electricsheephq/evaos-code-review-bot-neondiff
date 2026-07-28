@@ -75,6 +75,7 @@ package enum DesktopUpdateAccessPolicy {
 
 package enum DesktopUpdateCycleResult: Equatable, Sendable {
     case noUpdate
+    case feedInvalid
     case networkError
     case signatureError
     case cancelled
@@ -84,7 +85,9 @@ package enum DesktopUpdateCycleResult: Equatable, Sendable {
         switch sparkleErrorCode {
         case 1001:
             .noUpdate
-        case 1000, 1002, 2001:
+        case 1000, 1002:
+            .feedInvalid
+        case 2001:
             .networkError
         case 3001, 3002:
             .signatureError

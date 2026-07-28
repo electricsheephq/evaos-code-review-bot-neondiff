@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const script = "apps/neondiff-desktop/script/build_and_run.sh";
+const signedUpdateBoundary = {
+  NEONDIFF_SPARKLE_FEED_URL: "https://www.neondiff.com/appcast-beta.xml",
+  NEONDIFF_SPARKLE_PUBLIC_ED_KEY: "CI_ONLY_NOT_A_RELEASE_KEY"
+};
 
 function checkContract(overrides: Record<string, string> = {}) {
   return spawnSync(script, ["production-contract-check"], {
@@ -25,7 +29,8 @@ describe("NeonDiff desktop B0 production bundle contract", () => {
       NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
       NEONDIFF_DESKTOP_PAID_BETA_CONTRACT: "paid-mac-beta-v1",
       NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED: "true",
-      NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN: "https://neondiff-license.fly.dev"
+      NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN: "https://neondiff-license.fly.dev",
+      ...signedUpdateBoundary
     });
     expect(managed.status).toBe(0);
     expect(managed.stdout.trim()).toBe("managed");
@@ -35,7 +40,8 @@ describe("NeonDiff desktop B0 production bundle contract", () => {
     const result = checkContract({
       NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
       NEONDIFF_DESKTOP_PAID_BETA_CONTRACT: "paid-mac-beta-byo-v1",
-      NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED: "true"
+      NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED: "true",
+      ...signedUpdateBoundary
     });
 
     expect(result.status).toBe(0);
@@ -52,14 +58,16 @@ describe("NeonDiff desktop B0 production bundle contract", () => {
       },
       {
         NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
-        NEONDIFF_DESKTOP_PAID_BETA_CONTRACT: "paid-mac-beta-byo-v1"
+        NEONDIFF_DESKTOP_PAID_BETA_CONTRACT: "paid-mac-beta-byo-v1",
+        ...signedUpdateBoundary
       },
       {
         NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
         NEONDIFF_DESKTOP_PAID_BETA_CONTRACT: "paid-mac-beta-byo-v1",
         NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED: "true",
         NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED: "true",
-        NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN: "https://neondiff-license.fly.dev"
+        NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN: "https://neondiff-license.fly.dev",
+        ...signedUpdateBoundary
       }
     ];
 
@@ -68,5 +76,31 @@ describe("NeonDiff desktop B0 production bundle contract", () => {
       expect(result.status).not.toBe(0);
       expect(result.stdout).toBe("");
     }
+  });
+
+  it("requires a nonblank signed update boundary for every Release configuration", () => {
+    const missing = checkContract({
+      NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release"
+    });
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toContain("A signed Sparkle feed is required for this release build");
+
+    const whitespaceKey = checkContract({
+      NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
+      NEONDIFF_SPARKLE_FEED_URL: "https://www.neondiff.com/appcast-beta.xml",
+      NEONDIFF_SPARKLE_PUBLIC_ED_KEY: "   "
+    });
+    expect(whitespaceKey.status).toBe(2);
+    expect(whitespaceKey.stderr).toContain(
+      "Sparkle feed and public key must not contain surrounding whitespace"
+    );
+
+    const disabled = checkContract({
+      NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
+      NEONDIFF_SPARKLE_REQUIRED: "0",
+      ...signedUpdateBoundary
+    });
+    expect(disabled.status).toBe(2);
+    expect(disabled.stderr).toContain("Release builds require NEONDIFF_SPARKLE_REQUIRED=1");
   });
 });

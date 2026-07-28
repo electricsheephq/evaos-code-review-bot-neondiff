@@ -54,6 +54,7 @@ final class NeonUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate
         case .checking: "CHECKING"
         case .updateAvailable: "UPDATE AVAILABLE"
         case .upToDate: "UP TO DATE"
+        case .feedInvalid: "FEED ERROR"
         case .networkError: "NETWORK ERROR"
         case .signatureError: "SIGNATURE ERROR"
         case .failed: "UPDATE ERROR"
@@ -74,6 +75,8 @@ final class NeonUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate
             "A signed NeonDiff update is available."
         case .upToDate:
             "This Mac has the newest eligible NeonDiff beta."
+        case .feedInvalid:
+            "The signed NeonDiff update feed is invalid. No update was installed."
         case .networkError:
             "NeonDiff could not reach the update feed. Check your connection and try again."
         case .signatureError:
@@ -176,6 +179,9 @@ final class NeonUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate
         case .signatureError:
             runtimeStatus = .signatureError
             lastAction = "Update rejected: signature verification failed"
+        case .feedInvalid:
+            runtimeStatus = .feedInvalid
+            lastAction = "Update check failed: signed feed is invalid"
         case .networkError:
             runtimeStatus = .networkError
             lastAction = "Update check failed: feed unavailable"
@@ -253,6 +259,7 @@ private enum RuntimeStatus {
     case checking
     case updateAvailable
     case upToDate
+    case feedInvalid
     case networkError
     case signatureError
     case failed(String)

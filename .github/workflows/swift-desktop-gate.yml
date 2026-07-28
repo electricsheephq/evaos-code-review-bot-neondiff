@@ -408,6 +408,8 @@ jobs:
         timeout-minutes: 5
         env:
           RELEASE_ARCHIVE: ${{ runner.temp }}/NeonDiffDesktop-release.xcarchive
+          NEONDIFF_SPARKLE_FEED_URL: https://ci.invalid/neondiff/appcast-beta.xml
+          NEONDIFF_SPARKLE_PUBLIC_ED_KEY: CI_ONLY_NOT_A_RELEASE_KEY
         run: |
           set -euo pipefail
           NEONDIFF_DESKTOP_DIST_DIR="$PWD/apps/neondiff-desktop/dist-release" \
