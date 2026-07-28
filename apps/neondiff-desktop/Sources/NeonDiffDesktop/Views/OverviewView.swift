@@ -420,7 +420,7 @@ struct OverviewView: View {
             Button {
                 model.openLocalWorkerUpdateGuide()
             } label: {
-                Label("View Worker Update Steps", systemImage: "arrow.down.circle")
+                Label("Install / Update Local Worker", systemImage: "arrow.down.circle")
             }
             .buttonStyle(ReferenceOutlineButtonStyle())
             .accessibilityIdentifier("neondiff-worker-update-guide")

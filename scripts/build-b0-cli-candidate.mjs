@@ -237,6 +237,11 @@ function main() {
       ["--github-app-id", "--github-app-private-key-stdin"],
       "BYO GitHub verification"
     );
+    const reviewFlags = requireFlags(
+      parseHelp(installedBinary, "review-pr"),
+      ["--expected-config-revision", "--zcode"],
+      "dry-to-live review"
+    );
 
     manifest = {
       schemaVersion: 1,
@@ -265,6 +270,7 @@ function main() {
         reportedVersion,
         activationFlags,
         githubDoctorFlags,
+        reviewFlags,
         isolatedInstallPassed: true
       },
       distribution: {
@@ -280,7 +286,7 @@ function main() {
       proofBoundary: {
         allows: [
           "exact clean protected-main source was packed with version-only ephemeral metadata",
-          "isolated installed CLI exposes the B0 native activation and BYO GitHub verification flags"
+          "isolated installed CLI exposes the B0 native activation, BYO GitHub verification, and exact dry-to-live review flags"
         ],
         excludes: [
           "private bucket upload or authenticated readback",

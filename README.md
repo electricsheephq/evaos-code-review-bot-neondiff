@@ -102,6 +102,15 @@ package. To preview without changing your machine:
 curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
 ```
 
+Invite-only B0 Mac candidates use a separate checksum-bound private worker
+bundle rather than an unpublished npm version or an unpinned source checkout.
+When the app reports **Worker update required**, choose **Install / Update Local
+Worker** and follow the exact invite checksums plus the dry-run-first update and
+rollback commands in [docs/SETUP.md](docs/SETUP.md#update-an-existing-local-worker).
+This preserves the existing config, LaunchAgent identity/environment, provider
+state, repository allowlist, and credential stores. It is not a public npm,
+GitHub Release, Sparkle, or automatic worker-update claim.
+
 Source checkout fallback:
 
 ```bash
