@@ -285,6 +285,36 @@ describe("desktop config CLI", () => {
           },
           "openai-compatible": {
             apiKeyEnv: "NEONDIFF_PROVIDER_API_KEY"
+          },
+          "openrouter:free": {
+            enabled: false,
+            adapter: "openai-compatible",
+            displayName: "OpenRouter Free",
+            baseUrl: "https://openrouter.example.test/v1",
+            model: "openrouter/free",
+            authMode: "api-key-env",
+            apiKeyEnv: "OPENROUTER_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          },
+          "vendor.preview": {
+            enabled: false,
+            adapter: "openai-compatible",
+            displayName: "Vendor Preview",
+            baseUrl: "https://vendor.example.test/v1",
+            model: "vendor-preview",
+            authMode: "api-key-env",
+            apiKeyEnv: "VENDOR_API_KEY",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
           }
         }
       }
@@ -309,7 +339,6 @@ describe("desktop config CLI", () => {
     });
 
     const output = await runConfig(["config", "patch", "--config", configPath, "--input", patchPath]);
-
     expect(output).toMatchObject({
       ok: true,
       dryRun: true,
@@ -324,11 +353,35 @@ describe("desktop config CLI", () => {
         "providers.providers.ollama-local.structuredOutputMode",
         "providers.providers.ollama-local.capabilities.review",
         "providers.providers.ollama-local.capabilities.jsonOutput",
-        "providers.providers.openai-compatible.apiKeyEnv"
+        "providers.providers.openai-compatible.apiKeyEnv",
+        "providers.providers.openrouter:free.enabled",
+        "providers.providers.openrouter:free.adapter",
+        "providers.providers.openrouter:free.displayName",
+        "providers.providers.openrouter:free.baseUrl",
+        "providers.providers.openrouter:free.model",
+        "providers.providers.openrouter:free.authMode",
+        "providers.providers.openrouter:free.apiKeyEnv",
+        "providers.providers.openrouter:free.capabilities.review",
+        "providers.providers.openrouter:free.capabilities.jsonOutput",
+        "providers.providers.openrouter:free.capabilities.local",
+        "providers.providers.openrouter:free.capabilities.streaming",
+        "providers.providers.vendor.preview.enabled",
+        "providers.providers.vendor.preview.adapter",
+        "providers.providers.vendor.preview.displayName",
+        "providers.providers.vendor.preview.baseUrl",
+        "providers.providers.vendor.preview.model",
+        "providers.providers.vendor.preview.authMode",
+        "providers.providers.vendor.preview.apiKeyEnv",
+        "providers.providers.vendor.preview.capabilities.review",
+        "providers.providers.vendor.preview.capabilities.jsonOutput",
+        "providers.providers.vendor.preview.capabilities.local",
+        "providers.providers.vendor.preview.capabilities.streaming"
       ]
     });
     expect(output.config.providers.defaultProviderId).toBe("ollama-local");
     expect(output.config.providers.providers["openai-compatible"].apiKeyEnv).toBe("NEONDIFF_PROVIDER_API_KEY");
+    expect(output.config.providers.providers["openrouter:free"].model).toBe("openrouter/free");
+    expect(output.config.providers.providers["vendor.preview"].model).toBe("vendor-preview");
 
     const rejected = await runConfig(["config", "patch", "--config", configPath, "--input", secretPatchPath]);
     expect(rejected).toMatchObject({

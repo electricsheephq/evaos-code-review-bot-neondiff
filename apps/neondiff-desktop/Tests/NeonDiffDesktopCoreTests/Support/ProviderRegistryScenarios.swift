@@ -6,7 +6,7 @@ import Darwin
   func runProviderRegistryParsingAndPatchContracts() async throws -> [LegacyCoreCheckAssertion] {
       let context = LegacyCoreCheckRecorder()
     let providerRegistrySnapshot = ConfigInspectParser.parse(
-        #"{"ok":true,"command":"config inspect","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"zcode":{"model":"zcode-model","cliPath":"zcode","appConfigPath":"zcode.json"},"desktop":{"openAICompatibleEndpoint":"https://legacy.example/v1"},"providers":{"defaultProviderId":"gateway","providers":{"gateway":{"enabled":true,"adapter":"openai-compatible","displayName":"Gateway","baseUrl":"https://saved.example/v1","model":"saved-model","authMode":"api-key-env"},"disabled":{"enabled":false,"adapter":"openai-compatible","displayName":"Disabled","baseUrl":"https://disabled.example/v1","model":"disabled-model","authMode":"api-key-env"},"zcode":{"enabled":true,"adapter":"zcode","displayName":"ZCode","model":"zcode-model","authMode":"zcode-app-config"}}}}}"#,
+        #"{"ok":true,"command":"config inspect","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":{"zcode":{"model":"zcode-model","cliPath":"zcode","appConfigPath":"zcode.json"},"desktop":{"openAICompatibleEndpoint":"https://legacy.example/v1"},"providers":{"defaultProviderId":"gateway","providers":{"gateway":{"enabled":true,"adapter":"openai-compatible","displayName":"Gateway","baseUrl":"https://saved.example/v1","model":"saved-model","authMode":"api-key-env"},"disabled":{"enabled":false,"adapter":"openai-compatible","displayName":"Disabled","baseUrl":"https://disabled.example/v1","model":"disabled-model","authMode":"api-key-env"},"masked":{"enabled":false,"adapter":"openai-compatible","displayName":"Masked","model":"prefix-[redacted-secret]","authMode":"api-key-env"},"native":{"enabled":false,"adapter":"anthropic","displayName":"Anthropic","model":"claude-sonnet-4-5","authMode":"api-key-env"},"zcode":{"enabled":true,"adapter":"zcode","displayName":"ZCode","model":"zcode-model","authMode":"zcode-app-config"}}}}}"#,
         providerKeyStored: true,
         licenseKeyStored: false
     )
@@ -24,13 +24,23 @@ import Darwin
         let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
         let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
         let selectedProviderPatch = providerPatchEntries?["gateway"] as? [String: Any]
+        let disabledProviderPatch = providerPatchEntries?["disabled"] as? [String: Any]
+        let maskedProviderPatch = providerPatchEntries?["masked"] as? [String: Any]
+        let nativeProviderPatch = providerPatchEntries?["native"] as? [String: Any]
+        let zcodeProviderPatch = providerPatchEntries?["zcode"] as? [String: Any]
         context.expect(
             selectedProviderPatch?["baseUrl"] as? String == "https://saved.example/v1"
                 && selectedProviderPatch?["enabled"] as? Bool == true
                 && selectedProviderPatch?["adapter"] as? String == "openai-compatible"
                 && selectedProviderPatch?["displayName"] as? String == "Gateway"
-                && selectedProviderPatch?["authMode"] as? String == "api-key-env",
-            "provider patch uses the selected saved registry target"
+                && selectedProviderPatch?["authMode"] as? String == "api-key-env"
+                && disabledProviderPatch?["enabled"] as? Bool == false
+                && disabledProviderPatch?["model"] as? String == "disabled-model"
+                && maskedProviderPatch?["model"] == nil
+                && nativeProviderPatch?["baseUrl"] == nil
+                && zcodeProviderPatch?["adapter"] as? String == "zcode"
+                && zcodeProviderPatch?["authMode"] as? String == "zcode-app-config",
+            "provider patch preserves every saved registry target while selecting the requested provider"
         )
         context.expect(providerPatchZCode?["providerId"] == nil, "direct provider patch preserves the existing ZCode execution provider")
         context.expect(providerPatchZCode?["model"] as? String == "zcode-model", "direct provider patch preserves the existing ZCode execution model")
@@ -39,7 +49,7 @@ import Darwin
             Set(providerPatchObject?.keys.map { $0 } ?? []) == Set(["zcode", "providers"])
                 && Set(providerPatchZCode?.keys.map { $0 } ?? []) == Set(["cliPath", "appConfigPath", "model"])
                 && Set(providerPatchRegistry?.keys.map { $0 } ?? []) == Set(["defaultProviderId", "providers"])
-                && Set(providerPatchEntries?.keys.map { $0 } ?? []) == Set(["gateway"])
+                && Set(providerPatchEntries?.keys.map { $0 } ?? []) == Set(["gateway", "disabled", "masked", "native", "zcode"])
                 && Set(selectedProviderPatch?.keys.map { $0 } ?? []) == Set([
                     "enabled", "adapter", "displayName", "authMode", "baseUrl", "model"
                 ]),
