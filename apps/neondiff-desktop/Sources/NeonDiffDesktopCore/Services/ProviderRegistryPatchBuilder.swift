@@ -27,15 +27,18 @@ public enum ProviderRegistryPatchBuilder {
             zcodePatch["model"] = selectedModel
             zcodePatch["providerId"] = target.id
         }
+        var selectedProviderPatch: [String: Any] = [
+            "model": selectedModel
+        ]
+        if target.authMode != "zcode-app-config" {
+            selectedProviderPatch["baseUrl"] = target.baseUrl
+        }
         let patch: [String: Any] = [
             "zcode": zcodePatch,
             "providers": [
                 "defaultProviderId": target.id,
                 "providers": [
-                    target.id: [
-                        "baseUrl": target.baseUrl,
-                        "model": selectedModel
-                    ]
+                    target.id: selectedProviderPatch
                 ]
             ]
         ]

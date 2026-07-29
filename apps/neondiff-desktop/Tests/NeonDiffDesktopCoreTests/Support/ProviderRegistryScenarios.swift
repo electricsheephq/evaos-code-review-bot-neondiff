@@ -47,10 +47,17 @@ import Darwin
         let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
         let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
         let providerPatchZCode = providerPatchObject?["zcode"] as? [String: Any]
+        let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
+        let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
+        let selectedProviderPatch = providerPatchEntries?["zcode"] as? [String: Any]
         context.expect(
             providerPatchZCode?["providerId"] as? String == "zcode"
                 && providerPatchZCode?["model"] as? String == "zcode-model",
             "ZCode-managed provider patch binds the exact selected execution provider and model"
+        )
+        context.expect(
+            selectedProviderPatch?["baseUrl"] == nil,
+            "ZCode app-config patch preserves an omitted endpoint instead of writing an invalid empty URL"
         )
     } else {
         context.expect(false, "ZCode-managed registry snapshot remains parseable")
