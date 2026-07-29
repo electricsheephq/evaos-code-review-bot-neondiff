@@ -61,6 +61,6 @@ public enum ProviderRegistryPatchBuilder {
     }
 
     private static func isRedactedMetadata(_ value: String) -> Bool {
-        value == "[redacted-secret]" || value == "[env-var-name]"
+        value.contains("[redacted-secret]") || value.contains("[env-var-name]")
     }
 }
