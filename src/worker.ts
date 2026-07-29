@@ -2072,7 +2072,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         pullNumber: pull.number,
         headSha: pull.head.sha,
         ...(input.configRevision ? { configRevision: input.configRevision } : {}),
-        event: plan.event
+        event: plan.event,
+        ...(scopedActivationBaselineOverride
+          ? { allowActivationBaselineSupersession: true }
+          : {})
       });
       if (!recorded) return "skipped_processed";
       return manualReviewRequested ? "reviewed_command" : "reviewed";

@@ -154,6 +154,40 @@ describe("worker context budget preflight", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("completes a scoped dry run over an existing activation baseline", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scoped-baseline-override-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(400, "b".repeat(40));
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, [pullFile("src/scoped.ts", 20)]),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true,
+      allowActivationBaselineCommandLookup: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toHaveLength(1);
+    expect(createdReviews).toEqual([]);
+    const recorded = state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha);
+    expect(recorded).toMatchObject({ status: "dry_run" });
+    expect(recorded?.error).toBeUndefined();
+    state.close();
+  });
+
   it("skips oversized prompts before provider execution and records operator evidence", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-skip-"));
     roots.push(root);
