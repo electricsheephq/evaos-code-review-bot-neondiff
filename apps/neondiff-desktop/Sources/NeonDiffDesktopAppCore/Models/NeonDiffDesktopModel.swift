@@ -835,7 +835,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var scopedReviewProviderReady: Bool {
         providerSetupReady
             && providers.selectedRegistryTarget?.authMode == "zcode-app-config"
-            && providers.zcodeProviderId == providers.selectedProviderId
+            && !providers.zcodeProviderId
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
     }
 
     /// Account entitlement is server authority for the selected existing bot's
@@ -1963,16 +1965,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         ProviderConfigurationSnapshot(providers: providers, configPath: configPath)
     }
 
-    /// Provider patch generation writes the selected ZCode app-config target as
-    /// the explicit execution binding. Model that intended result separately
-    /// from the currently loaded config so legacy workers can preview and apply
-    /// the migration without a dry-run response authorizing useful work.
+    /// The provider registry and ZCode app config use distinct identifier
+    /// namespaces. Preserve the execution binding loaded from ZCode instead of
+    /// inventing one from the selected NeonDiff registry entry.
     private var desiredProviderConfigurationSnapshot: ProviderConfigurationSnapshot {
-        ProviderConfigurationSnapshot(
-            providers: providers,
-            configPath: configPath,
-            bindSelectedZCodeProvider: true
-        )
+        ProviderConfigurationSnapshot(providers: providers, configPath: configPath)
     }
 
     private var currentControlCenterSnapshot: DesktopControlCenterSnapshot {
@@ -5772,19 +5769,13 @@ private struct ProviderConfigurationSnapshot: Equatable, Sendable {
 
     init(
         providers: ProviderSettings,
-        configPath: String,
-        bindSelectedZCodeProvider: Bool = false
+        configPath: String
     ) {
         self.configPath = configPath
         zcodeModel = providers.zcodeModel
         zcodeCliPath = providers.zcodeCliPath
         zcodeAppConfigPath = providers.zcodeAppConfigPath
-        if bindSelectedZCodeProvider,
-           providers.selectedRegistryTarget?.authMode == "zcode-app-config" {
-            zcodeProviderId = providers.selectedProviderId
-        } else {
-            zcodeProviderId = providers.zcodeProviderId
-        }
+        zcodeProviderId = providers.zcodeProviderId
         selectedProviderId = providers.selectedProviderId
         registryTargets = providers.registryTargets
     }

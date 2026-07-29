@@ -128,33 +128,16 @@ import NeonDiffDesktopCore
         #expect(arguments.contains("true"))
     }
 
-    @Test func legacyZCodeConfigCanPreviewItsMissingExplicitProviderBinding() {
+    @Test func legacyZCodeConfigDoesNotInventBindingOrOfferNoOpApply() {
         let fixture = ModelDependencyFixture(productionBoundary: .testVerified)
         let revisionBefore = String(repeating: "a", count: 64)
-        let revisionAfter = String(repeating: "b", count: 64)
         fixture.loadConfig(
             #"{"ok":true,"command":"config inspect","revision":"\#(revisionBefore)","config":{"pilotRepos":[],"zcode":{"model":"GLM-5.2","cliPath":"/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs","appConfigPath":"/Volumes/LEXAR/zcode/.zcode/v2/config.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"GLM/Z.ai through ZCode","baseUrl":"","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#
         )
 
         #expect(fixture.model.providerSetupReady)
         #expect(!fixture.model.scopedReviewProviderReady)
-        #expect(fixture.model.canPreviewProviderConfig)
-
-        let previewJSON = #"{"ok":true,"command":"config patch","dryRun":true,"wrote":false,"revisionBefore":"\#(revisionBefore)","revisionAfter":"\#(revisionBefore)","config":{"pilotRepos":[],"zcode":{"providerId":"zcode-glm","model":"GLM-5.2","cliPath":"/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs","appConfigPath":"/Volumes/LEXAR/zcode/.zcode/v2/config.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"GLM/Z.ai through ZCode","baseUrl":"","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#
-        fixture.model.applyProviderPatchResultForTesting(
-            CLIRunResult(exitCode: 0, stdout: previewJSON, stderr: ""),
-            mode: .preview
-        )
-        #expect(fixture.model.canApplyProviderConfig)
-        #expect(!fixture.model.providerSetupReady)
-        #expect(!fixture.model.scopedReviewProviderReady)
-
-        let applyJSON = #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"\#(revisionBefore)","revisionAfter":"\#(revisionAfter)","config":{"pilotRepos":[],"zcode":{"providerId":"zcode-glm","model":"GLM-5.2","cliPath":"/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs","appConfigPath":"/Volumes/LEXAR/zcode/.zcode/v2/config.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"GLM/Z.ai through ZCode","baseUrl":"","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#
-        fixture.model.applyProviderPatchResultForTesting(
-            CLIRunResult(exitCode: 0, stdout: applyJSON, stderr: ""),
-            mode: .apply
-        )
-        #expect(fixture.model.providerSetupReady)
-        #expect(fixture.model.scopedReviewProviderReady)
+        #expect(!fixture.model.canPreviewProviderConfig)
+        #expect(!fixture.model.canApplyProviderConfig)
     }
 }
