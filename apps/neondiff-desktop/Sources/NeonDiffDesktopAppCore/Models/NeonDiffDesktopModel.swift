@@ -1942,17 +1942,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && providerLoadedSnapshot?.configPath == configPath
             && providerLoadedRevision != nil
             && providerLoadedSnapshot != nil
-            && (
-                providerLoadedSnapshot != currentProviderConfigurationSnapshot
-                    || selectedZCodeBindingNeedsExplicitWrite
-            )
+            && providerLoadedSnapshot != desiredProviderConfigurationSnapshot
             && !isConfigPatchInProgress
             && !isConfigInspectInProgress
     }
 
     package var canApplyProviderConfig: Bool {
         canEditProviderConfiguration
-            && previewedProviderSnapshot == currentProviderConfigurationSnapshot
+            && previewedProviderSnapshot == desiredProviderConfigurationSnapshot
             && previewedProviderExpectedRevision == providerLoadedRevision
             && !isConfigPatchInProgress
             && !isConfigInspectInProgress
@@ -1966,18 +1963,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         ProviderConfigurationSnapshot(providers: providers, configPath: configPath)
     }
 
-    /// Older local agents may have a complete ZCode app-config provider entry
-    /// without the explicit `zcode.providerId` binding required by scoped
-    /// native reviews. Keep that review boundary fail closed, but expose the
-    /// existing preview/apply migration so the user can write and read back the
-    /// exact selected provider instead of becoming trapped.
-    private var selectedZCodeBindingNeedsExplicitWrite: Bool {
-        guard let target = providers.selectedRegistryTarget,
-              target.authMode == "zcode-app-config"
-        else {
-            return false
-        }
-        return providers.zcodeProviderId != target.id
+    /// Provider patch generation writes the selected ZCode app-config target as
+    /// the explicit execution binding. Model that intended result separately
+    /// from the currently loaded config so legacy workers can preview and apply
+    /// the migration without a dry-run response authorizing useful work.
+    private var desiredProviderConfigurationSnapshot: ProviderConfigurationSnapshot {
+        ProviderConfigurationSnapshot(
+            providers: providers,
+            configPath: configPath,
+            bindSelectedZCodeProvider: true
+        )
     }
 
     private var currentControlCenterSnapshot: DesktopControlCenterSnapshot {
@@ -4660,7 +4655,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         arguments.append(contentsOf: ["--expected-revision", expectedRevision])
         let proof = PendingProviderPatchProof(
             id: UUID(),
-            snapshot: currentProviderConfigurationSnapshot,
+            snapshot: desiredProviderConfigurationSnapshot,
             expectedRevision: expectedRevision,
             mode: dryRun ? .preview : .apply
         )
@@ -5630,7 +5625,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         pendingProviderPatchProof = PendingProviderPatchProof(
             id: UUID(),
-            snapshot: currentProviderConfigurationSnapshot,
+            snapshot: desiredProviderConfigurationSnapshot,
             expectedRevision: expectedRevision,
             mode: mode
         )
@@ -5652,7 +5647,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         pendingProviderPatchProof = PendingProviderPatchProof(
             id: UUID(),
-            snapshot: currentProviderConfigurationSnapshot,
+            snapshot: desiredProviderConfigurationSnapshot,
             expectedRevision: expectedRevision,
             mode: mode
         )
@@ -5771,14 +5766,25 @@ private struct ProviderConfigurationSnapshot: Equatable, Sendable {
     let zcodeModel: String
     let zcodeCliPath: String
     let zcodeAppConfigPath: String
+    let zcodeProviderId: String
     let selectedProviderId: String
     let registryTargets: [ProviderRegistryTarget]
 
-    init(providers: ProviderSettings, configPath: String) {
+    init(
+        providers: ProviderSettings,
+        configPath: String,
+        bindSelectedZCodeProvider: Bool = false
+    ) {
         self.configPath = configPath
         zcodeModel = providers.zcodeModel
         zcodeCliPath = providers.zcodeCliPath
         zcodeAppConfigPath = providers.zcodeAppConfigPath
+        if bindSelectedZCodeProvider,
+           providers.selectedRegistryTarget?.authMode == "zcode-app-config" {
+            zcodeProviderId = providers.selectedProviderId
+        } else {
+            zcodeProviderId = providers.zcodeProviderId
+        }
         selectedProviderId = providers.selectedProviderId
         registryTargets = providers.registryTargets
     }
