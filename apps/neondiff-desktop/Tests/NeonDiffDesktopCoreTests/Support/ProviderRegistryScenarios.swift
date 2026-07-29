@@ -24,7 +24,14 @@ import Darwin
         let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
         let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
         let selectedProviderPatch = providerPatchEntries?["gateway"] as? [String: Any]
-        context.expect(selectedProviderPatch?["baseUrl"] as? String == "https://saved.example/v1", "provider patch uses the selected saved registry target")
+        context.expect(
+            selectedProviderPatch?["baseUrl"] as? String == "https://saved.example/v1"
+                && selectedProviderPatch?["enabled"] as? Bool == true
+                && selectedProviderPatch?["adapter"] as? String == "openai-compatible"
+                && selectedProviderPatch?["displayName"] as? String == "Gateway"
+                && selectedProviderPatch?["authMode"] as? String == "api-key-env",
+            "provider patch uses the selected saved registry target"
+        )
         context.expect(providerPatchZCode?["providerId"] == nil, "direct provider patch preserves the existing ZCode execution provider")
         context.expect(providerPatchZCode?["model"] as? String == "zcode-model", "direct provider patch preserves the existing ZCode execution model")
         context.expect(!providerPatchText.contains("https://legacy.example/v1"), "legacy desktop endpoint cannot enter the provider registry patch")
@@ -33,7 +40,9 @@ import Darwin
                 && Set(providerPatchZCode?.keys.map { $0 } ?? []) == Set(["cliPath", "appConfigPath", "model"])
                 && Set(providerPatchRegistry?.keys.map { $0 } ?? []) == Set(["defaultProviderId", "providers"])
                 && Set(providerPatchEntries?.keys.map { $0 } ?? []) == Set(["gateway"])
-                && Set(selectedProviderPatch?.keys.map { $0 } ?? []) == Set(["baseUrl", "model"]),
+                && Set(selectedProviderPatch?.keys.map { $0 } ?? []) == Set([
+                    "enabled", "adapter", "displayName", "authMode", "baseUrl", "model"
+                ]),
             "provider registry patch contains only the explicit non-secret schema"
         )
     }
@@ -60,7 +69,11 @@ import Darwin
             "ZCode-managed provider patch binds the exact selected execution provider and model"
         )
         context.expect(
-            selectedProviderPatch?["model"] as? String == "zcode-model",
+            selectedProviderPatch?["model"] as? String == "zcode-model"
+                && selectedProviderPatch?["enabled"] as? Bool == true
+                && selectedProviderPatch?["adapter"] as? String == "zcode"
+                && selectedProviderPatch?["displayName"] as? String == "ZCode"
+                && selectedProviderPatch?["authMode"] as? String == "zcode-app-config",
             "ZCode registry patch preserves the selected model"
         )
         context.expect(

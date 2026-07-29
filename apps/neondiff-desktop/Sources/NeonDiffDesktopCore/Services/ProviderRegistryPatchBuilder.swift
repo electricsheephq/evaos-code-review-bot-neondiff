@@ -28,6 +28,10 @@ public enum ProviderRegistryPatchBuilder {
             zcodePatch["providerId"] = target.id
         }
         var selectedProviderPatch: [String: Any] = [
+            "enabled": target.enabled,
+            "adapter": target.adapter,
+            "displayName": target.displayName,
+            "authMode": target.authMode,
             "model": selectedModel
         ]
         if target.authMode != "zcode-app-config"
