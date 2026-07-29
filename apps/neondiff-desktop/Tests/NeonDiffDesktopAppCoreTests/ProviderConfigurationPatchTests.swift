@@ -127,4 +127,16 @@ import NeonDiffDesktopCore
         #expect(arguments.contains("--confirm"))
         #expect(arguments.contains("true"))
     }
+
+    @Test func legacyZCodeConfigCanPreviewItsMissingExplicitProviderBinding() {
+        let fixture = ModelDependencyFixture(productionBoundary: .testVerified)
+        let revision = String(repeating: "a", count: 64)
+        fixture.loadConfig(
+            #"{"ok":true,"command":"config inspect","revision":"\#(revision)","config":{"pilotRepos":[],"zcode":{"model":"GLM-5.2","cliPath":"/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs","appConfigPath":"/Volumes/LEXAR/zcode/.zcode/v2/config.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"GLM/Z.ai through ZCode","baseUrl":"","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#
+        )
+
+        #expect(fixture.model.providerSetupReady)
+        #expect(!fixture.model.scopedReviewProviderReady)
+        #expect(fixture.model.canPreviewProviderConfig)
+    }
 }

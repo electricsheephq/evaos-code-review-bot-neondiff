@@ -1942,7 +1942,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && providerLoadedSnapshot?.configPath == configPath
             && providerLoadedRevision != nil
             && providerLoadedSnapshot != nil
-            && providerLoadedSnapshot != currentProviderConfigurationSnapshot
+            && (
+                providerLoadedSnapshot != currentProviderConfigurationSnapshot
+                    || selectedZCodeBindingNeedsExplicitWrite
+            )
             && !isConfigPatchInProgress
             && !isConfigInspectInProgress
     }
@@ -1961,6 +1964,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private var currentProviderConfigurationSnapshot: ProviderConfigurationSnapshot {
         ProviderConfigurationSnapshot(providers: providers, configPath: configPath)
+    }
+
+    /// Older local agents may have a complete ZCode app-config provider entry
+    /// without the explicit `zcode.providerId` binding required by scoped
+    /// native reviews. Keep that review boundary fail closed, but expose the
+    /// existing preview/apply migration so the user can write and read back the
+    /// exact selected provider instead of becoming trapped.
+    private var selectedZCodeBindingNeedsExplicitWrite: Bool {
+        guard let target = providers.selectedRegistryTarget,
+              target.authMode == "zcode-app-config"
+        else {
+            return false
+        }
+        return providers.zcodeProviderId != target.id
     }
 
     private var currentControlCenterSnapshot: DesktopControlCenterSnapshot {
