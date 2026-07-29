@@ -74,9 +74,9 @@ import Darwin
         let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
         let selectedProviderPatch = providerPatchEntries?["zcode"] as? [String: Any]
         context.expect(
-            providerPatchZCode?["providerId"] as? String == "zcode"
+            providerPatchZCode?["providerId"] as? String == "prior-zcode"
                 && providerPatchZCode?["model"] as? String == "zcode-model",
-            "ZCode-managed provider patch binds the exact selected execution provider and model"
+            "ZCode-managed provider patch preserves the exact existing execution provider and selected model"
         )
         context.expect(
             selectedProviderPatch?["model"] as? String == "zcode-model"
@@ -92,6 +92,23 @@ import Darwin
         )
     } else {
         context.expect(false, "ZCode-managed registry snapshot remains parseable")
+    }
+
+    let unboundZCodeSnapshot = ConfigInspectParser.parse(
+        #"{"ok":true,"command":"config inspect","revision":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","config":{"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"zcode","displayName":"GLM/Z.ai through ZCode","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#,
+        providerKeyStored: false,
+        licenseKeyStored: false
+    )
+    if let providerSettings = unboundZCodeSnapshot?.providers {
+        let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
+        let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
+        let providerPatchZCode = providerPatchObject?["zcode"] as? [String: Any]
+        context.expect(
+            providerPatchZCode?["providerId"] == nil,
+            "an unbound ZCode execution provider stays unbound instead of inheriting the NeonDiff registry id"
+        )
+    } else {
+        context.expect(false, "unbound ZCode registry snapshot remains parseable")
     }
 
     let zcodeManagedEndpointSnapshot = ConfigInspectParser.parse(

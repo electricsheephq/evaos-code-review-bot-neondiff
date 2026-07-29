@@ -25,7 +25,11 @@ public enum ProviderRegistryPatchBuilder {
         ]
         if target.authMode == "zcode-app-config" {
             zcodePatch["model"] = selectedModel
-            zcodePatch["providerId"] = target.id
+            let existingProviderId = providers.zcodeProviderId
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !existingProviderId.isEmpty {
+                zcodePatch["providerId"] = existingProviderId
+            }
         }
         var providerPatches: [String: [String: Any]] = [:]
         for registryTarget in providers.registryTargets {
