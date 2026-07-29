@@ -44,6 +44,10 @@ import Darwin
         licenseKeyStored: false
     )
     if let providerSettings = zcodeManagedSnapshot?.providers {
+        context.expect(
+            providerSettings.selectedProviderEndpointIsEditable == false,
+            "ZCode app-config endpoints are read-only in the native provider editor"
+        )
         let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
         let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
         let providerPatchZCode = providerPatchObject?["zcode"] as? [String: Any]
@@ -54,6 +58,10 @@ import Darwin
             providerPatchZCode?["providerId"] as? String == "zcode"
                 && providerPatchZCode?["model"] as? String == "zcode-model",
             "ZCode-managed provider patch binds the exact selected execution provider and model"
+        )
+        context.expect(
+            selectedProviderPatch?["model"] as? String == "zcode-model",
+            "ZCode registry patch preserves the selected model"
         )
         context.expect(
             selectedProviderPatch?["baseUrl"] == nil,

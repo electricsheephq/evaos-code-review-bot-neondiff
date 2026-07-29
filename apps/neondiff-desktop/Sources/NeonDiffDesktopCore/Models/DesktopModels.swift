@@ -180,6 +180,10 @@ public struct ProviderSettings: Equatable {
         }
     }
 
+    public var selectedProviderEndpointIsEditable: Bool {
+        selectedRegistryTarget?.authMode != "zcode-app-config"
+    }
+
     public var selectedProviderModel: String {
         get { selectedRegistryTarget?.model ?? "" }
         set {
