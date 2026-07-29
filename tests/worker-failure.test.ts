@@ -1590,6 +1590,86 @@ describe("worker review failures", () => {
     state.close();
   });
 
+  it("lets an explicit scoped review pass an existing activation baseline", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-worker-scoped-baseline-override-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1231, "head-scoped-baseline-override");
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    let pullFileReads = 0;
+
+    await expect(reviewPull({
+      config,
+      github: {
+        listPullFiles: async () => {
+          pullFileReads += 1;
+          throw new Error("scoped review reached review work");
+        }
+      } as unknown as GitHubApi,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: false,
+      allowActivationBaselineCommandLookup: true
+    })).rejects.toThrow("scoped review reached review work");
+
+    expect(pullFileReads).toBe(1);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+    state.close();
+  });
+
+  it.each([
+    { label: "posted", status: "posted" as const, error: undefined },
+    { label: "dry-run", status: "dry_run" as const, error: undefined },
+    { label: "failed", status: "failed" as const, error: "provider failed" },
+    { label: "unrelated skipped", status: "skipped" as const, error: "policy_skip" }
+  ])("keeps $label processed heads suppressed for scoped review", async ({ status, error }) => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-worker-scoped-processed-skip-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(1232, `head-scoped-${status}`);
+    state.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: pull.number,
+      headSha: pull.head.sha,
+      status,
+      ...(error ? { error } : {})
+    });
+    let pullFileReads = 0;
+
+    const result = await reviewPull({
+      config,
+      github: {
+        listPullFiles: async () => {
+          pullFileReads += 1;
+          throw new Error("processed heads should not reach review work");
+        }
+      } as unknown as GitHubApi,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: false,
+      allowActivationBaselineCommandLookup: true
+    });
+
+    expect(result).toBe("skipped_processed");
+    expect(pullFileReads).toBe(0);
+    state.close();
+  });
+
   it("reconciles active queue status when reviewPull early-returns for an already posted direct head", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-direct-review-early-return-"));
     roots.push(root);

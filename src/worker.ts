@@ -1454,6 +1454,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     input.dryRun &&
     input.processedHeadPolicy === "refresh_dry_run" &&
     processed?.status === "dry_run";
+  const scopedActivationBaselineOverride =
+    input.allowActivationBaselineCommandLookup &&
+    isActivationBaselineProcessedReview(processed);
   const approvedDryRunTransition =
     input.processedHeadPolicy === "approved_dry_run" &&
     processed?.status === "dry_run" &&
@@ -1682,6 +1685,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     !approvedDryRunTransition &&
     !retryableApprovedDryRunPrePostFailure &&
     !refreshableDryRun &&
+    !scopedActivationBaselineOverride &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
