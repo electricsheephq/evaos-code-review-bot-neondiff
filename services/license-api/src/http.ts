@@ -6,7 +6,8 @@ import {
   issueCheckoutLicense,
   malformedIssuanceResult,
   parseIssuanceRequest,
-  validateBearerSecret
+  validateBearerSecret,
+  validateIssuanceAuthorization
 } from "./issuance.js";
 import {
   activate,
@@ -297,7 +298,13 @@ async function handleIssuanceRequest(
   if (!options.issuanceSecret) {
     return writeJson(res, 503, { status: "server", detail: "license issuance is not configured" });
   }
-  if (!validateBearerSecret(req.headers.authorization, options.issuanceSecret)) {
+  if (
+    !validateIssuanceAuthorization(
+      req.headers.authorization,
+      req.headers["x-neondiff-issuance-authorization"],
+      options.issuanceSecret
+    )
+  ) {
     return writeJson(res, 401, { status: "unauthorized", detail: "license issuance authorization failed" });
   }
 
