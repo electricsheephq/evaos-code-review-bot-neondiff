@@ -217,6 +217,41 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
+    @Test func cleanInstallBYOUnlocksAfterExactSetupAndActivation() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(doctorResult(
+                    readChecks: doctorReadCheck(repo: "acme/demo")
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                    stderr: ""
+                ))
+            ],
+            activationLicenseClient: ActiveBYOActivationClient(),
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
+        fixture.model.provideExistingActivationKey()
+        await fixture.model.submitActivation()
+
+        #expect(fixture.model.selectedAccountWorkspace == nil)
+        #expect(fixture.model.selectedBotInstallation == nil)
+        #expect(fixture.model.currentRepositoryActivationReady)
+        #expect(fixture.model.productionUsefulWorkAvailable)
+    }
+
     @Test func verificationFailsClosedUnlessDoctorChecksExactlyMatchEnabledRepositories() async throws {
         struct Scenario {
             let name: String
@@ -456,6 +491,24 @@ private let exactB0Boundary = DesktopProductionBoundary.resolve(infoDictionary: 
     "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
     "NeonDiffBYOGitHubEnabled": true
 ])
+
+private struct ActiveBYOActivationClient: ActivationLicenseClienting {
+    func activate(key _: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+        .active(ActivationEntitlementSummary(
+            status: .active,
+            repoVisibilityScope: "private",
+            privateRepoAllowed: true,
+            updateEntitlement: true,
+            expiresAt: nil,
+            plan: "fixture-paid",
+            seats: 1
+        ))
+    }
+
+    func revalidate(key _: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
+        .serviceError
+    }
+}
 
 private let fixturePrivateKeyLabel = "PRIVATE" + " KEY"
 private let fixturePrivateKey = """

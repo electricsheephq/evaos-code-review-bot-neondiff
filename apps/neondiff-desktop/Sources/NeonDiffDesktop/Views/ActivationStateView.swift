@@ -182,7 +182,9 @@ struct ActivationStateView: View {
             case .active:
                 EmptyView()
             default:
-                activationFlow(palette: palette)
+                if !model.existingLocalAgentAccessAvailable {
+                    activationFlow(palette: palette)
+                }
             }
         }
     }

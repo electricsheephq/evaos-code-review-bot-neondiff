@@ -360,9 +360,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return false
         }
         if dependencies.productionBoundary.byoGitHubEnabled {
-            guard existingLocalBotIdentityReady,
-                  selectedAccountEntitlementSupportsCurrentPath,
-                  byoGitHubCredentialOnboardingAvailable,
+            if existingLocalBotReconciliationMode {
+                guard selectedAccountEntitlementSupportsCurrentPath else {
+                    return false
+                }
+            }
+            guard byoGitHubCredentialOnboardingAvailable,
                   byoGitHubCredentialsVerified,
                   repositoryConfigurationReady,
                   currentRepositoryActivationReady,
@@ -3498,13 +3501,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 "GitHub access was verified, but current entitlement verification was cancelled safely."
             return
         }
-        if currentRepositoryActivationReady {
-            isBYOGitHubVerificationInProgress = false
-            byoGitHubCredentialStatus =
-                "Verified existing local agent App access and API-backed entitlement for \(repository)."
-            return
-        }
-
         applyActivationEvent(.verifyExistingEntitlement)
         guard activationState == .activationPending else {
             isBYOGitHubVerificationInProgress = false
@@ -3544,9 +3540,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     standardInput: nil,
                     timeout: 20
                 )
-                outcome = result.exitCode == 0
-                    ? CLIActivationLicenseClient.classify(stdout: result.stdout)
-                    : .serviceError
+                outcome = result.stdout.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty
+                    ? .serviceError
+                    : CLIActivationLicenseClient.classify(
+                        stdout: result.stdout
+                    )
             } catch let error as NeonDiffCLIError {
                 switch error {
                 case .timedOut, .cancelled, .cleanupTimedOut:
@@ -3560,14 +3560,23 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
             await MainActor.run {
                 guard activationGeneration
-                        == self.activationRequestGeneration,
-                      self.workspaceContextGeneration
+                        == self.activationRequestGeneration
+                else {
+                    return
+                }
+                guard self.workspaceContextGeneration
                         == expectedWorkspaceGeneration,
                       self.cliPath == expectedCLIPath,
                       self.configPath == expectedConfigPath,
                       self.selectedReviewRepository?
                         .caseInsensitiveCompare(repository) == .orderedSame
                 else {
+                    self.isBYOGitHubVerificationInProgress = false
+                    self.applyActivationEvent(.activationServiceError)
+                    self.lastError =
+                        "The local worker, config, or Review Target changed before entitlement verification finished."
+                    self.byoGitHubCredentialStatus =
+                        "GitHub access was verified, but stale entitlement proof was discarded. Verify existing access again."
                     return
                 }
                 self.isBYOGitHubVerificationInProgress = false
@@ -3606,6 +3615,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case "public":
             guard summary.repoVisibilityScope == "all"
                     || summary.repoVisibilityScope == "public"
+                    || summary.repoVisibilityScope == "private"
             else {
                 return .scopeConflict
             }
