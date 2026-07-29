@@ -32,6 +32,7 @@ struct ProviderSettingsView: View {
                     }
                     .pickerStyle(.menu)
                     OperatorTextField(title: "Endpoint", text: $model.providers.selectedProviderBaseUrl)
+                        .disabled(!model.providers.selectedProviderEndpointIsEditable)
                     OperatorTextField(title: "Model", text: $model.providers.selectedProviderModel)
                     if let target = model.providers.selectedRegistryTarget {
                         Text("\(target.adapter) · \(target.authMode) · \(target.enabled ? "enabled" : "disabled")")

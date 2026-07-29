@@ -44,16 +44,50 @@ import Darwin
         licenseKeyStored: false
     )
     if let providerSettings = zcodeManagedSnapshot?.providers {
+        context.expect(
+            providerSettings.selectedProviderEndpointIsEditable == false,
+            "ZCode app-config endpoints are read-only in the native provider editor"
+        )
         let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
         let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
         let providerPatchZCode = providerPatchObject?["zcode"] as? [String: Any]
+        let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
+        let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
+        let selectedProviderPatch = providerPatchEntries?["zcode"] as? [String: Any]
         context.expect(
             providerPatchZCode?["providerId"] as? String == "zcode"
                 && providerPatchZCode?["model"] as? String == "zcode-model",
             "ZCode-managed provider patch binds the exact selected execution provider and model"
         )
+        context.expect(
+            selectedProviderPatch?["model"] as? String == "zcode-model",
+            "ZCode registry patch preserves the selected model"
+        )
+        context.expect(
+            selectedProviderPatch?["baseUrl"] == nil,
+            "ZCode app-config patch preserves an omitted endpoint instead of writing an invalid empty URL"
+        )
     } else {
         context.expect(false, "ZCode-managed registry snapshot remains parseable")
+    }
+
+    let zcodeManagedEndpointSnapshot = ConfigInspectParser.parse(
+        #"{"ok":true,"command":"config inspect","revision":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","config":{"zcode":{"model":"zcode-model","cliPath":"zcode","appConfigPath":"zcode.json","providerId":"zcode"},"providers":{"defaultProviderId":"zcode","providers":{"zcode":{"enabled":true,"adapter":"zcode","displayName":"ZCode","baseUrl":"https://zcode.example/v1","model":"zcode-model","authMode":"zcode-app-config"}}}}}"#,
+        providerKeyStored: false,
+        licenseKeyStored: false
+    )
+    if let providerSettings = zcodeManagedEndpointSnapshot?.providers {
+        let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
+        let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
+        let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
+        let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
+        let selectedProviderPatch = providerPatchEntries?["zcode"] as? [String: Any]
+        context.expect(
+            selectedProviderPatch?["baseUrl"] as? String == "https://zcode.example/v1",
+            "ZCode app-config patch preserves an explicit nonempty endpoint"
+        )
+    } else {
+        context.expect(false, "ZCode-managed registry snapshot with an endpoint remains parseable")
     }
 
     let emptyModelSnapshot = ConfigInspectParser.parse(
