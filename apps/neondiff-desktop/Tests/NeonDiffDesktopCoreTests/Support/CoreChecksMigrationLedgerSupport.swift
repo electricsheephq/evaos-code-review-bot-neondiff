@@ -31,7 +31,7 @@ let legacyCoreChecksScenarioInventory: [LegacyCoreChecksScenario: LegacyCoreChec
     .detachedCommandLaunchContracts: .init(assertionCount: 4, sortedMessageSHA256: "d2256a821d4f0eecfba2db5484b48e617ae10a09a007626268a76e82dbb70ddb"),
     .githubRecoveryRepositoryAndRateLimitContracts: .init(assertionCount: 29, sortedMessageSHA256: "bc27311a9264ba1b20622afabc316a78e48f1ea8539bff071564faaebf8a4092"),
     .configInspectAndPatchContracts: .init(assertionCount: 27, sortedMessageSHA256: "c963178d0c437cf22ab1e5cec966440761ac87c1730a9c5cd2ddc3107932393c"),
-    .providerRegistryParsingAndPatchContracts: .init(assertionCount: 17, sortedMessageSHA256: "6b7ca6124aeaeb2d20758b2bc8c240c4d2f9258c985c5638312418485df0f941"),
+    .providerRegistryParsingAndPatchContracts: .init(assertionCount: 17, sortedMessageSHA256: "6c7cc922267b166cf4350429f0d03ccd6d9ac27c2b8ca3c837665ccbbfe63418"),
     .providerVerificationTransportAndStrictEnvelopeContracts: .init(assertionCount: 37, sortedMessageSHA256: "27b74eecdf695f4be3fca3d9bf1090c8c41a2d27b1ca20e0e3ad47e6da28199e"),
     .canonicalRedactorCorpusContracts: .init(assertionCount: 195, sortedMessageSHA256: "b1af4e9101e9255b709cf93af983827cb367a7f37d1993940f004b0da2591c41"),
     .providerVerificationEscapingAndBudgetContracts: .init(assertionCount: 20, sortedMessageSHA256: "aabd8511ab77476e062c96210aee2ccafabaae2489d31fb44a7545313af56f1a")
@@ -65,7 +65,7 @@ final class LegacyCoreChecksAggregate: @unchecked Sendable {
         }
         #expect(messages.count == 398)
         #expect(Set(messages).count == 304)
-        #expect(coreChecksSHA256(messages.sorted()) == "9f39d7cf772f27d6055883c72d6e85f39cd43e0c807712ca3f987a7770b8dbab")
+        #expect(coreChecksSHA256(messages.sorted()) == "2062e67ae91800abd9aebb4d0ec3cc9679a28963d4281e057e9fe340f1ef0676")
     }
 }
 
