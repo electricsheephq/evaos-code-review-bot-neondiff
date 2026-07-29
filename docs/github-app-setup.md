@@ -115,6 +115,15 @@ repository-scoped entitlement must still pass before a new dry or live review.
 Local config alone never establishes membership, installation authority, or
 review authorization.
 
+The single **Verify existing access** action first runs `doctor github` for the
+exact selected repository and then runs credential-free
+`license status --refresh true --json` through the same matched worker and
+config—even when the native app has a separate current-launch activation.
+Only a live API-sourced entitlement covering GitHub's reported visibility
+unlocks review work. The app never reads, copies, or prompts for that worker's
+Activation Key; expired, revoked, malformed, offline, or stale results remain
+retryable and fail closed.
+
 An existing worker may already monitor several GitHub App-authorized
 repositories. NeonDiff preserves that allowlist and requires one explicit
 **Review Target** in the native repository table. The Activation Key request

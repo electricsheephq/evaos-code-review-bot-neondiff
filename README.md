@@ -191,6 +191,13 @@ failure revokes that approval instead of permitting a blind retry. For that
 multi-repository worker, daemon-wide start remains blocked. The selection and
 dry-run approval fail closed if the config, target, pull request, workspace, or
 head changes.
+The same **Verify existing access** action then runs credential-free
+`license status --refresh true` through that exact matched worker and config.
+It does not read, copy, migrate, or prompt for the worker's Activation Key.
+Useful work unlocks only when GitHub reports the exact repository visibility
+and the live API response returns an active entitlement covering that
+visibility; missing, unknown, expired, revoked, malformed, or offline proof
+fails closed.
 During launch it shows a bounded restoring state while that authorized
 account/bot/config intersection is checked; it does not flash empty first-run
 setup or claim that the existing configuration is missing.

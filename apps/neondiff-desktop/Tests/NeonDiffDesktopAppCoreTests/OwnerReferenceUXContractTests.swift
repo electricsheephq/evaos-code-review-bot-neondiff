@@ -247,6 +247,10 @@ import Testing
         #expect(activation.contains("existing local worker stays in place"))
         #expect(activation.contains("Use existing activation key"))
         #expect(activation.contains("model.applyActivationEvent(.checkoutUnavailable)"))
+        #expect(activation.contains(
+            "default:\n"
+                + "                if !model.existingLocalAgentAccessAvailable"
+        ))
         #expect(activity.contains("OperatorSection(\"Current Activity\")"))
         #expect(activity.contains("model.githubSetupReady"))
         #expect(activity.contains("GitHub connection ready"))

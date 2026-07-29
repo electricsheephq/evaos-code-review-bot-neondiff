@@ -135,15 +135,24 @@ struct ActivationStateView: View {
                 .font(NDFont.label)
                 .foregroundStyle(palette.warning)
 
-            Text("NeonDiff still blocks new work until the exact GitHub App and repository access are reverified for this launch.")
+            Text("NeonDiff still blocks new work until the exact GitHub App, repository, and API-backed entitlement are reverified for this launch.")
                 .font(NDFont.mono)
                 .foregroundStyle(palette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Button("Review repository access") {
-                model.reviewExistingBotRepositoryAccess()
+            Button(
+                model.existingLocalAgentAccessAvailable
+                    ? "Verify existing access"
+                    : "Review repository access"
+            ) {
+                if model.existingLocalAgentAccessAvailable {
+                    model.verifyExistingLocalBotGitHubAccess()
+                } else {
+                    model.reviewExistingBotRepositoryAccess()
+                }
             }
             .buttonStyle(NDBracketButtonStyle())
+            .disabled(model.isBYOGitHubVerificationInProgress)
             .accessibilityIdentifier("neondiff.activation.existing-account-reverify")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -167,11 +176,15 @@ struct ActivationStateView: View {
             )
             switch model.activationState {
             case .purchaseRequired:
-                existingAccountActivationRecovery(palette: palette)
+                if !model.existingLocalAgentAccessAvailable {
+                    existingAccountActivationRecovery(palette: palette)
+                }
             case .active:
                 EmptyView()
             default:
-                activationFlow(palette: palette)
+                if !model.existingLocalAgentAccessAvailable {
+                    activationFlow(palette: palette)
+                }
             }
         }
     }
