@@ -302,6 +302,13 @@ the same Mac. In that exact case it opens a reconciliation path:
   copying its private key. The key file must be a current-user-owned regular
   file with no group/other permissions. Only its file path—not its key bytes—is
   supplied as a child-process environment coordinate for the exact config;
+- its single **Verify existing access** action first proves the exact App and
+  Review Target with `doctor github --repo`, then runs credential-free
+  `license status --refresh true` through the same matched worker and config.
+  The native app never reads, copies, migrates, or prompts for the worker's
+  Activation Key. GitHub-reported repository visibility and an active live API
+  entitlement covering that visibility are both required; unknown, expired,
+  revoked, malformed, or offline proof fails closed;
 - Overview runs one provider-backed repository/PR-scoped dry review first. A
   live review is enabled only for that config revision and the returned
   40-character head SHA, and requires explicit confirmation (see

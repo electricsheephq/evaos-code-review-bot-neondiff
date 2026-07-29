@@ -467,6 +467,7 @@ package enum DesktopLocalBotExecutionContextResolver {
                 return credentialCommand
                     || reviewHelpCommand
                     || Array(arguments.prefix(2)) == ["config", "inspect"]
+                    || Array(arguments.prefix(2)) == ["license", "status"]
             }
         }
     }

@@ -11,9 +11,11 @@ import Testing
         (.purchaseRequired, .beginCheckout, .checkoutPending),
         (.purchaseRequired, .checkoutUnavailable, .checkoutPaused),
         (.purchaseRequired, .provideExistingKey, .keyReady),
+        (.purchaseRequired, .verifyExistingEntitlement, .activationPending),
         (.purchaseRequired, .choosePublicPath, .publicFreeSkip),
 
         (.checkoutPaused, .provideExistingKey, .keyReady),
+        (.checkoutPaused, .verifyExistingEntitlement, .activationPending),
         (.checkoutPaused, .checkoutCompleted, .keyReady),
         (.checkoutPaused, .checkoutCancelled, .purchaseRequired),
         (.checkoutPaused, .resetToPurchase, .purchaseRequired),
@@ -24,6 +26,7 @@ import Testing
         (.checkoutPending, .activationOffline, .offline),
 
         (.keyReady, .submitActivation, .activationPending),
+        (.keyReady, .verifyExistingEntitlement, .activationPending),
         (.keyReady, .resetToPurchase, .purchaseRequired),
 
         (.activationPending, .activationSucceeded, .active),
@@ -40,20 +43,26 @@ import Testing
         (.active, .activationRevoked, .revoked),
         (.active, .activationInvalid, .invalid),
         (.active, .activationOffline, .offline),
+        (.active, .verifyExistingEntitlement, .activationPending),
 
         (.invalid, .reenterKey, .keyReady),
+        (.invalid, .verifyExistingEntitlement, .activationPending),
         (.invalid, .resetToPurchase, .purchaseRequired),
 
         (.expired, .renew, .purchaseRequired),
         (.expired, .provideExistingKey, .keyReady),
+        (.expired, .verifyExistingEntitlement, .activationPending),
 
         (.revoked, .renew, .purchaseRequired),
+        (.revoked, .verifyExistingEntitlement, .activationPending),
 
         (.offline, .retry, .activationPending),
         (.offline, .reenterKey, .keyReady),
+        (.offline, .verifyExistingEntitlement, .activationPending),
 
         (.serviceError, .retry, .activationPending),
         (.serviceError, .reenterKey, .keyReady),
+        (.serviceError, .verifyExistingEntitlement, .activationPending),
 
         (.publicFreeSkip, .choosePrivatePath, .purchaseRequired)
     ]

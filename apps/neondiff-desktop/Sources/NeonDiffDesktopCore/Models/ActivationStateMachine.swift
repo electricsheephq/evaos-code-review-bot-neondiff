@@ -58,6 +58,9 @@ public enum ActivationEvent: String, CaseIterable, Sendable, Hashable {
     case checkoutCompleted
     case checkoutCancelled
     case provideExistingKey
+    /// Revalidate an exact existing local agent's stored entitlement without
+    /// copying its Activation Key into the native app.
+    case verifyExistingEntitlement
     case submitActivation
     case activationSucceeded
     case activationInvalid
@@ -114,9 +117,11 @@ public enum ActivationStateMachine {
         case (.purchaseRequired, .beginCheckout): return .checkoutPending
         case (.purchaseRequired, .checkoutUnavailable): return .checkoutPaused
         case (.purchaseRequired, .provideExistingKey): return .keyReady
+        case (.purchaseRequired, .verifyExistingEntitlement): return .activationPending
         case (.purchaseRequired, .choosePublicPath): return .publicFreeSkip
 
         case (.checkoutPaused, .provideExistingKey): return .keyReady
+        case (.checkoutPaused, .verifyExistingEntitlement): return .activationPending
         case (.checkoutPaused, .checkoutCompleted): return .keyReady
         case (.checkoutPaused, .checkoutCancelled): return .purchaseRequired
         case (.checkoutPaused, .resetToPurchase): return .purchaseRequired
@@ -127,6 +132,7 @@ public enum ActivationStateMachine {
         case (.checkoutPending, .activationOffline): return .offline
 
         case (.keyReady, .submitActivation): return .activationPending
+        case (.keyReady, .verifyExistingEntitlement): return .activationPending
         case (.keyReady, .resetToPurchase): return .purchaseRequired
 
         case (.activationPending, .activationSucceeded): return .active
@@ -145,20 +151,26 @@ public enum ActivationStateMachine {
         case (.active, .activationRevoked): return .revoked
         case (.active, .activationInvalid): return .invalid
         case (.active, .activationOffline): return .offline
+        case (.active, .verifyExistingEntitlement): return .activationPending
 
         case (.invalid, .reenterKey): return .keyReady
+        case (.invalid, .verifyExistingEntitlement): return .activationPending
         case (.invalid, .resetToPurchase): return .purchaseRequired
 
         case (.expired, .renew): return .purchaseRequired
         case (.expired, .provideExistingKey): return .keyReady
+        case (.expired, .verifyExistingEntitlement): return .activationPending
 
         case (.revoked, .renew): return .purchaseRequired
+        case (.revoked, .verifyExistingEntitlement): return .activationPending
 
         case (.offline, .retry): return .activationPending
         case (.offline, .reenterKey): return .keyReady
+        case (.offline, .verifyExistingEntitlement): return .activationPending
 
         case (.serviceError, .retry): return .activationPending
         case (.serviceError, .reenterKey): return .keyReady
+        case (.serviceError, .verifyExistingEntitlement): return .activationPending
 
         case (.publicFreeSkip, .choosePrivatePath): return .purchaseRequired
 

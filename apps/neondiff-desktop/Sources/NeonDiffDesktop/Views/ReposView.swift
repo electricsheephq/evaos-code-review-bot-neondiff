@@ -379,10 +379,10 @@ struct ReposView: View {
                 if model.byoGitHubCredentialOnboardingAvailable {
                     HStack(spacing: 10) {
                         OperatorBadge(
-                            text: model.byoGitHubCredentialsVerified
+                            text: model.existingLocalBotCurrentAccessVerified
                                 ? "CURRENT ACCESS VERIFIED"
                                 : "CURRENT ACCESS REQUIRED",
-                            color: model.byoGitHubCredentialsVerified
+                            color: model.existingLocalBotCurrentAccessVerified
                                 ? NeonDiffTheme.accent
                                 : NeonDiffTheme.warning
                         )
@@ -390,7 +390,7 @@ struct ReposView: View {
                             Label(
                                 model.isBYOGitHubVerificationInProgress
                                     ? "Verifying…"
-                                    : "Verify Existing App Access",
+                                    : "Verify Existing Access",
                                 systemImage: "checkmark.shield"
                             )
                         }
@@ -404,7 +404,7 @@ struct ReposView: View {
                     Text(model.existingLocalBotBYOGitHubVerificationStatus)
                     .font(.caption)
                     .foregroundStyle(
-                        model.byoGitHubCredentialsVerified
+                        model.existingLocalBotCurrentAccessVerified
                             ? NeonDiffTheme.accent
                             : NeonDiffTheme.warning
                     )

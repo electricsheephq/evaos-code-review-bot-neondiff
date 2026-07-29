@@ -536,6 +536,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return storedAppID == String(bot.appID)
     }
 
+    package var existingLocalBotCurrentAccessVerified: Bool {
+        existingLocalAgentAccessAvailable
+            && byoGitHubCredentialsVerified
+            && currentRepositoryActivationReady
+    }
+
     package var existingLocalAgentAccessAvailable: Bool {
         guard existingLocalBotIdentityReady,
               byoGitHubCredentialOnboardingAvailable,
@@ -566,7 +572,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         if existingLocalAgentAccessAvailable {
             return byoGitHubCredentialsVerified
-                ? "Verified through the existing local agent for this launch."
+                ? byoGitHubCredentialStatus
                 : "The exact existing local agent is ready for current-access verification. Its private key will not be copied or printed."
         }
         if cliPath != "neondiff" {
@@ -3448,6 +3454,156 @@ package final class NeonDiffDesktopModel: ObservableObject {
         logText = expectedContext.source == .existingLocalAgent
             ? "Existing local agent GitHub App installation and repository access verified. No credential was copied and no review was executed or posted."
             : "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
+
+        if expectedContext.source == .existingLocalAgent,
+           let readCheck = report.github.readChecks.first
+        {
+            verifyExistingLocalAgentEntitlement(
+                expectedContext: expectedContext,
+                visibility: readCheck.visibilityResult
+            )
+        }
+    }
+
+    private func verifyExistingLocalAgentEntitlement(
+        expectedContext: BYOGitHubVerificationContext,
+        visibility: String?
+    ) {
+        guard existingLocalAgentAccessAvailable,
+              existingLocalBotIdentityReady,
+              selectedAccountEntitlementSupportsCurrentPath,
+              expectedContext.source == .existingLocalAgent,
+              expectedContext.repositories.count == 1,
+              let repository = expectedContext.repositories.first,
+              selectedReviewRepository?.caseInsensitiveCompare(repository)
+                  == .orderedSame
+        else {
+            isBYOGitHubVerificationInProgress = false
+            lastError =
+                "The existing account, local agent, or Review Target changed before entitlement verification."
+            byoGitHubCredentialStatus =
+                "GitHub access was verified, but current entitlement verification was cancelled safely."
+            return
+        }
+        if currentRepositoryActivationReady {
+            isBYOGitHubVerificationInProgress = false
+            byoGitHubCredentialStatus =
+                "Verified existing local agent App access and API-backed entitlement for \(repository)."
+            return
+        }
+
+        applyActivationEvent(.verifyExistingEntitlement)
+        guard activationState == .activationPending else {
+            isBYOGitHubVerificationInProgress = false
+            lastError =
+                "Finish or cancel the current activation attempt before verifying the existing local agent."
+            byoGitHubCredentialStatus =
+                "GitHub access was verified, but entitlement verification could not start."
+            return
+        }
+
+        activationRequestGeneration &+= 1
+        let activationGeneration = activationRequestGeneration
+        let expectedWorkspaceGeneration = workspaceContextGeneration
+        let expectedCLIPath = cliPath
+        let expectedConfigPath = configPath
+        let executablePath = cliPath
+        let cli = dependencies.cli
+        let arguments = [
+            "license", "status",
+            "--config", configPath,
+            "--repo", repository,
+            "--refresh", "true",
+            "--json"
+        ]
+        isBYOGitHubVerificationInProgress = true
+        byoGitHubCredentialStatus =
+            "GitHub access verified. Checking the existing local agent's API-backed entitlement…"
+        lastCommandLine =
+            "\(shellQuote(cliPath)) license status --config \(shellQuote(configPath)) --repo \(shellQuote(repository)) --refresh true --json"
+
+        Task.detached {
+            let outcome: ActivationClientOutcome
+            do {
+                let result = try await cli.run(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    standardInput: nil,
+                    timeout: 20
+                )
+                outcome = result.exitCode == 0
+                    ? CLIActivationLicenseClient.classify(stdout: result.stdout)
+                    : .serviceError
+            } catch let error as NeonDiffCLIError {
+                switch error {
+                case .timedOut, .cancelled, .cleanupTimedOut:
+                    outcome = .offline
+                case .launchFailed, .standardInputTooLarge, .outputTooLarge:
+                    outcome = .serviceError
+                }
+            } catch {
+                outcome = .offline
+            }
+
+            await MainActor.run {
+                guard activationGeneration
+                        == self.activationRequestGeneration,
+                      self.workspaceContextGeneration
+                        == expectedWorkspaceGeneration,
+                      self.cliPath == expectedCLIPath,
+                      self.configPath == expectedConfigPath,
+                      self.selectedReviewRepository?
+                        .caseInsensitiveCompare(repository) == .orderedSame
+                else {
+                    return
+                }
+                self.isBYOGitHubVerificationInProgress = false
+                let resolved =
+                    self.resolveExistingLocalAgentEntitlementOutcome(
+                        outcome,
+                        visibility: visibility
+                    )
+                self.applyActivationEvent(
+                    ActivationLicenseOutcomeMapping.event(for: resolved)
+                )
+                self.applyActivationOutcomeSideEffects(
+                    resolved,
+                    repository: repository,
+                    activeLogMessage:
+                        "Current repository entitlement verified through the existing local agent. No Activation Key was copied."
+                )
+                switch resolved {
+                case .active:
+                    self.byoGitHubCredentialStatus =
+                        "Verified existing local agent App access and API-backed entitlement for \(repository)."
+                default:
+                    self.byoGitHubCredentialStatus =
+                        "GitHub access is verified, but the existing local agent did not return an active entitlement for \(repository)."
+                }
+            }
+        }
+    }
+
+    private func resolveExistingLocalAgentEntitlementOutcome(
+        _ outcome: ActivationClientOutcome,
+        visibility: String?
+    ) -> ActivationClientOutcome {
+        guard case let .active(summary) = outcome else { return outcome }
+        switch visibility?.lowercased() {
+        case "public":
+            guard summary.repoVisibilityScope == "all"
+                    || summary.repoVisibilityScope == "public"
+            else {
+                return .scopeConflict
+            }
+        case "private", "internal":
+            guard summary.coversPrivateRepos else {
+                return .scopeConflict
+            }
+        default:
+            return .scopeConflict
+        }
+        return outcome
     }
 
     private func invalidateBYOGitHubVerificationContext() {
@@ -3946,7 +4102,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private func applyActivationOutcomeSideEffects(
         _ outcome: ActivationClientOutcome,
-        repository: String?
+        repository: String?,
+        activeLogMessage: String? = nil
     ) {
         switch outcome {
         case .active(let summary):
@@ -3966,7 +4123,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             let scope = summary.repoVisibilityScope
             let plan = summary.plan.map { " · \($0)" } ?? ""
             license.entitlement = "active (\(scope)\(plan))"
-            logText = "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
+            logText = activeLogMessage
+                ?? "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
             activationVerifiedRepositoryThisLaunch = repository
             if let repository {
                 dependencies.preferences.set(repository, forKey: activationRepositoryKey)
@@ -5675,6 +5833,7 @@ private struct BYOGitHubDoctorReport: Decodable {
     struct ReadCheck: Decodable {
         let repo: String
         let ok: Bool
+        let visibilityResult: String?
         let skippedByPolicy: String?
         let installationIdPresent: Bool
         let appCanReadMetadata: Bool
@@ -5683,6 +5842,7 @@ private struct BYOGitHubDoctorReport: Decodable {
         enum CodingKeys: String, CodingKey {
             case repo
             case ok
+            case visibilityResult = "visibility_result"
             case skippedByPolicy
             case installationIdPresent = "installation_id_present"
             case appCanReadMetadata = "app_can_read_metadata"

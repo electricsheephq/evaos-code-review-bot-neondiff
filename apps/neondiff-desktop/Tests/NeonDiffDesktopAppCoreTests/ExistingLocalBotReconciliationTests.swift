@@ -780,6 +780,17 @@ import NeonDiffDesktopCore
                     exitCode: 0,
                     stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
                     stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: """
+                    {"command":"license status","ok":true,"status":"active","source":"api",
+                     "checkedAt":"2026-07-29T00:00:00.000Z",
+                     "entitlement":{"status":"active","repoVisibilityScope":"all",
+                     "privateRepoAllowed":true,"updateEntitlement":true,
+                     "plan":"internal-owner-recovery","seats":1}}
+                    """,
+                    stderr: ""
                 ))
             ],
             suspendCLIRuns: true,
@@ -816,26 +827,44 @@ import NeonDiffDesktopCore
         #expect(fixture.model.byoGitHubAppIdStored)
         #expect(fixture.model.byoGitHubPrivateKeyStored)
 
+        // Relaunch restores the persisted state but not this launch's live
+        // entitlement proof. Existing-agent verification must refresh it.
+        fixture.model.activationState = .active
+        #expect(!fixture.model.currentRepositoryActivationReady)
+
         fixture.model.verifyExistingLocalBotGitHubAccess()
         await fixture.cli.waitUntilCallCount(3)
         for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
             await Task.yield()
         }
 
-        let call = try #require(fixture.cli.calls.last)
-        #expect(call.arguments == [
+        #expect(fixture.cli.calls.count == 4)
+        let githubCall = fixture.cli.calls[2]
+        #expect(githubCall.arguments == [
             "doctor", "github",
             "--config", configPath,
             "--repo", targetRepository,
             "--json"
         ])
-        #expect(call.standardInput == nil)
-        #expect(call.timeout == 150)
+        #expect(githubCall.standardInput == nil)
+        #expect(githubCall.timeout == 150)
+        let entitlementCall = try #require(fixture.cli.calls.last)
+        #expect(entitlementCall.arguments == [
+            "license", "status",
+            "--config", configPath,
+            "--repo", targetRepository,
+            "--refresh", "true",
+            "--json"
+        ])
+        #expect(entitlementCall.standardInput == nil)
         #expect(fixture.model.repos.filter(\.enabled).count == 2)
         #expect(fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.currentRepositoryActivationReady)
+        #expect(fixture.model.activationState == .active)
+        #expect(fixture.model.productionUsefulWorkAvailable)
         #expect(
             fixture.model.existingLocalBotBYOGitHubVerificationStatus
-                .contains("existing local agent")
+                .contains("entitlement")
         )
 
         fixture.model.cliPath = "/tmp/untrusted-neondiff"
@@ -892,6 +921,87 @@ import NeonDiffDesktopCore
         fixture.model.verifyExistingLocalBotGitHubAccess()
         #expect(fixture.model.lastError == diagnosis)
         #expect(fixture.model.byoGitHubCredentialStatus == diagnosis)
+    }
+
+    @MainActor
+    @Test func privateRepositoryRejectsPublicOnlyExistingAgentEntitlement() async throws {
+        let targetRepository =
+            "electricsheephq/evaos-code-review-bot-neondiff"
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: existingBotConfig(
+                        authMode: "zcode-app-config",
+                        repositories: [targetRepository]
+                    ),
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"review-pr","licenseBoundary":{"packageVersion":"1.0.4"},"usage":{"command":"review-pr","flags":[{"name":"--expected-config-revision"},{"name":"--zcode"}]}}"#,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: """
+                    {"command":"license status","ok":true,"status":"active","source":"api",
+                     "checkedAt":"2026-07-29T00:00:00.000Z",
+                     "entitlement":{"status":"active","repoVisibilityScope":"public",
+                     "privateRepoAllowed":false,"updateEntitlement":false,
+                     "plan":"public-free","seats":1}}
+                    """,
+                    stderr: ""
+                ))
+            ],
+            suspendCLIRuns: true,
+            localBotConfigurations: [
+                DesktopLocalBotConfiguration(
+                    appID: 4_184_532,
+                    configPath: configPath,
+                    workingDirectory: "/fixture/evaos-code-review-bot"
+                )
+            ],
+            localBotExecutionConfigPaths: [configPath],
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        await fixture.cli.waitUntilCallCount(1)
+        fixture.cli.resumeSuspendedRuns()
+        for _ in 0..<20 where fixture.model.isConfigInspectInProgress {
+            await Task.yield()
+        }
+        await fixture.cli.waitUntilCallCount(2)
+        for _ in 0..<20
+            where fixture.model.localWorkerReviewCompatibility == .checking
+        {
+            await Task.yield()
+        }
+        fixture.model.selectBYOReviewRepository(fullName: targetRepository)
+
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        await fixture.cli.waitUntilCallCount(4)
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+
+        #expect(fixture.model.byoGitHubCredentialsVerified)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.existingLocalBotCurrentAccessVerified)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.activationState == .invalid)
+        #expect(
+            fixture.model.lastError?.contains("does not cover private")
+                == true
+        )
     }
 
     @MainActor
