@@ -5,6 +5,7 @@
  * signed/notarized NeonDiff candidate has one bounded defect to find when the
  * dry and live review sequence is initiated from the native app.
  * Beta 36 refreshes this disposable head without changing the canary defect.
+ * The installed-app pass runs while the background worker is briefly paused.
  */
 export function selectedRepository(
   repositories: Map<string, string>,
