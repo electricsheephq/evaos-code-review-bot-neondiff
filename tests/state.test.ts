@@ -2495,6 +2495,53 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("supersedes only activation baselines when an explicit dry-run override is present", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dry-proof-baseline-supersession-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const baselineHead = { repo: "r/x", pullNumber: 38, headSha: "sha-activation-baseline" };
+    store.recordProcessed({
+      ...baselineHead,
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+
+    expect(store.tryRecordDryRun({ ...baselineHead, event: "COMMENT" })).toBe(false);
+    expect(store.tryRecordDryRun({
+      ...baselineHead,
+      event: "COMMENT",
+      allowActivationBaselineSupersession: true
+    })).toBe(true);
+    const supersededBaseline = store.getProcessedReview(
+      baselineHead.repo,
+      baselineHead.pullNumber,
+      baselineHead.headSha
+    );
+    expect(supersededBaseline).toMatchObject({ status: "dry_run" });
+    expect(supersededBaseline?.error).toBeUndefined();
+
+    const unrelatedSkippedHead = { repo: "r/x", pullNumber: 39, headSha: "sha-policy-skip" };
+    store.recordProcessed({
+      ...unrelatedSkippedHead,
+      status: "skipped",
+      error: "policy_skip"
+    });
+    expect(store.tryRecordDryRun({
+      ...unrelatedSkippedHead,
+      event: "COMMENT",
+      allowActivationBaselineSupersession: true
+    })).toBe(false);
+    expect(store.getProcessedReview(
+      unrelatedSkippedHead.repo,
+      unrelatedSkippedHead.pullNumber,
+      unrelatedSkippedHead.headSha
+    )).toMatchObject({
+      status: "skipped",
+      error: "policy_skip"
+    });
+    store.close();
+  });
+
   it("binds dry-to-live claims to the exact config revision and permits a fresh dry proof after failure", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-dry-proof-revision-"));
     roots.push(root);

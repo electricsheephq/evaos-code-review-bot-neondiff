@@ -1454,6 +1454,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     input.dryRun &&
     input.processedHeadPolicy === "refresh_dry_run" &&
     processed?.status === "dry_run";
+  const scopedActivationBaselineOverride =
+    input.allowActivationBaselineCommandLookup &&
+    isActivationBaselineProcessedReview(processed);
   const approvedDryRunTransition =
     input.processedHeadPolicy === "approved_dry_run" &&
     processed?.status === "dry_run" &&
@@ -1682,6 +1685,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     !approvedDryRunTransition &&
     !retryableApprovedDryRunPrePostFailure &&
     !refreshableDryRun &&
+    !scopedActivationBaselineOverride &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -2068,7 +2072,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         pullNumber: pull.number,
         headSha: pull.head.sha,
         ...(input.configRevision ? { configRevision: input.configRevision } : {}),
-        event: plan.event
+        event: plan.event,
+        ...(scopedActivationBaselineOverride
+          ? { allowActivationBaselineSupersession: true }
+          : {})
       });
       if (!recorded) return "skipped_processed";
       return manualReviewRequested ? "reviewed_command" : "reviewed";

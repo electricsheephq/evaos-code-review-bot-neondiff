@@ -947,7 +947,9 @@ export class ReviewStateStore {
   }
 
   tryRecordDryRun(
-    record: Omit<ProcessedReviewRecord, "status" | "reviewUrl" | "error">,
+    record: Omit<ProcessedReviewRecord, "status" | "reviewUrl" | "error"> & {
+      allowActivationBaselineSupersession?: boolean;
+    },
     now: Date = new Date()
   ): boolean {
     this.db.exec("begin immediate");
@@ -971,11 +973,15 @@ export class ReviewStateStore {
           ProcessedReviewRecord,
           "status" | "error"
         > | undefined;
+      const activationBaselineSupersession =
+        record.allowActivationBaselineSupersession &&
+        isActivationBaselineProcessedReview(processed);
       if (
         activeClaim ||
         (processed &&
           processed.status !== "dry_run" &&
-          !isRetryableApprovedDryRunPrePostFailure(processed))
+          !isRetryableApprovedDryRunPrePostFailure(processed) &&
+          !activationBaselineSupersession)
       ) {
         this.db.exec("commit");
         return false;
