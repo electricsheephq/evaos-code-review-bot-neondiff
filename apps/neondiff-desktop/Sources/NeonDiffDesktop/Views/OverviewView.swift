@@ -438,6 +438,11 @@ struct OverviewView: View {
         }
     }
 
+    private var isScopedDryReviewButtonDisabled: Bool {
+        model.isScopedReviewInProgress
+            || model.positivePendingReviewPullNumber == nil
+    }
+
     @ViewBuilder
     private var scopedReviewControls: some View {
         TextField("PR number", text: $model.pendingReviewPullNumber)
@@ -455,12 +460,7 @@ struct OverviewView: View {
             )
         }
         .buttonStyle(ReferenceOutlineButtonStyle())
-        .disabled(
-            !model.scopedReviewExecutionAvailable
-                || !model.providerSetupReady
-                || model.isScopedReviewInProgress
-                || model.positivePendingReviewPullNumber == nil
-        )
+        .disabled(isScopedDryReviewButtonDisabled)
         .accessibilityIdentifier("neondiff-scoped-review-dry")
 
         Button {

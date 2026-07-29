@@ -310,6 +310,14 @@ import Testing
         #expect(overview.contains("Retry Worker Check"))
         #expect(overview.contains("neondiff-worker-update-guide"))
         #expect(overview.contains("neondiff-worker-retry-check"))
+        #expect(overview.contains("private var isScopedDryReviewButtonDisabled: Bool"))
+        #expect(overview.contains(".disabled(isScopedDryReviewButtonDisabled)"))
+        #expect(
+            !overview.contains(
+                "!model.scopedReviewExecutionAvailable\n"
+                    + "                || !model.providerSetupReady"
+            )
+        )
         #expect(overview.contains("Existing bot configured"))
         #expect(overview.contains("Restoring this Mac"))
         #expect(overview.contains("CHECKING LOCAL SETUP"))
