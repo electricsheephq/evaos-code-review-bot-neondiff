@@ -155,7 +155,7 @@ describe("worker review settings preview evidence", () => {
     state.close();
   });
 
-  it("marks stale zcode provider ids as registry misses instead of silently claiming a configured provider", () => {
+  it("uses the selected registry id for metadata when ZCode has a distinct execution id", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-metadata-"));
     roots.push(root);
     const config = minimalConfig(root);
@@ -180,10 +180,10 @@ describe("worker review settings preview evidence", () => {
     };
 
     expect(buildReviewProviderMetadata(config)).toEqual({
-      providerId: "ghost-provider",
-      adapter: "zcode (registry miss)",
-      model: "unknown",
-      displayName: "Unregistered provider id"
+      providerId: "zcode-glm",
+      adapter: "zcode",
+      model: "GLM-5.2",
+      displayName: "GLM/Z.ai through ZCode"
     });
   });
 });

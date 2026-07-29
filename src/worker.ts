@@ -148,7 +148,7 @@ function recordConsumedAuthorizationIncident(input: {
 }
 
 export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
-  const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
+  const providerId = resolveReviewRegistryProviderId(config);
   const provider = config.providers?.providers[providerId];
   if (!provider) {
     return {
@@ -167,8 +167,12 @@ export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMe
 }
 
 function resolveReviewContextWindowTokens(config: BotConfig): number | undefined {
-  const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
+  const providerId = resolveReviewRegistryProviderId(config);
   return config.providers?.providers[providerId]?.contextWindowTokens;
+}
+
+function resolveReviewRegistryProviderId(config: BotConfig): string {
+  return config.providers?.defaultProviderId ?? config.zcode.providerId ?? "zcode-glm";
 }
 
 function contextBudgetEvidence(plan: ContextBudgetPlan): Record<string, unknown> {
