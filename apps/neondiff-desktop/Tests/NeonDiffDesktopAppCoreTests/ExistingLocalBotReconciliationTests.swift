@@ -540,7 +540,7 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
-    @Test func scopedReviewRejectsAProviderDifferentFromTheOneZCodeWillExecute() {
+    @Test func scopedReviewAcceptsAnExplicitProviderFromZCodesOwnNamespace() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
             productionBoundary: .testAccountLink
@@ -553,7 +553,7 @@ import NeonDiffDesktopCore
         )
 
         #expect(fixture.model.providerSetupReady)
-        #expect(!fixture.model.scopedReviewProviderReady)
+        #expect(fixture.model.scopedReviewProviderReady)
     }
 
     @MainActor

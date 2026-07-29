@@ -200,6 +200,7 @@ describe("worker context budget preflight", () => {
       providerFudgeFactor: 1,
       maxChunks: 4
     };
+    config.zcode.providerId = "builtin:zai-coding-plan";
     config.providers!.providers["zcode-glm"]!.contextWindowTokens = 500;
     const state = new ReviewStateStore(config.statePath);
     const pull = pullSummary(401, "c".repeat(40));
