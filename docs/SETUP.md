@@ -246,7 +246,7 @@ public configuration values, not secrets, and do not override the server-side
 kill switch. Generic CLI status/deactivate and daemon-admission validation still
 require exact-candidate integration proof under #630.
 
-The invite-only B0 technical beta has a separate, mutually exclusive release
+The public paid B0 BYO beta has a separate, mutually exclusive release
 bundle contract:
 
 - `NeonDiffPaidBetaContract = paid-mac-beta-byo-v1`
@@ -260,7 +260,7 @@ manual UserDefaults rollout mutation. It does not make the managed App path
 available and is not proof that GitHub private-key custody, the compatible CLI
 package, billing, signing, or customer canaries have passed.
 
-For an invited B0 customer, the native first-run path is:
+For a B0 customer, the native first-run path is:
 
 1. Create and install a customer-owned GitHub App with the permissions in
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
@@ -277,7 +277,8 @@ For an invited B0 customer, the native first-run path is:
 
 This first-run step proves only current App installation and repository access.
 Provider verification, activation, dry run, and live review remain separate
-gates.
+gates. No invitation is required once the #610 public purchase/download gate
+opens; until then, the candidate and its GitHub prerelease assets remain held.
 
 ### Existing bot on this Mac
 
@@ -332,11 +333,11 @@ If Overview shows **Worker update required**:
 
 1. Do not run or retry a live review from another terminal. The dry-to-live
    approval contract is not proven for that worker.
-2. Choose **Install / Update Local Worker**. For the invite-only B0 beta, use
-   only the private worker ZIP named in the invite. Compare both its ZIP
-   SHA-256 and the manifest SHA-256 with the values supplied separately in the
-   invite before extracting it. Do not use an unpinned `main` checkout or trust
-   the ambiguous `1.0.4` version string.
+2. Choose **Install / Update Local Worker**. Use only the worker ZIP named in
+   the same immutable GitHub prerelease and release manifest as the installed
+   app. Compare both its ZIP SHA-256 and the manifest SHA-256 with the published
+   prerelease values before extracting it. Do not use an unpinned `main`
+   checkout or trust the ambiguous `1.0.4` version string.
 3. Confirm `node --version` reports Node.js 26 or newer. From the extracted
    directory, preview the checksum-bound migration using the exact LaunchAgent
    label shown in NeonDiff Settings. The installer requires absolute artifact
@@ -346,7 +347,7 @@ If Overview shows **Worker update required**:
    BUNDLE_DIR="$(pwd -P)"
    node install-b0-worker-candidate.mjs update \
      --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
-     --manifest-sha256 <manifest-sha256-from-invite> \
+     --manifest-sha256 <manifest-sha256-from-release> \
      --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
      --launchd-label <existing-label> \
      --dry-run true
@@ -378,8 +379,9 @@ Rollback also requires `--dry-run false --confirm true`. It restores the
 previous versioned worker, or the original LaunchAgent invocation on the first
 migration, without deleting either candidate or touching customer secrets.
 
-Until an invite or immutable release names a compatible worker artifact, this
-state is a release blocker rather than a prompt to repair source files manually.
+Until an immutable GitHub prerelease and release manifest name a compatible
+worker artifact, this state is a release blocker rather than a prompt to repair
+source files manually.
 The app's own Sparkle update does not update an external local worker.
 
 ## 4. Check Readiness
@@ -392,7 +394,7 @@ printing secrets:
 neondiff doctor github --config config.local.json --json
 ```
 
-The invite-only B0 desktop keeps the customer-owned App private key in the
+The public paid B0 BYO desktop keeps the customer-owned App private key in the
 macOS Keychain. Its explicit **Verify App Access** action sends that key only to
 the local CLI's bounded stdin for this check. The native app's clean-install
 config lives in its user-writable Application Support directory; the equivalent

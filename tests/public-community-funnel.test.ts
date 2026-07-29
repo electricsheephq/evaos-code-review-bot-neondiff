@@ -59,6 +59,30 @@ describe("NeonDiff public community funnel", () => {
     }
   });
 
+  it("public BYO onboarding does not retain the retired invite-only contract", () => {
+    const surfaces = {
+      readme: read("README.md"),
+      setup: read("docs/SETUP.md"),
+      githubApp: read("docs/github-app-setup.md"),
+      nativeOnboarding: read(
+        "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift"
+      )
+    };
+
+    for (const [name, text] of Object.entries(surfaces)) {
+      expect(text, name).not.toMatch(
+        /invite-only|\binvited\b|named in the invite|invite checksums|from-invite/i
+      );
+      expect(text, name).toMatch(/public paid|public BYO|public.*customer-owned/i);
+    }
+
+    for (const text of [surfaces.readme, surfaces.setup, surfaces.githubApp]) {
+      expect(text).toMatch(/no invitation (?:is )?required/i);
+      expect(text).toMatch(/GitHub prerelease|release manifest/i);
+      expect(text).toMatch(/SHA-256|checksum/i);
+    }
+  });
+
   it("license boundary surfaces are canonical and avoid open-source claims", () => {
     const license = read("LICENSE.md");
     const boundary = read("docs/license-boundary.md");

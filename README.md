@@ -102,14 +102,18 @@ package. To preview without changing your machine:
 curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
 ```
 
-Invite-only B0 Mac candidates use a separate checksum-bound private worker
-bundle rather than an unpublished npm version or an unpinned source checkout.
+The public paid B0 Mac beta uses a separate checksum-bound worker bundle from
+the same immutable GitHub prerelease as the app rather than an unpublished npm
+version or an unpinned source checkout. No invitation is required once the
+#610 public release gate opens.
 When the app reports **Worker update required**, choose **Install / Update Local
-Worker** and follow the exact invite checksums plus the dry-run-first update and
-rollback commands in [docs/SETUP.md](docs/SETUP.md#update-an-existing-local-worker).
+Worker** and compare the exact SHA-256 values in the prerelease notes and
+release manifest before following the dry-run-first update and rollback commands
+in [docs/SETUP.md](docs/SETUP.md#update-an-existing-local-worker).
 This preserves the existing config, LaunchAgent identity/environment, provider
 state, repository allowlist, and credential stores. It is not a public npm,
-GitHub Release, Sparkle, or automatic worker-update claim.
+Sparkle, or automatic worker-update claim before that immutable prerelease is
+published.
 
 Source checkout fallback:
 
@@ -158,14 +162,14 @@ when a release bundle carries the exact `paid-mac-beta-v1` Info.plist contract,
 fixed production broker origin, and explicit broker-enable marker. Those public
 build values are absent by default, so ordinary/debug bundles stay quarantined;
 the server kill switch and every broker/entitlement decision still fail closed.
-The invite-only B0 technical-beta build uses a separate exact
+The public paid B0 BYO beta build uses a separate exact
 `paid-mac-beta-byo-v1` release contract with `NeonDiffBYOGitHubEnabled=true` and
 no managed-broker fields. That contract enables the existing local direct/BYO
 path and API-backed native activation without a hidden defaults mutation. It
 is a paid path for every repository and does not claim the managed public-free
 model. On a clean Mac, native first run exposes **Initialize Local Config**
 (non-destructive; never force-overwrites), **Add Repository**, **Apply
-Repository**, and **Verify App Access**, so the invited customer does not need a
+Repository**, and **Verify App Access**, so the customer does not need a
 terminal or an operator edit to reach the repository-verification gate. This
 source path does not prove customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.
