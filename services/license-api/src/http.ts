@@ -299,6 +299,8 @@ async function handleIssuanceRequest(
     return writeJson(res, 503, { status: "server", detail: "license issuance is not configured" });
   }
   if (
+    hasDuplicateRawHeader(req, "authorization") ||
+    hasDuplicateRawHeader(req, "x-neondiff-issuance-authorization") ||
     !validateIssuanceAuthorization(
       req.headers.authorization,
       req.headers["x-neondiff-issuance-authorization"],
@@ -324,6 +326,17 @@ async function handleIssuanceRequest(
       malformedIssuanceResult(error instanceof Error ? error.message : "malformed request body")
     );
   }
+}
+
+function hasDuplicateRawHeader(req: IncomingMessage, name: string): boolean {
+  let matches = 0;
+  for (let index = 0; index < req.rawHeaders.length; index += 2) {
+    if (req.rawHeaders[index]?.toLowerCase() === name) {
+      matches += 1;
+      if (matches > 1) return true;
+    }
+  }
+  return false;
 }
 
 export function startLicenseServer(options: LicenseHttpOptions & { port?: number; host?: string }): Promise<{ server: Server; url: string }> {

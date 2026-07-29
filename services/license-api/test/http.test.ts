@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import type { Server } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
 import { LicenseStore } from "../src/store.ts";
 import { startLicenseServer } from "../src/http.ts";
 import {
@@ -37,6 +37,41 @@ async function post(
   });
   const text = await res.text();
   return { status: res.status, json: text ? JSON.parse(text) : {} };
+}
+
+async function postWithHeaders(
+  url: string,
+  path: string,
+  body: unknown,
+  headers: Record<string, string | string[]>
+): Promise<{ status: number; json: any }> {
+  const payload = JSON.stringify(body);
+  return await new Promise((resolve, reject) => {
+    const req = httpRequest(
+      `${url}${path}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          ...headers
+        }
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          resolve({
+            status: res.statusCode ?? 0,
+            json: text ? JSON.parse(text) : {}
+          });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end(payload);
+  });
 }
 
 describe("license http transport", () => {
@@ -241,6 +276,28 @@ describe("license issuance transport", () => {
       validateIssuanceAuthorization(undefined, "v1.invalid", issuanceSecret),
       false
     );
+  });
+
+  it("rejects duplicate raw Authorization fields before Node normalizes them", async () => {
+    const before = store.listLicenses().length;
+    const duplicate = await postWithHeaders(
+      url,
+      "/v1/admin/licenses/issue",
+      checkoutBody({
+        idempotencyKey: "checkout-session-duplicate-bearer",
+        externalSubscriptionId: "sub_duplicate_bearer",
+        externalCheckoutId: "cs_duplicate_bearer"
+      }),
+      {
+        Authorization: [
+          `Bearer ${issuanceSecret}`,
+          `Bearer ${issuanceSecret}`
+        ]
+      }
+    );
+
+    assert.equal(duplicate.status, 401);
+    assert.equal(store.listLicenses().length, before);
   });
 
   it("issues a product-native license key for checkout fulfillment", async () => {
