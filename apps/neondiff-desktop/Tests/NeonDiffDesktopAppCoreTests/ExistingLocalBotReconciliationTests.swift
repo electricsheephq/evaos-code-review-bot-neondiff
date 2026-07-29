@@ -1194,6 +1194,37 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func multiRepoExistingAgentWithoutStoredAppKeyUnlocksScopedReviewAfterReverify() async {
+        let targetRepository =
+            "electricsheephq/evaos-code-review-bot-neondiff"
+        let fixture = await preparedExistingAgentVerificationFixture(
+            visibility: "private",
+            licenseResult: existingAgentLicenseStatus(
+                scope: "private",
+                privateRepoAllowed: true
+            ),
+            repositories: [
+                "electricsheephq/WorldOS",
+                targetRepository
+            ]
+        )
+
+        #expect(!fixture.model.byoGitHubAppIdStored)
+        #expect(!fixture.model.byoGitHubPrivateKeyStored)
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        #expect(await reachesCallCount(fixture, 4))
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+
+        fixture.model.pendingReviewPullNumber = "708"
+        #expect(fixture.model.currentRepositoryActivationReady)
+        #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.scopedReviewExecutionAvailable)
+        #expect(fixture.model.positivePendingReviewPullNumber == 708)
+    }
+
+    @MainActor
     @Test func staleExactWorkerStatusClearsOwnedProgressState() async throws {
         let fixture = await preparedExistingAgentVerificationFixture(
             visibility: "private",
@@ -1709,17 +1740,19 @@ import NeonDiffDesktopCore
     private func preparedExistingAgentVerificationFixture(
         visibility: String,
         licenseResult: CLIRunResult,
-        activationLicenseClient: (any ActivationLicenseClienting)? = nil
+        activationLicenseClient: (any ActivationLicenseClienting)? = nil,
+        repositories: [String]? = nil
     ) async -> ModelDependencyFixture {
         let targetRepository =
             "electricsheephq/evaos-code-review-bot-neondiff"
+        let configuredRepositories = repositories ?? [targetRepository]
         let fixture = ModelDependencyFixture(
             cliOutcomes: [
                 .success(CLIRunResult(
                     exitCode: 0,
                     stdout: existingBotConfig(
                         authMode: "zcode-app-config",
-                        repositories: [targetRepository]
+                        repositories: configuredRepositories
                     ),
                     stderr: ""
                 )),
