@@ -360,7 +360,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return false
         }
         if dependencies.productionBoundary.byoGitHubEnabled {
-            guard byoGitHubCredentialOnboardingAvailable,
+            guard existingLocalBotIdentityReady,
+                  selectedAccountEntitlementSupportsCurrentPath,
+                  byoGitHubCredentialOnboardingAvailable,
                   byoGitHubCredentialsVerified,
                   repositoryConfigurationReady,
                   currentRepositoryActivationReady,
@@ -1456,6 +1458,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
         if let selectedAccountID = accountWorkspaceSelection.accountID,
            let selectedAccount = catalog.accounts.first(where: { $0.id == selectedAccountID }) {
+            let selectedAuthorityChanged =
+                previousSelectedAccount?.hasSameAuthority(as: selectedAccount)
+                    != true
+            if selectedAuthorityChanged {
+                resetWorkspaceBoundRuntimeState()
+            }
             if let selectedBotID = accountWorkspaceSelection.botID {
                 if let pendingNewBotPlan,
                    pendingNewBotPlan.accountID == selectedAccountID,
@@ -1475,8 +1483,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     accountWorkspaceStatus = "The selected bot is no longer authorized. Choose another bot or create a new one."
                     return
                 }
-                if previousSelectedBot?.localConfigPath != selectedBot.localConfigPath {
-                    resetWorkspaceBoundRuntimeState()
+                if selectedAuthorityChanged
+                    || previousSelectedBot?.localConfigPath
+                        != selectedBot.localConfigPath
+                {
+                    if !selectedAuthorityChanged {
+                        resetWorkspaceBoundRuntimeState()
+                    }
                     if let localConfigPath = selectedBot.localConfigPath {
                         configPath = localConfigPath
                         inspectConfig(
