@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import type { Server } from "node:http";
+import { request as httpRequest, type Server } from "node:http";
 import { LicenseStore } from "../src/store.ts";
 import { startLicenseServer } from "../src/http.ts";
+import {
+  deriveIssuanceAuthorization,
+  validateIssuanceAuthorization
+} from "../src/issuance.ts";
 import { RateLimiter } from "../src/service.ts";
 
 const fakeKey = (tag: string): string => ["nd", "live", `${tag}${"x".repeat(24 - tag.length)}`].join("_");
@@ -33,6 +37,41 @@ async function post(
   });
   const text = await res.text();
   return { status: res.status, json: text ? JSON.parse(text) : {} };
+}
+
+async function postWithHeaders(
+  url: string,
+  path: string,
+  body: unknown,
+  headers: Record<string, string | string[]>
+): Promise<{ status: number; json: any }> {
+  const payload = JSON.stringify(body);
+  return await new Promise((resolve, reject) => {
+    const req = httpRequest(
+      `${url}${path}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+          ...headers
+        }
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          resolve({
+            status: res.statusCode ?? 0,
+            json: text ? JSON.parse(text) : {}
+          });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end(payload);
+  });
 }
 
 describe("license http transport", () => {
@@ -139,6 +178,9 @@ describe("license issuance transport", () => {
   let url: string;
   const issuanceSecret = ["test", "issuance", "secret", "0123456789"].join("_");
   const auth = { Authorization: `Bearer ${issuanceSecret}` };
+  const derivedAuth = {
+    "X-NeonDiff-Issuance-Authorization": deriveIssuanceAuthorization(issuanceSecret)
+  };
 
   before(async () => {
     store = new LicenseStore(":memory:", {
@@ -166,6 +208,96 @@ describe("license issuance transport", () => {
     });
     assert.equal(res.status, 401);
     assert.equal(store.listLicenses().length, 0);
+  });
+
+  it("accepts the route-scoped derived credential without exposing the raw secret", async () => {
+    const authorization = deriveIssuanceAuthorization(issuanceSecret);
+    assert.match(authorization, /^v1\.[A-Za-z0-9_-]{43}$/);
+    assert.ok(!authorization.includes(issuanceSecret));
+
+    const before = store.listLicenses().length;
+    const issued = await post(
+      url,
+      "/v1/admin/licenses/issue",
+      checkoutBody({
+        idempotencyKey: "checkout-session-derived",
+        externalSubscriptionId: "sub_derived",
+        externalCheckoutId: "cs_derived"
+      }),
+      derivedAuth
+    );
+
+    assert.equal(issued.status, 200);
+    assert.equal(issued.json.replayed, false);
+    assert.equal(store.listLicenses().length, before + 1);
+  });
+
+  it("preserves one idempotent issuance across derived and bearer credentials", async () => {
+    const body = checkoutBody({
+      idempotencyKey: "checkout-session-cross-credential",
+      externalSubscriptionId: "sub_cross_credential",
+      externalCheckoutId: "cs_cross_credential"
+    });
+    const before = store.listLicenses().length;
+    const first = await post(url, "/v1/admin/licenses/issue", body, derivedAuth);
+    const replay = await post(url, "/v1/admin/licenses/issue", body, auth);
+
+    assert.equal(first.status, 200);
+    assert.equal(replay.status, 200);
+    assert.equal(replay.json.replayed, true);
+    assert.equal(replay.json.licenseKey, first.json.licenseKey);
+    assert.equal(store.listLicenses().length, before + 1);
+  });
+
+  it("rejects dual, malformed, and array-valued issuance credentials", async () => {
+    const before = store.listLicenses().length;
+    const dual = await post(
+      url,
+      "/v1/admin/licenses/issue",
+      checkoutBody({
+        idempotencyKey: "checkout-session-dual-auth",
+        externalSubscriptionId: "sub_dual_auth",
+        externalCheckoutId: "cs_dual_auth"
+      }),
+      { ...auth, ...derivedAuth }
+    );
+    assert.equal(dual.status, 401);
+    assert.equal(store.listLicenses().length, before);
+
+    assert.equal(
+      validateIssuanceAuthorization(
+        undefined,
+        ["v1.invalid", deriveIssuanceAuthorization(issuanceSecret)],
+        issuanceSecret
+      ),
+      false
+    );
+    assert.equal(
+      validateIssuanceAuthorization(undefined, "v1.invalid", issuanceSecret),
+      false
+    );
+  });
+
+  it("rejects duplicate raw Authorization fields before Node normalizes them", async () => {
+    const before = store.listLicenses().length;
+    const duplicate = await postWithHeaders(
+      url,
+      "/v1/admin/licenses/issue",
+      checkoutBody({
+        idempotencyKey: "checkout-session-duplicate-bearer",
+        externalSubscriptionId: "sub_duplicate_bearer",
+        externalCheckoutId: "cs_duplicate_bearer"
+      }),
+      {
+        Authorization: [
+          `Bearer ${issuanceSecret}`,
+          `Bearer ${issuanceSecret}`
+        ]
+      }
+    );
+
+    assert.equal(duplicate.status, 401);
+    assert.equal(store.listLicenses().length, before);
   });
 
   it("issues a product-native license key for checkout fulfillment", async () => {

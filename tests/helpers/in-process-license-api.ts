@@ -21,12 +21,14 @@ export function createInProcessLicenseApi(issuanceSecret: string): InProcessLice
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const path = new URL(String(input)).pathname;
     const body = String(init?.body ?? "");
+    const headerEntries = Array.from(new Headers(init?.headers).entries());
     return await new Promise<Response>((resolve, reject) => {
       let requestErrorCallback: ((error: Error) => void) | undefined;
       const req: any = {
         method: init?.method ?? "POST",
         url: path,
-        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+        headers: Object.fromEntries(headerEntries),
+        rawHeaders: headerEntries.flatMap(([name, value]) => [name, value]),
         socket: { remoteAddress: "127.0.0.1" },
         on(event: string, callback: (value?: unknown) => void) {
           if (event === "data" && body) callback(Buffer.from(body));
