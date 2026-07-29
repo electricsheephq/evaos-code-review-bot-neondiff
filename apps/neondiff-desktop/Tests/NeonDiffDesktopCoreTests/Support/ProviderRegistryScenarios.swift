@@ -63,6 +63,25 @@ import Darwin
         context.expect(false, "ZCode-managed registry snapshot remains parseable")
     }
 
+    let zcodeManagedEndpointSnapshot = ConfigInspectParser.parse(
+        #"{"ok":true,"command":"config inspect","revision":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","config":{"zcode":{"model":"zcode-model","cliPath":"zcode","appConfigPath":"zcode.json","providerId":"zcode"},"providers":{"defaultProviderId":"zcode","providers":{"zcode":{"enabled":true,"adapter":"zcode","displayName":"ZCode","baseUrl":"https://zcode.example/v1","model":"zcode-model","authMode":"zcode-app-config"}}}}}"#,
+        providerKeyStored: false,
+        licenseKeyStored: false
+    )
+    if let providerSettings = zcodeManagedEndpointSnapshot?.providers {
+        let providerPatchData = try ProviderRegistryPatchBuilder.data(for: providerSettings)
+        let providerPatchObject = try JSONSerialization.jsonObject(with: providerPatchData) as? [String: Any]
+        let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
+        let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
+        let selectedProviderPatch = providerPatchEntries?["zcode"] as? [String: Any]
+        context.expect(
+            selectedProviderPatch?["baseUrl"] as? String == "https://zcode.example/v1",
+            "ZCode app-config patch preserves an explicit nonempty endpoint"
+        )
+    } else {
+        context.expect(false, "ZCode-managed registry snapshot with an endpoint remains parseable")
+    }
+
     let emptyModelSnapshot = ConfigInspectParser.parse(
         #"{"ok":true,"command":"config inspect","revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"zcode":{"model":"fallback-model","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"gateway","providers":{"gateway":{"enabled":true,"adapter":"openai-compatible","displayName":"Gateway","baseUrl":"https://saved.example/v1","model":"","authMode":"api-key-env"}}}}}"#,
         providerKeyStored: true,

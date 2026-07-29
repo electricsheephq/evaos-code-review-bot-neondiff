@@ -30,7 +30,9 @@ public enum ProviderRegistryPatchBuilder {
         var selectedProviderPatch: [String: Any] = [
             "model": selectedModel
         ]
-        if target.authMode != "zcode-app-config" {
+        if target.authMode != "zcode-app-config"
+            || !target.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
             selectedProviderPatch["baseUrl"] = target.baseUrl
         }
         let patch: [String: Any] = [
