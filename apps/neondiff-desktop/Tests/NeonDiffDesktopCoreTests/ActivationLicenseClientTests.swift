@@ -70,6 +70,18 @@ import Testing
         #expect(summary.seats == 3)
     }
 
+    @Test func activeWithoutLiveAPISourceFailsClosed() {
+        let cached = activeJSON.replacingOccurrences(
+            of: #""source":"api""#,
+            with: #""source":"local""#
+        )
+
+        #expect(
+            CLIActivationLicenseClient.classify(stdout: cached)
+                == .serviceError
+        )
+    }
+
     @Test func keyIsPassedOverStdinNeverArgv() async throws {
         let (client, stub) = client(success(activeJSON))
         let key = ActivationKeyMaterial("NDL-REALKEY-0123456789")

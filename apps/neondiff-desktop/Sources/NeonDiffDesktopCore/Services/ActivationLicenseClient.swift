@@ -204,10 +204,13 @@ public final class CLIActivationLicenseClient: ActivationLicenseClienting, @unch
 
         switch status {
         case "active":
-            let summary = parseEntitlement(root["entitlement"]) ?? ActivationEntitlementSummary(
-                status: .active, repoVisibilityScope: "all", privateRepoAllowed: nil,
-                updateEntitlement: false, expiresAt: nil, plan: nil, seats: nil
-            )
+            guard root["ok"] as? Bool == true,
+                  root["source"] as? String == "api",
+                  let summary = parseEntitlement(root["entitlement"]),
+                  summary.status == .active
+            else {
+                return .serviceError
+            }
             return .active(summary)
         case "expired":
             return .expired(parseEntitlement(root["entitlement"]))
