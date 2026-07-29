@@ -24,13 +24,19 @@ import Darwin
         let providerPatchRegistry = providerPatchObject?["providers"] as? [String: Any]
         let providerPatchEntries = providerPatchRegistry?["providers"] as? [String: Any]
         let selectedProviderPatch = providerPatchEntries?["gateway"] as? [String: Any]
+        let disabledProviderPatch = providerPatchEntries?["disabled"] as? [String: Any]
+        let zcodeProviderPatch = providerPatchEntries?["zcode"] as? [String: Any]
         context.expect(
             selectedProviderPatch?["baseUrl"] as? String == "https://saved.example/v1"
                 && selectedProviderPatch?["enabled"] as? Bool == true
                 && selectedProviderPatch?["adapter"] as? String == "openai-compatible"
                 && selectedProviderPatch?["displayName"] as? String == "Gateway"
-                && selectedProviderPatch?["authMode"] as? String == "api-key-env",
-            "provider patch uses the selected saved registry target"
+                && selectedProviderPatch?["authMode"] as? String == "api-key-env"
+                && disabledProviderPatch?["enabled"] as? Bool == false
+                && disabledProviderPatch?["model"] as? String == "disabled-model"
+                && zcodeProviderPatch?["adapter"] as? String == "zcode"
+                && zcodeProviderPatch?["authMode"] as? String == "zcode-app-config",
+            "provider patch preserves every saved registry target while selecting the requested provider"
         )
         context.expect(providerPatchZCode?["providerId"] == nil, "direct provider patch preserves the existing ZCode execution provider")
         context.expect(providerPatchZCode?["model"] as? String == "zcode-model", "direct provider patch preserves the existing ZCode execution model")
@@ -39,7 +45,7 @@ import Darwin
             Set(providerPatchObject?.keys.map { $0 } ?? []) == Set(["zcode", "providers"])
                 && Set(providerPatchZCode?.keys.map { $0 } ?? []) == Set(["cliPath", "appConfigPath", "model"])
                 && Set(providerPatchRegistry?.keys.map { $0 } ?? []) == Set(["defaultProviderId", "providers"])
-                && Set(providerPatchEntries?.keys.map { $0 } ?? []) == Set(["gateway"])
+                && Set(providerPatchEntries?.keys.map { $0 } ?? []) == Set(["gateway", "disabled", "zcode"])
                 && Set(selectedProviderPatch?.keys.map { $0 } ?? []) == Set([
                     "enabled", "adapter", "displayName", "authMode", "baseUrl", "model"
                 ]),

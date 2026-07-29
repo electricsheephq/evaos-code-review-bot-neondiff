@@ -27,25 +27,30 @@ public enum ProviderRegistryPatchBuilder {
             zcodePatch["model"] = selectedModel
             zcodePatch["providerId"] = target.id
         }
-        var selectedProviderPatch: [String: Any] = [
-            "enabled": target.enabled,
-            "adapter": target.adapter,
-            "displayName": target.displayName,
-            "authMode": target.authMode,
-            "model": selectedModel
-        ]
-        if target.authMode != "zcode-app-config"
-            || !target.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            selectedProviderPatch["baseUrl"] = target.baseUrl
+        var providerPatches: [String: [String: Any]] = [:]
+        for registryTarget in providers.registryTargets {
+            let model = registryTarget.id == target.id
+                ? selectedModel
+                : registryTarget.model
+            var providerPatch: [String: Any] = [
+                "enabled": registryTarget.enabled,
+                "adapter": registryTarget.adapter,
+                "displayName": registryTarget.displayName,
+                "authMode": registryTarget.authMode,
+                "model": model
+            ]
+            if registryTarget.authMode != "zcode-app-config"
+                || !registryTarget.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                providerPatch["baseUrl"] = registryTarget.baseUrl
+            }
+            providerPatches[registryTarget.id] = providerPatch
         }
         let patch: [String: Any] = [
             "zcode": zcodePatch,
             "providers": [
                 "defaultProviderId": target.id,
-                "providers": [
-                    target.id: selectedProviderPatch
-                ]
+                "providers": providerPatches
             ]
         ]
         return try JSONSerialization.data(withJSONObject: patch, options: [.prettyPrinted, .sortedKeys])
