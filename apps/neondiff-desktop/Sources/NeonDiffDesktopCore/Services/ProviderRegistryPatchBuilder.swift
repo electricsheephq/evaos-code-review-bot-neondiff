@@ -35,12 +35,16 @@ public enum ProviderRegistryPatchBuilder {
             var providerPatch: [String: Any] = [
                 "enabled": registryTarget.enabled,
                 "adapter": registryTarget.adapter,
-                "displayName": registryTarget.displayName,
-                "authMode": registryTarget.authMode,
-                "model": model
+                "authMode": registryTarget.authMode
             ]
-            if registryTarget.authMode != "zcode-app-config"
-                || !registryTarget.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !isRedactedMetadata(registryTarget.displayName) {
+                providerPatch["displayName"] = registryTarget.displayName
+            }
+            if !isRedactedMetadata(model) {
+                providerPatch["model"] = model
+            }
+            if !registryTarget.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !isRedactedMetadata(registryTarget.baseUrl)
             {
                 providerPatch["baseUrl"] = registryTarget.baseUrl
             }
@@ -54,5 +58,9 @@ public enum ProviderRegistryPatchBuilder {
             ]
         ]
         return try JSONSerialization.data(withJSONObject: patch, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    private static func isRedactedMetadata(_ value: String) -> Bool {
+        value == "[redacted-secret]" || value == "[env-var-name]"
     }
 }
