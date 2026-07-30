@@ -311,7 +311,7 @@ describe("direct Stripe checkout fulfillment", () => {
     assert.equal(store.listLicenses().length, beforeCount);
   });
 
-  it("returns the raw license only for one exact redemption", async () => {
+  it("replays the same deterministic license for an exact redemption retry", async () => {
     const first = await postRaw(
       url,
       "/v1/checkout/redeem",
@@ -336,9 +336,26 @@ describe("direct Stripe checkout fulfillment", () => {
         Origin: ALLOWED_ORIGIN
       }
     );
-    assert.equal(replay.status, 410);
-    assert.deepEqual(replay.json, { status: "consumed" });
-    assert.ok(!JSON.stringify(replay.json).includes(first.json.licenseKey));
+    assert.equal(replay.status, 200);
+    assert.equal(replay.json.status, "redeemed");
+    assert.equal(replay.json.licenseKey, first.json.licenseKey);
+    assert.equal(replay.headers.get("cache-control"), "no-store");
+
+    const wrongToken = await postRaw(
+      url,
+      "/v1/checkout/redeem",
+      JSON.stringify({
+        sessionId: SESSION_ID,
+        fulfillmentToken: "B".repeat(48)
+      }),
+      {
+        "Content-Type": "application/json",
+        Origin: ALLOWED_ORIGIN
+      }
+    );
+    assert.equal(wrongToken.status, 404);
+    assert.deepEqual(wrongToken.json, { status: "not_found" });
+    assert.ok(!JSON.stringify(wrongToken.json).includes(first.json.licenseKey));
   });
 
   it("maps malformed redemption JSON to a bounded not-found response", async () => {

@@ -6,7 +6,7 @@ It implements the exact HTTP contract the shipped client (`src/license.ts`)
 already calls — activate / validate / deactivate — backed by SQLite, with an
 admin CLI that mints keys. Guarded server-to-server routes issue checkout
 licenses and apply provider subscription lifecycle events. The direct Stripe
-webhook and one-use browser redemption contract are owned here; Lovable and
+webhook and short-lived, idempotent browser redemption contract are owned here; Lovable and
 Supabase remain the website, account, and subscription-projection surfaces but
 are not the license-issuance authority.
 
@@ -24,7 +24,7 @@ Eight `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
 | `/v1/license/deactivate` | `{ licenseKey, repo?, machineId }` | `{ status:"active", … }` (idempotent) | 404 invalid |
 | `/v1/admin/licenses/issue` | `{ idempotencyKey, checkoutLookupKey, ... }` + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | `{ status:"issued", licenseKey:"nd_live_...", entitlement, replayed }` | 401 unauthorized · 400 malformed/unsupported lookup or policy · 409 idempotency conflict |
 | `/v1/webhooks/stripe` | raw Stripe event + `Stripe-Signature` | redacted `{ status:"fulfilled", replayed }` | 400 invalid · 409 conflict · 503 unavailable |
-| `/v1/checkout/redeem` | `{ sessionId, fulfillmentToken }` from the exact configured website origin | one-time `{ status:"redeemed", licenseKey, entitlement }` | 403 wrong origin · 404 invalid/not found · 410 expired/consumed · 503 unavailable |
+| `/v1/checkout/redeem` | `{ sessionId, fulfillmentToken }` from the exact configured website origin | `{ status:"redeemed", licenseKey, entitlement }`; an exact retry returns the same deterministic key until the fulfillment TTL expires | 403 wrong origin · 404 invalid/not found · 410 expired · 503 unavailable |
 | `/v1/admin/licenses/issue-lifecycle` | exact release identity + GitHub Actions OIDC bearer | short-lived lifecycle license + all-scope entitlement | 401 invalid workflow token · 403 candidate SHA mismatch · 409 workflow-run conflict · 503 unconfigured |
 | `/v1/admin/licenses/lifecycle` | strict subscription command + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | redacted `{ status, replayed, entitlement }` | 400 invalid · 401 unauthorized · 404 not_found · 409 conflict/terminally_revoked · 429 rate_limited · 503 unavailable |
 
