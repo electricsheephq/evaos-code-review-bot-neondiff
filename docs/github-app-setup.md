@@ -134,7 +134,9 @@ integration proof under #630.
    install choose **Initialize Local Config**. Enter the same `owner/repo`, then
    choose **Add Repository**, **Apply Repository**, and **Verify App Access**.
    Initialization never uses `--force`; the app updates `pilotRepos` through
-   `config patch`, and no operator edits the customer's config file.
+   `config patch`, and no operator edits the customer's config file. Each new
+   bot config receives isolated runtime, state, evidence, and license paths
+   beside that config rather than the packaged worker's placeholder paths.
 
 GitHub setup and paid activation remain separate gates. After Checkout returns
 the one-shot NeonDiff Activation Key, the customer pastes it in the native

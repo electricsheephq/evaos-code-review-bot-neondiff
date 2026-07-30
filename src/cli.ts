@@ -108,6 +108,11 @@ import { runProvidersVerifyCommand } from "./providers-verify-command.js";
 import { collectReleaseStatus, collectReleaseStatusWithConfig, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
+import {
+  assertPathOutsideProtectedRoot,
+  getProtectedCheckoutRoots,
+  resolvePathFollowingExistingSymlinks
+} from "./path-safety.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
@@ -2431,10 +2436,11 @@ function runInitCommand(args: ParsedArgs): {
   const backupPath = force && existsSync(configPath) ? backupInitForceTarget(configPath) : undefined;
   mkdirSync(dirname(configPath), { recursive: true });
   const exampleConfig = readFileSync(examplePath, "utf8");
+  const initializedConfig = buildInitializedConfig(exampleConfig, configPath);
   if (force) {
-    writeFileAtomic(configPath, exampleConfig);
+    writeFileAtomic(configPath, initializedConfig);
   } else {
-    writeNewFile(configPath, exampleConfig);
+    writeNewFile(configPath, initializedConfig);
   }
   return {
     ok: true,
@@ -2449,6 +2455,47 @@ function runInitCommand(args: ParsedArgs): {
       `neondiff status --config ${configPath} --json`
     ],
   };
+}
+
+function buildInitializedConfig(exampleConfig: string, configPath: string): string {
+  const configDirectory = resolvePathFollowingExistingSymlinks(dirname(configPath));
+  try {
+    assertPathOutsideProtectedRoot({
+      path: configDirectory,
+      protectedRoot: undefined,
+      protectedRoots: getProtectedCheckoutRoots(),
+      pathLabel: "init config directory",
+      protectedRootLabel: "protected checkout root"
+    });
+  } catch (error) {
+    if (
+      !(error instanceof Error)
+      || !error.message.startsWith("init config directory must be outside protected checkout root; got ")
+    ) {
+      throw error;
+    }
+    return exampleConfig;
+  }
+
+  const initialized = JSON.parse(exampleConfig) as Record<string, unknown>;
+  const stateDirectory = join(configDirectory, "state");
+  initialized.workRoot = join(configDirectory, "runtime");
+  initialized.statePath = join(stateDirectory, "reviews.sqlite");
+  initialized.evidenceDir = join(configDirectory, "evidence");
+
+  const existingLicense = initialized.license;
+  const license = existingLicense !== null
+      && typeof existingLicense === "object"
+      && !Array.isArray(existingLicense)
+    ? { ...(existingLicense as Record<string, unknown>) }
+    : {};
+  license.cachePath = join(stateDirectory, "license", "entitlement-cache.json");
+  if (license.storageBackend === "file") {
+    license.keyPath = join(stateDirectory, "license", "license-key.txt");
+  }
+  initialized.license = license;
+
+  return `${JSON.stringify(initialized, null, 2)}\n`;
 }
 
 function resolvePackageRoot(): string {

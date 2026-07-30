@@ -176,6 +176,81 @@ describe("public NeonDiff CLI surface", () => {
     });
   });
 
+  it("initializes isolated desktop state outside the packaged worker root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-desktop-packaged-worker-"));
+    roots.push(root);
+    const botRoot = join(root, "accounts", "paid-canary", "bots", "private-review");
+    const configPath = join(botRoot, "config.local.json");
+    const cliSourcePath = join(repoRoot, "src/cli.ts");
+    const env = {
+      ...process.env,
+      NODE_OPTIONS: "--experimental-sqlite",
+      NEONDIFF_PROTECTED_CHECKOUT_ROOT: "/tmp/neondiff"
+    };
+
+    const initialized = await execFileAsync(process.execPath, [
+      tsxCliPath,
+      cliSourcePath,
+      "init",
+      "--config",
+      configPath
+    ], {
+      cwd: "/",
+      env
+    });
+    expect(JSON.parse(initialized.stdout)).toMatchObject({
+      ok: true,
+      command: "init",
+      created: true,
+      configPath
+    });
+
+    const initializedConfig = JSON.parse(readFileSync(configPath, "utf8"));
+    const resolvedBotRoot = realpathSync(botRoot);
+    expect(initializedConfig.workRoot).toBe(join(resolvedBotRoot, "runtime"));
+    expect(initializedConfig.statePath).toBe(join(resolvedBotRoot, "state", "reviews.sqlite"));
+    expect(initializedConfig.evidenceDir).toBe(join(resolvedBotRoot, "evidence"));
+
+    const inspected = await execFileAsync(process.execPath, [
+      tsxCliPath,
+      cliSourcePath,
+      "config",
+      "inspect",
+      "--config",
+      configPath
+    ], {
+      cwd: "/",
+      env
+    });
+    expect(JSON.parse(inspected.stdout)).toMatchObject({
+      ok: true,
+      command: "config inspect"
+    });
+  });
+
+  it("keeps packaged example paths when init targets a protected checkout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-init-protected-checkout-"));
+    roots.push(root);
+    const checkoutRoot = join(root, "checkout");
+    const configPath = join(checkoutRoot, "config.local.json");
+    mkdirSync(join(checkoutRoot, ".git"), { recursive: true });
+
+    const { stdout } = await runCli(["init", "--config", configPath], {
+      cwd: "/",
+      env: { NEONDIFF_PROTECTED_CHECKOUT_ROOT: checkoutRoot }
+    });
+
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: true,
+      command: "init",
+      created: true,
+      configPath
+    });
+    expect(readFileSync(configPath, "utf8")).toBe(
+      readFileSync(join(repoRoot, "config.example.json"), "utf8")
+    );
+  });
+
   it("still rejects license state inside a non-package Git checkout", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-non-package-checkout-"));
     roots.push(root);
@@ -1907,7 +1982,18 @@ exit 1
     expect(realpathSync(output.configPath)).toBe(realpathSync(configPath));
     expect(existsSync(configPath)).toBe(true);
     const config = readFileSync(configPath, "utf8");
-    expect(config).toBe(example);
+    const parsedConfig = JSON.parse(config);
+    const resolvedRoot = realpathSync(root);
+    expect(parsedConfig).toMatchObject({
+      workRoot: join(resolvedRoot, "runtime"),
+      statePath: join(resolvedRoot, "state", "reviews.sqlite"),
+      evidenceDir: join(resolvedRoot, "evidence"),
+      license: {
+        cachePath: join(resolvedRoot, "state", "license", "entitlement-cache.json"),
+        keyPath: join(resolvedRoot, "state", "license", "license-key.txt")
+      }
+    });
+    expect(config).toContain("\"pilotRepos\"");
     expect(example).toContain("\"pilotRepos\"");
     const fixtureLeakPattern = new RegExp(
       String.raw`ghp_|BEGIN ${"PRIVATE KEY"}|api[_-]?key["']?\s*[:=]\s*["'][A-Za-z0-9._~+/=-]{16,}`,
