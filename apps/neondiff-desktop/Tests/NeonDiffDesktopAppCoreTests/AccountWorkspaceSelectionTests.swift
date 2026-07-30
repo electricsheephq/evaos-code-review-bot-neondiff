@@ -430,6 +430,115 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func pendingNewBotPlanAndConfigPathSurviveRelaunch() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let firstLaunch = ModelDependencyFixture(root: root)
+        firstLaunch.model.applyAccountWorkspaceCatalog(.loaded([personal]))
+        let original = try #require(firstLaunch.model.pendingNewBotPlan)
+        let originalConfigPath = try #require(original.bot.localConfigPath)
+        let originalConfigURL = URL(filePath: originalConfigPath)
+        try FileManager.default.createDirectory(
+            at: originalConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"pilotRepos":["\#(repository)"]}"#.utf8)
+            .write(to: originalConfigURL)
+
+        let savedConfigPath = try #require(
+            firstLaunch.preferences.string(forKey: "neondiff.configPath")
+        )
+        let savedBotID = try #require(
+            firstLaunch.preferences.string(forKey: "neondiff.accountBotID")
+        )
+        let savedPendingPlan = try #require(
+            firstLaunch.preferences.string(forKey: "neondiff.pendingNewBotPlan.v1")
+        )
+        var inspectPayload = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(ModelDependencyFixture.configInspectJSON.utf8)
+            ) as? [String: Any]
+        )
+        var inspectedConfig = try #require(inspectPayload["config"] as? [String: Any])
+        inspectedConfig["pilotRepos"] = [repository]
+        inspectPayload["config"] = inspectedConfig
+        let inspectJSON = try #require(String(
+            data: JSONSerialization.data(withJSONObject: inspectPayload),
+            encoding: .utf8
+        ))
+        let relaunched = ModelDependencyFixture(
+            root: root,
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: inspectJSON,
+                stderr: ""
+            ))],
+            preferenceStrings: [
+                "neondiff.accountWorkspaceID": personal.id,
+                "neondiff.accountBotID": savedBotID,
+                "neondiff.configPath": savedConfigPath,
+                "neondiff.pendingNewBotPlan.v1": savedPendingPlan
+            ]
+        )
+
+        relaunched.model.applyAccountWorkspaceCatalog(.loaded([personal]))
+        await relaunched.cli.waitUntilCallCount(1)
+        for _ in 0..<100 where relaunched.model.isConfigInspectInProgress {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(relaunched.model.pendingNewBotPlan == original)
+        #expect(relaunched.model.accountWorkspaceSelection.botID == original.bot.id)
+        #expect(relaunched.model.configPath == originalConfigPath)
+        #expect(relaunched.cli.calls[0].arguments == [
+            "config", "inspect", "--config", originalConfigPath
+        ])
+        #expect(relaunched.model.lastError == nil)
+        #expect(relaunched.model.repos.map(\.name) == [repository])
+    }
+
+    @MainActor
+    @Test func pendingNewBotRelaunchRejectsAConfigOutsideTheSelectedAccount() throws {
+        let root = fixtureURL("/fixture/model-app-support", directory: true)
+        let savedBotID = "pending-75f906e6-08f9-4ca0-bf6a-e83b964543e2"
+        let injectedPath = root
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent("another-account", isDirectory: true)
+            .appendingPathComponent("Bots", isDirectory: true)
+            .appendingPathComponent("new-neondiff-bot", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+            .path
+        let serialized = String(
+            data: try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "accountID": personal.id,
+                "botID": savedBotID,
+                "appSlug": "new-neondiff-bot",
+                "configPath": injectedPath
+            ]),
+            encoding: .utf8
+        )!
+        let fixture = ModelDependencyFixture(
+            root: root,
+            preferenceStrings: [
+                "neondiff.accountWorkspaceID": personal.id,
+                "neondiff.accountBotID": savedBotID,
+                "neondiff.configPath": injectedPath,
+                "neondiff.pendingNewBotPlan.v1": serialized
+            ]
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([personal]))
+
+        let replacement = try #require(fixture.model.pendingNewBotPlan)
+        #expect(replacement.bot.id != savedBotID)
+        #expect(replacement.bot.localConfigPath != injectedPath)
+        #expect(replacement.bot.localConfigPath?.contains("/Accounts/\(personal.id)/Bots/") == true)
+    }
+
+    @MainActor
     @Test func staleConfigInspectCannotPopulateTheNewWorkspace() async throws {
         let botA = bot(id: "bot-a", slug: "bot-a", configPath: "/fixture/a/config.local.json")
         let botB = bot(id: "bot-b", slug: "bot-b", configPath: "/fixture/b/config.local.json")

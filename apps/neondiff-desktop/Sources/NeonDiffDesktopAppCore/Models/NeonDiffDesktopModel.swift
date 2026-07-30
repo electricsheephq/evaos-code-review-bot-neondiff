@@ -698,6 +698,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var workspaceContextGeneration: UInt64 = 0
     private let accountWorkspacePreferenceKey = "neondiff.accountWorkspaceID"
     private let accountBotPreferenceKey = "neondiff.accountBotID"
+    private let pendingNewBotPlanPreferenceKey = "neondiff.pendingNewBotPlan.v1"
+
+    private struct PersistedPendingNewBotPlan: Codable {
+        let schemaVersion: Int
+        let accountID: String
+        let botID: String
+        let appSlug: String
+        let configPath: String
+    }
 
     package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
@@ -1485,6 +1494,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     accountWorkspaceSelection.selectBot(nil)
                     pendingNewBotPlan = nil
                     dependencies.preferences.removeValue(forKey: accountBotPreferenceKey)
+                    dependencies.preferences.removeValue(
+                        forKey: pendingNewBotPlanPreferenceKey
+                    )
                     accountWorkspaceStatus = "The selected bot is no longer authorized. Choose another bot or create a new one."
                     return
                 }
@@ -1519,7 +1531,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let initial = catalog.accounts.first(where: { $0.id == saved }) ?? catalog.accounts[0]
         let savedBotID = dependencies.preferences.string(forKey: accountBotPreferenceKey)
         selectAccountWorkspace(initial.id, clearSavedBot: false)
-        if let savedBotID,
+        if let restoredPlan = restoredPendingNewBotPlan(
+            account: initial,
+            savedBotID: savedBotID
+        ) {
+            pendingNewBotPlan = restoredPlan
+            accountWorkspaceSelection.selectBot(restoredPlan.bot.id)
+            configPath = restoredPlan.bot.localConfigPath ?? configPath
+            accountWorkspaceStatus = "Restored the pending New Bot setup on this Mac."
+            if dependencies.fileWriter.fileExists(at: URL(filePath: configPath)) {
+                inspectConfig(allowDuringAccountRestore: true)
+            } else {
+                reopenOnboarding(at: .welcome)
+            }
+        } else if let savedBotID,
            initial.bots.contains(where: {
                $0.id == savedBotID
                    && ($0.status == .verified || $0.status == .pending)
@@ -1527,6 +1552,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             selectBotInstallation(savedBotID)
         } else {
             dependencies.preferences.removeValue(forKey: accountBotPreferenceKey)
+            dependencies.preferences.removeValue(
+                forKey: pendingNewBotPlanPreferenceKey
+            )
             if initial.bots.isEmpty {
                 beginNewBot()
             }
@@ -1550,6 +1578,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.preferences.set(accountID, forKey: accountWorkspacePreferenceKey)
         if clearSavedBot {
             dependencies.preferences.removeValue(forKey: accountBotPreferenceKey)
+            dependencies.preferences.removeValue(
+                forKey: pendingNewBotPlanPreferenceKey
+            )
         }
         accountWorkspaceStatus = "Account selected. Choose an existing bot or create a new one."
     }
@@ -1567,6 +1598,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         resetWorkspaceBoundRuntimeState()
         accountWorkspaceSelection.selectBot(botID)
         pendingNewBotPlan = nil
+        dependencies.preferences.removeValue(
+            forKey: pendingNewBotPlanPreferenceKey
+        )
         dependencies.preferences.set(botID, forKey: accountBotPreferenceKey)
         if let localConfigPath = bot.localConfigPath {
             configPath = localConfigPath
@@ -1606,6 +1640,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             accountWorkspaceSelection.selectBot(plan.bot.id)
             configPath = plan.bot.localConfigPath ?? configPath
             dependencies.preferences.set(plan.bot.id, forKey: accountBotPreferenceKey)
+            dependencies.preferences.set(configPath, forKey: "neondiff.configPath")
+            persistPendingNewBotPlan(plan)
             accountWorkspaceStatus = "New bot setup is isolated from existing bot configs."
             reopenOnboarding(at: .welcome)
         } catch {
@@ -1717,6 +1753,106 @@ package final class NeonDiffDesktopModel: ObservableObject {
             .appendingPathComponent(appSlug, isDirectory: true)
             .appendingPathComponent("config.local.json")
             .standardizedFileURL.path
+    }
+
+    private func restoredPendingNewBotPlan(
+        account: DesktopAccountWorkspace,
+        savedBotID: String?
+    ) -> DesktopNewBotPlan? {
+        guard account.role != nil,
+              let savedBotID,
+              savedBotID.range(
+                of: "^pending-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                options: .regularExpression
+              ) != nil,
+              let serialized = dependencies.preferences.string(
+                forKey: pendingNewBotPlanPreferenceKey
+              ),
+              let data = serialized.data(using: .utf8),
+              let persisted = try? JSONDecoder().decode(
+                PersistedPendingNewBotPlan.self,
+                from: data
+              ),
+              persisted.schemaVersion == 1,
+              persisted.accountID == account.id,
+              persisted.botID == savedBotID,
+              dependencies.preferences.string(forKey: "neondiff.configPath")
+                == persisted.configPath,
+              persisted.appSlug.range(
+                of: "^[a-z0-9][a-z0-9-]{0,99}$",
+                options: .regularExpression
+              ) != nil
+        else {
+            return nil
+        }
+
+        let botsDirectory = dependencies.fileWriter.applicationSupportDirectory
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent(account.id, isDirectory: true)
+            .appendingPathComponent("Bots", isDirectory: true)
+            .standardizedFileURL
+        let configURL = URL(filePath: persisted.configPath).standardizedFileURL
+        let botDirectory = configURL.deletingLastPathComponent()
+        let directoryName = botDirectory.lastPathComponent
+        guard configURL.lastPathComponent == "config.local.json",
+              botDirectory.deletingLastPathComponent() == botsDirectory,
+              directoryName == persisted.appSlug
+                || isNumberedNewBotDirectory(
+                    directoryName,
+                    appSlug: persisted.appSlug
+                )
+        else {
+            return nil
+        }
+
+        return DesktopNewBotPlan(
+            accountID: account.id,
+            bot: DesktopBotInstallation(
+                id: savedBotID,
+                appID: 0,
+                appSlug: persisted.appSlug,
+                mode: .byo,
+                githubInstallationID: nil,
+                githubAccountLogin: nil,
+                status: .pending,
+                localConfigPath: configURL.path
+            )
+        )
+    }
+
+    private func persistPendingNewBotPlan(_ plan: DesktopNewBotPlan) {
+        guard let configPath = plan.bot.localConfigPath,
+              let data = try? JSONEncoder().encode(PersistedPendingNewBotPlan(
+                schemaVersion: 1,
+                accountID: plan.accountID,
+                botID: plan.bot.id,
+                appSlug: plan.bot.appSlug,
+                configPath: configPath
+              )),
+              let serialized = String(data: data, encoding: .utf8)
+        else {
+            dependencies.preferences.removeValue(
+                forKey: pendingNewBotPlanPreferenceKey
+            )
+            return
+        }
+        dependencies.preferences.set(
+            serialized,
+            forKey: pendingNewBotPlanPreferenceKey
+        )
+    }
+
+    private func isNumberedNewBotDirectory(
+        _ directoryName: String,
+        appSlug: String
+    ) -> Bool {
+        let prefix = appSlug + "-"
+        guard directoryName.hasPrefix(prefix),
+              let suffix = Int(directoryName.dropFirst(prefix.count))
+        else {
+            return false
+        }
+        return suffix >= 2 && directoryName == "\(prefix)\(suffix)"
     }
 
     #if DEBUG
