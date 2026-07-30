@@ -425,11 +425,18 @@ package enum DesktopLocalBotExecutionContextResolver {
         arguments: [String],
         executionContexts: [DesktopLocalBotExecutionContext]
     ) -> String? {
-        matchingContext(
-            executablePath: executablePath,
-            arguments: arguments,
-            executionContexts: executionContexts,
-            commandAccess: .executableReuse
+        (
+            matchingContext(
+                executablePath: executablePath,
+                arguments: arguments,
+                executionContexts: executionContexts,
+                commandAccess: .executableReuse
+            )
+            ?? unboundManagedWorkerContext(
+                executablePath: executablePath,
+                arguments: arguments,
+                executionContexts: executionContexts
+            )
         )?.executablePath
     }
 
@@ -443,6 +450,10 @@ package enum DesktopLocalBotExecutionContextResolver {
             arguments: arguments,
             executionContexts: executionContexts,
             commandAccess: .executableReuse
+        ) ?? unboundManagedWorkerContext(
+            executablePath: executablePath,
+            arguments: arguments,
+            executionContexts: executionContexts
         ) else {
             return arguments
         }
@@ -498,5 +509,154 @@ package enum DesktopLocalBotExecutionContextResolver {
         }
         guard matches.count == 1 else { return nil }
         return matches[0]
+    }
+
+    /// A newly created account bot has an isolated config path, so it cannot
+    /// match the existing LaunchAgent config that proved the local worker.
+    /// Reuse only the exact installer-managed worker executable for the
+    /// bounded first-run commands that do not borrow the existing bot's
+    /// credential environment. The separate `resolve` method intentionally
+    /// remains exact-config-only.
+    private static func unboundManagedWorkerContext(
+        executablePath: String,
+        arguments: [String],
+        executionContexts: [DesktopLocalBotExecutionContext]
+    ) -> DesktopLocalBotExecutionContext? {
+        guard executablePath == "neondiff",
+              isSupportedUnboundCommand(arguments),
+              isIsolatedAccountBotConfig(arguments)
+        else {
+            return nil
+        }
+        let matches = executionContexts.filter(isInstallerManagedWorker)
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    private static func isSupportedUnboundCommand(_ arguments: [String]) -> Bool {
+        if arguments.count == 3,
+           arguments[0] == "init",
+           arguments[1] == "--config"
+        {
+            return true
+        }
+        if arguments.count == 4,
+           Array(arguments.prefix(2)) == ["config", "inspect"],
+           arguments[2] == "--config"
+        {
+            return true
+        }
+        if Array(arguments.prefix(2)) == ["config", "patch"] {
+            return isSupportedConfigPatch(arguments)
+        }
+        guard arguments.count == 9,
+              Array(arguments.prefix(2)) == ["doctor", "github"],
+              arguments[2] == "--config",
+              arguments[4] == "--github-app-id",
+              !arguments[5].isEmpty,
+              arguments[5].utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+              Int64(arguments[5]).map({ $0 > 0 }) == true,
+              arguments[6] == "--github-app-private-key-stdin",
+              arguments[7] == "true",
+              arguments[8] == "--json"
+        else {
+            return false
+        }
+        return true
+    }
+
+    private static func isSupportedConfigPatch(_ arguments: [String]) -> Bool {
+        guard arguments.count >= 8,
+              arguments.count.isMultiple(of: 2)
+        else {
+            return false
+        }
+
+        var values: [String: String] = [:]
+        var index = 2
+        while index < arguments.count {
+            let flag = arguments[index]
+            let value = arguments[index + 1]
+            guard [
+                "--config",
+                "--input",
+                "--dry-run",
+                "--expected-revision",
+                "--confirm"
+            ].contains(flag),
+            values[flag] == nil,
+            !value.isEmpty
+            else {
+                return false
+            }
+            values[flag] = value
+            index += 2
+        }
+
+        guard values["--config"] != nil,
+              values["--input"].map({ $0.hasPrefix("/") }) == true,
+              let dryRun = values["--dry-run"],
+              dryRun == "true" || dryRun == "false"
+        else {
+            return false
+        }
+        if dryRun == "true" {
+            return values["--confirm"] == nil
+        }
+        return values["--confirm"] == "true"
+    }
+
+    private static func isIsolatedAccountBotConfig(_ arguments: [String]) -> Bool {
+        let configIndexes = arguments.indices.filter {
+            arguments[$0] == "--config"
+        }
+        guard configIndexes.count == 1,
+              let index = configIndexes.first,
+              arguments.index(after: index) < arguments.endIndex
+        else {
+            return false
+        }
+        let rawPath = arguments[arguments.index(after: index)]
+        guard rawPath.hasPrefix("/") else { return false }
+        let components = URL(filePath: rawPath).standardizedFileURL.pathComponents
+        guard components.count >= 8 else { return false }
+        let suffix = Array(components.suffix(8))
+        return suffix[0] == "Library"
+            && suffix[1] == "Application Support"
+            && suffix[2] == "NeonDiffDesktop"
+            && suffix[3] == "Accounts"
+            && !suffix[4].isEmpty
+            && suffix[4] != "_unselected"
+            && suffix[5] == "Bots"
+            && !suffix[6].isEmpty
+            && suffix[7] == "config.local.json"
+    }
+
+    private static func isInstallerManagedWorker(
+        _ context: DesktopLocalBotExecutionContext
+    ) -> Bool {
+        guard let executablePath = context.executablePath,
+              executablePath.hasPrefix("/"),
+              URL(filePath: executablePath).lastPathComponent == "node",
+              context.argumentPrefix.count == 1
+        else {
+            return false
+        }
+        let components = URL(
+            filePath: context.argumentPrefix[0]
+        ).standardizedFileURL.pathComponents
+        guard components.count >= 11 else { return false }
+        let suffix = Array(components.suffix(11))
+        return suffix[0] == "Library"
+            && suffix[1] == "Application Support"
+            && suffix[2] == "NeonDiffDesktop"
+            && suffix[3] == "Workers"
+            && !suffix[4].isEmpty
+            && suffix[5] == "current"
+            && suffix[6] == "node_modules"
+            && suffix[7] == "neondiff"
+            && suffix[8] == "dist"
+            && suffix[9] == "src"
+            && suffix[10] == "cli.js"
     }
 }

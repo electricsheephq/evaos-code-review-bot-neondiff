@@ -357,6 +357,165 @@ import Testing
         ) == nil)
     }
 
+    @Test func reusesInstallerManagedWorkerForAnIsolatedNewBotConfig() throws {
+        let label = "com.electricsheephq.evaos-code-review-bot"
+        let existingConfigPath =
+            "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
+        let isolatedConfigPath =
+            "/Users/test/Library/Application Support/NeonDiffDesktop/Accounts/account/Bots/new-bot/config.local.json"
+        let privateKeyPath = "/Users/test/.config/neondiff/app.pem"
+        let nodePath = "/opt/homebrew/bin/node"
+        let workerRoot = URL(
+            filePath: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers"
+        )
+        .appendingPathComponent(label, isDirectory: true)
+        .standardizedFileURL
+        let workerCLI = workerRoot
+            .appendingPathComponent(
+                "current/node_modules/neondiff/dist/src/cli.js"
+            )
+            .standardizedFileURL
+        let context = try #require(
+            DesktopLaunchAgentExecutionContextParser.parse(
+                data: propertyList(
+                    label: label,
+                    environment: [
+                        "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+                        "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": privateKeyPath
+                    ],
+                    arguments: [
+                        nodePath,
+                        workerCLI.path,
+                        "daemon",
+                        "--config",
+                        existingConfigPath
+                    ]
+                ),
+                expectedLabel: label,
+                installedWorkerRoot: workerRoot,
+                privateKeyPathIsSafe: { $0.path == privateKeyPath }
+            )
+        )
+        let initialize = ["init", "--config", isolatedConfigPath]
+        let inspect = ["config", "inspect", "--config", isolatedConfigPath]
+        let patch = [
+            "config", "patch",
+            "--config", isolatedConfigPath,
+            "--input", "/tmp/public-safe-patch.json",
+            "--dry-run", "false",
+            "--confirm", "true"
+        ]
+
+        for arguments in [initialize, inspect, patch] {
+            #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+                executablePath: "neondiff",
+                arguments: arguments,
+                executionContexts: [context]
+            ) == nodePath)
+            #expect(DesktopLocalBotExecutionContextResolver.resolveArguments(
+                executablePath: "neondiff",
+                arguments: arguments,
+                executionContexts: [context]
+            ) == [workerCLI.path] + arguments)
+            #expect(DesktopLocalBotExecutionContextResolver.resolve(
+                executablePath: "neondiff",
+                arguments: arguments,
+                executionContexts: [context]
+            ).isEmpty)
+        }
+    }
+
+    @Test func reusesInstallerManagedWorkerForIsolatedBYODoctorOnlyWithStdin() throws {
+        let label = "com.electricsheephq.evaos-code-review-bot"
+        let existingConfigPath =
+            "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"
+        let isolatedConfigPath =
+            "/Users/test/Library/Application Support/NeonDiffDesktop/Accounts/account/Bots/new-bot/config.local.json"
+        let privateKeyPath = "/Users/test/.config/neondiff/app.pem"
+        let nodePath = "/opt/homebrew/bin/node"
+        let workerRoot = URL(
+            filePath: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers"
+        )
+        .appendingPathComponent(label, isDirectory: true)
+        .standardizedFileURL
+        let workerCLI = workerRoot
+            .appendingPathComponent(
+                "current/node_modules/neondiff/dist/src/cli.js"
+            )
+            .standardizedFileURL
+        let context = try #require(
+            DesktopLaunchAgentExecutionContextParser.parse(
+                data: propertyList(
+                    label: label,
+                    environment: [
+                        "EVAOS_REVIEW_BOT_APP_ID": "4184532",
+                        "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH": privateKeyPath
+                    ],
+                    arguments: [
+                        nodePath,
+                        workerCLI.path,
+                        "daemon",
+                        "--config",
+                        existingConfigPath
+                    ]
+                ),
+                expectedLabel: label,
+                installedWorkerRoot: workerRoot,
+                privateKeyPathIsSafe: { $0.path == privateKeyPath }
+            )
+        )
+        let verifiedArguments = [
+            "doctor", "github",
+            "--config", isolatedConfigPath,
+            "--github-app-id", "4184532",
+            "--github-app-private-key-stdin", "true",
+            "--json"
+        ]
+        let missingStdinContract = [
+            "doctor", "github",
+            "--config", isolatedConfigPath,
+            "--json"
+        ]
+        let widenedDoctorContract = verifiedArguments + ["--repo", "owner/repo"]
+
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: verifiedArguments,
+            executionContexts: [context]
+        ) == nodePath)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveArguments(
+            executablePath: "neondiff",
+            arguments: verifiedArguments,
+            executionContexts: [context]
+        ) == [workerCLI.path] + verifiedArguments)
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "neondiff",
+            arguments: verifiedArguments,
+            executionContexts: [context]
+        ).isEmpty)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: missingStdinContract,
+            executionContexts: [context]
+        ) == nil)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: widenedDoctorContract,
+            executionContexts: [context]
+        ) == nil)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: [
+                "config", "patch",
+                "--config", isolatedConfigPath,
+                "--input", "/tmp/public-safe-patch.json",
+                "--dry-run", "true",
+                "--confirm", "true"
+            ],
+            executionContexts: [context]
+        ) == nil)
+    }
+
     @Test func preservesTheAcceptedSourceRunnerInvocationForDesktopCommands() throws {
         let workingDirectory = "/Volumes/LEXAR/repos/evaos-code-review-bot"
         let configPath = "/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json"

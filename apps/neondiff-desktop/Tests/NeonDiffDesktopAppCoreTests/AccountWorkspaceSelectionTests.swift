@@ -410,6 +410,26 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func firstCatalogAllocatesAnIsolatedPlanForAnAccountWithoutBots() throws {
+        let account = workspace(
+            id: "account-new",
+            name: "New Account",
+            bots: []
+        )
+        let fixture = ModelDependencyFixture()
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+
+        let plan = try #require(fixture.model.pendingNewBotPlan)
+        #expect(plan.accountID == account.id)
+        #expect(fixture.model.accountWorkspaceSelection.accountID == account.id)
+        #expect(fixture.model.accountWorkspaceSelection.botID == plan.bot.id)
+        #expect(fixture.model.configPath == plan.bot.localConfigPath)
+        #expect(!fixture.model.configPath.contains("/Accounts/_unselected/"))
+        #expect(fixture.model.isOnboardingPresented)
+    }
+
+    @MainActor
     @Test func staleConfigInspectCannotPopulateTheNewWorkspace() async throws {
         let botA = bot(id: "bot-a", slug: "bot-a", configPath: "/fixture/a/config.local.json")
         let botB = bot(id: "bot-b", slug: "bot-b", configPath: "/fixture/b/config.local.json")
