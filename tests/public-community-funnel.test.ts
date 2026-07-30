@@ -86,6 +86,9 @@ describe("NeonDiff public community funnel", () => {
 
     for (const text of [surfaces.readme, surfaces.setup, surfaces.githubApp]) {
       expect(text).toMatch(/no invitation (?:is )?required/i);
+      expect(text.replace(/\s+/g, " ")).toMatch(
+        /No invitation is required when the versioned public GitHub prerelease is published and the neondiff\.com purchase\/download path is live\./i
+      );
       expect(text).toMatch(/GitHub prerelease|release manifest/i);
       expect(text).toMatch(/SHA-256|checksum/i);
     }

@@ -279,8 +279,9 @@ For a B0 customer, the native first-run path is:
 
 This first-run step proves only current App installation and repository access.
 Provider verification, activation, dry run, and live review remain separate
-gates. No invitation is required once the #610 public purchase/download gate
-opens; until then, the candidate and its GitHub prerelease assets remain held.
+gates. No invitation is required when the versioned public GitHub prerelease is
+published and the neondiff.com purchase/download path is live. Until both are
+true, the candidate and its GitHub prerelease assets remain held.
 
 ### Existing bot on this Mac
 

@@ -104,8 +104,9 @@ curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
 
 The public paid B0 Mac beta uses a separate checksum-bound worker bundle from
 the same immutable GitHub prerelease as the app rather than an unpublished npm
-version or an unpinned source checkout. No invitation is required once the
-versioned public GitHub prerelease is published and linked from neondiff.com.
+version or an unpinned source checkout. No invitation is required when the
+versioned public GitHub prerelease is published and the neondiff.com
+purchase/download path is live.
 When the app reports **Worker update required**, choose **Install / Update Local
 Worker**. Verify the outer worker bundle ZIP against the prerelease notes, then
 verify the extracted release manifest and inner `.tgz` tarball against the

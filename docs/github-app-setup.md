@@ -8,12 +8,12 @@ configuration, state database, and evidence files.
 On macOS the native app (`apps/neondiff-desktop`) is the human first-run surface.
 The public paid B0 BYO build accepts the customer's own App ID and private key,
 one selected repository, and runs the explicit installation check from the
-wizard. No invitation is required when the versioned public GitHub prerelease
-and neondiff.com purchase/download path are live. The managed B1 path uses the
-official NeonDiff App and broker under #613; it is separate from B0. This
-document remains the operator/CLI reference for both paths' App identity,
-permission set, and install boundary. Matching public website onboarding copy
-lives in the website repo under neon-diff-agent-website#52.
+wizard. No invitation is required when the versioned public GitHub prerelease is
+published and the neondiff.com purchase/download path is live. The managed B1
+path uses the official NeonDiff App and broker under #613; it is separate from
+B0. This document remains the operator/CLI reference for both paths' App
+identity, permission set, and install boundary. Matching public website
+onboarding copy lives in the website repo under neon-diff-agent-website#52.
 
 ## Install URL
 
