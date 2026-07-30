@@ -177,6 +177,12 @@ Repository**, and **Verify App Access**, so the customer does not need a
 terminal or an operator edit to reach the repository-verification gate. This
 source path does not prove customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.
+After Checkout displays a one-shot NeonDiff Activation Key, return to the
+native **License** pane and paste it there. **Buy an Activation Key** opens the
+public pricing page without hiding that secure existing-key field, so returning
+from the browser does not require a second purchase or an operator-only state
+change. The app stores the key through its existing Keychain-only activation
+path and clears the plaintext field after the customer continues.
 When the signed-in account already contains a verified bot and its App identity
 matches a local launchd/config candidate on this Mac, the native app reuses that
 authoritative account/bot intersection instead of asking the user to initialize

@@ -200,15 +200,15 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Private repositories need activation",
-                cause: "Private repository review requires an active \(keyTerm). Get one through checkout, or paste a key you already have.",
+                cause: "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued.",
                 recovery: ActivationRecovery(
-                    label: "Get a \(keyTerm)",
-                    event: .beginCheckout,
-                    accessibilityLabel: "Open checkout to get a \(keyTerm)"
+                    label: "Continue with this key",
+                    event: .provideExistingKey,
+                    accessibilityLabel: "Store the existing \(keyTerm) securely and continue"
                 ),
                 accessibilityLabel: "Private repositories require an active \(keyTerm).",
                 isSuccess: false,
-                requiresKeyEntry: false,
+                requiresKeyEntry: true,
                 showsNotifyOption: false
             )
 

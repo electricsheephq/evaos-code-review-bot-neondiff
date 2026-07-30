@@ -136,6 +136,13 @@ integration proof under #630.
    Initialization never uses `--force`; the app updates `pilotRepos` through
    `config patch`, and no operator edits the customer's config file.
 
+GitHub setup and paid activation remain separate gates. After Checkout returns
+the one-shot NeonDiff Activation Key, the customer pastes it in the native
+**License** pane. The **Buy an Activation Key** control opens the public pricing
+page without replacing or hiding existing-key entry, and the app clears the
+plaintext field after storing the key through its Keychain-only activation
+path.
+
 If account linking finds a server-verified bot whose exact App identity and
 GitHub account match a local launchd/config candidate on this Mac, NeonDiff
 shows that existing connection instead of presenting clean-install credential

@@ -283,6 +283,14 @@ gates. No invitation is required when the versioned public GitHub prerelease is
 published and the neondiff.com purchase/download path is live. Until both are
 true, the candidate and its GitHub prerelease assets remain held.
 
+After Checkout displays the one-shot NeonDiff Activation Key, return to the
+native **License** pane, paste the key, and choose **Continue with this key**,
+then **Activate**. **Buy an Activation Key** opens the public pricing page but
+keeps the existing-key field available when the customer returns. The key is
+stored only through the app's Keychain activation path and the plaintext field
+is cleared; do not paste it into Terminal, config, logs, screenshots, or
+evidence.
+
 ### Existing bot on this Mac
 
 After account linking, the native app may find a server-verified bot whose App

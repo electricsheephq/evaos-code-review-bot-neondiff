@@ -153,6 +153,16 @@ import Testing
                 "checkout_paused must tell users existing keys still activate")
     }
 
+    @Test func purchaseRequiredAcceptsTheKeyCheckoutAlreadyIssued() {
+        let p = ActivationStateMachine.presentation(for: .purchaseRequired)
+
+        #expect(p.requiresKeyEntry, "purchase_required must not hide existing-key entry")
+        #expect(
+            p.recovery?.event == .provideExistingKey,
+            "purchase_required must let a customer continue with the key returned by checkout"
+        )
+    }
+
     @Test func presentationNeverEmbedsRawKeyMaterial() {
         // Redaction invariant: presentation copy is derived only from the state and
         // a caller-supplied REDACTED prefix — a raw secret can never leak into copy.

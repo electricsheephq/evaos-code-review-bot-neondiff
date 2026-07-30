@@ -69,6 +69,15 @@ struct ActivationStateView: View {
                     .accessibilityIdentifier("neondiff.activation.primary")
                 }
 
+                if presentation.state == .purchaseRequired {
+                    Button("Buy an Activation Key") {
+                        model.openActivationCheckout()
+                    }
+                    .buttonStyle(NDSecondaryButtonStyle())
+                    .accessibilityLabel("Open NeonDiff checkout in your browser")
+                    .accessibilityIdentifier("neondiff.activation.checkout")
+                }
+
                 if presentation.showsNotifyOption {
                     Button("Notify me when checkout reopens") {
                         model.requestActivationNotifyWhenCheckoutReopens()
