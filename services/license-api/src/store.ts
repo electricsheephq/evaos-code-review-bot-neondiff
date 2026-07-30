@@ -822,9 +822,6 @@ export class LicenseStore {
       transactionStarted = true;
       const row = this.getStripeCheckoutFulfillmentByCheckoutId(externalCheckoutId);
       if (!row) throw new CheckoutRedemptionNotFoundError("checkout fulfillment was not found");
-      if (row.redeemed_at) {
-        throw new CheckoutRedemptionConsumedError("checkout fulfillment was already consumed");
-      }
       const expiresAt = Date.parse(row.fulfillment_expires_at);
       if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) {
         throw new CheckoutRedemptionExpiredError("checkout fulfillment has expired");
@@ -842,6 +839,14 @@ export class LicenseStore {
       }
       if (record.expiresAt && Date.parse(record.expiresAt) <= now.getTime()) {
         throw new CheckoutRedemptionExpiredError("checkout entitlement has expired");
+      }
+      if (row.redeemed_at) {
+        this.db.exec("commit");
+        return {
+          rawKey,
+          record,
+          fulfillment: stripeCheckoutFulfillmentFromRow(row)
+        };
       }
       const redeemedAt = now.toISOString();
       const updated = this.db
