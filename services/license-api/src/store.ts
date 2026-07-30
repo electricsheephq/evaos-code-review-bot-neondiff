@@ -302,6 +302,13 @@ export interface CheckoutSubscriptionBindingRecord extends CheckoutSubscriptionB
   createdAt: string;
 }
 
+export interface CheckoutSubscriptionBindingLookup {
+  readonly provider: "stripe";
+  readonly providerAccountId: string;
+  readonly providerMode: "test" | "live";
+  readonly externalSubscriptionId: string;
+}
+
 export interface IssueBoundCheckoutLicenseInput {
   idempotencyKey: string;
   checkoutLookupKey: CheckoutLookupKey;
@@ -1185,6 +1192,40 @@ export class LicenseStore {
     }
   }
 
+  /**
+   * Resolve the immutable checkout issuance authority from the exact provider
+   * subscription tuple. This intentionally returns only the internal issuance
+   * key, never a raw license key or customer-facing credential.
+   */
+  resolveCheckoutIssuanceIdempotencyKey(
+    input: CheckoutSubscriptionBindingLookup
+  ): string | undefined {
+    if (
+      input.provider !== "stripe" ||
+      (input.providerMode !== "test" && input.providerMode !== "live") ||
+      !isBoundedLookupValue(input.providerAccountId, 160) ||
+      !isBoundedLookupValue(input.externalSubscriptionId, 160)
+    ) {
+      return undefined;
+    }
+    const row = this.db
+      .prepare(
+        `select issuance_idempotency_key
+         from checkout_subscription_bindings
+         where provider = ?
+           and provider_account_id = ?
+           and provider_mode = ?
+           and external_subscription_id = ?`
+      )
+      .get(
+        input.provider,
+        input.providerAccountId,
+        input.providerMode,
+        input.externalSubscriptionId
+      ) as Pick<CheckoutSubscriptionBindingRow, "issuance_idempotency_key"> | undefined;
+    return row?.issuance_idempotency_key;
+  }
+
   private insertLicense(rawKey: string, input: IssueLicenseInput): { rawKey: string; record: LicenseRecord } {
     const licenseKeyHash = hashLicenseKey(rawKey);
     const seats = input.seats ?? 1;
@@ -1325,6 +1366,15 @@ export class LicenseStore {
       .run(licenseKeyHash, machineId);
     return Number(info.changes) > 0;
   }
+}
+
+function isBoundedLookupValue(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    value === value.trim()
+  );
 }
 
 function mapLicense(row: LicenseRow): LicenseRecord {

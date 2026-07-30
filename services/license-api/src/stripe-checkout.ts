@@ -6,6 +6,10 @@ import {
 } from "./checkout-policy.js";
 import { deriveCheckoutLicenseKey } from "./issuance.js";
 import {
+  LifecycleRequestError,
+  parseSubscriptionLifecycleRequest
+} from "./subscription-lifecycle.js";
+import {
   CheckoutIssuanceConflictError,
   CheckoutIssuancePolicyError,
   CheckoutIssuanceTransientError,
@@ -14,14 +18,27 @@ import {
   CheckoutRedemptionInvalidError,
   CheckoutRedemptionNotFoundError,
   CheckoutRedemptionTransientError,
+  SubscriptionLifecycleConflictError,
+  SubscriptionLifecycleNotFoundError,
+  SubscriptionLifecyclePolicyError,
+  SubscriptionLifecycleTerminalError,
+  SubscriptionLifecycleTransientError,
+  SubscriptionLifecycleUnsupportedCommandError,
   type LicenseRecord,
   type LicenseStore
 } from "./store.js";
 
 const DEFAULT_REDEMPTION_TTL_MS = 30 * 60 * 1_000;
 const MAX_REDEMPTION_TTL_MS = 24 * 60 * 60 * 1_000;
-const STRIPE_ID_PATTERN = /^(?:acct|cs_(?:live|test)|cus|evt|price|prod|sub)_[A-Za-z0-9_]+$/;
+const STRIPE_ID_PATTERN = /^(?:acct|cs_(?:live|test)|cus|evt|in|price|prod|sub)_[A-Za-z0-9_]+$/;
 const TOKEN_HASH_PATTERN = /^[a-f0-9]{64}$/;
+const STRIPE_LIFECYCLE_EVENT_TYPES = new Set([
+  "invoice.paid",
+  "invoice.payment_succeeded",
+  "invoice.payment_failed",
+  "customer.subscription.updated",
+  "customer.subscription.deleted"
+]);
 
 export interface AllowedStripePrice {
   priceId: string;
@@ -50,6 +67,20 @@ export interface StripeCheckoutFulfillmentResult {
   status: "fulfilled";
   replayed: boolean;
 }
+
+export interface StripeCheckoutLifecycleResult {
+  status:
+    | "updated"
+    | "replayed"
+    | "ignored_stale"
+    | "payment_attention"
+    | "terminally_revoked";
+  replayed: boolean;
+}
+
+export type StripeCheckoutWebhookResult =
+  | StripeCheckoutFulfillmentResult
+  | StripeCheckoutLifecycleResult;
 
 export interface StripeCheckoutRedemptionResult {
   status: "redeemed";
@@ -99,7 +130,7 @@ export async function fulfillStripeCheckoutWebhook(options: {
   rawBody: string;
   signature: string;
   now: Date;
-}): Promise<StripeCheckoutFulfillmentResult> {
+}): Promise<StripeCheckoutWebhookResult> {
   const { store, runtime, rawBody, signature, now } = options;
   if (!Number.isFinite(now.getTime())) {
     throw new StripeCheckoutUnavailableError("checkout clock is unavailable");
@@ -113,10 +144,8 @@ export async function fulfillStripeCheckoutWebhook(options: {
   }
 
   const eventId = stripeId(verifiedEvent.id, "evt", "event id");
-  if (verifiedEvent.type !== "checkout.session.completed") {
-    throw new StripeCheckoutInvalidError("Stripe event type is unsupported");
-  }
-  positiveInteger(verifiedEvent.created, "event created");
+  const eventType = requiredString(verifiedEvent.type, "event type", 80);
+  const eventCreatedAt = positiveInteger(verifiedEvent.created, "event created");
   const eventLiveMode = boolean(verifiedEvent.livemode, "event livemode");
   const expectedLiveMode = config.mode === "live";
   if (eventLiveMode !== expectedLiveMode) {
@@ -127,7 +156,22 @@ export async function fulfillStripeCheckoutWebhook(options: {
     throw new StripeCheckoutInvalidError("Stripe event account is invalid");
   }
   const eventData = record(verifiedEvent.data);
-  const eventSession = record(eventData.object);
+  const eventObject = record(eventData.object);
+  if (eventType !== "checkout.session.completed") {
+    if (!STRIPE_LIFECYCLE_EVENT_TYPES.has(eventType)) {
+      throw new StripeCheckoutInvalidError("Stripe event type is unsupported");
+    }
+    return fulfillStripeSubscriptionLifecycle({
+      store,
+      runtime: config,
+      eventId,
+      eventType,
+      eventCreatedAt,
+      eventObject,
+      now
+    });
+  }
+  const eventSession = eventObject;
   const eventSessionId = stripeId(eventSession.id, "cs_", "checkout session id");
   const eventHash = createHash("sha256").update(rawBody).digest("hex");
   const existing = store.getStripeCheckoutFulfillmentForEvent(eventId);
@@ -202,6 +246,399 @@ export async function fulfillStripeCheckoutWebhook(options: {
     }
     throw new StripeCheckoutUnavailableError("Stripe checkout fulfillment failed");
   }
+}
+
+async function fulfillStripeSubscriptionLifecycle(options: {
+  store: LicenseStore;
+  runtime: ReturnType<typeof validateRuntime>;
+  eventId: string;
+  eventType: string;
+  eventCreatedAt: number;
+  eventObject: Record<string, unknown>;
+  now: Date;
+}): Promise<StripeCheckoutLifecycleResult> {
+  const { store, runtime, eventId, eventType, eventCreatedAt, eventObject, now } = options;
+  let account: Record<string, unknown>;
+  try {
+    account = record(await runtime.gateway.retrieveAccount(runtime.expectedAccountId));
+  } catch (error) {
+    if (error instanceof StripeCheckoutInvalidError) throw error;
+    throw new StripeCheckoutUnavailableError("Stripe lifecycle verification is unavailable");
+  }
+  const accountId = stripeId(account.id, "acct_", "account id");
+  if (accountId !== runtime.expectedAccountId) {
+    throw new StripeCheckoutInvalidError("Stripe API account is invalid");
+  }
+
+  const externalSubscriptionId = lifecycleSubscriptionId(eventType, eventObject);
+  const issuanceIdempotencyKey = store.resolveCheckoutIssuanceIdempotencyKey({
+    provider: "stripe",
+    providerAccountId: accountId,
+    providerMode: runtime.mode,
+    externalSubscriptionId
+  });
+  if (!issuanceIdempotencyKey) {
+    // Stripe event delivery order is not guaranteed. A retryable response lets
+    // checkout.session.completed establish the immutable binding first.
+    throw new StripeCheckoutUnavailableError("Stripe lifecycle binding is unavailable");
+  }
+
+  let lifecycleBody: Record<string, unknown>;
+  try {
+    lifecycleBody = await normalizeStripeLifecycleEvent({
+      runtime,
+      eventId,
+      eventType,
+      eventCreatedAt,
+      eventObject,
+      issuanceIdempotencyKey,
+      externalSubscriptionId,
+      accountId
+    });
+  } catch (error) {
+    if (
+      error instanceof StripeCheckoutInvalidError ||
+      error instanceof StripeCheckoutUnavailableError
+    ) {
+      throw error;
+    }
+    throw new StripeCheckoutUnavailableError("Stripe lifecycle verification is unavailable");
+  }
+
+  let request;
+  try {
+    request = parseSubscriptionLifecycleRequest(JSON.stringify(lifecycleBody), now);
+  } catch (error) {
+    if (error instanceof LifecycleRequestError) {
+      throw new StripeCheckoutInvalidError("Stripe lifecycle event is invalid");
+    }
+    throw new StripeCheckoutUnavailableError("Stripe lifecycle normalization failed");
+  }
+
+  try {
+    const applied = store.applyCheckoutSubscriptionLifecycle(request);
+    return { status: applied.status, replayed: applied.replayed };
+  } catch (error) {
+    if (error instanceof SubscriptionLifecycleConflictError) {
+      throw new StripeCheckoutConflictError("Stripe lifecycle event conflicts");
+    }
+    if (error instanceof SubscriptionLifecycleNotFoundError) {
+      throw new StripeCheckoutUnavailableError("Stripe lifecycle binding is unavailable");
+    }
+    if (
+      error instanceof SubscriptionLifecyclePolicyError ||
+      error instanceof SubscriptionLifecycleTerminalError ||
+      error instanceof SubscriptionLifecycleUnsupportedCommandError
+    ) {
+      throw new StripeCheckoutInvalidError("Stripe lifecycle event is invalid");
+    }
+    if (error instanceof SubscriptionLifecycleTransientError) {
+      throw new StripeCheckoutUnavailableError("Stripe lifecycle storage is unavailable");
+    }
+    throw new StripeCheckoutUnavailableError("Stripe lifecycle application failed");
+  }
+}
+
+async function normalizeStripeLifecycleEvent(options: {
+  runtime: ReturnType<typeof validateRuntime>;
+  eventId: string;
+  eventType: string;
+  eventCreatedAt: number;
+  eventObject: Record<string, unknown>;
+  issuanceIdempotencyKey: string;
+  externalSubscriptionId: string;
+  accountId: string;
+}): Promise<Record<string, unknown>> {
+  const {
+    runtime,
+    eventId,
+    eventType,
+    eventCreatedAt,
+    eventObject,
+    issuanceIdempotencyKey,
+    externalSubscriptionId,
+    accountId
+  } = options;
+  if (
+    boolean(eventObject.livemode, "lifecycle object livemode") !==
+    (runtime.mode === "live")
+  ) {
+    throw new StripeCheckoutInvalidError("Stripe lifecycle object mode is invalid");
+  }
+  const common = {
+    schemaVersion: 1,
+    issuanceIdempotencyKey,
+    eventId,
+    eventCreatedAt,
+    provider: "stripe",
+    providerAccountId: accountId,
+    providerMode: runtime.mode,
+    externalSubscriptionId
+  };
+
+  if (
+    eventType === "invoice.paid" ||
+    eventType === "invoice.payment_succeeded" ||
+    eventType === "invoice.payment_failed"
+  ) {
+    const subscription = await retrieveLifecycleSubscription(
+      runtime,
+      externalSubscriptionId
+    );
+    if (eventType === "invoice.payment_failed") {
+      if (
+        !["active", "past_due", "incomplete", "paused"].includes(
+          subscription.status
+        )
+      ) {
+        throw new StripeCheckoutInvalidError(
+          "Stripe failed-payment subscription state is invalid"
+        );
+      }
+      return {
+        ...common,
+        providerEventType: eventType,
+        command: "payment_attention",
+        subscriptionStatus: subscription.status,
+        cancelAtPeriodEnd: subscription.cancelAtPeriodEnd
+      };
+    }
+    if (subscription.status !== "active") {
+      throw new StripeCheckoutInvalidError(
+        "Stripe paid invoice subscription is not active"
+      );
+    }
+    return {
+      ...common,
+      providerEventType: eventType,
+      command: "renew_paid",
+      paymentReference: stripeId(eventObject.id, "in_", "invoice id"),
+      amountPaidMinor: positiveInteger(eventObject.amount_paid, "invoice amount paid"),
+      currency: exactString(eventObject.currency, "usd", "invoice currency"),
+      paidOutOfBand: invoicePaidOutOfBand(eventObject),
+      billingReason: exactString(
+        eventObject.billing_reason,
+        "subscription_cycle",
+        "invoice billing reason"
+      ),
+      subscriptionStatus: "active",
+      currentPeriodEnd: new Date(
+        invoiceSubscriptionPeriodEnd(eventObject, externalSubscriptionId) * 1_000
+      ).toISOString(),
+      cancelAtPeriodEnd: false
+    };
+  }
+
+  const subscription = normalizeSubscriptionSnapshot(
+    eventObject,
+    runtime.mode,
+    externalSubscriptionId
+  );
+  if (eventType === "customer.subscription.deleted") {
+    if (!["canceled", "unpaid", "incomplete_expired"].includes(subscription.status)) {
+      throw new StripeCheckoutInvalidError("Stripe deleted subscription state is invalid");
+    }
+    return {
+      ...common,
+      providerEventType: eventType,
+      command: "revoke",
+      subscriptionStatus: subscription.status,
+      cancelAtPeriodEnd: false
+    };
+  }
+
+  if (subscription.status === "canceled" ||
+      subscription.status === "unpaid" ||
+      subscription.status === "incomplete_expired") {
+    return {
+      ...common,
+      providerEventType: eventType,
+      command: "revoke",
+      subscriptionStatus: subscription.status,
+      cancelAtPeriodEnd: false
+    };
+  }
+  if (
+    (subscription.status === "active" || subscription.status === "trialing") &&
+    subscription.cancelAtPeriodEnd
+  ) {
+    return {
+      ...common,
+      providerEventType: eventType,
+      command: "cancel_at_period_end",
+      subscriptionStatus: subscription.status,
+      currentPeriodEnd: new Date(
+        requiredSubscriptionPeriodEnd(eventObject) * 1_000
+      ).toISOString(),
+      cancelAtPeriodEnd: true
+    };
+  }
+  if (subscription.status === "active" || subscription.status === "trialing") {
+    return {
+      ...common,
+      providerEventType: eventType,
+      command: "reconcile",
+      subscriptionStatus: subscription.status,
+      cancelAtPeriodEnd: false
+    };
+  }
+  if (["past_due", "incomplete", "paused"].includes(subscription.status)) {
+    return {
+      ...common,
+      providerEventType: eventType,
+      command: "payment_attention",
+      subscriptionStatus: subscription.status,
+      cancelAtPeriodEnd: subscription.cancelAtPeriodEnd
+    };
+  }
+  throw new StripeCheckoutInvalidError("Stripe subscription state is unsupported");
+}
+
+async function retrieveLifecycleSubscription(
+  runtime: ReturnType<typeof validateRuntime>,
+  expectedSubscriptionId: string
+): Promise<{ status: string; cancelAtPeriodEnd: boolean }> {
+  let raw: Record<string, unknown>;
+  try {
+    raw = record(
+      await runtime.gateway.retrieveSubscription(expectedSubscriptionId)
+    );
+  } catch (error) {
+    if (error instanceof StripeCheckoutInvalidError) throw error;
+    throw new StripeCheckoutUnavailableError(
+      "Stripe subscription verification is unavailable"
+    );
+  }
+  const normalized = normalizeSubscriptionSnapshot(
+    raw,
+    runtime.mode,
+    expectedSubscriptionId
+  );
+  return {
+    status: normalized.status,
+    cancelAtPeriodEnd: normalized.cancelAtPeriodEnd
+  };
+}
+
+function normalizeSubscriptionSnapshot(
+  value: Record<string, unknown>,
+  mode: "test" | "live",
+  expectedSubscriptionId: string
+): { status: string; cancelAtPeriodEnd: boolean } {
+  const subscriptionId = stripeId(value.id, "sub_", "subscription id");
+  if (subscriptionId !== expectedSubscriptionId) {
+    throw new StripeCheckoutInvalidError("Stripe subscription changed");
+  }
+  if (
+    boolean(value.livemode, "subscription livemode") !==
+    (mode === "live")
+  ) {
+    throw new StripeCheckoutInvalidError("Stripe subscription mode is invalid");
+  }
+  return {
+    status: requiredString(value.status, "subscription status", 40),
+    cancelAtPeriodEnd: boolean(
+      value.cancel_at_period_end,
+      "subscription cancel at period end"
+    )
+  };
+}
+
+function lifecycleSubscriptionId(
+  eventType: string,
+  eventObject: Record<string, unknown>
+): string {
+  if (eventType.startsWith("customer.subscription.")) {
+    return stripeId(eventObject.id, "sub_", "subscription id");
+  }
+  const direct = stripeReference(eventObject.subscription);
+  if (direct) return stripeId(direct, "sub_", "subscription id");
+  const parent = record(eventObject.parent);
+  if (parent.type !== "subscription_details") {
+    throw new StripeCheckoutInvalidError("Stripe invoice subscription is invalid");
+  }
+  const details = record(parent.subscription_details);
+  return stripeId(
+    stripeReference(details.subscription),
+    "sub_",
+    "subscription id"
+  );
+}
+
+function invoiceSubscriptionPeriodEnd(
+  invoice: Record<string, unknown>,
+  externalSubscriptionId: string
+): number {
+  const lines = record(invoice.lines);
+  const data = Array.isArray(lines.data) ? lines.data : [];
+  const periodEnds = data.flatMap((entry) => {
+    const line = record(entry);
+    const subscription = stripeReference(line.subscription);
+    if (subscription !== externalSubscriptionId) return [];
+    const parent = record(line.parent);
+    if (parent.type !== "subscription_item_details") return [];
+    return [positiveInteger(record(line.period).end, "invoice service period end")];
+  });
+  if (periodEnds.length === 0 || new Set(periodEnds).size !== 1) {
+    throw new StripeCheckoutInvalidError(
+      "Stripe invoice service period is ambiguous"
+    );
+  }
+  return periodEnds[0]!;
+}
+
+function requiredSubscriptionPeriodEnd(subscription: Record<string, unknown>): number {
+  if (subscription.current_period_end !== undefined) {
+    return positiveInteger(
+      subscription.current_period_end,
+      "subscription period end"
+    );
+  }
+  const items = record(subscription.items);
+  const data = Array.isArray(items.data) ? items.data : [];
+  if (data.length !== 1) {
+    throw new StripeCheckoutInvalidError(
+      "Stripe subscription must contain exactly one item"
+    );
+  }
+  return positiveInteger(
+    record(data[0]).current_period_end,
+    "subscription period end"
+  );
+}
+
+function invoicePaidOutOfBand(invoice: Record<string, unknown>): false {
+  if (invoice.amount_paid_off_stripe !== undefined) {
+    const paidOffStripe = nonNegativeInteger(
+      invoice.amount_paid_off_stripe,
+      "invoice amount paid off Stripe"
+    );
+    if (paidOffStripe !== 0) {
+      throw new StripeCheckoutInvalidError(
+        "Stripe invoice paid out of band is invalid"
+      );
+    }
+    if (invoice.paid_out_of_band === true) {
+      throw new StripeCheckoutInvalidError(
+        "Stripe invoice paid out of band is invalid"
+      );
+    }
+    return false;
+  }
+  if (invoice.paid_out_of_band !== false) {
+    throw new StripeCheckoutInvalidError(
+      "Stripe invoice paid out of band is invalid"
+    );
+  }
+  return false;
+}
+
+function stripeReference(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return optionalString((value as Record<string, unknown>).id);
+  }
+  return undefined;
 }
 
 export function redeemStripeCheckout(options: {
@@ -471,6 +908,20 @@ function positiveInteger(value: unknown, field: string): number {
     throw new StripeCheckoutInvalidError(`${field} is invalid`);
   }
   return Number(value);
+}
+
+function nonNegativeInteger(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new StripeCheckoutInvalidError(`${field} is invalid`);
+  }
+  return Number(value);
+}
+
+function exactString(value: unknown, expected: string, field: string): string {
+  if (value !== expected) {
+    throw new StripeCheckoutInvalidError(`${field} is invalid`);
+  }
+  return expected;
 }
 
 function boolean(value: unknown, field: string): boolean {

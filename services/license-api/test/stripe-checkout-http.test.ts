@@ -19,6 +19,9 @@ const SUBSCRIPTION_ID = "sub_neondiff_checkout_1";
 const CUSTOMER_ID = "cus_neondiff_checkout_1";
 const TOKEN = "A".repeat(48);
 const TOKEN_HASH = createHash("sha256").update(TOKEN).digest("hex");
+const RENEWAL_PERIOD_END = Math.floor(
+  Date.parse("2026-08-30T00:00:00.000Z") / 1_000
+);
 const stripeVerifier = new Stripe("sk_test_not_used_for_network", {
   apiVersion: "2026-06-24.dahlia"
 });
@@ -59,11 +62,28 @@ function signatureFor(payload: string): string {
   });
 }
 
+function lifecycleEventPayload(
+  type: string,
+  object: Record<string, unknown>,
+  id: string
+): string {
+  return JSON.stringify({
+    id,
+    object: "event",
+    api_version: "2026-06-24.dahlia",
+    created: 1_785_384_000,
+    livemode: true,
+    type,
+    data: { object }
+  });
+}
+
 function snapshots(overrides: {
   accountId?: string;
   priceId?: string;
   productId?: string;
   subscriptionStatus?: string;
+  cancelAtPeriodEnd?: boolean;
 } = {}) {
   const accountId = overrides.accountId ?? "acct_neondiff_live";
   const priceId = overrides.priceId ?? "price_neondiff_monthly";
@@ -102,6 +122,7 @@ function snapshots(overrides: {
       customer: CUSTOMER_ID,
       livemode: true,
       status: overrides.subscriptionStatus ?? "trialing",
+      cancel_at_period_end: overrides.cancelAtPeriodEnd ?? false,
       metadata: {
         priceLookupKey: "neondiff_monthly",
         fulfillmentTokenHash: TOKEN_HASH
@@ -110,6 +131,7 @@ function snapshots(overrides: {
         data: [
           {
             quantity: 1,
+            current_period_end: RENEWAL_PERIOD_END,
             price: {
               id: priceId,
               lookup_key: "neondiff_monthly",
@@ -216,6 +238,11 @@ async function postWebhook(url: string, payload = eventPayload()) {
     "Content-Type": "application/json",
     "Stripe-Signature": signatureFor(payload)
   });
+}
+
+async function seedCheckout(url: string): Promise<void> {
+  const response = await postWebhook(url);
+  assert.equal(response.status, 200, JSON.stringify(response.json));
 }
 
 describe("direct Stripe checkout fulfillment", () => {
@@ -463,6 +490,200 @@ describe("direct Stripe checkout validation boundaries", () => {
         );
         assert.equal(expired.status, 410);
         assert.deepEqual(expired.json, { status: "expired" });
+      }
+    );
+  });
+});
+
+describe("direct Stripe subscription lifecycle", () => {
+  it("extends the bound entitlement from a paid renewal without returning identifiers", async () => {
+    await withCheckoutServer(
+      { gateway: gatewayFor({ subscriptionStatus: "active" }) },
+      async ({ store, url }) => {
+        await seedCheckout(url);
+        const payload = lifecycleEventPayload(
+          "invoice.paid",
+          {
+            id: "in_neondiff_renewal_1",
+            object: "invoice",
+            livemode: true,
+            subscription: SUBSCRIPTION_ID,
+            amount_paid: 100,
+            currency: "usd",
+            paid_out_of_band: false,
+            billing_reason: "subscription_cycle",
+            lines: {
+              data: [
+                {
+                  subscription: SUBSCRIPTION_ID,
+                  parent: { type: "subscription_item_details" },
+                  period: { end: RENEWAL_PERIOD_END }
+                }
+              ]
+            }
+          },
+          "evt_neondiff_renewal_1"
+        );
+
+        const response = await postWebhook(url, payload);
+        assert.equal(response.status, 200, JSON.stringify(response.json));
+        assert.deepEqual(response.json, { status: "updated", replayed: false });
+        assert.equal(store.listLicenses()[0]?.expiresAt, "2026-08-30T00:00:00.000Z");
+        const serialized = JSON.stringify(response.json);
+        assert.ok(!serialized.includes("nd_live_"));
+        assert.ok(!serialized.includes("in_neondiff"));
+        assert.ok(!serialized.includes(SUBSCRIPTION_ID));
+        assert.ok(!serialized.includes(CUSTOMER_ID));
+
+        const replay = await postWebhook(url, payload);
+        assert.equal(replay.status, 200, JSON.stringify(replay.json));
+        assert.deepEqual(replay.json, { status: "replayed", replayed: true });
+        assert.equal(store.listLicenses().length, 1);
+
+        const changed = lifecycleEventPayload(
+          "invoice.paid",
+          {
+            id: "in_neondiff_renewal_1",
+            object: "invoice",
+            livemode: true,
+            subscription: SUBSCRIPTION_ID,
+            amount_paid: 200,
+            currency: "usd",
+            paid_out_of_band: false,
+            billing_reason: "subscription_cycle",
+            lines: {
+              data: [
+                {
+                  subscription: SUBSCRIPTION_ID,
+                  parent: { type: "subscription_item_details" },
+                  period: { end: RENEWAL_PERIOD_END }
+                }
+              ]
+            }
+          },
+          "evt_neondiff_renewal_1"
+        );
+        const conflict = await postWebhook(url, changed);
+        assert.equal(conflict.status, 409);
+        assert.deepEqual(conflict.json, { status: "conflict" });
+      }
+    );
+  });
+
+  it("records a failed payment without revoking or shortening the entitlement", async () => {
+    await withCheckoutServer(
+      { gateway: gatewayFor({ subscriptionStatus: "active" }) },
+      async ({ store, url }) => {
+        await seedCheckout(url);
+        const before = store.listLicenses()[0];
+        const payload = lifecycleEventPayload(
+          "invoice.payment_failed",
+          {
+            id: "in_neondiff_failed_1",
+            object: "invoice",
+            livemode: true,
+            subscription: SUBSCRIPTION_ID
+          },
+          "evt_neondiff_failed_1"
+        );
+
+        const response = await postWebhook(url, payload);
+        assert.equal(response.status, 200, JSON.stringify(response.json));
+        assert.deepEqual(response.json, {
+          status: "payment_attention",
+          replayed: false
+        });
+        const after = store.listLicenses()[0];
+        assert.equal(after?.status, "active");
+        assert.equal(after?.expiresAt, before?.expiresAt);
+      }
+    );
+  });
+
+  it("terminally revokes the bound entitlement from a deleted subscription", async () => {
+    await withCheckoutServer({}, async ({ store, url }) => {
+      await seedCheckout(url);
+      const payload = lifecycleEventPayload(
+        "customer.subscription.deleted",
+        {
+          id: SUBSCRIPTION_ID,
+          object: "subscription",
+          livemode: true,
+          status: "canceled",
+          cancel_at_period_end: false,
+          items: {
+            data: [{ current_period_end: RENEWAL_PERIOD_END }]
+          }
+        },
+        "evt_neondiff_deleted_1"
+      );
+
+      const response = await postWebhook(url, payload);
+      assert.equal(response.status, 200, JSON.stringify(response.json));
+      assert.deepEqual(response.json, {
+        status: "terminally_revoked",
+        replayed: false
+      });
+      assert.equal(store.listLicenses()[0]?.status, "revoked");
+      assert.equal(
+        store.listLicenses()[0]?.revocationReason,
+        "subscription_canceled"
+      );
+    });
+  });
+
+  it("records scheduled cancellation without shortening the paid entitlement", async () => {
+    await withCheckoutServer({}, async ({ store, url }) => {
+      await seedCheckout(url);
+      const before = store.listLicenses()[0];
+      const payload = lifecycleEventPayload(
+        "customer.subscription.updated",
+        {
+          id: SUBSCRIPTION_ID,
+          object: "subscription",
+          livemode: true,
+          status: "active",
+          cancel_at_period_end: true,
+          items: {
+            data: [{ current_period_end: RENEWAL_PERIOD_END }]
+          }
+        },
+        "evt_neondiff_cancel_scheduled_1"
+      );
+
+      const response = await postWebhook(url, payload);
+      assert.equal(response.status, 200, JSON.stringify(response.json));
+      assert.deepEqual(response.json, { status: "updated", replayed: false });
+      const after = store.listLicenses()[0];
+      assert.equal(after?.status, "active");
+      assert.equal(after?.expiresAt, before?.expiresAt);
+    });
+  });
+
+  it("does not mutate a license for an unbound subscription", async () => {
+    await withCheckoutServer(
+      { gateway: gatewayFor({ subscriptionStatus: "active" }) },
+      async ({ store, url }) => {
+        await seedCheckout(url);
+        const before = store.listLicenses()[0];
+        const payload = lifecycleEventPayload(
+          "customer.subscription.updated",
+          {
+            id: "sub_neondiff_unbound",
+            object: "subscription",
+            livemode: true,
+            status: "active",
+            cancel_at_period_end: false,
+            items: {
+              data: [{ current_period_end: RENEWAL_PERIOD_END }]
+            }
+          },
+          "evt_neondiff_unbound_1"
+        );
+
+        const response = await postWebhook(url, payload);
+        assert.notEqual(response.status, 200);
+        assert.deepEqual(store.listLicenses()[0], before);
       }
     );
   });
