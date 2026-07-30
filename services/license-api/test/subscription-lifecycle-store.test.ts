@@ -241,6 +241,44 @@ describe("checkout subscription lifecycle binding", () => {
       store.close();
     }
   });
+
+  it("resolves only the internal issuance key for the exact subscription tuple", () => {
+    const store = new LicenseStore(":memory:", { now: () => NOW });
+    try {
+      const issued = issueBound(store);
+      const lookup = {
+        provider: "stripe" as const,
+        providerAccountId: issued.request.providerAccountId,
+        providerMode: issued.request.providerMode,
+        externalSubscriptionId: issued.request.externalSubscriptionId
+      };
+      assert.equal(
+        store.resolveCheckoutIssuanceIdempotencyKey(lookup),
+        issued.request.idempotencyKey
+      );
+      for (const override of [
+        { provider: "other-provider" },
+        { providerAccountId: "acct_other" },
+        { providerMode: "test" },
+        { externalSubscriptionId: "sub_other" }
+      ]) {
+        assert.equal(
+          store.resolveCheckoutIssuanceIdempotencyKey({
+            ...lookup,
+            ...override
+          } as typeof lookup),
+          undefined
+        );
+      }
+      assert.ok(
+        !store
+          .resolveCheckoutIssuanceIdempotencyKey(lookup)!
+          .includes(issued.rawKey)
+      );
+    } finally {
+      store.close();
+    }
+  });
 });
 
 describe("checkout subscription lifecycle replay", () => {
