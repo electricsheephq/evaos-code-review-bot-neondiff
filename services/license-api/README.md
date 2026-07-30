@@ -193,7 +193,7 @@ Environment:
   deterministic checkout key derivation. It is not an HTTP authorization
   credential and is never shared with Lovable or browser code.
 - `NEONDIFF_STRIPE_REDEMPTION_ORIGIN` — exact HTTPS website origin allowed to
-  redeem once.
+  redeem and safely replay the exact request until the fulfillment TTL expires.
 - `NEONDIFF_STRIPE_MONTHLY_PRICE_ID`,
   `NEONDIFF_STRIPE_MONTHLY_PRODUCT_ID`,
   `NEONDIFF_STRIPE_YEARLY_PRICE_ID`,
