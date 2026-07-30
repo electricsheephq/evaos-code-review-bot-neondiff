@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -20,7 +20,7 @@ import {
   type SchemaObjectSignature
 } from "./schema-signature.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const DEFAULT_BUSY_TIMEOUT_MS = 250;
 const MAX_BUSY_TIMEOUT_MS = 1_000;
 const BOUND_CHECKOUT_INPUT_FIELDS = new Set([
@@ -49,6 +49,7 @@ export type SchemaMigrationStep =
   | "transaction-started"
   | "core-schema-created"
   | "lifecycle-schema-created"
+  | "stripe-checkout-fulfillment-schema-created"
   | "schema-verified"
   | "version-set";
 
@@ -133,8 +134,27 @@ const LIFECYCLE_SCHEMA = `
     on license_subscription_lifecycle_events (issuance_idempotency_key, event_created_at);
 `;
 
+const STRIPE_CHECKOUT_FULFILLMENT_SCHEMA = `
+  create table stripe_checkout_fulfillments (
+    stripe_event_id text primary key,
+    event_hash text not null,
+    issuance_idempotency_key text not null unique,
+    license_key_hash text not null unique,
+    external_checkout_id text not null unique,
+    fulfillment_token_hash text not null unique,
+    fulfillment_expires_at text not null,
+    redeemed_at text,
+    created_at text not null default (datetime('now')),
+    foreign key (issuance_idempotency_key) references checkout_subscription_bindings(issuance_idempotency_key),
+    foreign key (license_key_hash) references licenses(license_key_hash)
+  );
+`;
+
 const LEGACY_SCHEMA_SIGNATURE = expectedSchemaSignature(CORE_SCHEMA);
 const SCHEMA_V2_SIGNATURE = expectedSchemaSignature(`${CORE_SCHEMA}\n${LIFECYCLE_SCHEMA}`);
+const SCHEMA_V3_SIGNATURE = expectedSchemaSignature(
+  `${CORE_SCHEMA}\n${LIFECYCLE_SCHEMA}\n${STRIPE_CHECKOUT_FULFILLMENT_SCHEMA}`
+);
 
 export type LicenseStatus = "active" | "revoked" | "expired";
 export type RepoVisibilityScope = "public" | "private" | "all";
@@ -220,6 +240,18 @@ interface SubscriptionLifecycleEventRow {
   created_at: string;
 }
 
+interface StripeCheckoutFulfillmentRow {
+  stripe_event_id: string;
+  event_hash: string;
+  issuance_idempotency_key: string;
+  license_key_hash: string;
+  external_checkout_id: string;
+  fulfillment_token_hash: string;
+  fulfillment_expires_at: string;
+  redeemed_at: string | null;
+  created_at: string;
+}
+
 /**
  * Deterministic at-rest identifier for a license key. Only the hash is ever
  * stored or logged; the raw key is printed once by the admin CLI at issuance
@@ -276,9 +308,34 @@ export interface IssueBoundCheckoutLicenseInput {
   binding: CheckoutSubscriptionBindingInput;
 }
 
+export interface StripeCheckoutFulfillmentInput {
+  stripeEventId: string;
+  eventHash: string;
+  fulfillmentTokenHash: string;
+  fulfillmentExpiresAt: string;
+  issuance: IssueBoundCheckoutLicenseInput;
+}
+
+export interface StripeCheckoutFulfillmentRecord {
+  stripeEventId: string;
+  eventHash: string;
+  issuanceIdempotencyKey: string;
+  licenseKeyHash: string;
+  externalCheckoutId: string;
+  fulfillmentTokenHash: string;
+  fulfillmentExpiresAt: string;
+  redeemedAt?: string;
+  createdAt: string;
+}
+
 export class CheckoutIssuanceConflictError extends Error {}
 export class CheckoutIssuancePolicyError extends Error {}
 export class CheckoutIssuanceTransientError extends Error {}
+export class CheckoutRedemptionNotFoundError extends Error {}
+export class CheckoutRedemptionInvalidError extends Error {}
+export class CheckoutRedemptionExpiredError extends Error {}
+export class CheckoutRedemptionConsumedError extends Error {}
+export class CheckoutRedemptionTransientError extends Error {}
 
 export class CheckoutBindingNotFoundError extends Error {}
 export class CheckoutBindingWrongSourceError extends Error {}
@@ -368,8 +425,36 @@ export class LicenseStore {
   private ensureSchema(options: LicenseStoreOptions): void {
     const version = this.readUserVersion();
     if (version === SCHEMA_VERSION) {
-      this.verifySchemaV2();
+      this.verifySchemaV3();
       return;
+    }
+    if (version === 2) {
+      this.verifySchemaV2();
+      this.db.exec("begin immediate");
+      try {
+        const lockedVersion = this.readUserVersion();
+        if (lockedVersion === SCHEMA_VERSION) {
+          this.verifySchemaV3();
+          this.db.exec("commit");
+          return;
+        }
+        if (lockedVersion !== 2) {
+          throw new Error(`unsupported license database schema version ${lockedVersion}`);
+        }
+        this.verifySchemaV2();
+        options.migrationHook?.("transaction-started");
+        this.db.exec(STRIPE_CHECKOUT_FULFILLMENT_SCHEMA);
+        options.migrationHook?.("stripe-checkout-fulfillment-schema-created");
+        this.verifySchemaV3();
+        options.migrationHook?.("schema-verified");
+        this.db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
+        options.migrationHook?.("version-set");
+        this.db.exec("commit");
+        return;
+      } catch (error) {
+        this.db.exec("rollback");
+        throw error;
+      }
     }
     if (version !== 0) {
       throw new Error(`unsupported license database schema version ${version}`);
@@ -382,7 +467,7 @@ export class LicenseStore {
       // waited for the writer lock. Classify only the state protected by it.
       const lockedVersion = this.readUserVersion();
       if (lockedVersion === SCHEMA_VERSION) {
-        this.verifySchemaV2();
+        this.verifySchemaV3();
         this.db.exec("commit");
         return;
       }
@@ -401,7 +486,9 @@ export class LicenseStore {
       options.migrationHook?.("core-schema-created");
       this.db.exec(LIFECYCLE_SCHEMA);
       options.migrationHook?.("lifecycle-schema-created");
-      this.verifySchemaV2();
+      this.db.exec(STRIPE_CHECKOUT_FULFILLMENT_SCHEMA);
+      options.migrationHook?.("stripe-checkout-fulfillment-schema-created");
+      this.verifySchemaV3();
       options.migrationHook?.("schema-verified");
       this.db.exec(`pragma user_version = ${SCHEMA_VERSION}`);
       options.migrationHook?.("version-set");
@@ -424,6 +511,16 @@ export class LicenseStore {
     }
     if (!signaturesEqual(actual, SCHEMA_V2_SIGNATURE)) {
       throw new Error("license database schema v2 has unexpected constraints");
+    }
+  }
+
+  private verifySchemaV3(): void {
+    const actual = readSchemaSignature(this.db);
+    if (!sameStrings(schemaObjectKeys(actual), schemaObjectKeys(SCHEMA_V3_SIGNATURE))) {
+      throw new Error("license database schema v3 has unexpected objects");
+    }
+    if (!signaturesEqual(actual, SCHEMA_V3_SIGNATURE)) {
+      throw new Error("license database schema v3 has unexpected constraints");
     }
   }
 
@@ -499,8 +596,6 @@ export class LicenseStore {
     replayed: boolean;
   } {
     const validatedInput = validateBoundCheckoutInput(input);
-    const policy = checkoutPolicyFor(validatedInput.checkoutLookupKey);
-    const requestHash = boundCheckoutRequestHash(validatedInput);
     const issuedAt = this.now();
     if (!Number.isFinite(issuedAt.getTime())) {
       throw new Error("license store clock returned an invalid date");
@@ -509,95 +604,289 @@ export class LicenseStore {
     try {
       this.db.exec("begin immediate");
       transactionStarted = true;
-      const existing = this.getIssuanceEvent(validatedInput.idempotencyKey);
+      const result = this.issueBoundCheckoutLicenseInOpenTransaction(
+        rawKey,
+        validatedInput,
+        issuedAt
+      );
+      this.db.exec("commit");
+      return result;
+    } catch (error) {
+      if (transactionStarted) this.db.exec("rollback");
+      throw classifyCheckoutIssuanceStorageError(error);
+    }
+  }
+
+  private issueBoundCheckoutLicenseInOpenTransaction(
+    rawKey: string,
+    validatedInput: IssueBoundCheckoutLicenseInput,
+    issuedAt: Date
+  ): {
+    rawKey: string;
+    record: LicenseRecord;
+    binding: CheckoutSubscriptionBindingRecord;
+    replayed: boolean;
+  } {
+    const policy = checkoutPolicyFor(validatedInput.checkoutLookupKey);
+    const requestHash = boundCheckoutRequestHash(validatedInput);
+    const existing = this.getIssuanceEvent(validatedInput.idempotencyKey);
+    if (existing) {
+      if (existing.source !== "checkout") {
+        throw new CheckoutIssuanceConflictError("issuance reference is not checkout-owned");
+      }
+      const binding = this.getCheckoutSubscriptionBinding(validatedInput.idempotencyKey);
+      if (!binding) {
+        throw new CheckoutIssuanceConflictError("legacy checkout issuance is not bound");
+      }
+      const record = this.getLicenseByHash(existing.license_key_hash);
+      if (!record) {
+        throw new Error("issuance reference points to a missing license record");
+      }
+      validateStoredCheckoutEntitlement(record, policy, issuedAt);
+      if (hashLicenseKey(rawKey) !== existing.license_key_hash) {
+        throw new CheckoutIssuanceConflictError(
+          "issuance reference was issued with a different key derivation secret"
+        );
+      }
+      if (existing.request_hash !== requestHash) {
+        throw new CheckoutIssuanceConflictError(
+          "issuance reference was already used with different request data"
+        );
+      }
+      if (!sameCheckoutBinding(binding, validatedInput.binding)) {
+        throw new CheckoutIssuanceConflictError(
+          "issuance reference was already used with different checkout correlation"
+        );
+      }
+      return { rawKey, record, binding, replayed: true };
+    }
+
+    const expiresAt = new Date(
+      issuedAt.getTime() + policy.trialDays * 24 * 60 * 60 * 1_000
+    ).toISOString();
+    const { record } = this.insertLicense(rawKey, {
+      plan: policy.plan,
+      repoVisibilityScope: policy.repoVisibilityScope,
+      privateRepoAllowed: policy.privateRepoAllowed,
+      updateEntitlement: policy.updateEntitlement,
+      seats: policy.seats,
+      expiresAt
+    });
+    this.db
+      .prepare(
+        `insert into license_issuance_events (
+          idempotency_key, license_key_hash, request_hash, source, external_ref
+        ) values (?, ?, ?, 'checkout', ?)`
+      )
+      .run(
+        validatedInput.idempotencyKey,
+        record.licenseKeyHash,
+        requestHash,
+        validatedInput.binding.externalCheckoutId
+      );
+    this.db
+      .prepare(
+        `insert into checkout_subscription_bindings (
+          issuance_idempotency_key, license_key_hash, provider, provider_account_id,
+          provider_mode, external_subscription_id, external_checkout_id
+        ) values (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        validatedInput.idempotencyKey,
+        record.licenseKeyHash,
+        validatedInput.binding.provider,
+        validatedInput.binding.providerAccountId,
+        validatedInput.binding.providerMode,
+        validatedInput.binding.externalSubscriptionId,
+        validatedInput.binding.externalCheckoutId
+      );
+    const binding = this.getCheckoutSubscriptionBinding(validatedInput.idempotencyKey);
+    if (!binding) throw new Error("checkout binding insert did not persist");
+    return { rawKey, record, binding, replayed: false };
+  }
+
+  fulfillStripeCheckout(
+    rawKey: string,
+    input: StripeCheckoutFulfillmentInput
+  ): {
+    record: LicenseRecord;
+    binding: CheckoutSubscriptionBindingRecord;
+    fulfillment: StripeCheckoutFulfillmentRecord;
+    replayed: boolean;
+  } {
+    const issuedAt = this.now();
+    if (!Number.isFinite(issuedAt.getTime())) {
+      throw new Error("license store clock returned an invalid date");
+    }
+    const validated = validateStripeCheckoutFulfillmentInput(input, issuedAt);
+    let transactionStarted = false;
+    try {
+      this.db.exec("begin immediate");
+      transactionStarted = true;
+      const issuance = this.issueBoundCheckoutLicenseInOpenTransaction(
+        rawKey,
+        validated.issuance,
+        issuedAt
+      );
+      const existing = this.getStripeCheckoutFulfillmentByEventId(validated.stripeEventId);
       if (existing) {
-        if (existing.source !== "checkout") {
-          throw new CheckoutIssuanceConflictError("issuance reference is not checkout-owned");
-        }
-        const binding = this.getCheckoutSubscriptionBinding(validatedInput.idempotencyKey);
-        if (!binding) {
-          throw new CheckoutIssuanceConflictError("legacy checkout issuance is not bound");
-        }
-        const record = this.getLicenseByHash(existing.license_key_hash);
-        if (!record) {
-          throw new Error("issuance reference points to a missing license record");
-        }
-        validateStoredCheckoutEntitlement(record, policy, issuedAt);
-        if (hashLicenseKey(rawKey) !== existing.license_key_hash) {
+        if (
+          existing.event_hash !== validated.eventHash ||
+          existing.issuance_idempotency_key !== validated.issuance.idempotencyKey ||
+          existing.license_key_hash !== issuance.record.licenseKeyHash ||
+          existing.external_checkout_id !== validated.issuance.binding.externalCheckoutId ||
+          existing.fulfillment_token_hash !== validated.fulfillmentTokenHash
+        ) {
           throw new CheckoutIssuanceConflictError(
-            "issuance reference was issued with a different key derivation secret"
-          );
-        }
-        if (existing.request_hash !== requestHash) {
-          throw new CheckoutIssuanceConflictError(
-            "issuance reference was already used with different request data"
-          );
-        }
-        if (!sameCheckoutBinding(binding, validatedInput.binding)) {
-          throw new CheckoutIssuanceConflictError(
-            "issuance reference was already used with different checkout correlation"
+            "Stripe event was already used with different checkout fulfillment data"
           );
         }
         this.db.exec("commit");
-        return { rawKey, record, binding, replayed: true };
+        return {
+          record: issuance.record,
+          binding: issuance.binding,
+          fulfillment: stripeCheckoutFulfillmentFromRow(existing),
+          replayed: true
+        };
       }
 
-      const expiresAt = new Date(
-        issuedAt.getTime() + policy.trialDays * 24 * 60 * 60 * 1_000
-      ).toISOString();
-      const { record } = this.insertLicense(rawKey, {
-        plan: policy.plan,
-        repoVisibilityScope: policy.repoVisibilityScope,
-        privateRepoAllowed: policy.privateRepoAllowed,
-        updateEntitlement: policy.updateEntitlement,
-        seats: policy.seats,
-        expiresAt
-      });
       this.db
         .prepare(
-          `insert into license_issuance_events (
-            idempotency_key, license_key_hash, request_hash, source, external_ref
-          ) values (?, ?, ?, 'checkout', ?)`
-        )
-        .run(
-          validatedInput.idempotencyKey,
-          record.licenseKeyHash,
-          requestHash,
-          validatedInput.binding.externalCheckoutId
-        );
-      this.db
-        .prepare(
-          `insert into checkout_subscription_bindings (
-            issuance_idempotency_key, license_key_hash, provider, provider_account_id,
-            provider_mode, external_subscription_id, external_checkout_id
+          `insert into stripe_checkout_fulfillments (
+            stripe_event_id, event_hash, issuance_idempotency_key, license_key_hash,
+            external_checkout_id, fulfillment_token_hash, fulfillment_expires_at
           ) values (?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
-          validatedInput.idempotencyKey,
-          record.licenseKeyHash,
-          validatedInput.binding.provider,
-          validatedInput.binding.providerAccountId,
-          validatedInput.binding.providerMode,
-          validatedInput.binding.externalSubscriptionId,
-          validatedInput.binding.externalCheckoutId
+          validated.stripeEventId,
+          validated.eventHash,
+          validated.issuance.idempotencyKey,
+          issuance.record.licenseKeyHash,
+          validated.issuance.binding.externalCheckoutId,
+          validated.fulfillmentTokenHash,
+          validated.fulfillmentExpiresAt
         );
-      const binding = this.getCheckoutSubscriptionBinding(validatedInput.idempotencyKey);
-      if (!binding) throw new Error("checkout binding insert did not persist");
+      const stored = this.getStripeCheckoutFulfillmentByEventId(validated.stripeEventId);
+      if (!stored) throw new Error("Stripe checkout fulfillment insert did not persist");
       this.db.exec("commit");
-      return { rawKey, record, binding, replayed: false };
+      return {
+        record: issuance.record,
+        binding: issuance.binding,
+        fulfillment: stripeCheckoutFulfillmentFromRow(stored),
+        replayed: false
+      };
     } catch (error) {
       if (transactionStarted) this.db.exec("rollback");
-      if (isSqliteBusy(error)) {
-        throw new CheckoutIssuanceTransientError("checkout issuance storage is busy");
-      }
-      if (
-        error instanceof Error &&
-        error.message.includes("UNIQUE constraint failed: checkout_subscription_bindings")
-      ) {
-        throw new CheckoutIssuanceConflictError("checkout correlation is already bound");
-      }
-      throw error;
+      throw classifyCheckoutIssuanceStorageError(error);
     }
+  }
+
+  redeemStripeCheckout(
+    rawKey: string,
+    input: { externalCheckoutId: string; fulfillmentToken: string }
+  ): { rawKey: string; record: LicenseRecord; fulfillment: StripeCheckoutFulfillmentRecord } {
+    let externalCheckoutId: string;
+    let fulfillmentToken: string;
+    try {
+      externalCheckoutId = readBoundedCheckoutString(
+        input.externalCheckoutId,
+        "externalCheckoutId",
+        160
+      );
+      fulfillmentToken = readBoundedCheckoutString(
+        input.fulfillmentToken,
+        "fulfillmentToken",
+        128
+      );
+    } catch {
+      throw new CheckoutRedemptionInvalidError("checkout fulfillment request is invalid");
+    }
+    if (!/^[A-Za-z0-9]{32,128}$/.test(fulfillmentToken)) {
+      throw new CheckoutRedemptionInvalidError("fulfillment token is invalid");
+    }
+    const now = this.now();
+    if (!Number.isFinite(now.getTime())) {
+      throw new CheckoutRedemptionTransientError("license store clock is invalid");
+    }
+
+    let transactionStarted = false;
+    try {
+      this.db.exec("begin immediate");
+      transactionStarted = true;
+      const row = this.getStripeCheckoutFulfillmentByCheckoutId(externalCheckoutId);
+      if (!row) throw new CheckoutRedemptionNotFoundError("checkout fulfillment was not found");
+      if (row.redeemed_at) {
+        throw new CheckoutRedemptionConsumedError("checkout fulfillment was already consumed");
+      }
+      const expiresAt = Date.parse(row.fulfillment_expires_at);
+      if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) {
+        throw new CheckoutRedemptionExpiredError("checkout fulfillment has expired");
+      }
+      const suppliedTokenHash = createHash("sha256").update(fulfillmentToken).digest("hex");
+      if (!safeEqualHex(suppliedTokenHash, row.fulfillment_token_hash)) {
+        throw new CheckoutRedemptionInvalidError("checkout fulfillment authorization failed");
+      }
+      if (hashLicenseKey(rawKey) !== row.license_key_hash) {
+        throw new CheckoutRedemptionInvalidError("checkout fulfillment key derivation failed");
+      }
+      const record = this.getLicenseByHash(row.license_key_hash);
+      if (!record || record.status !== "active") {
+        throw new CheckoutRedemptionInvalidError("checkout entitlement is unavailable");
+      }
+      if (record.expiresAt && Date.parse(record.expiresAt) <= now.getTime()) {
+        throw new CheckoutRedemptionExpiredError("checkout entitlement has expired");
+      }
+      const redeemedAt = now.toISOString();
+      const updated = this.db
+        .prepare(
+          `update stripe_checkout_fulfillments
+           set redeemed_at = ?
+           where stripe_event_id = ? and redeemed_at is null`
+        )
+        .run(redeemedAt, row.stripe_event_id);
+      if (Number(updated.changes) !== 1) {
+        throw new CheckoutRedemptionConsumedError("checkout fulfillment was already consumed");
+      }
+      const redeemed = this.getStripeCheckoutFulfillmentByEventId(row.stripe_event_id);
+      if (!redeemed?.redeemed_at) {
+        throw new Error("checkout fulfillment redemption did not persist");
+      }
+      this.db.exec("commit");
+      return {
+        rawKey,
+        record,
+        fulfillment: stripeCheckoutFulfillmentFromRow(redeemed)
+      };
+    } catch (error) {
+      if (transactionStarted) this.db.exec("rollback");
+      if (
+        error instanceof CheckoutRedemptionNotFoundError ||
+        error instanceof CheckoutRedemptionInvalidError ||
+        error instanceof CheckoutRedemptionExpiredError ||
+        error instanceof CheckoutRedemptionConsumedError ||
+        error instanceof CheckoutRedemptionTransientError
+      ) {
+        throw error;
+      }
+      if (isSqliteBusy(error)) {
+        throw new CheckoutRedemptionTransientError("checkout redemption storage is busy");
+      }
+      throw new CheckoutRedemptionTransientError("checkout redemption failed");
+    }
+  }
+
+  getStripeCheckoutFulfillment(
+    externalCheckoutId: string
+  ): StripeCheckoutFulfillmentRecord | undefined {
+    const row = this.getStripeCheckoutFulfillmentByCheckoutId(externalCheckoutId);
+    return row ? stripeCheckoutFulfillmentFromRow(row) : undefined;
+  }
+
+  getStripeCheckoutFulfillmentForEvent(
+    stripeEventId: string
+  ): StripeCheckoutFulfillmentRecord | undefined {
+    const row = this.getStripeCheckoutFulfillmentByEventId(stripeEventId);
+    return row ? stripeCheckoutFulfillmentFromRow(row) : undefined;
   }
 
   /**
@@ -940,6 +1229,22 @@ export class LicenseStore {
     return row ? mapCheckoutSubscriptionBinding(row) : undefined;
   }
 
+  private getStripeCheckoutFulfillmentByEventId(
+    stripeEventId: string
+  ): StripeCheckoutFulfillmentRow | undefined {
+    return this.db
+      .prepare("select * from stripe_checkout_fulfillments where stripe_event_id = ?")
+      .get(stripeEventId) as StripeCheckoutFulfillmentRow | undefined;
+  }
+
+  private getStripeCheckoutFulfillmentByCheckoutId(
+    externalCheckoutId: string
+  ): StripeCheckoutFulfillmentRow | undefined {
+    return this.db
+      .prepare("select * from stripe_checkout_fulfillments where external_checkout_id = ?")
+      .get(externalCheckoutId) as StripeCheckoutFulfillmentRow | undefined;
+  }
+
   private getSubscriptionLifecycleEvent(
     eventId: string
   ): SubscriptionLifecycleEventRow | undefined {
@@ -1067,6 +1372,22 @@ function mapCheckoutSubscriptionBinding(
     ...(row.last_non_mutating_event_created_at !== null
       ? { lastNonMutatingEventCreatedAt: row.last_non_mutating_event_created_at }
       : {}),
+    createdAt: row.created_at
+  };
+}
+
+function stripeCheckoutFulfillmentFromRow(
+  row: StripeCheckoutFulfillmentRow
+): StripeCheckoutFulfillmentRecord {
+  return {
+    stripeEventId: row.stripe_event_id,
+    eventHash: row.event_hash,
+    issuanceIdempotencyKey: row.issuance_idempotency_key,
+    licenseKeyHash: row.license_key_hash,
+    externalCheckoutId: row.external_checkout_id,
+    fulfillmentTokenHash: row.fulfillment_token_hash,
+    fulfillmentExpiresAt: row.fulfillment_expires_at,
+    ...(row.redeemed_at ? { redeemedAt: row.redeemed_at } : {}),
     createdAt: row.created_at
   };
 }
@@ -1258,6 +1579,56 @@ function validateBoundCheckoutInput(
   };
 }
 
+function validateStripeCheckoutFulfillmentInput(
+  input: StripeCheckoutFulfillmentInput,
+  now: Date
+): StripeCheckoutFulfillmentInput {
+  if (!Number.isFinite(now.getTime())) {
+    throw new CheckoutIssuancePolicyError("license store clock returned an invalid date");
+  }
+  const stripeEventId = readBoundedCheckoutString(
+    input.stripeEventId,
+    "stripeEventId",
+    200
+  );
+  if (!/^evt_[A-Za-z0-9_]+$/.test(stripeEventId)) {
+    throw new CheckoutIssuancePolicyError("stripeEventId is invalid");
+  }
+  const eventHash = readBoundedCheckoutString(input.eventHash, "eventHash", 64);
+  if (!/^[a-f0-9]{64}$/.test(eventHash)) {
+    throw new CheckoutIssuancePolicyError("eventHash is invalid");
+  }
+  const fulfillmentTokenHash = readBoundedCheckoutString(
+    input.fulfillmentTokenHash,
+    "fulfillmentTokenHash",
+    64
+  );
+  if (!/^[a-f0-9]{64}$/.test(fulfillmentTokenHash)) {
+    throw new CheckoutIssuancePolicyError("fulfillmentTokenHash is invalid");
+  }
+  const fulfillmentExpiresAt = readBoundedCheckoutString(
+    input.fulfillmentExpiresAt,
+    "fulfillmentExpiresAt",
+    40
+  );
+  const expiresAt = Date.parse(fulfillmentExpiresAt);
+  if (
+    !Number.isFinite(expiresAt) ||
+    new Date(expiresAt).toISOString() !== fulfillmentExpiresAt ||
+    expiresAt <= now.getTime() ||
+    expiresAt > now.getTime() + 24 * 60 * 60 * 1_000
+  ) {
+    throw new CheckoutIssuancePolicyError("fulfillmentExpiresAt is invalid");
+  }
+  return {
+    stripeEventId,
+    eventHash,
+    fulfillmentTokenHash,
+    fulfillmentExpiresAt,
+    issuance: validateBoundCheckoutInput(input.issuance)
+  };
+}
+
 function validateCheckoutBindingBackfillInput(
   input: BindCheckoutSubscriptionInput
 ): BindCheckoutSubscriptionInput {
@@ -1365,6 +1736,27 @@ function validateStoredCheckoutEntitlement(
   if (record.status !== "active" || Date.parse(record.expiresAt) <= now.getTime()) {
     throw new CheckoutIssuanceConflictError("checkout issuance is no longer usable");
   }
+}
+
+function classifyCheckoutIssuanceStorageError(error: unknown): unknown {
+  if (isSqliteBusy(error)) {
+    return new CheckoutIssuanceTransientError("checkout issuance storage is busy");
+  }
+  if (
+    error instanceof Error &&
+    (
+      error.message.includes("UNIQUE constraint failed: checkout_subscription_bindings") ||
+      error.message.includes("UNIQUE constraint failed: stripe_checkout_fulfillments")
+    )
+  ) {
+    return new CheckoutIssuanceConflictError("checkout correlation is already bound");
+  }
+  return error;
+}
+
+function safeEqualHex(a: string, b: string): boolean {
+  if (!/^[a-f0-9]{64}$/.test(a) || !/^[a-f0-9]{64}$/.test(b)) return false;
+  return timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
 }
 
 function isSqliteBusy(error: unknown): boolean {

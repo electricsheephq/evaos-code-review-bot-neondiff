@@ -5,16 +5,17 @@ Self-contained license service for NeonDiff API-backed entitlements
 It implements the exact HTTP contract the shipped client (`src/license.ts`)
 already calls — activate / validate / deactivate — backed by SQLite, with an
 admin CLI that mints keys. Guarded server-to-server routes issue checkout
-licenses and apply provider subscription lifecycle events. Stripe/Lovable
-publish wiring remains outside this package and must use the owner-held shared
-secret; checkout is still held pending the rollout proof in issue #559.
+licenses and apply provider subscription lifecycle events. The direct Stripe
+webhook and one-use browser redemption contract are owned here; Lovable and
+Supabase remain the website, account, and subscription-projection surfaces but
+are not the license-issuance authority.
 
 The service is a separate package boundary; it does **not** import the review
 worker and can be deployed on its own (SQLite on a mounted volume).
 
 ## Contract
 
-Six `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
+Eight `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
 
 | Endpoint | Request body | Success (200) | Denials |
 | --- | --- | --- | --- |
@@ -22,6 +23,8 @@ Six `POST` endpoints, JSON in / JSON out (`Content-Type: application/json`):
 | `/v1/license/validate` | `{ licenseKey, repo?, machineId }` | active entitlement | 404 invalid · 403 revoked · 402 expired · 409 scope_mismatch (never activated on this machine) |
 | `/v1/license/deactivate` | `{ licenseKey, repo?, machineId }` | `{ status:"active", … }` (idempotent) | 404 invalid |
 | `/v1/admin/licenses/issue` | `{ idempotencyKey, checkoutLookupKey, ... }` + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | `{ status:"issued", licenseKey:"nd_live_...", entitlement, replayed }` | 401 unauthorized · 400 malformed/unsupported lookup or policy · 409 idempotency conflict |
+| `/v1/webhooks/stripe` | raw Stripe event + `Stripe-Signature` | redacted `{ status:"fulfilled", replayed }` | 400 invalid · 409 conflict · 503 unavailable |
+| `/v1/checkout/redeem` | `{ sessionId, fulfillmentToken }` from the exact configured website origin | one-time `{ status:"redeemed", licenseKey, entitlement }` | 403 wrong origin · 404 invalid/not found · 410 expired/consumed · 503 unavailable |
 | `/v1/admin/licenses/issue-lifecycle` | exact release identity + GitHub Actions OIDC bearer | short-lived lifecycle license + all-scope entitlement | 401 invalid workflow token · 403 candidate SHA mismatch · 409 workflow-run conflict · 503 unconfigured |
 | `/v1/admin/licenses/lifecycle` | strict subscription command + `Authorization: Bearer <LICENSE_ISSUANCE_SECRET>` | redacted `{ status, replayed, entitlement }` | 400 invalid · 401 unauthorized · 404 not_found · 409 conflict/terminally_revoked · 429 rate_limited · 503 unavailable |
 
@@ -49,9 +52,38 @@ Lifecycle revocation derives a non-secret reason code from subscription status:
 that derived value; arbitrary provider/customer text and control characters are
 rejected before storage.
 
-### Checkout issuance
+### Direct Stripe checkout fulfillment
 
-`POST /v1/admin/licenses/issue` is for the website/payment webhook only. It is
+`POST /v1/webhooks/stripe` is the paid-checkout authority path. It is disabled
+unless `NEONDIFF_STRIPE_CHECKOUT_ENABLED=true` and every required Stripe,
+price/product, origin, and Fly-only derivation setting is present. It verifies
+the raw Stripe signature, then re-reads the current Stripe account, Checkout
+Session, and subscription. Issuance requires the exact configured account and
+test/live mode, a completed subscription Checkout Session, a paid or
+no-payment-required initial state, one active/trialing subscription, one
+quantity-one recurring USD item, and the exact configured lookup-key, Price,
+Product, customer, subscription, and fulfillment-token-hash intersection.
+
+The license, immutable Stripe correlation, Stripe event hash, and hashed
+short-lived redemption token are stored in one SQLite transaction. Exact event
+replay returns `replayed=true` without a duplicate license. A changed event or
+Checkout correlation fails closed. The webhook response never contains a raw
+license key or redemption token.
+
+`POST /v1/checkout/redeem` accepts only the exact configured HTTPS website
+origin. A valid Checkout Session ID plus the fragment-held fulfillment token
+returns the raw license key once. Wrong tokens do not consume fulfillment;
+expired and previously redeemed tokens return `410`. Responses use exact-origin
+CORS, `Cache-Control: no-store`, and `Referrer-Policy: no-referrer`.
+
+This source contract is not deployment, live billing, activation, publication,
+or customer proof. Issue
+[#718](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/718)
+owns this bounded change; tracker #610 owns the public paid BYO beta gate.
+
+### Legacy checkout issuance
+
+`POST /v1/admin/licenses/issue` is the legacy shared-secret issuance route. It is
 disabled unless `LICENSE_ISSUANCE_SECRET` is configured, and it requires:
 
 ```json
@@ -89,9 +121,9 @@ conflict`. SQLite stores only the license hash plus issuance metadata; the raw
 key is deterministically derived from `LICENSE_ISSUANCE_SECRET` and the
 idempotency key so webhook retries can be safe without storing raw key material.
 
-Checkout remains held. This source contract does not authorize reopening the
-website payment path; issue #559 owns version, manifest, deploy, install, and
-live activation proof. See
+The public purchase/download gate remains held until #610's production evidence
+passes. The direct Stripe path replaces Lovable-to-Fly calls for new
+fulfillment; this legacy route is not the customer delivery path. See
 [`docs/subscription-lifecycle.md`](docs/subscription-lifecycle.md) for the
 provider event matrix and rollout boundary.
 
@@ -143,10 +175,29 @@ Environment:
 - `PORT` / `HOST` — listen address (default `8080` / `0.0.0.0`). TLS is
   terminated upstream (fly), so the process serves plain HTTP internally.
 - `LICENSE_ISSUANCE_SECRET` — optional server-to-server bearer secret that
-  derives issued keys and enables `POST /v1/admin/licenses/issue`. The OIDC
+  derives legacy issued keys and enables `POST /v1/admin/licenses/issue`. The OIDC
   lifecycle route also requires it for deterministic key derivation, but never
-  accepts it as request authorization. Keep it only on Fly and the checkout
-  webhook server; do not expose it to browsers, clients, workflows, or logs.
+  accepts it as request authorization. The direct Stripe path does not share
+  this value with Lovable. Do not expose it to browsers, clients, workflows, or
+  logs.
+- `NEONDIFF_STRIPE_CHECKOUT_ENABLED` — exact `true` enables composition of the
+  direct Stripe authority. Unset disables it; any incomplete configuration
+  keeps both direct routes unavailable.
+- `STRIPE_RESTRICTED_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_ACCOUNT_ID`,
+  and `STRIPE_PROVIDER_MODE` — Fly-only direct-webhook credentials and identity.
+  Use a least-privilege restricted key for current-account, Checkout Session,
+  and subscription reads; keep test and live values separate.
+- `NEONDIFF_CHECKOUT_LICENSE_DERIVATION_SECRET` — distinct Fly-only secret for
+  deterministic checkout key derivation. It is not an HTTP authorization
+  credential and is never shared with Lovable or browser code.
+- `NEONDIFF_STRIPE_REDEMPTION_ORIGIN` — exact HTTPS website origin allowed to
+  redeem once.
+- `NEONDIFF_STRIPE_MONTHLY_PRICE_ID`,
+  `NEONDIFF_STRIPE_MONTHLY_PRODUCT_ID`,
+  `NEONDIFF_STRIPE_YEARLY_PRICE_ID`,
+  `NEONDIFF_STRIPE_YEARLY_PRODUCT_ID`,
+  `NEONDIFF_STRIPE_ORG_YEARLY_PRICE_ID`, and
+  `NEONDIFF_STRIPE_ORG_YEARLY_PRODUCT_ID` — exact live/test catalog allowlist.
 - `GITHUB_BROKER_ENABLED` — exact `true` constructs the managed GitHub App
   broker; unset/`false` is the kill switch and keeps its routes at typed
   `broker_unavailable`.

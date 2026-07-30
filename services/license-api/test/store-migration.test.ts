@@ -250,7 +250,7 @@ async function waitForAcknowledgments(paths: readonly string[]): Promise<void> {
   );
 }
 
-describe("license store schema v2 migration", () => {
+describe("license store schema v3 migration", () => {
   for (const [label, setup] of [
     ["empty bootstrap", (_path: string) => {}],
     ["legacy migration", createLegacyDatabase]
@@ -278,7 +278,7 @@ describe("license store schema v2 migration", () => {
           [{ status: "opened" }, { status: "opened" }]
         );
         const inspected = open(path);
-        assert.equal(userVersion(inspected), 2);
+        assert.equal(userVersion(inspected), 3);
         if (label === "legacy migration") assertLegacyRowsPreserved(inspected);
         inspected.close();
       } finally {
@@ -294,19 +294,20 @@ describe("license store schema v2 migration", () => {
     });
   }
 
-  it("bootstraps an empty version-zero database directly to the complete v2 schema", () => {
+  it("bootstraps an empty version-zero database directly to the complete v3 schema", () => {
     const path = databasePath();
     const store = new LicenseStore(path);
     store.close();
 
     const db = open(path);
-    assert.equal(userVersion(db), 2);
+    assert.equal(userVersion(db), 3);
     assert.deepEqual(objectNames(db, "table"), [
       "activations",
       "checkout_subscription_bindings",
       "license_issuance_events",
       "license_subscription_lifecycle_events",
-      "licenses"
+      "licenses",
+      "stripe_checkout_fulfillments"
     ]);
     assert.ok(
       objectNames(db, "index").includes("license_subscription_lifecycle_events_issuance_time_idx")
@@ -362,10 +363,11 @@ describe("license store schema v2 migration", () => {
     store.close();
 
     const db = open(path);
-    assert.equal(userVersion(db), 2);
+    assert.equal(userVersion(db), 3);
     assertLegacyRowsPreserved(db);
     assert.ok(objectNames(db, "table").includes("checkout_subscription_bindings"));
     assert.ok(objectNames(db, "table").includes("license_subscription_lifecycle_events"));
+    assert.ok(objectNames(db, "table").includes("stripe_checkout_fulfillments"));
     db.close();
   });
 
@@ -382,12 +384,13 @@ describe("license store schema v2 migration", () => {
     store.close();
 
     const db = open(path);
-    assert.equal(userVersion(db), 2);
+    assert.equal(userVersion(db), 3);
     assertLegacyRowsPreserved(db);
     assert.deepEqual({ ...db.prepare("select * from _litestream_lock").get() }, { id: 1 });
     assert.deepEqual({ ...db.prepare("select * from _litestream_seq").get() }, { id: 1, seq: 3170 });
     assert.ok(objectNames(db, "table").includes("checkout_subscription_bindings"));
     assert.ok(objectNames(db, "table").includes("license_subscription_lifecycle_events"));
+    assert.ok(objectNames(db, "table").includes("stripe_checkout_fulfillments"));
     db.close();
   });
 
@@ -411,7 +414,7 @@ describe("license store schema v2 migration", () => {
     inspected.close();
   });
 
-  it("reopens schema v2 without changing its schema or data", () => {
+  it("reopens schema v3 without changing its schema or data", () => {
     const path = databasePath();
     createLegacyDatabase(path);
     new LicenseStore(path).close();
@@ -425,7 +428,7 @@ describe("license store schema v2 migration", () => {
     new LicenseStore(path).close();
 
     const after = open(path);
-    assert.equal(userVersion(after), 2);
+    assert.equal(userVersion(after), 3);
     assert.deepEqual(
       after.prepare("select type, name, sql from sqlite_schema where name not like 'sqlite_%' order by type, name").all(),
       schemaBefore
@@ -474,6 +477,45 @@ describe("license store schema v2 migration", () => {
       inspected.close();
     });
   }
+
+  it("migrates an exact populated v2 database to v3 without changing license data", () => {
+    const path = databasePath();
+    const initial = new LicenseStore(path, {
+      now: () => new Date("2026-07-30T00:00:00.000Z")
+    });
+    initial.issueBoundCheckoutLicense("nd_live_v2migrationfixture", {
+      idempotencyKey: "checkout-session:v2-migration",
+      checkoutLookupKey: "neondiff_monthly",
+      binding: {
+        provider: "stripe",
+        providerAccountId: "acct_v2_migration",
+        providerMode: "live",
+        externalSubscriptionId: "sub_v2_migration",
+        externalCheckoutId: "cs_live_v2_migration"
+      }
+    });
+    initial.close();
+
+    const downgraded = open(path);
+    downgraded.exec("drop table stripe_checkout_fulfillments; pragma user_version = 2;");
+    const licenseBefore = downgraded.prepare("select * from licenses").get();
+    const bindingBefore = downgraded
+      .prepare("select * from checkout_subscription_bindings")
+      .get();
+    downgraded.close();
+
+    new LicenseStore(path).close();
+
+    const migrated = open(path);
+    assert.equal(userVersion(migrated), 3);
+    assert.deepEqual(migrated.prepare("select * from licenses").get(), licenseBefore);
+    assert.deepEqual(
+      migrated.prepare("select * from checkout_subscription_bindings").get(),
+      bindingBefore
+    );
+    assert.ok(objectNames(migrated, "table").includes("stripe_checkout_fulfillments"));
+    migrated.close();
+  });
 
   it("rejects a database labeled v2 when lifecycle constraints are missing", () => {
     const path = databasePath();
@@ -536,17 +578,17 @@ describe("license store schema v2 migration", () => {
       "unexpected_license_projection"
     ]
   ] as const) {
-    it(`rejects an otherwise valid v2 schema with an unexpected ${label}`, () => {
+    it(`rejects an otherwise valid v3 schema with an unexpected ${label}`, () => {
       const path = databasePath();
       new LicenseStore(path).close();
       const db = open(path);
       db.exec(mutation);
       db.close();
 
-      assert.throws(() => new LicenseStore(path), /schema v2 has unexpected objects/);
+      assert.throws(() => new LicenseStore(path), /schema v3 has unexpected objects/);
 
       const inspected = open(path);
-      assert.equal(userVersion(inspected), 2);
+      assert.equal(userVersion(inspected), 3);
       assert.deepEqual(objectNames(inspected, type), [name]);
       inspected.close();
     });
@@ -562,26 +604,38 @@ describe("license store schema v2 migration", () => {
     {
       label: "empty bootstrap",
       setup() {},
-      steps: ["core-schema-created", "lifecycle-schema-created", "schema-verified", "version-set"],
+      steps: [
+        "core-schema-created",
+        "lifecycle-schema-created",
+        "stripe-checkout-fulfillment-schema-created",
+        "schema-verified",
+        "version-set"
+      ],
       assertUnchanged(db) {
         assert.equal(userVersion(db), 0);
         assert.deepEqual(schemaRows(db), []);
       },
       assertRecovered(db) {
-        assert.equal(userVersion(db), 2);
+        assert.equal(userVersion(db), 3);
         assert.deepEqual(objectNames(db, "table"), [
           "activations",
           "checkout_subscription_bindings",
           "license_issuance_events",
           "license_subscription_lifecycle_events",
-          "licenses"
+          "licenses",
+          "stripe_checkout_fulfillments"
         ]);
       }
     },
     {
       label: "legacy migration",
       setup: createLegacyDatabase,
-      steps: ["lifecycle-schema-created", "schema-verified", "version-set"],
+      steps: [
+        "lifecycle-schema-created",
+        "stripe-checkout-fulfillment-schema-created",
+        "schema-verified",
+        "version-set"
+      ],
       assertUnchanged(db) {
         assert.equal(userVersion(db), 0);
         assert.deepEqual(objectNames(db, "table"), ["activations", "license_issuance_events", "licenses"]);
@@ -589,7 +643,7 @@ describe("license store schema v2 migration", () => {
         assertLegacyRowsPreserved(db);
       },
       assertRecovered(db) {
-        assert.equal(userVersion(db), 2);
+        assert.equal(userVersion(db), 3);
         assertLegacyRowsPreserved(db);
       }
     }
