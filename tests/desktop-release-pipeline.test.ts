@@ -19,6 +19,60 @@ function read(path: string): string {
 const retiredCoreChecksTarget = ["NeonDiffDesktopCore", "Checks"].join("");
 
 describe("NeonDiff desktop release-smoke pipeline", () => {
+  it("defines a three-clean-Mac public download and install canary", () => {
+    const workflowPath = ".github/workflows/paid-beta-public-download-canary.yml";
+
+    expect(existsSync(workflowPath)).toBe(true);
+
+    const workflow = read(workflowPath);
+    const parsed = YAML.parse(workflow) as {
+      on?: {
+        workflow_dispatch?: {
+          inputs?: Record<string, { required?: boolean }>;
+        };
+      };
+      permissions?: { contents?: string };
+      jobs?: Record<
+        string,
+        {
+          strategy?: { "fail-fast"?: boolean; matrix?: { runner?: string[] } };
+          "runs-on"?: string;
+        }
+      >;
+    };
+
+    const inputs = parsed.on?.workflow_dispatch?.inputs;
+    expect(inputs?.release_tag?.required).toBe(true);
+    expect(inputs?.artifact_name?.required).toBe(true);
+    expect(inputs?.artifact_sha256?.required).toBe(true);
+    expect(parsed.permissions).toEqual({ contents: "read" });
+
+    const job = parsed.jobs?.["public-download-install-canary"];
+    expect(job?.strategy?.["fail-fast"]).toBe(false);
+    expect(job?.strategy?.matrix?.runner).toEqual(["macos-14", "macos-15", "macos-26"]);
+    expect(job?.["runs-on"]).toBe("${{ matrix.runner }}");
+
+    for (const command of [
+      "releases/download",
+      "curl --fail",
+      "shasum -a 256",
+      "com.apple.quarantine",
+      "ditto -x -k",
+      "codesign --verify --deep --strict",
+      "xcrun stapler validate",
+      "spctl -a -vv -t exec",
+      "/Applications/NeonDiff.app",
+      "open -n",
+      "NeonDiffDesktop"
+    ]) {
+      expect(workflow).toContain(command);
+    }
+
+    expect(workflow).toMatch(/actions\/upload-artifact@[0-9a-f]{40}/);
+    expect(workflow).not.toMatch(/actions\/upload-artifact@v4/);
+    expect(workflow).not.toMatch(/\$\{\{\s*secrets\./);
+  });
+
   it("defines an unsigned macOS release-smoke workflow with the required desktop gates", () => {
     const workflowPath = ".github/workflows/desktop-release-smoke.yml";
 
