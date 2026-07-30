@@ -180,11 +180,13 @@ plan before it presents the initialization action; it never initializes the
 `_unselected` placeholder. A new native config receives bot-isolated runtime,
 state, evidence, and license paths beside that config instead of reusing the
 packaged worker's placeholder `/tmp/neondiff` tree. If one exact
-checksum-managed local worker already exists
-for the selected LaunchAgent label, the app reuses it for these isolated setup
-commands instead of silently invoking an older global `neondiff` command. It
-does not borrow the existing bot's credential environment; GitHub verification
-receives the new bot's Keychain-owned private key only through bounded stdin.
+checksum-managed local worker already exists for the selected LaunchAgent
+label, the app reuses it for these isolated setup commands instead of resolving
+them through a global `neondiff` command. It does not borrow the existing bot's
+credential environment; GitHub verification receives the new bot's
+Keychain-owned private key only through bounded stdin. If zero or multiple
+managed worker contexts are found, this reuse path is not selected; installing
+and proving exactly one managed worker remains a separate distribution gate.
 This
 source path does not prove customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.

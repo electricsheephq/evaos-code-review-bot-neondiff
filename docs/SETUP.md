@@ -286,9 +286,11 @@ plan before showing **Initialize Local Config**. It never initializes the
 When the same Mac already has one exact checksum-managed worker for the selected
 LaunchAgent label, the app reuses that worker for the isolated bot's `init`,
 `config inspect`, `config patch`, and private-key-stdin GitHub doctor commands.
-It does not silently fall back to an older global `neondiff` package, and it
-does not pass the existing bot's App ID or private-key file environment into the
-new bot process.
+Within that proven one-worker case, it does not resolve those commands through
+an older global `neondiff` package, and it does not pass the existing bot's App
+ID or private-key file environment into the new bot process. Zero or ambiguous
+managed-worker discovery does not select this reuse path; installing and proving
+exactly one managed worker is a separate distribution gate.
 
 This first-run step proves only current App installation and repository access.
 Provider verification, activation, dry run, and live review remain separate
