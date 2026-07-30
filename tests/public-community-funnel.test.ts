@@ -101,9 +101,9 @@ describe("NeonDiff public community funnel", () => {
     expect(surfaces.setup).not.toMatch(
       /Use the public NeonDiff GitHub App install URL for the beta/i
     );
+    expect(surfaces.githubApp).toContain("https://github.com/settings/apps/new");
     const registrationGuide = surfaces.githubApp.replace(/\s+/g, " ");
     for (const required of [
-      /github\.com\/settings\/apps\/new/i,
       /Homepage URL/i,
       /Request user authorization.*(?:off|disabled|do not enable)/is,
       /Setup URL.*blank/is,
