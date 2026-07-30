@@ -1555,7 +1555,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
                $0.id == savedBotID
                    && ($0.status == .verified || $0.status == .pending)
            }) {
-            selectBotInstallation(savedBotID)
+            let preservesPendingPlan = restoredPendingNewBotPlan(
+                account: initial,
+                savedBotID: savedBotID,
+                requiresCurrentSelection: false
+            ) != nil
+            selectBotInstallation(
+                savedBotID,
+                preservesPendingNewBotPlan: preservesPendingPlan
+            )
         } else {
             dependencies.preferences.removeValue(forKey: accountBotPreferenceKey)
             dependencies.preferences.removeValue(
@@ -1592,6 +1600,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func selectBotInstallation(_ botID: String) {
+        selectBotInstallation(botID, preservesPendingNewBotPlan: false)
+    }
+
+    private func selectBotInstallation(
+        _ botID: String,
+        preservesPendingNewBotPlan: Bool
+    ) {
         guard let account = selectedAccountWorkspace,
               let bot = account.bots.first(where: { $0.id == botID }),
               bot.status == .verified || bot.status == .pending
@@ -1604,9 +1619,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         resetWorkspaceBoundRuntimeState()
         accountWorkspaceSelection.selectBot(botID)
         pendingNewBotPlan = nil
-        dependencies.preferences.removeValue(
-            forKey: pendingNewBotPlanPreferenceKey
-        )
+        if !preservesPendingNewBotPlan {
+            dependencies.preferences.removeValue(
+                forKey: pendingNewBotPlanPreferenceKey
+            )
+        }
         dependencies.preferences.set(botID, forKey: accountBotPreferenceKey)
         if let localConfigPath = bot.localConfigPath {
             configPath = localConfigPath
@@ -1627,6 +1644,32 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func beginNewBot(appSlug: String = "new-neondiff-bot") {
         guard let account = selectedAccountWorkspace else {
             accountWorkspaceStatus = "Choose an account before creating a bot."
+            return
+        }
+        if pendingNewBotPlan == nil,
+           let restoredPlan = restoredPendingNewBotPlan(
+               account: account,
+               savedBotID: nil,
+               requiresCurrentSelection: false
+           ) {
+            resetWorkspaceBoundRuntimeState()
+            pendingNewBotPlan = restoredPlan
+            accountWorkspaceSelection.selectBot(restoredPlan.bot.id)
+            configPath = restoredPlan.bot.localConfigPath ?? configPath
+            dependencies.preferences.set(
+                restoredPlan.bot.id,
+                forKey: accountBotPreferenceKey
+            )
+            dependencies.preferences.set(
+                configPath,
+                forKey: Self.configPathPreferenceKey
+            )
+            persistPendingNewBotPlan(restoredPlan)
+            accountWorkspaceStatus = "Resumed the pending New Bot setup on this Mac."
+            reopenOnboarding(at: .welcome)
+            if dependencies.fileWriter.fileExists(at: URL(filePath: configPath)) {
+                inspectConfig()
+            }
             return
         }
         do {
@@ -1763,14 +1806,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private func restoredPendingNewBotPlan(
         account: DesktopAccountWorkspace,
-        savedBotID: String?
+        savedBotID: String?,
+        requiresCurrentSelection: Bool = true
     ) -> DesktopNewBotPlan? {
         guard account.role != nil,
-              let savedBotID,
-              savedBotID.range(
-                of: "^pending-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-                options: .regularExpression
-              ) != nil,
               let serialized = dependencies.preferences.string(
                 forKey: pendingNewBotPlanPreferenceKey
               ),
@@ -1781,15 +1820,25 @@ package final class NeonDiffDesktopModel: ObservableObject {
               ),
               persisted.schemaVersion == 1,
               persisted.accountID == account.id,
-              persisted.botID == savedBotID,
-              dependencies.preferences.string(forKey: Self.configPathPreferenceKey)
-                == persisted.configPath,
+              persisted.botID.range(
+                of: "^pending-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                options: .regularExpression
+              ) != nil,
               persisted.appSlug.range(
                 of: "^[a-z0-9][a-z0-9-]{0,99}$",
                 options: .regularExpression
               ) != nil
         else {
             return nil
+        }
+        if requiresCurrentSelection {
+            guard persisted.botID == savedBotID,
+                  dependencies.preferences.string(
+                      forKey: Self.configPathPreferenceKey
+                  ) == persisted.configPath
+            else {
+                return nil
+            }
         }
 
         let botsDirectory = dependencies.fileWriter.applicationSupportDirectory
@@ -1814,7 +1863,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return DesktopNewBotPlan(
             accountID: account.id,
             bot: DesktopBotInstallation(
-                id: savedBotID,
+                id: persisted.botID,
                 appID: 0,
                 appSlug: persisted.appSlug,
                 mode: .byo,

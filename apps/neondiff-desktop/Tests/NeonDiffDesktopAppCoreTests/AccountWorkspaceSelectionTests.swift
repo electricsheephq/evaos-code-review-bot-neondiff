@@ -500,6 +500,128 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func explicitNewBotResumesPendingPlanAfterOlderBuildSelectionDrift() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let firstLaunch = ModelDependencyFixture(root: root)
+        firstLaunch.model.applyAccountWorkspaceCatalog(.loaded([electricSheep]))
+        firstLaunch.model.beginNewBot()
+        let original = try #require(firstLaunch.model.pendingNewBotPlan)
+        let pendingConfigPath = try #require(original.bot.localConfigPath)
+        let pendingConfigURL = URL(filePath: pendingConfigPath)
+        let pendingConfigData = Data(#"{"pilotRepos":["\#(repository)"]}"#.utf8)
+        try FileManager.default.createDirectory(
+            at: pendingConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try pendingConfigData.write(to: pendingConfigURL)
+        let savedPendingPlan = try #require(
+            firstLaunch.preferences.string(forKey: "neondiff.pendingNewBotPlan.v1")
+        )
+
+        let existingConfigURL = root
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent(electricSheep.id, isDirectory: true)
+            .appendingPathComponent("Bots", isDirectory: true)
+            .appendingPathComponent("evaos-code-review-bot", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+        try FileManager.default.createDirectory(
+            at: existingConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"pilotRepos":["electricsheephq/existing-bot"]}"#.utf8)
+            .write(to: existingConfigURL)
+        let existingBot = bot(
+            id: "bot-evaos-code-review-bot",
+            slug: "evaos-code-review-bot",
+            configPath: existingConfigURL.path
+        )
+        let account = workspace(
+            id: electricSheep.id,
+            name: electricSheep.name,
+            bots: [existingBot]
+        )
+        var pendingInspectPayload = try #require(
+            JSONSerialization.jsonObject(
+                with: Data(ModelDependencyFixture.configInspectJSON.utf8)
+            ) as? [String: Any]
+        )
+        var pendingInspectedConfig = try #require(
+            pendingInspectPayload["config"] as? [String: Any]
+        )
+        pendingInspectedConfig["pilotRepos"] = [repository]
+        pendingInspectPayload["config"] = pendingInspectedConfig
+        let pendingInspectJSON = try #require(String(
+            data: JSONSerialization.data(withJSONObject: pendingInspectPayload),
+            encoding: .utf8
+        ))
+        let reinstalled = ModelDependencyFixture(
+            root: root,
+            cliOutcomes: [
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: ModelDependencyFixture.configInspectJSON,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: pendingInspectJSON,
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: [
+                "neondiff.accountWorkspaceID": electricSheep.id,
+                "neondiff.accountBotID": existingBot.id,
+                "neondiff.configPath": existingConfigURL.path,
+                "neondiff.pendingNewBotPlan.v1": savedPendingPlan
+            ]
+        )
+
+        reinstalled.model.applyAccountWorkspaceCatalog(.loaded([account]))
+        await reinstalled.cli.waitUntilCallCount(1)
+        for _ in 0..<100 where reinstalled.model.isConfigInspectInProgress {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(reinstalled.model.selectedBotInstallation?.id == existingBot.id)
+        #expect(reinstalled.model.pendingNewBotPlan == nil)
+        #expect(reinstalled.model.configPath == existingConfigURL.path)
+        #expect(
+            reinstalled.preferences.string(forKey: "neondiff.pendingNewBotPlan.v1")
+                == savedPendingPlan
+        )
+
+        reinstalled.model.beginNewBot()
+        for _ in 0..<100 where reinstalled.cli.calls.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        for _ in 0..<100 where reinstalled.model.isConfigInspectInProgress {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(reinstalled.model.pendingNewBotPlan == original)
+        #expect(reinstalled.model.accountWorkspaceSelection.botID == original.bot.id)
+        #expect(reinstalled.model.configPath == pendingConfigPath)
+        #expect(
+            reinstalled.preferences.string(forKey: "neondiff.accountBotID")
+                == original.bot.id
+        )
+        #expect(
+            reinstalled.preferences.string(forKey: "neondiff.configPath")
+                == pendingConfigPath
+        )
+        #expect(try Data(contentsOf: pendingConfigURL) == pendingConfigData)
+        #expect(reinstalled.cli.calls.count == 2)
+        if reinstalled.cli.calls.count == 2 {
+            #expect(reinstalled.cli.calls[1].arguments == [
+                "config", "inspect", "--config", pendingConfigPath
+            ])
+        }
+        #expect(reinstalled.model.repos.map(\.name) == [repository])
+    }
+
+    @MainActor
     @Test func pendingNewBotRelaunchRejectsAConfigOutsideTheSelectedAccount() throws {
         let root = fixtureURL("/fixture/model-app-support", directory: true)
         let savedBotID = "pending-75f906e6-08f9-4ca0-bf6a-e83b964543e2"
