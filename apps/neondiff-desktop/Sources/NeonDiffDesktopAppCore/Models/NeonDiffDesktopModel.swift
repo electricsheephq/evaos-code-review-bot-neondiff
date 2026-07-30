@@ -1600,6 +1600,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func selectBotInstallation(_ botID: String) {
+        if accountWorkspaceSelection.botID == botID,
+           let selectedBot = selectedBotInstallation,
+           selectedBot.status == .verified || selectedBot.status == .pending {
+            dependencies.preferences.removeValue(
+                forKey: pendingNewBotPlanPreferenceKey
+            )
+            return
+        }
         selectBotInstallation(botID, preservesPendingNewBotPlan: false)
     }
 

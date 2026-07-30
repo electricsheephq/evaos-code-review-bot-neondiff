@@ -256,6 +256,32 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func explicitlyReselectingRestoredBotAbandonsPreservedPendingPlan() throws {
+        let existingBot = bot(id: "bot-existing", slug: "existing-bot", configPath: nil)
+        let account = workspace(id: "account-existing", name: "Existing Account", bots: [existingBot])
+        let pendingBotID = "pending-75f906e6-08f9-4ca0-bf6a-e83b964543e2"
+        let pendingConfigPath = fixtureURL("/fixture/model-app-support/Accounts/\(account.id)/Bots/new-neondiff-bot/config.local.json").path
+        let persistedPlan = String(data: try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "accountID": account.id, "botID": pendingBotID, "appSlug": "new-neondiff-bot", "configPath": pendingConfigPath]), encoding: .utf8)!
+        let fixture = ModelDependencyFixture(preferenceStrings: ["neondiff.accountWorkspaceID": account.id, "neondiff.accountBotID": existingBot.id, "neondiff.configPath": "/fixture/existing-bot/config.local.json", "neondiff.pendingNewBotPlan.v1": persistedPlan])
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+        #expect(fixture.model.accountWorkspaceSelection.botID == existingBot.id)
+        #expect(fixture.preferences.string(forKey: "neondiff.pendingNewBotPlan.v1") == persistedPlan)
+        fixture.model.repos = [RepoMonitor(name: "account-existing/private", enabled: true)]
+        fixture.model.providers.providerKeyStored = true
+        fixture.model.github.installationCount = 1
+        let selectedConfigPath = fixture.model.configPath
+
+        fixture.model.selectBotInstallation(existingBot.id)
+
+        #expect(fixture.preferences.string(forKey: "neondiff.pendingNewBotPlan.v1") == nil)
+        #expect(fixture.model.accountWorkspaceSelection.botID == existingBot.id)
+        #expect(fixture.model.configPath == selectedConfigPath)
+        #expect(fixture.model.repos == [RepoMonitor(name: "account-existing/private", enabled: true)])
+        #expect(fixture.model.providers.providerKeyStored)
+        #expect(fixture.model.github.installationCount == 1)
+    }
+
+    @MainActor
     @Test func catalogLocalPathLossInvalidatesSelectedBotRuntimeState() {
         let localBot = bot(
             id: "bot-local",
