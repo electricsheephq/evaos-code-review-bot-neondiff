@@ -174,10 +174,18 @@ is a paid path for every repository and does not claim the managed public-free
 model. On a clean Mac, native first run exposes **Initialize Local Config**
 (non-destructive; never force-overwrites), **Add Repository**, **Apply
 Repository**, and **Verify App Access**, so the customer does not need a
-terminal or an operator edit to reach the repository-verification gate. A new
-native config receives bot-isolated runtime, state, evidence, and license paths
-beside that config instead of reusing the packaged worker's placeholder
-`/tmp/neondiff` tree. This
+terminal or an operator edit to reach the repository-verification gate. When
+the verified account has no bot yet, the app allocates that isolated new-bot
+plan before it presents the initialization action; it never initializes the
+`_unselected` placeholder. A new native config receives bot-isolated runtime,
+state, evidence, and license paths beside that config instead of reusing the
+packaged worker's placeholder `/tmp/neondiff` tree. If one exact
+checksum-managed local worker already exists
+for the selected LaunchAgent label, the app reuses it for these isolated setup
+commands instead of silently invoking an older global `neondiff` command. It
+does not borrow the existing bot's credential environment; GitHub verification
+receives the new bot's Keychain-owned private key only through bounded stdin.
+This
 source path does not prove customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.
 After Checkout displays a one-shot NeonDiff Activation Key, return to the

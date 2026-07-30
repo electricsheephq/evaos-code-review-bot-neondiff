@@ -279,6 +279,17 @@ For a B0 customer, the native first-run path is:
 5. Choose **Verify App Access**. Continue remains disabled until GitHub verifies
    the exact configured repository through that App installation.
 
+For a verified account with no bot yet, the app allocates the isolated new-bot
+plan before showing **Initialize Local Config**. It never initializes the
+`Accounts/_unselected` placeholder.
+
+When the same Mac already has one exact checksum-managed worker for the selected
+LaunchAgent label, the app reuses that worker for the isolated bot's `init`,
+`config inspect`, `config patch`, and private-key-stdin GitHub doctor commands.
+It does not silently fall back to an older global `neondiff` package, and it
+does not pass the existing bot's App ID or private-key file environment into the
+new bot process.
+
 This first-run step proves only current App installation and repository access.
 Provider verification, activation, dry run, and live review remain separate
 gates. No invitation is required when the versioned public GitHub prerelease is

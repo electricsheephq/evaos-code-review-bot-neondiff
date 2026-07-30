@@ -1527,6 +1527,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             selectBotInstallation(savedBotID)
         } else {
             dependencies.preferences.removeValue(forKey: accountBotPreferenceKey)
+            if initial.bots.isEmpty {
+                beginNewBot()
+            }
         }
     }
 

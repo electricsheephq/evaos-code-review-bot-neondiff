@@ -136,7 +136,14 @@ integration proof under #630.
    Initialization never uses `--force`; the app updates `pilotRepos` through
    `config patch`, and no operator edits the customer's config file. Each new
    bot config receives isolated runtime, state, evidence, and license paths
-   beside that config rather than the packaged worker's placeholder paths.
+   beside that config rather than the packaged worker's placeholder paths. An
+   account with no bot gets this isolated plan before the initialization action
+   appears; the app never initializes the `_unselected` placeholder.
+   If one exact checksum-managed worker already exists for the selected
+   LaunchAgent label, these isolated config commands and the bounded
+   private-key-stdin GitHub doctor reuse that worker instead of an older global
+   `neondiff` command. The new bot never inherits the existing bot's credential
+   environment.
 
 GitHub setup and paid activation remain separate gates. After Checkout returns
 the one-shot NeonDiff Activation Key, the customer pastes it in the native
