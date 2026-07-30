@@ -270,7 +270,9 @@ For a B0 customer, the native first-run path is:
    PEM, then choose **Store in Keychain**.
 3. On a clean install, choose **Initialize Local Config**. This invokes the
    non-destructive `neondiff init` path and never supplies `--force`; an existing
-   config is not overwritten.
+   config is not overwritten. The generated config keeps its runtime, state,
+   evidence, and license files in bot-isolated directories beside the config,
+   outside the packaged worker or source checkout.
 4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
    Repository**. The app writes the allowlist through the typed local `config
    patch` command; the customer does not edit a config file.

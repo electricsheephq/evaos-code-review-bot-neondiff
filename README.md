@@ -174,7 +174,10 @@ is a paid path for every repository and does not claim the managed public-free
 model. On a clean Mac, native first run exposes **Initialize Local Config**
 (non-destructive; never force-overwrites), **Add Repository**, **Apply
 Repository**, and **Verify App Access**, so the customer does not need a
-terminal or an operator edit to reach the repository-verification gate. This
+terminal or an operator edit to reach the repository-verification gate. A new
+native config receives bot-isolated runtime, state, evidence, and license paths
+beside that config instead of reusing the packaged worker's placeholder
+`/tmp/neondiff` tree. This
 source path does not prove customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.
 After Checkout displays a one-shot NeonDiff Activation Key, return to the
