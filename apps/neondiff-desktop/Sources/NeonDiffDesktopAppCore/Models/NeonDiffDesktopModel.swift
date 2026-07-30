@@ -699,6 +699,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private let accountWorkspacePreferenceKey = "neondiff.accountWorkspaceID"
     private let accountBotPreferenceKey = "neondiff.accountBotID"
     private let pendingNewBotPlanPreferenceKey = "neondiff.pendingNewBotPlan.v1"
+    private static let configPathPreferenceKey = "neondiff.configPath"
 
     private struct PersistedPendingNewBotPlan: Codable {
         let schemaVersion: Int
@@ -711,7 +712,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
         self.activationLicenseClientOverride = activationLicenseClient
-        self.configPath = dependencies.preferences.string(forKey: "neondiff.configPath")
+        self.configPath = dependencies.preferences.string(forKey: Self.configPathPreferenceKey)
             ?? dependencies.fileWriter.applicationSupportDirectory
                 .appendingPathComponent("config.local.json")
                 .standardizedFileURL.path
@@ -1280,7 +1281,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         applyAccountWorkspaceCatalog(.loaded(accounts))
 
-        if selectedBotInstallation == nil,
+        if pendingNewBotPlan == nil,
+           selectedBotInstallation == nil,
            let localBot = selectedAccountWorkspace?.bots.first(where: {
                $0.status == .verified && $0.localConfigPath != nil
            }) {
@@ -1297,6 +1299,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     ) {
         guard isAutomaticAccountWorkspaceRefreshInProgress else { return }
         isAutomaticAccountWorkspaceRefreshInProgress = false
+        if pendingNewBotPlan != nil {
+            isOnboardingPresented = true
+            return
+        }
         guard !dependencies.preferences.bool(forKey: onboardingCompletedKey) else {
             isOnboardingPresented = false
             return
@@ -1640,7 +1646,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             accountWorkspaceSelection.selectBot(plan.bot.id)
             configPath = plan.bot.localConfigPath ?? configPath
             dependencies.preferences.set(plan.bot.id, forKey: accountBotPreferenceKey)
-            dependencies.preferences.set(configPath, forKey: "neondiff.configPath")
+            dependencies.preferences.set(configPath, forKey: Self.configPathPreferenceKey)
             persistPendingNewBotPlan(plan)
             accountWorkspaceStatus = "New bot setup is isolated from existing bot configs."
             reopenOnboarding(at: .welcome)
@@ -1776,7 +1782,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
               persisted.schemaVersion == 1,
               persisted.accountID == account.id,
               persisted.botID == savedBotID,
-              dependencies.preferences.string(forKey: "neondiff.configPath")
+              dependencies.preferences.string(forKey: Self.configPathPreferenceKey)
                 == persisted.configPath,
               persisted.appSlug.range(
                 of: "^[a-z0-9][a-z0-9-]{0,99}$",
@@ -2138,7 +2144,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = providerVerificationSafetyLatchMessage
             return
         }
-        dependencies.preferences.set(configPath, forKey: "neondiff.configPath")
+        dependencies.preferences.set(configPath, forKey: Self.configPathPreferenceKey)
         dependencies.preferences.set(cliPath, forKey: "neondiff.cliPath")
         dependencies.preferences.set(launchdLabel, forKey: "neondiff.launchdLabel")
         if controlCenterLoadedSnapshot?.configPath != configPath {
