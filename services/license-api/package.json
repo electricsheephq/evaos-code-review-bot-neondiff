@@ -11,9 +11,11 @@
     "node": ">=26"
   },
   "dependencies": {
-    "jose": "^6.2.3"
+    "jose": "^6.2.3",
+    "stripe": "^22.3.0"
   },
   "devDependencies": {
+    "@types/node": "^24.13.3",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
   },

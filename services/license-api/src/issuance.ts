@@ -186,7 +186,7 @@ export function validateIssuanceAuthorization(
   return timingSafeEqualDigest(derivedHeader, deriveIssuanceAuthorization(expectedSecret));
 }
 
-function deriveCheckoutLicenseKey(secret: string, idempotencyKey: string): string {
+export function deriveCheckoutLicenseKey(secret: string, idempotencyKey: string): string {
   const digest = createHmac("sha256", secret).update(`checkout-license:${idempotencyKey}`).digest();
   return ["nd", "live", digest.subarray(0, 24).toString("base64url")].join("_");
 }

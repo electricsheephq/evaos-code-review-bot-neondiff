@@ -50,6 +50,19 @@ import {
   isAccountLinkPath,
   type AccountLinkDeps
 } from "./account-link/index.js";
+import {
+  CheckoutRedemptionConsumedError,
+  CheckoutRedemptionExpiredError,
+  CheckoutRedemptionInvalidError,
+  CheckoutRedemptionNotFoundError,
+  CheckoutRedemptionTransientError,
+  fulfillStripeCheckoutWebhook,
+  redeemStripeCheckout,
+  StripeCheckoutConflictError,
+  StripeCheckoutInvalidError,
+  StripeCheckoutUnavailableError,
+  type StripeCheckoutRuntime
+} from "./stripe-checkout.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const CANONICAL_GITHUB_REPOSITORY_PATTERN =
@@ -72,6 +85,8 @@ export interface LicenseHttpOptions {
   githubBroker?: GitHubBrokerDeps;
   /** Lovable account linking is independent from the managed GitHub App lane. */
   accountLink?: AccountLinkDeps;
+  /** Direct Stripe checkout fulfillment and browser redemption. Omitted → routes fail closed. */
+  stripeCheckout?: StripeCheckoutRuntime;
 }
 
 type Handler = (store: LicenseStore, req: LicenseRequest, now: Date) => ServiceResult;
@@ -110,6 +125,12 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       return writeJson(res, 200, { status: "ok" });
     }
     const path = req.url?.split("?")[0];
+    if (req.method === "POST" && path === "/v1/webhooks/stripe") {
+      return handleStripeCheckoutWebhook(options, req, res);
+    }
+    if (path === "/v1/checkout/redeem") {
+      return handleStripeCheckoutRedemption(options, req, res);
+    }
     if (isAccountLinkPath(path)) {
       if (!accountLinkService) {
         const unavailable = new BrokerError(
@@ -176,6 +197,160 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       // Never surface internal error text (could contain no key, but stay safe) → 500 server.
       return writeJson(res, 500, { status: "server", detail: "internal error" });
     }
+  };
+}
+
+async function handleStripeCheckoutWebhook(
+  options: LicenseHttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!options.stripeCheckout) {
+    return writeJson(res, 503, { status: "unavailable" });
+  }
+  if (hasDuplicateRawHeader(req, "stripe-signature")) {
+    return writeJson(res, 400, { status: "invalid" });
+  }
+  const signature = req.headers["stripe-signature"];
+  if (typeof signature !== "string" || !signature) {
+    return writeJson(res, 400, { status: "invalid" });
+  }
+  try {
+    const result = await fulfillStripeCheckoutWebhook({
+      store: options.store,
+      runtime: options.stripeCheckout,
+      rawBody: await readBody(req),
+      signature,
+      now: (options.now ?? (() => new Date()))()
+    });
+    return writeJson(res, 200, result);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return writeJson(res, 413, { status: "invalid" });
+    }
+    if (error instanceof StripeCheckoutConflictError) {
+      return writeJson(res, 409, { status: "conflict" });
+    }
+    if (error instanceof StripeCheckoutInvalidError) {
+      return writeJson(res, 400, { status: "invalid" });
+    }
+    if (error instanceof StripeCheckoutUnavailableError) {
+      return writeJson(res, 503, { status: "unavailable" });
+    }
+    return writeJson(res, 500, { status: "server" });
+  }
+}
+
+async function handleStripeCheckoutRedemption(
+  options: LicenseHttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  const runtime = options.stripeCheckout;
+  if (!runtime) {
+    return writeJson(res, 503, { status: "unavailable" });
+  }
+  const corsHeaders = checkoutRedemptionHeaders(req, runtime.allowedOrigin);
+  if (!corsHeaders) {
+    return writeJson(res, 403, { status: "forbidden" }, {
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+      Vary: "Origin"
+    });
+  }
+  if (req.method === "OPTIONS") {
+    return writeJson(res, 204, {}, {
+      ...corsHeaders,
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Max-Age": "600"
+    });
+  }
+  if (req.method !== "POST") {
+    return writeJson(res, 405, { status: "invalid" }, corsHeaders);
+  }
+  try {
+    const parsed = parseCheckoutRedemptionRequest(await readBody(req));
+    const result = redeemStripeCheckout({
+      store: options.store,
+      runtime,
+      sessionId: parsed.sessionId,
+      fulfillmentToken: parsed.fulfillmentToken
+    });
+    return writeJson(res, 200, result, corsHeaders);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return writeJson(res, 413, { status: "invalid" }, corsHeaders);
+    }
+    if (error instanceof CheckoutRedemptionConsumedError) {
+      return writeJson(res, 410, { status: "consumed" }, corsHeaders);
+    }
+    if (error instanceof CheckoutRedemptionExpiredError) {
+      return writeJson(res, 410, { status: "expired" }, corsHeaders);
+    }
+    if (
+      error instanceof CheckoutRedemptionInvalidError ||
+      error instanceof CheckoutRedemptionNotFoundError ||
+      error instanceof StripeCheckoutInvalidError
+    ) {
+      return writeJson(res, 404, { status: "not_found" }, corsHeaders);
+    }
+    if (
+      error instanceof CheckoutRedemptionTransientError ||
+      error instanceof StripeCheckoutUnavailableError
+    ) {
+      return writeJson(res, 503, { status: "unavailable" }, corsHeaders);
+    }
+    return writeJson(res, 500, { status: "server" }, corsHeaders);
+  }
+}
+
+function checkoutRedemptionHeaders(
+  req: IncomingMessage,
+  allowedOrigin: string
+): Record<string, string> | undefined {
+  const origin = req.headers.origin;
+  if (
+    typeof origin !== "string" ||
+    hasDuplicateRawHeader(req, "origin") ||
+    origin !== allowedOrigin
+  ) {
+    return undefined;
+  }
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    Vary: "Origin"
+  };
+}
+
+function parseCheckoutRedemptionRequest(raw: string): {
+  sessionId: string;
+  fulfillmentToken: string;
+} {
+  let parsed: unknown;
+  try {
+    parsed = raw ? (JSON.parse(raw) as unknown) : {};
+  } catch {
+    throw new StripeCheckoutInvalidError("redemption body is invalid");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new StripeCheckoutInvalidError("redemption body is invalid");
+  }
+  const body = parsed as Record<string, unknown>;
+  if (
+    Object.keys(body).some(
+      (key) => key !== "sessionId" && key !== "fulfillmentToken"
+    ) ||
+    typeof body.sessionId !== "string" ||
+    typeof body.fulfillmentToken !== "string"
+  ) {
+    throw new StripeCheckoutInvalidError("redemption body is invalid");
+  }
+  return {
+    sessionId: body.sessionId,
+    fulfillmentToken: body.fulfillmentToken
   };
 }
 

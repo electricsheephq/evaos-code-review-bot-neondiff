@@ -5,6 +5,7 @@ import { RateLimiter } from "./service.js";
 import { loadGitHubBrokerRuntimeConfig } from "./github-broker/runtime-config.js";
 import { createLicenseStoreEntitlementResolver } from "./github-broker/license-entitlement.js";
 import { loadAccountLinkRuntimeConfig } from "./account-link/runtime-config.js";
+import { loadStripeCheckoutRuntimeConfig } from "./stripe-checkout-runtime-config.js";
 
 /**
  * Production entrypoint. SQLite lives on a mounted volume in deploy
@@ -21,6 +22,7 @@ async function main(): Promise<void> {
   const store = new LicenseStore(dbPath);
   const githubBrokerRuntime = loadGitHubBrokerRuntimeConfig(process.env, dbPath);
   const accountLinkRuntime = loadAccountLinkRuntimeConfig(process.env, dbPath);
+  const stripeCheckoutRuntime = loadStripeCheckoutRuntimeConfig(process.env);
   if (githubBrokerRuntime.status === "invalid") {
     // Setting name + fixed reason are public-safe. Never log the submitted value.
     // The license API remains available while every broker route fails closed
@@ -35,6 +37,14 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     console.error(
       `account link unavailable: ${accountLinkRuntime.setting} ${accountLinkRuntime.reason}`
+    );
+  }
+  if (stripeCheckoutRuntime.status === "invalid") {
+    // Setting name + fixed reason only; never log Stripe keys, signing secrets,
+    // price IDs, or submitted values.
+    // eslint-disable-next-line no-console
+    console.error(
+      `Stripe checkout unavailable: ${stripeCheckoutRuntime.setting} ${stripeCheckoutRuntime.reason}`
     );
   }
   const { url } = await startLicenseServer({
@@ -58,6 +68,9 @@ async function main(): Promise<void> {
             resolveEntitlement: createLicenseStoreEntitlementResolver(store)
           }
         }
+      : {}),
+    ...(stripeCheckoutRuntime.status === "ready"
+      ? { stripeCheckout: stripeCheckoutRuntime.runtime }
       : {})
   });
   // eslint-disable-next-line no-console
