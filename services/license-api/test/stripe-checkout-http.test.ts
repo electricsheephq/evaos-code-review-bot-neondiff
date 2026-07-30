@@ -515,8 +515,12 @@ describe("direct Stripe subscription lifecycle", () => {
             lines: {
               data: [
                 {
-                  subscription: SUBSCRIPTION_ID,
-                  parent: { type: "subscription_item_details" },
+                  parent: {
+                    type: "subscription_item_details",
+                    subscription_item_details: {
+                      subscription: SUBSCRIPTION_ID
+                    }
+                  },
                   period: { end: RENEWAL_PERIOD_END }
                 }
               ]
@@ -554,8 +558,12 @@ describe("direct Stripe subscription lifecycle", () => {
             lines: {
               data: [
                 {
-                  subscription: SUBSCRIPTION_ID,
-                  parent: { type: "subscription_item_details" },
+                  parent: {
+                    type: "subscription_item_details",
+                    subscription_item_details: {
+                      subscription: SUBSCRIPTION_ID
+                    }
+                  },
                   period: { end: RENEWAL_PERIOD_END }
                 }
               ]

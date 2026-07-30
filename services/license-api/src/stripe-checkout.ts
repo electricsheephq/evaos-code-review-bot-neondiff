@@ -573,10 +573,21 @@ function invoiceSubscriptionPeriodEnd(
   const data = Array.isArray(lines.data) ? lines.data : [];
   const periodEnds = data.flatMap((entry) => {
     const line = record(entry);
-    const subscription = stripeReference(line.subscription);
-    if (subscription !== externalSubscriptionId) return [];
     const parent = record(line.parent);
     if (parent.type !== "subscription_item_details") return [];
+    const details = record(parent.subscription_item_details);
+    const subscription = stripeReference(details.subscription);
+    const legacySubscription = stripeReference(line.subscription);
+    if (
+      legacySubscription &&
+      subscription &&
+      legacySubscription !== subscription
+    ) {
+      throw new StripeCheckoutInvalidError(
+        "Stripe invoice subscription correlation conflicts"
+      );
+    }
+    if (subscription !== externalSubscriptionId) return [];
     return [positiveInteger(record(line.period).end, "invoice service period end")];
   });
   if (periodEnds.length === 0 || new Set(periodEnds).size !== 1) {
