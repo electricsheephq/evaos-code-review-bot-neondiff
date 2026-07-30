@@ -57,8 +57,7 @@ function eventPayload(overrides: Record<string, unknown> = {}): string {
 function signatureFor(payload: string): string {
   return stripeVerifier.webhooks.generateTestHeaderString({
     payload,
-    secret: WEBHOOK_SECRET,
-    timestamp: 1_785_400_010
+    secret: WEBHOOK_SECRET
   });
 }
 
