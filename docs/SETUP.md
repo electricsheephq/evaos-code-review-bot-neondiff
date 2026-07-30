@@ -283,6 +283,13 @@ For a verified account with no bot yet, the app allocates the isolated new-bot
 plan before showing **Initialize Local Config**. It never initializes the
 `Accounts/_unselected` placeholder.
 
+If the customer quits before setup is complete, relaunch NeonDiff and continue
+the same pending bot. The app restores the exact account-scoped config path and
+reopens onboarding rather than creating a second `new-neondiff-bot-*`
+directory. This recovery also takes precedence over automatic selection of an
+older local bot under the same account. Choosing another account or an existing
+bot explicitly still ends the pending setup.
+
 When the same Mac already has one exact checksum-managed worker for the selected
 LaunchAgent label, the app reuses that worker for the isolated bot's `init`,
 `config inspect`, `config patch`, and private-key-stdin GitHub doctor commands.

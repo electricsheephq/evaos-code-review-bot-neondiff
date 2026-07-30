@@ -177,7 +177,10 @@ Repository**, and **Verify App Access**, so the customer does not need a
 terminal or an operator edit to reach the repository-verification gate. When
 the verified account has no bot yet, the app allocates that isolated new-bot
 plan before it presents the initialization action; it never initializes the
-`_unselected` placeholder. A new native config receives bot-isolated runtime,
+`_unselected` placeholder. If the customer quits during that setup, the next
+launch restores the same pending bot and config path—even when the account also
+has an existing local bot—and reopens onboarding instead of allocating another
+config directory. A new native config receives bot-isolated runtime,
 state, evidence, and license paths beside that config instead of reusing the
 packaged worker's placeholder `/tmp/neondiff` tree. If one exact
 checksum-managed local worker already exists for the selected LaunchAgent

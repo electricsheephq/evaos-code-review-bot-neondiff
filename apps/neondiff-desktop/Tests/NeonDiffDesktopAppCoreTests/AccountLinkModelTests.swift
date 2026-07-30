@@ -145,6 +145,70 @@ import NeonDiffDesktopCore
         #expect(model.customerSurfaceStatus == "SETUP INCOMPLETE")
     }
 
+    @Test func launchRefreshPreservesPendingNewBotForAccountWithExistingLocalBot() async throws {
+        let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
+            .appendingPathComponent("neondiff-account-pending-bot-\(UUID().uuidString)", isDirectory: true)
+        let fileWriter = TemporaryFileWriter(root: root)
+        let existingConfigURL = root.appendingPathComponent("existing-worker.json")
+        try fileWriter.write(Data("{}".utf8), to: existingConfigURL)
+        let pendingBotID = "pending-75f906e6-08f9-4ca0-bf6a-e83b964543e2"
+        let pendingConfigURL = root
+            .appendingPathComponent("Accounts/account-electric-sheep/Bots/new-neondiff-bot/config.local.json")
+        try fileWriter.write(Data("{}".utf8), to: pendingConfigURL)
+        let preferences = MemoryPreferences()
+        preferences.set("account-electric-sheep", forKey: "neondiff.accountWorkspaceID")
+        preferences.set(pendingBotID, forKey: "neondiff.accountBotID")
+        preferences.set(pendingConfigURL.path, forKey: "neondiff.configPath")
+        preferences.set(true, forKey: "neondiff.hasCompletedActivationOnboarding.v2")
+        preferences.set(
+            """
+            {"schemaVersion":1,"accountID":"account-electric-sheep","botID":"\(pendingBotID)","appSlug":"new-neondiff-bot","configPath":"\(pendingConfigURL.path)"}
+            """,
+            forKey: "neondiff.pendingNewBotPlan.v1"
+        )
+        let secrets = AccountLinkMemorySecretStore()
+        _ = try GitHubBrokerDeviceIdentityStore(secretStore: secrets).loadOrCreate()
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+            clipboard: RecordingClipboard(),
+            urlOpener: RecordingURLOpener(),
+            cli: RecordingCLIExecutor(result: CLIRunResult(
+                exitCode: 0,
+                stdout: ModelDependencyFixture.configInspectJSON,
+                stderr: ""
+            )),
+            dashboard: RecordingDashboardLauncher(),
+            preferences: preferences,
+            clock: TestClock(),
+            fileWriter: fileWriter,
+            providerVerifier: RecordingProviderVerifier(),
+            secretStore: secrets,
+            githubAuthenticator: StubGitHubAuthenticator(),
+            accountLink: ScriptedAccountLink(workspaceResults: [
+                .success(AccountLinkFixtures.electricSheep)
+            ]),
+            productionBoundary: .testAccountLink,
+            localBotConfigurations: [
+                DesktopLocalBotConfiguration(
+                    appID: 4242,
+                    configPath: existingConfigURL.path
+                )
+            ]
+        ))
+
+        #expect(!model.isOnboardingPresented)
+
+        model.refreshAccountWorkspacesOnLaunch()
+        await model.waitForAccountLinkOperation()
+        for _ in 0..<50 where model.isConfigInspectInProgress {
+            await Task.yield()
+        }
+
+        #expect(model.pendingNewBotPlan?.bot.id == pendingBotID)
+        #expect(model.accountWorkspaceSelection.botID == pendingBotID)
+        #expect(model.configPath == pendingConfigURL.path)
+        #expect(model.isOnboardingPresented)
+    }
+
     @Test func launchRefreshFailureStaysInRetryStateInsteadOfClaimingFirstRun() async throws {
         let root = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
             .appendingPathComponent("neondiff-account-launch-failure-\(UUID().uuidString)", isDirectory: true)

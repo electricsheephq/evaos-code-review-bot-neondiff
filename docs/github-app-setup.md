@@ -139,6 +139,11 @@ integration proof under #630.
    beside that config rather than the packaged worker's placeholder paths. An
    account with no bot gets this isolated plan before the initialization action
    appears; the app never initializes the `_unselected` placeholder.
+   If NeonDiff is quit mid-setup, relaunch restores that exact pending bot and
+   config path and reopens onboarding. It does not silently fall back to an
+   existing local bot on the same account or allocate another numbered config
+   directory; the customer can explicitly choose another account or bot to end
+   the pending flow.
    If one exact checksum-managed worker already exists for the selected
    LaunchAgent label, these isolated config commands and the bounded
    private-key-stdin GitHub doctor reuse that worker instead of resolving
