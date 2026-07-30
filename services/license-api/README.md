@@ -72,9 +72,11 @@ license key or redemption token.
 
 `POST /v1/checkout/redeem` accepts only the exact configured HTTPS website
 origin. A valid Checkout Session ID plus the fragment-held fulfillment token
-returns the raw license key once. Wrong tokens do not consume fulfillment;
-expired and previously redeemed tokens return `410`. Responses use exact-origin
-CORS, `Cache-Control: no-store`, and `Referrer-Policy: no-referrer`.
+returns the raw license key. An exact retry within the fulfillment TTL returns
+that same deterministic key without another issuance. Wrong tokens do not
+consume fulfillment, and expired tokens return `410`. Responses use
+exact-origin CORS, `Cache-Control: no-store`, and
+`Referrer-Policy: no-referrer`.
 
 This source contract is not deployment, live billing, activation, publication,
 or customer proof. Issue
