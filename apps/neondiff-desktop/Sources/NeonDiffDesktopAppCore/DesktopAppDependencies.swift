@@ -99,6 +99,24 @@ private let approvedAccountConnectURL = URL(
     string: "https://www.neondiff.com/desktop/connect"
 )!
 
+package enum DesktopReleaseRouting {
+    private static let releasesURL = URL(
+        string: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases"
+    )!
+
+    package static func localWorkerUpdateGuideURL(shortVersion: String?) -> URL {
+        guard let shortVersion else { return releasesURL }
+        let version = shortVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+        let semverPattern = #"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$"#
+        guard version.range(of: semverPattern, options: .regularExpression) != nil else {
+            return releasesURL
+        }
+        return releasesURL
+            .appendingPathComponent("tag", isDirectory: false)
+            .appendingPathComponent("v\(version)", isDirectory: false)
+    }
+}
+
 package struct DesktopAppDependencies {
     package let clipboard: any DesktopClipboard
     package let urlOpener: any DesktopURLOpener
@@ -113,6 +131,7 @@ package struct DesktopAppDependencies {
     package let githubBroker: (any GitHubBrokerConnecting)?
     package let accountLink: (any NeonDiffAccountLinkConnecting)?
     package let productionBoundary: DesktopProductionBoundary
+    package let localWorkerUpdateGuideURL: URL
     package let cliWorkingDirectory: URL?
     package let localBotConfigurations: [DesktopLocalBotConfiguration]
     package let localBotExecutionConfigPaths: [String]
@@ -131,6 +150,9 @@ package struct DesktopAppDependencies {
         githubBroker: (any GitHubBrokerConnecting)? = nil,
         accountLink: (any NeonDiffAccountLinkConnecting)? = nil,
         productionBoundary: DesktopProductionBoundary,
+        localWorkerUpdateGuideURL: URL = DesktopReleaseRouting.localWorkerUpdateGuideURL(
+            shortVersion: nil
+        ),
         cliWorkingDirectory: URL? = nil,
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
         localBotExecutionConfigPaths: [String] = []
@@ -148,6 +170,7 @@ package struct DesktopAppDependencies {
         self.githubBroker = githubBroker
         self.accountLink = accountLink
         self.productionBoundary = productionBoundary
+        self.localWorkerUpdateGuideURL = localWorkerUpdateGuideURL
         self.cliWorkingDirectory = cliWorkingDirectory
         self.localBotConfigurations = localBotConfigurations
         self.localBotExecutionConfigPaths = localBotExecutionConfigPaths

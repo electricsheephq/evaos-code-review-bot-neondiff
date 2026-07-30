@@ -58,6 +58,11 @@ enum NeonDiffDesktopCompositionRoot {
             githubBroker: githubBroker,
             accountLink: accountLink,
             productionBoundary: productionBoundary,
+            localWorkerUpdateGuideURL: DesktopReleaseRouting.localWorkerUpdateGuideURL(
+                shortVersion: Bundle.main.object(
+                    forInfoDictionaryKey: "CFBundleShortVersionString"
+                ) as? String
+            ),
             cliWorkingDirectory: cliWorkingDirectory,
             localBotConfigurations: localBotConfigurations,
             localBotExecutionConfigPaths: localBotExecutionContexts.map(

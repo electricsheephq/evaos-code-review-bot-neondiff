@@ -253,7 +253,10 @@ struct ModelDependencyFixture {
         preferenceStrings: [String: String] = [:],
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
         localBotExecutionConfigPaths: [String] = [],
-        productionBoundary: DesktopProductionBoundary = .testVerified
+        productionBoundary: DesktopProductionBoundary = .testVerified,
+        localWorkerUpdateGuideURL: URL = DesktopReleaseRouting.localWorkerUpdateGuideURL(
+            shortVersion: "1.1.0-beta.37"
+        )
     ) {
         clipboard = RecordingClipboard(result: clipboardResult)
         urlOpener = RecordingURLOpener(result: urlResult)
@@ -288,6 +291,7 @@ struct ModelDependencyFixture {
             githubAuthenticator: githubAuthenticator,
             githubBroker: githubBroker,
             productionBoundary: productionBoundary,
+            localWorkerUpdateGuideURL: localWorkerUpdateGuideURL,
             localBotConfigurations: localBotConfigurations,
             localBotExecutionConfigPaths: localBotExecutionConfigPaths
         ), activationLicenseClient: activationLicenseClient)

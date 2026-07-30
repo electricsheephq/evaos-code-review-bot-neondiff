@@ -80,10 +80,12 @@ npm run build
 If you intentionally use the source checkout without the global package,
 substitute `./dist/src/cli.js` for `neondiff`.
 
-## 2. Create Or Install A GitHub App
+## 2. Create And Install A Customer-Owned GitHub App
 
-Use the public NeonDiff GitHub App install URL for the beta you are testing, or
-create an equivalent App while the public registration is being finalized. See
+For the public paid B0 BYO beta, create a customer-owned GitHub App in your
+GitHub account or organization and use that App's install URL. The public
+organization-owned NeonDiff App belongs to the later managed B1 path and does
+not replace the B0 private key flow. See
 [docs/github-app-setup.md](github-app-setup.md) for the selected-repo install
 path, uninstall path, evidence packet, and troubleshooting details.
 
@@ -333,10 +335,12 @@ If Overview shows **Worker update required**:
 
 1. Do not run or retry a live review from another terminal. The dry-to-live
    approval contract is not proven for that worker.
-2. Choose **Install / Update Local Worker**. Use only the worker ZIP named in
-   the same immutable GitHub prerelease and release manifest as the installed
-   app. Compare both its ZIP SHA-256 and the manifest SHA-256 with the published
-   prerelease values before extracting it. Do not use an unpinned `main`
+2. Choose **Install / Update Local Worker**. Use only the outer worker bundle
+   ZIP named in the same immutable GitHub prerelease and release manifest as the
+   installed app. Before extracting it, compare the bundle ZIP SHA-256 with the
+   prerelease notes. After extraction, compare the release manifest SHA-256 with
+   the prerelease notes, then compare the inner `.tgz` tarball SHA-256 with both
+   the release manifest and the prerelease notes. Do not use an unpinned `main`
    checkout or trust the ambiguous `1.0.4` version string.
 3. Confirm `node --version` reports Node.js 26 or newer. From the extracted
    directory, preview the checksum-bound migration using the exact LaunchAgent

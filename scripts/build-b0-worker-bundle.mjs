@@ -98,12 +98,18 @@ function assertOutputDirectory(repoRoot, requested) {
 function installGuide(candidate, manifestFilename, tarballFilename, manifestSHA256) {
   return `# Install the NeonDiff ${candidate.packageVersion} B0 worker
 
-This private bundle is for the invited B0 technical beta. It is not a public
-npm package, GitHub Release, or automatic update.
+This outer bundle ZIP is for the public paid BYO Mac beta. It is distributed
+only through the immutable GitHub prerelease named in the release manifest; it
+is not a public npm package or an automatic update.
 
-Before continuing, compare this manifest SHA-256 with the value in your invite:
+Before extracting the outer ZIP, compare its SHA-256 with the prerelease notes.
+Then compare this release manifest SHA-256 with the prerelease notes:
 
 \`${manifestSHA256}\`
+
+The installer verifies the inner \`.tgz\` tarball
+\`${tarballFilename}\` against the release manifest before mutation. Compare
+that tarball SHA-256 with the prerelease notes as well.
 
 From this extracted directory, preview the exact migration:
 
@@ -113,7 +119,7 @@ node install-b0-worker-candidate.mjs update \\
   --manifest "$BUNDLE_DIR/${manifestFilename}" \\
   --manifest-sha256 ${manifestSHA256} \\
   --tarball "$BUNDLE_DIR/${tarballFilename}" \\
-  --launchd-label YOUR_INVITED_LAUNCHD_LABEL \\
+  --launchd-label YOUR_NEONDIFF_LAUNCHD_LABEL \\
   --dry-run true
 \`\`\`
 
@@ -128,7 +134,7 @@ Rollback preview:
 
 \`\`\`sh
 node install-b0-worker-candidate.mjs rollback \\
-  --launchd-label YOUR_INVITED_LAUNCHD_LABEL \\
+  --launchd-label YOUR_NEONDIFF_LAUNCHD_LABEL \\
   --dry-run true
 \`\`\`
 
@@ -207,7 +213,7 @@ function main() {
         "lib/b0-worker-installer.mjs",
         "INSTALL.md"
       ],
-      proofBoundary: "Private customer bundle assembly only; no upload, publication, install, rollback, review, beta, release, or customer-readiness claim."
+      proofBoundary: "Worker bundle assembly only; no upload, publication, install, rollback, review, beta, release, or customer-readiness claim."
     };
     writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
     console.log(JSON.stringify({
