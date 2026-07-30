@@ -103,6 +103,9 @@ package enum DesktopReleaseRouting {
     private static let releasesURL = URL(
         string: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases"
     )!
+    package static let activationCheckoutURL = URL(
+        string: "https://www.neondiff.com/#pricing"
+    )!
 
     package static func localWorkerUpdateGuideURL(shortVersion: String?) -> URL {
         guard let shortVersion else { return releasesURL }

@@ -73,12 +73,14 @@ import NeonDiffDesktopCore
         secretStore: RecordingKeychain = RecordingKeychain(),
         cli: RecordingCLIExecutor = RecordingCLIExecutor(),
         clock: TestClock = TestClock(),
+        urlOpener: RecordingURLOpener = RecordingURLOpener(),
+        productionBoundary: DesktopProductionBoundary = .testVerified,
         client: (any ActivationLicenseClienting)? = nil
     ) -> NeonDiffDesktopModel {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let dependencies = DesktopAppDependencies(
             clipboard: RecordingClipboard(),
-            urlOpener: RecordingURLOpener(),
+            urlOpener: urlOpener,
             cli: cli,
             dashboard: RecordingDashboardLauncher(),
             preferences: preferences,
@@ -87,7 +89,7 @@ import NeonDiffDesktopCore
             providerVerifier: RecordingProviderVerifier(),
             secretStore: secretStore,
             githubAuthenticator: StubGitHubAuthenticator(),
-            productionBoundary: .testVerified
+            productionBoundary: productionBoundary
         )
         return NeonDiffDesktopModel(dependencies: dependencies, activationLicenseClient: client)
     }
@@ -142,6 +144,20 @@ import NeonDiffDesktopCore
         model.beginActivationCheckout()
         #expect(model.activationState == .checkoutPaused)
         #expect(model.activationPresentation.showsNotifyOption)
+    }
+
+    @Test func paidBYOCheckoutOpensPublicPricingWithoutTrappingExistingKeyEntry() {
+        let opener = RecordingURLOpener()
+        let model = makeModel(
+            urlOpener: opener,
+            productionBoundary: .testAccountLink
+        )
+
+        model.openActivationCheckout()
+
+        #expect(opener.urls == [URL(string: "https://www.neondiff.com/#pricing")!])
+        #expect(model.activationState == .purchaseRequired)
+        #expect(model.activationPresentation.requiresKeyEntry)
     }
 
     @Test func provideExistingKeyStoresInKeychainOnlyAndAdvances() {

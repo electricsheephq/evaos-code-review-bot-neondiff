@@ -3864,10 +3864,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             || dependencies.preferences.bool(forKey: activationHandoffEnabledKey)
     }
 
-    /// Production checkout stays disabled pending #562 + website #46. Until then
-    /// the private route renders the honest `checkout_paused` state.
+    /// Paid BYO production builds expose the public purchase surface. Other
+    /// boundaries retain the explicit preference gate and honest paused state.
     package var activationCheckoutEnabled: Bool {
-        dependencies.preferences.bool(forKey: activationCheckoutEnabledKey)
+        dependencies.productionBoundary.byoGitHubEnabled
+            || dependencies.preferences.bool(forKey: activationCheckoutEnabledKey)
     }
 
     package var activationPresentation: ActivationStatePresentation {
@@ -3948,6 +3949,21 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func beginActivationCheckout() {
         applyActivationEvent(activationCheckoutEnabled ? .beginCheckout : .checkoutUnavailable)
+    }
+
+    /// Open the public purchase surface without moving away from the existing-key
+    /// entry state. Checkout returns a one-shot key in the browser, so the customer
+    /// must still be able to paste that key here after returning to the app.
+    package func openActivationCheckout() {
+        guard activationCheckoutEnabled else {
+            applyActivationEvent(.checkoutUnavailable)
+            return
+        }
+        guard dependencies.urlOpener.open(DesktopReleaseRouting.activationCheckoutURL) else {
+            lastError = "Could not open NeonDiff checkout. Visit neondiff.com to purchase an Activation Key."
+            return
+        }
+        lastError = nil
     }
 
     package func cancelActivationCheckout() {
