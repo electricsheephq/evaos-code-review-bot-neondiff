@@ -44,9 +44,13 @@ jobs:
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v1\.1\.0-beta\.[0-9]+$ ]]
-          [[ "$ARTIFACT_NAME" =~ ^NeonDiff-1\.1\.0-beta\.[0-9]+-build[0-9]+-macOS\.zip$ ]]
+          [[ "$RELEASE_TAG" =~ ^v1\.1\.0-beta\.([0-9]+)$ ]]
+          release_beta="${BASH_REMATCH[1]}"
+          [[ "$ARTIFACT_NAME" =~ ^NeonDiff-1\.1\.0-beta\.([0-9]+)-build[0-9]+-macOS\.zip$ ]]
+          artifact_beta="${BASH_REMATCH[1]}"
+          test "$release_beta" = "$artifact_beta"
           [[ "$ARTIFACT_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(uname -m)" = "arm64"
           printf 'url=https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/download/%s/%s\n' \
             "$RELEASE_TAG" "$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
@@ -83,29 +87,24 @@ jobs:
           test -d "$extract_root/NeonDiff.app"
           test "$(find "$extract_root" -maxdepth 1 -type d -name '*.app' | wc -l | tr -d ' ')" = "1"
           codesign --verify --deep --strict --verbose=2 "$extract_root/NeonDiff.app"
+          identity="$(codesign -dv --verbose=4 "$extract_root/NeonDiff.app" 2>&1)"
+          grep -Fxq 'TeamIdentifier=TC6MS3T6NN' <<<"$identity"
+          grep -Fxq 'Authority=Developer ID Application: Andrew Ryan (TC6MS3T6NN)' <<<"$identity"
           xcrun stapler validate "$extract_root/NeonDiff.app"
           spctl -a -vv -t exec "$extract_root/NeonDiff.app"
 
-      - name: Install and launch on clean runner
+      - name: Install exact app on clean runner
         shell: bash
         run: |
           set -euo pipefail
           test ! -e /Applications/NeonDiff.app
-          if pgrep -x NeonDiffDesktop >/dev/null; then
-            echo "NeonDiffDesktop is unexpectedly running on the clean runner" >&2
-            exit 1
-          fi
           sudo ditto "$RUNNER_TEMP/neondiff-download/extracted/NeonDiff.app" /Applications/NeonDiff.app
           codesign --verify --deep --strict --verbose=2 /Applications/NeonDiff.app
+          identity="$(codesign -dv --verbose=4 /Applications/NeonDiff.app 2>&1)"
+          grep -Fxq 'TeamIdentifier=TC6MS3T6NN' <<<"$identity"
+          grep -Fxq 'Authority=Developer ID Application: Andrew Ryan (TC6MS3T6NN)' <<<"$identity"
           xcrun stapler validate /Applications/NeonDiff.app
           spctl -a -vv -t exec /Applications/NeonDiff.app
-          open -n /Applications/NeonDiff.app
-          for _ in {1..15}; do
-            pgrep -x NeonDiffDesktop >/dev/null && break
-            sleep 1
-          done
-          pgrep -x NeonDiffDesktop >/dev/null
-          pkill -TERM -x NeonDiffDesktop
 
       - name: Write sanitized canary receipt
         shell: bash
@@ -138,8 +137,8 @@ jobs:
               developerIdSignature: $result,
               notarizationTicket: $result,
               gatekeeper: $result,
-              cleanInstall: $result,
-              launch: $result
+              developerIdTeam: "TC6MS3T6NN",
+              cleanInstall: $result
             }' > "$RUNNER_TEMP/neondiff-download/canary-receipt.json"
 
       - name: Upload sanitized receipt

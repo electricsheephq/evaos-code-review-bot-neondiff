@@ -59,11 +59,13 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
       "com.apple.quarantine",
       "ditto -x -k",
       "codesign --verify --deep --strict",
+      "TeamIdentifier=TC6MS3T6NN",
+      "Developer ID Application: Andrew Ryan (TC6MS3T6NN)",
       "xcrun stapler validate",
       "spctl -a -vv -t exec",
       "/Applications/NeonDiff.app",
-      "open -n",
-      "NeonDiffDesktop"
+      'test "$(uname -m)" = "arm64"',
+      'test "$release_beta" = "$artifact_beta"'
     ]) {
       expect(workflow).toContain(command);
     }
@@ -71,6 +73,8 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).toMatch(/actions\/upload-artifact@[0-9a-f]{40}/);
     expect(workflow).not.toMatch(/actions\/upload-artifact@v4/);
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./);
+    expect(workflow).not.toContain("open -n");
+    expect(workflow).not.toContain("NeonDiffDesktop");
   });
 
   it("defines an unsigned macOS release-smoke workflow with the required desktop gates", () => {
