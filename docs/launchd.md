@@ -56,9 +56,10 @@ Use the JSON-first CLI instead of choosing `bootstrap` or `kickstart` from
 plist existence alone. The executable stop/start sequence and confirmation
 requirements live in [the operator CLI guide](operator-cli.md#common-operator-flows).
 
-For an invited B0 Mac worker update, do not edit `ProgramArguments`,
+For a public paid B0 BYO Mac worker update, do not edit `ProgramArguments`,
 `WorkingDirectory`, or credential environment entries by hand. Use the
-checksum-bound private bundle described in
+checksum-bound worker bundle from the same immutable GitHub prerelease as the
+app, as described in
 [SETUP.md](SETUP.md#update-an-existing-local-worker). Its installer validates
 the existing NeonDiff invocation, preserves the label and environment, stages a
 versioned user-owned worker, and changes the plist atomically only after

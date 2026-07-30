@@ -80,10 +80,12 @@ npm run build
 If you intentionally use the source checkout without the global package,
 substitute `./dist/src/cli.js` for `neondiff`.
 
-## 2. Create Or Install A GitHub App
+## 2. Create And Install A Customer-Owned GitHub App
 
-Use the public NeonDiff GitHub App install URL for the beta you are testing, or
-create an equivalent App while the public registration is being finalized. See
+For the public paid B0 BYO beta, create a customer-owned GitHub App in your
+GitHub account or organization and use that App's install URL. The public
+organization-owned NeonDiff App belongs to the later managed B1 path and does
+not replace the B0 private key flow. See
 [docs/github-app-setup.md](github-app-setup.md) for the selected-repo install
 path, uninstall path, evidence packet, and troubleshooting details.
 
@@ -246,7 +248,7 @@ public configuration values, not secrets, and do not override the server-side
 kill switch. Generic CLI status/deactivate and daemon-admission validation still
 require exact-candidate integration proof under #630.
 
-The invite-only B0 technical beta has a separate, mutually exclusive release
+The public paid B0 BYO beta has a separate, mutually exclusive release
 bundle contract:
 
 - `NeonDiffPaidBetaContract = paid-mac-beta-byo-v1`
@@ -260,7 +262,7 @@ manual UserDefaults rollout mutation. It does not make the managed App path
 available and is not proof that GitHub private-key custody, the compatible CLI
 package, billing, signing, or customer canaries have passed.
 
-For an invited B0 customer, the native first-run path is:
+For a B0 customer, the native first-run path is:
 
 1. Create and install a customer-owned GitHub App with the permissions in
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
@@ -277,7 +279,9 @@ For an invited B0 customer, the native first-run path is:
 
 This first-run step proves only current App installation and repository access.
 Provider verification, activation, dry run, and live review remain separate
-gates.
+gates. No invitation is required when the versioned public GitHub prerelease is
+published and the neondiff.com purchase/download path is live. Until both are
+true, the candidate and its GitHub prerelease assets remain held.
 
 ### Existing bot on this Mac
 
@@ -332,11 +336,13 @@ If Overview shows **Worker update required**:
 
 1. Do not run or retry a live review from another terminal. The dry-to-live
    approval contract is not proven for that worker.
-2. Choose **Install / Update Local Worker**. For the invite-only B0 beta, use
-   only the private worker ZIP named in the invite. Compare both its ZIP
-   SHA-256 and the manifest SHA-256 with the values supplied separately in the
-   invite before extracting it. Do not use an unpinned `main` checkout or trust
-   the ambiguous `1.0.4` version string.
+2. Choose **Install / Update Local Worker**. Use only the outer worker bundle
+   ZIP named in the same immutable GitHub prerelease and release manifest as the
+   installed app. Before extracting it, compare the bundle ZIP SHA-256 with the
+   prerelease notes. After extraction, compare the release manifest SHA-256 with
+   the prerelease notes, then compare the inner `.tgz` tarball SHA-256 with both
+   the release manifest and the prerelease notes. Do not use an unpinned `main`
+   checkout or trust the ambiguous `1.0.4` version string.
 3. Confirm `node --version` reports Node.js 26 or newer. From the extracted
    directory, preview the checksum-bound migration using the exact LaunchAgent
    label shown in NeonDiff Settings. The installer requires absolute artifact
@@ -346,7 +352,7 @@ If Overview shows **Worker update required**:
    BUNDLE_DIR="$(pwd -P)"
    node install-b0-worker-candidate.mjs update \
      --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
-     --manifest-sha256 <manifest-sha256-from-invite> \
+     --manifest-sha256 <manifest-sha256-from-release> \
      --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
      --launchd-label <existing-label> \
      --dry-run true
@@ -378,8 +384,9 @@ Rollback also requires `--dry-run false --confirm true`. It restores the
 previous versioned worker, or the original LaunchAgent invocation on the first
 migration, without deleting either candidate or touching customer secrets.
 
-Until an invite or immutable release names a compatible worker artifact, this
-state is a release blocker rather than a prompt to repair source files manually.
+Until an immutable GitHub prerelease and release manifest name a compatible
+worker artifact, this state is a release blocker rather than a prompt to repair
+source files manually.
 The app's own Sparkle update does not update an external local worker.
 
 ## 4. Check Readiness
@@ -392,7 +399,7 @@ printing secrets:
 neondiff doctor github --config config.local.json --json
 ```
 
-The invite-only B0 desktop keeps the customer-owned App private key in the
+The public paid B0 BYO desktop keeps the customer-owned App private key in the
 macOS Keychain. Its explicit **Verify App Access** action sends that key only to
 the local CLI's bounded stdin for this check. The native app's clean-install
 config lives in its user-writable Application Support directory; the equivalent

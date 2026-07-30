@@ -651,9 +651,10 @@ import NeonDiffDesktopCore
         #expect(fixture.model.scopedReviewStatus.contains("update required"))
 
         fixture.model.openLocalWorkerUpdateGuide()
-        #expect(fixture.urlOpener.urls.last?.absoluteString.contains(
-            "docs/SETUP.md#update-an-existing-local-worker"
-        ) == true)
+        #expect(
+            fixture.urlOpener.urls.last?.absoluteString
+                == "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.1.0-beta.37"
+        )
 
         fixture.cli.enqueue(.success(CLIRunResult(
             exitCode: 0,

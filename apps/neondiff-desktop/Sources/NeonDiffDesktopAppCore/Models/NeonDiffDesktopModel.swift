@@ -2165,10 +2165,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func openLocalWorkerUpdateGuide() {
-        let url = URL(
-            string: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/blob/main/docs/SETUP.md#update-an-existing-local-worker"
-        )!
-        guard dependencies.urlOpener.open(url) else {
+        guard dependencies.urlOpener.open(dependencies.localWorkerUpdateGuideURL) else {
             lastError = "NeonDiff could not open the local worker installer guide."
             return
         }

@@ -6,21 +6,53 @@ comments in GitHub; your local worker holds the App ID, private key, provider
 configuration, state database, and evidence files.
 
 On macOS the native app (`apps/neondiff-desktop`) is the human first-run surface.
-The invite-only B0 build accepts the invited customer's own App ID and private
-key, one selected repository, and runs the explicit installation check from the
-wizard. The managed B1 path uses the official NeonDiff App and broker under
-#613; it is separate from B0. This document remains the operator/CLI reference
-for both paths' App identity, permission set, and install boundary. Matching
-public website onboarding copy lives in the website repo under
-neon-diff-agent-website#52.
+The public paid B0 BYO build accepts the customer's own App ID and private key,
+one selected repository, and runs the explicit installation check from the
+wizard. No invitation is required when the versioned public GitHub prerelease is
+published and the neondiff.com purchase/download path is live. The managed B1
+path uses the official NeonDiff App and broker under #613; it is separate from
+B0. This document remains the operator/CLI reference for both paths' App
+identity, permission set, and install boundary. Matching public website
+onboarding copy lives in the website repo under neon-diff-agent-website#52.
 
 ## Install URL
 
-For B0, create a customer-owned GitHub App in the invited customer's GitHub
-account or organization, then use that App's install link. Record its numeric
-App ID, generate one private key, and keep the downloaded PEM outside git. The
-public, organization-owned NeonDiff App is the separate managed B1 path; do not
-use it to describe or prove B0.
+For B0, create a customer-owned GitHub App in the customer's GitHub account or
+organization, then use that App's install link. Record its numeric App ID,
+generate one private key, and keep the downloaded PEM outside git. The public,
+organization-owned NeonDiff App is the separate managed B1 path; do not use it
+to describe or prove B0.
+
+### Register the direct B0 App
+
+Open GitHub's [New GitHub App](https://github.com/settings/apps/new) page while
+signed in to the account that should own the App. For an organization-owned App,
+open that organization's **Settings → Developer settings → GitHub Apps → New
+GitHub App** page instead. GitHub's canonical field reference is
+[Registering a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).
+
+Use these direct local-worker values:
+
+1. **GitHub App name:** choose a unique customer-owned name.
+2. **Homepage URL:** use `https://www.neondiff.com` or the customer's own
+   project homepage.
+3. **Request user authorization (OAuth) during installation: off.** B0 does not
+   request or store a GitHub user token.
+4. **Callback URL:** blank.
+5. **Setup URL:** blank, with **Redirect on update** off.
+6. **Webhook:** disabled—deselect **Active** and leave the webhook URL blank.
+   The local worker polls; B0 has no webhook receiver.
+7. **Device Flow:** off. It is not used by the direct B0 App path.
+8. Set the repository permissions in the next section and leave all
+   organization and account permissions at **No access**.
+9. Under **Where can this GitHub App be installed?**, choose **Only on this
+   account**.
+10. Create the App, generate one private key, record the numeric App ID, and use
+    the App's public-page install link to install it on selected repositories.
+
+Do not copy the managed-B1 OAuth/callback settings from
+`docs/security/github-app-staging-registration.md`; that registration belongs to
+the broker path and is incompatible with the B0 private-key flow.
 
 Install only on selected repositories. NeonDiff does not need organization-wide
 discovery for the v1.0 MVP, and the worker only reviews repos present in your
@@ -138,12 +170,17 @@ to both. Any transport failure revokes approval and requires a new dry review.
 Daemon-wide start stays blocked for a multi-repository worker.
 
 If this matched local worker reports **Worker update required**, choose
-**Install / Update Local Worker** and use only the checksum-bound private B0
-bundle named in the invite. Follow the Node.js 26+, absolute-path, dry-run, and
-confirmed-mutation steps in [SETUP.md](./SETUP.md#update-an-existing-local-worker).
-The label-isolated installer preserves the existing App environment, config,
-provider state, repository allowlist, and private-key file coordinate. Preview
-rollback before confirmed rollback; neither path reads or copies key bytes.
+**Install / Update Local Worker** and use only the checksum-bound B0 bundle
+named in the same immutable GitHub prerelease and release manifest as the app.
+Verify the outer bundle ZIP against the prerelease notes before extraction.
+Then verify the release manifest against its SHA-256 in the prerelease notes,
+and verify the inner `.tgz` tarball against the SHA-256 in both the release
+manifest and prerelease notes before following the Node.js 26+, absolute-path,
+dry-run, and confirmed-mutation steps in
+[SETUP.md](./SETUP.md#update-an-existing-local-worker). The label-isolated
+installer preserves the existing App environment, config, provider state,
+repository allowlist, and private-key file coordinate. Preview rollback before
+confirmed rollback; neither path reads or copies key bytes.
 
 Keep the private key and local config out of git. A typical shell setup is:
 

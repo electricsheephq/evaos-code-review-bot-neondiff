@@ -432,7 +432,7 @@ struct ReposView: View {
                     )
                 }
 
-                Text("B0 uses a GitHub App owned and installed by the invited customer. Enter its numeric App ID and paste the full unencrypted PEM private key. NeonDiff stores the key in this Mac's Keychain; it is not written to config or command arguments.")
+                Text("The public paid B0 BYO beta uses a GitHub App owned and installed by the customer. Enter its numeric App ID and paste the full unencrypted PEM private key. NeonDiff stores the key in this Mac's Keychain; it is not written to config or command arguments.")
                     .operatorBodyText()
                     .fixedSize(horizontal: false, vertical: true)
 

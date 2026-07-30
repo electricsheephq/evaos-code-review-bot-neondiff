@@ -59,6 +59,68 @@ describe("NeonDiff public community funnel", () => {
     }
   });
 
+  it("public BYO onboarding does not retain the retired invite-only contract", () => {
+    const surfaces = {
+      readme: read("README.md"),
+      setup: read("docs/SETUP.md"),
+      githubApp: read("docs/github-app-setup.md"),
+      nativeOnboarding: read(
+        "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift"
+      ),
+      nativeRepositories: read(
+        "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ReposView.swift"
+      ),
+      workerBundle: read("scripts/build-b0-worker-bundle.mjs"),
+      launchdGuide: read("docs/launchd.md"),
+      desktopGuide: read("docs/neondiff-desktop.md")
+    };
+
+    for (const [name, text] of Object.entries(surfaces)) {
+      const withoutAllowedNoInvitation = text.replace(
+        /no invitation (?:is )?required/gi,
+        ""
+      );
+      expect(withoutAllowedNoInvitation, name).not.toMatch(
+        /invite-only|\binvited\b|named in the invite|invite checksums|from-invite|by invitation|requires an invitation|an invitation is required/i
+      );
+      expect(text, name).toMatch(/public paid|public BYO|public.*customer-owned/i);
+    }
+
+    for (const text of [surfaces.readme, surfaces.setup, surfaces.githubApp]) {
+      expect(text).toMatch(/no invitation (?:is )?required/i);
+      expect(text.replace(/\s+/g, " ")).toMatch(
+        /No invitation is required when the versioned public GitHub prerelease is published and the neondiff\.com purchase\/download path is live\./i
+      );
+      expect(text).toMatch(/GitHub prerelease|release manifest/i);
+      expect(text).toMatch(/SHA-256|checksum/i);
+    }
+
+    expect(surfaces.readme).not.toMatch(/#610 public release gate/i);
+    expect(surfaces.readme).toMatch(/operator|contributor/i);
+    expect(surfaces.setup).toMatch(/create a customer-owned GitHub App/i);
+    expect(surfaces.setup).not.toMatch(
+      /Use the public NeonDiff GitHub App install URL for the beta/i
+    );
+    expect(surfaces.githubApp).toContain("https://github.com/settings/apps/new");
+    const registrationGuide = surfaces.githubApp.replace(/\s+/g, " ");
+    for (const required of [
+      /Homepage URL/i,
+      /Request user authorization.*(?:off|disabled|do not enable)/is,
+      /Setup URL.*blank/is,
+      /webhook.*(?:off|disabled|deselect|uncheck)/is,
+      /Device Flow.*(?:off|disabled|do not enable)/is,
+      /Only on this account/i
+    ]) {
+      expect(registrationGuide).toMatch(required);
+    }
+    for (const text of [surfaces.setup, surfaces.githubApp, surfaces.workerBundle]) {
+      expect(text).toMatch(/outer.*ZIP|bundle ZIP/i);
+      expect(text).toMatch(/inner.*\.tgz|tarball.*\.tgz|\.tgz.*tarball/i);
+      expect(text).toMatch(/release notes|prerelease notes/i);
+      expect(text).toMatch(/release manifest/i);
+    }
+  });
+
   it("license boundary surfaces are canonical and avoid open-source claims", () => {
     const license = read("LICENSE.md");
     const boundary = read("docs/license-boundary.md");

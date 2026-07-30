@@ -221,7 +221,7 @@ struct OnboardingWizardView: View {
                 )
             }
 
-            Text("This invite-only technical beta uses a GitHub App owned by you. Paste the App ID and its unencrypted private-key PEM. The private key is stored only in this Mac's Keychain and plaintext input is cleared after every attempt.")
+            Text("This public paid BYO beta uses a GitHub App owned by you. Paste the App ID and its unencrypted private-key PEM. The private key is stored only in this Mac's Keychain and plaintext input is cleared after every attempt.")
                 .operatorBodyText()
                 .fixedSize(horizontal: false, vertical: true)
 
