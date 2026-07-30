@@ -23,6 +23,37 @@ generate one private key, and keep the downloaded PEM outside git. The public,
 organization-owned NeonDiff App is the separate managed B1 path; do not use it
 to describe or prove B0.
 
+### Register the direct B0 App
+
+Open GitHub's [New GitHub App](https://github.com/settings/apps/new) page while
+signed in to the account that should own the App. For an organization-owned App,
+open that organization's **Settings → Developer settings → GitHub Apps → New
+GitHub App** page instead. GitHub's canonical field reference is
+[Registering a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app).
+
+Use these direct local-worker values:
+
+1. **GitHub App name:** choose a unique customer-owned name.
+2. **Homepage URL:** use `https://www.neondiff.com` or the customer's own
+   project homepage.
+3. **Request user authorization (OAuth) during installation: off.** B0 does not
+   request or store a GitHub user token.
+4. **Callback URL:** blank.
+5. **Setup URL:** blank, with **Redirect on update** off.
+6. **Webhook:** disabled—deselect **Active** and leave the webhook URL blank.
+   The local worker polls; B0 has no webhook receiver.
+7. **Device Flow:** off. It is not used by the direct B0 App path.
+8. Set the repository permissions in the next section and leave all
+   organization and account permissions at **No access**.
+9. Under **Where can this GitHub App be installed?**, choose **Only on this
+   account**.
+10. Create the App, generate one private key, record the numeric App ID, and use
+    the App's public-page install link to install it on selected repositories.
+
+Do not copy the managed-B1 OAuth/callback settings from
+`docs/security/github-app-staging-registration.md`; that registration belongs to
+the broker path and is incompatible with the B0 private-key flow.
+
 Install only on selected repositories. NeonDiff does not need organization-wide
 discovery for the v1.0 MVP, and the worker only reviews repos present in your
 local config allowlist.

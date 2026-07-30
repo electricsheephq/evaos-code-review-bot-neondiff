@@ -70,7 +70,9 @@ describe("NeonDiff public community funnel", () => {
       nativeRepositories: read(
         "apps/neondiff-desktop/Sources/NeonDiffDesktop/Views/ReposView.swift"
       ),
-      workerBundle: read("scripts/build-b0-worker-bundle.mjs")
+      workerBundle: read("scripts/build-b0-worker-bundle.mjs"),
+      launchdGuide: read("docs/launchd.md"),
+      desktopGuide: read("docs/neondiff-desktop.md")
     };
 
     for (const [name, text] of Object.entries(surfaces)) {
@@ -99,6 +101,18 @@ describe("NeonDiff public community funnel", () => {
     expect(surfaces.setup).not.toMatch(
       /Use the public NeonDiff GitHub App install URL for the beta/i
     );
+    const registrationGuide = surfaces.githubApp.replace(/\s+/g, " ");
+    for (const required of [
+      /github\.com\/settings\/apps\/new/i,
+      /Homepage URL/i,
+      /Request user authorization.*(?:off|disabled|do not enable)/is,
+      /Setup URL.*blank/is,
+      /webhook.*(?:off|disabled|deselect|uncheck)/is,
+      /Device Flow.*(?:off|disabled|do not enable)/is,
+      /Only on this account/i
+    ]) {
+      expect(registrationGuide).toMatch(required);
+    }
     for (const text of [surfaces.setup, surfaces.githubApp, surfaces.workerBundle]) {
       expect(text).toMatch(/outer.*ZIP|bundle ZIP/i);
       expect(text).toMatch(/inner.*\.tgz|tarball.*\.tgz|\.tgz.*tarball/i);
