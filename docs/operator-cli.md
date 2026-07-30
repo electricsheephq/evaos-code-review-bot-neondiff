@@ -122,6 +122,28 @@ evaos-review-bot status --config config.local.json
   packet to a fresh or empty output root. It does not post comments, mutate
   GitHub, write SQLite, restart launchd, activate lenses, or widen
   issue-enrichment/PR review allowlists.
+- `review-bench prepare-adjudication` and `review-bench verify-adjudication`:
+  offline, provider-free commands for creating a blinded human packet and
+  binding two complete responses to an immutable receipt. Verification exits
+  with code 1 for `needs_resolution` after preserving that receipt. This is a
+  routing outcome rather than evidence corruption: shell and CI wrappers must
+  retain stdout and branch on the emitted JSON `status` before deciding that a
+  nonzero exit represents a broken run. A resolver may later close only the
+  frozen disagreements; these commands do not assemble or admit Corpus v1.
+- `review-bench verify-advisory-adjudication`: setup-safe, provider-free Phase 1
+  routing for two distinct blinded `agent:*` responses over a packet bound to
+  `review-bench-phase1-advisory-protocol/v1`. Human-only Corpus v1 protocol
+  packets are rejected rather than silently reinterpreted.
+  Agreement emits only `pilot_ready`; disagreement preserves an immutable
+  receipt, exits with code 1 as `needs_ai_resolution`, and requires a later
+  third distinct canonical `agent:*` resolver using
+  `review-bench-advisory-ai-resolver-response/v1`.
+  Every advisory receipt declares `profile: phase1_advisory`,
+  `resolutionAuthority: independent_ai`, `corpusV1Eligible: false`, and
+  `publicationEligible: false`. It cannot satisfy
+  Corpus v1, source admission, promotion, or publication gates. The receipt
+  records asserted logical identities and does not authenticate separate agent processes;
+  it also does not authenticate providers, models, or actual execution independence.
 - `review-bench verify-sources`: setup-safe Corpus v1 admission gate. It reads a
   corpus manifest, digest-named public source diffs, and digest-named
   `<oracle-evidence-sha256>.oracle.json` packets plus
