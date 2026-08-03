@@ -4014,7 +4014,9 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
       provider: codexRuntime ? "codex-cli-oauth" : config.zcode.providerId,
       model: codexRuntime?.model ?? config.zcode.model,
       providerAttempts: 0,
-      notes: ["Configured review execution disabled for this dry-run; provider latency and token usage were not measured."]
+      notes: [codexRuntime
+        ? "Configured review execution disabled for this dry-run; provider latency and token usage were not measured."
+        : "ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
     }
   };
 }
