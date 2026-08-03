@@ -264,6 +264,29 @@ export function planWorkerUpdate({
   };
 }
 
+export function selectStableNodeLaunchPath({ execPath, stableCandidates, resolvePath }) {
+  if (!isAbsolute(execPath) || !Array.isArray(stableCandidates) || typeof resolvePath !== "function") {
+    fail("Node launch-path inputs are invalid");
+  }
+  let resolvedExecPath;
+  try {
+    resolvedExecPath = resolvePath(execPath);
+  } catch {
+    return execPath;
+  }
+  if (typeof resolvedExecPath !== "string" || !isAbsolute(resolvedExecPath)) return execPath;
+
+  for (const candidate of stableCandidates) {
+    if (typeof candidate !== "string" || !isAbsolute(candidate)) continue;
+    try {
+      if (resolvePath(candidate) === resolvedExecPath) return candidate;
+    } catch {
+      // A missing candidate is expected on machines using a different Node prefix.
+    }
+  }
+  return execPath;
+}
+
 export function planWorkerRollback({ state, currentLaunchAgent, expectedLabel }) {
   validateLaunchAgent(currentLaunchAgent, expectedLabel);
   if (

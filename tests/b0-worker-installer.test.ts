@@ -7,6 +7,7 @@ import {
   planWorkerUpdate,
   recoverPreviouslyLoadedWorker,
   retryTransientLaunchdBootstrap,
+  selectStableNodeLaunchPath,
   validateWorkerCandidate
 } from "../scripts/lib/b0-worker-installer.mjs";
 
@@ -70,6 +71,26 @@ function launchAgent() {
 }
 
 describe("B0 worker installer", () => {
+  it("keeps a stable Node command when it resolves to the running Node binary", () => {
+    const resolved = new Map([
+      ["/opt/homebrew/Cellar/node/26.5.1/bin/node", "/opt/homebrew/Cellar/node/26.5.1/bin/node"],
+      ["/opt/homebrew/bin/node", "/opt/homebrew/Cellar/node/26.5.1/bin/node"],
+      ["/usr/local/bin/node", "/usr/local/Cellar/node/24.0.0/bin/node"]
+    ]);
+
+    expect(selectStableNodeLaunchPath({
+      execPath: "/opt/homebrew/Cellar/node/26.5.1/bin/node",
+      stableCandidates: ["/opt/homebrew/bin/node", "/usr/local/bin/node"],
+      resolvePath: (path) => resolved.get(path)
+    })).toBe("/opt/homebrew/bin/node");
+
+    expect(selectStableNodeLaunchPath({
+      execPath: "/opt/homebrew/Cellar/node/26.5.1/bin/node",
+      stableCandidates: ["/usr/local/bin/node"],
+      resolvePath: (path) => resolved.get(path)
+    })).toBe("/opt/homebrew/Cellar/node/26.5.1/bin/node");
+  });
+
   it("exposes an explicit dry-run, confirmed update, and rollback command", () => {
     const scriptPath = "scripts/install-b0-worker-candidate.mjs";
     expect(existsSync(scriptPath)).toBe(true);
