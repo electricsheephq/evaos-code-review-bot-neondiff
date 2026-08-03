@@ -89,6 +89,23 @@ describe("B0 worker installer", () => {
       stableCandidates: ["/usr/local/bin/node"],
       resolvePath: (path) => resolved.get(path)
     })).toBe("/opt/homebrew/Cellar/node/26.5.1/bin/node");
+
+    expect(selectStableNodeLaunchPath({
+      execPath: "/opt/homebrew/Cellar/node/26.5.1/bin/node",
+      stableCandidates: ["/opt/homebrew/bin/node"],
+      resolvePath: (path) => {
+        if (path === "/opt/homebrew/bin/node") throw new Error("missing stable candidate");
+        return resolved.get(path);
+      }
+    })).toBe("/opt/homebrew/Cellar/node/26.5.1/bin/node");
+
+    expect(selectStableNodeLaunchPath({
+      execPath: "/opt/homebrew/Cellar/node/26.5.1/bin/node",
+      stableCandidates: ["/opt/homebrew/bin/node"],
+      resolvePath: () => {
+        throw new Error("cannot resolve process.execPath");
+      }
+    })).toBe("/opt/homebrew/Cellar/node/26.5.1/bin/node");
   });
 
   it("exposes an explicit dry-run, confirmed update, and rollback command", () => {

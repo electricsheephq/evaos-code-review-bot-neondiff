@@ -115,10 +115,10 @@ commands in [docs/SETUP.md](docs/SETUP.md#update-an-existing-local-worker).
 This preserves the existing config, LaunchAgent identity/environment, provider
 state, repository allowlist, and credential stores. It is not a public npm,
 Sparkle, or automatic worker-update claim before that immutable prerelease is
-published. When the installer is running through Homebrew's stable Node command,
-it keeps that stable command in the LaunchAgent instead of pinning the current
-versioned Cellar path, so routine Homebrew upgrades do not strand the worker on
-a removed runtime.
+published. The installer keeps a stable Homebrew Node command in the LaunchAgent
+whenever that command resolves to the same binary as `process.execPath`, including
+when migrating an existing versioned Cellar path. Routine Homebrew upgrades then
+do not strand the worker on a removed runtime.
 
 Operator/contributor source checkout fallback:
 
