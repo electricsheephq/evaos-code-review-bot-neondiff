@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_CONTEXT_BUDGET_CONFIG, type ContextBudgetConfig } from "./context-budget.js";
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
@@ -101,6 +101,15 @@ export interface BotConfig {
   license?: LicenseConfig;
   desktop?: DesktopConfig;
   providers?: ProviderRegistryConfig;
+  codexRuntime?: {
+    enabled: boolean;
+    cliPath: string;
+    model: string;
+    reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
+    timeoutMs: number;
+    maxOutputBytes: number;
+    contextWindowTokens: number;
+  };
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -571,6 +580,15 @@ const DEFAULT_CONFIG: BotConfig = {
     maxPatchBytes: 80_000,
     retryMaxRetries: 0
   },
+  codexRuntime: {
+    enabled: false,
+    cliPath: "/usr/local/bin/codex",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "max",
+    timeoutMs: 600_000,
+    maxOutputBytes: 20 * 1024 * 1024,
+    contextWindowTokens: 128_000
+  },
   github: {}
 };
 
@@ -748,6 +766,20 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(config.zcode.maxPatchBytes, "config.zcode.maxPatchBytes");
   validateNonNegativeInteger(config.zcode.retryMaxRetries, "config.zcode.retryMaxRetries");
   validateOptionalString(config.zcode.providerId, "config.zcode.providerId");
+  const codexRuntime = config.codexRuntime ?? DEFAULT_CONFIG.codexRuntime!;
+  config.codexRuntime = codexRuntime;
+  validateBoolean(codexRuntime.enabled, "config.codexRuntime.enabled");
+  validateNonEmptyString(codexRuntime.cliPath, "config.codexRuntime.cliPath");
+  if (codexRuntime.enabled && !isAbsolute(codexRuntime.cliPath)) {
+    throw new Error("config.codexRuntime.cliPath must be absolute when enabled");
+  }
+  validateNonEmptyString(codexRuntime.model, "config.codexRuntime.model");
+  if (!["low", "medium", "high", "xhigh", "max"].includes(codexRuntime.reasoningEffort)) {
+    throw new Error("config.codexRuntime.reasoningEffort must be low, medium, high, xhigh, or max");
+  }
+  validatePositiveInteger(codexRuntime.timeoutMs, "config.codexRuntime.timeoutMs");
+  validatePositiveInteger(codexRuntime.maxOutputBytes, "config.codexRuntime.maxOutputBytes");
+  validatePositiveInteger(codexRuntime.contextWindowTokens, "config.codexRuntime.contextWindowTokens");
   validateOptionalString(config.github.appId, "config.github.appId");
   validateOptionalString(config.github.clientId, "config.github.clientId");
   validateOptionalString(config.github.apiBaseUrl, "config.github.apiBaseUrl");

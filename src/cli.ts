@@ -302,16 +302,34 @@ async function main(): Promise<void> {
     }
     const config = loadConfig(args.config);
     if (action === "list") {
+      const codexRuntime = config.codexRuntime?.enabled ? config.codexRuntime : undefined;
       console.log(stringifyProviderOutput({
         ok: true,
         command: "providers list",
-        proofBoundary: "Provider registry visibility only; live review execution remains ZCode-backed until adapter rollout evidence passes.",
+        proofBoundary: codexRuntime
+          ? "Provider registry visibility plus active Codex CLI runtime selection; this does not prove an installed review or GitHub post."
+          : "Provider registry visibility only; live review execution uses the configured ZCode runtime.",
+        activeRuntime: codexRuntime
+          ? {
+              providerId: "codex-cli-oauth",
+              adapter: "codex-cli",
+              model: codexRuntime.model,
+              auth: "existing-codex-session"
+            }
+          : {
+              providerId: config.zcode.providerId,
+              adapter: "zcode",
+              model: config.zcode.model,
+              auth: "zcode-app-config"
+            },
         ...buildProviderRegistrySummary({
           registry: config.providers!,
-          currentZCode: {
-            providerId: config.zcode.providerId,
-            model: config.zcode.model
-          }
+          ...(codexRuntime ? {} : {
+            currentZCode: {
+              providerId: config.zcode.providerId,
+              model: config.zcode.model
+            }
+          })
         })
       }));
       return;

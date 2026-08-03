@@ -1,8 +1,8 @@
 # Agent Runtime Adapters
 
-Issue #243 is discovery and contract work only. It does not add live runtime
-support, does not change provider selection, and does not claim that Codex CLI,
-Claude Code, or OpenCode can run NeonDiff reviews today.
+Issue #243 is the completed discovery contract. Issue #730 implements one
+opt-in local Codex CLI runtime against that contract. Claude Code and OpenCode
+remain discovery-only and are not live-supported providers.
 
 NeonDiff's current provider registry describes model/provider transports such
 as ZCode-backed GLM/Z.ai and OpenAI-compatible APIs. Agent runtimes are a
@@ -15,7 +15,7 @@ adapters unless a later implementation proves a bounded contract.
 
 | Candidate | Classification | Dated observation | Current NeonDiff claim |
 | --- | --- | --- | --- |
-| Codex CLI | Agent-runtime adapter candidate; possible invocation plugin | Observed on 2026-07-05 as a local coding agent CLI with non-interactive/scriptable execution and JSONL event output. Its model access and approval/sandbox settings are owned by Codex, not by NeonDiff's provider registry. | No live support. Do not list as a NeonDiff provider. |
+| Codex CLI | Opt-in agent-runtime adapter, separate from the provider registry | Observed on 2026-08-03 with non-interactive execution, existing OAuth login, read-only sandbox, Max reasoning, and strict schema output. Its model access remains owned by Codex. | Supported only through `codexRuntime` after local dry-run proof; not a provider-registry entry. |
 | Claude Code | Agent-runtime adapter candidate; possible invocation plugin or SDK bridge | Observed on 2026-07-05 as an agentic coding CLI with print mode, structured output options, permission modes, tools, plugins, and its own Anthropic/account/provider configuration. | No live support. Do not list as a NeonDiff provider. |
 | OpenCode | Agent-runtime adapter candidate; possible invocation plugin | Observed on 2026-07-05 as an AI coding agent with CLI commands, agents, permission configuration, and internal model/provider selection. Even when OpenCode is configured for GLM, Z.AI, or another provider, NeonDiff would be invoking OpenCode, not directly calling that provider. | No live support. Do not list as a NeonDiff provider. |
 
@@ -45,6 +45,26 @@ The adapter contract should be explicit before any implementation issue starts.
 The first implementation should be opt-in, disabled by default, and limited to
 dry-run fixture review until redaction, no-write, schema, timeout, and evidence
 proof exist.
+
+## Codex CLI Implementation
+
+The #730 adapter invokes the configured absolute Codex binary with an ephemeral
+session, ignored user config and project rules, approval `never`, read-only
+sandbox, disabled account apps and recursive agents, explicit model and
+reasoning effort, strict output schema, hard timeout, and bounded output. It
+supplies the review prompt over stdin and stores only redacted process evidence
+plus the schema-validated final result. The
+environment allowlist includes the local home/Codex auth coordinate and network
+transport settings but excludes GitHub tokens, GitHub App keys, provider API
+keys, and NeonDiff license material. NeonDiff never reads or receives the OAuth
+token.
+
+The adapter compares Git worktree state before and after the invocation and
+fails closed on any change. Codex itself cannot post to GitHub; validated
+findings continue through NeonDiff's existing current-head, line-placement,
+redaction, duplicate-suppression, dry-run, and live-confirmation gates. A failed
+Codex invocation is terminal for that queue attempt and is not recursively
+retried by the adapter.
 
 ### Inputs
 
