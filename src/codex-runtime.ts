@@ -188,6 +188,7 @@ export async function runCodexReview(input: {
     throw new Error(`codex_runtime_schema_invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (containsSecretLikeText(rawResponse)) {
+    writeSecureFileSync(outputPath, '{"status":"rejected-secret-like-output"}\n');
     throw new Error("codex_runtime_secret_output: result contained secret-like text");
   }
   let parsed: unknown;
@@ -210,7 +211,7 @@ export async function runCodexReview(input: {
 }
 
 function captureGitWorktreeState(cwd: string): string {
-  const result = spawnSync("/usr/bin/git", [
+  const result = spawnSync("git", [
     "status",
     "--porcelain=v1",
     "--untracked-files=all",

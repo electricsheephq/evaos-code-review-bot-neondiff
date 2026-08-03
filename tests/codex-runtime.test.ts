@@ -9,7 +9,7 @@ import {
   CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
   runCodexReview
 } from "../src/codex-runtime.js";
-import { buildReviewProviderMetadata } from "../src/worker.js";
+import { buildReviewProviderMetadata, resolveSelfConsistencyBackend } from "../src/worker.js";
 
 const temporaryRoots: string[] = [];
 
@@ -157,5 +157,68 @@ describe("Codex CLI review runtime", () => {
         return { stdout: "", stderr: "", status: 0, signal: null };
       }
     })).rejects.toThrow("codex_runtime_unsafe_write_attempt");
+  });
+
+  it("replaces a rejected secret-like result artifact before failing closed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-secret-result-"));
+    temporaryRoots.push(root);
+    const evidenceDir = join(root, "evidence");
+    const fixtureToken = ["super", "secret", "token"].join("-");
+
+    await expect(runCodexReview({
+      cwd: join(root, "worktree"),
+      prompt: "Return the fixture result.",
+      cliPath: "/Users/test/.local/bin/codex",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "max",
+      evidenceDir,
+      timeoutMs: 30_000,
+      maxOutputBytes: 1024 * 1024
+    }, {
+      captureWorktreeState: () => "clean",
+      runProcess: async (invocation) => {
+        writeFileSync(invocation.outputPath, JSON.stringify({
+          findings: [{
+            severity: "P1",
+            path: "src/example.ts",
+            line: 12,
+            title: "Fixture finding",
+            body: `Leaked ${fixtureToken}`,
+            confidence: 0.99
+          }]
+        }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    })).rejects.toThrow("codex_runtime_secret_output");
+
+    const retained = readFileSync(join(evidenceDir, "codex-review-result.json"), "utf8");
+    expect(retained).not.toContain(fixtureToken);
+    expect(retained).toContain("rejected-secret-like-output");
+  });
+
+  it("keeps default self-consistency draws on the active Codex backend", () => {
+    const config = loadConfigFromObject({
+      codexRuntime: {
+        enabled: true,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "max",
+        timeoutMs: 300_000,
+        maxOutputBytes: 20 * 1024 * 1024,
+        contextWindowTokens: 128_000
+      }
+    });
+
+    expect(resolveSelfConsistencyBackend(config, { enabled: true })).toEqual({
+      useCodex: true,
+      providerId: "codex-cli-oauth"
+    });
+    expect(resolveSelfConsistencyBackend(config, {
+      enabled: true,
+      provider: "zcode-glm"
+    })).toEqual({
+      useCodex: false,
+      providerId: "zcode-glm"
+    });
   });
 });

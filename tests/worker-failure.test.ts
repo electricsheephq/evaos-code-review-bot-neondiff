@@ -218,7 +218,7 @@ describe("worker review failures", () => {
     expect(buildReviewApprovalRevision({
       configRevision,
       useZCode: false,
-      zcodeAppConfigPath: zcodeConfigPath
+      zcodeAppConfigPath: join(root, "missing-zcode.json")
     })).toBe(configRevision);
   });
 
