@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { parseFindings } from "./findings.js";
@@ -177,15 +177,23 @@ export async function runCodexReview(input: {
   }
 
   let rawResponse: string;
+  let outputFd: number | undefined;
   try {
-    const outputStat = statSync(outputPath);
+    const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+    outputFd = openSync(outputPath, constants.O_RDONLY | noFollow);
+    const outputStat = fstatSync(outputFd);
     if (!outputStat.isFile() || outputStat.size > input.maxOutputBytes) {
       throw new Error("result file is missing, invalid, or over the output limit");
     }
-    chmodSync(outputPath, 0o600);
-    rawResponse = readFileSync(outputPath, "utf8");
+    fchmodSync(outputFd, 0o600);
+    rawResponse = readFileSync(outputFd, "utf8");
+    if (Buffer.byteLength(rawResponse, "utf8") > input.maxOutputBytes) {
+      throw new Error("result file grew over the output limit while being read");
+    }
   } catch (error) {
     throw new Error(`codex_runtime_schema_invalid: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    if (outputFd !== undefined) closeSync(outputFd);
   }
   if (containsSecretLikeText(rawResponse)) {
     writeSecureFileSync(outputPath, '{"status":"rejected-secret-like-output"}\n');
