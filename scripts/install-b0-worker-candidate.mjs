@@ -25,6 +25,7 @@ import {
   planWorkerUpdate,
   recoverPreviouslyLoadedWorker,
   retryTransientLaunchdBootstrap,
+  selectStableNodeLaunchPath,
   validateWorkerCandidate
 } from "./lib/b0-worker-installer.mjs";
 
@@ -506,11 +507,16 @@ function update(args) {
   });
   const launchAgent = parsePlist(plistPath);
   const priorState = readState(paths.statePath);
+  const nodePath = selectStableNodeLaunchPath({
+    execPath: process.execPath,
+    stableCandidates: ["/opt/homebrew/bin/node", "/usr/local/bin/node"],
+    resolvePath: realpathSync
+  });
   const plan = planWorkerUpdate({
     launchAgent,
     expectedLabel: label,
     workerRoot: paths.workerRoot,
-    nodePath: process.execPath,
+    nodePath,
     candidateHead: candidate.candidateHead,
     packageVersion: candidate.packageVersion,
     manifestSHA256,
