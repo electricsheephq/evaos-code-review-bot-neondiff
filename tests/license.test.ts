@@ -46,7 +46,7 @@ describe("license activation and entitlement cache", () => {
     const server = await startLicenseServer((_req, res) => {
       writeJson(res, 200, {
         status: "active",
-        expiresAt: "2026-08-01T00:00:00.000Z",
+        expiresAt: "2999-08-01T00:00:00.000Z",
         repoVisibilityScope: "private",
         updateEntitlement: true,
         plan: "supporter"
@@ -715,7 +715,7 @@ describe("license activation and entitlement cache", () => {
         urls.push(String(url));
         return new Response(JSON.stringify({
           status: "active",
-          expiresAt: "2026-08-01T00:00:00.000Z",
+          expiresAt: "2999-08-01T00:00:00.000Z",
           repoVisibilityScope: "private",
           updateEntitlement: true
         }), {
@@ -739,7 +739,7 @@ describe("license activation and entitlement cache", () => {
       }
       writeJson(res, 200, {
         status: "active",
-        expiresAt: "2026-08-01T00:00:00.000Z",
+        expiresAt: "2999-08-01T00:00:00.000Z",
         repoVisibilityScope: "private",
         updateEntitlement: true
       });
@@ -787,7 +787,7 @@ describe("license activation and entitlement cache", () => {
       }
       writeJson(res, 200, {
         status: "active",
-        expiresAt: "2026-08-01T00:00:00.000Z",
+        expiresAt: "2999-08-01T00:00:00.000Z",
         repoVisibilityScope: "private",
         updateEntitlement: true
       });
@@ -1616,7 +1616,7 @@ describe("license activation and entitlement cache", () => {
     const keyPath = join(root, "license.key");
     const server = await startLicenseServer((_req, res) => writeJson(res, 200, {
       status: "active",
-      expiresAt: "2026-08-01T00:00:00.000Z",
+      expiresAt: "2999-08-01T00:00:00.000Z",
       repoVisibilityScope: "private",
       updateEntitlement: true
     }));
@@ -1819,7 +1819,7 @@ describe("license activation and entitlement cache", () => {
     writeFileSync(join(root, "entitlement.json"), `${JSON.stringify({
       status: "active",
       checkedAt: "2026-07-01T00:00:00.000Z",
-      expiresAt: "2026-08-01T00:00:00.000Z",
+      expiresAt: "2999-08-01T00:00:00.000Z",
       repoVisibilityScope: "private",
       updateEntitlement: true
     })}\n`, { mode: 0o600 });

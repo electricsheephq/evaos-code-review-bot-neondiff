@@ -329,6 +329,16 @@
     "maxPatchBytes": 80000,
     "retryMaxRetries": 0
   },
+  "codexRuntime": {
+    "_comment": "Optional agent runtime. Uses the existing Codex CLI login internally; never paste OAuth material into this file.",
+    "enabled": false,
+    "cliPath": "/absolute/path/to/codex",
+    "model": "gpt-5.6-luna",
+    "reasoningEffort": "max",
+    "timeoutMs": 600000,
+    "maxOutputBytes": 20971520,
+    "contextWindowTokens": 128000
+  },
   "github": {
     "appId": "set via NEONDIFF_GITHUB_APP_ID",
     "clientId": "optional public GitHub App client ID for desktop/device authorization",

@@ -61,7 +61,8 @@ Status definitions:
 | LM Studio, vLLM, llama.cpp, SGLang, or local OpenAI-compatible gateway | `compatible by interface`; schema-constrained request construction shipped behind explicit config | Use an explicit provider id and local `/v1` base URL; promote only after fixture and dry-run review proof | No-egress only for local/self-hosted endpoints; hosted gateways are remote egress | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240), schema mode [#399](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/399) |
 | Hosted OpenAI-compatible BYOK gateway | `compatible by interface`; remote smoke and live review proof required | Store only `apiKeyEnv`, run a single-provider smoke, then record redacted evidence before live review | Hosted provider receives prompts and diffs | Hosted BYOK coverage [#241](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/241) |
 | Free/trial provider catalogs such as `cheahjs/free-llm-api-resources` | `resource only / untested` unless a provider has a NeonDiff proof issue | Verify provider terms, model availability, OpenAI compatibility, quota, and NeonDiff proof separately | Usually hosted egress; read each provider's terms and privacy posture | This resource issue [#242](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/242) |
-| Agent runtimes such as Codex CLI, Claude Code, and OpenCode | `tracked/planned`; discovery only | Do not configure as a live review provider until the runtime contract is documented and proven | Depends on each runtime/provider chain; no general no-egress claim | Agent runtime discovery [#243](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/243) |
+| Codex CLI | Opt-in local agent-runtime adapter; not a provider-registry entry | Enable `codexRuntime` only after `codex exec` succeeds with the selected model/effort, then run one dry review before live posting | Codex's configured OpenAI service receives prompts and diffs; NeonDiff invokes the CLI without reading its OAuth token | Runtime implementation [#730](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/730), discovery [#243](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/243) |
+| Claude Code and OpenCode agent runtimes | `tracked/planned`; discovery only | Do not configure as live review providers until their runtime contracts are implemented and proven | Depends on each runtime/provider chain; no general no-egress claim | Agent runtime discovery [#243](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/243) |
 
 ## Commands
 
@@ -281,12 +282,33 @@ registry. Treat them as discovery-stage agent-runtime adapter or invocation
 plugin candidates: their CLIs may call tools, read a checkout, use their own
 model/provider settings, and produce review output after an agent loop.
 
-NeonDiff does not currently claim live review support for Codex CLI, Claude
-Code, or OpenCode. Do not list them as provider registry entries until a later
-implementation proves a bounded no-write runtime contract, schema-valid output,
-redacted evidence, timeout/error handling, and current-head review behavior. The
-discovery contract is documented in
-[docs/agent-runtime-adapters.md](agent-runtime-adapters.md).
+The opt-in `codexRuntime` path implements that separate contract for Codex CLI.
+It starts `codex exec` with an ephemeral session, ignored user config/rules,
+disabled account apps and recursive agents, approval `never`, a read-only
+sandbox, strict findings schema, bounded output, hard timeout, and pre/post
+checkout-state comparison. Codex uses its existing
+login internally; NeonDiff does not read or receive OAuth material. Model and
+reasoning effort are explicit configuration, and availability remains subject
+to the authenticated Codex account. Claude Code and OpenCode remain discovery
+only. See [docs/agent-runtime-adapters.md](agent-runtime-adapters.md).
+
+```json
+{
+  "codexRuntime": {
+    "enabled": true,
+    "cliPath": "/absolute/path/to/codex",
+    "model": "gpt-5.6-luna",
+    "reasoningEffort": "max",
+    "timeoutMs": 600000,
+    "maxOutputBytes": 20971520,
+    "contextWindowTokens": 128000
+  }
+}
+```
+
+This is an execution-backend choice, not a license or GitHub authorization
+bypass. The same activation, current-head, dry-run, line-placement, redaction,
+duplicate-suppression, and posting gates remain authoritative.
 
 ## Error Categories
 

@@ -11,7 +11,7 @@ import {
   isFinishingTouchCommandAction,
   type CommandDecision
 } from "./commands.js";
-import { loadConfig, type BotConfig } from "./config.js";
+import { loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
 import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
 import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
@@ -108,6 +108,7 @@ import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, extractJsonObject, extractZCodeResponse, isZCodeSchemaFailureError, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
+import { runCodexReview } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
@@ -148,6 +149,14 @@ function recordConsumedAuthorizationIncident(input: {
 }
 
 export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
+  if (config.codexRuntime?.enabled) {
+    return {
+      providerId: "codex-cli-oauth",
+      adapter: "codex-cli",
+      model: config.codexRuntime.model,
+      displayName: "Codex CLI (existing OAuth session)"
+    };
+  }
   const providerId = resolveReviewRegistryProviderId(config);
   const provider = config.providers?.providers[providerId];
   if (!provider) {
@@ -167,6 +176,7 @@ export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMe
 }
 
 function resolveReviewContextWindowTokens(config: BotConfig): number | undefined {
+  if (config.codexRuntime?.enabled) return config.codexRuntime.contextWindowTokens;
   const providerId = resolveReviewRegistryProviderId(config);
   return config.providers?.providers[providerId]?.contextWindowTokens;
 }
@@ -402,7 +412,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
   }
   const reviewApprovalRevision = buildReviewApprovalRevision({
     configRevision: options.expectedConfigRevision,
-    useZCode: options.useZCode ?? true,
+    useZCode: (options.useZCode ?? true) && !config.codexRuntime?.enabled,
     zcodeAppConfigPath: config.zcode.appConfigPath
   });
   const result: RunOnceResult = {
@@ -1899,7 +1909,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       assertReviewApprovalRevisionCurrent({
         approvedRevision: input.configRevision,
         sourceConfigRevision: input.sourceConfigRevision,
-        useZCode: input.useZCode,
+        useZCode: input.useZCode && !config.codexRuntime?.enabled,
         zcodeAppConfigPath: config.zcode.appConfigPath
       });
     };
@@ -3776,7 +3786,8 @@ async function applySelfConsistencyRecheck(input: {
     return { comments: input.gate.comments, event: input.gate.event };
   }
 
-  const providerId = selfConsistencyConfig.provider ?? input.config.zcode.providerId;
+  const backend = resolveSelfConsistencyBackend(input.config, selfConsistencyConfig);
+  const providerId = backend.providerId;
   const result = await runSelfConsistencyRecheck({
     comments: input.gate.comments,
     files: input.files,
@@ -3788,16 +3799,35 @@ async function applySelfConsistencyRecheck(input: {
       ? { categoryPrecisionFloors: input.config.reviewGate.categoryPrecisionFloors }
       : {}),
     secondDraw: async ({ comment, hunk }) => {
-      const draw = await runZCodeReview({
-        cwd: input.worktreePath,
-        prompt: buildSelfConsistencyPrompt(comment, hunk),
-        cliPath: input.config.zcode.cliPath,
-        appConfigPath: input.config.zcode.appConfigPath,
-        model: input.config.zcode.model,
-        ...(providerId ? { providerId } : {}),
-        timeoutMs: input.config.zcode.timeoutMs,
-        retryMaxRetries: input.config.zcode.retryMaxRetries
-      });
+      const prompt = buildSelfConsistencyPrompt(comment, hunk);
+      const draw = backend.useCodex
+        ? await runConfiguredReview({
+            config: input.config,
+            worktreePath: input.worktreePath,
+            prompt,
+            evidenceDir: join(
+              input.evidenceDir,
+              "self-consistency-codex",
+              createHash("sha256")
+                .update(comment.path)
+                .update("\0")
+                .update(String(comment.line))
+                .update("\0")
+                .update(comment.title)
+                .digest("hex")
+                .slice(0, 16)
+            )
+          })
+        : await runZCodeReview({
+            cwd: input.worktreePath,
+            prompt,
+            cliPath: input.config.zcode.cliPath,
+            appConfigPath: input.config.zcode.appConfigPath,
+            model: input.config.zcode.model,
+            ...(providerId ? { providerId } : {}),
+            timeoutMs: input.config.zcode.timeoutMs,
+            retryMaxRetries: input.config.zcode.retryMaxRetries
+          });
       return parseSelfConsistencyVerdict(draw.rawResponse);
     }
   });
@@ -3818,6 +3848,17 @@ async function applySelfConsistencyRecheck(input: {
     : undefined;
 
   return { comments: result.comments, event: result.event, ...(runtimeNote ? { runtimeNote } : {}) };
+}
+
+export function resolveSelfConsistencyBackend(
+  config: BotConfig,
+  selfConsistencyConfig: SelfConsistencyConfig
+): { useCodex: boolean; providerId?: string } {
+  const useCodex = Boolean(config.codexRuntime?.enabled && selfConsistencyConfig.provider === undefined);
+  return {
+    useCodex,
+    providerId: useCodex ? "codex-cli-oauth" : (selfConsistencyConfig.provider ?? config.zcode.providerId)
+  };
 }
 
 function buildSelfConsistencyPrompt(comment: DeterministicReviewGateResult["comments"][number], hunk: string): string {
@@ -3876,7 +3917,7 @@ async function runReviewWithContextBudget(input: {
   }
 
   const result = input.useZCode
-    ? await runZCodeReviewWithProviderRetry({
+    ? await runConfiguredReview({
         config: input.config,
         worktreePath: input.worktreePath,
         prompt: input.prompt,
@@ -3922,7 +3963,7 @@ async function runChunkedZCodeReview(input: {
     let result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput };
     try {
       result = input.useZCode
-        ? await runZCodeReviewWithProviderRetry({
+        ? await runConfiguredReview({
             config: input.config,
             worktreePath: input.worktreePath,
             prompt,
@@ -3980,8 +4021,8 @@ async function runChunkedZCodeReview(input: {
       attempts,
       degradedRecovery,
       runtime: {
-        provider: input.config.zcode.providerId,
-        model: input.config.zcode.model,
+        provider: input.config.codexRuntime?.enabled ? "codex-cli-oauth" : input.config.zcode.providerId,
+        model: input.config.codexRuntime?.enabled ? input.config.codexRuntime.model : input.config.zcode.model,
         startedAt: startedAt.toISOString(),
         completedAt: completedAt.toISOString(),
         latencyMs: completedAt.getTime() - startedAt.getTime(),
@@ -3993,6 +4034,7 @@ async function runChunkedZCodeReview(input: {
 }
 
 function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } {
+  const codexRuntime = config.codexRuntime?.enabled ? config.codexRuntime : undefined;
   return {
     findings: [],
     droppedFromSchema: [],
@@ -4000,10 +4042,49 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
     attempts: 0,
     degradedRecovery: false,
     runtime: {
-      provider: config.zcode.providerId,
-      model: config.zcode.model,
+      provider: codexRuntime ? "codex-cli-oauth" : config.zcode.providerId,
+      model: codexRuntime?.model ?? config.zcode.model,
       providerAttempts: 0,
-      notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+      notes: [codexRuntime
+        ? "Configured review execution disabled for this dry-run; provider latency and token usage were not measured."
+        : "ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+    }
+  };
+}
+
+async function runConfiguredReview(input: {
+  config: BotConfig;
+  worktreePath: string;
+  prompt: string;
+  evidenceDir: string;
+}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+  if (!input.config.codexRuntime?.enabled) return runZCodeReviewWithProviderRetry(input);
+  const startedAt = new Date();
+  const result = await runCodexReview({
+    cwd: input.worktreePath,
+    prompt: input.prompt,
+    cliPath: input.config.codexRuntime.cliPath,
+    model: input.config.codexRuntime.model,
+    reasoningEffort: input.config.codexRuntime.reasoningEffort,
+    evidenceDir: input.evidenceDir,
+    timeoutMs: input.config.codexRuntime.timeoutMs,
+    maxOutputBytes: input.config.codexRuntime.maxOutputBytes
+  });
+  const completedAt = new Date();
+  return {
+    ...result,
+    runtime: {
+      provider: "codex-cli-oauth",
+      model: input.config.codexRuntime.model,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      latencyMs: completedAt.getTime() - startedAt.getTime(),
+      providerAttempts: 1,
+      notes: [
+        `Codex CLI reasoning effort: ${input.config.codexRuntime.reasoningEffort}.`,
+        "Codex CLI used its existing authenticated session; NeonDiff did not read or receive OAuth material.",
+        "Codex runtime retries are disabled; a failed invocation returns one terminal queue failure."
+      ]
     }
   };
 }
