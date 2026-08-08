@@ -1867,6 +1867,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return nil
         }
+        let occupiedConfigPaths = Set(
+            account.bots.compactMap(\.localConfigPath).map(normalizedPath)
+        )
+        guard !occupiedConfigPaths.contains(configURL.path) else {
+            return nil
+        }
 
         return DesktopNewBotPlan(
             accountID: account.id,
