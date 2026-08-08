@@ -286,9 +286,13 @@ plan before showing **Initialize Local Config**. It never initializes the
 If the customer quits before setup is complete, relaunch NeonDiff and continue
 the same pending bot. The app restores the exact account-scoped config path and
 reopens onboarding rather than creating a second `new-neondiff-bot-*`
-directory. This recovery also takes precedence over automatic selection of an
-older local bot under the same account. Choosing another account or an existing
-bot explicitly still ends the pending setup.
+directory. If an older build or manual rollback changed the saved selection to
+a verified existing bot under the same account, relaunch keeps that
+authoritative bot selected and preserves only a structurally valid,
+account-scoped pending plan. Choose **NEW BOT** to resume that preserved setup;
+the app rejects it if any authorized bot now owns the same config identity.
+Choosing another account or explicitly choosing an existing bot ends the
+pending setup.
 
 When the same Mac already has one exact checksum-managed worker for the selected
 LaunchAgent label, the app reuses that worker for the isolated bot's `init`,
