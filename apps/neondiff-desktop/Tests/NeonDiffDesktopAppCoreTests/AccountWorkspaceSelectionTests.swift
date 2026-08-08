@@ -912,6 +912,92 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func pendingNewBotRecoveryRejectsConfigFileAliasOutsidePendingBot() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let accountID = "account-a"
+        let botsDirectory = root
+            .appendingPathComponent("Accounts", isDirectory: true)
+            .appendingPathComponent(accountID, isDirectory: true)
+            .appendingPathComponent("Bots", isDirectory: true)
+        let existingConfigPath = botsDirectory
+            .appendingPathComponent("existing-bot", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+            .path
+        let pendingBotDirectory = botsDirectory
+            .appendingPathComponent("new-neondiff-bot", isDirectory: true)
+        let victimConfigURL = root
+            .appendingPathComponent("uncatalogued-victim", isDirectory: true)
+            .appendingPathComponent("config.local.json")
+        let victimConfigData = Data(#"{"pilotRepos":["account-a/private"]}"#.utf8)
+        try FileManager.default.createDirectory(
+            at: pendingBotDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: victimConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try victimConfigData.write(to: victimConfigURL)
+        let aliasedPendingConfigURL = pendingBotDirectory
+            .appendingPathComponent("config.local.json")
+        try FileManager.default.createSymbolicLink(
+            at: aliasedPendingConfigURL,
+            withDestinationURL: victimConfigURL
+        )
+        let existingBot = bot(
+            id: "bot-existing",
+            slug: "existing-bot",
+            configPath: existingConfigPath
+        )
+        let account = workspace(
+            id: accountID,
+            name: "Account A",
+            bots: [existingBot]
+        )
+        let stalePendingBotID = "pending-75f906e6-08f9-4ca0-bf6a-e83b964543e2"
+        let persistedPlan = String(
+            data: try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "accountID": account.id,
+                "botID": stalePendingBotID,
+                "appSlug": "new-neondiff-bot",
+                "configPath": aliasedPendingConfigURL.path
+            ]),
+            encoding: .utf8
+        )!
+        let fixture = ModelDependencyFixture(
+            root: root,
+            preferenceStrings: [
+                "neondiff.accountWorkspaceID": account.id,
+                "neondiff.accountBotID": existingBot.id,
+                "neondiff.configPath": existingConfigPath,
+                "neondiff.pendingNewBotPlan.v1": persistedPlan
+            ]
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([account]))
+        await fixture.cli.waitUntilCallCount(1)
+        for _ in 0..<100 where fixture.model.isConfigInspectInProgress {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(fixture.model.selectedBotInstallation?.id == existingBot.id)
+        #expect(
+            fixture.preferences.string(forKey: "neondiff.pendingNewBotPlan.v1")
+                == nil
+        )
+
+        fixture.model.beginNewBot()
+
+        let replacement = try #require(fixture.model.pendingNewBotPlan)
+        #expect(replacement.bot.id != stalePendingBotID)
+        #expect(replacement.bot.localConfigPath != aliasedPendingConfigURL.path)
+        #expect(try Data(contentsOf: victimConfigURL) == victimConfigData)
+    }
+
+    @MainActor
     @Test func pendingNewBotRelaunchRejectsAConfigOutsideTheSelectedAccount() throws {
         let root = fixtureURL("/fixture/model-app-support", directory: true)
         let savedBotID = "pending-75f906e6-08f9-4ca0-bf6a-e83b964543e2"

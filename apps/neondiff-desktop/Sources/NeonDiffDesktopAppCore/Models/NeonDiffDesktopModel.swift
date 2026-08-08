@@ -1858,13 +1858,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let botDirectory = configURL.deletingLastPathComponent()
         let directoryName = botDirectory.lastPathComponent
         let resolvedBotsDirectory = botsDirectory.resolvingSymlinksInPath()
-        let resolvedBotParent = botDirectory
+        let resolvedBotDirectory = botDirectory.resolvingSymlinksInPath()
+        let resolvedBotParent = resolvedBotDirectory.deletingLastPathComponent()
+        let resolvedConfigParent = configURL
             .resolvingSymlinksInPath()
             .deletingLastPathComponent()
         guard configURL.lastPathComponent == "config.local.json",
               botDirectory.deletingLastPathComponent() == botsDirectory,
               resolvedBotParent.path.caseInsensitiveCompare(
                   resolvedBotsDirectory.path
+              ) == .orderedSame,
+              resolvedConfigParent.path.caseInsensitiveCompare(
+                  resolvedBotDirectory.path
               ) == .orderedSame,
               directoryName == persisted.appSlug
                 || isNumberedNewBotDirectory(
