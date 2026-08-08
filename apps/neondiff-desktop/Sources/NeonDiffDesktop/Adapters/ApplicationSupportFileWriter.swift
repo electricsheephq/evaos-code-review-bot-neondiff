@@ -20,6 +20,28 @@ final class ApplicationSupportFileWriter: DesktopFileWriting, @unchecked Sendabl
         fileManager.fileExists(atPath: url.standardizedFileURL.path)
     }
 
+    func pathsReferToSameFile(_ lhs: URL, _ rhs: URL) -> Bool {
+        let lhsURL = lhs.standardizedFileURL.resolvingSymlinksInPath()
+        let rhsURL = rhs.standardizedFileURL.resolvingSymlinksInPath()
+        if lhsURL.path.caseInsensitiveCompare(rhsURL.path) == .orderedSame {
+            return true
+        }
+        guard let lhsAttributes = try? fileManager.attributesOfItem(
+            atPath: lhsURL.path
+        ),
+        let rhsAttributes = try? fileManager.attributesOfItem(
+            atPath: rhsURL.path
+        ),
+        let lhsSystem = lhsAttributes[.systemNumber] as? NSNumber,
+        let rhsSystem = rhsAttributes[.systemNumber] as? NSNumber,
+        let lhsFile = lhsAttributes[.systemFileNumber] as? NSNumber,
+        let rhsFile = rhsAttributes[.systemFileNumber] as? NSNumber
+        else {
+            return false
+        }
+        return lhsSystem == rhsSystem && lhsFile == rhsFile
+    }
+
     func write(_ data: Data, to url: URL) throws {
         let destination = url.standardizedFileURL
         let rootPath = applicationSupportDirectory.path

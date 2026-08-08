@@ -1857,8 +1857,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let configURL = URL(filePath: persisted.configPath).standardizedFileURL
         let botDirectory = configURL.deletingLastPathComponent()
         let directoryName = botDirectory.lastPathComponent
+        let resolvedBotsDirectory = botsDirectory.resolvingSymlinksInPath()
+        let resolvedBotParent = botDirectory
+            .resolvingSymlinksInPath()
+            .deletingLastPathComponent()
         guard configURL.lastPathComponent == "config.local.json",
               botDirectory.deletingLastPathComponent() == botsDirectory,
+              resolvedBotParent.path.caseInsensitiveCompare(
+                  resolvedBotsDirectory.path
+              ) == .orderedSame,
               directoryName == persisted.appSlug
                 || isNumberedNewBotDirectory(
                     directoryName,
@@ -1867,10 +1874,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return nil
         }
-        let configPathIsOwned = account.bots
+        let configPathIsOwned = accountWorkspaceCatalog.accounts
+            .flatMap(\.bots)
             .compactMap(\.localConfigPath)
             .contains(where: {
-                pathsReferToSameConfigFile($0, configURL.path)
+                dependencies.fileWriter.pathsReferToSameFile(
+                    URL(filePath: $0),
+                    configURL
+                )
             })
         guard !configPathIsOwned else {
             return nil
@@ -1924,35 +1935,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return false
         }
         return suffix >= 2 && directoryName == "\(prefix)\(suffix)"
-    }
-
-    private func pathsReferToSameConfigFile(
-        _ lhs: String,
-        _ rhs: String
-    ) -> Bool {
-        let lhsURL = URL(filePath: lhs)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        let rhsURL = URL(filePath: rhs)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        if lhsURL.path.caseInsensitiveCompare(rhsURL.path) == .orderedSame {
-            return true
-        }
-        guard let lhsAttributes = try? FileManager.default.attributesOfItem(
-            atPath: lhsURL.path
-        ),
-        let rhsAttributes = try? FileManager.default.attributesOfItem(
-            atPath: rhsURL.path
-        ),
-        let lhsSystem = lhsAttributes[.systemNumber] as? NSNumber,
-        let rhsSystem = rhsAttributes[.systemNumber] as? NSNumber,
-        let lhsFile = lhsAttributes[.systemFileNumber] as? NSNumber,
-        let rhsFile = rhsAttributes[.systemFileNumber] as? NSNumber
-        else {
-            return false
-        }
-        return lhsSystem == rhsSystem && lhsFile == rhsFile
     }
 
     #if DEBUG
