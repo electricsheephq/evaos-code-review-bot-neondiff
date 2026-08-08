@@ -801,6 +801,35 @@ exit 1
     });
   });
 
+  it("reports Codex as the active review runtime when its adapter is enabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-codex-cli-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({
+      codexRuntime: {
+        enabled: true,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "max",
+        timeoutMs: 300_000,
+        maxOutputBytes: 20 * 1024 * 1024,
+        contextWindowTokens: 128_000
+      }
+    }));
+
+    const list = JSON.parse((await runCli(["providers", "list", "--config", configPath])).stdout);
+    expect(list).toMatchObject({
+      activeRuntime: {
+        providerId: "codex-cli-oauth",
+        adapter: "codex-cli",
+        model: "gpt-5.6-luna",
+        auth: "existing-codex-session"
+      }
+    });
+    expect(list.proofBoundary).toMatch(/Codex CLI/i);
+    expect(list.proofBoundary).not.toMatch(/remains ZCode-backed/i);
+  });
+
   it("blocks providers doctor smoke before contacting a configured endpoint without activation", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cli-"));
     roots.push(root);

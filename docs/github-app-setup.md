@@ -203,7 +203,9 @@ dry-run, and confirmed-mutation steps in
 [SETUP.md](./SETUP.md#update-an-existing-local-worker). The label-isolated
 installer preserves the existing App environment, config, provider state,
 repository allowlist, and private-key file coordinate. Preview rollback before
-confirmed rollback; neither path reads or copies key bytes.
+confirmed rollback; neither path reads or copies key bytes. When a stable
+Homebrew Node command resolves to the same binary as `process.execPath`, the
+installer keeps the stable command instead of pinning a versioned Cellar path.
 
 Keep the private key and local config out of git. A typical shell setup is:
 

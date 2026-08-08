@@ -48,6 +48,8 @@ describe("desktop config CLI", () => {
       source: "file"
     });
     expect(output.editablePaths).toContain("zcode.model");
+    expect(output.editablePaths).toContain("codexRuntime.enabled");
+    expect(output.editablePaths).toContain("codexRuntime.reasoningEffort");
     expect(output.editablePaths).toContain("desktop.openAICompatibleEndpoint");
     expect(output.editablePaths).toContain("github.appId");
     expect(output.editablePaths).toContain("github.clientId");

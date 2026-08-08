@@ -401,7 +401,10 @@ If Overview shows **Worker update required**:
    or copies private-key bytes. Each LaunchAgent label has an isolated worker
    version, rollback state, and install lock. A lock owned by a process that no
    longer exists is recovered automatically; a lock with missing or invalid
-   owner metadata fails closed and must be handled with NeonDiff support.
+   owner metadata fails closed and must be handled with NeonDiff support. When
+   `/opt/homebrew/bin/node` or `/usr/local/bin/node` resolves to the Node runtime
+   executing the installer, that stable command is retained in the LaunchAgent
+   rather than its versioned package-manager target.
 5. Return to Overview and choose **Retry Worker Check**. Dry review stays
    disabled until the exact installed worker advertises both config-revision
    approval and the matching ZCode provider path.
