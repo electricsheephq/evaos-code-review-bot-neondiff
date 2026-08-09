@@ -93,7 +93,7 @@ describe("worker review settings preview evidence", () => {
     });
     expect(preview).not.toHaveProperty("reviewEventAuthorization");
     expect(walkthrough).toContain("### Review Settings Preview");
-    expect(walkthrough).toContain("Provider: GLM/Z.ai through ZCode (`zcode-glm`, zcode, model `GLM-5.2`).");
+    expect(walkthrough).toContain("Provider: ZCode (app configuration) (`zcode-glm`, zcode, model `GLM-5.2`).");
     expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");
     expectSettingsPathInstructionCodeSpan(walkthrough, "src/`templates`/**");
     expect(walkthrough).not.toContain(secretLikeToken);
@@ -101,7 +101,10 @@ describe("worker review settings preview evidence", () => {
       provider: "zcode-glm",
       model: "GLM-5.2",
       providerAttempts: 0,
-      notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+      notes: [
+        "Configured review execution disabled for this dry-run; provider latency and token usage were not measured.",
+        "No automatic cross-runtime fallback exists: Codex failures are terminal and ZCode retries stay on ZCode."
+      ]
     });
     state.close();
   });
@@ -155,7 +158,7 @@ describe("worker review settings preview evidence", () => {
     state.close();
   });
 
-  it("uses the selected registry id for metadata when ZCode has a distinct execution id", () => {
+  it("uses the explicit ZCode execution id for metadata instead of the registry default", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-metadata-"));
     roots.push(root);
     const config = minimalConfig(root);
@@ -180,10 +183,10 @@ describe("worker review settings preview evidence", () => {
     };
 
     expect(buildReviewProviderMetadata(config)).toEqual({
-      providerId: "zcode-glm",
+      providerId: "ghost-provider",
       adapter: "zcode",
       model: "GLM-5.2",
-      displayName: "GLM/Z.ai through ZCode"
+      displayName: "ZCode (app configuration)"
     });
   });
 });
