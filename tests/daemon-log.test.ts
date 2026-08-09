@@ -221,6 +221,7 @@ describe("daemon heartbeat logs", () => {
       });
       expect(() => writer("x")).toThrow();
       expect(readFileSync(livePath, "utf8")).toBe("preserve");
+      expect(readFileSync(collision, "utf8")).toBe("private collision");
     } finally {
       closeSync(otherFd);
       closeSync(fd);

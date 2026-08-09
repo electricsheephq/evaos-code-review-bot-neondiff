@@ -154,8 +154,10 @@ function archiveLaunchdLog(input: {
   const temporaryPath = `${archivePath}.tmp`;
   const bytes = readInheritedLogSnapshot(input.path, input.fd);
   let temporaryFd: number | undefined;
+  let temporaryCreated = false;
   try {
     temporaryFd = openSync(temporaryPath, "wx", 0o600);
+    temporaryCreated = true;
     writeAll(temporaryFd, bytes);
     fsyncSync(temporaryFd);
     closeSync(temporaryFd);
@@ -169,10 +171,12 @@ function archiveLaunchdLog(input: {
     assertPrivateLaunchdLog(input.path, input.fd);
   } catch (error) {
     if (temporaryFd !== undefined) closeSync(temporaryFd);
-    try {
-      rmSync(temporaryPath, { force: true });
-    } catch {
-      // Preserve the original rotation failure; the private temp path is bounded and exact.
+    if (temporaryCreated) {
+      try {
+        rmSync(temporaryPath, { force: true });
+      } catch {
+        // Preserve the original rotation failure; only this call's private temp path is eligible.
+      }
     }
     throw error;
   }

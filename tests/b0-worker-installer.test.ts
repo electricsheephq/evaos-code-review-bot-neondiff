@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -7,10 +8,12 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  symlinkSync
+  statSync,
+  symlinkSync,
+  writeFileSync
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -81,8 +84,8 @@ function launchAgent() {
       "true"
     ],
     WorkingDirectory: "/Users/test/neondiff",
-    StandardOutPath: "/Users/test/Library/Logs/evaos-code-review-bot/launchd.out.log",
-    StandardErrorPath: "/Users/test/Library/Logs/evaos-code-review-bot/launchd.err.log",
+    StandardOutPath: join(homedir(), "Library", "Logs", "evaos-code-review-bot", "launchd.out.log"),
+    StandardErrorPath: join(homedir(), "Library", "Logs", "evaos-code-review-bot", "launchd.err.log"),
     EnvironmentVariables: {
       NEONDIFF_GITHUB_APP_ID: "123456",
       NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: "/Users/test/.config/neondiff/app.pem"
@@ -120,6 +123,43 @@ describe("B0 worker installer", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("narrows existing managed log permissions without truncating contents", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-existing-")));
+    try {
+      const stdoutPath = join(root, "launchd.out.log");
+      const stderrPath = join(root, "launchd.err.log");
+      writeFileSync(stdoutPath, "keep stdout", { mode: 0o600 });
+      writeFileSync(stderrPath, "keep stderr", { mode: 0o600 });
+      chmodSync(stdoutPath, 0o644);
+      chmodSync(stderrPath, 0o644);
+
+      prepareLaunchdLogFiles({ StandardOutPath: stdoutPath, StandardErrorPath: stderrPath });
+
+      expect(readFileSync(stdoutPath, "utf8")).toBe("keep stdout");
+      expect(readFileSync(stderrPath, "utf8")).toBe("keep stderr");
+      expect(statSync(stdoutPath).mode & 0o777).toBe(0o600);
+      expect(statSync(stderrPath).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects normalized launchd log paths outside the current user's Library", () => {
+    const outsideHome = launchAgent();
+    outsideHome.StandardOutPath = "/tmp/Library/Logs/evaos-code-review-bot/launchd.out.log";
+    outsideHome.StandardErrorPath = "/tmp/Library/Logs/evaos-code-review-bot/launchd.err.log";
+
+    expect(() => planWorkerUpdate({
+      launchAgent: outsideHome,
+      expectedLabel: "com.electricsheephq.neondiff",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    })).toThrow("private user Library/Logs/evaos-code-review-bot directory");
   });
 
   it("keeps a stable Node command when it resolves to the running Node binary", () => {

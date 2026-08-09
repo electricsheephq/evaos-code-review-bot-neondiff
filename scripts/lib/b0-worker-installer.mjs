@@ -10,6 +10,7 @@ import {
   openSync,
   realpathSync
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -88,7 +89,25 @@ export function prepareLaunchdLogFiles(launchAgent) {
       if (typeof process.getuid === "function" && existing.uid !== process.getuid()) {
         fail("LaunchAgent log path must be owned by the current user");
       }
-      chmodSync(path, 0o600);
+      let fd;
+      try {
+        fd = openSync(path, constants.O_WRONLY | constants.O_NOFOLLOW);
+        fchmodSync(fd, 0o600);
+        const descriptorEntry = fstatSync(fd);
+        const pathEntry = lstatSync(path);
+        requireCurrentUserPrivateFile(descriptorEntry, "LaunchAgent log descriptor");
+        requireCurrentUserPrivateFile(pathEntry, "LaunchAgent log path");
+        if (descriptorEntry.dev !== pathEntry.dev || descriptorEntry.ino !== pathEntry.ino) {
+          fail("LaunchAgent log path changed while permissions were prepared");
+        }
+      } catch (error) {
+        if (error?.code === "ELOOP") {
+          fail("LaunchAgent log path must be a regular non-symlink file");
+        }
+        throw error;
+      } finally {
+        if (fd !== undefined) closeSync(fd);
+      }
       continue;
     }
 
@@ -235,11 +254,12 @@ function buildLaunchdLogRotationEnvironment(launchAgent) {
   if (resolve(stdoutPath) !== stdoutPath || resolve(stderrPath) !== stderrPath) {
     fail("LaunchAgent log paths must be normalized absolute paths");
   }
-  const stdoutDirectory = stdoutPath.slice(0, stdoutPath.lastIndexOf("/"));
-  const stderrDirectory = stderrPath.slice(0, stderrPath.lastIndexOf("/"));
+  const stdoutDirectory = dirname(stdoutPath);
+  const stderrDirectory = dirname(stderrPath);
+  const expectedDirectory = join(homedir(), "Library", "Logs", "evaos-code-review-bot");
   if (
     stdoutDirectory !== stderrDirectory
-    || !stdoutDirectory.endsWith("/Library/Logs/evaos-code-review-bot")
+    || stdoutDirectory !== expectedDirectory
   ) {
     fail("LaunchAgent logs must share the private user Library/Logs/evaos-code-review-bot directory");
   }
