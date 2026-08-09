@@ -1762,6 +1762,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   let headClaim: ReviewHeadClaim | undefined;
   let budgetStarted = false;
   let ensembleEvidencePromise: Promise<void> | undefined;
+  let startShadowLeaves: (() => void) | undefined;
   const releaseReviewCapacity = (): void => {
     // Crash-safe release-on-failure (#295): if we hold the per-head claim and the finally runs
     // before recordProcessed retired it (error/early return), release it so the head is re-claimable.
@@ -1935,52 +1936,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       contextBudget,
       promptForFiles,
       useZCode: input.useZCode,
-      evidenceDir
+      evidenceDir,
+      assertProviderConfigCurrent: assertApprovedProviderConfigCurrent
     });
-    assertApprovedProviderConfigCurrent();
-    if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
-    if (zcodeExecution.status === "skipped_context_budget") return "skipped_context_budget";
-    const zcodeResult = zcodeExecution.result;
-    if (zcodeExecution.ensemblePromise) {
-      ensembleEvidencePromise = zcodeExecution.ensemblePromise
-        .then(() => undefined)
-        .catch((error) => {
-          writeRedactedJsonBestEffort(join(evidenceDir, "review-ensemble", "evidence-error.json"), {
-            error: redactSecrets(error instanceof Error ? error.message : String(error)),
-            recordedAt: new Date().toISOString()
-          });
-        });
-    }
-
-    assertGitClean(worktree.path);
-
-    const liveBeforePlan = await github.getPull(repo, pull.number);
-    const staleBeforePlan = detectStalePullHead({ expected: pull, live: liveBeforePlan, phase: "before_plan" });
-    if (staleBeforePlan) {
-      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforePlan, evidenceDir });
-      return "skipped_stale_head";
-    }
-
-    const gatedFindings = applyRetryDegradedConfidencePenalty(
-      zcodeResult.findings,
-      zcodeResult.degradedRecovery,
-      config.reviewGate?.retryDegradedConfidencePenalty
-    );
-    const gate = applyDeterministicReviewGate({
-      findings: gatedFindings,
-      files: reviewFiles,
-      droppedFromSchema: zcodeResult.droppedFromSchema,
-      maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
-      repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
-      repoMemoryFalsePositives: repoMemory.falsePositives,
-      publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
-      ...(config.reviewGate?.requestChangesConfidenceFloors
-        ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
-        : {}),
-      ...(config.reviewGate?.categoryPrecisionFloors
-        ? { categoryPrecisionFloors: config.reviewGate.categoryPrecisionFloors }
-        : {})
-    });
+    startShadowLeaves = zcodeExecution.startShadowLeaves;
     if (zcodeExecution.ensemblePromise) {
       ensembleEvidencePromise = zcodeExecution.ensemblePromise
         .then((ensemble) => {
@@ -2015,16 +1974,56 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           });
         });
     }
+    assertApprovedProviderConfigCurrent();
+    if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
+    if (zcodeExecution.status === "skipped_context_budget") return "skipped_context_budget";
+    const zcodeResult = zcodeExecution.result;
+
+    assertGitClean(worktree.path);
+
+    const liveBeforePlan = await github.getPull(repo, pull.number);
+    const staleBeforePlan = detectStalePullHead({ expected: pull, live: liveBeforePlan, phase: "before_plan" });
+    if (staleBeforePlan) {
+      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforePlan, evidenceDir });
+      return "skipped_stale_head";
+    }
+
+    const gatedFindings = applyRetryDegradedConfidencePenalty(
+      zcodeResult.findings,
+      zcodeResult.degradedRecovery,
+      config.reviewGate?.retryDegradedConfidencePenalty
+    );
+    const gate = applyDeterministicReviewGate({
+      findings: gatedFindings,
+      files: reviewFiles,
+      droppedFromSchema: zcodeResult.droppedFromSchema,
+      maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
+      repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
+      repoMemoryFalsePositives: repoMemory.falsePositives,
+      publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
+      ...(config.reviewGate?.requestChangesConfidenceFloors
+        ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
+        : {}),
+      ...(config.reviewGate?.categoryPrecisionFloors
+        ? { categoryPrecisionFloors: config.reviewGate.categoryPrecisionFloors }
+        : {})
+    });
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
     // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
     // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.
-    const selfConsistency = await applySelfConsistencyRecheck({
-      config,
-      gate,
-      files: reviewFiles,
-      worktreePath: worktree.path,
-      evidenceDir
-    });
+    let selfConsistency: Awaited<ReturnType<typeof applySelfConsistencyRecheck>>;
+    try {
+      selfConsistency = await applySelfConsistencyRecheck({
+        config,
+        gate,
+        files: reviewFiles,
+        worktreePath: worktree.path,
+        evidenceDir
+      });
+    } finally {
+      startShadowLeaves?.();
+      startShadowLeaves = undefined;
+    }
     assertApprovedProviderConfigCurrent();
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
@@ -2498,6 +2497,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     return manualReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
+    startShadowLeaves?.();
     if (ensembleEvidencePromise) await ensembleEvidencePromise;
     releaseReviewCapacity();
   }
@@ -3945,14 +3945,17 @@ function parseSelfConsistencyVerdict(rawResponse: string): SelfConsistencySecond
   return { verified, confidence };
 }
 
-type ContextBudgetReviewExecution =
+type ContextBudgetReviewExecution = (
   | {
       status: "reviewed";
       result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput };
-      ensemblePromise?: Promise<ReviewEnsembleRun>;
     }
   | { status: "skipped_context_budget" }
-  | { status: "skipped_stale_head" };
+  | { status: "skipped_stale_head" }
+) & {
+  ensemblePromise?: Promise<ReviewEnsembleRun>;
+  startShadowLeaves?: () => void;
+};
 
 async function runReviewWithContextBudget(input: {
   config: BotConfig;
@@ -3967,6 +3970,7 @@ async function runReviewWithContextBudget(input: {
   promptForFiles: (files: PullFilePatch[]) => string;
   useZCode: boolean;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const plan = buildReviewEnsemblePlan(input.config.reviewEnsemble ?? { enabled: false, mode: "shadow" });
   if (!plan) return runSingleReviewWithContextBudget(input);
@@ -3978,6 +3982,18 @@ async function runReviewWithContextBudget(input: {
     headSha: input.pull.head.sha
   };
   const executions = new Map<string, ContextBudgetReviewExecution>();
+  const delayShadowLeaves = Boolean(input.config.reviewGate?.selfConsistency?.enabled);
+  let releaseShadowLeaves: (() => void) | undefined;
+  const shadowStart = delayShadowLeaves
+    ? new Promise<void>((resolve) => {
+        let released = false;
+        releaseShadowLeaves = () => {
+          if (released) return;
+          released = true;
+          resolve();
+        };
+      })
+    : Promise.resolve();
   const anchorPromise = runSingleReviewWithContextBudget({
     ...input,
     authority: "canonical"
@@ -3986,6 +4002,7 @@ async function runReviewWithContextBudget(input: {
     plan,
     subject,
     runLeaf: async (leaf) => {
+      if (leaf.id !== "anchor") await shadowStart;
       const execution = leaf.id === "anchor"
         ? await anchorPromise
         : await (async () => {
@@ -4042,11 +4059,16 @@ async function runReviewWithContextBudget(input: {
   try {
     const anchor = await anchorPromise;
     if (anchor.status !== "reviewed") {
-      await ensemblePromise.catch(() => undefined);
-      return anchor;
+      releaseShadowLeaves?.();
+      return { ...anchor, ensemblePromise };
     }
-    return { ...anchor, ensemblePromise };
+    return {
+      ...anchor,
+      ensemblePromise,
+      ...(releaseShadowLeaves ? { startShadowLeaves: releaseShadowLeaves } : {})
+    };
   } catch (error) {
+    releaseShadowLeaves?.();
     await ensemblePromise.catch(() => undefined);
     throw error;
   }
@@ -4066,6 +4088,7 @@ async function runSingleReviewWithContextBudget(input: {
   useZCode: boolean;
   evidenceDir: string;
   authority?: "canonical" | "shadow";
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   if (input.contextBudget.mode === "chunk") {
     return runChunkedZCodeReview({
@@ -4079,7 +4102,8 @@ async function runSingleReviewWithContextBudget(input: {
         config: input.config,
         worktreePath: input.worktreePath,
         prompt: input.prompt,
-        evidenceDir: input.evidenceDir
+        evidenceDir: input.evidenceDir,
+        assertProviderConfigCurrent: input.assertProviderConfigCurrent
       })
     : disabledZCodeReviewResult(input.config);
   return { status: "reviewed", result };
@@ -4097,6 +4121,7 @@ async function runChunkedZCodeReview(input: {
   useZCode: boolean;
   evidenceDir: string;
   authority?: "canonical" | "shadow";
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const startedAt = new Date();
   const findings: ZCodeReviewResult["findings"] = [];
@@ -4131,7 +4156,8 @@ async function runChunkedZCodeReview(input: {
             config: input.config,
             worktreePath: input.worktreePath,
             prompt,
-            evidenceDir: chunkDir
+            evidenceDir: chunkDir,
+            assertProviderConfigCurrent: input.assertProviderConfigCurrent
           })
         : disabledZCodeReviewResult(input.config);
     } catch (error) {
@@ -4223,8 +4249,10 @@ async function runConfiguredReview(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   if (!input.config.codexRuntime?.enabled) return runZCodeReviewWithProviderRetry(input);
+  input.assertProviderConfigCurrent?.();
   const startedAt = new Date();
   const result = await runCodexReview({
     cwd: input.worktreePath,
@@ -4260,6 +4288,7 @@ async function runZCodeReviewWithProviderRetry(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   const startedAt = new Date();
   let providerAttempts = 0;
@@ -4267,6 +4296,7 @@ async function runZCodeReviewWithProviderRetry(input: {
     config: input.config,
     evidenceDir: input.evidenceDir,
     operation: () => {
+      input.assertProviderConfigCurrent?.();
       providerAttempts += 1;
       return runZCodeReview({
         cwd: input.worktreePath,

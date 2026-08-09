@@ -82,4 +82,30 @@ describe("temporary ZCode review policy", () => {
 
     expect(readFileSync(configPath, "utf8")).toBe("{\"features\":{\"subagent\":true}}\n");
   });
+
+  it("keeps one shared policy installed until concurrent runs have all settled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "zcode-policy-concurrent-"));
+    roots.push(root);
+    const configDir = join(root, ".zcode");
+    const configPath = join(configDir, "config.json");
+    mkdirSync(configDir);
+    writeFileSync(configPath, "{\"features\":{\"subagent\":true}}\n");
+
+    let releaseFirst: (() => void) | undefined;
+    const first = withTemporaryZCodeReviewPolicy(root, undefined, async () => {
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      expect(readFileSync(configPath, "utf8")).toContain("\"Bash\"");
+    });
+    const second = withTemporaryZCodeReviewPolicy(root, undefined, async () => {
+      expect(readFileSync(configPath, "utf8")).toContain("\"Bash\"");
+    });
+
+    await second;
+    expect(readFileSync(configPath, "utf8")).toContain("\"Bash\"");
+    releaseFirst?.();
+    await first;
+    expect(readFileSync(configPath, "utf8")).toBe("{\"features\":{\"subagent\":true}}\n");
+  });
 });
