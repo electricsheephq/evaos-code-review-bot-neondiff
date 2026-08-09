@@ -19,6 +19,7 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorAgentInventory,
@@ -98,6 +99,55 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("reports recovered history as amber while keeping current operator gates actionable", () => {
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: true,
+        database: {
+          errorCount: 51,
+          unrecoveredErrorCount: 0,
+          recentUnrecoveredErrorCount: 0,
+          failedReviewQueueJobCount: 52,
+          activeFailedReviewQueueJobCount: 0,
+          lastErrorAt: "2026-08-09T14:08:22.000Z",
+          failureWindowHours: 24
+        }
+      }),
+      coverage: coverageReport({}),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue: durableQueueSnapshot({
+        ok: false,
+        summary: { ...cleanDurableQueueSummary(), total: 52, failed: 52 }
+      })
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.health).toMatchObject({
+      state: "amber",
+      active: { failedQueueJobs: 0, staleReviewLeases: 0 },
+      recent: { unrecoveredReviewErrors: 0 },
+      history: { reviewErrors: 51, failedQueueJobs: 52 }
+    });
+    expect(status.summary).toMatchObject({
+      failedRows: 51,
+      recentUnrecoveredFailedRows: 0,
+      failedQueueJobs: 52,
+      activeFailedQueueJobs: 0
+    });
+    expect(status.gates).toContainEqual({
+      name: "durable_queue_no_failed_jobs",
+      ok: true,
+      detail: "0 active failed durable queue job(s); 52 all-time"
+    });
+    expect(formatOperatorStatusHuman(status)).toContain("status: amber - current gates pass");
+    expect(formatOperatorStatusHuman(status)).toContain(
+      "current: activeFailedQueueJobs=0 staleReviewLeases=0 recentUnrecoveredReviewErrors=0"
+    );
+    expect(formatOperatorStatusHuman(status)).toContain("history: reviewErrors=51 failedQueueJobs=52");
+    expect(formatOperatorStatusHuman(status)).toContain("actionable: none");
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
