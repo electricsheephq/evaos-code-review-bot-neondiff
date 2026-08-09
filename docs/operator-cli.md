@@ -27,9 +27,11 @@ evaos-review-bot status --config config.local.json
   recent unrecovered review failure is actionable, `amber` when current gates
   pass but retained failure history exists, and `green` when current gates pass
   without recorded review or queue failure history. The recent-failure window
-  is 24 hours. All-time counts and last-failure timestamps remain visible;
-  later clean posted outcomes recover an older failure without deleting or
-  rewriting its audit row. Malformed timestamps fail closed as recent.
+  is 24 hours. Retained historical counts and last-failure timestamps remain
+  visible; a later clean posted outcome for the same PR can classify an older
+  retained row as recovered. The existing same-head retry replacement behavior
+  is unchanged, so these fields are not an append-only attempt ledger.
+  Malformed timestamps fail closed as recent.
 - `runtime-inventory`: read-only runtime classifier for release operators. It
   includes release status, coverage, durable queue work, provider cooldowns,
   budget status, leases, heartbeat, and bot-owned process rows. It can classify
