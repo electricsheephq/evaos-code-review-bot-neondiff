@@ -22,7 +22,11 @@ evaos-review-bot status --config config.local.json
 
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
-  durable queue counts, and recommended actions.
+  durable queue counts, review-runtime authority, and recommended actions. The
+  `review_runtime_authority_valid` gate is derived from configuration only: it
+  identifies whether Codex CLI or legacy ZCode is authoritative and states that
+  automatic cross-runtime fallback is absent. It does not prove installed
+  adoption, provider reachability, review success, posting, or release.
 - `runtime-inventory`: read-only runtime classifier for release operators. It
   includes release status, coverage, durable queue work, provider cooldowns,
   budget status, leases, heartbeat, and bot-owned process rows. It can classify

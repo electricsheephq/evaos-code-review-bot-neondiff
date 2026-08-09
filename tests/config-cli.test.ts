@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { inspectConfigForDesktop, patchConfigForDesktop } from "../src/config-cli.js";
+import { configRevision, inspectConfigForDesktop, patchConfigForDesktop } from "../src/config-cli.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -45,8 +45,22 @@ describe("desktop config CLI", () => {
       ok: true,
       command: "config inspect",
       exists: true,
-      source: "file"
+      source: "file",
+      runtimeAuthority: {
+        ok: true,
+        state: "legacy_authoritative",
+        execution: {
+          adapter: "zcode",
+          model: "GLM-5.2"
+        },
+        automaticFallback: {
+          configured: false,
+          reachable: false,
+          target: null
+        }
+      }
     });
+    expect(output.revision).toBe(configRevision(readFileSync(configPath, "utf8")));
     expect(output.editablePaths).toContain("zcode.model");
     expect(output.editablePaths).toContain("codexRuntime.enabled");
     expect(output.editablePaths).toContain("codexRuntime.reasoningEffort");

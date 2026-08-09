@@ -814,20 +814,117 @@ exit 1
         timeoutMs: 300_000,
         maxOutputBytes: 20 * 1024 * 1024,
         contextWindowTokens: 128_000
+      },
+      providers: {
+        providers: {
+          "zcode-glm": { enabled: false }
+        }
       }
     }));
 
     const list = JSON.parse((await runCli(["providers", "list", "--config", configPath])).stdout);
     expect(list).toMatchObject({
+      ok: true,
       activeRuntime: {
         providerId: "codex-cli-oauth",
         adapter: "codex-cli",
         model: "gpt-5.6-luna",
-        auth: "existing-codex-session"
+        auth: "existing-codex-session",
+        willAttempt: true
+      },
+      runtimeAuthority: {
+        state: "codex_authoritative",
+        reason: "codex_enabled",
+        legacyProviderMetadata: {
+          providerId: "zcode-glm",
+          enabled: false,
+          authoritative: false
+        },
+        automaticFallback: {
+          configured: false,
+          reachable: false,
+          target: null
+        }
       }
     });
     expect(list.proofBoundary).toMatch(/Codex CLI/i);
     expect(list.proofBoundary).not.toMatch(/remains ZCode-backed/i);
+  });
+
+  it("does not read legacy ZCode app configuration when Codex is authoritative", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-codex-authority-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({
+      pilotRepos: [],
+      codexRuntime: {
+        enabled: true,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "xhigh",
+        timeoutMs: 300_000,
+        maxOutputBytes: 20 * 1024 * 1024,
+        contextWindowTokens: 128_000
+      },
+      zcode: {
+        appConfigPath: join(root, "missing-zcode-config.json")
+      },
+      providers: {
+        providers: {
+          "zcode-glm": { enabled: false }
+        }
+      }
+    }));
+
+    const doctor = JSON.parse((await runCli(["doctor", "--config", configPath])).stdout);
+    expect(doctor).toMatchObject({
+      ok: true,
+      runtimeAuthority: {
+        ok: true,
+        state: "codex_authoritative",
+        execution: {
+          adapter: "codex-cli",
+          model: "gpt-5.6-luna"
+        }
+      }
+    });
+    expect(doctor).not.toHaveProperty("zcode");
+  });
+
+  it("reports both-disabled authority without reading legacy ZCode credentials", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-invalid-authority-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({
+      pilotRepos: [],
+      zcode: {
+        appConfigPath: join(root, "missing-zcode-config.json")
+      },
+      providers: {
+        providers: {
+          "zcode-glm": { enabled: false }
+        }
+      }
+    }));
+
+    const result = await runCli(["doctor", "--config", configPath]).then(
+      () => { throw new Error("doctor unexpectedly accepted invalid runtime authority"); },
+      (error: unknown) => error as { stdout: string }
+    );
+    const doctor = JSON.parse(result.stdout);
+    expect(doctor).toMatchObject({
+      ok: false,
+      runtimeAuthority: {
+        ok: false,
+        state: "invalid_authoritative",
+        reason: "both_disabled",
+        execution: {
+          adapter: "zcode",
+          willAttempt: true
+        }
+      }
+    });
+    expect(doctor).not.toHaveProperty("zcode");
   });
 
   it("blocks providers doctor smoke before contacting a configured endpoint without activation", async () => {

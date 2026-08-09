@@ -29,7 +29,8 @@ import { buildIssueEnrichmentStatus } from "../src/issue-enrichment.js";
 import type { ReviewBudgetStatus } from "../src/review-budget.js";
 import type { ReleaseStatus } from "../src/release-status.js";
 import type { RepoProviderCooldownRecord } from "../src/state.js";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, loadConfigFromObject } from "../src/config.js";
+import { classifyReviewRuntimeAuthority } from "../src/review-runtime-authority.js";
 
 describe("operator CLI summaries", () => {
   const tempDirs: string[] = [];
@@ -98,6 +99,37 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("gates operator status on the derived review-runtime authority", () => {
+    const validAuthority = classifyReviewRuntimeAuthority(loadConfigFromObject({}));
+    const valid = buildOperatorStatus({
+      release: releaseStatus({}),
+      agents: agentInventory({}),
+      runtimeAuthority: validAuthority
+    });
+    expect(valid.runtimeAuthority).toEqual(validAuthority);
+    expect(valid.gates).toContainEqual(expect.objectContaining({
+      name: "review_runtime_authority_valid",
+      ok: true
+    }));
+
+    const invalidAuthority = classifyReviewRuntimeAuthority(loadConfigFromObject({
+      providers: { providers: { "zcode-glm": { enabled: false } } }
+    }));
+    const invalid = buildOperatorStatus({
+      release: releaseStatus({}),
+      agents: agentInventory({}),
+      runtimeAuthority: invalidAuthority
+    });
+    expect(invalid.ok).toBe(false);
+    expect(invalid.failedGates).toContainEqual(expect.objectContaining({
+      name: "review_runtime_authority_valid",
+      ok: false
+    }));
+    expect(invalid.recommendedActions).toContain(
+      "align diagnostic provider metadata with the configured review executor; do not change routing solely to clear status"
+    );
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
