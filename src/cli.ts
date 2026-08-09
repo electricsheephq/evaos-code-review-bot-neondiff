@@ -99,6 +99,7 @@ import {
   formatOperatorDashboardHuman,
   formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
+  resolveActiveFailedQueueJobCount,
   summarizeAgentInventory,
   type OperatorDurableQueueSnapshot,
   type OperatorQueueSnapshot
@@ -574,7 +575,7 @@ async function main(): Promise<void> {
       budgetJobLimit
     });
     const readyToRetry = status.budget?.providerDeferred.readyToRetry ?? 0;
-    const failed = status.database.failedReviewQueueJobCount ?? 0;
+    const failed = resolveActiveFailedQueueJobCount(status);
     const ok = status.budget?.enabled === true &&
       status.budget.details.inputJobsTruncated !== true &&
       readyToRetry === 0 &&

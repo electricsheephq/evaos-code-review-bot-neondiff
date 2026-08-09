@@ -21,6 +21,7 @@ import {
   formatOperatorDashboardHuman,
   formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
+  resolveActiveFailedQueueJobCount,
   summarizeAgentInventory,
   type OperatorAgentInventory,
   type OperatorDurableQueueSnapshot
@@ -211,6 +212,22 @@ describe("operator CLI summaries", () => {
       detail: "0 active failed durable queue job(s); 1 retained history"
     });
     expect(inventory.recommendedActions).not.toContain("inspect operator queue failed jobs before promotion");
+  });
+
+  it("resolves active failed queue counts for budget and other operator gates", () => {
+    expect(resolveActiveFailedQueueJobCount(releaseStatus({
+      ok: true,
+      database: {
+        failedReviewQueueJobCount: 7,
+        activeFailedReviewQueueJobCount: 0
+      }
+    }))).toBe(0);
+    expect(resolveActiveFailedQueueJobCount(releaseStatus({
+      ok: false,
+      database: {
+        failedReviewQueueJobCount: 7
+      }
+    }))).toBe(7);
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
@@ -1578,6 +1595,47 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain(
       "npx tsx src/cli.ts queue --config /config/live.json --state failed"
     );
+  });
+
+  it("does not emit retry commands for recovered timeout rows mixed with active failures", () => {
+    const activeTimeout = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 216,
+      headSha: "active-timeout",
+      state: "failed",
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000"
+    });
+    const recoveredTimeout = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 215,
+      headSha: "recovered-timeout",
+      state: "failed",
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000"
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          errorCount: 1,
+          failedReviewQueueJobCount: 2,
+          activeFailedReviewQueueJobCount: 1,
+          zcodeTimeoutFailedReviewQueueJobCount: 2,
+          activeZCodeTimeoutFailedReviewQueueJobCount: 1,
+          activeRetryableZCodeTimeoutFailedReviewQueueJobCount: 1,
+          activeExhaustedZCodeTimeoutFailedReviewQueueJobCount: 0
+        }
+      }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({
+        summary: { ...cleanDurableQueueSummary(), total: 2, failed: 2 },
+        jobs: [activeTimeout, recoveredTimeout]
+      })
+    });
+
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts queue --config /config/live.json --state failed"
+    );
+    expect(status.recommendedActions.join("\n")).not.toContain("retry-failed");
   });
 
   it("keeps blocked-on-proof readiness above processed coverage for the same head", () => {

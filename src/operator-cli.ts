@@ -426,8 +426,7 @@ export function buildOperatorStatus(input: {
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
   const recentUnrecoveredFailedRows =
     input.release.database.recentUnrecoveredErrorCount ?? failedRows;
-  const activeFailedQueueJobs =
-    input.release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
+  const activeFailedQueueJobs = resolveActiveFailedQueueJobCount(input.release, failedQueueJobs);
   const staleActiveReviewQueueJobs = input.release.database.staleActiveReviewQueueJobCount ?? 0;
   const staleReviewLeases = input.agents.summary.staleLeases + staleActiveReviewQueueJobs;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
@@ -686,8 +685,7 @@ export function buildRuntimeInventory(input: {
     Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
   const retryCoveredReviewerSessions = input.release.database.retryCoveredReviewerSessionCount ?? 0;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
-  const activeFailedQueueJobs =
-    input.release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
+  const activeFailedQueueJobs = resolveActiveFailedQueueJobCount(input.release, failedQueueJobs);
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
   const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
@@ -1860,6 +1858,15 @@ function zcodeTimeoutRecommendedActions(
   release: ReleaseStatus,
   durableQueue?: OperatorDurableQueueSnapshot
 ): string[] {
+  const retainedFailedQueueJobs = release.database.failedReviewQueueJobCount;
+  const activeFailedQueueJobs = release.database.activeFailedReviewQueueJobCount;
+  if (
+    retainedFailedQueueJobs !== undefined &&
+    activeFailedQueueJobs !== undefined &&
+    activeFailedQueueJobs < retainedFailedQueueJobs
+  ) {
+    return [buildZCodeTimeoutInspectCommand(release.releaseUnit.configPath)];
+  }
   const retryCommands = buildZCodeTimeoutRetryCommandsForJobs({
     configPath: release.releaseUnit.configPath,
     jobs: durableQueue?.jobs ?? []
@@ -1867,6 +1874,15 @@ function zcodeTimeoutRecommendedActions(
   return retryCommands.length > 0
     ? retryCommands
     : [buildZCodeTimeoutInspectCommand(release.releaseUnit.configPath)];
+}
+
+export function resolveActiveFailedQueueJobCount(
+  release: ReleaseStatus,
+  fallback = 0
+): number {
+  return release.database.activeFailedReviewQueueJobCount ??
+    release.database.failedReviewQueueJobCount ??
+    fallback;
 }
 
 function emptyDurableQueue(now: Date): OperatorDurableQueueSnapshot {
