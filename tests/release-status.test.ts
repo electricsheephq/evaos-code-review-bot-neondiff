@@ -4916,7 +4916,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(status.gates).toContainEqual({
       name: "live_db_no_errors",
       ok: true,
-      detail: expect.stringContaining("1 all-time")
+      detail: expect.stringContaining("1 retained history")
     });
     const databaseHealth = buildReleaseStatus({
       repo: {

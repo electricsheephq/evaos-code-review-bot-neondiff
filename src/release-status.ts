@@ -366,7 +366,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
         (input.database.recentUnrecoveredErrorCount === undefined
           ? `${input.database.errorCount} blocking error row(s)`
           : `${recentUnrecoveredErrorCount} recent unrecovered blocking error row(s) in ${failureWindowHours}h; ` +
-            `${input.database.errorCount} all-time; last failure ${input.database.lastErrorAt ?? "unknown"}`) +
+            `${input.database.errorCount} retained history; last failure ${input.database.lastErrorAt ?? "unknown"}`) +
         describeProviderCooldownCounts(input.database)
     },
     {
@@ -382,7 +382,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       detail: activeFailedQueueJobCount === allTimeFailedQueueJobCount
         ? `${allTimeFailedQueueJobCount} failed durable queue job(s)`
         : `${activeFailedQueueJobCount} active failed durable queue job(s); ` +
-          `${allTimeFailedQueueJobCount} all-time; last failure ${input.database.lastFailedReviewQueueJobAt ?? "unknown"}`
+          `${allTimeFailedQueueJobCount} retained history; last failure ${input.database.lastFailedReviewQueueJobAt ?? "unknown"}`
     },
     {
       name: "queue_no_zcode_timeout_failed_jobs",
@@ -391,7 +391,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
         ? `${zcodeTimeoutFailedQueueJobCount} ZCode timeout failed durable queue job(s); ` +
           `retryable=${retryableZCodeTimeoutFailedQueueJobCount} exhausted=${exhaustedZCodeTimeoutFailedQueueJobCount}`
         : `${activeZCodeTimeoutFailedQueueJobCount} active ZCode timeout failed durable queue job(s); ` +
-          `all-time=${zcodeTimeoutFailedQueueJobCount} ` +
+          `retained=${zcodeTimeoutFailedQueueJobCount} ` +
           `retryable=${input.database.activeRetryableZCodeTimeoutFailedReviewQueueJobCount ?? retryableZCodeTimeoutFailedQueueJobCount} ` +
           `exhausted=${input.database.activeExhaustedZCodeTimeoutFailedReviewQueueJobCount ?? exhaustedZCodeTimeoutFailedQueueJobCount}`
     },

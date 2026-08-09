@@ -140,7 +140,7 @@ describe("operator CLI summaries", () => {
     expect(status.gates).toContainEqual({
       name: "durable_queue_no_failed_jobs",
       ok: true,
-      detail: "0 active failed durable queue job(s); 52 all-time"
+      detail: "0 active failed durable queue job(s); 52 retained history"
     });
     expect(formatOperatorStatusHuman(status)).toContain("status: amber - current gates pass");
     expect(formatOperatorStatusHuman(status)).toContain(
@@ -148,6 +148,69 @@ describe("operator CLI summaries", () => {
     );
     expect(formatOperatorStatusHuman(status)).toContain("history: reviewErrors=51 failedQueueJobs=52");
     expect(formatOperatorStatusHuman(status)).toContain("actionable: none");
+  });
+
+  it("includes stale active queue jobs in current operator health and human output", () => {
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          staleActiveReviewQueueJobCount: 1
+        }
+      }),
+      coverage: coverageReport({}),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue: durableQueueSnapshot({
+        ok: true,
+        summary: cleanDurableQueueSummary()
+      })
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.health).toMatchObject({
+      state: "red",
+      active: { staleReviewLeases: 1 }
+    });
+    expect(status.summary).toMatchObject({
+      staleLeases: 0,
+      staleReviewLeases: 1
+    });
+    expect(status.gates).toContainEqual({
+      name: "agents_no_stale_leases",
+      ok: false,
+      detail: "1 stale review lease/job(s)"
+    });
+    expect(formatOperatorStatusHuman(status)).toContain("staleReviewLeases=1");
+  });
+
+  it("keeps runtime inventory healthy when retained failed queue history is recovered", () => {
+    const inventory = buildRuntimeInventory({
+      release: releaseStatus({
+        ok: true,
+        database: {
+          failedReviewQueueJobCount: 1,
+          activeFailedReviewQueueJobCount: 0
+        }
+      }),
+      agents: agentInventory({ ok: true }),
+      durableQueue: durableQueueSnapshot({
+        ok: false,
+        summary: { ...cleanDurableQueueSummary(), total: 1, failed: 1 }
+      })
+    });
+
+    expect(inventory.ok).toBe(true);
+    expect(inventory.summary).toMatchObject({
+      failedQueueJobs: 1,
+      activeFailedQueueJobs: 0
+    });
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_no_failed_queue_jobs",
+      ok: true,
+      detail: "0 active failed durable queue job(s); 1 retained history"
+    });
+    expect(inventory.recommendedActions).not.toContain("inspect operator queue failed jobs before promotion");
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {

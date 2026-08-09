@@ -47,6 +47,7 @@ export interface OperatorStatus {
     heartbeatStatus: ReleaseHeartbeatStatus["status"];
     activeLeases: number;
     staleLeases: number;
+    staleReviewLeases: number;
     pendingHeads: number;
     providerDeferredHeads: number;
     skippedHeads: number;
@@ -97,6 +98,7 @@ export interface RuntimeInventory {
     runningJobs: number;
     providerDeferredJobs: number;
     failedQueueJobs: number;
+    activeFailedQueueJobs: number;
     zcodeTimeoutFailedQueueJobs: number;
     retryableZCodeTimeoutFailedQueueJobs: number;
     exhaustedZCodeTimeoutFailedQueueJobs: number;
@@ -426,6 +428,8 @@ export function buildOperatorStatus(input: {
     input.release.database.recentUnrecoveredErrorCount ?? failedRows;
   const activeFailedQueueJobs =
     input.release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
+  const staleActiveReviewQueueJobs = input.release.database.staleActiveReviewQueueJobCount ?? 0;
+  const staleReviewLeases = input.agents.summary.staleLeases + staleActiveReviewQueueJobs;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
   const budget = input.release.budget;
@@ -460,17 +464,19 @@ export function buildOperatorStatus(input: {
     },
     {
       name: "agents_no_stale_leases",
-      ok: input.agents.summary.staleLeases === 0,
-      detail: input.agents.summary.staleLeases === 0
+      ok: staleReviewLeases === 0,
+      detail: staleReviewLeases === 0
         ? "0 stale lease(s)"
-        : `${input.agents.summary.staleLeases} stale lease(s)`
+        : staleActiveReviewQueueJobs === 0
+          ? `${staleReviewLeases} stale lease(s)`
+          : `${staleReviewLeases} stale review lease/job(s)`
     },
     {
       name: "durable_queue_no_failed_jobs",
       ok: activeFailedQueueJobs === 0,
       detail: activeFailedQueueJobs === failedQueueJobs
         ? `${failedQueueJobs} failed durable queue job(s)`
-        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} all-time`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "durable_queue_no_zcode_timeout_failed_jobs",
@@ -518,6 +524,7 @@ export function buildOperatorStatus(input: {
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : []),
+    ...(staleActiveReviewQueueJobs > 0 ? ["inspect stale active review queue jobs before restarting or retiring work"] : []),
     ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(zcodeTimeoutQueue.total > 0
       ? zcodeTimeoutRetryActions
@@ -537,13 +544,14 @@ export function buildOperatorStatus(input: {
       failedGateNames: gates.filter((gate) => !gate.ok).map((gate) => gate.name),
       release: input.release,
       activeFailedQueueJobs,
-      staleReviewLeases: input.agents.summary.staleLeases
+      staleReviewLeases
     }),
     summary: {
       launchdState: input.release.launchd.state,
       heartbeatStatus: input.release.heartbeat.status,
       activeLeases: input.agents.summary.activeLeases,
       staleLeases: input.agents.summary.staleLeases,
+      staleReviewLeases,
       pendingHeads,
       providerDeferredHeads,
       skippedHeads: queue?.summary.skipped ?? 0,
@@ -586,7 +594,7 @@ export function formatOperatorStatusHuman(status: OperatorStatus): string {
   return [
     `status: ${health?.state ?? (status.ok ? "green" : "red")} - ${health?.reason ?? (status.ok ? "current gates pass" : "current gates failed")}`,
     `current: activeFailedQueueJobs=${status.summary.activeFailedQueueJobs}` +
-      ` staleReviewLeases=${status.summary.staleLeases}` +
+      ` staleReviewLeases=${status.summary.staleReviewLeases}` +
       ` recentUnrecoveredReviewErrors=${status.summary.recentUnrecoveredFailedRows}`,
     `history: reviewErrors=${status.summary.failedRows} failedQueueJobs=${status.summary.failedQueueJobs}` +
       (health?.lastFailureAt ? ` lastFailureAt=${health.lastFailureAt}` : ""),
@@ -678,6 +686,8 @@ export function buildRuntimeInventory(input: {
     Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
   const retryCoveredReviewerSessions = input.release.database.retryCoveredReviewerSessionCount ?? 0;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
+  const activeFailedQueueJobs =
+    input.release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
   const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
@@ -706,8 +716,10 @@ export function buildRuntimeInventory(input: {
     },
     {
       name: "runtime_no_failed_queue_jobs",
-      ok: failedQueueJobs === 0,
-      detail: `${failedQueueJobs} failed durable queue job(s)`
+      ok: activeFailedQueueJobs === 0,
+      detail: activeFailedQueueJobs === failedQueueJobs
+        ? `${failedQueueJobs} failed durable queue job(s)`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "runtime_no_zcode_timeout_failed_queue_jobs",
@@ -803,7 +815,7 @@ export function buildRuntimeInventory(input: {
     ...(uncoveredPendingHeads.length > 0 ? ["wait for daemon cycle or run scoped run-once for uncovered pending heads"] : []),
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect stale leases before restarting launchd"] : []),
-    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(zcodeTimeoutQueue.total > 0
       ? zcodeTimeoutRetryActions
       : []),
@@ -829,6 +841,7 @@ export function buildRuntimeInventory(input: {
       runningJobs: durableQueue?.summary.running ?? 0,
       providerDeferredJobs,
       failedQueueJobs,
+      activeFailedQueueJobs,
       zcodeTimeoutFailedQueueJobs: zcodeTimeoutQueue.total,
       retryableZCodeTimeoutFailedQueueJobs: zcodeTimeoutQueue.retryable,
       exhaustedZCodeTimeoutFailedQueueJobs: zcodeTimeoutQueue.exhausted,
