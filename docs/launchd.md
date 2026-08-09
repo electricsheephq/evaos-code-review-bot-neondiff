@@ -38,8 +38,51 @@ Minimum LaunchAgent environment block:
   <string>/absolute/path/to/neondiff.private-key.pem</string>
   <key>NODE_OPTIONS</key>
   <string>--use-system-ca</string>
+  <key>NEONDIFF_LAUNCHD_STDOUT_PATH</key>
+  <string>/Users/your-user/Library/Logs/evaos-code-review-bot/launchd.out.log</string>
+  <key>NEONDIFF_LAUNCHD_STDERR_PATH</key>
+  <string>/Users/your-user/Library/Logs/evaos-code-review-bot/launchd.err.log</string>
+  <key>NEONDIFF_LAUNCHD_LOG_MAX_BYTES</key>
+  <string>10485760</string>
+  <key>NEONDIFF_LAUNCHD_LOG_ARCHIVE_COUNT</key>
+  <string>5</string>
+  <key>NEONDIFF_LAUNCHD_LOG_MAX_AGE_HOURS</key>
+  <string>168</string>
 </dict>
 ```
+
+## Bounded launchd logs
+
+The managed LaunchAgent policy bounds stdout and stderr independently. Each
+live file rotates before the next record would take it past 10 MiB, retains at
+most five archives, and removes archives older than 168 hours. One record may
+be larger than the threshold; otherwise the expected upper bound is about
+120 MiB across two live files and ten archives. The log directory is `0700`;
+live files and archives are `0600` and must be owned by the current user.
+
+Rotation copies the current bytes into a private same-directory archive,
+durably closes that archive, and then truncates the already-open inherited file
+descriptor. The visible live path keeps the same device and inode, so launchd
+does not need to reopen it and the worker continues writing after rotation.
+The runtime fails closed on symlinks, a path/descriptor inode mismatch, broader
+permissions, wrong ownership, or an archive/copy/truncate failure. It never
+renames the live inode and does not use a second daemon, log shipper, or
+privileged `/etc/newsyslog.d` policy.
+
+The worker installer adds the exact policy idempotently, creates missing live
+files without reading or truncating them, and narrows their permissions. It
+preserves existing archives. Rolling back to an earlier managed worker keeps
+the policy; rolling back to the original invocation restores the original
+environment values and leaves the directory, live files, and archives in
+place. Uninstall or rollback must not delete unrelated logs. Archives contain
+only the exact already-local log bytes and remain in the same private directory;
+rotation does not copy credentials or logs to another surface.
+
+Source and packaging tests do not prove installed adoption. A separately
+authorized post-install smoke must verify a fresh heartbeat, continued stdout
+and stderr writes through one rotation, bounded file growth, and the installed
+plist values. Do not truncate the current log or restart launchd merely to
+validate source changes.
 
 Only switch to `--dry-run false` after:
 

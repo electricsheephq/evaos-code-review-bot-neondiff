@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { basename, isAbsolute, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -11,6 +11,19 @@ const PRIVATE_KEY_KEYS = [
   "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
   "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH"
 ];
+export const LAUNCHD_LOG_ROTATION_POLICY = Object.freeze({
+  maxBytes: 10 * 1024 * 1024,
+  archiveCount: 5,
+  maxAgeHours: 168,
+  descriptorMode: "copy_ftruncate_same_inode"
+});
+export const LAUNCHD_LOG_ROTATION_ENV = Object.freeze({
+  stdoutPath: "NEONDIFF_LAUNCHD_STDOUT_PATH",
+  stderrPath: "NEONDIFF_LAUNCHD_STDERR_PATH",
+  maxBytes: "NEONDIFF_LAUNCHD_LOG_MAX_BYTES",
+  archiveCount: "NEONDIFF_LAUNCHD_LOG_ARCHIVE_COUNT",
+  maxAgeHours: "NEONDIFF_LAUNCHD_LOG_MAX_AGE_HOURS"
+});
 const LAUNCHD_BOOTSTRAP_RETRY_DELAYS_MS = [250, 750, 2_000, 5_000, 10_000];
 
 function fail(message) {
@@ -98,6 +111,13 @@ function validateLaunchAgent(launchAgent, expectedLabel) {
     (value) => isAbsolute(value),
     "GitHub App private-key path"
   );
+  const logRotationEnvironment = buildLaunchdLogRotationEnvironment(launchAgent);
+  for (const [name, expectedValue] of Object.entries(logRotationEnvironment)) {
+    const currentValue = environment[name];
+    if (currentValue !== undefined && currentValue !== expectedValue) {
+      fail(`LaunchAgent has conflicting ${name}`);
+    }
+  }
 
   const daemonIndex = daemonIndexFor(launchAgent.ProgramArguments, launchAgent.WorkingDirectory);
   const daemonArguments = launchAgent.ProgramArguments.slice(daemonIndex + 1);
@@ -113,8 +133,54 @@ function validateLaunchAgent(launchAgent, expectedLabel) {
   }
   return {
     daemonArguments,
-    configPath: daemonArguments[configIndexes[0] + 1]
+    configPath: daemonArguments[configIndexes[0] + 1],
+    logRotationEnvironment
   };
+}
+
+function buildLaunchdLogRotationEnvironment(launchAgent) {
+  const stdoutPath = launchAgent.StandardOutPath;
+  const stderrPath = launchAgent.StandardErrorPath;
+  if (!isAbsolute(stdoutPath ?? "") || !isAbsolute(stderrPath ?? "") || stdoutPath === stderrPath) {
+    fail("LaunchAgent must have distinct absolute stdout and stderr log paths");
+  }
+  if (resolve(stdoutPath) !== stdoutPath || resolve(stderrPath) !== stderrPath) {
+    fail("LaunchAgent log paths must be normalized absolute paths");
+  }
+  const stdoutDirectory = stdoutPath.slice(0, stdoutPath.lastIndexOf("/"));
+  const stderrDirectory = stderrPath.slice(0, stderrPath.lastIndexOf("/"));
+  if (
+    stdoutDirectory !== stderrDirectory
+    || !stdoutDirectory.endsWith("/Library/Logs/evaos-code-review-bot")
+  ) {
+    fail("LaunchAgent logs must share the private user Library/Logs/evaos-code-review-bot directory");
+  }
+  return {
+    [LAUNCHD_LOG_ROTATION_ENV.stdoutPath]: stdoutPath,
+    [LAUNCHD_LOG_ROTATION_ENV.stderrPath]: stderrPath,
+    [LAUNCHD_LOG_ROTATION_ENV.maxBytes]: String(LAUNCHD_LOG_ROTATION_POLICY.maxBytes),
+    [LAUNCHD_LOG_ROTATION_ENV.archiveCount]: String(LAUNCHD_LOG_ROTATION_POLICY.archiveCount),
+    [LAUNCHD_LOG_ROTATION_ENV.maxAgeHours]: String(LAUNCHD_LOG_ROTATION_POLICY.maxAgeHours)
+  };
+}
+
+function captureManagedLogEnvironment(environment) {
+  return Object.fromEntries(
+    Object.values(LAUNCHD_LOG_ROTATION_ENV).map((name) => [
+      name,
+      Object.prototype.hasOwnProperty.call(environment, name) ? environment[name] : null
+    ])
+  );
+}
+
+function restoreManagedLogEnvironment(environment, original) {
+  const restored = clone(environment);
+  for (const name of Object.values(LAUNCHD_LOG_ROTATION_ENV)) {
+    const value = original?.[name];
+    if (typeof value === "string") restored[name] = value;
+    else delete restored[name];
+  }
+  return restored;
 }
 
 export function validateWorkerCandidate({
@@ -200,7 +266,7 @@ export function planWorkerUpdate({
   if (!FULL_SHA_PATTERN.test(candidateHead)) fail("candidate head is invalid");
   if (!PACKAGE_VERSION_PATTERN.test(packageVersion)) fail("candidate package version is invalid");
   if (!SHA256_PATTERN.test(manifestSHA256)) fail("candidate manifest SHA-256 is invalid");
-  const { daemonArguments, configPath } = validateLaunchAgent(launchAgent, expectedLabel);
+  const { daemonArguments, configPath, logRotationEnvironment } = validateLaunchAgent(launchAgent, expectedLabel);
   const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
   const currentPackageRoot = join(workerRoot, "current", "node_modules", "neondiff");
   if (previousState && previousState.launchdLabel !== expectedLabel) {
@@ -225,6 +291,10 @@ export function planWorkerUpdate({
     ...daemonArguments
   ];
   nextLaunchAgent.WorkingDirectory = launchAgent.WorkingDirectory;
+  nextLaunchAgent.EnvironmentVariables = {
+    ...nextLaunchAgent.EnvironmentVariables,
+    ...logRotationEnvironment
+  };
 
   const originalProgramArguments = previousState?.originalProgramArguments
     ?? clone(launchAgent.ProgramArguments);
@@ -234,6 +304,8 @@ export function planWorkerUpdate({
   const previousPackageVersion = previousVersionID
     ? previousState?.packageVersion ?? null
     : null;
+  const originalLogRotationEnvironment = previousState?.originalLogRotationEnvironment
+    ?? captureManagedLogEnvironment(launchAgent.EnvironmentVariables);
   const nextState = {
     schemaVersion: 1,
     launchdLabel: expectedLabel,
@@ -242,6 +314,7 @@ export function planWorkerUpdate({
     previousPackageVersion,
     originalProgramArguments,
     originalWorkingDirectory,
+    originalLogRotationEnvironment,
     candidateHead,
     packageVersion,
     manifestSHA256
@@ -259,7 +332,11 @@ export function planWorkerUpdate({
       preservesConfiguration: true,
       preservesCredentials: true,
       preservesProviderState: true,
-      preservesRepositoryAllowlist: true
+      preservesRepositoryAllowlist: true,
+      logRotation: {
+        ...LAUNCHD_LOG_ROTATION_POLICY,
+        private: true
+      }
     }
   };
 }
@@ -321,6 +398,10 @@ export function planWorkerRollback({ state, currentLaunchAgent, expectedLabel })
   const nextLaunchAgent = clone(currentLaunchAgent);
   nextLaunchAgent.ProgramArguments = clone(state.originalProgramArguments);
   nextLaunchAgent.WorkingDirectory = state.originalWorkingDirectory;
+  nextLaunchAgent.EnvironmentVariables = restoreManagedLogEnvironment(
+    nextLaunchAgent.EnvironmentVariables,
+    state.originalLogRotationEnvironment
+  );
   validateLaunchAgent(nextLaunchAgent, expectedLabel);
   return {
     nextLaunchAgent,

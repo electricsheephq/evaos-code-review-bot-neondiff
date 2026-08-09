@@ -4,10 +4,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readlinkSync,
   realpathSync,
@@ -180,6 +182,9 @@ function writePlistFromTemplate(templatePath, destinationPath, launchAgent) {
   execFileSync("/usr/bin/plutil", [
     "-replace", "WorkingDirectory", "-string", launchAgent.WorkingDirectory, destinationPath
   ], CHILD_PROCESS_OPTIONS);
+  execFileSync("/usr/bin/plutil", [
+    "-replace", "EnvironmentVariables", "-json", JSON.stringify(launchAgent.EnvironmentVariables), destinationPath
+  ], CHILD_PROCESS_OPTIONS);
   const readback = parsePlist(destinationPath);
   if (
     readback.Label !== launchAgent.Label
@@ -188,6 +193,42 @@ function writePlistFromTemplate(templatePath, destinationPath, launchAgent) {
     || JSON.stringify(readback.EnvironmentVariables) !== JSON.stringify(launchAgent.EnvironmentVariables)
   ) {
     fail("LaunchAgent staged readback mismatch");
+  }
+}
+
+function prepareLaunchdLogFiles(launchAgent) {
+  const paths = [launchAgent.StandardOutPath, launchAgent.StandardErrorPath];
+  if (!paths.every((path) => typeof path === "string" && isAbsolute(path)) || paths[0] === paths[1]) {
+    fail("LaunchAgent log paths are invalid");
+  }
+  const directory = dirname(paths[0]);
+  if (dirname(paths[1]) !== directory) fail("LaunchAgent log paths must share one directory");
+  if (!existsSync(directory)) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const directoryEntry = lstatSync(directory);
+  if (directoryEntry.isSymbolicLink() || !directoryEntry.isDirectory()) {
+    fail("LaunchAgent log directory must be a real directory");
+  }
+  if (typeof process.getuid === "function" && directoryEntry.uid !== process.getuid()) {
+    fail("LaunchAgent log directory must be owned by the current user");
+  }
+  if (realpathSync(directory) !== resolve(directory)) {
+    fail("LaunchAgent log directory must not traverse symlinks");
+  }
+  chmodSync(directory, 0o700);
+  for (const path of paths) {
+    if (!existsSync(path)) {
+      const fd = openSync(path, "a", 0o600);
+      closeSync(fd);
+      continue;
+    }
+    const entry = lstatSync(path);
+    if (entry.isSymbolicLink() || !entry.isFile()) {
+      fail("LaunchAgent log path must be a regular non-symlink file");
+    }
+    if (typeof process.getuid === "function" && entry.uid !== process.getuid()) {
+      fail("LaunchAgent log path must be owned by the current user");
+    }
+    chmodSync(path, 0o600);
   }
 }
 
@@ -527,6 +568,7 @@ function update(args) {
     return;
   }
   const result = withWorkerLock(paths, () => {
+    prepareLaunchdLogFiles(plan.nextLaunchAgent);
     installVersion({
       versionsRoot: paths.versionsRoot,
       versionID: plan.versionID,
