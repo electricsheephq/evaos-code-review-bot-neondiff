@@ -33,8 +33,12 @@ export function advanceWorktreeCleanupDeadline(input: {
   intervalMs: number;
   nextCleanupAtMs: number;
   nowMs: number;
+  runOnce?: boolean;
 }): { due: boolean; nextCleanupAtMs: number } {
-  if (!input.enabled || input.nowMs < input.nextCleanupAtMs) {
+  if (!input.enabled) {
+    return { due: false, nextCleanupAtMs: input.nextCleanupAtMs };
+  }
+  if (!input.runOnce && input.nowMs < input.nextCleanupAtMs) {
     return { due: false, nextCleanupAtMs: input.nextCleanupAtMs };
   }
   return {

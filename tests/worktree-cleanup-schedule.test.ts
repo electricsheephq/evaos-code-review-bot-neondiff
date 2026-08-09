@@ -68,4 +68,14 @@ describe("worktree cleanup elapsed-time scheduling", () => {
       nowMs: 2 * INTERVAL_MS
     })).toEqual({ due: false, nextCleanupAtMs: INTERVAL_MS });
   });
+
+  it("preserves cleanup for the documented one-shot daemon path", () => {
+    expect(advanceWorktreeCleanupDeadline({
+      enabled: true,
+      intervalMs: INTERVAL_MS,
+      nextCleanupAtMs: INTERVAL_MS,
+      nowMs: 0,
+      runOnce: true
+    })).toEqual({ due: true, nextCleanupAtMs: INTERVAL_MS });
+  });
 });

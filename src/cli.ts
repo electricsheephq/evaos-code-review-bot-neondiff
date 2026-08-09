@@ -2369,7 +2369,8 @@ async function main(): Promise<void> {
         enabled: config.worktreeCleanup!.enabled,
         intervalMs: config.worktreeCleanup!.intervalMs,
         nextCleanupAtMs: nextWorktreeCleanupAtMs,
-        nowMs: performance.now()
+        nowMs: performance.now(),
+        runOnce
       });
       nextWorktreeCleanupAtMs = worktreeCleanupSchedule.nextCleanupAtMs;
       const cycleResult = await runDaemonCycle({
