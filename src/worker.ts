@@ -1976,7 +1976,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     assertApprovedProviderConfigCurrent();
     if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
-    if (zcodeExecution.status === "skipped_context_budget") return "skipped_context_budget";
+    if (zcodeExecution.status === "skipped_context_budget") {
+      if (zcodeExecution.deferredFailure) {
+        await ensembleEvidencePromise;
+        recordFailedReview({
+          config,
+          state,
+          repo,
+          pull,
+          error: zcodeExecution.deferredFailure,
+          writeErrorEvidence: false
+        });
+      }
+      return "skipped_context_budget";
+    }
     const zcodeResult = zcodeExecution.result;
 
     assertGitClean(worktree.path);
@@ -2483,6 +2496,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         });
       }
     }
+    if (!ensembleEvidencePromise) releaseReviewCapacity();
     if (headChangedDuringPost) return "posted_stale_head";
     if (postReviewHeadLookupFailed) return "posted_head_unverified";
     if (!headChangedDuringPost && !postReviewHeadLookupFailed && input.processedHeadPolicy !== "retry_failed_head") {
@@ -3950,7 +3964,7 @@ type ContextBudgetReviewExecution = (
       status: "reviewed";
       result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput };
     }
-  | { status: "skipped_context_budget" }
+  | { status: "skipped_context_budget"; deferredFailure?: Error }
   | { status: "skipped_stale_head" }
 ) & {
   ensemblePromise?: Promise<ReviewEnsembleRun>;
@@ -3996,7 +4010,8 @@ async function runReviewWithContextBudget(input: {
     : Promise.resolve();
   const anchorPromise = runSingleReviewWithContextBudget({
     ...input,
-    authority: "canonical"
+    authority: "canonical",
+    deferCanonicalFailureRecord: true
   });
   const ensemblePromise = executeReviewEnsemble({
     plan,
@@ -4088,6 +4103,7 @@ async function runSingleReviewWithContextBudget(input: {
   useZCode: boolean;
   evidenceDir: string;
   authority?: "canonical" | "shadow";
+  deferCanonicalFailureRecord?: boolean;
   assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   if (input.contextBudget.mode === "chunk") {
@@ -4121,6 +4137,7 @@ async function runChunkedZCodeReview(input: {
   useZCode: boolean;
   evidenceDir: string;
   authority?: "canonical" | "shadow";
+  deferCanonicalFailureRecord?: boolean;
   assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const startedAt = new Date();
@@ -4171,7 +4188,7 @@ async function runChunkedZCodeReview(input: {
         error: failure.message,
         recordedAt: new Date().toISOString()
       });
-      if (input.authority !== "shadow") {
+      if (input.authority !== "shadow" && !input.deferCanonicalFailureRecord) {
         recordFailedReview({
           config: input.config,
           state: input.state,
@@ -4181,7 +4198,12 @@ async function runChunkedZCodeReview(input: {
           writeErrorEvidence: false
         });
       }
-      return { status: "skipped_context_budget" };
+      return {
+        status: "skipped_context_budget",
+        ...(input.authority !== "shadow" && input.deferCanonicalFailureRecord
+          ? { deferredFailure: failure }
+          : {})
+      };
     }
 
     const allowedFilenames = new Set(chunk.filenames);

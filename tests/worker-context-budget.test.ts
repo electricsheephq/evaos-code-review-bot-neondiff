@@ -566,6 +566,46 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("releases ordinary review capacity before direct-review status reconciliation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-capacity-before-reconcile-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewStatusComment = { enabled: true };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(425, "4".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Canonical finding")]);
+    let reconciliationLease: ReturnType<ReviewStateStore["tryAcquireReviewRunLease"]>;
+    const github = {
+      getPull: async () => pull,
+      listPullFiles: async () => files,
+      canPostAsApp: () => true,
+      createReview: async (input: typeof createdReviews[number]) => {
+        createdReviews.push(input);
+        return { html_url: `https://github.test/review/${createdReviews.length}`, id: createdReviews.length };
+      },
+      upsertIssueComment: async () => {
+        reconciliationLease = state.tryAcquireReviewRunLease(1, 60_000);
+        return { action: "created" as const, html_url: "https://github.test/comment/1", id: 1 };
+      }
+    } as unknown as GitHubApi;
+
+    const result = await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(reconciliationLease).toBeDefined();
+    if (reconciliationLease) state.releaseReviewRunLease(reconciliationLease.leaseId);
+    state.close();
+  });
+
   it("finishes canonical self-consistency before starting advisory leaves", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-self-consistency-priority-"));
     roots.push(root);
@@ -675,6 +715,65 @@ describe("worker context budget preflight", () => {
     expect(JSON.parse(readFileSync(join(ensembleDir, "shadow-packet.json"), "utf8"))).toMatchObject({
       complete: false,
       postingEligible: false
+    });
+    state.close();
+  });
+
+  it("defers retry admission until chunk-failure shadow evidence settles", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-anchor-claim-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(429, "1".repeat(40));
+    const files = [pullFile("src/a.ts", 5_000), pullFile("src/b.ts", 5_000)];
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+    zcodeFirstFailuresByPath.set("src/a.ts", { message: "anchor provider failure" });
+    let releaseSpecialist: (() => void) | undefined;
+    zcodeBarriersByPath.set("State and lifecycle review", new Promise<void>((resolve) => {
+      releaseSpecialist = resolve;
+    }));
+
+    const review = reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+    await vi.waitFor(() => {
+      expect(zcodePrompts.some((prompt) => prompt.includes("State and lifecycle review"))).toBe(true);
+    });
+
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toBeUndefined();
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      processedHeadPolicy: "retry_failed_head"
+    })).toBe("skipped_processed");
+
+    releaseSpecialist?.();
+    expect(await review).toBe("skipped_context_budget");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("context_budget_chunk_provider_failure")
     });
     state.close();
   });

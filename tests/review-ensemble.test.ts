@@ -135,6 +135,27 @@ describe("review ensemble reduction", () => {
     expect(packet.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("attributes near-duplicate lane findings to the retained gate fingerprint", () => {
+    const receipts = [
+      completedReceipt("anchor", [finding]),
+      completedReceipt("state", [{
+        ...finding,
+        line: 3,
+        title: `${finding.title} after reconnect`,
+        body: "The lifecycle lens observed the same reset through a different path."
+      }]),
+      completedReceipt("boundary", []),
+      completedReceipt("failure", [])
+    ];
+
+    const packet = reduceReviewEnsemble({ subject, files, receipts });
+
+    expect(packet.gate.comments).toHaveLength(1);
+    const retainedFingerprint = packet.gate.comments[0]!.fingerprint;
+    expect(Object.keys(packet.provenance)).toEqual([retainedFingerprint]);
+    expect(packet.provenance[retainedFingerprint]).toEqual(["anchor", "state"]);
+  });
+
   it("rejects mixed immutable subjects before reduction", () => {
     const receipt = completedReceipt("anchor", [finding]);
     receipt.subject = { ...subject, headSha: "c".repeat(40) };

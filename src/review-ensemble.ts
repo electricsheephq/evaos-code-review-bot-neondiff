@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { buildFindingFingerprint } from "./findings.js";
+import { buildFindingFingerprint, sameRunFindingsAreNearDuplicates } from "./findings.js";
 import { applyDeterministicReviewGate, type DeterministicReviewGateResult } from "./review-gate.js";
 import { getBuiltInReviewLensDefinition } from "./review-lenses.js";
 import { redactSecrets } from "./secrets.js";
@@ -205,12 +205,17 @@ export function reduceReviewEnsemble(input: {
     ...input.gatePolicy
   });
   const provenance: Record<string, ReviewEnsembleLeafId[]> = {};
+  const gatedRepresentatives = gate.comments.flatMap((comment) => {
+    const representative = findings.find((item) => buildFindingFingerprint(item) === comment.fingerprint);
+    return representative ? [{ fingerprint: comment.fingerprint, representative }] : [];
+  });
   for (const receipt of completed) {
     for (const item of receipt.findings) {
-      const fingerprint = buildFindingFingerprint(item);
-      const ids = provenance[fingerprint] ?? [];
+      const cluster = gatedRepresentatives.find(({ representative }) => sameRunFindingsAreNearDuplicates(representative, item));
+      if (!cluster) continue;
+      const ids = provenance[cluster.fingerprint] ?? [];
       if (!ids.includes(receipt.leafId)) ids.push(receipt.leafId);
-      provenance[fingerprint] = ids.sort(compareLeafId);
+      provenance[cluster.fingerprint] = ids.sort(compareLeafId);
     }
   }
   const leaves = receipts.map(toManifestLeaf);
