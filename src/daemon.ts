@@ -28,6 +28,21 @@ export function shouldExitDaemonAfterFailedCycle(result: DaemonCycleResult, runO
   return !result.ok && (runOnce || result.failureKind === "admission_denied");
 }
 
+export function advanceWorktreeCleanupDeadline(input: {
+  enabled: boolean;
+  intervalMs: number;
+  nextCleanupAtMs: number;
+  nowMs: number;
+}): { due: boolean; nextCleanupAtMs: number } {
+  if (!input.enabled || input.nowMs < input.nextCleanupAtMs) {
+    return { due: false, nextCleanupAtMs: input.nextCleanupAtMs };
+  }
+  return {
+    due: true,
+    nextCleanupAtMs: input.nowMs + input.intervalMs
+  };
+}
+
 export interface RunDaemonCycleOptions {
   cycle: number;
   dryRun: boolean;
