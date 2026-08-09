@@ -1,5 +1,16 @@
 import { createHash } from "node:crypto";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  realpathSync
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -28,6 +39,83 @@ const LAUNCHD_BOOTSTRAP_RETRY_DELAYS_MS = [250, 750, 2_000, 5_000, 10_000];
 
 function fail(message) {
   throw new Error(message);
+}
+
+function lstatIfPresent(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function requireCurrentUserPrivateFile(entry, label) {
+  if (!entry.isFile()) fail(`${label} must be a regular non-symlink file`);
+  if (typeof process.getuid === "function" && entry.uid !== process.getuid()) {
+    fail(`${label} must be owned by the current user`);
+  }
+  if ((entry.mode & 0o077) !== 0) fail(`${label} must be private to the current user (0600)`);
+}
+
+export function prepareLaunchdLogFiles(launchAgent) {
+  const paths = [launchAgent.StandardOutPath, launchAgent.StandardErrorPath];
+  if (!paths.every((path) => typeof path === "string" && isAbsolute(path)) || paths[0] === paths[1]) {
+    fail("LaunchAgent log paths are invalid");
+  }
+  const directory = dirname(paths[0]);
+  if (dirname(paths[1]) !== directory) fail("LaunchAgent log paths must share one directory");
+  if (lstatIfPresent(directory) === null) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const directoryEntry = lstatSync(directory);
+  if (directoryEntry.isSymbolicLink() || !directoryEntry.isDirectory()) {
+    fail("LaunchAgent log directory must be a real directory");
+  }
+  if (typeof process.getuid === "function" && directoryEntry.uid !== process.getuid()) {
+    fail("LaunchAgent log directory must be owned by the current user");
+  }
+  if (realpathSync(directory) !== resolve(directory)) {
+    fail("LaunchAgent log directory must not traverse symlinks");
+  }
+  chmodSync(directory, 0o700);
+
+  for (const path of paths) {
+    const existing = lstatIfPresent(path);
+    if (existing !== null) {
+      if (existing.isSymbolicLink()) {
+        fail("LaunchAgent log path must be a regular non-symlink file");
+      }
+      if (!existing.isFile()) fail("LaunchAgent log path must be a regular non-symlink file");
+      if (typeof process.getuid === "function" && existing.uid !== process.getuid()) {
+        fail("LaunchAgent log path must be owned by the current user");
+      }
+      chmodSync(path, 0o600);
+      continue;
+    }
+
+    let fd;
+    try {
+      fd = openSync(
+        path,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        0o600
+      );
+      fchmodSync(fd, 0o600);
+      const descriptorEntry = fstatSync(fd);
+      const pathEntry = lstatSync(path);
+      requireCurrentUserPrivateFile(descriptorEntry, "LaunchAgent log descriptor");
+      requireCurrentUserPrivateFile(pathEntry, "LaunchAgent log path");
+      if (descriptorEntry.dev !== pathEntry.dev || descriptorEntry.ino !== pathEntry.ino) {
+        fail("LaunchAgent log path changed while it was created");
+      }
+    } catch (error) {
+      if (error?.code === "EEXIST" || error?.code === "ELOOP") {
+        fail("LaunchAgent log path must be a regular non-symlink file");
+      }
+      throw error;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
 }
 
 function sha256(value) {

@@ -1,6 +1,17 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync
+} from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   LAUNCHD_LOG_ENV as RUNTIME_LOG_ENV,
@@ -11,6 +22,7 @@ import {
   LAUNCHD_LOG_ROTATION_POLICY,
   planWorkerRollback,
   planWorkerUpdate,
+  prepareLaunchdLogFiles,
   recoverPreviouslyLoadedWorker,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
@@ -87,6 +99,27 @@ describe("B0 worker installer", () => {
     expect(plist).toContain(`<string>${LAUNCHD_LOG_ROTATION_POLICY.maxBytes}</string>`);
     expect(plist).toContain(`<string>${LAUNCHD_LOG_ROTATION_POLICY.archiveCount}</string>`);
     expect(plist).toContain(`<string>${LAUNCHD_LOG_ROTATION_POLICY.maxAgeHours}</string>`);
+  });
+
+  it("rejects a dangling managed log symlink without creating its target", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-install-")));
+    try {
+      const directory = join(root, "Library", "Logs", "evaos-code-review-bot");
+      const stdoutPath = join(directory, "launchd.out.log");
+      const stderrPath = join(directory, "launchd.err.log");
+      const redirectedTarget = join(root, "redirected.out.log");
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      symlinkSync(redirectedTarget, stdoutPath);
+
+      expect(() => prepareLaunchdLogFiles({
+        StandardOutPath: stdoutPath,
+        StandardErrorPath: stderrPath
+      })).toThrow("regular non-symlink file");
+      expect(lstatSync(stdoutPath).isSymbolicLink()).toBe(true);
+      expect(existsSync(redirectedTarget)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps a stable Node command when it resolves to the running Node binary", () => {
