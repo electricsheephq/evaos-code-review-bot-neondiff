@@ -29,6 +29,10 @@ import { isApiKeyEnvName, isProviderId, isProviderStructuredOutputMode, PROVIDER
 import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
 import { validateRelativePacketPath, type RepoWikiContextConfig } from "./repo-wiki-context.js";
+import {
+  validateReviewEnsembleConfig,
+  type ReviewEnsembleConfig
+} from "./review-ensemble.js";
 import { DEFAULT_REVIEW_LENS_CONFIG, validateReviewLensConfig, type ReviewLensConfig } from "./review-lenses.js";
 import type { ReviewEventPolicyConfig } from "./review-event-policy.js";
 import { containsSecretLikeText } from "./secrets.js";
@@ -62,6 +66,7 @@ export interface BotConfig {
     headCountLimit: number;
   };
   reviewScheduler?: ReviewSchedulerConfig;
+  reviewEnsemble?: ReviewEnsembleConfig;
   riskWeightedQueue?: RiskWeightedQueueConfig;
   /** Review mode router (#266, default off / absent). Absent ⇒ byte-identical + zero evidence. */
   reviewModes?: ReviewModesConfig;
@@ -344,6 +349,10 @@ const DEFAULT_CONFIG: BotConfig = {
     maxQueuedPerRepo: 10,
     manualCommandReserve: 1,
     backgroundPriority: 50
+  },
+  reviewEnsemble: {
+    enabled: false,
+    mode: "shadow"
   },
   riskWeightedQueue: {
     enabled: false
@@ -671,6 +680,9 @@ function validateConfig(config: BotConfig): void {
   const reviewScheduler = config.reviewScheduler ?? DEFAULT_CONFIG.reviewScheduler!;
   config.reviewScheduler = reviewScheduler;
   validateReviewSchedulerConfig(reviewScheduler, "config.reviewScheduler");
+  const reviewEnsemble = config.reviewEnsemble ?? DEFAULT_CONFIG.reviewEnsemble!;
+  config.reviewEnsemble = reviewEnsemble;
+  validateReviewEnsembleConfig(reviewEnsemble, "config.reviewEnsemble");
   const riskWeightedQueue = config.riskWeightedQueue ?? DEFAULT_CONFIG.riskWeightedQueue!;
   config.riskWeightedQueue = riskWeightedQueue;
   validateRiskWeightedQueueConfig(riskWeightedQueue, "config.riskWeightedQueue", reviewScheduler.backgroundPriority);

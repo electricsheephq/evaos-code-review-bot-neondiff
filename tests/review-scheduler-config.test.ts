@@ -27,6 +27,26 @@ describe("review scheduler config", () => {
       overloadBackoffMaxDurationMs: 10 * 60_000,
       overloadBackoffJitterMs: 30_000
     });
+    expect(config.reviewEnsemble).toEqual({
+      enabled: false,
+      mode: "shadow"
+    });
+  });
+
+  it("loads and validates the disabled-by-default shadow ensemble", () => {
+    expect(loadConfig(writeConfig({
+      reviewEnsemble: {
+        enabled: true,
+        mode: "shadow"
+      }
+    })).reviewEnsemble).toEqual({ enabled: true, mode: "shadow" });
+
+    expect(() => loadConfig(writeConfig({ reviewEnsemble: { enabled: true, mode: "posting" } }))).toThrow(
+      /config\.reviewEnsemble\.mode must be shadow/
+    );
+    expect(() => loadConfig(writeConfig({ reviewEnsemble: { enabled: true, concurrency: 4 } }))).toThrow(
+      /config\.reviewEnsemble has unknown key/
+    );
   });
 
   it("rejects scheduler settings that cannot preserve manual reserve capacity", () => {

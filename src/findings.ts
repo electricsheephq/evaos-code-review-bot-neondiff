@@ -180,27 +180,26 @@ export const SAME_RUN_DEDUP_MIN_PREFIX_LENGTH = 12;
  * kept and later members are dropped, so callers should pass findings pre-sorted by rank.
  */
 export function suppressSameRunNearDuplicates(findings: Finding[]): { kept: Finding[]; dropped: Finding[] } {
-  const kept: Array<{ finding: Finding; category: string; normalizedTitle: string }> = [];
+  const kept: Finding[] = [];
   const dropped: Finding[] = [];
 
   for (const finding of findings) {
-    const category = normalizeFindingCategory(finding);
-    const normalizedTitle = normalizeTitleForDedup(finding.title);
-    const isDuplicate = kept.some(
-      (entry) =>
-        entry.finding.path === finding.path &&
-        entry.category === category &&
-        Math.abs(entry.finding.line - finding.line) <= SAME_RUN_DEDUP_MAX_LINE_DELTA &&
-        titlesAreNearDuplicate(entry.normalizedTitle, normalizedTitle)
-    );
+    const isDuplicate = kept.some((entry) => sameRunFindingsAreNearDuplicates(entry, finding));
     if (isDuplicate) {
       dropped.push(finding);
       continue;
     }
-    kept.push({ finding, category, normalizedTitle });
+    kept.push(finding);
   }
 
-  return { kept: kept.map((entry) => entry.finding), dropped };
+  return { kept, dropped };
+}
+
+export function sameRunFindingsAreNearDuplicates(left: Finding, right: Finding): boolean {
+  return left.path === right.path &&
+    normalizeFindingCategory(left) === normalizeFindingCategory(right) &&
+    Math.abs(left.line - right.line) <= SAME_RUN_DEDUP_MAX_LINE_DELTA &&
+    titlesAreNearDuplicate(normalizeTitleForDedup(left.title), normalizeTitleForDedup(right.title));
 }
 
 export function normalizeTitleForDedup(title: string): string {

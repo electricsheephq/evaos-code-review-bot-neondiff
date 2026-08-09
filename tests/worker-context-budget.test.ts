@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,8 +9,12 @@ import type { Finding, PullRequestSummary } from "../src/types.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 const zcodePrompts = vi.hoisted((): string[] => []);
+const zcodeCompletedPrompts = vi.hoisted((): string[] => []);
 const zcodeFindingsByPath = vi.hoisted(() => new Map<string, Finding[]>());
 const zcodeFailuresByPath = vi.hoisted(() => new Map<string, string>());
+const zcodeDelaysByPath = vi.hoisted(() => new Map<string, number>());
+const zcodeBarriersByPath = vi.hoisted(() => new Map<string, Promise<void>>());
+const zcodeFirstFailuresByPath = vi.hoisted(() => new Map<string, { message: string; beforeThrow?: () => void }>());
 const createdReviews = vi.hoisted((): Array<{
   repo: string;
   pullNumber: number;
@@ -44,13 +48,24 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/zcode.js")>();
   return {
     ...actual,
-    runZCodeReview: vi.fn((input: { prompt: string }) => {
+    runZCodeReview: vi.fn(async (input: { prompt: string }) => {
       zcodePrompts.push(input.prompt);
+      const delay = [...zcodeDelaysByPath.entries()].find(([path]) => input.prompt.includes(path));
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay[1]));
+      const barrier = [...zcodeBarriersByPath.entries()].find(([path]) => input.prompt.includes(path));
+      if (barrier) await barrier[1];
+      const firstFailure = [...zcodeFirstFailuresByPath.entries()].find(([path]) => input.prompt.includes(path));
+      if (firstFailure) {
+        zcodeFirstFailuresByPath.delete(firstFailure[0]);
+        firstFailure[1].beforeThrow?.();
+        throw new Error(firstFailure[1].message);
+      }
       const failure = [...zcodeFailuresByPath.entries()].find(([path]) => input.prompt.includes(path));
       if (failure) throw new Error(failure[1]);
       const findings = [...zcodeFindingsByPath.entries()]
         .filter(([path]) => input.prompt.includes(path))
         .flatMap(([, entries]) => entries);
+      zcodeCompletedPrompts.push(input.prompt);
       return {
         findings,
         droppedFromSchema: [],
@@ -122,6 +137,7 @@ vi.mock("../src/walkthrough.js", async (importOriginal) => {
 
 const {
   localDateFolder,
+  buildReviewApprovalRevision,
   prepareFailedHeadRetry,
   recoverPostedReviewReceipt,
   recoverPostedReviewReceiptForCurrentHead,
@@ -143,8 +159,12 @@ describe("worker context budget preflight", () => {
 
   afterEach(() => {
     zcodePrompts.length = 0;
+    zcodeCompletedPrompts.length = 0;
     zcodeFindingsByPath.clear();
     zcodeFailuresByPath.clear();
+    zcodeDelaysByPath.clear();
+    zcodeBarriersByPath.clear();
+    zcodeFirstFailuresByPath.clear();
     createdReviews.length = 0;
     walkthroughBuildEvents.length = 0;
     delete reviewPostControl.error;
@@ -411,6 +431,391 @@ describe("worker context budget preflight", () => {
       status: "posted",
       reviewUrl: `https://github.com/electricsheephq/WorldOS/pull/${pull.number}#pullrequestreview-1`
     });
+    state.close();
+  });
+
+  it("runs the enabled shadow ensemble without changing the canonical posted review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-shadow-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(421, "9".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Anchor finding")]);
+    zcodeFindingsByPath.set("State and lifecycle review", [finding("src/a.ts", "State-only finding")]);
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toHaveLength(4);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("State and lifecycle review"))).toHaveLength(1);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("Authority and integration-boundary review"))).toHaveLength(1);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("Failure, concurrency, and operator-truth review"))).toHaveLength(1);
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(["Anchor finding"]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
+
+    const ensembleDir = join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "review-ensemble"
+    );
+    expect(JSON.parse(readFileSync(join(ensembleDir, "manifest.json"), "utf8"))).toMatchObject({
+      complete: true,
+      subject: { repo: "electricsheephq/WorldOS", pullNumber: pull.number, headSha: pull.head.sha }
+    });
+    expect(JSON.parse(readFileSync(join(ensembleDir, "shadow-packet.json"), "utf8"))).toMatchObject({
+      complete: true,
+      postingEligible: false,
+      gate: { comments: expect.arrayContaining([expect.objectContaining({ title: "State-only finding" })]) }
+    });
+    state.close();
+  });
+
+  it("keeps a specialist failure out of canonical processed state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-partial-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(423, "6".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Canonical finding")]);
+    zcodeFailuresByPath.set("Failure, concurrency, and operator-truth review", "specialist provider failed");
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(["Canonical finding"]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
+    const ensembleDir = join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "review-ensemble"
+    );
+    expect(JSON.parse(readFileSync(join(ensembleDir, "manifest.json"), "utf8"))).toMatchObject({
+      complete: false,
+      leaves: expect.arrayContaining([
+        expect.objectContaining({ id: "failure", status: "failed", error: "specialist provider failed" })
+      ])
+    });
+    expect(JSON.parse(readFileSync(join(ensembleDir, "shadow-packet.json"), "utf8"))).toMatchObject({
+      complete: false,
+      postingEligible: false
+    });
+    state.close();
+  });
+
+  it("posts the canonical anchor before a slow specialist settles", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-slow-shadow-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(424, "5".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Canonical before shadow")]);
+    let releaseSpecialist: (() => void) | undefined;
+    zcodeBarriersByPath.set("State and lifecycle review", new Promise<void>((resolve) => {
+      releaseSpecialist = resolve;
+    }));
+    reviewPostControl.afterCreate = () => {
+      expect(zcodeCompletedPrompts.some((prompt) => prompt.includes("State and lifecycle review"))).toBe(false);
+      releaseSpecialist?.();
+    };
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(createdReviews).toHaveLength(1);
+    expect(zcodeCompletedPrompts.some((prompt) => prompt.includes("State and lifecycle review"))).toBe(true);
+    state.close();
+  });
+
+  it("releases ordinary review capacity before direct-review status reconciliation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-capacity-before-reconcile-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewStatusComment = { enabled: true };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(425, "4".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Canonical finding")]);
+    let reconciliationLease: ReturnType<ReviewStateStore["tryAcquireReviewRunLease"]>;
+    const github = {
+      getPull: async () => pull,
+      listPullFiles: async () => files,
+      canPostAsApp: () => true,
+      createReview: async (input: typeof createdReviews[number]) => {
+        createdReviews.push(input);
+        return { html_url: `https://github.test/review/${createdReviews.length}`, id: createdReviews.length };
+      },
+      upsertIssueComment: async () => {
+        reconciliationLease = state.tryAcquireReviewRunLease(1, 60_000);
+        return { action: "created" as const, html_url: "https://github.test/comment/1", id: 1 };
+      }
+    } as unknown as GitHubApi;
+
+    const result = await reviewPull({
+      config,
+      github,
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(reconciliationLease).toBeDefined();
+    if (reconciliationLease) state.releaseReviewRunLease(reconciliationLease.leaseId);
+    state.close();
+  });
+
+  it("finishes canonical self-consistency before starting advisory leaves", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-self-consistency-priority-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(426, "4".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [p1Finding("src/a.ts", "Canonical blocking finding")]);
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    const selfConsistencyIndex = zcodePrompts.findIndex((prompt) => prompt.includes("re-checking a SINGLE prior"));
+    const firstShadowIndex = zcodePrompts.findIndex((prompt) => prompt.includes("State and lifecycle review"));
+    expect(selfConsistencyIndex).toBeGreaterThan(0);
+    expect(firstShadowIndex).toBeGreaterThan(selfConsistencyIndex);
+    state.close();
+  });
+
+  it("rechecks the approved provider revision before an ensemble retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-provider-revision-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    const appConfigPath = join(root, "zcode-app.json");
+    writeFileSync(appConfigPath, "{\"provider\":\"one\"}\n");
+    config.zcode.appConfigPath = appConfigPath;
+    const sourceConfigRevision = "f".repeat(64);
+    const approvedRevision = buildReviewApprovalRevision({
+      configRevision: sourceConfigRevision,
+      useZCode: true,
+      zcodeAppConfigPath: appConfigPath
+    })!;
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(427, "3".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFirstFailuresByPath.set("src/a.ts", {
+      message: "provider temporarily overloaded",
+      beforeThrow: () => writeFileSync(appConfigPath, "{\"provider\":\"two\"}\n")
+    });
+
+    await expect(reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      configRevision: approvedRevision,
+      sourceConfigRevision
+    })).rejects.toThrow("review-pr provider configuration changed; run a new dry review before posting");
+    expect(createdReviews).toHaveLength(0);
+    state.close();
+  });
+
+  it("writes a shadow packet when a chunked anchor aborts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-anchor-abort-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(428, "2".repeat(40));
+    const files = [pullFile("src/a.ts", 5_000), pullFile("src/b.ts", 5_000)];
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+    zcodeFailuresByPath.set("src/a.ts", "anchor provider failure");
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("skipped_context_budget");
+    const ensembleDir = join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "review-ensemble"
+    );
+    expect(JSON.parse(readFileSync(join(ensembleDir, "shadow-packet.json"), "utf8"))).toMatchObject({
+      complete: false,
+      postingEligible: false
+    });
+    state.close();
+  });
+
+  it("defers retry admission until chunk-failure shadow evidence settles", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-anchor-claim-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(429, "1".repeat(40));
+    const files = [pullFile("src/a.ts", 5_000), pullFile("src/b.ts", 5_000)];
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+    zcodeFirstFailuresByPath.set("src/a.ts", { message: "anchor provider failure" });
+    let releaseSpecialist: (() => void) | undefined;
+    zcodeBarriersByPath.set("State and lifecycle review", new Promise<void>((resolve) => {
+      releaseSpecialist = resolve;
+    }));
+
+    const review = reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+    await vi.waitFor(() => {
+      expect(zcodePrompts.some((prompt) => prompt.includes("State and lifecycle review"))).toBe(true);
+    });
+
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toBeUndefined();
+    expect(await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true,
+      processedHeadPolicy: "retry_failed_head"
+    })).toBe("skipped_processed");
+
+    releaseSpecialist?.();
+    expect(await review).toBe("skipped_context_budget");
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("context_budget_chunk_provider_failure")
+    });
+    state.close();
+  });
+
+  it("applies every ensemble lens to every context chunk while retaining one canonical post", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-chunk-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(422, "7".repeat(40));
+    const files = [pullFile("src/a.ts", 5_000), pullFile("src/b.ts", 5_000)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Chunk anchor finding")]);
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toHaveLength(8);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("State and lifecycle review"))).toHaveLength(2);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("Authority and integration-boundary review"))).toHaveLength(2);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("Failure, concurrency, and operator-truth review"))).toHaveLength(2);
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(["Chunk anchor finding"]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
     state.close();
   });
 

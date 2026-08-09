@@ -354,47 +354,75 @@ function buildStrictJsonRetryPrompt(originalPrompt: string): string {
   ].join("\n");
 }
 
+interface ActiveZCodeReviewPolicy {
+  users: number;
+  configDir: string;
+  configPath: string;
+  hadConfigDir: boolean;
+  originalConfig: { contents: string; mode: number } | null;
+}
+
+const activeZCodeReviewPolicies = new Map<string, ActiveZCodeReviewPolicy>();
+
 export function withTemporaryZCodeReviewPolicy<T>(cwd: string, evidenceDir: string | undefined, run: () => T): T {
   const configDir = join(cwd, ".zcode");
   const configPath = join(configDir, "config.json");
-  const hadConfigDir = existsSync(configDir);
-  const originalConfig = existsSync(configPath)
-    ? { contents: readFileSync(configPath, "utf8"), mode: statSync(configPath).mode }
-    : null;
   const policy = buildZCodeReviewPolicy();
-
-  mkdirSync(configDir, { recursive: true });
-  writeFileAtomic(configPath, `${JSON.stringify(policy, null, 2)}\n`, 0o600);
-  if (evidenceDir) {
-    mkdirSync(evidenceDir, { recursive: true });
-    writeFileAtomic(join(evidenceDir, "zcode-review-policy.json"), `${JSON.stringify(policy, null, 2)}\n`, 0o600);
+  let activePolicy = activeZCodeReviewPolicies.get(configPath);
+  if (activePolicy) {
+    activePolicy.users += 1;
+  } else {
+    activePolicy = {
+      users: 1,
+      configDir,
+      configPath,
+      hadConfigDir: existsSync(configDir),
+      originalConfig: existsSync(configPath)
+        ? { contents: readFileSync(configPath, "utf8"), mode: statSync(configPath).mode }
+        : null
+    };
+    mkdirSync(configDir, { recursive: true });
+    writeFileAtomic(configPath, `${JSON.stringify(policy, null, 2)}\n`, 0o600);
+    activeZCodeReviewPolicies.set(configPath, activePolicy);
   }
 
-  const restore = () => {
-    if (originalConfig) {
-      mkdirSync(configDir, { recursive: true });
-      writeFileAtomic(configPath, originalConfig.contents, originalConfig.mode);
-    } else {
-      rmSync(configPath, { force: true });
-      if (!hadConfigDir) {
-        try {
-          rmdirSync(configDir);
-        } catch {
-          // Leave a non-empty directory in place; the clean-worktree guard will catch it.
+  const release = () => {
+    const current = activeZCodeReviewPolicies.get(configPath);
+    if (!current) return;
+    current.users -= 1;
+    if (current.users > 0) return;
+    try {
+      if (current.originalConfig) {
+        mkdirSync(current.configDir, { recursive: true });
+        writeFileAtomic(current.configPath, current.originalConfig.contents, current.originalConfig.mode);
+      } else {
+        rmSync(current.configPath, { force: true });
+        if (!current.hadConfigDir) {
+          try {
+            rmdirSync(current.configDir);
+          } catch {
+            // Leave a non-empty directory in place; the clean-worktree guard will catch it.
+          }
         }
       }
+    } finally {
+      activeZCodeReviewPolicies.delete(configPath);
     }
   };
 
   try {
+    if (evidenceDir) {
+      mkdirSync(evidenceDir, { recursive: true });
+      writeFileAtomic(join(evidenceDir, "zcode-review-policy.json"), `${JSON.stringify(policy, null, 2)}\n`, 0o600);
+    }
     const result = run();
     if (isPromiseLike(result)) {
-      return result.finally(restore) as T;
+      return result.finally(release) as T;
     }
-    restore();
+    release();
     return result;
   } catch (error) {
-    restore();
+    release();
     throw error;
   }
 }

@@ -10,6 +10,11 @@
     "maxActiveRuns": 5,
     "leaseTtlMs": 900000
   },
+  "_reviewEnsembleComment": "Experimental default-off shadow team. One canonical full-diff anchor plus state, boundary, and failure specialists run concurrently. Only the anchor may post or write canonical processed-head state; specialist output is evidence-only.",
+  "reviewEnsemble": {
+    "enabled": false,
+    "mode": "shadow"
+  },
   "_worktreeCleanupComment": "Periodic daemon cleanup is limited to stale, clean, Git-registered NeonDiff review worktrees. retentionMs cannot be shorter than two hours or the active review lease TTL. Set enabled:false to disable deletion.",
   "worktreeCleanup": {
     "enabled": true,

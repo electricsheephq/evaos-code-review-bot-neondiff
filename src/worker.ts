@@ -51,6 +51,14 @@ import {
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
 import {
+  buildReviewEnsembleLeafPrompt,
+  buildReviewEnsemblePlan,
+  executeReviewEnsemble,
+  reduceReviewEnsemble,
+  type ReviewEnsembleRun,
+  type ReviewEnsembleSubject
+} from "./review-ensemble.js";
+import {
   decideReviewEventPolicy,
   type ReviewEventAuthorizationAttempt,
   type ReviewEventDecision,
@@ -1753,6 +1761,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   let lease: ReviewRunLease | undefined;
   let headClaim: ReviewHeadClaim | undefined;
   let budgetStarted = false;
+  let ensembleEvidencePromise: Promise<void> | undefined;
+  let startShadowLeaves: (() => void) | undefined;
   const releaseReviewCapacity = (): void => {
     // Crash-safe release-on-failure (#295): if we hold the per-head claim and the finally runs
     // before recordProcessed retired it (error/early return), release it so the head is re-claimable.
@@ -1922,14 +1932,64 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pull,
       worktreePath: worktree.path,
       prompt,
+      files: reviewFiles,
       contextBudget,
       promptForFiles,
       useZCode: input.useZCode,
-      evidenceDir
+      evidenceDir,
+      assertProviderConfigCurrent: assertApprovedProviderConfigCurrent
     });
+    startShadowLeaves = zcodeExecution.startShadowLeaves;
+    if (zcodeExecution.ensemblePromise) {
+      ensembleEvidencePromise = zcodeExecution.ensemblePromise
+        .then((ensemble) => {
+          const shadowPacket = reduceReviewEnsemble({
+            subject: {
+              repo,
+              pullNumber: pull.number,
+              baseSha: pull.base.sha,
+              headSha: pull.head.sha
+            },
+            files: reviewFiles,
+            receipts: ensemble.receipts,
+            gatePolicy: {
+              maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
+              repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
+              repoMemoryFalsePositives: repoMemory.falsePositives,
+              publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
+              ...(config.reviewGate?.requestChangesConfidenceFloors
+                ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
+                : {}),
+              ...(config.reviewGate?.categoryPrecisionFloors
+                ? { categoryPrecisionFloors: config.reviewGate.categoryPrecisionFloors }
+                : {})
+            }
+          });
+          writeRedactedJson(join(evidenceDir, "review-ensemble", "shadow-packet.json"), shadowPacket);
+        })
+        .catch((error) => {
+          writeRedactedJsonBestEffort(join(evidenceDir, "review-ensemble", "evidence-error.json"), {
+            error: redactSecrets(error instanceof Error ? error.message : String(error)),
+            recordedAt: new Date().toISOString()
+          });
+        });
+    }
     assertApprovedProviderConfigCurrent();
     if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
-    if (zcodeExecution.status === "skipped_context_budget") return "skipped_context_budget";
+    if (zcodeExecution.status === "skipped_context_budget") {
+      if (zcodeExecution.deferredFailure) {
+        await ensembleEvidencePromise;
+        recordFailedReview({
+          config,
+          state,
+          repo,
+          pull,
+          error: zcodeExecution.deferredFailure,
+          writeErrorEvidence: false
+        });
+      }
+      return "skipped_context_budget";
+    }
     const zcodeResult = zcodeExecution.result;
 
     assertGitClean(worktree.path);
@@ -1964,13 +2024,19 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
     // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
     // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.
-    const selfConsistency = await applySelfConsistencyRecheck({
-      config,
-      gate,
-      files: reviewFiles,
-      worktreePath: worktree.path,
-      evidenceDir
-    });
+    let selfConsistency: Awaited<ReturnType<typeof applySelfConsistencyRecheck>>;
+    try {
+      selfConsistency = await applySelfConsistencyRecheck({
+        config,
+        gate,
+        files: reviewFiles,
+        worktreePath: worktree.path,
+        evidenceDir
+      });
+    } finally {
+      startShadowLeaves?.();
+      startShadowLeaves = undefined;
+    }
     assertApprovedProviderConfigCurrent();
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
@@ -2430,7 +2496,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         });
       }
     }
-    releaseReviewCapacity();
+    if (!ensembleEvidencePromise) releaseReviewCapacity();
     if (headChangedDuringPost) return "posted_stale_head";
     if (postReviewHeadLookupFailed) return "posted_head_unverified";
     if (!headChangedDuringPost && !postReviewHeadLookupFailed && input.processedHeadPolicy !== "retry_failed_head") {
@@ -2445,6 +2511,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     return manualReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
+    startShadowLeaves?.();
+    if (ensembleEvidencePromise) await ensembleEvidencePromise;
     releaseReviewCapacity();
   }
 }
@@ -3891,10 +3959,17 @@ function parseSelfConsistencyVerdict(rawResponse: string): SelfConsistencySecond
   return { verified, confidence };
 }
 
-type ContextBudgetReviewExecution =
-  | { status: "reviewed"; result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } }
-  | { status: "skipped_context_budget" }
-  | { status: "skipped_stale_head" };
+type ContextBudgetReviewExecution = (
+  | {
+      status: "reviewed";
+      result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput };
+    }
+  | { status: "skipped_context_budget"; deferredFailure?: Error }
+  | { status: "skipped_stale_head" }
+) & {
+  ensemblePromise?: Promise<ReviewEnsembleRun>;
+  startShadowLeaves?: () => void;
+};
 
 async function runReviewWithContextBudget(input: {
   config: BotConfig;
@@ -3904,10 +3979,132 @@ async function runReviewWithContextBudget(input: {
   pull: PullRequestSummary;
   worktreePath: string;
   prompt: string;
+  files: PullFilePatch[];
   contextBudget: ContextBudgetPlan;
   promptForFiles: (files: PullFilePatch[]) => string;
   useZCode: boolean;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
+}): Promise<ContextBudgetReviewExecution> {
+  const plan = buildReviewEnsemblePlan(input.config.reviewEnsemble ?? { enabled: false, mode: "shadow" });
+  if (!plan) return runSingleReviewWithContextBudget(input);
+
+  const subject: ReviewEnsembleSubject = {
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    baseSha: input.pull.base.sha,
+    headSha: input.pull.head.sha
+  };
+  const executions = new Map<string, ContextBudgetReviewExecution>();
+  const delayShadowLeaves = Boolean(input.config.reviewGate?.selfConsistency?.enabled);
+  let releaseShadowLeaves: (() => void) | undefined;
+  const shadowStart = delayShadowLeaves
+    ? new Promise<void>((resolve) => {
+        let released = false;
+        releaseShadowLeaves = () => {
+          if (released) return;
+          released = true;
+          resolve();
+        };
+      })
+    : Promise.resolve();
+  const anchorPromise = runSingleReviewWithContextBudget({
+    ...input,
+    authority: "canonical",
+    deferCanonicalFailureRecord: true
+  });
+  const ensemblePromise = executeReviewEnsemble({
+    plan,
+    subject,
+    runLeaf: async (leaf) => {
+      if (leaf.id !== "anchor") await shadowStart;
+      const execution = leaf.id === "anchor"
+        ? await anchorPromise
+        : await (async () => {
+            const prompt = buildReviewEnsembleLeafPrompt(input.prompt, leaf.id);
+            const promptForFiles = (files: PullFilePatch[]) => buildReviewEnsembleLeafPrompt(input.promptForFiles(files), leaf.id);
+            const evidenceDir = join(input.evidenceDir, "review-ensemble", "leaves", leaf.id, "provider");
+            const contextBudget = planContextBudget({
+              prompt,
+              files: input.files,
+              contextWindowTokens: resolveReviewContextWindowTokens(input.config),
+              config: input.config.contextBudget,
+              buildPrompt: promptForFiles
+            });
+            mkdirSync(evidenceDir, { recursive: true });
+            writeRedactedJson(join(evidenceDir, "context-budget.json"), contextBudgetEvidence(contextBudget));
+            if (contextBudget.mode === "skip") {
+              return { status: "skipped_context_budget" } as ContextBudgetReviewExecution;
+            }
+            return runSingleReviewWithContextBudget({
+              ...input,
+              prompt,
+              contextBudget,
+              promptForFiles,
+              evidenceDir,
+              authority: "shadow"
+            });
+          })();
+      executions.set(leaf.id, execution);
+      if (execution.status !== "reviewed") {
+        throw new Error(`review ensemble ${leaf.id} ended with ${execution.status}`);
+      }
+      return {
+        findings: applyRetryDegradedConfidencePenalty(
+          execution.result.findings,
+          execution.result.degradedRecovery,
+          input.config.reviewGate?.retryDegradedConfidencePenalty
+        ),
+        dropped: execution.result.droppedFromSchema,
+        runtime: execution.result.runtime
+      };
+    }
+  }).then((ensemble) => {
+    const ensembleDir = join(input.evidenceDir, "review-ensemble");
+    mkdirSync(ensembleDir, { recursive: true });
+    writeRedactedJson(join(ensembleDir, "manifest.json"), ensemble.manifest);
+    for (const receipt of ensemble.receipts) {
+      const leafDir = join(ensembleDir, "leaves", receipt.leafId);
+      mkdirSync(leafDir, { recursive: true });
+      writeRedactedJson(join(leafDir, "receipt.json"), receipt);
+    }
+    return ensemble;
+  });
+
+  try {
+    const anchor = await anchorPromise;
+    if (anchor.status !== "reviewed") {
+      releaseShadowLeaves?.();
+      return { ...anchor, ensemblePromise };
+    }
+    return {
+      ...anchor,
+      ensemblePromise,
+      ...(releaseShadowLeaves ? { startShadowLeaves: releaseShadowLeaves } : {})
+    };
+  } catch (error) {
+    releaseShadowLeaves?.();
+    await ensemblePromise.catch(() => undefined);
+    throw error;
+  }
+}
+
+async function runSingleReviewWithContextBudget(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  worktreePath: string;
+  prompt: string;
+  files: PullFilePatch[];
+  contextBudget: ContextBudgetPlan;
+  promptForFiles: (files: PullFilePatch[]) => string;
+  useZCode: boolean;
+  evidenceDir: string;
+  authority?: "canonical" | "shadow";
+  deferCanonicalFailureRecord?: boolean;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   if (input.contextBudget.mode === "chunk") {
     return runChunkedZCodeReview({
@@ -3921,7 +4118,8 @@ async function runReviewWithContextBudget(input: {
         config: input.config,
         worktreePath: input.worktreePath,
         prompt: input.prompt,
-        evidenceDir: input.evidenceDir
+        evidenceDir: input.evidenceDir,
+        assertProviderConfigCurrent: input.assertProviderConfigCurrent
       })
     : disabledZCodeReviewResult(input.config);
   return { status: "reviewed", result };
@@ -3938,6 +4136,9 @@ async function runChunkedZCodeReview(input: {
   promptForFiles: (files: PullFilePatch[]) => string;
   useZCode: boolean;
   evidenceDir: string;
+  authority?: "canonical" | "shadow";
+  deferCanonicalFailureRecord?: boolean;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const startedAt = new Date();
   const findings: ZCodeReviewResult["findings"] = [];
@@ -3952,7 +4153,12 @@ async function runChunkedZCodeReview(input: {
     const livePull = await input.github.getPull(input.repo, input.pull.number);
     const stale = detectStalePullHead({ expected: input.pull, live: livePull, phase: "before_chunk" });
     if (stale) {
-      recordStaleHeadSkip({ state: input.state, repo: input.repo, pull: input.pull, stale, evidenceDir: input.evidenceDir });
+      if (input.authority !== "shadow") {
+        recordStaleHeadSkip({ state: input.state, repo: input.repo, pull: input.pull, stale, evidenceDir: input.evidenceDir });
+      } else {
+        mkdirSync(input.evidenceDir, { recursive: true });
+        writeRedactedJson(join(input.evidenceDir, "stale-head.json"), stale);
+      }
       return { status: "skipped_stale_head" };
     }
     const chunkDir = join(input.evidenceDir, "context-chunks", `chunk-${String(chunk.index).padStart(3, "0")}`);
@@ -3967,7 +4173,8 @@ async function runChunkedZCodeReview(input: {
             config: input.config,
             worktreePath: input.worktreePath,
             prompt,
-            evidenceDir: chunkDir
+            evidenceDir: chunkDir,
+            assertProviderConfigCurrent: input.assertProviderConfigCurrent
           })
         : disabledZCodeReviewResult(input.config);
     } catch (error) {
@@ -3981,15 +4188,22 @@ async function runChunkedZCodeReview(input: {
         error: failure.message,
         recordedAt: new Date().toISOString()
       });
-      recordFailedReview({
-        config: input.config,
-        state: input.state,
-        repo: input.repo,
-        pull: input.pull,
-        error: failure,
-        writeErrorEvidence: false
-      });
-      return { status: "skipped_context_budget" };
+      if (input.authority !== "shadow" && !input.deferCanonicalFailureRecord) {
+        recordFailedReview({
+          config: input.config,
+          state: input.state,
+          repo: input.repo,
+          pull: input.pull,
+          error: failure,
+          writeErrorEvidence: false
+        });
+      }
+      return {
+        status: "skipped_context_budget",
+        ...(input.authority !== "shadow" && input.deferCanonicalFailureRecord
+          ? { deferredFailure: failure }
+          : {})
+      };
     }
 
     const allowedFilenames = new Set(chunk.filenames);
@@ -4057,8 +4271,10 @@ async function runConfiguredReview(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   if (!input.config.codexRuntime?.enabled) return runZCodeReviewWithProviderRetry(input);
+  input.assertProviderConfigCurrent?.();
   const startedAt = new Date();
   const result = await runCodexReview({
     cwd: input.worktreePath,
@@ -4094,6 +4310,7 @@ async function runZCodeReviewWithProviderRetry(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   const startedAt = new Date();
   let providerAttempts = 0;
@@ -4101,6 +4318,7 @@ async function runZCodeReviewWithProviderRetry(input: {
     config: input.config,
     evidenceDir: input.evidenceDir,
     operation: () => {
+      input.assertProviderConfigCurrent?.();
       providerAttempts += 1;
       return runZCodeReview({
         cwd: input.worktreePath,
