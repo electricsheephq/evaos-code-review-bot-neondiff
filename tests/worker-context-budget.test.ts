@@ -9,8 +9,10 @@ import type { Finding, PullRequestSummary } from "../src/types.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 const zcodePrompts = vi.hoisted((): string[] => []);
+const zcodeCompletedPrompts = vi.hoisted((): string[] => []);
 const zcodeFindingsByPath = vi.hoisted(() => new Map<string, Finding[]>());
 const zcodeFailuresByPath = vi.hoisted(() => new Map<string, string>());
+const zcodeDelaysByPath = vi.hoisted(() => new Map<string, number>());
 const createdReviews = vi.hoisted((): Array<{
   repo: string;
   pullNumber: number;
@@ -44,13 +46,16 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/zcode.js")>();
   return {
     ...actual,
-    runZCodeReview: vi.fn((input: { prompt: string }) => {
+    runZCodeReview: vi.fn(async (input: { prompt: string }) => {
       zcodePrompts.push(input.prompt);
+      const delay = [...zcodeDelaysByPath.entries()].find(([path]) => input.prompt.includes(path));
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay[1]));
       const failure = [...zcodeFailuresByPath.entries()].find(([path]) => input.prompt.includes(path));
       if (failure) throw new Error(failure[1]);
       const findings = [...zcodeFindingsByPath.entries()]
         .filter(([path]) => input.prompt.includes(path))
         .flatMap(([, entries]) => entries);
+      zcodeCompletedPrompts.push(input.prompt);
       return {
         findings,
         droppedFromSchema: [],
@@ -143,8 +148,10 @@ describe("worker context budget preflight", () => {
 
   afterEach(() => {
     zcodePrompts.length = 0;
+    zcodeCompletedPrompts.length = 0;
     zcodeFindingsByPath.clear();
     zcodeFailuresByPath.clear();
+    zcodeDelaysByPath.clear();
     createdReviews.length = 0;
     walkthroughBuildEvents.length = 0;
     delete reviewPostControl.error;
@@ -411,6 +418,175 @@ describe("worker context budget preflight", () => {
       status: "posted",
       reviewUrl: `https://github.com/electricsheephq/WorldOS/pull/${pull.number}#pullrequestreview-1`
     });
+    state.close();
+  });
+
+  it("runs the enabled shadow ensemble without changing the canonical posted review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-shadow-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(421, "9".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Anchor finding")]);
+    zcodeFindingsByPath.set("State and lifecycle review", [finding("src/a.ts", "State-only finding")]);
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toHaveLength(4);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("State and lifecycle review"))).toHaveLength(1);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("Authority and integration-boundary review"))).toHaveLength(1);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("Failure, concurrency, and operator-truth review"))).toHaveLength(1);
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(["Anchor finding"]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
+
+    const ensembleDir = join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "review-ensemble"
+    );
+    expect(JSON.parse(readFileSync(join(ensembleDir, "manifest.json"), "utf8"))).toMatchObject({
+      complete: true,
+      subject: { repo: "electricsheephq/WorldOS", pullNumber: pull.number, headSha: pull.head.sha }
+    });
+    expect(JSON.parse(readFileSync(join(ensembleDir, "shadow-packet.json"), "utf8"))).toMatchObject({
+      complete: true,
+      postingEligible: false,
+      gate: { comments: expect.arrayContaining([expect.objectContaining({ title: "State-only finding" })]) }
+    });
+    state.close();
+  });
+
+  it("keeps a specialist failure out of canonical processed state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-partial-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(423, "6".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Canonical finding")]);
+    zcodeFailuresByPath.set("Failure, concurrency, and operator-truth review", "specialist provider failed");
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(["Canonical finding"]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
+    const ensembleDir = join(
+      root,
+      "evidence",
+      localDateFolder(),
+      "electricsheephq__WorldOS",
+      `pr-${pull.number}`,
+      pull.head.sha,
+      "review-ensemble"
+    );
+    expect(JSON.parse(readFileSync(join(ensembleDir, "manifest.json"), "utf8"))).toMatchObject({
+      complete: false,
+      leaves: expect.arrayContaining([
+        expect.objectContaining({ id: "failure", status: "failed", error: "specialist provider failed" })
+      ])
+    });
+    expect(JSON.parse(readFileSync(join(ensembleDir, "shadow-packet.json"), "utf8"))).toMatchObject({
+      complete: false,
+      postingEligible: false
+    });
+    state.close();
+  });
+
+  it("posts the canonical anchor before a slow specialist settles", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-slow-shadow-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(424, "5".repeat(40));
+    const files = [pullFile("src/a.ts", 200)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Canonical before shadow")]);
+    zcodeDelaysByPath.set("State and lifecycle review", 100);
+    reviewPostControl.afterCreate = () => {
+      expect(zcodeCompletedPrompts.some((prompt) => prompt.includes("State and lifecycle review"))).toBe(false);
+    };
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(createdReviews).toHaveLength(1);
+    expect(zcodeCompletedPrompts.some((prompt) => prompt.includes("State and lifecycle review"))).toBe(true);
+    state.close();
+  });
+
+  it("applies every ensemble lens to every context chunk while retaining one canonical post", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-chunk-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.reviewEnsemble = { enabled: true, mode: "shadow" };
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(422, "7".repeat(40));
+    const files = [pullFile("src/a.ts", 5_000), pullFile("src/b.ts", 5_000)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Chunk anchor finding")]);
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + config.contextBudget.reservedOutputTokens + 2_000;
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: false,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toHaveLength(8);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("State and lifecycle review"))).toHaveLength(2);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("Authority and integration-boundary review"))).toHaveLength(2);
+    expect(zcodePrompts.filter((prompt) => prompt.includes("Failure, concurrency, and operator-truth review"))).toHaveLength(2);
+    expect(createdReviews).toHaveLength(1);
+    expect(createdReviews[0]?.comments.map((comment) => comment.title)).toEqual(["Chunk anchor finding"]);
+    expect(state.getProcessedReview("electricsheephq/WorldOS", pull.number, pull.head.sha)).toMatchObject({ status: "posted" });
     state.close();
   });
 

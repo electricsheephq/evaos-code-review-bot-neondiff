@@ -77,6 +77,29 @@ describe("review lenses config and packet safety", () => {
     expect(result.redactionReport.ok).toBe(true);
   });
 
+  it("provides bounded state, boundary, and failure specialist lenses", () => {
+    const result = buildReviewLensPacket({
+      config: reviewLensConfig({
+        active: [
+          { id: "failure", surface: "pr_shadow", mode: "shadow" },
+          { id: "state", surface: "pr_shadow", mode: "shadow" },
+          { id: "boundary", surface: "pr_shadow", mode: "shadow" }
+        ]
+      }),
+      surface: "pr_shadow",
+      generatedAt: "2026-08-09T00:00:00.000Z"
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected specialist lens packet");
+    expect(result.packet.lenses.map((lens) => lens.id)).toEqual(["boundary", "failure", "state"]);
+    expect(result.packet.markdown).toContain("State and lifecycle review");
+    expect(result.packet.markdown).toContain("Authority and integration-boundary review");
+    expect(result.packet.markdown).toContain("Failure, concurrency, and operator-truth review");
+    expect(result.packet.markdown).toContain("speculative hardening");
+    expect(result.packet.byteEstimate).toBeLessThanOrEqual(12_000);
+  });
+
   it("omits disallowed or oversized built-in lens text and redacts secret-looking text", () => {
     const result = buildReviewLensPacket({
       config: reviewLensConfig({
