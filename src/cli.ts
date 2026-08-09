@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
-import { runDaemonCycle, shouldExitDaemonAfterFailedCycle } from "./daemon.js";
+import {
+  advanceWorktreeCleanupDeadline,
+  runDaemonCycle,
+  shouldExitDaemonAfterFailedCycle
+} from "./daemon.js";
 import {
   runLaunchdControlCommand,
   type LaunchctlResult
@@ -2356,11 +2360,19 @@ async function main(): Promise<void> {
     const config = loadConfig(args.config);
     const monitoredRepos = listReposToScan(config);
     let cycle = 0;
+    let nextWorktreeCleanupAtMs = performance.now() + config.worktreeCleanup!.intervalMs;
     const runOnce = args.once === "true";
     for (;;) {
       cycle += 1;
       const dryRun = args["dry-run"] !== "false";
-      const cleanupIntervalCycles = Math.max(1, Math.ceil(config.worktreeCleanup!.intervalMs / config.pollIntervalMs));
+      const worktreeCleanupSchedule = advanceWorktreeCleanupDeadline({
+        enabled: config.worktreeCleanup!.enabled,
+        intervalMs: config.worktreeCleanup!.intervalMs,
+        nextCleanupAtMs: nextWorktreeCleanupAtMs,
+        nowMs: performance.now(),
+        runOnce
+      });
+      nextWorktreeCleanupAtMs = worktreeCleanupSchedule.nextCleanupAtMs;
       const cycleResult = await runDaemonCycle({
         cycle,
         dryRun,
@@ -2370,7 +2382,7 @@ async function main(): Promise<void> {
         commandsEnabled: config.commands.enabled,
         reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
         issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
-        worktreeCleanupDue: config.worktreeCleanup!.enabled && (cycle === 1 || (cycle - 1) % cleanupIntervalCycles === 0),
+        worktreeCleanupDue: worktreeCleanupSchedule.due,
         configPath: args.config
       });
       if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
