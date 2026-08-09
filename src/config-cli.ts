@@ -47,6 +47,8 @@ const EXACT_PATCH_PATHS = new Set([
   "canaryPulls",
   "reviewConcurrency.maxActiveRuns",
   "reviewConcurrency.leaseTtlMs",
+  "reviewEnsemble.enabled",
+  "reviewEnsemble.mode",
   "worktreeCleanup.enabled",
   "worktreeCleanup.retentionMs",
   "worktreeCleanup.intervalMs",

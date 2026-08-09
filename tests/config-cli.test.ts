@@ -486,6 +486,10 @@ describe("desktop config CLI", () => {
         maxActiveRuns: 2,
         leaseTtlMs: 600_000
       },
+      reviewEnsemble: {
+        enabled: true,
+        mode: "shadow"
+      },
       worktreeCleanup: {
         enabled: true,
         retentionMs: 7_200_000,
@@ -528,6 +532,8 @@ describe("desktop config CLI", () => {
         "skipDrafts",
         "reviewConcurrency.maxActiveRuns",
         "reviewConcurrency.leaseTtlMs",
+        "reviewEnsemble.enabled",
+        "reviewEnsemble.mode",
         "worktreeCleanup.enabled",
         "worktreeCleanup.retentionMs",
         "worktreeCleanup.intervalMs",
