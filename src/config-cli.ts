@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { loadConfig, loadConfigFromObject, type BotConfig, type RepoProfileConfig } from "./config.js";
 import { isApiKeyEnvName, isProviderId } from "./providers.js";
+import { classifyReviewRuntimeAuthority, type ReviewRuntimeAuthority } from "./review-runtime-authority.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const SECRET_KEY_PATTERN = /(?:token|secret|password|cookie|license(?:Key|Token|Secret)|api[_-]?key(?!env)|privateKey)/i;
@@ -108,6 +109,7 @@ export interface ConfigInspectResult {
   source: "file" | "defaults";
   revision: string;
   editablePaths: string[];
+  runtimeAuthority?: ReviewRuntimeAuthority;
   config?: unknown;
   error?: string;
 }
@@ -183,6 +185,7 @@ export function inspectConfigForDesktop(configPath?: string, fileOps?: Partial<C
       source: exists ? "file" : "defaults",
       revision: snapshot?.revision ?? "",
       editablePaths: editablePatchPaths(),
+      runtimeAuthority: redactConfigObject(classifyReviewRuntimeAuthority(config)) as ReviewRuntimeAuthority,
       config: redactConfigObject(config)
     };
   } catch (error) {

@@ -114,6 +114,7 @@ import {
   resolvePathFollowingExistingSymlinks
 } from "./path-safety.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
+import { classifyReviewRuntimeAuthority } from "./review-runtime-authority.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
 import { buildSkillPackContextPacket } from "./skill-packs.js";
@@ -302,29 +303,16 @@ async function main(): Promise<void> {
     }
     const config = loadConfig(args.config);
     if (action === "list") {
-      const codexRuntime = config.codexRuntime?.enabled ? config.codexRuntime : undefined;
+      const runtimeAuthority = classifyReviewRuntimeAuthority(config);
       console.log(stringifyProviderOutput({
-        ok: true,
+        ok: runtimeAuthority.ok,
         command: "providers list",
-        proofBoundary: codexRuntime
-          ? "Provider registry visibility plus active Codex CLI runtime selection; this does not prove an installed review or GitHub post."
-          : "Provider registry visibility only; live review execution uses the configured ZCode runtime.",
-        activeRuntime: codexRuntime
-          ? {
-              providerId: "codex-cli-oauth",
-              adapter: "codex-cli",
-              model: codexRuntime.model,
-              auth: "existing-codex-session"
-            }
-          : {
-              providerId: config.zcode.providerId,
-              adapter: "zcode",
-              model: config.zcode.model,
-              auth: "zcode-app-config"
-            },
+        proofBoundary: runtimeAuthority.proofBoundary,
+        activeRuntime: runtimeAuthority.execution,
+        runtimeAuthority,
         ...buildProviderRegistrySummary({
           registry: config.providers!,
-          ...(codexRuntime ? {} : {
+          ...(runtimeAuthority.execution.adapter === "codex-cli" ? {} : {
             currentZCode: {
               providerId: config.zcode.providerId,
               model: config.zcode.model
@@ -332,6 +320,7 @@ async function main(): Promise<void> {
           })
         })
       }));
+      if (!runtimeAuthority.ok) process.exitCode = 1;
       return;
     }
     if (action === "doctor") {
@@ -366,9 +355,11 @@ async function main(): Promise<void> {
         ...(providerId ? { providerId } : {}),
         smoke
       });
+      const runtimeAuthority = classifyReviewRuntimeAuthority(config);
       console.log(stringifyProviderOutput({
         ...result,
-        proofBoundary: "Provider readiness check only; alternate providers are not selected for live review execution by this command."
+        runtimeAuthority,
+        proofBoundary: "Provider registry readiness is reported separately from review execution authority; this command does not select or change a live review runtime."
       }));
       if (!result.ok) process.exitCode = 1;
       return;
@@ -429,11 +420,14 @@ async function main(): Promise<void> {
       if (!result.ok) process.exitCode = 1;
       return;
     }
-    const zcode = resolveZCodeProviderEnv({
-      appConfigPath: config.zcode.appConfigPath,
-      model: config.zcode.model,
-      providerId: config.zcode.providerId
-    });
+    const runtimeAuthority = classifyReviewRuntimeAuthority(config);
+    const zcode = runtimeAuthority.state === "legacy_authoritative"
+      ? resolveZCodeProviderEnv({
+          appConfigPath: config.zcode.appConfigPath,
+          model: config.zcode.model,
+          providerId: config.zcode.providerId
+        })
+      : undefined;
     const github = new GitHubApi(config.github);
     const readChecks = [];
     const monitoredRepos = listReposToScan(config);
@@ -461,7 +455,7 @@ async function main(): Promise<void> {
       canPostAsApp: github.canPostAsApp(),
       issueReadChecks: await collectIssueEnrichmentReadChecks(config, github)
     });
-    const ok = readChecks.every((check) => check.ok) && issueEnrichment.ok;
+    const ok = runtimeAuthority.ok && readChecks.every((check) => check.ok) && issueEnrichment.ok;
     console.log(stringifyRedactedJson({
       ok,
       pilotRepos: config.pilotRepos,
@@ -476,7 +470,8 @@ async function main(): Promise<void> {
       commandsEnabled: config.commands.enabled,
       statePath: config.statePath,
       workRoot: config.workRoot,
-      zcode: zcode.redacted,
+      runtimeAuthority,
+      ...(zcode ? { zcode: zcode.redacted } : {}),
       github: {
         canPostAsApp: github.canPostAsApp(),
         readMode: github.canPostAsApp() ? "app_installation" : "fallback_token",
@@ -689,6 +684,7 @@ async function main(): Promise<void> {
       release,
       coverage,
       agents,
+      runtimeAuthority: classifyReviewRuntimeAuthority(config),
       providerCooldowns,
       durableQueue,
       issueEnrichment: buildIssueEnrichmentStatus({

@@ -66,6 +66,7 @@ import {
 } from "./review-event-policy.js";
 import { selectReviewMode } from "./review-mode-router.js";
 import type { ReviewModeAnalysisPlan } from "./review-mode-types.js";
+import { classifyReviewRuntimeAuthority, type ReviewRuntimeAuthority } from "./review-runtime-authority.js";
 import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
@@ -157,30 +158,19 @@ function recordConsumedAuthorizationIncident(input: {
 }
 
 export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
-  if (config.codexRuntime?.enabled) {
-    return {
-      providerId: "codex-cli-oauth",
-      adapter: "codex-cli",
-      model: config.codexRuntime.model,
-      displayName: "Codex CLI (existing OAuth session)"
-    };
-  }
-  const providerId = resolveReviewRegistryProviderId(config);
-  const provider = config.providers?.providers[providerId];
-  if (!provider) {
-    return {
-      providerId,
-      adapter: "zcode (registry miss)",
-      model: "unknown",
-      displayName: "Unregistered provider id"
-    };
-  }
+  const authority = classifyReviewRuntimeAuthority(config);
   return {
-    providerId,
-    adapter: provider.adapter,
-    model: provider.model,
-    ...(provider.displayName ? { displayName: provider.displayName } : {})
+    providerId: authority.execution.providerId,
+    adapter: authority.execution.adapter,
+    model: authority.execution.model,
+    displayName: authority.execution.adapter === "codex-cli"
+      ? "Codex CLI (existing OAuth session)"
+      : "ZCode (app configuration)"
   };
+}
+
+function reviewRuntimeAuthorityNote(authority: ReviewRuntimeAuthority): string {
+  return `Review runtime authority: state=${authority.state}; reason=${authority.reason}.`;
 }
 
 function resolveReviewContextWindowTokens(config: BotConfig): number | undefined {
@@ -3922,7 +3912,8 @@ export function resolveSelfConsistencyBackend(
   config: BotConfig,
   selfConsistencyConfig: SelfConsistencyConfig
 ): { useCodex: boolean; providerId?: string } {
-  const useCodex = Boolean(config.codexRuntime?.enabled && selfConsistencyConfig.provider === undefined);
+  const authority = classifyReviewRuntimeAuthority(config);
+  const useCodex = authority.execution.adapter === "codex-cli" && selfConsistencyConfig.provider === undefined;
   return {
     useCodex,
     providerId: useCodex ? "codex-cli-oauth" : (selfConsistencyConfig.provider ?? config.zcode.providerId)
@@ -4141,6 +4132,8 @@ async function runChunkedZCodeReview(input: {
   assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const startedAt = new Date();
+  const authority = classifyReviewRuntimeAuthority(input.config);
+  const authorityNote = reviewRuntimeAuthorityNote(authority);
   const findings: ZCodeReviewResult["findings"] = [];
   const droppedFromSchema: ZCodeReviewResult["droppedFromSchema"] = [];
   const rawResponses: Array<{ index: number; rawResponse: string }> = [];
@@ -4221,7 +4214,9 @@ async function runChunkedZCodeReview(input: {
       runtimeNotes.push(`chunk ${chunk.index}: dropped ${droppedCrossChunkFindings.length} finding(s) outside this chunk's file set.`);
     }
     if (result.runtime.notes) {
-      runtimeNotes.push(...result.runtime.notes.map((note) => `chunk ${chunk.index}: ${note}`));
+      runtimeNotes.push(...result.runtime.notes
+        .filter((note) => note !== authorityNote)
+        .map((note) => `chunk ${chunk.index}: ${note}`));
     }
   }
 
@@ -4235,20 +4230,20 @@ async function runChunkedZCodeReview(input: {
       attempts,
       degradedRecovery,
       runtime: {
-        provider: input.config.codexRuntime?.enabled ? "codex-cli-oauth" : input.config.zcode.providerId,
-        model: input.config.codexRuntime?.enabled ? input.config.codexRuntime.model : input.config.zcode.model,
+        provider: authority.execution.providerId,
+        model: authority.execution.model,
         startedAt: startedAt.toISOString(),
         completedAt: completedAt.toISOString(),
         latencyMs: completedAt.getTime() - startedAt.getTime(),
         providerAttempts,
-        notes: runtimeNotes
+        notes: [authorityNote, ...runtimeNotes]
       }
     }
   };
 }
 
 function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } {
-  const codexRuntime = config.codexRuntime?.enabled ? config.codexRuntime : undefined;
+  const authority = classifyReviewRuntimeAuthority(config, { executionRequested: false });
   return {
     findings: [],
     droppedFromSchema: [],
@@ -4256,12 +4251,14 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
     attempts: 0,
     degradedRecovery: false,
     runtime: {
-      provider: codexRuntime ? "codex-cli-oauth" : config.zcode.providerId,
-      model: codexRuntime?.model ?? config.zcode.model,
+      provider: authority.execution.providerId,
+      model: authority.execution.model,
       providerAttempts: 0,
-      notes: [codexRuntime
-        ? "Configured review execution disabled for this dry-run; provider latency and token usage were not measured."
-        : "ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+      notes: [
+        "Configured review execution disabled for this dry-run; provider latency and token usage were not measured.",
+        reviewRuntimeAuthorityNote(authority),
+        authority.automaticFallback.reason
+      ]
     }
   };
 }
@@ -4273,33 +4270,37 @@ async function runConfiguredReview(input: {
   evidenceDir: string;
   assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
-  if (!input.config.codexRuntime?.enabled) return runZCodeReviewWithProviderRetry(input);
+  const authority = classifyReviewRuntimeAuthority(input.config);
+  if (authority.execution.adapter === "zcode") return runZCodeReviewWithProviderRetry(input);
+  const codexRuntime = input.config.codexRuntime!;
   input.assertProviderConfigCurrent?.();
   const startedAt = new Date();
   const result = await runCodexReview({
     cwd: input.worktreePath,
     prompt: input.prompt,
-    cliPath: input.config.codexRuntime.cliPath,
-    model: input.config.codexRuntime.model,
-    reasoningEffort: input.config.codexRuntime.reasoningEffort,
+    cliPath: codexRuntime.cliPath,
+    model: codexRuntime.model,
+    reasoningEffort: codexRuntime.reasoningEffort,
     evidenceDir: input.evidenceDir,
-    timeoutMs: input.config.codexRuntime.timeoutMs,
-    maxOutputBytes: input.config.codexRuntime.maxOutputBytes
+    timeoutMs: codexRuntime.timeoutMs,
+    maxOutputBytes: codexRuntime.maxOutputBytes
   });
   const completedAt = new Date();
   return {
     ...result,
     runtime: {
-      provider: "codex-cli-oauth",
-      model: input.config.codexRuntime.model,
+      provider: authority.execution.providerId,
+      model: authority.execution.model,
       startedAt: startedAt.toISOString(),
       completedAt: completedAt.toISOString(),
       latencyMs: completedAt.getTime() - startedAt.getTime(),
       providerAttempts: 1,
       notes: [
-        `Codex CLI reasoning effort: ${input.config.codexRuntime.reasoningEffort}.`,
+        `Codex CLI reasoning effort: ${codexRuntime.reasoningEffort}.`,
         "Codex CLI used its existing authenticated session; NeonDiff did not read or receive OAuth material.",
-        "Codex runtime retries are disabled; a failed invocation returns one terminal queue failure."
+        "Codex runtime retries are disabled; a failed invocation returns one terminal queue failure.",
+        reviewRuntimeAuthorityNote(authority),
+        authority.automaticFallback.reason
       ]
     }
   };
@@ -4313,6 +4314,7 @@ async function runZCodeReviewWithProviderRetry(input: {
   assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   const startedAt = new Date();
+  const authority = classifyReviewRuntimeAuthority(input.config);
   let providerAttempts = 0;
   const result = await runWithProviderRetry({
     config: input.config,
@@ -4337,14 +4339,16 @@ async function runZCodeReviewWithProviderRetry(input: {
   return {
     ...result,
     runtime: {
-      provider: input.config.zcode.providerId,
-      model: input.config.zcode.model,
+      provider: authority.execution.providerId,
+      model: authority.execution.model,
       startedAt: startedAt.toISOString(),
       completedAt: completedAt.toISOString(),
       latencyMs: completedAt.getTime() - startedAt.getTime(),
       notes: [
         `Observed outer provider retry attempts: ${providerAttempts}.`,
         "Internal ZCode retry attempts and token usage are not exposed by the configured provider path; providerAttempts and token metrics remain null.",
+        reviewRuntimeAuthorityNote(authority),
+        authority.automaticFallback.reason,
         // Retry-degraded provenance (#304): surfaced only when the strict-JSON retry path produced
         // the accepted parse, so evidence packets and the ledger runtime honestly flag it.
         ...(result.degradedRecovery

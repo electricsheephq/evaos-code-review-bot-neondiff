@@ -45,7 +45,8 @@ evidence.
 
 Status definitions:
 
-- `default beta path`: shipped live review route in this beta.
+- `default beta path`: shipped legacy review route when `codexRuntime.enabled`
+  is false.
 - `tested by NeonDiff`: covered by NeonDiff fixture, doctor, smoke, or live-route
   proof named in repo evidence; this still does not claim quality parity.
 - `compatible by interface`: the provider exposes an API shape NeonDiff can
@@ -56,7 +57,7 @@ Status definitions:
 
 | Provider, runtime, or resource | Status | How to verify | Egress posture | Tracking |
 | --- | --- | --- | --- | --- |
-| GLM/Z.AI through ZCode (`zcode-glm`) | `default beta path`; `tested by NeonDiff` as the current live review route | `neondiff providers doctor --config config.local.json --json`, then a dry-run review before live posting | Hosted Z.AI/GLM path through ZCode can receive prompts and diffs | Provider sprint [#238](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/238) |
+| GLM/Z.AI through ZCode (`zcode-glm`) | `default beta path` when Codex is disabled; `tested by NeonDiff` as the legacy review route | Inspect `runtimeAuthority`, then run `neondiff providers doctor --config config.local.json --json` and a dry-run review before live posting | Hosted Z.AI/GLM path through ZCode can receive prompts and diffs when it is authoritative or explicitly used for a self-consistency re-check | Provider sprint [#238](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/238) |
 | Ollama on `http://localhost:11434/v1` | `compatible by interface`; `ollama-format-json-schema` request construction shipped behind explicit config | Enable the local provider and run `neondiff providers doctor --config config.local.json --provider ollama-local --smoke true --json`, then a review fixture/dry-run | No-egress only when endpoint is loopback or self-hosted and the model runs locally | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240), schema mode [#399](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/399) |
 | LM Studio, vLLM, llama.cpp, SGLang, or local OpenAI-compatible gateway | `compatible by interface`; schema-constrained request construction shipped behind explicit config | Use an explicit provider id and local `/v1` base URL; promote only after fixture and dry-run review proof | No-egress only for local/self-hosted endpoints; hosted gateways are remote egress | OpenAI-compatible adapter [#240](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/240), schema mode [#399](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/399) |
 | Hosted OpenAI-compatible BYOK gateway | `compatible by interface`; remote smoke and live review proof required | Store only `apiKeyEnv`, run a single-provider smoke, then record redacted evidence before live review | Hosted provider receives prompts and diffs | Hosted BYOK coverage [#241](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/241) |
@@ -78,6 +79,31 @@ Check enabled provider metadata:
 neondiff providers doctor --config config.local.json --json
 ```
 
+`runtimeAuthority` is the execution-selection truth shared by config inspect,
+provider listing, general doctor, operator status, and review receipts:
+
+- `codexRuntime.enabled=true` selects Codex CLI for canonical review execution.
+- Otherwise canonical review execution calls ZCode using `zcode` configuration.
+- On the legacy path, `zcode.providerId` pins the ZCode app provider. When it is
+  absent, ZCode selects a matching enabled app provider; the registry default
+  is compared as diagnostic metadata but does not route the request.
+- Provider-registry defaults are diagnostic and setup metadata. They do not
+  replace the canonical executor selected by the rule above.
+- There is no automatic Codex-to-ZCode or ZCode-to-registry fallback. Codex
+  failures are terminal, and ZCode retry attempts stay on ZCode.
+- An explicit self-consistency provider is an auxiliary second draw. It is not
+  a fallback and cannot replace a canonical finding when that second draw
+  fails.
+- Per-invocation review suppression disables execution; it does not select a
+  different runtime.
+
+An invalid legacy authority report means an explicit `zcode.providerId` pin has
+no matching registry entry, is disabled, or contradicts the ZCode executor that
+current worker code would attempt. Correct the pin or registry metadata
+deliberately; do not change routing merely to make doctor green. Authority
+output proves configuration precedence only, not CLI login, provider reachability,
+installed adoption, review success, posting, release, or customer readiness.
+
 Smoke an OpenAI-compatible `/models` endpoint:
 
 ```bash
@@ -88,7 +114,8 @@ neondiff providers doctor \
   --json
 ```
 
-The native desktop Providers pane uses this saved registry as its authority.
+The native desktop Providers pane uses this saved registry as its authority for
+provider setup and verification, not for canonical review-executor selection.
 It does not treat `desktop.openAICompatibleEndpoint` as a verified target.
 Preview and Apply endpoint/model changes first; the subsequent explicit Verify
 click pins `--provider` and `--expected-config-revision`, reads the key from
@@ -289,7 +316,9 @@ sandbox, strict findings schema, bounded output, hard timeout, and pre/post
 checkout-state comparison. Codex uses its existing
 login internally; NeonDiff does not read or receive OAuth material. Model and
 reasoning effort are explicit configuration, and availability remains subject
-to the authenticated Codex account. Claude Code and OpenCode remain discovery
+to the authenticated Codex account. A failed Codex invocation does not invoke
+ZCode automatically; it returns a terminal review/queue failure. Claude Code
+and OpenCode remain discovery
 only. See [docs/agent-runtime-adapters.md](agent-runtime-adapters.md).
 
 ```json

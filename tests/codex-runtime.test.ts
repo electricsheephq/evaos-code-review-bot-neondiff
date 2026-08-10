@@ -43,6 +43,27 @@ describe("Codex CLI review runtime", () => {
     });
   });
 
+  it("keeps receipt metadata on the actual ZCode executor when registry metadata disagrees", () => {
+    const config = loadConfigFromObject({
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            capabilities: { review: true, jsonOutput: true }
+          }
+        }
+      }
+    });
+
+    expect(buildReviewProviderMetadata(config)).toMatchObject({
+      providerId: "zcode-app-selected",
+      adapter: "zcode",
+      model: "GLM-5.2",
+      displayName: "ZCode (app configuration)"
+    });
+  });
+
   it("constructs a read-only ephemeral invocation without OAuth material", () => {
     const invocation = buildCodexExecInvocation({
       cliPath: "/Users/test/.local/bin/codex",

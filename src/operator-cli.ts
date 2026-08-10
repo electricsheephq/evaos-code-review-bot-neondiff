@@ -14,6 +14,7 @@ import type {
 import type { IssueEnrichmentStatus } from "./issue-enrichment.js";
 import type { ReviewBudgetStatus } from "./review-budget.js";
 import type { ReleaseHeartbeatStatus, ReleaseLaunchdStatus, ReleaseStatus } from "./release-status.js";
+import type { ReviewRuntimeAuthority } from "./review-runtime-authority.js";
 import { redactSecrets } from "./secrets.js";
 import {
   parseProviderCooldownError,
@@ -72,6 +73,7 @@ export interface OperatorStatus {
   durableQueue?: OperatorDurableQueueSnapshot;
   issueEnrichment?: IssueEnrichmentStatus;
   issueEnrichmentRuntime?: OperatorIssueEnrichmentRuntime;
+  runtimeAuthority?: ReviewRuntimeAuthority;
 }
 
 export interface RuntimeInventory {
@@ -401,6 +403,7 @@ export function buildOperatorStatus(input: {
   durableQueue?: OperatorDurableQueueSnapshot;
   issueEnrichment?: IssueEnrichmentStatus;
   issueEnrichmentRuntime?: OperatorIssueEnrichmentRuntime;
+  runtimeAuthority?: ReviewRuntimeAuthority;
   checkedAt?: string;
 }): OperatorStatus {
   const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
@@ -428,9 +431,17 @@ export function buildOperatorStatus(input: {
   const issueEnrichmentRuntimeRetryableDeferred = issueEnrichmentRuntime?.summary.retryableDeferred ?? 0;
   const issueEnrichmentRuntimeRetryableDeferredDetail =
     describeIssueEnrichmentRuntimeRetryableDeferred(issueEnrichmentRuntimeRetryableDeferred);
+  const runtimeAuthority = input.runtimeAuthority;
 
   const gates = [
     ...input.release.gates,
+    ...(runtimeAuthority
+      ? [{
+          name: "review_runtime_authority_valid",
+          ok: runtimeAuthority.ok,
+          detail: `${runtimeAuthority.state}: ${runtimeAuthority.reason}; executor=${runtimeAuthority.execution.adapter}/${runtimeAuthority.execution.model}; automaticFallback=${runtimeAuthority.automaticFallback.reachable}`
+        }]
+      : []),
     {
       name: "queue_no_pending_heads",
       ok: pendingHeads === 0,
@@ -511,7 +522,10 @@ export function buildOperatorStatus(input: {
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
     ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : []),
     ...(issueEnrichmentRuntimeFailed > 0 ? ["inspect failed issue-enrichment records before promotion"] : []),
-    ...(issueEnrichmentRuntimeRetryableDeferred > 0 ? ["retry or inspect deferred issue-enrichment records"] : [])
+    ...(issueEnrichmentRuntimeRetryableDeferred > 0 ? ["retry or inspect deferred issue-enrichment records"] : []),
+    ...(runtimeAuthority && !runtimeAuthority.ok
+      ? ["align diagnostic provider metadata with the configured review executor; do not change routing solely to clear status"]
+      : [])
   ]);
 
   return {
@@ -552,7 +566,8 @@ export function buildOperatorStatus(input: {
     providerCooldowns,
     ...(durableQueue ? { durableQueue } : {}),
     ...(issueEnrichment ? { issueEnrichment } : {}),
-    ...(issueEnrichmentRuntime ? { issueEnrichmentRuntime } : {})
+    ...(issueEnrichmentRuntime ? { issueEnrichmentRuntime } : {}),
+    ...(runtimeAuthority ? { runtimeAuthority } : {})
   };
 }
 
