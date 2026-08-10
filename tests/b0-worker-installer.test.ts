@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -144,6 +145,24 @@ describe("B0 worker installer", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("rejects a hardlinked managed log before changing the shared inode", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-hardlink-install-")));
+    try {
+      const directory = join(root, "logs");
+      const stdoutPath = join(directory, "launchd.out.log");
+      const stderrPath = join(directory, "launchd.err.log");
+      const operatorPath = join(root, "operator-owned.log");
+      mkdirSync(directory, { mode: 0o700 });
+      writeFileSync(operatorPath, "preserve", { mode: 0o644 });
+      linkSync(operatorPath, stdoutPath);
+      expect(() => prepareLaunchdLogFiles({ StandardOutPath: stdoutPath, StandardErrorPath: stderrPath })).toThrow("must have exactly one link");
+      expect(readFileSync(operatorPath, "utf8")).toBe("preserve");
+      expect(statSync(operatorPath).mode & 0o777).toBe(0o644);
+      expect(statSync(operatorPath).nlink).toBe(2);
+      expect(existsSync(stderrPath)).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("rejects normalized launchd log paths outside the current user's Library", () => {

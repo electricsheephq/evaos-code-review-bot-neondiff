@@ -51,11 +51,16 @@ function lstatIfPresent(path) {
   }
 }
 
-function requireCurrentUserPrivateFile(entry, label) {
+function requireCurrentUserSingleLinkFile(entry, label) {
   if (!entry.isFile()) fail(`${label} must be a regular non-symlink file`);
   if (typeof process.getuid === "function" && entry.uid !== process.getuid()) {
     fail(`${label} must be owned by the current user`);
   }
+  if (entry.nlink !== 1) fail(`${label} must have exactly one link`);
+}
+
+function requireCurrentUserPrivateFile(entry, label) {
+  requireCurrentUserSingleLinkFile(entry, label);
   if ((entry.mode & 0o077) !== 0) fail(`${label} must be private to the current user (0600)`);
 }
 
@@ -89,15 +94,26 @@ export function prepareLaunchdLogFiles(launchAgent) {
       if (typeof process.getuid === "function" && existing.uid !== process.getuid()) {
         fail("LaunchAgent log path must be owned by the current user");
       }
+      requireCurrentUserSingleLinkFile(existing, "LaunchAgent log path");
       let fd;
       try {
         fd = openSync(path, constants.O_WRONLY | constants.O_NOFOLLOW);
-        fchmodSync(fd, 0o600);
         const descriptorEntry = fstatSync(fd);
         const pathEntry = lstatSync(path);
-        requireCurrentUserPrivateFile(descriptorEntry, "LaunchAgent log descriptor");
-        requireCurrentUserPrivateFile(pathEntry, "LaunchAgent log path");
+        requireCurrentUserSingleLinkFile(descriptorEntry, "LaunchAgent log descriptor");
+        requireCurrentUserSingleLinkFile(pathEntry, "LaunchAgent log path");
         if (descriptorEntry.dev !== pathEntry.dev || descriptorEntry.ino !== pathEntry.ino) {
+          fail("LaunchAgent log path changed while permissions were prepared");
+        }
+        fchmodSync(fd, 0o600);
+        const preparedDescriptorEntry = fstatSync(fd);
+        const preparedPathEntry = lstatSync(path);
+        requireCurrentUserPrivateFile(preparedDescriptorEntry, "LaunchAgent log descriptor");
+        requireCurrentUserPrivateFile(preparedPathEntry, "LaunchAgent log path");
+        if (
+          preparedDescriptorEntry.dev !== preparedPathEntry.dev
+          || preparedDescriptorEntry.ino !== preparedPathEntry.ino
+        ) {
           fail("LaunchAgent log path changed while permissions were prepared");
         }
       } catch (error) {
@@ -118,12 +134,22 @@ export function prepareLaunchdLogFiles(launchAgent) {
         constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
         0o600
       );
-      fchmodSync(fd, 0o600);
       const descriptorEntry = fstatSync(fd);
       const pathEntry = lstatSync(path);
-      requireCurrentUserPrivateFile(descriptorEntry, "LaunchAgent log descriptor");
-      requireCurrentUserPrivateFile(pathEntry, "LaunchAgent log path");
+      requireCurrentUserSingleLinkFile(descriptorEntry, "LaunchAgent log descriptor");
+      requireCurrentUserSingleLinkFile(pathEntry, "LaunchAgent log path");
       if (descriptorEntry.dev !== pathEntry.dev || descriptorEntry.ino !== pathEntry.ino) {
+        fail("LaunchAgent log path changed while it was created");
+      }
+      fchmodSync(fd, 0o600);
+      const preparedDescriptorEntry = fstatSync(fd);
+      const preparedPathEntry = lstatSync(path);
+      requireCurrentUserPrivateFile(preparedDescriptorEntry, "LaunchAgent log descriptor");
+      requireCurrentUserPrivateFile(preparedPathEntry, "LaunchAgent log path");
+      if (
+        preparedDescriptorEntry.dev !== preparedPathEntry.dev
+        || preparedDescriptorEntry.ino !== preparedPathEntry.ino
+      ) {
         fail("LaunchAgent log path changed while it was created");
       }
     } catch (error) {

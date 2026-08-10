@@ -2,6 +2,7 @@ import {
   closeSync,
   chmodSync,
   fstatSync,
+  linkSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -129,6 +130,62 @@ describe("daemon heartbeat logs", () => {
     } finally {
       closeSync(fd);
     }
+  });
+
+  it("rejects a hardlinked live log before archive or truncation", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-hardlink-")));
+    roots.push(root);
+    const livePath = join(root, "launchd.out.log");
+    const linkedPath = join(root, "operator-owned.log");
+    writeFileSync(livePath, "preserve", { mode: 0o600 });
+    linkSync(livePath, linkedPath);
+    const fd = openSync(livePath, "a");
+    try {
+      expect(() => createLaunchdLogWriter({ path: livePath, fd, maxBytes: 1 })).toThrow(
+        "must have exactly one link"
+      );
+      expect(readFileSync(livePath, "utf8")).toBe("preserve");
+      expect(readFileSync(linkedPath, "utf8")).toBe("preserve");
+      expect(statSync(linkedPath).nlink).toBe(2);
+    } finally { closeSync(fd); }
+  });
+
+  it("copies a fixed initial snapshot through a bounded buffer", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-bounded-")));
+    roots.push(root);
+    const livePath = join(root, "launchd.out.log");
+    const initial = Buffer.alloc(192 * 1024 + 17, "x");
+    writeFileSync(livePath, initial, { mode: 0o600 });
+    const fd = openSync(livePath, "a");
+    try {
+      const writer = createLaunchdLogWriter({ path: livePath, fd, maxBytes: initial.byteLength, archiveCount: 2, maxAgeMs: 7 * 24 * 60 * 60 * 1_000, now: () => new Date("2026-08-10T00:00:00.000Z") });
+      writer("new");
+      const archive = readdirSync(root).find((name) => name.endsWith(".archive"));
+      expect(archive).toBeDefined();
+      expect(readFileSync(join(root, archive!))).toEqual(initial);
+      expect(readFileSync(livePath, "utf8")).toBe("new\n");
+    } finally { closeSync(fd); }
+    const implementation = readFileSync(new URL("../src/daemon-log.ts", import.meta.url), "utf8");
+    expect(implementation).toContain("readSync(");
+    expect(implementation).toContain("snapshotLength = source.size");
+    expect(implementation).not.toContain("readFileSync(sourceFd)");
+  });
+
+  it("preserves an existing exact archive destination and the live log", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-final-collision-")));
+    roots.push(root);
+    const livePath = join(root, "launchd.out.log");
+    const finalPath = join(root, `${basename(livePath)}.neondiff-20260810T000000000Z-${process.pid}-1.archive`);
+    writeFileSync(livePath, "preserve", { mode: 0o600 });
+    writeFileSync(finalPath, "existing archive", { mode: 0o600 });
+    const fd = openSync(livePath, "a");
+    try {
+      const writer = createLaunchdLogWriter({ path: livePath, fd, maxBytes: 1, archiveCount: 5, maxAgeMs: 7 * 24 * 60 * 60 * 1_000, now: () => new Date("2026-08-10T00:00:00.000Z") });
+      expect(() => writer("x")).toThrow();
+      expect(readFileSync(finalPath, "utf8")).toBe("existing archive");
+      expect(readFileSync(livePath, "utf8")).toBe("preserve");
+      expect(readdirSync(root)).not.toContain(`${basename(finalPath)}.tmp`);
+    } finally { closeSync(fd); }
   });
 
   it("bounds archive count and age without touching unrelated files", () => {

@@ -4,12 +4,12 @@ import {
   fstatSync,
   fsyncSync,
   ftruncateSync,
+  linkSync,
   lstatSync,
   openSync,
-  readFileSync,
   readdirSync,
+  readSync,
   realpathSync,
-  renameSync,
   rmSync,
   writeSync
 } from "node:fs";
@@ -152,17 +152,18 @@ function archiveLaunchdLog(input: {
   const archiveName = launchdArchiveName(input.path, input.now, input.archiveSequence);
   const archivePath = resolve(directory, archiveName);
   const temporaryPath = `${archivePath}.tmp`;
-  const bytes = readInheritedLogSnapshot(input.path, input.fd);
   let temporaryFd: number | undefined;
   let temporaryCreated = false;
   try {
     temporaryFd = openSync(temporaryPath, "wx", 0o600);
     temporaryCreated = true;
-    writeAll(temporaryFd, bytes);
+    copyInheritedLogSnapshot(input.path, input.fd, temporaryFd);
     fsyncSync(temporaryFd);
     closeSync(temporaryFd);
     temporaryFd = undefined;
-    renameSync(temporaryPath, archivePath);
+    linkSync(temporaryPath, archivePath);
+    rmSync(temporaryPath);
+    temporaryCreated = false;
     fsyncDirectory(directory);
     assertPrivateArchive(archivePath);
     pruneLaunchdLogArchives(input.path, input.archiveCount, input.maxAgeMs, input.now, archivePath);
@@ -182,7 +183,7 @@ function archiveLaunchdLog(input: {
   }
 }
 
-function readInheritedLogSnapshot(path: string, inheritedFd: number): Buffer {
+function copyInheritedLogSnapshot(path: string, inheritedFd: number, archiveFd: number): void {
   const sourceFd = openSync(resolve(path), constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const source = fstatSync(sourceFd) as Stats;
@@ -190,7 +191,26 @@ function readInheritedLogSnapshot(path: string, inheritedFd: number): Buffer {
     if (!source.isFile() || source.dev !== inherited.dev || source.ino !== inherited.ino) {
       throw new Error("launchd log snapshot must use the inherited descriptor inode");
     }
-    return readFileSync(sourceFd);
+    if (source.nlink !== 1 || inherited.nlink !== 1) {
+      throw new Error("launchd log path must have exactly one link");
+    }
+    const snapshotLength = source.size;
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let snapshotOffset = 0;
+    while (snapshotOffset < snapshotLength) {
+      const bytesRead = readSync(
+        sourceFd,
+        buffer,
+        0,
+        Math.min(buffer.byteLength, snapshotLength - snapshotOffset),
+        snapshotOffset
+      );
+      if (bytesRead === 0) {
+        throw new Error("launchd log snapshot changed before it could be archived");
+      }
+      writeAll(archiveFd, buffer, bytesRead);
+      snapshotOffset += bytesRead;
+    }
   } finally {
     closeSync(sourceFd);
   }
@@ -246,6 +266,9 @@ function assertPrivateLaunchdLog(path: string, fd: number): Stats {
   if (!fdEntry.isFile() || fdEntry.dev !== pathEntry.dev || fdEntry.ino !== pathEntry.ino) {
     throw new Error("launchd log path and inherited descriptor must identify the same regular file");
   }
+  if (pathEntry.nlink !== 1 || fdEntry.nlink !== 1) {
+    throw new Error("launchd log path must have exactly one link");
+  }
   return fdEntry;
 }
 
@@ -276,9 +299,9 @@ function launchdArchivePattern(path: string): RegExp {
   return new RegExp(`^${escaped}\\.neondiff-\\d{8}T\\d{9}Z-\\d+-\\d+\\.archive$`);
 }
 
-function writeAll(fd: number, bytes: Buffer): void {
+function writeAll(fd: number, bytes: Buffer, byteLength = bytes.byteLength): void {
   let offset = 0;
-  while (offset < bytes.byteLength) offset += writeSync(fd, bytes, offset, bytes.byteLength - offset);
+  while (offset < byteLength) offset += writeSync(fd, bytes, offset, byteLength - offset);
 }
 
 function fsyncDirectory(path: string): void {
