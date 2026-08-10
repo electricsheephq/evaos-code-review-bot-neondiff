@@ -1,10 +1,32 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from "node:fs";
 import { spawnSync } from "node:child_process";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  LAUNCHD_LOG_ENV as RUNTIME_LOG_ENV,
+  LAUNCHD_LOG_POLICY as RUNTIME_LOG_POLICY
+} from "../src/daemon-log.js";
+import {
+  LAUNCHD_LOG_ROTATION_ENV,
+  LAUNCHD_LOG_ROTATION_POLICY,
   planWorkerRollback,
   planWorkerUpdate,
+  prepareLaunchdLogFiles,
   recoverPreviouslyLoadedWorker,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
@@ -63,6 +85,8 @@ function launchAgent() {
       "true"
     ],
     WorkingDirectory: "/Users/test/neondiff",
+    StandardOutPath: join(homedir(), "Library", "Logs", "evaos-code-review-bot", "launchd.out.log"),
+    StandardErrorPath: join(homedir(), "Library", "Logs", "evaos-code-review-bot", "launchd.err.log"),
     EnvironmentVariables: {
       NEONDIFF_GITHUB_APP_ID: "123456",
       NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: "/Users/test/.config/neondiff/app.pem"
@@ -71,6 +95,92 @@ function launchAgent() {
 }
 
 describe("B0 worker installer", () => {
+  it("keeps the runtime, installer, and example plist on one bounded log policy", () => {
+    expect(LAUNCHD_LOG_ROTATION_POLICY).toEqual(RUNTIME_LOG_POLICY);
+    expect(LAUNCHD_LOG_ROTATION_ENV).toEqual(RUNTIME_LOG_ENV);
+    const plist = readFileSync("launchd/evaos-code-review-bot.plist.example", "utf8");
+    for (const name of Object.values(LAUNCHD_LOG_ROTATION_ENV)) expect(plist).toContain(`<key>${name}</key>`);
+    expect(plist).toContain(`<string>${LAUNCHD_LOG_ROTATION_POLICY.maxBytes}</string>`);
+    expect(plist).toContain(`<string>${LAUNCHD_LOG_ROTATION_POLICY.archiveCount}</string>`);
+    expect(plist).toContain(`<string>${LAUNCHD_LOG_ROTATION_POLICY.maxAgeHours}</string>`);
+  });
+
+  it("rejects a dangling managed log symlink without creating its target", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-install-")));
+    try {
+      const directory = join(root, "Library", "Logs", "evaos-code-review-bot");
+      const stdoutPath = join(directory, "launchd.out.log");
+      const stderrPath = join(directory, "launchd.err.log");
+      const redirectedTarget = join(root, "redirected.out.log");
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      symlinkSync(redirectedTarget, stdoutPath);
+
+      expect(() => prepareLaunchdLogFiles({
+        StandardOutPath: stdoutPath,
+        StandardErrorPath: stderrPath
+      })).toThrow("regular non-symlink file");
+      expect(lstatSync(stdoutPath).isSymbolicLink()).toBe(true);
+      expect(existsSync(redirectedTarget)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("narrows existing managed log permissions without truncating contents", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-existing-")));
+    try {
+      const stdoutPath = join(root, "launchd.out.log");
+      const stderrPath = join(root, "launchd.err.log");
+      writeFileSync(stdoutPath, "keep stdout", { mode: 0o600 });
+      writeFileSync(stderrPath, "keep stderr", { mode: 0o600 });
+      chmodSync(stdoutPath, 0o644);
+      chmodSync(stderrPath, 0o644);
+
+      prepareLaunchdLogFiles({ StandardOutPath: stdoutPath, StandardErrorPath: stderrPath });
+
+      expect(readFileSync(stdoutPath, "utf8")).toBe("keep stdout");
+      expect(readFileSync(stderrPath, "utf8")).toBe("keep stderr");
+      expect(statSync(stdoutPath).mode & 0o777).toBe(0o600);
+      expect(statSync(stderrPath).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a hardlinked managed log before changing the shared inode", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "neondiff-launchd-hardlink-install-")));
+    try {
+      const directory = join(root, "logs");
+      const stdoutPath = join(directory, "launchd.out.log");
+      const stderrPath = join(directory, "launchd.err.log");
+      const operatorPath = join(root, "operator-owned.log");
+      mkdirSync(directory, { mode: 0o700 });
+      writeFileSync(operatorPath, "preserve", { mode: 0o644 });
+      linkSync(operatorPath, stdoutPath);
+      expect(() => prepareLaunchdLogFiles({ StandardOutPath: stdoutPath, StandardErrorPath: stderrPath })).toThrow("must have exactly one link");
+      expect(readFileSync(operatorPath, "utf8")).toBe("preserve");
+      expect(statSync(operatorPath).mode & 0o777).toBe(0o644);
+      expect(statSync(operatorPath).nlink).toBe(2);
+      expect(existsSync(stderrPath)).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("rejects normalized launchd log paths outside the current user's Library", () => {
+    const outsideHome = launchAgent();
+    outsideHome.StandardOutPath = "/tmp/Library/Logs/evaos-code-review-bot/launchd.out.log";
+    outsideHome.StandardErrorPath = "/tmp/Library/Logs/evaos-code-review-bot/launchd.err.log";
+
+    expect(() => planWorkerUpdate({
+      launchAgent: outsideHome,
+      expectedLabel: "com.electricsheephq.neondiff",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    })).toThrow("private user Library/Logs/evaos-code-review-bot directory");
+  });
+
   it("keeps a stable Node command when it resolves to the running Node binary", () => {
     const resolved = new Map([
       ["/opt/homebrew/Cellar/node/26.5.1/bin/node", "/opt/homebrew/Cellar/node/26.5.1/bin/node"],
@@ -212,7 +322,14 @@ describe("B0 worker installer", () => {
     expect(plan.versionID).toBe(`1.1.0-beta.27-${candidateHead.slice(0, 12)}`);
     expect(plan.configPath).toBe("/Users/test/.config/neondiff/config.local.json");
     expect(plan.nextLaunchAgent.Label).toBe("com.electricsheephq.neondiff");
-    expect(plan.nextLaunchAgent.EnvironmentVariables).toEqual(launchAgent().EnvironmentVariables);
+    expect(plan.nextLaunchAgent.EnvironmentVariables).toMatchObject({
+      ...launchAgent().EnvironmentVariables,
+      [LAUNCHD_LOG_ROTATION_ENV.stdoutPath]: launchAgent().StandardOutPath,
+      [LAUNCHD_LOG_ROTATION_ENV.stderrPath]: launchAgent().StandardErrorPath,
+      [LAUNCHD_LOG_ROTATION_ENV.maxBytes]: String(LAUNCHD_LOG_ROTATION_POLICY.maxBytes),
+      [LAUNCHD_LOG_ROTATION_ENV.archiveCount]: String(LAUNCHD_LOG_ROTATION_POLICY.archiveCount),
+      [LAUNCHD_LOG_ROTATION_ENV.maxAgeHours]: String(LAUNCHD_LOG_ROTATION_POLICY.maxAgeHours)
+    });
     expect(plan.nextLaunchAgent.ProgramArguments).toEqual([
       "/opt/homebrew/bin/node",
       "/Users/test/Library/Application Support/NeonDiffDesktop/Workers/current/node_modules/neondiff/dist/src/cli.js",
@@ -223,6 +340,10 @@ describe("B0 worker installer", () => {
       "true"
     ]);
     expect(plan.nextLaunchAgent.WorkingDirectory).toBe(launchAgent().WorkingDirectory);
+    expect(plan.publicSummary.logRotation).toEqual({
+      ...LAUNCHD_LOG_ROTATION_POLICY,
+      private: true
+    });
     expect(JSON.stringify(plan.publicSummary)).not.toContain("app.pem");
     expect(JSON.stringify(plan.publicSummary)).not.toContain("config.local.json");
   });
@@ -256,7 +377,44 @@ describe("B0 worker installer", () => {
     });
     expect(rollback.nextLaunchAgent.ProgramArguments).toEqual(launchAgent().ProgramArguments);
     expect(rollback.nextLaunchAgent.WorkingDirectory).toBe(launchAgent().WorkingDirectory);
+    expect(rollback.nextLaunchAgent.EnvironmentVariables).toEqual(launchAgent().EnvironmentVariables);
     expect(rollback.publicSummary).toMatchObject({ action: "rollback", target: "original-worker" });
+  });
+
+  it("plans launchd log rotation idempotently and rejects conflicting managed policy", () => {
+    const first = planWorkerUpdate({
+      launchAgent: launchAgent(),
+      expectedLabel: "com.electricsheephq.neondiff",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    });
+    const repeated = planWorkerUpdate({
+      launchAgent: first.nextLaunchAgent,
+      expectedLabel: "com.electricsheephq.neondiff",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64),
+      previousState: first.nextState
+    });
+    expect(repeated.nextLaunchAgent.EnvironmentVariables).toEqual(first.nextLaunchAgent.EnvironmentVariables);
+    expect(repeated.nextState.originalLogRotationEnvironment).toEqual(first.nextState.originalLogRotationEnvironment);
+
+    const conflicting = launchAgent();
+    conflicting.EnvironmentVariables[LAUNCHD_LOG_ROTATION_ENV.maxBytes] = "999";
+    expect(() => planWorkerUpdate({
+      launchAgent: conflicting,
+      expectedLabel: "com.electricsheephq.neondiff",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    })).toThrow(`conflicting ${LAUNCHD_LOG_ROTATION_ENV.maxBytes}`);
   });
 
   it("fails closed when managed worker state is missing or belongs to another label", () => {

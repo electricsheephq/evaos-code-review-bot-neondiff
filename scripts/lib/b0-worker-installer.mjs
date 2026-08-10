@@ -1,5 +1,17 @@
 import { createHash } from "node:crypto";
-import { basename, isAbsolute, join, relative, sep } from "node:path";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  realpathSync
+} from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -11,10 +23,144 @@ const PRIVATE_KEY_KEYS = [
   "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
   "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH"
 ];
+export const LAUNCHD_LOG_ROTATION_POLICY = Object.freeze({
+  maxBytes: 10 * 1024 * 1024,
+  archiveCount: 5,
+  maxAgeHours: 168,
+  descriptorMode: "copy_ftruncate_same_inode"
+});
+export const LAUNCHD_LOG_ROTATION_ENV = Object.freeze({
+  stdoutPath: "NEONDIFF_LAUNCHD_STDOUT_PATH",
+  stderrPath: "NEONDIFF_LAUNCHD_STDERR_PATH",
+  maxBytes: "NEONDIFF_LAUNCHD_LOG_MAX_BYTES",
+  archiveCount: "NEONDIFF_LAUNCHD_LOG_ARCHIVE_COUNT",
+  maxAgeHours: "NEONDIFF_LAUNCHD_LOG_MAX_AGE_HOURS"
+});
 const LAUNCHD_BOOTSTRAP_RETRY_DELAYS_MS = [250, 750, 2_000, 5_000, 10_000];
 
 function fail(message) {
   throw new Error(message);
+}
+
+function lstatIfPresent(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function requireCurrentUserSingleLinkFile(entry, label) {
+  if (!entry.isFile()) fail(`${label} must be a regular non-symlink file`);
+  if (typeof process.getuid === "function" && entry.uid !== process.getuid()) {
+    fail(`${label} must be owned by the current user`);
+  }
+  if (entry.nlink !== 1) fail(`${label} must have exactly one link`);
+}
+
+function requireCurrentUserPrivateFile(entry, label) {
+  requireCurrentUserSingleLinkFile(entry, label);
+  if ((entry.mode & 0o077) !== 0) fail(`${label} must be private to the current user (0600)`);
+}
+
+export function prepareLaunchdLogFiles(launchAgent) {
+  const paths = [launchAgent.StandardOutPath, launchAgent.StandardErrorPath];
+  if (!paths.every((path) => typeof path === "string" && isAbsolute(path)) || paths[0] === paths[1]) {
+    fail("LaunchAgent log paths are invalid");
+  }
+  const directory = dirname(paths[0]);
+  if (dirname(paths[1]) !== directory) fail("LaunchAgent log paths must share one directory");
+  if (lstatIfPresent(directory) === null) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const directoryEntry = lstatSync(directory);
+  if (directoryEntry.isSymbolicLink() || !directoryEntry.isDirectory()) {
+    fail("LaunchAgent log directory must be a real directory");
+  }
+  if (typeof process.getuid === "function" && directoryEntry.uid !== process.getuid()) {
+    fail("LaunchAgent log directory must be owned by the current user");
+  }
+  if (realpathSync(directory) !== resolve(directory)) {
+    fail("LaunchAgent log directory must not traverse symlinks");
+  }
+  chmodSync(directory, 0o700);
+
+  for (const path of paths) {
+    const existing = lstatIfPresent(path);
+    if (existing !== null) {
+      if (existing.isSymbolicLink()) {
+        fail("LaunchAgent log path must be a regular non-symlink file");
+      }
+      if (!existing.isFile()) fail("LaunchAgent log path must be a regular non-symlink file");
+      if (typeof process.getuid === "function" && existing.uid !== process.getuid()) {
+        fail("LaunchAgent log path must be owned by the current user");
+      }
+      requireCurrentUserSingleLinkFile(existing, "LaunchAgent log path");
+      let fd;
+      try {
+        fd = openSync(path, constants.O_WRONLY | constants.O_NOFOLLOW);
+        const descriptorEntry = fstatSync(fd);
+        const pathEntry = lstatSync(path);
+        requireCurrentUserSingleLinkFile(descriptorEntry, "LaunchAgent log descriptor");
+        requireCurrentUserSingleLinkFile(pathEntry, "LaunchAgent log path");
+        if (descriptorEntry.dev !== pathEntry.dev || descriptorEntry.ino !== pathEntry.ino) {
+          fail("LaunchAgent log path changed while permissions were prepared");
+        }
+        fchmodSync(fd, 0o600);
+        const preparedDescriptorEntry = fstatSync(fd);
+        const preparedPathEntry = lstatSync(path);
+        requireCurrentUserPrivateFile(preparedDescriptorEntry, "LaunchAgent log descriptor");
+        requireCurrentUserPrivateFile(preparedPathEntry, "LaunchAgent log path");
+        if (
+          preparedDescriptorEntry.dev !== preparedPathEntry.dev
+          || preparedDescriptorEntry.ino !== preparedPathEntry.ino
+        ) {
+          fail("LaunchAgent log path changed while permissions were prepared");
+        }
+      } catch (error) {
+        if (error?.code === "ELOOP") {
+          fail("LaunchAgent log path must be a regular non-symlink file");
+        }
+        throw error;
+      } finally {
+        if (fd !== undefined) closeSync(fd);
+      }
+      continue;
+    }
+
+    let fd;
+    try {
+      fd = openSync(
+        path,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        0o600
+      );
+      const descriptorEntry = fstatSync(fd);
+      const pathEntry = lstatSync(path);
+      requireCurrentUserSingleLinkFile(descriptorEntry, "LaunchAgent log descriptor");
+      requireCurrentUserSingleLinkFile(pathEntry, "LaunchAgent log path");
+      if (descriptorEntry.dev !== pathEntry.dev || descriptorEntry.ino !== pathEntry.ino) {
+        fail("LaunchAgent log path changed while it was created");
+      }
+      fchmodSync(fd, 0o600);
+      const preparedDescriptorEntry = fstatSync(fd);
+      const preparedPathEntry = lstatSync(path);
+      requireCurrentUserPrivateFile(preparedDescriptorEntry, "LaunchAgent log descriptor");
+      requireCurrentUserPrivateFile(preparedPathEntry, "LaunchAgent log path");
+      if (
+        preparedDescriptorEntry.dev !== preparedPathEntry.dev
+        || preparedDescriptorEntry.ino !== preparedPathEntry.ino
+      ) {
+        fail("LaunchAgent log path changed while it was created");
+      }
+    } catch (error) {
+      if (error?.code === "EEXIST" || error?.code === "ELOOP") {
+        fail("LaunchAgent log path must be a regular non-symlink file");
+      }
+      throw error;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
 }
 
 function sha256(value) {
@@ -98,6 +244,13 @@ function validateLaunchAgent(launchAgent, expectedLabel) {
     (value) => isAbsolute(value),
     "GitHub App private-key path"
   );
+  const logRotationEnvironment = buildLaunchdLogRotationEnvironment(launchAgent);
+  for (const [name, expectedValue] of Object.entries(logRotationEnvironment)) {
+    const currentValue = environment[name];
+    if (currentValue !== undefined && currentValue !== expectedValue) {
+      fail(`LaunchAgent has conflicting ${name}`);
+    }
+  }
 
   const daemonIndex = daemonIndexFor(launchAgent.ProgramArguments, launchAgent.WorkingDirectory);
   const daemonArguments = launchAgent.ProgramArguments.slice(daemonIndex + 1);
@@ -113,8 +266,55 @@ function validateLaunchAgent(launchAgent, expectedLabel) {
   }
   return {
     daemonArguments,
-    configPath: daemonArguments[configIndexes[0] + 1]
+    configPath: daemonArguments[configIndexes[0] + 1],
+    logRotationEnvironment
   };
+}
+
+function buildLaunchdLogRotationEnvironment(launchAgent) {
+  const stdoutPath = launchAgent.StandardOutPath;
+  const stderrPath = launchAgent.StandardErrorPath;
+  if (!isAbsolute(stdoutPath ?? "") || !isAbsolute(stderrPath ?? "") || stdoutPath === stderrPath) {
+    fail("LaunchAgent must have distinct absolute stdout and stderr log paths");
+  }
+  if (resolve(stdoutPath) !== stdoutPath || resolve(stderrPath) !== stderrPath) {
+    fail("LaunchAgent log paths must be normalized absolute paths");
+  }
+  const stdoutDirectory = dirname(stdoutPath);
+  const stderrDirectory = dirname(stderrPath);
+  const expectedDirectory = join(homedir(), "Library", "Logs", "evaos-code-review-bot");
+  if (
+    stdoutDirectory !== stderrDirectory
+    || stdoutDirectory !== expectedDirectory
+  ) {
+    fail("LaunchAgent logs must share the private user Library/Logs/evaos-code-review-bot directory");
+  }
+  return {
+    [LAUNCHD_LOG_ROTATION_ENV.stdoutPath]: stdoutPath,
+    [LAUNCHD_LOG_ROTATION_ENV.stderrPath]: stderrPath,
+    [LAUNCHD_LOG_ROTATION_ENV.maxBytes]: String(LAUNCHD_LOG_ROTATION_POLICY.maxBytes),
+    [LAUNCHD_LOG_ROTATION_ENV.archiveCount]: String(LAUNCHD_LOG_ROTATION_POLICY.archiveCount),
+    [LAUNCHD_LOG_ROTATION_ENV.maxAgeHours]: String(LAUNCHD_LOG_ROTATION_POLICY.maxAgeHours)
+  };
+}
+
+function captureManagedLogEnvironment(environment) {
+  return Object.fromEntries(
+    Object.values(LAUNCHD_LOG_ROTATION_ENV).map((name) => [
+      name,
+      Object.prototype.hasOwnProperty.call(environment, name) ? environment[name] : null
+    ])
+  );
+}
+
+function restoreManagedLogEnvironment(environment, original) {
+  const restored = clone(environment);
+  for (const name of Object.values(LAUNCHD_LOG_ROTATION_ENV)) {
+    const value = original?.[name];
+    if (typeof value === "string") restored[name] = value;
+    else delete restored[name];
+  }
+  return restored;
 }
 
 export function validateWorkerCandidate({
@@ -200,7 +400,7 @@ export function planWorkerUpdate({
   if (!FULL_SHA_PATTERN.test(candidateHead)) fail("candidate head is invalid");
   if (!PACKAGE_VERSION_PATTERN.test(packageVersion)) fail("candidate package version is invalid");
   if (!SHA256_PATTERN.test(manifestSHA256)) fail("candidate manifest SHA-256 is invalid");
-  const { daemonArguments, configPath } = validateLaunchAgent(launchAgent, expectedLabel);
+  const { daemonArguments, configPath, logRotationEnvironment } = validateLaunchAgent(launchAgent, expectedLabel);
   const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
   const currentPackageRoot = join(workerRoot, "current", "node_modules", "neondiff");
   if (previousState && previousState.launchdLabel !== expectedLabel) {
@@ -225,6 +425,10 @@ export function planWorkerUpdate({
     ...daemonArguments
   ];
   nextLaunchAgent.WorkingDirectory = launchAgent.WorkingDirectory;
+  nextLaunchAgent.EnvironmentVariables = {
+    ...nextLaunchAgent.EnvironmentVariables,
+    ...logRotationEnvironment
+  };
 
   const originalProgramArguments = previousState?.originalProgramArguments
     ?? clone(launchAgent.ProgramArguments);
@@ -234,6 +438,8 @@ export function planWorkerUpdate({
   const previousPackageVersion = previousVersionID
     ? previousState?.packageVersion ?? null
     : null;
+  const originalLogRotationEnvironment = previousState?.originalLogRotationEnvironment
+    ?? captureManagedLogEnvironment(launchAgent.EnvironmentVariables);
   const nextState = {
     schemaVersion: 1,
     launchdLabel: expectedLabel,
@@ -242,6 +448,7 @@ export function planWorkerUpdate({
     previousPackageVersion,
     originalProgramArguments,
     originalWorkingDirectory,
+    originalLogRotationEnvironment,
     candidateHead,
     packageVersion,
     manifestSHA256
@@ -259,7 +466,11 @@ export function planWorkerUpdate({
       preservesConfiguration: true,
       preservesCredentials: true,
       preservesProviderState: true,
-      preservesRepositoryAllowlist: true
+      preservesRepositoryAllowlist: true,
+      logRotation: {
+        ...LAUNCHD_LOG_ROTATION_POLICY,
+        private: true
+      }
     }
   };
 }
@@ -321,6 +532,10 @@ export function planWorkerRollback({ state, currentLaunchAgent, expectedLabel })
   const nextLaunchAgent = clone(currentLaunchAgent);
   nextLaunchAgent.ProgramArguments = clone(state.originalProgramArguments);
   nextLaunchAgent.WorkingDirectory = state.originalWorkingDirectory;
+  nextLaunchAgent.EnvironmentVariables = restoreManagedLogEnvironment(
+    nextLaunchAgent.EnvironmentVariables,
+    state.originalLogRotationEnvironment
+  );
   validateLaunchAgent(nextLaunchAgent, expectedLabel);
   return {
     nextLaunchAgent,

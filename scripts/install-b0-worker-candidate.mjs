@@ -23,6 +23,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import {
   planWorkerRollback,
   planWorkerUpdate,
+  prepareLaunchdLogFiles,
   recoverPreviouslyLoadedWorker,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
@@ -179,6 +180,9 @@ function writePlistFromTemplate(templatePath, destinationPath, launchAgent) {
   ], CHILD_PROCESS_OPTIONS);
   execFileSync("/usr/bin/plutil", [
     "-replace", "WorkingDirectory", "-string", launchAgent.WorkingDirectory, destinationPath
+  ], CHILD_PROCESS_OPTIONS);
+  execFileSync("/usr/bin/plutil", [
+    "-replace", "EnvironmentVariables", "-json", JSON.stringify(launchAgent.EnvironmentVariables), destinationPath
   ], CHILD_PROCESS_OPTIONS);
   const readback = parsePlist(destinationPath);
   if (
@@ -527,6 +531,7 @@ function update(args) {
     return;
   }
   const result = withWorkerLock(paths, () => {
+    prepareLaunchdLogFiles(plan.nextLaunchAgent);
     installVersion({
       versionsRoot: paths.versionsRoot,
       versionID: plan.versionID,

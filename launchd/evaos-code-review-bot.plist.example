@@ -34,6 +34,16 @@
     <string>REPLACE_WITH_APP_ID</string>
     <key>EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH</key>
     <string>/absolute/path/to/private-key.pem</string>
+    <key>NEONDIFF_LAUNCHD_STDOUT_PATH</key>
+    <string>/Users/lume/Library/Logs/evaos-code-review-bot/launchd.out.log</string>
+    <key>NEONDIFF_LAUNCHD_STDERR_PATH</key>
+    <string>/Users/lume/Library/Logs/evaos-code-review-bot/launchd.err.log</string>
+    <key>NEONDIFF_LAUNCHD_LOG_MAX_BYTES</key>
+    <string>10485760</string>
+    <key>NEONDIFF_LAUNCHD_LOG_ARCHIVE_COUNT</key>
+    <string>5</string>
+    <key>NEONDIFF_LAUNCHD_LOG_MAX_AGE_HOURS</key>
+    <string>168</string>
   </dict>
   <key>RunAtLoad</key>
   <false/>

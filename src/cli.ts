@@ -6,6 +6,7 @@ import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./con
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
 import { collectProviderThrottleReport } from "./provider-throttle-report.js";
 import { runDaemonCycle, shouldExitDaemonAfterFailedCycle } from "./daemon.js";
+import { createLaunchdDaemonLogWriters, installLaunchdDaemonConsole } from "./daemon-log.js";
 import {
   runLaunchdControlCommand,
   type LaunchctlResult
@@ -2355,6 +2356,8 @@ async function main(): Promise<void> {
     }
     const config = loadConfig(args.config);
     const monitoredRepos = listReposToScan(config);
+    const launchdLogWriters = createLaunchdDaemonLogWriters();
+    if (launchdLogWriters) installLaunchdDaemonConsole(launchdLogWriters);
     let cycle = 0;
     const runOnce = args.once === "true";
     for (;;) {
@@ -2371,7 +2374,8 @@ async function main(): Promise<void> {
         reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
         issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
         worktreeCleanupDue: config.worktreeCleanup!.enabled && (cycle === 1 || (cycle - 1) % cleanupIntervalCycles === 0),
-        configPath: args.config
+        configPath: args.config,
+        ...(launchdLogWriters ? launchdLogWriters : {})
       });
       if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
         process.exitCode = 1;
