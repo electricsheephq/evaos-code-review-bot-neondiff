@@ -4889,12 +4889,12 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         `insert into processed_reviews
           (repo, pull_number, head_sha, status, error, created_at)
          values (?, 42, ?, ?, ?, ?)`
-      ).run("electricsheephq/WorldOS", "failed-head", "failed", "provider timeout", "2026-08-10T00:00:00.000Z");
+      ).run("electricsheephq/WorldOS", "failed-head", "failed", "provider timeout", "2026-08-10T00:00:00.100Z");
       db.prepare(
         `insert into processed_reviews
           (repo, pull_number, head_sha, status, error, created_at)
          values (?, 42, ?, ?, null, ?)`
-      ).run("electricsheephq/WorldOS", "posted-head", "posted", "2026-08-10T01:00:00.000Z");
+      ).run("electricsheephq/WorldOS", "posted-head", "posted", "2026-08-10T00:00:00.900Z");
     } finally {
       db.close();
     }
@@ -4911,7 +4911,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
       errorCount: 1,
       unrecoveredErrorCount: 0,
       recentUnrecoveredErrorCount: 0,
-      lastErrorAt: "2026-08-10T00:00:00.000Z"
+      lastErrorAt: "2026-08-10T00:00:00.100Z"
     });
     expect(status.gates).toContainEqual({
       name: "live_db_no_errors",

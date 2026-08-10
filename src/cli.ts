@@ -2192,7 +2192,14 @@ async function main(): Promise<void> {
         includeDetails: false,
         inputJobLimit: durableQueue.jobs.length + activeProviderCooldowns.length
       });
-      const failedQueueJobs = durableQueue.summary.failed;
+      const release = collectReleaseStatus({
+        cwd: process.cwd(),
+        configPath: args.config,
+        statePath,
+        now: checkedAt
+      });
+      const retainedFailedQueueJobs = durableQueue.summary.failed;
+      const failedQueueJobs = resolveActiveFailedQueueJobCount(release, retainedFailedQueueJobs);
       const retryableProviderDeferred = durableQueue.summary.retryableProviderDeferred;
       const readyToRetry = budget.providerDeferred.readyToRetry;
       const activeProviderCooldownCount = activeProviderCooldowns.length;
@@ -2205,7 +2212,9 @@ async function main(): Promise<void> {
         {
           name: "provider_cooldowns_no_failed_queue_jobs",
           ok: failedQueueJobs === 0,
-          detail: `${failedQueueJobs} failed durable queue job(s)`
+          detail: failedQueueJobs === retainedFailedQueueJobs
+            ? `${failedQueueJobs} failed durable queue job(s)`
+            : `${failedQueueJobs} active failed durable queue job(s); ${retainedFailedQueueJobs} retained history`
         },
         {
           name: "provider_cooldowns_no_retryable_provider_deferred_jobs",
@@ -2231,6 +2240,7 @@ async function main(): Promise<void> {
           total: rows.length,
           expired: expiredCount,
           failedQueueJobs,
+          retainedFailedQueueJobs,
           providerDeferredJobs: durableQueue.summary.providerDeferred,
           retryableProviderDeferredJobs: retryableProviderDeferred,
           readyToRetryProviderDeferredJobs: readyToRetry,

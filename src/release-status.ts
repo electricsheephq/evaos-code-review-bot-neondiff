@@ -2416,9 +2416,9 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
                       and recovered.pull_number = processed_reviews.pull_number
                       and recovered.status = 'posted'
                       and (recovered.error is null or recovered.error = '')
-                      and datetime(recovered.created_at) is not null
-                      and datetime(processed_reviews.created_at) is not null
-                      and datetime(recovered.created_at) > datetime(processed_reviews.created_at)
+                      and julianday(recovered.created_at) is not null
+                      and julianday(processed_reviews.created_at) is not null
+                      and julianday(recovered.created_at) > julianday(processed_reviews.created_at)
                   )
                   then 1 else 0
                 end) as unrecoveredErrorCount,
@@ -2433,11 +2433,11 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
                       and recovered.pull_number = processed_reviews.pull_number
                       and recovered.status = 'posted'
                       and (recovered.error is null or recovered.error = '')
-                      and datetime(recovered.created_at) is not null
-                      and datetime(processed_reviews.created_at) is not null
-                      and datetime(recovered.created_at) > datetime(processed_reviews.created_at)
+                      and julianday(recovered.created_at) is not null
+                      and julianday(processed_reviews.created_at) is not null
+                      and julianday(recovered.created_at) > julianday(processed_reviews.created_at)
                   )
-                    and (datetime(created_at) is null or datetime(created_at) >= datetime(?))
+                    and (julianday(created_at) is null or julianday(created_at) >= julianday(?))
                   then 1 else 0
                 end) as recentUnrecoveredErrorCount
            from processed_reviews`
