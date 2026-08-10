@@ -63,7 +63,7 @@ describe("review runtime authority", () => {
     });
   });
 
-  it("reports an enabled non-ZCode registry default as invalid without changing the executor", () => {
+  it("keeps a dynamic ZCode selection authoritative despite unrelated registry defaults", () => {
     const authority = classifyReviewRuntimeAuthority(loadConfigFromObject({
       providers: {
         defaultProviderId: "openai-compatible",
@@ -77,9 +77,9 @@ describe("review runtime authority", () => {
     }));
 
     expect(authority).toMatchObject({
-      ok: false,
-      state: "invalid_authoritative",
-      reason: "legacy_registry_mismatch",
+      ok: true,
+      state: "legacy_authoritative",
+      reason: "legacy_zcode_enabled",
       execution: {
         adapter: "zcode",
         providerId: "zcode-app-selected",
@@ -90,6 +90,27 @@ describe("review runtime authority", () => {
         adapter: "openai-compatible",
         authoritative: false,
         matchesExecution: false
+      }
+    });
+  });
+
+  it("keeps dynamic ZCode authoritative when the optional provider registry is absent", () => {
+    const config = loadConfigFromObject({});
+    config.providers = undefined;
+
+    const authority = classifyReviewRuntimeAuthority(config);
+
+    expect(authority).toMatchObject({
+      ok: true,
+      state: "legacy_authoritative",
+      reason: "legacy_zcode_enabled",
+      execution: { providerId: "zcode-app-selected", adapter: "zcode" },
+      legacyProviderMetadata: {
+        registryDefaultProviderId: null,
+        providerId: null,
+        selectionSource: "none",
+        exists: false,
+        authoritative: false
       }
     });
   });
@@ -123,6 +144,7 @@ describe("review runtime authority", () => {
 
   it("reports Codex-disabled plus legacy-disabled as invalid while preserving current attempt truth", () => {
     const authority = classifyReviewRuntimeAuthority(loadConfigFromObject({
+      zcode: { providerId: "zcode-glm" },
       providers: {
         providers: {
           "zcode-glm": { enabled: false }
@@ -142,6 +164,25 @@ describe("review runtime authority", () => {
         providerId: "zcode-glm",
         enabled: false,
         authoritative: false
+      }
+    });
+  });
+
+  it("fails closed when an explicit ZCode provider pin has no registry entry", () => {
+    const config = loadConfigFromObject({ zcode: { providerId: "missing-zcode-provider" } });
+    config.providers = undefined;
+
+    expect(classifyReviewRuntimeAuthority(config)).toMatchObject({
+      ok: false,
+      state: "invalid_authoritative",
+      reason: "legacy_registry_mismatch",
+      execution: { providerId: "missing-zcode-provider", adapter: "zcode" },
+      legacyProviderMetadata: {
+        registryDefaultProviderId: null,
+        providerId: "missing-zcode-provider",
+        selectionSource: "zcode.providerId",
+        exists: false,
+        matchesExecution: false
       }
     });
   });

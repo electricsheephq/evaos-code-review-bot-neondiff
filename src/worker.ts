@@ -66,7 +66,7 @@ import {
 } from "./review-event-policy.js";
 import { selectReviewMode } from "./review-mode-router.js";
 import type { ReviewModeAnalysisPlan } from "./review-mode-types.js";
-import { classifyReviewRuntimeAuthority } from "./review-runtime-authority.js";
+import { classifyReviewRuntimeAuthority, type ReviewRuntimeAuthority } from "./review-runtime-authority.js";
 import {
   buildOutcomeLedger,
   buildOutcomeLedgerInputFromReviewPlan,
@@ -167,6 +167,10 @@ export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMe
       ? "Codex CLI (existing OAuth session)"
       : "ZCode (app configuration)"
   };
+}
+
+function reviewRuntimeAuthorityNote(authority: ReviewRuntimeAuthority): string {
+  return `Review runtime authority: state=${authority.state}; reason=${authority.reason}.`;
 }
 
 function resolveReviewContextWindowTokens(config: BotConfig): number | undefined {
@@ -4128,6 +4132,8 @@ async function runChunkedZCodeReview(input: {
   assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const startedAt = new Date();
+  const authority = classifyReviewRuntimeAuthority(input.config);
+  const authorityNote = reviewRuntimeAuthorityNote(authority);
   const findings: ZCodeReviewResult["findings"] = [];
   const droppedFromSchema: ZCodeReviewResult["droppedFromSchema"] = [];
   const rawResponses: Array<{ index: number; rawResponse: string }> = [];
@@ -4208,12 +4214,13 @@ async function runChunkedZCodeReview(input: {
       runtimeNotes.push(`chunk ${chunk.index}: dropped ${droppedCrossChunkFindings.length} finding(s) outside this chunk's file set.`);
     }
     if (result.runtime.notes) {
-      runtimeNotes.push(...result.runtime.notes.map((note) => `chunk ${chunk.index}: ${note}`));
+      runtimeNotes.push(...result.runtime.notes
+        .filter((note) => note !== authorityNote)
+        .map((note) => `chunk ${chunk.index}: ${note}`));
     }
   }
 
   const completedAt = new Date();
-  const authority = classifyReviewRuntimeAuthority(input.config);
   return {
     status: "reviewed",
     result: {
@@ -4229,7 +4236,7 @@ async function runChunkedZCodeReview(input: {
         completedAt: completedAt.toISOString(),
         latencyMs: completedAt.getTime() - startedAt.getTime(),
         providerAttempts,
-        notes: runtimeNotes
+        notes: [authorityNote, ...runtimeNotes]
       }
     }
   };
@@ -4249,6 +4256,7 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
       providerAttempts: 0,
       notes: [
         "Configured review execution disabled for this dry-run; provider latency and token usage were not measured.",
+        reviewRuntimeAuthorityNote(authority),
         authority.automaticFallback.reason
       ]
     }
@@ -4291,6 +4299,7 @@ async function runConfiguredReview(input: {
         `Codex CLI reasoning effort: ${codexRuntime.reasoningEffort}.`,
         "Codex CLI used its existing authenticated session; NeonDiff did not read or receive OAuth material.",
         "Codex runtime retries are disabled; a failed invocation returns one terminal queue failure.",
+        reviewRuntimeAuthorityNote(authority),
         authority.automaticFallback.reason
       ]
     }
@@ -4338,6 +4347,7 @@ async function runZCodeReviewWithProviderRetry(input: {
       notes: [
         `Observed outer provider retry attempts: ${providerAttempts}.`,
         "Internal ZCode retry attempts and token usage are not exposed by the configured provider path; providerAttempts and token metrics remain null.",
+        reviewRuntimeAuthorityNote(authority),
         authority.automaticFallback.reason,
         // Retry-degraded provenance (#304): surfaced only when the strict-JSON retry path produced
         // the accepted parse, so evidence packets and the ledger runtime honestly flag it.

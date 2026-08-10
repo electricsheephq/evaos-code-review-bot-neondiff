@@ -97,8 +97,9 @@ provider listing, general doctor, operator status, and review receipts:
 - Per-invocation review suppression disables execution; it does not select a
   different runtime.
 
-An invalid authority report means registry metadata contradicts the executor
-that current worker code would attempt. Correct the metadata or configuration
+An invalid legacy authority report means an explicit `zcode.providerId` pin has
+no matching registry entry, is disabled, or contradicts the ZCode executor that
+current worker code would attempt. Correct the pin or registry metadata
 deliberately; do not change routing merely to make doctor green. Authority
 output proves configuration precedence only, not CLI login, provider reachability,
 installed adoption, review success, posting, release, or customer readiness.

@@ -898,6 +898,7 @@ exit 1
     writeFileSync(configPath, JSON.stringify({
       pilotRepos: [],
       zcode: {
+        providerId: "zcode-glm",
         appConfigPath: join(root, "missing-zcode-config.json")
       },
       providers: {

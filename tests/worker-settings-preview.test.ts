@@ -103,6 +103,7 @@ describe("worker review settings preview evidence", () => {
       providerAttempts: 0,
       notes: [
         "Configured review execution disabled for this dry-run; provider latency and token usage were not measured.",
+        "Review runtime authority: state=legacy_authoritative; reason=legacy_zcode_enabled.",
         "No automatic cross-runtime fallback exists: Codex failures are terminal and ZCode retries stay on ZCode."
       ]
     });
@@ -184,6 +185,21 @@ describe("worker review settings preview evidence", () => {
 
     expect(buildReviewProviderMetadata(config)).toEqual({
       providerId: "ghost-provider",
+      adapter: "zcode",
+      model: "GLM-5.2",
+      displayName: "ZCode (app configuration)"
+    });
+  });
+
+  it("keeps shared provider receipt metadata truthful without an optional registry", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-worker-provider-metadata-no-registry-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    config.zcode.providerId = undefined;
+    config.providers = undefined;
+
+    expect(buildReviewProviderMetadata(config)).toEqual({
+      providerId: "zcode-app-selected",
       adapter: "zcode",
       model: "GLM-5.2",
       displayName: "ZCode (app configuration)"

@@ -185,7 +185,7 @@ export function inspectConfigForDesktop(configPath?: string, fileOps?: Partial<C
       source: exists ? "file" : "defaults",
       revision: snapshot?.revision ?? "",
       editablePaths: editablePatchPaths(),
-      runtimeAuthority: classifyReviewRuntimeAuthority(config),
+      runtimeAuthority: redactConfigObject(classifyReviewRuntimeAuthority(config)) as ReviewRuntimeAuthority,
       config: redactConfigObject(config)
     };
   } catch (error) {

@@ -24,9 +24,9 @@ export interface ReviewRuntimeAuthority {
     willAttempt: boolean;
   };
   legacyProviderMetadata: {
-    registryDefaultProviderId: string;
-    providerId: string;
-    selectionSource: "zcode.providerId" | "providers.defaultProviderId";
+    registryDefaultProviderId: string | null;
+    providerId: string | null;
+    selectionSource: "zcode.providerId" | "providers.defaultProviderId" | "none";
     exists: boolean;
     enabled: boolean;
     adapter: ProviderAdapter | null;
@@ -54,9 +54,11 @@ export function classifyReviewRuntimeAuthority(
   options: { executionRequested?: boolean } = {}
 ): ReviewRuntimeAuthority {
   const executionRequested = options.executionRequested ?? true;
-  const registry = config.providers!;
-  const registryProviderId = config.zcode.providerId ?? registry.defaultProviderId;
-  const registryProvider = registry.providers[registryProviderId];
+  const registry = config.providers;
+  const explicitProviderId = config.zcode.providerId;
+  const registryDefaultProviderId = registry?.defaultProviderId ?? null;
+  const registryProviderId = explicitProviderId ?? registryDefaultProviderId;
+  const registryProvider = registryProviderId ? registry?.providers[registryProviderId] : undefined;
   const registryMatchesZCode = Boolean(
     registryProvider?.enabled
     && registryProvider.adapter === "zcode"
@@ -66,9 +68,11 @@ export function classifyReviewRuntimeAuthority(
     && registryProvider.capabilities.jsonOutput
   );
   const legacyProviderMetadata: ReviewRuntimeAuthority["legacyProviderMetadata"] = {
-    registryDefaultProviderId: registry.defaultProviderId,
+    registryDefaultProviderId,
     providerId: registryProviderId,
-    selectionSource: config.zcode.providerId ? "zcode.providerId" : "providers.defaultProviderId",
+    selectionSource: explicitProviderId
+      ? "zcode.providerId"
+      : registryDefaultProviderId ? "providers.defaultProviderId" : "none",
     exists: Boolean(registryProvider),
     enabled: Boolean(registryProvider?.enabled),
     adapter: registryProvider?.adapter ?? null,
@@ -112,7 +116,7 @@ export function classifyReviewRuntimeAuthority(
     auth: "zcode-app-config" as const,
     willAttempt: executionRequested
   };
-  if (registryProvider && !registryProvider.enabled) {
+  if (explicitProviderId && registryProvider && !registryProvider.enabled) {
     return {
       ok: false,
       state: "invalid_authoritative",
@@ -123,7 +127,7 @@ export function classifyReviewRuntimeAuthority(
       proofBoundary: "Configuration authority is invalid: Codex and the selected legacy registry metadata are disabled, although current worker code would still attempt ZCode."
     };
   }
-  if (!registryMatchesZCode) {
+  if (explicitProviderId && !registryMatchesZCode) {
     return {
       ok: false,
       state: "invalid_authoritative",

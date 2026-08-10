@@ -115,6 +115,7 @@ describe("operator CLI summaries", () => {
     }));
 
     const invalidAuthority = classifyReviewRuntimeAuthority(loadConfigFromObject({
+      zcode: { providerId: "zcode-glm" },
       providers: { providers: { "zcode-glm": { enabled: false } } }
     }));
     const invalid = buildOperatorStatus({

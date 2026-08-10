@@ -117,6 +117,24 @@ describe("desktop config CLI", () => {
     });
   });
 
+  it("redacts secret-looking runtime authority values with the effective config", async () => {
+    const root = mkRoot();
+    const configPath = join(root, "config.json");
+    const secretProviderId = `ghp_${"a".repeat(40)}`;
+    writeConfig(configPath, {
+      pilotRepos: ["owner/repo"], workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"), evidenceDir: join(root, "evidence"),
+      zcode: { providerId: secretProviderId }
+    });
+
+    const output = await runConfig(["config", "inspect", "--config", configPath]);
+
+    expect(output.runtimeAuthority.execution.providerId).toBe("[redacted-secret]");
+    expect(output.runtimeAuthority.legacyProviderMetadata.providerId).toBe("[redacted-secret]");
+    expect(output.config.zcode.providerId).toBe("[redacted-secret]");
+    expect(JSON.stringify(output)).not.toContain(secretProviderId);
+  });
+
   it("retries inspect when the config changes during its stable read", () => {
     const root = mkRoot();
     const configPath = join(root, "config.json");
