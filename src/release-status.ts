@@ -2641,9 +2641,9 @@ function readReviewQueueCounts(
                   and p.pull_number = q.pull_number
                   and p.status = 'posted'
                   and (p.error is null or p.error = '')
-                  and datetime(p.created_at) is not null
-                  and datetime(q.updated_at) is not null
-                  and datetime(p.created_at) > datetime(q.updated_at)
+                  and julianday(p.created_at) is not null
+                  and julianday(q.updated_at) is not null
+                  and julianday(p.created_at) > julianday(q.updated_at)
               ) as recovered
        from review_queue_jobs q
        where q.state = 'failed'`

@@ -1858,14 +1858,25 @@ function zcodeTimeoutRecommendedActions(
   release: ReleaseStatus,
   durableQueue?: OperatorDurableQueueSnapshot
 ): string[] {
-  const retainedFailedQueueJobs = release.database.failedReviewQueueJobCount;
-  const activeFailedQueueJobs = release.database.activeFailedReviewQueueJobCount;
+  const retainedTimeoutJobs = release.database.zcodeTimeoutFailedReviewQueueJobCount;
+  const activeTimeoutJobs = release.database.activeZCodeTimeoutFailedReviewQueueJobCount;
   if (
-    retainedFailedQueueJobs !== undefined &&
-    activeFailedQueueJobs !== undefined &&
-    activeFailedQueueJobs < retainedFailedQueueJobs
+    retainedTimeoutJobs !== undefined &&
+    activeTimeoutJobs !== undefined &&
+    activeTimeoutJobs < retainedTimeoutJobs
   ) {
     return [buildZCodeTimeoutInspectCommand(release.releaseUnit.configPath)];
+  }
+  if (retainedTimeoutJobs === undefined || activeTimeoutJobs === undefined) {
+    const retainedFailedQueueJobs = release.database.failedReviewQueueJobCount;
+    const activeFailedQueueJobs = release.database.activeFailedReviewQueueJobCount;
+    if (
+      retainedFailedQueueJobs !== undefined &&
+      activeFailedQueueJobs !== undefined &&
+      activeFailedQueueJobs < retainedFailedQueueJobs
+    ) {
+      return [buildZCodeTimeoutInspectCommand(release.releaseUnit.configPath)];
+    }
   }
   const retryCommands = buildZCodeTimeoutRetryCommandsForJobs({
     configPath: release.releaseUnit.configPath,

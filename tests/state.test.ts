@@ -31,6 +31,24 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("records processed review completion with millisecond ordering precision", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-state-precision-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordProcessed({
+      repo: "electricsheephq/WorldOS",
+      pullNumber: 1206,
+      headSha: "precision-head",
+      status: "posted",
+      event: "COMMENT"
+    });
+
+    expect(store.getProcessedReview("electricsheephq/WorldOS", 1206, "precision-head")?.createdAt)
+      .toMatch(/\.\d{3}Z$/);
+    store.close();
+  });
+
   it("stores normalized issue enrichment body hashes and rejects invalid hashes", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-body-hash-"));
     roots.push(root);

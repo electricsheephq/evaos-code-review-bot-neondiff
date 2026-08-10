@@ -916,13 +916,14 @@ export class ReviewStateStore {
   }
 
   recordProcessed(record: ProcessedReviewRecord): void {
+    const completedAt = new Date().toISOString();
     this.db.exec("begin immediate");
     try {
       this.db
         .prepare(
           `insert or replace into processed_reviews
             (repo, pull_number, head_sha, status, config_revision, event, review_url, error, created_at)
-           values (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           record.repo,
@@ -932,7 +933,8 @@ export class ReviewStateStore {
           record.configRevision ?? null,
           record.event ?? null,
           record.reviewUrl ?? null,
-          record.error ?? null
+          record.error ?? null,
+          completedAt
         );
       // Completion and claim retirement are one transaction. A later ordinary claimant must see
       // either the live claim or the durable processed row, never a gap between the two.
@@ -1879,11 +1881,11 @@ export class ReviewStateStore {
       if (!preserveExistingBlocking) {
         this.db
           .prepare(
-            `insert or replace into processed_reviews
+          `insert or replace into processed_reviews
               (repo, pull_number, head_sha, status, event, review_url, error, created_at)
-             values (?, ?, ?, 'posted', ?, ?, null, datetime('now'))`
+             values (?, ?, ?, 'posted', ?, ?, null, ?)`
           )
-          .run(input.repo, input.pullNumber, input.headSha, input.event, input.reviewUrl);
+          .run(input.repo, input.pullNumber, input.headSha, input.event, input.reviewUrl, postedAt);
       }
       const readinessEvent = preserveExistingBlocking ? "REQUEST_CHANGES" : input.event;
       const readinessUrl = preserveExistingBlocking ? existingProcessed?.reviewUrl : input.reviewUrl;

@@ -1638,6 +1638,46 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions.join("\n")).not.toContain("retry-failed");
   });
 
+  it("keeps retry guidance for an active timeout when recovered history is non-timeout", () => {
+    const activeTimeout = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 216,
+      headSha: "active-timeout",
+      state: "failed",
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000"
+    });
+    const recoveredOrdinaryFailure = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 215,
+      headSha: "recovered-ordinary",
+      state: "failed",
+      lastError: "provider failed before posting"
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          errorCount: 1,
+          failedReviewQueueJobCount: 2,
+          activeFailedReviewQueueJobCount: 1,
+          zcodeTimeoutFailedReviewQueueJobCount: 1,
+          activeZCodeTimeoutFailedReviewQueueJobCount: 1,
+          activeRetryableZCodeTimeoutFailedReviewQueueJobCount: 1,
+          activeExhaustedZCodeTimeoutFailedReviewQueueJobCount: 0
+        }
+      }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({
+        summary: { ...cleanDurableQueueSummary(), total: 2, failed: 2 },
+        jobs: [activeTimeout, recoveredOrdinaryFailure]
+      })
+    });
+
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 216 --head-sha active-timeout --dry-run false --zcode true"
+    );
+  });
+
   it("keeps blocked-on-proof readiness above processed coverage for the same head", () => {
     const dashboard = buildOperatorDashboard({
       coverage: coverageReport({ ok: true, processed: [processedEntry(8, "head-proof", "posted")] }),

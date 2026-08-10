@@ -6277,6 +6277,128 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(detailedStatus.budget?.delayed.length).toBeLessThanOrEqual(1);
   });
 
+  it("preserves sub-second queue recovery ordering in both directions", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-subsecond-recovery-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null,
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 1, 'failed', ?, ?, ?)`
+      ).run(
+        "failed-subsecond",
+        "automatic:owner/repo#17@failed-head",
+        "owner/repo",
+        "owner",
+        17,
+        "failed-head",
+        "provider failed",
+        "2026-07-01T00:00:00.100Z",
+        "2026-07-01T00:00:00.100Z"
+      );
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 1, 'failed', ?, ?, ?)`
+      ).run(
+        "failed-after-post",
+        "automatic:owner/repo#18@failed-head",
+        "owner/repo",
+        "owner",
+        18,
+        "failed-head",
+        "provider failed",
+        "2026-07-01T00:00:00.900Z",
+        "2026-07-01T00:00:00.900Z"
+      );
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, event, review_url, error, created_at)
+         values (?, ?, ?, 'posted', 'COMMENT', ?, null, ?)`
+      ).run(
+        "owner/repo",
+        17,
+        "later-clean-head",
+        "https://github.test/owner/repo/pull/17#pullrequestreview-1",
+        "2026-07-01T00:00:00.900Z"
+      );
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, event, review_url, error, created_at)
+         values (?, ?, ?, 'posted', 'COMMENT', ?, null, ?)`
+      ).run(
+        "owner/repo",
+        18,
+        "earlier-clean-head",
+        "https://github.test/owner/repo/pull/18#pullrequestreview-1",
+        "2026-07-01T00:00:00.100Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+
+    expect(status.database).toMatchObject({
+      failedReviewQueueJobCount: 2,
+      activeFailedReviewQueueJobCount: 1,
+      recentActiveFailedReviewQueueJobCount: 1
+    });
+    expect(status.gates.find((gate) => gate.name === "queue_no_failed_jobs")).toMatchObject({
+      name: "queue_no_failed_jobs",
+      ok: false,
+      detail: expect.stringContaining("1 active failed durable queue job(s); 2 retained history")
+    });
+  });
+
   it("does not fail the provider-deferred gate when retryable jobs are waiting on capacity", () => {
     const status = buildReleaseStatus({
       repo: {
