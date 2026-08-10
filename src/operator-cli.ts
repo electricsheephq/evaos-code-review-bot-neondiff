@@ -1889,8 +1889,13 @@ function zcodeTimeoutRecommendedActions(
 
 export function resolveActiveFailedQueueJobCount(
   release: ReleaseStatus,
-  fallback = 0
+  fallback = 0,
+  repo?: string
 ): number {
+  if (repo) {
+    const repoQueue = release.database.reviewQueueJobsByRepo?.find((entry) => entry.repo === repo);
+    return repoQueue?.activeFailed ?? repoQueue?.failed ?? fallback;
+  }
   return release.database.activeFailedReviewQueueJobCount ??
     release.database.failedReviewQueueJobCount ??
     fallback;

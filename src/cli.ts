@@ -2199,7 +2199,7 @@ async function main(): Promise<void> {
         now: checkedAt
       });
       const retainedFailedQueueJobs = durableQueue.summary.failed;
-      const failedQueueJobs = resolveActiveFailedQueueJobCount(release, retainedFailedQueueJobs);
+      const failedQueueJobs = resolveActiveFailedQueueJobCount(release, retainedFailedQueueJobs, args.repo);
       const retryableProviderDeferred = durableQueue.summary.retryableProviderDeferred;
       const readyToRetry = budget.providerDeferred.readyToRetry;
       const activeProviderCooldownCount = activeProviderCooldowns.length;

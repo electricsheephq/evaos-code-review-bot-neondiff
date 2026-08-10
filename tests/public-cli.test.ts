@@ -3587,6 +3587,22 @@ exit 1
         "2026-07-03T00:00:00.100Z"
       );
       db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 1, 'failed', ?, ?, ?)`
+      ).run(
+        "failed-other-repo",
+        "automatic:owner/other#128@failed-head",
+        "owner/other",
+        "owner",
+        128,
+        "failed-head",
+        "provider failed",
+        "2026-07-03T00:00:00.100Z",
+        "2026-07-03T00:00:00.100Z"
+      );
+      db.prepare(
         `insert into processed_reviews
           (repo, pull_number, head_sha, status, event, review_url, error, created_at)
          values (?, ?, ?, 'posted', 'COMMENT', ?, null, ?)`

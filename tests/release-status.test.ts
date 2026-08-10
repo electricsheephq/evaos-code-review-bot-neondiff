@@ -6221,7 +6221,8 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 0,
         providerDeferred: 0,
         retryableProviderDeferred: 0,
-        failed: 1
+        failed: 1,
+        activeFailed: 1
       },
       {
         repo: "100yenadmin/evaOS-GUI",
@@ -6231,7 +6232,8 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 0,
         providerDeferred: 2,
         retryableProviderDeferred: 1,
-        failed: 0
+        failed: 0,
+        activeFailed: 0
       },
       {
         repo: "electricsheephq/WorldOS",
@@ -6241,7 +6243,8 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 1,
         providerDeferred: 0,
         retryableProviderDeferred: 0,
-        failed: 0
+        failed: 0,
+        activeFailed: 0
       }
     ]);
     expect(status.gates).toContainEqual({

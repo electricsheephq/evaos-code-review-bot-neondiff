@@ -105,6 +105,7 @@ export interface ReviewQueueRepoStatus {
   providerDeferred: number;
   retryableProviderDeferred: number;
   failed: number;
+  activeFailed: number;
 }
 
 export interface ReleaseHeartbeatStatus {
@@ -2633,7 +2634,7 @@ function readReviewQueueCounts(
     .all(nowIso) as unknown as Array<QueueCountRow & { repo: string }>;
   const failedRows = db
     .prepare(
-      `select q.last_error, q.updated_at,
+      `select q.repo, q.last_error, q.updated_at,
               exists (
                 select 1
                 from processed_reviews p
@@ -2648,7 +2649,12 @@ function readReviewQueueCounts(
        from review_queue_jobs q
        where q.state = 'failed'`
     )
-    .all() as unknown as Array<{ last_error: string | null; updated_at: string; recovered: number }>;
+    .all() as unknown as Array<{
+      repo: string;
+      last_error: string | null;
+      updated_at: string;
+      recovered: number;
+    }>;
   const activeFailedRows = failedRows.filter((failedRow) => failedRow.recovered !== 1);
   const failureWindowStartMs = now.getTime() - FAILURE_HEALTH_WINDOW_MS;
   const recentActiveFailedRows = activeFailedRows.filter((failedRow) => {
@@ -2685,7 +2691,8 @@ function readReviewQueueCounts(
       running: repoRow.running ?? 0,
       providerDeferred: repoRow.providerDeferred ?? 0,
       retryableProviderDeferred: repoRow.retryableProviderDeferred ?? 0,
-      failed: repoRow.failed ?? 0
+      failed: repoRow.failed ?? 0,
+      activeFailed: activeFailedRows.filter((failedRow) => failedRow.repo === repoRow.repo).length
     }))
   };
 }
