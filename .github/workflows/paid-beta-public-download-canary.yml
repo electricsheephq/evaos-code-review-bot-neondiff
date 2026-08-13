@@ -24,7 +24,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  privacy-audit:
+    uses: ./.github/workflows/publication-privacy-audit.yml
+    secrets: inherit
+
   public-download-install-canary:
+    needs: privacy-audit
     name: Public download and clean install (${{ matrix.runner }})
     strategy:
       fail-fast: false
@@ -89,9 +94,9 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$extract_root/NeonDiff.app"
           identity="$(codesign -dv --verbose=4 "$extract_root/NeonDiff.app" 2>&1)"
           grep -Fxq 'TeamIdentifier=TC6MS3T6NN' <<<"$identity"
-          grep -Fxq 'Authority=Developer ID Application: Andrew Ryan (TC6MS3T6NN)' <<<"$identity"
+          grep -Eq '^Authority=Developer ID Application:.+$' <<<"$identity"
           xcrun stapler validate "$extract_root/NeonDiff.app"
-          spctl -a -vv -t exec "$extract_root/NeonDiff.app"
+          spctl --assess --type execute "$extract_root/NeonDiff.app"
 
       - name: Install exact app on clean runner
         shell: bash
@@ -102,9 +107,9 @@ jobs:
           codesign --verify --deep --strict --verbose=2 /Applications/NeonDiff.app
           identity="$(codesign -dv --verbose=4 /Applications/NeonDiff.app 2>&1)"
           grep -Fxq 'TeamIdentifier=TC6MS3T6NN' <<<"$identity"
-          grep -Fxq 'Authority=Developer ID Application: Andrew Ryan (TC6MS3T6NN)' <<<"$identity"
+          grep -Eq '^Authority=Developer ID Application:.+$' <<<"$identity"
           xcrun stapler validate /Applications/NeonDiff.app
-          spctl -a -vv -t exec /Applications/NeonDiff.app
+          spctl --assess --type execute /Applications/NeonDiff.app
 
       - name: Write sanitized canary receipt
         shell: bash
