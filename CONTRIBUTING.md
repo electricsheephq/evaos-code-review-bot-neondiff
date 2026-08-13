@@ -80,7 +80,7 @@ Every meaningful PR should name the proof it ran:
 - focused validation command
 - `npm test` and `npm run build`, or why CI is the right place for heavier validation
 - dry-run review evidence when the change affects review behavior
-- evidence path such as `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/YYYY-MM-DD/issue-<number>/`
+- evidence path such as `/Users/m1/Codex/evidence/neondiff/YYYY-MM-DD/issue-<number>/`
 
 Evidence should contain public-safe summaries, counts, refs, hashes, setup
 status, blocker codes, and command names. It must not contain secrets, raw PR

@@ -299,9 +299,16 @@ For a B0 customer, the native first-run path is:
    remain separate gates.
 4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
    Repository**. The app writes the allowlist through the typed local `config
-   patch` command; the customer does not edit a config file.
+   patch` command and ensures every selected repository has an enabled local
+   policy profile; the customer does not edit a config file. Existing
+   per-repository policy fields are preserved.
 5. Choose **Verify App Access**. Continue remains disabled until GitHub verifies
    the exact configured repository through that App installation.
+
+If verification reports a missing repository policy, choose **Apply
+Repository** again before retrying **Verify App Access**. This is a local
+configuration recovery step, not evidence that the GitHub App installation is
+missing.
 
 For a verified account with no bot yet, the app allocates the isolated new-bot
 plan before showing **Initialize Local Config**. It never initializes the

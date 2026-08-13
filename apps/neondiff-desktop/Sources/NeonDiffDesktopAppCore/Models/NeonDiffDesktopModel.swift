@@ -3702,11 +3702,41 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case .existingLocalAgent:
             expectedCredentialSource = "configured"
         }
+        let report = result.stdout.data(using: .utf8).flatMap {
+            try? JSONDecoder().decode(BYOGitHubDoctorReport.self, from: $0)
+        }
+        let expectedRepositories = normalizedExactRepoNames(
+            expectedContext.repositories
+        )
+        let reportedRepositories = report.flatMap {
+            normalizedExactRepoNames($0.github.readChecks.map(\.repo))
+        }
+        if result.exitCode == 0,
+           let report,
+           let expectedRepositories,
+           !expectedRepositories.isEmpty,
+           reportedRepositories == expectedRepositories
+        {
+            let missingProfiles = report.github.readChecks
+                .filter { $0.skippedByPolicy == "repo_profile_missing" }
+                .map(\.repo)
+                .sorted {
+                    $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+                }
+            if !missingProfiles.isEmpty {
+                byoGitHubCredentialsVerified = false
+                lastError =
+                    "NeonDiff repository policy is missing an enabled profile for \(missingProfiles.joined(separator: ", ")). Apply Repository again, then retry App verification."
+                byoGitHubCredentialStatus = lastError ?? "Repository policy missing"
+                logText =
+                    "GitHub credentials and installation access were not accepted because the selected repository is missing an enabled local policy profile."
+                return
+            }
+        }
         guard result.exitCode == 0,
-              let data = result.stdout.data(using: .utf8),
-              let report = try? JSONDecoder().decode(BYOGitHubDoctorReport.self, from: data),
-              let expectedRepositories = normalizedExactRepoNames(expectedContext.repositories),
-              let reportedRepositories = normalizedExactRepoNames(report.github.readChecks.map(\.repo)),
+              let report,
+              let expectedRepositories,
+              let reportedRepositories,
               !expectedRepositories.isEmpty,
               reportedRepositories == expectedRepositories,
               report.ok,
@@ -5518,8 +5548,22 @@ package final class NeonDiffDesktopModel: ObservableObject {
             .filter(\.enabled)
             .map(\.name)
         let uniqueRepos = uniqueSortedRepoNames(selectedRepos)
+        let configuredRepos = uniqueSortedRepoNames(repos.map(\.name))
+        let repoProfiles = Dictionary(
+            uniqueKeysWithValues: configuredRepos.map { repository in
+                let enabled = repos.contains {
+                    $0.enabled
+                        && $0.name.caseInsensitiveCompare(repository)
+                            == .orderedSame
+                }
+                return (repository, ["enabled": enabled])
+            }
+        )
         let patch: [String: Any] = [
-            "pilotRepos": uniqueRepos
+            "pilotRepos": uniqueRepos,
+            "repoProfiles": [
+                "repos": repoProfiles
+            ]
         ]
         let data = try JSONSerialization.data(withJSONObject: patch, options: [.prettyPrinted, .sortedKeys])
         try dependencies.fileWriter.write(data, to: repoSelectionPatchPath)
