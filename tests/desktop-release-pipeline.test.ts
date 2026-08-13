@@ -45,7 +45,11 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(inputs?.release_tag?.required).toBe(true);
     expect(inputs?.artifact_name?.required).toBe(true);
     expect(inputs?.artifact_sha256?.required).toBe(true);
-    expect(parsed.permissions).toEqual({ contents: "read" });
+    expect(parsed.permissions).toEqual({
+      contents: "read",
+      issues: "read",
+      "pull-requests": "read"
+    });
 
     const job = parsed.jobs?.["public-download-install-canary"];
     expect(job?.strategy?.["fail-fast"]).toBe(false);
@@ -219,6 +223,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
 
   it("builds the credential-bearing worker as one pinned sealed executable", () => {
     const script = read("scripts/build-desktop-sealed-worker.mjs");
+    const cli = read("src/cli.ts");
     const entitlements = read(
       "apps/neondiff-desktop/script/worker-runtime.entitlements.plist"
     );
@@ -230,6 +235,11 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(script).toContain("--build-sea");
     expect(script).toContain('mainFormat: "module"');
     expect(script).toContain('format: "esm"');
+    expect(script).toContain("__NEONDIFF_SEA_PACKAGE_VERSION__");
+    expect(script).toContain("portabilityDirectory");
+    expect(cli).toContain(
+      "typeof __NEONDIFF_SEA_PACKAGE_VERSION__ === \"string\""
+    );
     expect(script).toContain("/usr/bin/codesign");
     expect(script).toContain("/usr/bin/otool");
     expect(entitlements).toContain(

@@ -143,6 +143,8 @@ import {
   type RuntimeGitHubCredentials
 } from "./runtime-github-credentials.js";
 
+declare const __NEONDIFF_SEA_PACKAGE_VERSION__: string | undefined;
+
 const LAUNCHCTL_TIMEOUT_MS = 15_000;
 const PLUTIL_TIMEOUT_MS = 5_000;
 
@@ -2605,6 +2607,12 @@ function resolvePackageRoot(): string {
 }
 
 function resolvePackageVersion(): string {
+  if (
+    typeof __NEONDIFF_SEA_PACKAGE_VERSION__ === "string"
+    && __NEONDIFF_SEA_PACKAGE_VERSION__.length > 0
+  ) {
+    return __NEONDIFF_SEA_PACKAGE_VERSION__;
+  }
   const packageJson = JSON.parse(readFileSync(join(resolvePackageRoot(), "package.json"), "utf8"));
   if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
     throw new Error("package.json is missing a version string");

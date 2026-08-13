@@ -44,6 +44,21 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function packageVersion(repoRoot) {
+  const packageJson = JSON.parse(
+    readFileSync(join(repoRoot, "package.json"), "utf8")
+  );
+  if (
+    typeof packageJson.version !== "string"
+    || !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(
+      packageJson.version
+    )
+  ) {
+    fail("package.json has an invalid version");
+  }
+  return packageJson.version;
+}
+
 function main() {
   if (process.platform !== "darwin") {
     fail("the sealed desktop worker can be built only on macOS");
@@ -58,6 +73,7 @@ function main() {
   }
 
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const sealedPackageVersion = packageVersion(repoRoot);
   const staging = mkdtempSync(join(tmpdir(), "neondiff-sealed-worker-"));
   const cacheDirectory = join(
     homedir(),
@@ -97,6 +113,10 @@ function main() {
       platform: "node",
       format: "esm",
       target: "node26",
+      define: {
+        __NEONDIFF_SEA_PACKAGE_VERSION__:
+          JSON.stringify(sealedPackageVersion)
+      },
       sourcemap: false,
       logLevel: "silent"
     });
@@ -145,7 +165,10 @@ function main() {
       "-",
       output
     ], { stdio: ["ignore", "ignore", "pipe"] });
+    const portabilityDirectory = join(staging, "portability-cwd");
+    mkdirSync(portabilityDirectory, { mode: 0o700 });
     const reportedVersion = execFileSync(output, ["--version"], {
+      cwd: portabilityDirectory,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"]
     }).trim();
