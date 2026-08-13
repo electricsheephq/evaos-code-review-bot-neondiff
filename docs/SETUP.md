@@ -418,7 +418,9 @@ If Overview shows **Worker update required**:
 
 4. Inspect the public-safe preview, then repeat it with
    `--dry-run false --confirm true`. The installer verifies the tarball before
-   mutation, installs into a versioned user-owned Application Support prefix,
+   mutation, freshly reinstalls an unreferenced leftover from that exact
+   artifact instead of executing it, and installs into a versioned user-owned
+   Application Support prefix,
    preserves the existing config, LaunchAgent label/environment, GitHub App key
    file, Keychain entries, provider state, and repository allowlist, and
    restarts the same LaunchAgent only when it was already loaded. It never reads
@@ -433,17 +435,25 @@ If Overview shows **Worker update required**:
    disabled until the exact installed worker advertises both config-revision
    approval and the matching ZCode provider path.
 
-Preview rollback before changing the active worker:
+The first checksum-managed migration has no trusted prior candidate, so it
+fails closed instead of restoring the unbound original LaunchAgent invocation.
+Retain every verified worker bundle. After installing a later candidate,
+preview rollback from the complete prior bundle:
 
 ```bash
+BUNDLE_DIR="$(pwd -P)"
 node install-b0-worker-candidate.mjs rollback \
+  --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.PRIOR-b0-candidate-manifest.json" \
+  --manifest-sha256 <prior-manifest-sha256-from-release> \
+  --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.PRIOR.tgz" \
   --launchd-label <existing-label> \
   --dry-run true
 ```
 
-Rollback also requires `--dry-run false --confirm true`. It restores the
-previous versioned worker, or the original LaunchAgent invocation on the first
-migration, without deleting either candidate or touching customer secrets.
+Rollback also requires `--dry-run false --confirm true`. It verifies that the
+supplied prior artifacts match the recorded prior candidate, installs them
+through fresh staging, and then switches atomically without executing or
+overwriting either pre-existing candidate tree or touching customer secrets.
 
 Until an immutable GitHub prerelease and release manifest name a compatible
 worker artifact, this state is a release blocker rather than a prompt to repair

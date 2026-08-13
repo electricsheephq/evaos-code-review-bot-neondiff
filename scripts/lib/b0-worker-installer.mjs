@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, unlinkSync } from "node:fs";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -193,7 +193,11 @@ export function validateWorkerCandidate({
 
 export function selectWorkerVersionAction(
   versionRoot,
-  { rejectExisting }
+  {
+    rejectExisting,
+    versionID = null,
+    protectedVersionIDs = []
+  }
 ) {
   if (rejectExisting !== true && rejectExisting !== false) {
     fail("worker version policy is invalid");
@@ -207,7 +211,61 @@ export function selectWorkerVersionAction(
   if (rejectExisting) {
     fail("worker version already exists; refusing unverified reuse");
   }
-  return "reuse";
+  if (
+    typeof versionID !== "string"
+    || versionID.length === 0
+    || !Array.isArray(protectedVersionIDs)
+    || !protectedVersionIDs.every(
+      (value) => typeof value === "string" && value.length > 0
+    )
+  ) {
+    fail("worker replacement references are invalid");
+  }
+  if (protectedVersionIDs.includes(versionID)) {
+    fail("worker version is current or rollback-referenced; refusing replacement");
+  }
+  return "replace";
+}
+
+export function removeReplaceableWorkerVersion({
+  versionRoot,
+  versionsRoot,
+  currentUID = typeof process.getuid === "function"
+    ? process.getuid()
+    : null
+}) {
+  if (
+    !isAbsolute(versionRoot)
+    || !isAbsolute(versionsRoot)
+    || !isPathAtOrInside(versionsRoot, versionRoot)
+    || versionRoot === versionsRoot
+  ) {
+    fail("worker replacement path escaped the version root");
+  }
+  const entry = lstatSync(versionRoot);
+  if (currentUID !== null && entry.uid !== currentUID) {
+    fail("worker replacement must be owned by the current user");
+  }
+  if (entry.isSymbolicLink()) {
+    unlinkSync(versionRoot);
+    return "unlinked";
+  }
+  if (!entry.isDirectory()) {
+    fail("worker replacement must be a directory or symbolic link");
+  }
+  if ((entry.mode & 0o077) !== 0) {
+    fail("worker replacement directory must be private to the current user (0700)");
+  }
+  const realVersionsRoot = realpathSync(versionsRoot);
+  const realVersionRoot = realpathSync(versionRoot);
+  if (
+    !isPathAtOrInside(realVersionsRoot, realVersionRoot)
+    || realVersionRoot === realVersionsRoot
+  ) {
+    fail("worker replacement path escaped the real version root");
+  }
+  rmSync(realVersionRoot, { recursive: true });
+  return "removed";
 }
 
 export function requireFirstInstallLaunchdUnloaded(state) {
@@ -329,12 +387,30 @@ export function planWorkerUpdate({
   const previousPackageVersion = previousVersionID
     ? previousState?.packageVersion ?? null
     : null;
+  const previousCandidateHead = previousVersionID
+    ? previousState?.candidateHead ?? null
+    : null;
+  const previousManifestSHA256 = previousVersionID
+    ? previousState?.manifestSHA256 ?? null
+    : null;
+  if (
+    previousVersionID
+    && (
+      !PACKAGE_VERSION_PATTERN.test(previousPackageVersion ?? "")
+      || !FULL_SHA_PATTERN.test(previousCandidateHead ?? "")
+      || !SHA256_PATTERN.test(previousManifestSHA256 ?? "")
+    )
+  ) {
+    fail("managed worker state candidate identity is invalid");
+  }
   const nextState = {
     schemaVersion: 1,
     launchdLabel: expectedLabel,
     currentVersionID: versionID,
     previousVersionID,
     previousPackageVersion,
+    previousCandidateHead,
+    previousManifestSHA256,
     originalProgramArguments,
     originalWorkingDirectory,
     candidateHead,
@@ -382,7 +458,12 @@ export function selectStableNodeLaunchPath({ execPath, stableCandidates, resolve
   return execPath;
 }
 
-export function planWorkerRollback({ state, currentLaunchAgent, expectedLabel }) {
+export function planWorkerRollback({
+  state,
+  currentLaunchAgent,
+  expectedLabel,
+  replacementVersionID
+}) {
   validateLaunchAgent(currentLaunchAgent, expectedLabel);
   if (
     state?.schemaVersion !== 1
@@ -393,45 +474,62 @@ export function planWorkerRollback({ state, currentLaunchAgent, expectedLabel })
   ) {
     fail("worker rollback state is invalid");
   }
-  if (state.currentVersionID === null) {
-    fail("original worker is already active; run update to reactivate a candidate");
+  if (!state.previousVersionID) {
+    fail(
+      "no checksum-bound prior candidate exists; install another verified candidate before rollback"
+    );
   }
-  if (state.previousVersionID) {
-    return {
-      nextLaunchAgent: clone(currentLaunchAgent),
-      nextState: {
-        ...state,
-        currentVersionID: state.previousVersionID,
-        previousVersionID: state.currentVersionID,
-        packageVersion: state.previousPackageVersion,
-        previousPackageVersion: state.packageVersion
-      },
-      publicSummary: {
-        action: "rollback",
-        target: "previous-worker",
-        launchdLabel: expectedLabel
-      }
-    };
+  if (
+    typeof replacementVersionID !== "string"
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/.test(replacementVersionID)
+    || !PACKAGE_VERSION_PATTERN.test(state.previousPackageVersion ?? "")
+    || !FULL_SHA_PATTERN.test(state.previousCandidateHead ?? "")
+    || !SHA256_PATTERN.test(state.previousManifestSHA256 ?? "")
+    || !PACKAGE_VERSION_PATTERN.test(state.packageVersion ?? "")
+    || !FULL_SHA_PATTERN.test(state.candidateHead ?? "")
+    || !SHA256_PATTERN.test(state.manifestSHA256 ?? "")
+  ) {
+    fail("worker rollback candidate identity is invalid");
   }
-  const nextLaunchAgent = clone(currentLaunchAgent);
-  nextLaunchAgent.ProgramArguments = clone(state.originalProgramArguments);
-  nextLaunchAgent.WorkingDirectory = state.originalWorkingDirectory;
-  validateLaunchAgent(nextLaunchAgent, expectedLabel);
   return {
-    nextLaunchAgent,
+    expectedCandidate: {
+      candidateHead: state.previousCandidateHead,
+      packageVersion: state.previousPackageVersion,
+      manifestSHA256: state.previousManifestSHA256
+    },
+    nextLaunchAgent: clone(currentLaunchAgent),
     nextState: {
       ...state,
-      currentVersionID: null,
+      currentVersionID: replacementVersionID,
       previousVersionID: state.currentVersionID,
-      packageVersion: null,
-      previousPackageVersion: state.packageVersion
+      packageVersion: state.previousPackageVersion,
+      previousPackageVersion: state.packageVersion,
+      candidateHead: state.previousCandidateHead,
+      previousCandidateHead: state.candidateHead,
+      manifestSHA256: state.previousManifestSHA256,
+      previousManifestSHA256: state.manifestSHA256
     },
     publicSummary: {
       action: "rollback",
-      target: "original-worker",
+      target: "previous-worker",
       launchdLabel: expectedLabel
     }
   };
+}
+
+export function requireRollbackCandidate({
+  expectedCandidate,
+  suppliedCandidate,
+  suppliedManifestSHA256
+}) {
+  if (
+    suppliedCandidate?.candidateHead !== expectedCandidate?.candidateHead
+    || suppliedCandidate?.packageVersion !== expectedCandidate?.packageVersion
+    || suppliedManifestSHA256 !== expectedCandidate?.manifestSHA256
+  ) {
+    fail("rollback artifacts do not match the recorded prior candidate");
+  }
+  return clone(expectedCandidate);
 }
 
 export function recoverPreviouslyLoadedWorker({

@@ -150,15 +150,24 @@ Worker Check**. The existing config, GitHub App environment, provider state,
 repository allowlist, and private-key file are preserved; private-key bytes are
 never read by the installer.
 
-Rollback preview:
+The first checksum-managed migration has no trusted prior candidate and cannot
+roll back to the unbound original invocation. After a later candidate update,
+retain the prior candidate's complete verified bundle. Preview rollback from
+that prior bundle:
 
 \`\`\`sh
+BUNDLE_DIR="$(pwd -P)"
 node install-b0-worker-candidate.mjs rollback \\
+  --manifest "$BUNDLE_DIR/${manifestFilename}" \\
+  --manifest-sha256 ${manifestSHA256} \\
+  --tarball "$BUNDLE_DIR/${tarballFilename}" \\
   --launchd-label YOUR_NEONDIFF_LAUNCHD_LABEL \\
   --dry-run true
 \`\`\`
 
-Rollback mutation also requires \`--dry-run false --confirm true\`.
+The placeholders above must name the prior candidate, not the currently active
+candidate. Rollback mutation also requires
+\`--dry-run false --confirm true\`.
 
 Candidate source: \`${candidate.candidateHead}\`
 

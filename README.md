@@ -114,6 +114,10 @@ Worker**. Verify the outer worker bundle ZIP against the prerelease notes, then
 verify the extracted release manifest and inner `.tgz` tarball against the
 published SHA-256 values before following the dry-run-first update and rollback
 commands in [docs/SETUP.md](docs/SETUP.md#update-an-existing-local-worker).
+Retain each verified worker bundle: rollback is available only after a second
+checksum-managed candidate has been installed, and requires the prior
+candidate's exact manifest, published manifest SHA-256, and tarball. The first
+migration cannot roll back to an unbound original invocation.
 This preserves the existing config, LaunchAgent identity/environment, provider
 state, repository allowlist, and credential stores. It is not a public npm,
 Sparkle, or automatic worker-update claim before that immutable prerelease is
