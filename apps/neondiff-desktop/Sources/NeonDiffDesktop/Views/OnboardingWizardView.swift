@@ -646,7 +646,10 @@ struct OnboardingWizardView: View {
                                 Label("Check Status", systemImage: "arrow.clockwise")
                             }
                             Button { model.startDaemon() } label: {
-                                Label("Start/Restart", systemImage: "play.circle")
+                                Label(
+                                    model.daemonStartActionTitle,
+                                    systemImage: "play.circle"
+                                )
                             }
                             .disabled(!model.productionDaemonStartAvailable)
                             Button { model.stopDaemon() } label: {
@@ -665,6 +668,10 @@ struct OnboardingWizardView: View {
                             }
                         }
                     }
+
+                    Text(model.keychainWorkerLaunchAgentStatus)
+                        .operatorBodyText()
+                        .fixedSize(horizontal: false, vertical: true)
 
                     OperatorBadge(
                         text: model.onboardingFlow.daemonBootstrapChecked ? "Checked" : "Check Required",

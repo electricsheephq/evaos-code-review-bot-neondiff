@@ -45,6 +45,32 @@ enum NeonDiffDesktopCompositionRoot {
                 LaunchAgentLocalBotConfigurationDiscovery
                     .discoverExecutionContexts()
             }
+        let localBotDiscoveryProvider:
+            @Sendable (String) -> DesktopLocalBotDiscoverySnapshot = {
+                label in
+                let snapshot =
+                    LaunchAgentLocalBotConfigurationDiscovery
+                        .discoverSnapshot(label: label)
+                return DesktopLocalBotDiscoverySnapshot(
+                    configurations: snapshot.configurations,
+                    executionContexts: snapshot.executionContexts
+                )
+            }
+        let keychainWorkerLaunchAgentManager:
+            any DesktopKeychainWorkerLaunchAgentManaging
+        if let appExecutableURL = Bundle.main.executableURL {
+            keychainWorkerLaunchAgentManager =
+                FoundationKeychainWorkerLaunchAgentManager(
+                    appExecutableURL: appExecutableURL,
+                    executionContextProvider: { label in
+                        LaunchAgentLocalBotConfigurationDiscovery
+                            .discoverExecutionContexts(label: label)
+                    }
+                )
+        } else {
+            keychainWorkerLaunchAgentManager =
+                UnavailableDesktopKeychainWorkerLaunchAgentManager()
+        }
         let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: AppKitClipboard(),
             urlOpener: AppKitURLOpener(),
@@ -75,7 +101,10 @@ enum NeonDiffDesktopCompositionRoot {
             localBotExecutionContexts: localBotExecutionContexts,
             localBotExecutionConfigPaths: localBotExecutionContexts.map(
                 \.configPath
-            )
+            ),
+            localBotDiscoveryProvider: localBotDiscoveryProvider,
+            keychainWorkerLaunchAgentManager:
+                keychainWorkerLaunchAgentManager
         ))
         model.localWorkerExecutionContextProvider =
             localBotExecutionContextProvider

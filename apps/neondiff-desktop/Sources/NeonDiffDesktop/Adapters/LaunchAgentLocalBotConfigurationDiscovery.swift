@@ -34,35 +34,55 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
             return Snapshot(configurations: [], executionContexts: [])
         }
         guard let data = launchAgentData else {
-            let installationURL = installedWorkerRoot
-                .appendingPathComponent("installation.json")
-            guard isSafeInstallationFile(installationURL),
-                  let installationData = try? Data(
-                    contentsOf: installationURL,
-                    options: .mappedIfSafe
-                  ),
-                  let context =
-                    DesktopInstalledWorkerExecutionContextParser.parse(
-                        data: installationData,
-                        expectedLabel: label,
-                        installedWorkerRoot: installedWorkerRoot,
-                        resolveCLI: {
-                            let resolved = $0.resolvingSymlinksInPath()
-                            return resolved == $0 ? nil : resolved
-                        },
-                        cliIsSafe: {
-                            isSafeInstalledCLI($0, fileManager: fileManager)
-                        },
-                        nodeIsExecutable: {
-                            isExecutableRegularFile($0, fileManager: fileManager)
-                        }
-                    )
+            guard let context = discoverInstalledWorkerExecutionContext(
+                label: label,
+                fileManager: fileManager
+            )
             else {
                 return Snapshot(configurations: [], executionContexts: [])
             }
             return Snapshot(
                 configurations: [],
                 executionContexts: [context]
+            )
+        }
+        if let request =
+            DesktopKeychainWorkerLaunchAgentContract.parsePropertyList(
+                data,
+                expectedLabel: label,
+                homeDirectory: fileManager.homeDirectoryForCurrentUser,
+                appExecutableIsSafe: {
+                    isSafeAppExecutable($0, fileManager: fileManager)
+                },
+                configExists: {
+                    isSafeConfigFile($0, fileManager: fileManager)
+                }
+            ),
+           let appID = Int64(request.appID),
+           let installedContext = discoverInstalledWorkerExecutionContext(
+                label: label,
+                fileManager: fileManager
+           ) {
+            return Snapshot(
+                configurations: [
+                    DesktopLocalBotConfiguration(
+                        appID: appID,
+                        configPath: request.configPath,
+                        workingDirectory: URL(
+                            filePath: request.configPath
+                        ).deletingLastPathComponent().path
+                    )
+                ],
+                executionContexts: [
+                    DesktopLocalBotExecutionContext(
+                        configPath: request.configPath,
+                        executablePath:
+                            installedContext.executablePath,
+                        argumentPrefix:
+                            installedContext.argumentPrefix,
+                        environmentOverrides: [:]
+                    )
+                ]
             )
         }
         let configuration = DesktopLaunchAgentBotConfigurationParser.parse(
@@ -106,6 +126,45 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
         discoverSnapshot(label: label, fileManager: fileManager).executionContexts
     }
 
+    static func discoverInstalledWorkerExecutionContext(
+        label: String = defaultLabel,
+        fileManager: FileManager = .default
+    ) -> DesktopLocalBotExecutionContext? {
+        let installedWorkerRoot = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(
+                "Library/Application Support/NeonDiffDesktop/Workers",
+                isDirectory: true
+            )
+            .appendingPathComponent(label, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let installationURL = installedWorkerRoot
+            .appendingPathComponent("installation.json")
+        guard isSafeInstallationFile(installationURL),
+              let installationData = try? Data(
+                contentsOf: installationURL,
+                options: .mappedIfSafe
+              )
+        else {
+            return nil
+        }
+        return DesktopInstalledWorkerExecutionContextParser.parse(
+            data: installationData,
+            expectedLabel: label,
+            installedWorkerRoot: installedWorkerRoot,
+            resolveCLI: {
+                let resolved = $0.resolvingSymlinksInPath()
+                return resolved == $0 ? nil : resolved
+            },
+            cliIsSafe: {
+                isSafeInstalledCLI($0, fileManager: fileManager)
+            },
+            nodeIsExecutable: {
+                isExecutableRegularFile($0, fileManager: fileManager)
+            }
+        )
+    }
+
     private static func isSafePrivateKeyFile(
         _ url: URL,
         fileManager: FileManager
@@ -132,6 +191,43 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
             && (entry.st_mode & 0o077) == 0
             && entry.st_size > 0
             && entry.st_size <= 1024 * 1024
+    }
+
+    private static func isSafeAppExecutable(
+        _ url: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        guard url.path
+            == "/Applications/NeonDiff.app/Contents/MacOS/NeonDiff"
+        else {
+            return false
+        }
+        var entry = stat()
+        return lstat(url.path, &entry) == 0
+            && (entry.st_mode & S_IFMT) == S_IFREG
+            && (entry.st_uid == 0 || entry.st_uid == getuid())
+            && (entry.st_mode & 0o022) == 0
+            && fileManager.isExecutableFile(atPath: url.path)
+    }
+
+    private static func isSafeConfigFile(
+        _ url: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        let standardized = url.standardizedFileURL
+        guard standardized.resolvingSymlinksInPath().path
+            == standardized.path
+        else {
+            return false
+        }
+        var entry = stat()
+        return lstat(standardized.path, &entry) == 0
+            && (entry.st_mode & S_IFMT) == S_IFREG
+            && entry.st_uid == getuid()
+            && (entry.st_mode & 0o022) == 0
+            && entry.st_size > 0
+            && entry.st_size <= 10 * 1024 * 1024
+            && fileManager.isReadableFile(atPath: url.path)
     }
 
     private static func entryExists(_ url: URL) -> Bool {

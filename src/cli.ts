@@ -135,6 +135,12 @@ import { resolveZCodeProviderEnv } from "./zcode-env.js";
 import { parsePositiveInteger } from "./cli-args.js";
 import { readSecretFromStdin } from "./secret-stdin.js";
 import { classifyCommandLicensePolicy, type CommandLicensePolicy } from "./command-license-policy.js";
+import {
+  resolveRuntimeGitHubCredentials,
+  resolveRuntimeCredentialEnvelope,
+  withRuntimeGitHubCredentials,
+  type RuntimeGitHubCredentials
+} from "./runtime-github-credentials.js";
 
 const LAUNCHCTL_TIMEOUT_MS = 15_000;
 const PLUTIL_TIMEOUT_MS = 5_000;
@@ -2116,29 +2122,35 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const result = await runOnceCliCommand({
-      options: {
-        configPath: args.config,
-        dryRun,
-        repo,
-        pullNumber,
-        useZCode,
-        expectedHeadSha: reviewPrExpectedHeadSha,
-        expectedConfigRevision,
-        processedHeadPolicy:
-          command === "review-pr" && !dryRun && reviewPrExpectedHeadSha
-            ? "approved_dry_run"
-            : command === "review-pr" && dryRun
-              ? "refresh_dry_run"
-              : "normal"
-      },
-      commandName: command,
-      admitImpl: async () => {
-        const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
-        if (!admission) throw new Error("review commands require production license admission");
-        return admission;
-      }
-    });
+    const runtimeGitHubCredentials = command === "review-pr"
+      ? await resolveCLIReviewRuntimeCredentials(args)
+      : undefined;
+    const result = await withRuntimeGitHubCredentials(
+      runtimeGitHubCredentials,
+      () => runOnceCliCommand({
+        options: {
+          configPath: args.config,
+          dryRun,
+          repo,
+          pullNumber,
+          useZCode,
+          expectedHeadSha: reviewPrExpectedHeadSha,
+          expectedConfigRevision,
+          processedHeadPolicy:
+            command === "review-pr" && !dryRun && reviewPrExpectedHeadSha
+              ? "approved_dry_run"
+              : command === "review-pr" && dryRun
+                ? "refresh_dry_run"
+                : "normal"
+        },
+        commandName: command,
+        admitImpl: async () => {
+          const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+          if (!admission) throw new Error("review commands require production license admission");
+          return admission;
+        }
+      })
+    );
     console.log(result.output);
     if (result.exitCode !== 0) process.exitCode = result.exitCode;
     return;
@@ -2353,38 +2365,89 @@ async function main(): Promise<void> {
     if (daemonAction) {
       throw new Error("daemon subcommand must be one of: start, stop, status");
     }
-    const config = loadConfig(args.config);
-    const monitoredRepos = listReposToScan(config);
-    let cycle = 0;
-    const runOnce = args.once === "true";
-    for (;;) {
-      cycle += 1;
-      const dryRun = args["dry-run"] !== "false";
-      const cleanupIntervalCycles = Math.max(1, Math.ceil(config.worktreeCleanup!.intervalMs / config.pollIntervalMs));
-      const cycleResult = await runDaemonCycle({
-        cycle,
-        dryRun,
-        pilotRepos: config.pilotRepos,
-        monitoredRepos,
-        canaryPulls: config.canaryPulls ?? [],
-        commandsEnabled: config.commands.enabled,
-        reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
-        issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
-        worktreeCleanupDue: config.worktreeCleanup!.enabled && (cycle === 1 || (cycle - 1) % cleanupIntervalCycles === 0),
-        configPath: args.config
-      });
-      if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
-        process.exitCode = 1;
-        return;
-      }
-      if (runOnce) {
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
-    }
+    const runtimeGitHubCredentials =
+      await resolveCLIDaemonRuntimeCredentials(args);
+    await withRuntimeGitHubCredentials(
+      runtimeGitHubCredentials,
+      () => runRawDaemon(args)
+    );
+    return;
   }
 
   throw new Error(`Unknown command: ${command ?? "(missing)"}`);
+}
+
+async function runRawDaemon(args: ParsedArgs): Promise<void> {
+  const config = loadConfig(args.config);
+  const monitoredRepos = listReposToScan(config);
+  let cycle = 0;
+  const runOnce = args.once === "true";
+  for (;;) {
+    cycle += 1;
+    const dryRun = args["dry-run"] !== "false";
+    const cleanupIntervalCycles = Math.max(
+      1,
+      Math.ceil(config.worktreeCleanup!.intervalMs / config.pollIntervalMs)
+    );
+    const cycleResult = await runDaemonCycle({
+      cycle,
+      dryRun,
+      pilotRepos: config.pilotRepos,
+      monitoredRepos,
+      canaryPulls: config.canaryPulls ?? [],
+      commandsEnabled: config.commands.enabled,
+      reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
+      issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
+      worktreeCleanupDue:
+        config.worktreeCleanup!.enabled
+        && (cycle === 1 || (cycle - 1) % cleanupIntervalCycles === 0),
+      configPath: args.config
+    });
+    if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
+      process.exitCode = 1;
+      return;
+    }
+    if (runOnce) return;
+    await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
+  }
+}
+
+async function resolveCLIReviewRuntimeCredentials(
+  args: ParsedArgs
+): Promise<RuntimeGitHubCredentials | undefined> {
+  const envelope = await resolveRuntimeCredentialEnvelope({
+    command: "review-pr",
+    subcommand: undefined,
+    runtimeCredentialsStdin: args["runtime-credentials-stdin"],
+    stdin: process.stdin
+  });
+  if (envelope) return envelope;
+  return resolveRuntimeGitHubCredentials({
+    command: "review-pr",
+    subcommand: undefined,
+    appId: args["github-app-id"],
+    privateKeyStdin: args["github-app-private-key-stdin"],
+    stdin: process.stdin
+  });
+}
+
+async function resolveCLIDaemonRuntimeCredentials(
+  args: ParsedArgs
+): Promise<RuntimeGitHubCredentials | undefined> {
+  const envelope = await resolveRuntimeCredentialEnvelope({
+    command: "daemon",
+    subcommand: undefined,
+    runtimeCredentialsStdin: args["runtime-credentials-stdin"],
+    stdin: process.stdin
+  });
+  if (envelope) return envelope;
+  return resolveRuntimeGitHubCredentials({
+    command: "daemon",
+    subcommand: undefined,
+    appId: args["github-app-id"],
+    privateKeyStdin: args["github-app-private-key-stdin"],
+    stdin: process.stdin
+  });
 }
 
 async function collectCoverageReport(args: ParsedArgs, config = loadConfig(args.config), forceScoped = false) {
@@ -3474,7 +3537,10 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--dry-run", description: "true (default) or false; false requires --confirm true." },
       { name: "--confirm", description: "Must be true to allow --dry-run false." },
       { name: "--expected-config-revision", description: "Required lowercase SHA-256 config revision from provider verification for dry and live execution." },
-      { name: "--zcode", description: "Must be true so dry and live reviews execute the same provider path." }
+      { name: "--zcode", description: "Must be true so dry and live reviews execute the same provider path." },
+      { name: "--github-app-id", description: "Numeric customer-owned App ID used only with bounded private-key stdin." },
+      { name: "--github-app-private-key-stdin", description: "true to read one bounded runtime-only App key; never accepted from config." },
+      { name: "--runtime-credentials-stdin", description: "true for the signed app to supply one bounded App-key/license-key JSON envelope." }
     ]
   },
   "run-once": {
@@ -3510,7 +3576,10 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--config", description: "Path to the config file." },
       { name: "--launchd-label", description: "launchd label for start/stop/status subcommands." },
       { name: "--dry-run", description: "true (default) or false for the direct poll loop." },
-      { name: "--once", description: "true to run a single cycle instead of looping (direct poll loop only)." }
+      { name: "--once", description: "true to run a single cycle instead of looping (direct poll loop only)." },
+      { name: "--github-app-id", description: "Numeric customer-owned App ID for the raw poll loop only." },
+      { name: "--github-app-private-key-stdin", description: "true to read one bounded runtime-only App key for the raw poll loop; rejected by start/stop/status." },
+      { name: "--runtime-credentials-stdin", description: "true for the signed app to supply one bounded App-key/license-key JSON envelope to the raw poll loop." }
     ]
   },
   providers: {

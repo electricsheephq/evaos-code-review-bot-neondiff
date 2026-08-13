@@ -20,6 +20,7 @@ struct NeonDiffDesktopApp: App {
 #endif
 
     init() {
+        FoundationKeychainWorkerDaemonRunner.runAndExitIfRequested()
 #if DEBUG
         let context: DesktopResolvedEvaluationLaunchContext?
         do {

@@ -186,10 +186,17 @@ Access** and routes the customer to **Install / Update Local Worker** instead
 of invoking a missing `neondiff` command. The checksum-bound bundle's explicit
 `first-install` command installs only its verified CLI in a private current-user
 version directory and writes a credential-free installation marker. It creates
-or loads no LaunchAgent and starts no daemon. Native first run can use that
-exact worker for bounded setup commands; review and daemon readiness remain
-separate gates. The immutable published prerelease and clean-Mac artifact proof
-remain distribution gates. Once an
+or loads no LaunchAgent and starts no daemon. After repository, provider,
+activation, and App-access verification, the signed app can install a separate
+secret-free LaunchAgent whose executable is the signed NeonDiff app. The
+headless app validates the exact account-scoped config and checksum-managed
+worker, reads the customer-owned App key and API-backed activation credential
+from its own Keychain without exporting either value, and pipes one bounded JSON
+envelope to the worker's stdin. The plist contains only the
+public App ID, config path, launchd label, and signed app path—never a key value
+or key-file path. Review and daemon readiness remain separate gates. The
+immutable published prerelease and clean-Mac artifact proof remain distribution
+gates. Once an
 executable global or checksum-managed worker is available, native first run
 exposes **Initialize Local Config** (non-destructive; never force-overwrites),
 **Add Repository**, **Apply Repository**, and **Verify App Access** without a

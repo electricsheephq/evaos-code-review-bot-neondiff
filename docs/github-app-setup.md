@@ -167,6 +167,18 @@ integration proof under #630.
    command. Source support does not prove that immutable release publication,
    signing, clean-Mac execution, review, or daemon readiness has passed.
 
+8. After App access, provider, repository, and activation are verified, use the
+   native daemon step's **Preview Start** and **Install & Start** actions. The
+   signed app writes a secret-free LaunchAgent that points back to
+   `/Applications/NeonDiff.app` with only the public App ID, exact selected
+   config, and launchd label. Its headless mode validates the checksum-managed
+   worker, reads the private key and API-backed activation credential from the
+   app-owned Keychain, and hands them to the local worker only through one
+   bounded JSON stdin envelope. It never exports either secret, writes a PEM or
+   license file, places a secret in the plist or environment, or uses a generic
+   `security -w` wrapper. Any coordinate mismatch or unavailable Keychain item
+   fails closed before the worker starts.
+
 GitHub setup and paid activation remain separate gates. After Checkout returns
 the one-shot NeonDiff Activation Key, the customer pastes it in the native
 **License** pane. The **Buy an Activation Key** control opens the public pricing

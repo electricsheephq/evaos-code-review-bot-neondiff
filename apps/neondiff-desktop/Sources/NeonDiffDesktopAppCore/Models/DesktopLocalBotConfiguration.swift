@@ -564,6 +564,12 @@ package enum DesktopLocalBotExecutionContextResolver {
                     || reviewHelpCommand
                     || Array(arguments.prefix(2)) == ["config", "inspect"]
                     || Array(arguments.prefix(2)) == ["license", "status"]
+                    || (
+                        arguments.count >= 2
+                            && arguments[0] == "daemon"
+                            && ["start", "stop", "status"]
+                                .contains(arguments[1])
+                    )
             }
         }
     }

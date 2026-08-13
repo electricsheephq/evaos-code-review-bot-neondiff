@@ -1,5 +1,6 @@
 import { constants, closeSync, fstatSync, openSync, readSync } from "node:fs";
 import type { LicenseConfig } from "./license.js";
+import { readRuntimeLicenseKey } from "./runtime-github-credentials.js";
 
 const MAXIMUM_LICENSE_SECRET_BYTES = 512;
 const productionKeyPattern = /^nd_live_[A-Za-z0-9_-]{8,}$/;
@@ -10,6 +11,8 @@ export interface LicenseSecretReader {
 
 export const productionLicenseSecretReader: LicenseSecretReader = {
   read(config) {
+    const runtimeKey = readRuntimeLicenseKey();
+    if (runtimeKey) return runtimeKey;
     if (config.storageBackend !== "file") {
       throw new Error("license secret storage is not supported for production admission; use the approved file backend");
     }
