@@ -139,4 +139,22 @@ describe("runtime GitHub credentials", () => {
       expect(reader.canPostAsApp()).toBe(true);
     });
   });
+
+  it("keeps repeated config loads scoped when the file omits GitHub settings", async () => {
+    const credentials = await resolveRuntimeGitHubCredentials({
+      command: "review-pr",
+      subcommand: undefined,
+      appId: "4184532",
+      privateKeyStdin: "true",
+      stdin: Readable.from([privateKey])
+    });
+
+    await withRuntimeGitHubCredentials(credentials, async () => {
+      const first = loadConfigFromObject({});
+      const second = loadConfigFromObject({});
+      expect(first.github.privateKey).toBe(privateKey.trim());
+      expect(second.github.privateKey).toBe(privateKey.trim());
+    });
+    expect(loadConfigFromObject({}).github.privateKey).toBeUndefined();
+  });
 });

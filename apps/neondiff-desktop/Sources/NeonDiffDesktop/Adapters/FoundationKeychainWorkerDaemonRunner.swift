@@ -101,6 +101,7 @@ enum FoundationKeychainWorkerDaemonRunner {
                 contentsOf: standardInput
             )
             try inputPipe.fileHandleForWriting.close()
+            standardInput.resetBytes(in: 0..<standardInput.count)
         } catch {
             process.terminate()
             throw WorkerDaemonRunnerError.stdinFailed

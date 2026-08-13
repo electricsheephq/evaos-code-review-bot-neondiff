@@ -433,6 +433,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         productionUsefulWorkAvailable
             && reviewTargetRuntimeReady
             && scopedReviewProviderReady
+            && !isKeychainWorkerLaunchAgentOperationInProgress
             && (
                 !dependencies.productionBoundary.byoGitHubEnabled
                     || existingLocalAgentAccessAvailable

@@ -615,6 +615,7 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     throw new Error("config files must not contain github.privateKey; use the bounded runtime stdin channel");
   }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
+  merged.github = { ...merged.github };
   merged.worktreeCleanup = { ...merged.worktreeCleanup! };
   const configuredCleanup = isRecord(fromFile) && isRecord(fromFile.worktreeCleanup)
     ? fromFile.worktreeCleanup
