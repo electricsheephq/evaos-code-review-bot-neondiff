@@ -6,6 +6,33 @@ import NeonDiffDesktopCore
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct BYOGitHubAppCredentialOnboardingTests {
+    @Test func missingConfiguredCLIBlocksStepOneAndRoutesToWorkerInstaller() {
+        let guideURL = URL(
+            string: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.1.0-beta.37"
+        )!
+        let fixture = ModelDependencyFixture(
+            preferenceStrings: [
+                "neondiff.cliPath": "/fixture/missing/neondiff"
+            ],
+            productionBoundary: exactB0Boundary,
+            localWorkerUpdateGuideURL: guideURL
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+
+        #expect(!fixture.model.localWorkerCLIAvailable)
+        #expect(fixture.model.localWorkerCLIStatus.contains("/fixture/missing/neondiff"))
+
+        fixture.model.initializeConfigForOnboarding()
+        fixture.model.applyRepoAllowlistPatch()
+        fixture.model.verifyBYOGitHubAppCredentials()
+
+        #expect(fixture.cli.calls.isEmpty)
+        #expect(fixture.model.lastError?.contains("Install / Update Local Worker") == true)
+
+        fixture.model.openLocalWorkerUpdateGuide()
+        #expect(fixture.urlOpener.urls == [guideURL])
+    }
+
     @Test func cleanInstallInitializationUsesNonDestructiveCLIInit() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(CLIRunResult(
@@ -13,9 +40,13 @@ struct BYOGitHubAppCredentialOnboardingTests {
                 stdout: #"{"ok":true,"command":"init","created":true}"#,
                 stderr: ""
             ))],
+            preferenceStrings: [
+                "neondiff.cliPath": "/usr/bin/true"
+            ],
             productionBoundary: exactB0Boundary
         )
 
+        #expect(fixture.model.localWorkerCLIAvailable)
         fixture.model.initializeConfigForOnboarding()
         await fixture.cli.waitUntilCallCount(1)
 
@@ -23,6 +54,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
             .appendingPathComponent("config.local.json")
             .standardizedFileURL.path
         #expect(fixture.model.configPath == expectedConfigPath)
+        #expect(fixture.cli.calls[0].executablePath == "/usr/bin/true")
         #expect(fixture.cli.calls[0].arguments == ["init", "--config", expectedConfigPath])
         #expect(!fixture.cli.calls[0].arguments.contains("--force"))
         #expect(fixture.model.configInitializeCommand.commandLine.contains(" init --config "))

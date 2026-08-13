@@ -286,6 +286,20 @@ struct OnboardingWizardView: View {
                 .operatorBodyText()
                 .fixedSize(horizontal: false, vertical: true)
 
+            if !model.localWorkerCLIAvailable {
+                Text(model.localWorkerCLIStatus)
+                    .font(.caption)
+                    .foregroundStyle(NeonDiffTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button {
+                    model.openLocalWorkerUpdateGuide()
+                } label: {
+                    Label("Install / Update Local Worker", systemImage: "arrow.down.circle")
+                }
+                .accessibilityIdentifier("neondiff-onboarding-worker-update-guide")
+            }
+
             Button { model.initializeConfigForOnboarding() } label: {
                 Label(
                     model.isConfigInitializationInProgress ? "Initializing…" : "Initialize Local Config",
@@ -293,7 +307,8 @@ struct OnboardingWizardView: View {
                 )
             }
             .disabled(
-                !model.canEditProviderConfiguration
+                !model.localWorkerCLIAvailable
+                    || !model.canEditProviderConfiguration
                     || model.isConfigInitializationInProgress
                     || model.isConfigPatchInProgress
                     || model.isConfigInspectInProgress
@@ -355,6 +370,7 @@ struct OnboardingWizardView: View {
                 }
                 .disabled(
                     model.repos.filter(\.enabled).count != 1
+                        || !model.localWorkerCLIAvailable
                         || !model.canEditProviderConfiguration
                         || model.isConfigInitializationInProgress
                         || model.isConfigPatchInProgress
@@ -370,6 +386,7 @@ struct OnboardingWizardView: View {
                 }
                 .disabled(
                     !model.byoGitHubCredentialsStored
+                        || !model.localWorkerCLIAvailable
                         || model.repos.filter(\.enabled).count != 1
                         || !model.canEditProviderConfiguration
                         || model.isConfigInitializationInProgress

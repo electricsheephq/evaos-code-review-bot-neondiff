@@ -273,6 +273,13 @@ For a B0 customer, the native first-run path is:
    config is not overwritten. The generated config keeps its runtime, state,
    evidence, and license files in bot-isolated directories beside the config,
    outside the packaged worker or source checkout.
+   If NeonDiff reports that the local worker command is unavailable, this and
+   the later CLI-backed setup controls remain disabled. Choose **Install /
+   Update Local Worker** to open the version-matched release guide. Continue
+   only when that exact release provides a checksum-bound worker bundle and a
+   supported first-install path. The current B0 update/rollback installer
+   requires an existing LaunchAgent and does not bootstrap a clean Mac; until a
+   matching first-install artifact exists, this is a release blocker.
 4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
    Repository**. The app writes the allowlist through the typed local `config
    patch` command; the customer does not edit a config file.
