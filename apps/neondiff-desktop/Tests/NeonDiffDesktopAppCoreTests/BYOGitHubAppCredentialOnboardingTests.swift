@@ -305,6 +305,130 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
+    @Test func byoRepositoryApplyKeepsPolicyProfilesAlignedWithRepositorySelection() async throws {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                stderr: ""
+            ))],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [
+            RepoMonitor(name: "acme/demo", enabled: true),
+            RepoMonitor(name: "acme/disabled", enabled: false)
+        ]
+
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        let write = try #require(fixture.fileWriter.writes.last)
+        let patch = try #require(
+            JSONSerialization.jsonObject(with: write.data) as? [String: Any]
+        )
+        #expect(patch["pilotRepos"] as? [String] == ["acme/demo"])
+        let repoProfiles = try #require(patch["repoProfiles"] as? [String: Any])
+        let repositories = try #require(repoProfiles["repos"] as? [String: Any])
+        let selectedProfile = try #require(repositories["acme/demo"] as? [String: Any])
+        let disabledProfile = try #require(repositories["acme/disabled"] as? [String: Any])
+        #expect(selectedProfile["enabled"] as? Bool == true)
+        #expect(disabledProfile["enabled"] as? Bool == false)
+    }
+
+    @Test func removingFinalRepositoryDisablesItsPersistedPolicyProfile() async throws {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":[],"repoProfiles":{"repos":{"acme/demo":{"enabled":false}}}}}"#,
+                stderr: ""
+            ))],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        let repository = RepoMonitor(name: "acme/demo", enabled: true)
+        fixture.model.repos = [repository]
+
+        fixture.model.removeRepoFromAllowlist(repository)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        let write = try #require(fixture.fileWriter.writes.last)
+        let patch = try #require(
+            JSONSerialization.jsonObject(with: write.data) as? [String: Any]
+        )
+        #expect(patch["pilotRepos"] as? [String] == [])
+        let repoProfiles = try #require(patch["repoProfiles"] as? [String: Any])
+        let repositories = try #require(repoProfiles["repos"] as? [String: Any])
+        let removedProfile = try #require(repositories["acme/demo"] as? [String: Any])
+        #expect(removedProfile["enabled"] as? Bool == false)
+    }
+
+    @Test func configInspectReusesExistingPolicyProfileCasing() throws {
+        let snapshot = try #require(ConfigInspectParser.parse(
+            #"{"ok":true,"command":"config inspect","config":{"pilotRepos":["acme/demo"],"repoProfiles":{"repos":{"Acme/Demo":{"enabled":false,"reviewProfile":"strict"}}}}}"#,
+            providerKeyStored: false,
+            licenseKeyStored: false
+        ))
+
+        #expect(snapshot.repos.map(\.name) == ["Acme/Demo"])
+        #expect(snapshot.repos.map(\.profile) == ["strict"])
+    }
+
+    @Test func missingRepositoryProfileReportsPolicyRecoveryInsteadOfInstallationFailure() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(doctorResult(
+                readChecks: doctorReadCheck(
+                    repo: "acme/demo",
+                    skippedByPolicy: "repo_profile_missing"
+                ),
+                exitCode: 1,
+                ok: false
+            ))],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.lastError?.contains("repository policy") == true)
+        #expect(fixture.model.lastError?.contains("Apply Repository") == true)
+        #expect(fixture.model.lastError?.contains("App installation") == false)
+    }
+
+    @Test func disabledRepositoryProfileReportsPolicyRecoveryInsteadOfInstallationFailure() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(doctorResult(
+                readChecks: doctorReadCheck(
+                    repo: "acme/demo",
+                    skippedByPolicy: "repo_profile_disabled"
+                ),
+                exitCode: 1,
+                ok: false
+            ))],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.lastError?.contains("repository policy") == true)
+        #expect(fixture.model.lastError?.contains("Apply Repository") == true)
+        #expect(fixture.model.lastError?.contains("App installation") == false)
+    }
+
     @Test func cleanInstallBYOUnlocksAfterExactSetupAndActivation() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [
@@ -568,10 +692,14 @@ private func byoRepoPatchJSON(repository: String) -> String {
     #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["\#(repository)"]}}"#
 }
 
-private func doctorResult(readChecks: String) -> CLIRunResult {
+private func doctorResult(
+    readChecks: String,
+    exitCode: Int32 = 0,
+    ok: Bool = true
+) -> CLIRunResult {
     CLIRunResult(
-        exitCode: 0,
-        stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
+        exitCode: exitCode,
+        stdout: #"{"ok":\#(ok),"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
         stderr: ""
     )
 }
@@ -581,7 +709,9 @@ private func doctorReadCheck(
     skippedByPolicy: String? = nil,
     ok: Bool = true
 ) -> String {
-    let skippedField = skippedByPolicy.map { #",\"skippedByPolicy\":\"\#($0)\""# } ?? ""
+    let skippedField = skippedByPolicy.map {
+        #","skippedByPolicy":"\#($0)""#
+    } ?? ""
     return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
 }
 

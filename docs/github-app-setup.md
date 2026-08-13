@@ -137,8 +137,13 @@ integration proof under #630.
    Worker** once more to refresh discovery, then choose **Initialize Local
    Config**. Enter the same `owner/repo`, then choose **Add Repository**,
    **Apply Repository**, and **Verify App Access**.
-   Initialization never uses `--force`; the app updates `pilotRepos` through
-   `config patch`, and no operator edits the customer's config file. Each new
+   Initialization never uses `--force`; the app updates `pilotRepos` and the
+   selected repository's enabled policy profile through `config patch`, and no
+   operator edits the customer's config file. Existing policy fields for that
+   repository are preserved. If verification reports a missing or disabled
+   repository policy profile, apply the repository again before retrying
+   verification; that
+   message does not mean the App installation is missing. Each new
    bot config receives isolated runtime, state, evidence, and license paths
    beside that config rather than the packaged worker's placeholder paths. An
    account with no bot gets this isolated plan before the initialization action

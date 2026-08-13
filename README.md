@@ -193,7 +193,10 @@ remain distribution gates. Once an
 executable global or checksum-managed worker is available, native first run
 exposes **Initialize Local Config** (non-destructive; never force-overwrites),
 **Add Repository**, **Apply Repository**, and **Verify App Access** without a
-terminal or operator config edit. When the verified account has no bot yet,
+terminal or operator config edit. **Apply Repository** writes both the selected
+`pilotRepos` allowlist and an enabled policy profile for each selected
+repository, preserving any existing per-repository policy fields. When the
+verified account has no bot yet,
 the app allocates that isolated new-bot plan before it presents the
 initialization action; it never initializes the `_unselected` placeholder. If
 the customer quits during that setup, the next

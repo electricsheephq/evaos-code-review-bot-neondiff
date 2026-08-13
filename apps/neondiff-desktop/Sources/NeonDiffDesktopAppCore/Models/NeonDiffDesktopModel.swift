@@ -83,6 +83,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var configPath: String {
         didSet {
             guard configPath != oldValue else { return }
+            pendingRemovedRepoProfileNames.removeAll()
             selectedBYOReviewRepository = nil
             invalidateRepoApplicationProof()
             invalidateProviderConfigAuthorization()
@@ -721,6 +722,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var previewedProviderExpectedRevision: String?
     private var pendingProviderPatchProof: PendingProviderPatchProof?
     private var pendingRepoPatchProof: PendingRepoPatchProof?
+    private var pendingRemovedRepoProfileNames = Set<String>()
     private var workspaceContextGeneration: UInt64 = 0
     private let accountWorkspacePreferenceKey = "neondiff.accountWorkspaceID"
     private let accountBotPreferenceKey = "neondiff.accountBotID"
@@ -2796,6 +2798,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         if let index = repos.firstIndex(where: { $0.name.caseInsensitiveCompare(repoName) == .orderedSame }) {
             repos[index].enabled = true
+        } else if let removedName = pendingRemovedRepoProfileNames.first(where: {
+            $0.caseInsensitiveCompare(repoName) == .orderedSame
+        }) {
+            pendingRemovedRepoProfileNames.remove(removedName)
+            repos.append(RepoMonitor(name: removedName, enabled: true, profile: "selected"))
+            repos.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         } else {
             repos.append(RepoMonitor(name: repoName, enabled: true, profile: "selected"))
             repos.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -2919,6 +2927,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         repos.removeAll { $0.id == repo.id }
+        pendingRemovedRepoProfileNames.insert(repo.name)
         lastError = nil
         logText = "Repo removed locally. Preview or apply the config patch to persist it."
     }
@@ -3702,11 +3711,45 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case .existingLocalAgent:
             expectedCredentialSource = "configured"
         }
+        let report = result.stdout.data(using: .utf8).flatMap {
+            try? JSONDecoder().decode(BYOGitHubDoctorReport.self, from: $0)
+        }
+        let expectedRepositories = normalizedExactRepoNames(
+            expectedContext.repositories
+        )
+        let reportedRepositories = report.flatMap {
+            normalizedExactRepoNames($0.github.readChecks.map(\.repo))
+        }
+        if let report,
+           let expectedRepositories,
+           !expectedRepositories.isEmpty,
+           reportedRepositories == expectedRepositories,
+           report.command == "doctor github",
+           report.appCredentials.source == expectedCredentialSource
+        {
+            let unavailableProfiles = report.github.readChecks
+                .filter {
+                    $0.skippedByPolicy == "repo_profile_missing"
+                        || $0.skippedByPolicy == "repo_profile_disabled"
+                }
+                .map(\.repo)
+                .sorted {
+                    $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+                }
+            if !unavailableProfiles.isEmpty {
+                byoGitHubCredentialsVerified = false
+                lastError =
+                    "NeonDiff repository policy is missing an enabled profile for \(unavailableProfiles.joined(separator: ", ")). Apply Repository again, then retry App verification."
+                byoGitHubCredentialStatus = lastError ?? "Repository policy missing"
+                logText =
+                    "GitHub credentials and installation access were not accepted because the selected repository is missing an enabled local policy profile."
+                return
+            }
+        }
         guard result.exitCode == 0,
-              let data = result.stdout.data(using: .utf8),
-              let report = try? JSONDecoder().decode(BYOGitHubDoctorReport.self, from: data),
-              let expectedRepositories = normalizedExactRepoNames(expectedContext.repositories),
-              let reportedRepositories = normalizedExactRepoNames(report.github.readChecks.map(\.repo)),
+              let report,
+              let expectedRepositories,
+              let reportedRepositories,
               !expectedRepositories.isEmpty,
               reportedRepositories == expectedRepositories,
               report.ok,
@@ -5035,6 +5078,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 repositories: uniqueSortedRepoNames(
                     repos.filter(\.enabled).map(\.name)
                 ),
+                removedProfileNames: pendingRemovedRepoProfileNames,
                 managedRepository: managedGitHubAvailable
                     ? selectedManagedGitHubRepository
                     : nil,
@@ -5518,8 +5562,24 @@ package final class NeonDiffDesktopModel: ObservableObject {
             .filter(\.enabled)
             .map(\.name)
         let uniqueRepos = uniqueSortedRepoNames(selectedRepos)
+        let configuredRepos = uniqueSortedRepoNames(
+            repos.map(\.name) + Array(pendingRemovedRepoProfileNames)
+        )
+        let repoProfiles = Dictionary(
+            uniqueKeysWithValues: configuredRepos.map { repository in
+                let enabled = repos.contains {
+                    $0.enabled
+                        && $0.name.caseInsensitiveCompare(repository)
+                            == .orderedSame
+                }
+                return (repository, ["enabled": enabled])
+            }
+        )
         let patch: [String: Any] = [
-            "pilotRepos": uniqueRepos
+            "pilotRepos": uniqueRepos,
+            "repoProfiles": [
+                "repos": repoProfiles
+            ]
         ]
         let data = try JSONSerialization.data(withJSONObject: patch, options: [.prettyPrinted, .sortedKeys])
         try dependencies.fileWriter.write(data, to: repoSelectionPatchPath)
@@ -5729,6 +5789,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 }
                 github = parsedGitHub
                 if commandName == "config inspect" {
+                    pendingRemovedRepoProfileNames.removeAll()
                     let inspectedRepositories = uniqueSortedRepoNames(
                         snapshot.repos
                             .filter(\.enabled)
@@ -5804,6 +5865,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 clearPendingProviderPatchProof(ifOwnedBy: providerPatchProof)
             }
             if commandName == "config patch", let repoPatchProof {
+                pendingRemovedRepoProfileNames.subtract(
+                    repoPatchProof.removedProfileNames
+                )
                 appliedRepoSelection = AppliedRepoSelection(
                     repositories: repoPatchProof.repositories,
                     configPath: repoPatchProof.configPath
@@ -6085,6 +6149,7 @@ private struct PendingProviderPatchProof: Sendable {
 private struct PendingRepoPatchProof: Sendable {
     let id: UUID
     let repositories: [String]
+    let removedProfileNames: Set<String>
     let managedRepository: String?
     let configPath: String
 }
