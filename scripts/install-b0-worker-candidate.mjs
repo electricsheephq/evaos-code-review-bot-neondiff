@@ -26,7 +26,9 @@ import {
   planWorkerUpdate,
   recoverFailedFirstInstall,
   recoverPreviouslyLoadedWorker,
+  removeReplaceableWorkerVersion,
   requireFirstInstallLaunchdUnloaded,
+  requireRollbackCandidate,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
   selectWorkerVersionAction,
@@ -71,8 +73,13 @@ Usage:
 
   node install-b0-worker-candidate.mjs first-install ... --dry-run false --confirm true
   node install-b0-worker-candidate.mjs update ... --dry-run false --confirm true
-  node install-b0-worker-candidate.mjs rollback --launchd-label <label> [--dry-run true]
-  node install-b0-worker-candidate.mjs rollback --launchd-label <label> --dry-run false --confirm true
+  node install-b0-worker-candidate.mjs rollback \\
+    --manifest /absolute/path/prior-manifest.json \\
+    --manifest-sha256 <64-lowercase-hex> \\
+    --tarball /absolute/path/prior-neondiff.tgz \\
+    --launchd-label <label> [--dry-run true]
+
+  node install-b0-worker-candidate.mjs rollback ... --dry-run false --confirm true
 
 First install creates only a credential-free CLI worker; it does not create or
 load a LaunchAgent. Updates preserve the existing config and LaunchAgent
@@ -298,18 +305,18 @@ function installVersion({
   manifestBytes,
   manifestSHA256,
   packageVersion,
-  rejectExisting
+  rejectExisting,
+  protectedVersionIDs = []
 }) {
   const versionRoot = join(versionsRoot, versionID);
   if (!pathIsInside(versionsRoot, versionRoot)) fail("worker version path escaped the version root");
-  const action = selectWorkerVersionAction(versionRoot, { rejectExisting });
-  if (action === "reuse") {
-    const embeddedManifest = join(versionRoot, ".neondiff-candidate-manifest.json");
-    requireAbsoluteRegularFile(embeddedManifest, MAX_MANIFEST_BYTES, "installed candidate manifest");
-    const embeddedBytes = readFileSync(embeddedManifest);
-    if (Buffer.compare(embeddedBytes, manifestBytes) !== 0) fail("installed candidate manifest mismatch");
-    verifyInstalledWorker(versionRoot, packageVersion);
-    return versionRoot;
+  const action = selectWorkerVersionAction(versionRoot, {
+    rejectExisting,
+    versionID,
+    protectedVersionIDs
+  });
+  if (action === "replace") {
+    removeReplaceableWorkerVersion({ versionRoot, versionsRoot });
   }
 
   const staging = join(versionsRoot, `.staging-${process.pid}-${randomUUID()}`);
@@ -345,6 +352,33 @@ function currentTarget(currentLink, versionsRoot) {
   const resolved = resolve(dirname(currentLink), target);
   if (!pathIsInside(versionsRoot, resolved)) fail("worker current pointer escaped the version root");
   return target;
+}
+
+function protectedWorkerVersionIDs(paths, state) {
+  const protectedIDs = [];
+  for (const value of [state?.currentVersionID, state?.previousVersionID]) {
+    if (value === null || value === undefined) continue;
+    if (
+      typeof value !== "string"
+      || value.length === 0
+      || value.includes(sep)
+    ) {
+      fail("worker state version reference is invalid");
+    }
+    protectedIDs.push(value);
+  }
+  const activeTarget = currentTarget(paths.currentLink, paths.versionsRoot);
+  if (activeTarget) {
+    const activeVersionID = relative(
+      paths.versionsRoot,
+      resolve(dirname(paths.currentLink), activeTarget)
+    );
+    if (activeVersionID.length === 0 || activeVersionID.includes(sep)) {
+      fail("worker current pointer must name one exact version");
+    }
+    protectedIDs.push(activeVersionID);
+  }
+  return [...new Set(protectedIDs)];
 }
 
 function switchCurrent(currentLink, relativeTarget) {
@@ -683,6 +717,11 @@ function update(args) {
     return;
   }
   const result = withWorkerLock(paths, () => {
+    const lockedState = readState(paths.statePath);
+    if (JSON.stringify(lockedState) !== JSON.stringify(priorState)) {
+      fail("worker state changed after update preview; retry the update");
+    }
+    const protectedVersionIDs = protectedWorkerVersionIDs(paths, lockedState);
     installVersion({
       versionsRoot: paths.versionsRoot,
       versionID: plan.versionID,
@@ -690,7 +729,8 @@ function update(args) {
       manifestBytes,
       manifestSHA256,
       packageVersion: candidate.packageVersion,
-      rejectExisting: false
+      rejectExisting: false,
+      protectedVersionIDs
     });
     const relativeTarget = join("versions", plan.versionID);
     const restarted = mutateLaunchAgent({
@@ -714,27 +754,71 @@ function rollback(args) {
   const state = readState(paths.statePath);
   if (!state) fail("no NeonDiff worker rollback state exists");
   const launchAgent = parsePlist(plistPath);
-  const plan = planWorkerRollback({ state, currentLaunchAgent: launchAgent, expectedLabel: label });
+  const replacementVersionID = `rollback-${randomUUID()}`;
+  const plan = planWorkerRollback({
+    state,
+    currentLaunchAgent: launchAgent,
+    expectedLabel: label,
+    replacementVersionID
+  });
+  const manifestPath = requireAbsoluteRegularFile(
+    required(args, "manifest"),
+    MAX_MANIFEST_BYTES,
+    "rollback manifest"
+  );
+  const tarballPath = requireAbsoluteRegularFile(
+    required(args, "tarball"),
+    MAX_TARBALL_BYTES,
+    "rollback tarball"
+  );
+  const manifestSHA256 = required(args, "manifest-sha256");
+  const manifestBytes = readFileSync(manifestPath);
+  const candidate = validateWorkerCandidate({
+    manifestBytes,
+    manifestSHA256,
+    tarballBytes: readFileSync(tarballPath),
+    tarballFilename: basename(tarballPath)
+  });
+  requireRollbackCandidate({
+    expectedCandidate: plan.expectedCandidate,
+    suppliedCandidate: candidate,
+    suppliedManifestSHA256: manifestSHA256
+  });
   if (dryRun) {
     console.log(JSON.stringify({ ok: true, dryRun: true, ...plan.publicSummary }));
     return;
   }
   const result = withWorkerLock(paths, () => {
-    let target = null;
-    if (plan.nextState.currentVersionID) {
-      const versionRoot = join(paths.versionsRoot, plan.nextState.currentVersionID);
-      if (!existsSync(versionRoot) || !pathIsInside(paths.versionsRoot, realpathSync(versionRoot))) {
-        fail("rollback worker version is missing or outside the version root");
-      }
-      verifyInstalledWorker(versionRoot, plan.nextState.packageVersion);
-      target = join("versions", plan.nextState.currentVersionID);
+    const lockedState = readState(paths.statePath);
+    if (JSON.stringify(lockedState) !== JSON.stringify(state)) {
+      fail("worker state changed after rollback preview; retry the rollback");
     }
+    const lockedPlan = planWorkerRollback({
+      state: lockedState,
+      currentLaunchAgent: parsePlist(plistPath),
+      expectedLabel: label,
+      replacementVersionID
+    });
+    requireRollbackCandidate({
+      expectedCandidate: lockedPlan.expectedCandidate,
+      suppliedCandidate: candidate,
+      suppliedManifestSHA256: manifestSHA256
+    });
+    installVersion({
+      versionsRoot: paths.versionsRoot,
+      versionID: replacementVersionID,
+      tarballPath,
+      manifestBytes,
+      manifestSHA256,
+      packageVersion: candidate.packageVersion,
+      rejectExisting: true
+    });
     const restarted = mutateLaunchAgent({
       plistPath,
-      nextLaunchAgent: plan.nextLaunchAgent,
+      nextLaunchAgent: lockedPlan.nextLaunchAgent,
       currentLink: paths.currentLink,
-      nextTarget: target,
-      nextState: plan.nextState,
+      nextTarget: join("versions", replacementVersionID),
+      nextState: lockedPlan.nextState,
       statePath: paths.statePath
     });
     return { restarted };

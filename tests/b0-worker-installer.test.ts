@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  writeFileSync,
   symlinkSync
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -16,6 +18,8 @@ import {
   planWorkerUpdate,
   recoverFailedFirstInstall,
   recoverPreviouslyLoadedWorker,
+  removeReplaceableWorkerVersion,
+  requireRollbackCandidate,
   requireFirstInstallLaunchdUnloaded,
   retryTransientLaunchdBootstrap,
   selectWorkerVersionAction,
@@ -83,13 +87,14 @@ function launchAgent() {
 }
 
 describe("B0 worker installer", () => {
-  it("classifies strict first-install rejection and legacy update reuse", () => {
+  it("rejects first-install reuse and safely replaces only unreferenced update leftovers", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-worker-reuse-"));
     const versionsRoot = join(root, "versions");
     const outsideRoot = join(root, "outside");
     const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
-    const symlinkVersion = join(versionsRoot, versionID);
-    const forgedVersion = join(versionsRoot, `${versionID}-forged`);
+    const symlinkVersionID = `${versionID}-symlink`;
+    const symlinkVersion = join(versionsRoot, symlinkVersionID);
+    const forgedVersion = join(versionsRoot, versionID);
     mkdirSync(versionsRoot, { mode: 0o700 });
     mkdirSync(outsideRoot, { mode: 0o700 });
     symlinkSync(outsideRoot, symlinkVersion);
@@ -102,13 +107,78 @@ describe("B0 worker installer", () => {
       )).toThrow("worker version already exists; refusing unverified reuse");
       expect(selectWorkerVersionAction(
         versionRoot,
-        { rejectExisting: false }
-      )).toBe("reuse");
+        {
+          rejectExisting: false,
+          versionID: versionRoot === symlinkVersion
+            ? symlinkVersionID
+            : versionID,
+          protectedVersionIDs: []
+        }
+      )).toBe("replace");
     }
     expect(selectWorkerVersionAction(
       join(versionsRoot, "missing"),
       { rejectExisting: true }
     )).toBe("install");
+
+    for (const protectedVersionID of [versionID, symlinkVersionID]) {
+      const protectedRoot = join(versionsRoot, protectedVersionID);
+      expect(() => selectWorkerVersionAction(
+        protectedRoot,
+        {
+          rejectExisting: false,
+          versionID: protectedVersionID,
+          protectedVersionIDs: [protectedVersionID]
+        }
+      )).toThrow(
+        "worker version is current or rollback-referenced; refusing replacement"
+      );
+    }
+  });
+
+  it("removes only confined private update leftovers without following symlinks", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-worker-replace-"));
+    const versionsRoot = join(root, "versions");
+    const outsideRoot = join(root, "outside");
+    const forgedVersion = join(versionsRoot, "forged");
+    const symlinkVersion = join(versionsRoot, "symlink");
+    mkdirSync(versionsRoot, { mode: 0o700 });
+    mkdirSync(outsideRoot, { mode: 0o700 });
+    writeFileSync(join(outsideRoot, "must-remain"), "outside");
+    mkdirSync(forgedVersion, { mode: 0o700 });
+    writeFileSync(join(forgedVersion, "forged-cli.js"), "must never execute");
+    symlinkSync(outsideRoot, symlinkVersion);
+
+    expect(removeReplaceableWorkerVersion({
+      versionRoot: forgedVersion,
+      versionsRoot
+    })).toBe("removed");
+    expect(existsSync(forgedVersion)).toBe(false);
+    expect(removeReplaceableWorkerVersion({
+      versionRoot: symlinkVersion,
+      versionsRoot
+    })).toBe("unlinked");
+    expect(existsSync(symlinkVersion)).toBe(false);
+    expect(existsSync(join(outsideRoot, "must-remain"))).toBe(true);
+
+    const unsafeVersion = join(versionsRoot, "unsafe");
+    mkdirSync(unsafeVersion, { mode: 0o700 });
+    chmodSync(unsafeVersion, 0o755);
+    expect(() => removeReplaceableWorkerVersion({
+      versionRoot: unsafeVersion,
+      versionsRoot
+    })).toThrow(
+      "worker replacement directory must be private to the current user (0700)"
+    );
+    expect(() => removeReplaceableWorkerVersion({
+      versionRoot: unsafeVersion,
+      versionsRoot,
+      currentUID: Number.MAX_SAFE_INTEGER
+    })).toThrow("worker replacement must be owned by the current user");
+    expect(() => removeReplaceableWorkerVersion({
+      versionRoot: outsideRoot,
+      versionsRoot
+    })).toThrow("worker replacement path escaped the version root");
   });
 
   it("requires a definitively unloaded launchd label for first install", () => {
@@ -220,6 +290,9 @@ describe("B0 worker installer", () => {
     expect(help.stdout).toContain("first-install");
     expect(help.stdout).toContain("rollback");
     expect(help.stdout).toContain("--manifest-sha256");
+    expect(help.stdout).toMatch(
+      /rollback[\s\S]*--manifest[\s\S]*--manifest-sha256[\s\S]*--tarball/
+    );
     expect(help.stdout).toContain("--dry-run false --confirm true");
   });
 
@@ -232,6 +305,7 @@ describe("B0 worker installer", () => {
     expect(script).toContain("INSTALL.md");
     expect(script).toContain("bundleSHA256");
     expect(script).toContain("manifestSHA256");
+    expect(script).toContain("retain the prior candidate");
     expect(script).toContain("assertExactCandidateCheckout");
     expect(script).toContain('BUNDLE_DIR="$(pwd -P)"');
     expect(script).not.toMatch(/npm publish|npm dist-tag|gh release|git tag/);
@@ -331,7 +405,7 @@ describe("B0 worker installer", () => {
     expect(JSON.stringify(plan.publicSummary)).not.toContain("config.local.json");
   });
 
-  it("rejects ambiguous or non-NeonDiff LaunchAgents and plans reversible state", () => {
+  it("rejects ambiguous LaunchAgents and first-migration rollback", () => {
     const ambiguous = launchAgent();
     ambiguous.ProgramArguments.push("--config", "/tmp/other.json");
     expect(() => planWorkerUpdate({
@@ -353,14 +427,14 @@ describe("B0 worker installer", () => {
       packageVersion,
       manifestSHA256: "a".repeat(64)
     });
-    const rollback = planWorkerRollback({
+    expect(() => planWorkerRollback({
       state: update.nextState,
       currentLaunchAgent: update.nextLaunchAgent,
-      expectedLabel: "com.electricsheephq.neondiff"
-    });
-    expect(rollback.nextLaunchAgent.ProgramArguments).toEqual(launchAgent().ProgramArguments);
-    expect(rollback.nextLaunchAgent.WorkingDirectory).toBe(launchAgent().WorkingDirectory);
-    expect(rollback.publicSummary).toMatchObject({ action: "rollback", target: "original-worker" });
+      expectedLabel: "com.electricsheephq.neondiff",
+      replacementVersionID: "replacement"
+    })).toThrow(
+      "no checksum-bound prior candidate exists; install another verified candidate before rollback"
+    );
   });
 
   it("fails closed when managed worker state is missing or belongs to another label", () => {
@@ -428,16 +502,51 @@ describe("B0 worker installer", () => {
     });
     expect(second.nextState.previousVersionID).toBe(first.versionID);
     expect(second.nextState.previousPackageVersion).toBe("1.1.0-beta.26");
+    expect(second.nextState.previousCandidateHead).toBe(candidateHead);
+    expect(second.nextState.previousManifestSHA256).toBe("a".repeat(64));
 
     const rollback = planWorkerRollback({
       state: second.nextState,
       currentLaunchAgent: second.nextLaunchAgent,
-      expectedLabel: "com.electricsheephq.neondiff"
+      expectedLabel: "com.electricsheephq.neondiff",
+      replacementVersionID: "fresh-rollback-version"
     });
-    expect(rollback.nextState.currentVersionID).toBe(first.versionID);
+    expect(rollback.nextState.currentVersionID).toBe("fresh-rollback-version");
     expect(rollback.nextState.packageVersion).toBe("1.1.0-beta.26");
     expect(rollback.nextState.previousVersionID).toBe(second.versionID);
     expect(rollback.nextState.previousPackageVersion).toBe("1.1.0-beta.27");
+    expect(rollback.nextState.candidateHead).toBe(candidateHead);
+    expect(rollback.nextState.previousCandidateHead).toBe(secondHead);
+    expect(rollback.nextState.manifestSHA256).toBe("a".repeat(64));
+    expect(rollback.nextState.previousManifestSHA256).toBe("b".repeat(64));
+    expect(rollback.expectedCandidate).toEqual({
+      candidateHead,
+      packageVersion: "1.1.0-beta.26",
+      manifestSHA256: "a".repeat(64)
+    });
+  });
+
+  it("requires rollback artifacts to match the exact recorded prior candidate", () => {
+    const expectedCandidate = {
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    };
+    expect(requireRollbackCandidate({
+      expectedCandidate,
+      suppliedCandidate: { candidateHead, packageVersion },
+      suppliedManifestSHA256: "a".repeat(64)
+    })).toEqual(expectedCandidate);
+    expect(() => requireRollbackCandidate({
+      expectedCandidate,
+      suppliedCandidate: { candidateHead: "8".repeat(40), packageVersion },
+      suppliedManifestSHA256: "a".repeat(64)
+    })).toThrow("rollback artifacts do not match the recorded prior candidate");
+    expect(() => requireRollbackCandidate({
+      expectedCandidate,
+      suppliedCandidate: { candidateHead, packageVersion },
+      suppliedManifestSHA256: "b".repeat(64)
+    })).toThrow("rollback artifacts do not match the recorded prior candidate");
   });
 
   it("boots out a partially activated replacement before restarting the original worker", () => {
@@ -516,7 +625,7 @@ describe("B0 worker installer", () => {
     expect(boundedAttempts).toBe(2);
   });
 
-  it("fails closed when rollback is requested after the original worker is already active", () => {
+  it("fails closed when no checksum-bound prior candidate exists", () => {
     const update = planWorkerUpdate({
       launchAgent: launchAgent(),
       expectedLabel: "com.electricsheephq.neondiff",
@@ -526,15 +635,13 @@ describe("B0 worker installer", () => {
       packageVersion,
       manifestSHA256: "a".repeat(64)
     });
-    const firstRollback = planWorkerRollback({
+    expect(() => planWorkerRollback({
       state: update.nextState,
       currentLaunchAgent: update.nextLaunchAgent,
-      expectedLabel: "com.electricsheephq.neondiff"
-    });
-    expect(() => planWorkerRollback({
-      state: firstRollback.nextState,
-      currentLaunchAgent: firstRollback.nextLaunchAgent,
-      expectedLabel: "com.electricsheephq.neondiff"
-    })).toThrow("original worker is already active");
+      expectedLabel: "com.electricsheephq.neondiff",
+      replacementVersionID: "fresh-rollback-version"
+    })).toThrow(
+      "no checksum-bound prior candidate exists; install another verified candidate before rollback"
+    );
   });
 });
