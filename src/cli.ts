@@ -436,11 +436,16 @@ async function main(): Promise<void> {
       if (!result.ok) process.exitCode = 1;
       return;
     }
-    const zcode = resolveZCodeProviderEnv({
-      appConfigPath: config.zcode.appConfigPath,
-      model: config.zcode.model,
-      providerId: config.zcode.providerId
-    });
+    const codexRuntime = config.codexRuntime?.enabled
+      ? config.codexRuntime
+      : undefined;
+    const zcode = codexRuntime
+      ? undefined
+      : resolveZCodeProviderEnv({
+          appConfigPath: config.zcode.appConfigPath,
+          model: config.zcode.model,
+          providerId: config.zcode.providerId
+        });
     const github = new GitHubApi(config.github);
     const readChecks = [];
     const monitoredRepos = listReposToScan(config);
@@ -483,7 +488,17 @@ async function main(): Promise<void> {
       commandsEnabled: config.commands.enabled,
       statePath: config.statePath,
       workRoot: config.workRoot,
-      zcode: zcode.redacted,
+      ...(codexRuntime
+        ? {
+            activeRuntime: {
+              providerId: "codex-cli-oauth",
+              adapter: "codex-cli",
+              model: codexRuntime.model,
+              reasoningEffort: codexRuntime.reasoningEffort,
+              auth: "existing-codex-session"
+            }
+          }
+        : { zcode: zcode!.redacted }),
       github: {
         canPostAsApp: github.canPostAsApp(),
         readMode: github.canPostAsApp() ? "app_installation" : "fallback_token",
