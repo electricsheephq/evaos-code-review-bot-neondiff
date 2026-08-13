@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync
+} from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   planWorkerFirstInstall,
@@ -9,6 +19,7 @@ import {
   recoverPreviouslyLoadedWorker,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
+  validateExistingWorkerVersionEvidence,
   validateWorkerCandidate
 } from "../scripts/lib/b0-worker-installer.mjs";
 
@@ -72,6 +83,64 @@ function launchAgent() {
 }
 
 describe("B0 worker installer", () => {
+  it("rejects an existing version symlink before returning an executable CLI", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-worker-reuse-"));
+    const versionsRoot = join(root, "versions");
+    const outsideRoot = join(root, "outside");
+    const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
+    mkdirSync(versionsRoot, { mode: 0o700 });
+    mkdirSync(outsideRoot, { mode: 0o700 });
+    symlinkSync(outsideRoot, join(versionsRoot, versionID));
+
+    expect(() => validateExistingWorkerVersionEvidence({
+      versionsRoot,
+      versionRoot: join(versionsRoot, versionID),
+      manifestBytes: Buffer.from(`${JSON.stringify(candidateManifest())}\n`),
+      manifestSHA256: "a".repeat(64),
+      packageVersion
+    })).toThrow("existing worker version must be a real directory");
+  });
+
+  it("binds valid existing-version reuse to exact installer and package evidence", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-worker-reuse-"));
+    const versionsRoot = join(root, "versions");
+    const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
+    const versionRoot = join(versionsRoot, versionID);
+    const packageRoot = join(versionRoot, "node_modules", "neondiff");
+    const cliPath = join(packageRoot, "dist", "src", "cli.js");
+    const manifestBytes = Buffer.from(`${JSON.stringify(candidateManifest())}\n`);
+    const manifestSHA256 = createHash("sha256").update(manifestBytes).digest("hex");
+    mkdirSync(join(packageRoot, "dist", "src"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(versionRoot, ".neondiff-candidate-manifest.json"), manifestBytes);
+    writeFileSync(
+      join(versionRoot, ".neondiff-candidate-manifest.sha256"),
+      `${manifestSHA256}\n`
+    );
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      `${JSON.stringify({ name: "neondiff", version: packageVersion })}\n`
+    );
+    writeFileSync(cliPath, "#!/usr/bin/env node\n");
+
+    expect(validateExistingWorkerVersionEvidence({
+      versionsRoot,
+      versionRoot,
+      manifestBytes,
+      manifestSHA256,
+      packageVersion
+    })).toEqual({
+      versionRoot: realpathSync(versionRoot),
+      cliPath: realpathSync(cliPath)
+    });
+    expect(() => validateExistingWorkerVersionEvidence({
+      versionsRoot,
+      versionRoot,
+      manifestBytes: Buffer.from("other candidate"),
+      manifestSHA256,
+      packageVersion
+    })).toThrow("installed candidate manifest mismatch");
+  });
+
   it("plans a credential-free clean-Mac worker install without a LaunchAgent", () => {
     const plan = planWorkerFirstInstall({
       launchdLabel: "com.electricsheephq.evaos-code-review-bot",

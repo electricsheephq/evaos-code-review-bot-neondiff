@@ -27,6 +27,7 @@ import {
   recoverPreviouslyLoadedWorker,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
+  validateExistingWorkerVersionEvidence,
   validateWorkerCandidate
 } from "./lib/b0-worker-installer.mjs";
 
@@ -267,9 +268,12 @@ function resolveNpmPath() {
   fail("npm was not found beside Node or in an approved install location");
 }
 
-function verifyInstalledWorker(versionRoot, expectedVersion) {
-  const cliPath = join(versionRoot, "node_modules", "neondiff", "dist", "src", "cli.js");
-  requireAbsoluteRegularFile(cliPath, 50 * 1024 * 1024, "installed worker CLI", false);
+function verifyInstalledWorker(versionRoot, expectedVersion, boundCLIPath = null) {
+  const cliPath = boundCLIPath
+    ?? join(versionRoot, "node_modules", "neondiff", "dist", "src", "cli.js");
+  if (!boundCLIPath) {
+    requireAbsoluteRegularFile(cliPath, 50 * 1024 * 1024, "installed worker CLI", false);
+  }
   const version = execFileSync(process.execPath, [cliPath, "--version"], {
     ...CHILD_PROCESS_OPTIONS
   }).trim();
@@ -291,13 +295,16 @@ function verifyInstalledWorker(versionRoot, expectedVersion) {
 function installVersion({ versionsRoot, versionID, tarballPath, manifestBytes, manifestSHA256, packageVersion }) {
   const versionRoot = join(versionsRoot, versionID);
   if (!pathIsInside(versionsRoot, versionRoot)) fail("worker version path escaped the version root");
-  if (existsSync(versionRoot)) {
-    const embeddedManifest = join(versionRoot, ".neondiff-candidate-manifest.json");
-    requireAbsoluteRegularFile(embeddedManifest, MAX_MANIFEST_BYTES, "installed candidate manifest");
-    const embeddedBytes = readFileSync(embeddedManifest);
-    if (Buffer.compare(embeddedBytes, manifestBytes) !== 0) fail("installed candidate manifest mismatch");
-    verifyInstalledWorker(versionRoot, packageVersion);
-    return versionRoot;
+  if (pathEntryExists(versionRoot)) {
+    const evidence = validateExistingWorkerVersionEvidence({
+      versionsRoot,
+      versionRoot,
+      manifestBytes,
+      manifestSHA256,
+      packageVersion
+    });
+    verifyInstalledWorker(evidence.versionRoot, packageVersion, evidence.cliPath);
+    return evidence.versionRoot;
   }
 
   const staging = join(versionsRoot, `.staging-${process.pid}-${randomUUID()}`);

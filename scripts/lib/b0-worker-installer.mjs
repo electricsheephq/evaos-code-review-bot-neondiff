@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -32,6 +33,23 @@ function clone(value) {
 function isPathAtOrInside(root, candidate) {
   const rel = relative(root, candidate);
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function readConfinedRegularFile(root, candidate, maximumSize, label) {
+  const entry = lstatSync(candidate);
+  if (
+    entry.isSymbolicLink()
+    || !entry.isFile()
+    || entry.size <= 0
+    || entry.size > maximumSize
+    || (typeof process.getuid === "function" && entry.uid !== process.getuid())
+    || (entry.mode & 0o022) !== 0
+  ) {
+    fail(`${label} is not an owner-controlled regular file`);
+  }
+  const resolved = realpathSync(candidate);
+  if (!isPathAtOrInside(root, resolved)) fail(`${label} escaped the worker version`);
+  return { bytes: readFileSync(resolved), path: resolved };
 }
 
 function consistentEnvironmentValue(environment, keys, validator, label) {
@@ -188,6 +206,74 @@ export function validateWorkerCandidate({
     tarballSHA256: manifest.package.sha256,
     reviewFlags: [...REQUIRED_REVIEW_FLAGS]
   };
+}
+
+export function validateExistingWorkerVersionEvidence({
+  versionsRoot,
+  versionRoot,
+  manifestBytes,
+  manifestSHA256,
+  packageVersion
+}) {
+  const versionsEntry = lstatSync(versionsRoot);
+  const versionEntry = lstatSync(versionRoot);
+  if (
+    versionsEntry.isSymbolicLink()
+    || !versionsEntry.isDirectory()
+    || versionEntry.isSymbolicLink()
+    || !versionEntry.isDirectory()
+  ) {
+    fail("existing worker version must be a real directory");
+  }
+  const realVersionsRoot = realpathSync(versionsRoot);
+  const realVersionRoot = realpathSync(versionRoot);
+  if (
+    !isPathAtOrInside(realVersionsRoot, realVersionRoot)
+    || (typeof process.getuid === "function" && versionEntry.uid !== process.getuid())
+    || (versionEntry.mode & 0o077) !== 0
+  ) {
+    fail("existing worker version is outside the private version root");
+  }
+  const embeddedManifest = readConfinedRegularFile(
+    realVersionRoot,
+    join(versionRoot, ".neondiff-candidate-manifest.json"),
+    1024 * 1024,
+    "installed candidate manifest"
+  );
+  if (Buffer.compare(embeddedManifest.bytes, manifestBytes) !== 0) {
+    fail("installed candidate manifest mismatch");
+  }
+  const embeddedDigest = readConfinedRegularFile(
+    realVersionRoot,
+    join(versionRoot, ".neondiff-candidate-manifest.sha256"),
+    1024,
+    "installed candidate manifest digest"
+  );
+  if (embeddedDigest.bytes.toString("utf8") !== `${manifestSHA256}\n`) {
+    fail("installed candidate manifest digest mismatch");
+  }
+  const packageEvidence = readConfinedRegularFile(
+    realVersionRoot,
+    join(versionRoot, "node_modules", "neondiff", "package.json"),
+    1024 * 1024,
+    "installed worker package evidence"
+  );
+  let installedPackage;
+  try {
+    installedPackage = JSON.parse(packageEvidence.bytes.toString("utf8"));
+  } catch {
+    fail("installed worker package evidence is invalid");
+  }
+  if (installedPackage?.name !== "neondiff" || installedPackage?.version !== packageVersion) {
+    fail("installed worker package identity mismatch");
+  }
+  const cli = readConfinedRegularFile(
+    realVersionRoot,
+    join(versionRoot, "node_modules", "neondiff", "dist", "src", "cli.js"),
+    50 * 1024 * 1024,
+    "installed worker CLI"
+  );
+  return { versionRoot: realVersionRoot, cliPath: cli.path };
 }
 
 export function planWorkerFirstInstall({
