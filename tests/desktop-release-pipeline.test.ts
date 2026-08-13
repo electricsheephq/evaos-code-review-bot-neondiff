@@ -235,10 +235,15 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(script).toContain("--build-sea");
     expect(script).toContain('mainFormat: "module"');
     expect(script).toContain('format: "esm"');
-    expect(script).toContain("__NEONDIFF_SEA_PACKAGE_VERSION__");
+    expect(script).toContain(
+      '"import.meta.neondiffPackageVersion"'
+    );
     expect(script).toContain("portabilityDirectory");
     expect(cli).toContain(
-      "typeof __NEONDIFF_SEA_PACKAGE_VERSION__ === \"string\""
+      "typeof sealedPackageVersion === \"string\""
+    );
+    expect(cli).not.toContain(
+      "declare const __NEONDIFF_SEA_PACKAGE_VERSION__"
     );
     expect(script).toContain("/usr/bin/codesign");
     expect(script).toContain("/usr/bin/otool");

@@ -143,8 +143,6 @@ import {
   type RuntimeGitHubCredentials
 } from "./runtime-github-credentials.js";
 
-declare const __NEONDIFF_SEA_PACKAGE_VERSION__: string | undefined;
-
 const LAUNCHCTL_TIMEOUT_MS = 15_000;
 const PLUTIL_TIMEOUT_MS = 5_000;
 
@@ -2607,11 +2605,16 @@ function resolvePackageRoot(): string {
 }
 
 function resolvePackageVersion(): string {
+  const sealedPackageVersion = (
+    import.meta as ImportMeta & {
+      neondiffPackageVersion?: unknown;
+    }
+  ).neondiffPackageVersion;
   if (
-    typeof __NEONDIFF_SEA_PACKAGE_VERSION__ === "string"
-    && __NEONDIFF_SEA_PACKAGE_VERSION__.length > 0
+    typeof sealedPackageVersion === "string"
+    && sealedPackageVersion.length > 0
   ) {
-    return __NEONDIFF_SEA_PACKAGE_VERSION__;
+    return sealedPackageVersion;
   }
   const packageJson = JSON.parse(readFileSync(join(resolvePackageRoot(), "package.json"), "utf8"));
   if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {

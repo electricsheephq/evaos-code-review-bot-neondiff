@@ -114,7 +114,7 @@ function main() {
       format: "esm",
       target: "node26",
       define: {
-        __NEONDIFF_SEA_PACKAGE_VERSION__:
+        "import.meta.neondiffPackageVersion":
           JSON.stringify(sealedPackageVersion)
       },
       sourcemap: false,
