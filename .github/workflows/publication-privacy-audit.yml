@@ -1,0 +1,21 @@
+name: Pre-publication privacy audit
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+      - name: Scan source and public GitHub text
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PUBLICATION_PRIVACY_BLOCKLIST_B64: ${{ secrets.PUBLICATION_PRIVACY_BLOCKLIST_B64 }}
+        run: node scripts/check-publication-privacy.mjs
