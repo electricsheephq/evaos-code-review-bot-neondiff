@@ -8,25 +8,24 @@ struct FoundationKeychainWorkerLaunchAgentManager:
 {
     private let appExecutableURL: URL
     private let homeDirectory: URL
-    private let executionContextProvider:
-        @Sendable (String) -> [DesktopLocalBotExecutionContext]
+    private let trustedBundledWorker:
+        DesktopLocalBotExecutionContext
 
     init(
         appExecutableURL: URL,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        executionContextProvider:
-            @escaping @Sendable (String) -> [DesktopLocalBotExecutionContext]
+        trustedBundledWorker: DesktopLocalBotExecutionContext
     ) {
         self.appExecutableURL = appExecutableURL.standardizedFileURL
         self.homeDirectory = homeDirectory.standardizedFileURL
-        self.executionContextProvider = executionContextProvider
+        self.trustedBundledWorker = trustedBundledWorker
     }
 
     func preview(
         request: DesktopKeychainWorkerLaunchAgentRequest
     ) async throws -> String {
         try validate(request)
-        return "Ready to install a secret-free LaunchAgent for the selected account bot and start the checksum-managed worker."
+        return "Ready to install a secret-free LaunchAgent for the selected account bot and start the worker sealed inside the signed NeonDiff app."
     }
 
     func installAndStart(
@@ -66,11 +65,8 @@ struct FoundationKeychainWorkerLaunchAgentManager:
                         expectedLabel: request.launchdLabel,
                         homeDirectory: homeDirectory,
                         appExecutableIsSafe: { $0 == appExecutableURL },
-                        configExists: {
-                            $0.standardizedFileURL.path
-                                == request.configPath
-                        }
-                    ) == request
+                        configExists: isSafeConfig
+                    ) != nil
                 else {
                     throw WorkerLaunchAgentRuntimeError
                         .conflictingLaunchAgent
@@ -108,45 +104,18 @@ struct FoundationKeychainWorkerLaunchAgentManager:
     ) throws {
         guard isSafeAppExecutable(appExecutableURL),
               isSafeConfig(URL(filePath: request.configPath)),
-              hasExactInstalledWorker(for: request)
+              trustedBundledWorker.executablePath
+                == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
+              trustedBundledWorker.argumentPrefix.isEmpty,
+              trustedBundledWorker.environmentOverrides.isEmpty
         else {
             throw WorkerLaunchAgentRuntimeError.invalidCoordinates
         }
     }
 
-    private func hasExactInstalledWorker(
-        for request: DesktopKeychainWorkerLaunchAgentRequest
-    ) -> Bool {
-        let expectedRoot = homeDirectory.appending(
-            path:
-                "Library/Application Support/NeonDiffDesktop/Workers/\(request.launchdLabel)",
-            directoryHint: .isDirectory
-        ).standardizedFileURL
-        let expectedCLI = expectedRoot.appending(
-            path: "current/node_modules/neondiff/dist/src/cli.js",
-            directoryHint: .notDirectory
-        ).standardizedFileURL.path
-        let matches = executionContextProvider(request.launchdLabel).filter {
-            context in
-            guard context.environmentOverrides.isEmpty,
-                  context.configPath.isEmpty
-                    || URL(filePath: context.configPath)
-                        .standardizedFileURL.path == request.configPath,
-                  let executable = context.executablePath,
-                  ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
-                    .contains(executable),
-                  context.argumentPrefix == [expectedCLI]
-            else {
-                return false
-            }
-            return true
-        }
-        return matches.count == 1
-    }
-
     private func isSafeAppExecutable(_ url: URL) -> Bool {
         guard url.path
-            == "/Applications/NeonDiff.app/Contents/MacOS/NeonDiff"
+            == "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop"
         else {
             return false
         }
@@ -183,6 +152,7 @@ private enum WorkerLaunchAgentRuntimeError: Error, LocalizedError {
     case invalidCoordinates
     case launchctlFailed
     case launchctlTimedOut
+    case launchctlNotReady
     case writeFailed
 
     var errorDescription: String? {
@@ -190,11 +160,13 @@ private enum WorkerLaunchAgentRuntimeError: Error, LocalizedError {
         case .conflictingLaunchAgent:
             "The existing LaunchAgent does not match the selected Keychain-only NeonDiff worker."
         case .invalidCoordinates:
-            "The signed app, account config, or checksum-managed worker could not be validated."
+            "The signed app, account config, or sealed worker could not be validated."
         case .launchctlFailed:
             "launchd did not accept the secret-free NeonDiff worker service."
         case .launchctlTimedOut:
             "launchd did not finish the worker operation in time."
+        case .launchctlNotReady:
+            "The Keychain-backed local worker did not remain running."
         case .writeFailed:
             "The secret-free NeonDiff LaunchAgent could not be written safely."
         }
@@ -259,6 +231,28 @@ private func restartLaunchAgent(label: String, plistURL: URL) throws {
     }
     _ = try runLaunchctl(["bootstrap", domain, plistURL.path])
     _ = try runLaunchctl(["kickstart", "-k", target])
+    var previousPID: Int32?
+    for _ in 0..<12 {
+        usleep(250_000)
+        let sample = try runLaunchctlCapture(
+            ["print", target],
+            acceptsFailure: true
+        )
+        guard sample.status == 0,
+              let pid =
+                DesktopKeychainWorkerLaunchAgentContract.runningPID(
+                    launchctlPrint: sample.output
+                )
+        else {
+            previousPID = nil
+            continue
+        }
+        if previousPID == pid {
+            return
+        }
+        previousPID = pid
+    }
+    throw WorkerLaunchAgentRuntimeError.launchctlNotReady
 }
 
 private func bootoutLaunchAgent(label: String) throws {
@@ -271,15 +265,26 @@ private func runLaunchctl(
     _ arguments: [String],
     acceptsFailure: Bool = false
 ) throws -> Int32 {
+    try runLaunchctlCapture(
+        arguments,
+        acceptsFailure: acceptsFailure
+    ).status
+}
+
+private func runLaunchctlCapture(
+    _ arguments: [String],
+    acceptsFailure: Bool = false
+) throws -> (status: Int32, output: String) {
     let process = Process()
     process.executableURL = URL(filePath: "/bin/launchctl")
     process.arguments = arguments
-    process.standardOutput = FileHandle.nullDevice
+    let output = Pipe()
+    process.standardOutput = output
     process.standardError = FileHandle.nullDevice
     do {
         try process.run()
     } catch {
-        if acceptsFailure { return 1 }
+        if acceptsFailure { return (1, "") }
         throw WorkerLaunchAgentRuntimeError.launchctlFailed
     }
     let semaphore = DispatchSemaphore(value: 0)
@@ -291,5 +296,9 @@ private func runLaunchctl(
     if !acceptsFailure, process.terminationStatus != 0 {
         throw WorkerLaunchAgentRuntimeError.launchctlFailed
     }
-    return process.terminationStatus
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    return (
+        process.terminationStatus,
+        String(decoding: data, as: UTF8.self)
+    )
 }

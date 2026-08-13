@@ -83,11 +83,14 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
     private let standardInputWriter: (Int32, UnsafeRawPointer?, Int) -> Int
     private let beforeProcessLaunch: () -> Void
     private let afterProcessLaunch: () -> Void
+    private let processStartedValidator: @Sendable (Int32) -> Bool
 
     public init(
         executablePath: String,
         workingDirectory: URL? = nil,
-        environmentOverrides: [String: String] = [:]
+        environmentOverrides: [String: String] = [:],
+        processStartedValidator:
+            @escaping @Sendable (Int32) -> Bool = { _ in true }
     ) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
@@ -99,6 +102,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
         }
         self.beforeProcessLaunch = {}
         self.afterProcessLaunch = {}
+        self.processStartedValidator = processStartedValidator
     }
 
     @_spi(Testing) public init(
@@ -111,7 +115,9 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
             Darwin.write(descriptor, buffer, count)
         },
         beforeProcessLaunch: @escaping () -> Void = {},
-        afterProcessLaunch: @escaping () -> Void = {}
+        afterProcessLaunch: @escaping () -> Void = {},
+        processStartedValidator:
+            @escaping @Sendable (Int32) -> Bool = { _ in true }
     ) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
@@ -121,6 +127,7 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
         self.standardInputWriter = standardInputWriter
         self.beforeProcessLaunch = beforeProcessLaunch
         self.afterProcessLaunch = afterProcessLaunch
+        self.processStartedValidator = processStartedValidator
     }
 
     public func run(
@@ -247,6 +254,18 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
             throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(error.localizedDescription)")
         }
         afterProcessLaunch()
+        guard processStartedValidator(process.processIdentifier) else {
+            try? stdinWriteHandle?.close()
+            try? stdout.fileHandleForReading.close()
+            try? stderr.fileHandleForReading.close()
+            try terminateAndReap(
+                process,
+                terminationObserved: terminationObserved
+            )
+            throw NeonDiffCLIError.launchFailed(
+                "The credential-bearing NeonDiff worker failed signed-process validation"
+            )
+        }
 
         var inputOffset = 0
         var inputClosed = standardInput == nil

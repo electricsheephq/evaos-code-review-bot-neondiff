@@ -121,6 +121,7 @@ import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from 
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
 import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
@@ -3240,10 +3241,12 @@ export async function buildGitHubRelatedContext(input: {
 export function createGitHubRelatedContextReader(config: BotConfig, fallback: GitHubRelatedContextReader): GitHubRelatedContextReader {
   const relatedConfig = config.githubRelatedContext;
   if (!relatedConfig?.enabled) return fallback;
-  return new GitHubApi({
+  const githubConfig = {
     ...config.github,
     requestTimeoutMs: relatedConfig.requestTimeoutMs
-  });
+  };
+  applyRuntimeGitHubCredentials(githubConfig);
+  return new GitHubApi(githubConfig);
 }
 
 export function writeDryRunOutcomeLedgerEvidence(input: {

@@ -4000,6 +4000,25 @@ exit 0
     });
   });
 
+  it("rejects credential stdin flags on daemon control subcommands", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-control-credentials-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+
+    await expect(runCli([
+      "daemon",
+      "status",
+      "--config",
+      configPath,
+      "--runtime-credentials-stdin",
+      "true"
+    ], { env: darwinDaemonEnv })).rejects.toMatchObject({
+      stderr: expect.stringContaining(
+        "credential stdin is supported only for the raw daemon process"
+      )
+    });
+  });
+
   it("degrades launchd daemon controls on Linux with systemd guidance", async () => {
     const startError = await runCli([
       "daemon",

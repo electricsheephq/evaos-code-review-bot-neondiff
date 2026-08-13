@@ -114,7 +114,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
     ) throws -> Data {
         let executable = appExecutableURL.standardizedFileURL
         guard executable.path.hasPrefix("/"),
-              executable.lastPathComponent == "NeonDiff"
+              executable.lastPathComponent == "NeonDiffDesktop"
         else {
             throw DesktopKeychainWorkerLaunchAgentError.invalidAppExecutable
         }
@@ -213,6 +213,73 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
             homeDirectory: homeDirectory
         )
     }
+
+    package static func runningPID(
+        launchctlPrint: String
+    ) -> Int32? {
+        let lines = launchctlPrint.split(
+            whereSeparator: \.isNewline
+        ).map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        guard lines.contains("state = running") else { return nil }
+        let pidLines = lines.filter { $0.hasPrefix("pid = ") }
+        guard pidLines.count == 1,
+              let rawPID = pidLines.first?.dropFirst("pid = ".count),
+              let pid = Int32(rawPID),
+              pid > 0
+        else {
+            return nil
+        }
+        return pid
+    }
+}
+
+package enum DesktopTrustedBundledWorkerContract {
+    package static let expectedBundlePath = "/Applications/NeonDiff.app"
+    package static let workerRelativePath =
+        "Contents/Helpers/NeonDiffWorker"
+
+    package static func requiresTrustedWorker(
+        arguments: [String],
+        hasStandardInput: Bool
+    ) -> Bool {
+        guard hasStandardInput else { return false }
+        return [
+            "--runtime-credentials-stdin",
+            "--github-app-private-key-stdin",
+            "--license-key-stdin"
+        ].contains { arguments.contains($0) }
+    }
+
+    package static func executionContext(
+        appBundleURL: URL,
+        appSignatureIsValid: (URL) -> Bool,
+        sealedFileIsValid: (URL) -> Bool
+    ) -> DesktopLocalBotExecutionContext? {
+        let bundle = appBundleURL.standardizedFileURL
+        guard bundle.path == expectedBundlePath,
+              bundle.resolvingSymlinksInPath().path == bundle.path,
+              appSignatureIsValid(bundle)
+        else {
+            return nil
+        }
+        let worker = bundle.appending(
+            path: workerRelativePath,
+            directoryHint: .notDirectory
+        ).standardizedFileURL
+        guard sealedFileIsValid(worker)
+        else {
+            return nil
+        }
+        return DesktopLocalBotExecutionContext(
+            configPath: "",
+            executablePath: worker.path,
+            argumentPrefix: [],
+            environmentOverrides: [:]
+        )
+    }
+
 }
 
 package protocol DesktopKeychainWorkerLaunchAgentManaging: Sendable {

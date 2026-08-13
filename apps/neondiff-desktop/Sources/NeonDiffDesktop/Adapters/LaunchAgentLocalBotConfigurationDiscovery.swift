@@ -57,12 +57,10 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
                 configExists: {
                     isSafeConfigFile($0, fileManager: fileManager)
                 }
-            ),
+           ),
            let appID = Int64(request.appID),
-           let installedContext = discoverInstalledWorkerExecutionContext(
-                label: label,
-                fileManager: fileManager
-           ) {
+           let sealedContext =
+                FoundationTrustedBundledWorker.executionContext() {
             return Snapshot(
                 configurations: [
                     DesktopLocalBotConfiguration(
@@ -77,9 +75,9 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
                     DesktopLocalBotExecutionContext(
                         configPath: request.configPath,
                         executablePath:
-                            installedContext.executablePath,
+                            sealedContext.executablePath,
                         argumentPrefix:
-                            installedContext.argumentPrefix,
+                            sealedContext.argumentPrefix,
                         environmentOverrides: [:]
                     )
                 ]
@@ -198,7 +196,7 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
         fileManager: FileManager
     ) -> Bool {
         guard url.path
-            == "/Applications/NeonDiff.app/Contents/MacOS/NeonDiff"
+            == "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop"
         else {
             return false
         }

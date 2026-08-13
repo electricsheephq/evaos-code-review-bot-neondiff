@@ -180,24 +180,24 @@ The public paid B0 BYO beta build uses a separate exact
 no managed-broker fields. That contract enables the existing local direct/BYO
 path and API-backed native activation without a hidden defaults mutation. It
 is a paid path for every repository and does not claim the managed public-free
-model. On a clean Mac without an executable local worker, native first run
-blocks **Initialize Local Config**, **Apply Repository**, and **Verify App
-Access** and routes the customer to **Install / Update Local Worker** instead
-of invoking a missing `neondiff` command. The checksum-bound bundle's explicit
-`first-install` command installs only its verified CLI in a private current-user
-version directory and writes a credential-free installation marker. It creates
-or loads no LaunchAgent and starts no daemon. After repository, provider,
-activation, and App-access verification, the signed app can install a separate
-secret-free LaunchAgent whose executable is the signed NeonDiff app. The
-headless app validates the exact account-scoped config and checksum-managed
-worker, reads the customer-owned App key and API-backed activation credential
-from its own Keychain without exporting either value, and pipes one bounded JSON
-envelope to the worker's stdin. The plist contains only the
+model. The signed release app contains a sealed NeonDiff worker built from the
+exact reviewed source and a pinned, SHA-256-verified official Node runtime. A
+clean Mac therefore does not need a global CLI or separate worker install for
+the native setup and review path. The separate checksum-bound bundle remains
+available for the customer-owned local-agent path; its explicit `first-install`
+command installs only its verified CLI in a private current-user version
+directory, writes a credential-free installation marker, and creates or loads
+no LaunchAgent. After repository, provider, activation, and App-access
+verification, the signed app can install a secret-free LaunchAgent whose
+executable is the signed NeonDiff app. Before releasing either Keychain secret,
+the app validates its exact Developer ID signature and the running sealed
+worker process, then pipes one bounded JSON envelope to that process's stdin.
+The plist contains only the
 public App ID, config path, launchd label, and signed app path—never a key value
 or key-file path. Review and daemon readiness remain separate gates. The
 immutable published prerelease and clean-Mac artifact proof remain distribution
-gates. Once an
-executable global or checksum-managed worker is available, native first run
+gates. Unsigned development builds still require an executable global or
+checksum-managed worker before native first run
 exposes **Initialize Local Config** (non-destructive; never force-overwrites),
 **Add Repository**, **Apply Repository**, and **Verify App Access** without a
 terminal or operator config edit. **Apply Repository** writes both the selected
@@ -215,12 +215,11 @@ explicitly chooses **NEW BOT**. A new native config receives bot-isolated runtim
 state, evidence, and license paths beside that config instead of reusing the
 packaged worker's placeholder `/tmp/neondiff` tree. If one exact
 checksum-managed local worker already exists for the selected LaunchAgent
-label, the app reuses it for these isolated setup commands instead of resolving
-them through a global `neondiff` command. It does not borrow the existing bot's
-credential environment; GitHub verification receives the new bot's
-Keychain-owned private key only through bounded stdin. If zero or multiple
-managed worker contexts are found, this reuse path is not selected; installing
-and proving exactly one managed worker remains a separate distribution gate.
+label, the app may reuse it for non-secret legacy commands. Credential-bearing
+commands always use the sealed worker; the app never sends Keychain material to
+a global, customer-writable, or checksum-marker-only executable. A verified
+legacy LaunchAgent remains supported without migrating or exporting its
+existing credential environment.
 This
 source path does not prove customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.

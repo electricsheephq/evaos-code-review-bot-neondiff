@@ -44,16 +44,11 @@ enum FoundationKeychainWorkerDaemonRunner {
                 homeDirectory: homeDirectory
               ),
               let context =
-                LaunchAgentLocalBotConfigurationDiscovery
-                    .discoverInstalledWorkerExecutionContext(
-                        label: request.launchdLabel
-                    ),
+                FoundationTrustedBundledWorker.executionContext(),
               context.environmentOverrides.isEmpty,
               context.configPath.isEmpty,
-              let nodePath = context.executablePath,
-              ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
-                .contains(nodePath),
-              context.argumentPrefix.count == 1
+              let workerPath = context.executablePath,
+              context.argumentPrefix.isEmpty
         else {
             throw WorkerDaemonRunnerError.invalidInvocation
         }
@@ -79,9 +74,9 @@ enum FoundationKeychainWorkerDaemonRunner {
         }
 
         let process = Process()
-        process.executableURL = URL(filePath: nodePath)
+        process.executableURL = URL(filePath: workerPath)
         process.arguments =
-            context.argumentPrefix + [
+            [
                 "daemon",
                 "--config", request.configPath,
                 "--runtime-credentials-stdin", "true"
@@ -94,6 +89,13 @@ enum FoundationKeychainWorkerDaemonRunner {
         let inputPipe = Pipe()
         process.standardInput = inputPipe
         try process.run()
+        guard FoundationTrustedBundledWorker.runningProcessIsTrusted(
+            process.processIdentifier
+        ) else {
+            process.terminate()
+            process.waitUntilExit()
+            throw WorkerDaemonRunnerError.untrustedWorker
+        }
         do {
             try inputPipe.fileHandleForWriting.write(
                 contentsOf: standardInput
@@ -151,4 +153,5 @@ private enum WorkerDaemonRunnerError: Error {
     case invalidInvocation
     case keychainUnavailable
     case stdinFailed
+    case untrustedWorker
 }

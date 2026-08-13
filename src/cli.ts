@@ -136,6 +136,7 @@ import { parsePositiveInteger } from "./cli-args.js";
 import { readSecretFromStdin } from "./secret-stdin.js";
 import { classifyCommandLicensePolicy, type CommandLicensePolicy } from "./command-license-policy.js";
 import {
+  applyRuntimeGitHubCredentials,
   resolveRuntimeGitHubCredentials,
   resolveRuntimeCredentialEnvelope,
   withRuntimeGitHubCredentials,
@@ -1137,10 +1138,12 @@ async function main(): Promise<void> {
     const generatedAt = args["generated-at"] ?? new Date().toISOString();
     parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
     const relatedConfig = config.githubRelatedContext!;
-    const github = new GitHubApi({
+    const githubConfig = {
       ...config.github,
       requestTimeoutMs: relatedConfig.requestTimeoutMs
-    });
+    };
+    applyRuntimeGitHubCredentials(githubConfig);
+    const github = new GitHubApi(githubConfig);
     const pull = await github.getPull(repo, pullNumber);
     const result = await buildGitHubRelatedContextPacket({
       repo,
@@ -2352,6 +2355,13 @@ async function main(): Promise<void> {
   if (command === "daemon") {
     const daemonAction = args._[1];
     if (daemonAction === "start" || daemonAction === "stop" || daemonAction === "status") {
+      if (args["runtime-credentials-stdin"] !== undefined
+        || args["github-app-private-key-stdin"] !== undefined
+        || args["github-app-id"] !== undefined) {
+        throw new Error(
+          "credential stdin is supported only for the raw daemon process, not daemon start, stop, or status"
+        );
+      }
       if (daemonAction === "start"
         && args["dry-run"] === "false"
         && args.confirm === "true") {

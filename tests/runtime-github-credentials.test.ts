@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
 import { productionLicenseSecretReader } from "../src/license-secret-store.js";
+import { createGitHubRelatedContextReader } from "../src/worker.js";
 import {
   resolveRuntimeGitHubCredentials,
   resolveRuntimeCredentialEnvelope,
@@ -109,5 +110,33 @@ describe("runtime GitHub credentials", () => {
       expect(JSON.stringify(config)).not.toContain("nd_live_runtime_fixture_1234");
     });
     expect(readRuntimeLicenseKey()).toBeUndefined();
+  });
+
+  it("preserves runtime App credentials when related-context options are copied", async () => {
+    const credentials = await resolveRuntimeCredentialEnvelope({
+      command: "review-pr",
+      subcommand: undefined,
+      runtimeCredentialsStdin: "true",
+      stdin: Readable.from([JSON.stringify({
+        schemaVersion: 1,
+        githubAppId: "4184532",
+        githubPrivateKey: privateKey,
+        licenseKey: "nd_live_runtime_fixture_1234"
+      })])
+    });
+
+    await withRuntimeGitHubCredentials(credentials, async () => {
+      const config = loadConfigFromObject({
+        github: {},
+        githubRelatedContext: {
+          enabled: true,
+          requestTimeoutMs: 1_000
+        }
+      });
+      const reader = createGitHubRelatedContextReader(config, {
+        getIssueOrPull: async () => undefined
+      }) as unknown as { canPostAsApp(): boolean };
+      expect(reader.canPostAsApp()).toBe(true);
+    });
   });
 });

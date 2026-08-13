@@ -346,14 +346,14 @@ After App access, provider, repository, and activation are verified, the native
 daemon step offers **Preview Start** followed by **Install & Start** when no
 supported LaunchAgent exists. Preview validates the exact signed
 `/Applications/NeonDiff.app`, account-scoped config, customer-owned App ID, and
-checksum-managed worker. Confirmed install writes one 0600 secret-free plist in
+the worker sealed inside the signed app. Confirmed install writes one 0600 secret-free plist in
 `~/Library/LaunchAgents` and starts it through the current user's launchd
 domain. The plist invokes the signed app's bounded headless mode and contains no
 private-key value or file path. That mode revalidates the same public
 coordinates, reads the App key from NeonDiff's own Keychain without user
 interaction, reads the API-backed activation credential from the same app-owned
-Keychain service, and pipes both values once in a bounded JSON envelope to the
-worker's stdin. A conflicting
+Keychain service, validates the running sealed worker process, and only then
+pipes both values once in a bounded JSON envelope to its stdin. A conflicting
 plist, unsafe app/config/worker path, unavailable Keychain item, or launchd
 failure fails closed. Do not replace this with a `security -w` wrapper, export
 the key to disk, or weaken its Keychain access control.
@@ -519,8 +519,11 @@ passing doctor proves only current installation/repository read access for the
 configured allowlist; it does not execute or post a review.
 
 The signed Mac app uses the same bounded stdin credential contract for
-`review-pr` and the raw long-running daemon. `daemon start|stop|status` control
-subcommands never accept secret stdin. Runtime-only private-key material is
+`review-pr` and the raw long-running daemon. It routes every credential-bearing
+CLI operation to the single executable worker sealed inside the Developer
+ID-signed app and validates the live process before writing stdin.
+`daemon start|stop|status` control subcommands never accept secret stdin.
+Runtime-only private-key material is
 non-enumerable in the in-memory config object, overrides file/token credentials
 for that operation, and is never accepted from JSON config. Runtime-only
 activation material remains outside the config object and is available only to

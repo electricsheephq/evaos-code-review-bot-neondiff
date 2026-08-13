@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_NAME="NeonDiff"
 EXECUTABLE_NAME="NeonDiffDesktop"
-BUNDLE_NAME="NeonDiffDesktop"
+BUNDLE_NAME="NeonDiff"
 ARTIFACT_NAME="NeonDiff.app.zip"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

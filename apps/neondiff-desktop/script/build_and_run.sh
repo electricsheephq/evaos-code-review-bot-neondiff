@@ -4,12 +4,13 @@ set -euo pipefail
 MODE="${1:-run}"
 APP_NAME="NeonDiff"
 PRODUCT_NAME="NeonDiffDesktop"
-BUNDLE_NAME="NeonDiffDesktop"
+BUNDLE_NAME="NeonDiff"
 BUNDLE_ID="com.electricsheephq.NeonDiffDesktop"
 MIN_SYSTEM_VERSION="14.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 BUILD_CONFIGURATION="${NEONDIFF_DESKTOP_BUILD_CONFIGURATION:-debug}"
 case "$MODE" in
   release-build|release-bundle-check)
@@ -202,6 +203,10 @@ fi
 cp "$ROOT_DIR/Sources/NeonDiffDesktop/Resources/NeonDiff.icns" "$APP_RESOURCES/NeonDiff.icns"
 cp "$ROOT_DIR/Sources/NeonDiffDesktop/Resources/NeonDiff-Light.icns" "$APP_RESOURCES/NeonDiff-Light.icns"
 cp "$ROOT_DIR/Sources/NeonDiffDesktop/Resources/NeonDiff-Dark.icns" "$APP_RESOURCES/NeonDiff-Dark.icns"
+if [ "$BUILD_CONFIGURATION" = "release" ]; then
+  node "$REPO_ROOT/scripts/build-desktop-sealed-worker.mjs" \
+    --output "$APP_HELPERS/NeonDiffWorker"
+fi
 
 SPARKLE_FRAMEWORK="$(find "$BUILD_DIR" "$ROOT_DIR/.build" -path "*/Sparkle.framework" -type d -print -quit 2>/dev/null || true)"
 if otool -L "$APP_BINARY" | grep -q "Sparkle.framework"; then
@@ -303,6 +308,8 @@ case "$MODE" in
     test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST")" = "$APP_NAME"
     if [ "$BUILD_CONFIGURATION" = "release" ]; then
       "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
+      test -x "$APP_HELPERS/NeonDiffWorker"
+      test "$("$APP_HELPERS/NeonDiffWorker" --version)" = "1.0.4"
     fi
     INVALID_BUNDLE_ROOT_ENTRIES="$(find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents -print)"
     if [ -n "$INVALID_BUNDLE_ROOT_ENTRIES" ]; then

@@ -2503,7 +2503,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let manager = dependencies.keychainWorkerLaunchAgentManager
         isKeychainWorkerLaunchAgentOperationInProgress = true
         keychainWorkerLaunchAgentStatus =
-            "Validating the signed app, selected config, and installed worker…"
+            "Validating the signed app, selected config, and sealed worker…"
         Task { [weak self] in
             do {
                 let status = try await manager.preview(request: request)

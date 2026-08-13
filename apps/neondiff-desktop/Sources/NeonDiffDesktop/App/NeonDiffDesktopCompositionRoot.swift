@@ -38,12 +38,22 @@ enum NeonDiffDesktopCompositionRoot {
         let cliWorkingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
         let localBotSnapshot =
             LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot()
+        let trustedBundledWorker =
+            FoundationTrustedBundledWorker.executionContext()
         let localBotConfigurations = localBotSnapshot.configurations
-        let localBotExecutionContexts = localBotSnapshot.executionContexts
+        let localBotExecutionContexts =
+            localBotSnapshot.executionContexts
+            + (trustedBundledWorker.map { [$0] } ?? [])
         let localBotExecutionContextProvider:
             @Sendable () -> [DesktopLocalBotExecutionContext] = {
                 LaunchAgentLocalBotConfigurationDiscovery
                     .discoverExecutionContexts()
+                    + (
+                        FoundationTrustedBundledWorker
+                            .executionContext()
+                            .map { [$0] }
+                        ?? []
+                    )
             }
         let localBotDiscoveryProvider:
             @Sendable (String) -> DesktopLocalBotDiscoverySnapshot = {
@@ -53,19 +63,24 @@ enum NeonDiffDesktopCompositionRoot {
                         .discoverSnapshot(label: label)
                 return DesktopLocalBotDiscoverySnapshot(
                     configurations: snapshot.configurations,
-                    executionContexts: snapshot.executionContexts
+                    executionContexts:
+                        snapshot.executionContexts
+                        + (
+                            FoundationTrustedBundledWorker
+                                .executionContext()
+                                .map { [$0] }
+                            ?? []
+                        )
                 )
             }
         let keychainWorkerLaunchAgentManager:
             any DesktopKeychainWorkerLaunchAgentManaging
-        if let appExecutableURL = Bundle.main.executableURL {
+        if let appExecutableURL = Bundle.main.executableURL,
+           let trustedBundledWorker {
             keychainWorkerLaunchAgentManager =
                 FoundationKeychainWorkerLaunchAgentManager(
                     appExecutableURL: appExecutableURL,
-                    executionContextProvider: { label in
-                        LaunchAgentLocalBotConfigurationDiscovery
-                            .discoverExecutionContexts(label: label)
-                    }
+                    trustedBundledWorker: trustedBundledWorker
                 )
         } else {
             keychainWorkerLaunchAgentManager =
@@ -79,7 +94,12 @@ enum NeonDiffDesktopCompositionRoot {
                 localBotExecutionContexts: localBotExecutionContexts,
                 localBotExecutionContextProvider:
                     localBotExecutionContextProvider,
-                defaultWorkingDirectory: cliWorkingDirectory
+                defaultWorkingDirectory: cliWorkingDirectory,
+                trustedBundledWorker: trustedBundledWorker,
+                trustedProcessValidator: {
+                    FoundationTrustedBundledWorker
+                        .runningProcessIsTrusted($0)
+                }
             ),
             dashboard: FoundationDesktopDashboardLauncher(),
             preferences: UserDefaultsDesktopPreferences(.standard),

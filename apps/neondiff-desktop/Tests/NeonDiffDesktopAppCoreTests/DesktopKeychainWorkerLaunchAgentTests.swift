@@ -5,7 +5,7 @@ import Testing
 @Suite struct DesktopKeychainWorkerLaunchAgentTests {
     private let home = URL(filePath: "/Users/test")
     private let appExecutable = URL(
-        filePath: "/Applications/NeonDiff.app/Contents/MacOS/NeonDiff"
+        filePath: "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop"
     )
     private let label = "com.electricsheephq.evaos-code-review-bot"
     private let appID = "4184532"
@@ -93,6 +93,129 @@ import Testing
         #expect(
             object["licenseKey"] as? String
                 == "nd_live_runtime_fixture_1234"
+        )
+    }
+
+    @Test func credentialBearingCommandsRequireTheSignedBundledWorker() {
+        #expect(DesktopTrustedBundledWorkerContract.requiresTrustedWorker(
+            arguments: [
+                "review-pr",
+                "--config", "/fixture/config.local.json",
+                "--runtime-credentials-stdin", "true"
+            ],
+            hasStandardInput: true
+        ))
+        #expect(DesktopTrustedBundledWorkerContract.requiresTrustedWorker(
+            arguments: [
+                "doctor", "github",
+                "--config", "/fixture/config.local.json",
+                "--github-app-private-key-stdin", "true"
+            ],
+            hasStandardInput: true
+        ))
+        #expect(DesktopTrustedBundledWorkerContract.requiresTrustedWorker(
+            arguments: [
+                "license", "activate",
+                "--license-key-stdin", "true"
+            ],
+            hasStandardInput: true
+        ))
+        #expect(!DesktopTrustedBundledWorkerContract.requiresTrustedWorker(
+            arguments: [
+                "review-pr",
+                "--config", "/fixture/config.local.json"
+            ],
+            hasStandardInput: false
+        ))
+    }
+
+    @Test func trustedBundledWorkerUsesOnlySealedAppCoordinates() throws {
+        let app = URL(filePath: "/Applications/NeonDiff.app")
+        let context = try #require(
+            DesktopTrustedBundledWorkerContract.executionContext(
+                appBundleURL: app,
+                appSignatureIsValid: { $0 == app },
+                sealedFileIsValid: {
+                    [
+                        "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker"
+                    ].contains($0.path)
+                }
+            )
+        )
+        #expect(
+            context.executablePath
+                == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker"
+        )
+        #expect(context.argumentPrefix.isEmpty)
+        #expect(context.environmentOverrides.isEmpty)
+        #expect(DesktopTrustedBundledWorkerContract.executionContext(
+            appBundleURL: app,
+            appSignatureIsValid: { _ in false },
+            sealedFileIsValid: { _ in true }
+        ) == nil)
+    }
+
+    @Test func launchctlReadinessRequiresAStableRunningPID() {
+        #expect(
+            DesktopKeychainWorkerLaunchAgentContract.runningPID(
+                launchctlPrint: """
+                state = running
+                pid = 41845
+                """
+            ) == 41845
+        )
+        #expect(
+            DesktopKeychainWorkerLaunchAgentContract.runningPID(
+                launchctlPrint: """
+                state = waiting
+                last exit code = 78
+                """
+            ) == nil
+        )
+        #expect(
+            DesktopKeychainWorkerLaunchAgentContract.runningPID(
+                launchctlPrint: """
+                state = running
+                pid = 0
+                """
+            ) == nil
+        )
+    }
+
+    @Test func sealedWorkerWinsCleanSetupResolutionOverMutableInstalledWorker() {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        ).path
+        let sealed = DesktopLocalBotExecutionContext(
+            configPath: "",
+            executablePath:
+                "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
+            argumentPrefix: [],
+            environmentOverrides: [:]
+        )
+        let mutable = DesktopLocalBotExecutionContext(
+            configPath: "",
+            executablePath: "/opt/homebrew/bin/node",
+            argumentPrefix: [
+                "\(home.path)/Library/Application Support/NeonDiffDesktop/Workers/\(label)/current/node_modules/neondiff/dist/src/cli.js"
+            ],
+            environmentOverrides: [:]
+        )
+        let arguments = ["init", "--config", config]
+
+        #expect(
+            DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+                executablePath: "neondiff",
+                arguments: arguments,
+                executionContexts: [mutable, sealed]
+            ) == sealed.executablePath
+        )
+        #expect(
+            DesktopLocalBotExecutionContextResolver.resolveArguments(
+                executablePath: "neondiff",
+                arguments: arguments,
+                executionContexts: [mutable, sealed]
+            ) == arguments
         )
     }
 }

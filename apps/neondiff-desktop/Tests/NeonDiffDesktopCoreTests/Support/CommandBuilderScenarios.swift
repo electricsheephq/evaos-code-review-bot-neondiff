@@ -67,6 +67,36 @@ import Darwin
     context.expect(standardInputResult.stdout.contains("\"receivedBytes\":22"), "CLI standard-input transport returns only redacted metadata")
     context.expect(!standardInputResult.stdout.contains("fixture-provider-value"), "CLI output never echoes standard input")
 
+    var rejectedWorkerWriteCalls = 0
+    let rejectedWorkerClient = NeonDiffCLIClient(
+        executablePath: localCLI.path,
+        workingDirectory: tempRoot,
+        standardInputWriter: { _, _, _ in
+            rejectedWorkerWriteCalls += 1
+            return 0
+        },
+        processStartedValidator: { _ in false }
+    )
+    var rejectedWorkerFailedClosed = false
+    do {
+        _ = try rejectedWorkerClient.run(
+            arguments: ["stdin-check"],
+            standardInput: Data("fixture-provider-value".utf8),
+            timeout: 5
+        )
+    } catch NeonDiffCLIError.launchFailed(let message) {
+        rejectedWorkerFailedClosed =
+            message.contains("signed-process validation")
+    }
+    context.expect(
+        rejectedWorkerFailedClosed,
+        "a rejected worker process fails closed before credential delivery"
+    )
+    context.expect(
+        rejectedWorkerWriteCalls == 0,
+        "a rejected worker process receives zero credential bytes"
+    )
+
     let environmentClient = NeonDiffCLIClient(
         executablePath: localCLI.path,
         workingDirectory: tempRoot,
