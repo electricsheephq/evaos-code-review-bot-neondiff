@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const PACKAGE_VERSION_PATTERN = /^1\.1\.0-beta\.[1-9][0-9]{0,3}$/;
 const LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const STABLE_NODE_PATHS = new Set([
+  "/opt/homebrew/bin/node",
+  "/usr/local/bin/node"
+]);
 const REQUIRED_REVIEW_FLAGS = ["--expected-config-revision", "--zcode"];
 const APP_ID_KEYS = ["NEONDIFF_GITHUB_APP_ID", "EVAOS_REVIEW_BOT_APP_ID"];
 const PRIVATE_KEY_KEYS = [
@@ -183,6 +188,96 @@ export function validateWorkerCandidate({
     packageVersion,
     tarballSHA256: manifest.package.sha256,
     reviewFlags: [...REQUIRED_REVIEW_FLAGS]
+  };
+}
+
+export function selectWorkerVersionAction(
+  versionRoot,
+  { rejectExisting }
+) {
+  if (rejectExisting !== true && rejectExisting !== false) {
+    fail("worker version policy is invalid");
+  }
+  try {
+    lstatSync(versionRoot);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return "install";
+    throw error;
+  }
+  if (rejectExisting) {
+    fail("worker version already exists; refusing unverified reuse");
+  }
+  return "reuse";
+}
+
+export function requireFirstInstallLaunchdUnloaded(state) {
+  if (state?.loaded !== false) {
+    fail("first install refuses a loaded LaunchAgent");
+  }
+  return false;
+}
+
+export function recoverFailedFirstInstall({
+  expectedCurrentTarget,
+  observedCurrentTarget,
+  removeCurrent,
+  removeMarker,
+  removeVersion
+}) {
+  if (
+    observedCurrentTarget !== null
+    && observedCurrentTarget !== expectedCurrentTarget
+  ) {
+    fail("first-install recovery found an unexpected current worker");
+  }
+  if (observedCurrentTarget === expectedCurrentTarget) removeCurrent();
+  removeMarker();
+  removeVersion();
+}
+
+export function planWorkerFirstInstall({
+  launchdLabel,
+  workerRoot,
+  nodePath,
+  candidateHead,
+  packageVersion,
+  manifestSHA256
+}) {
+  if (!LABEL_PATTERN.test(launchdLabel)) fail("launchd label is invalid");
+  if (!isAbsolute(workerRoot)) fail("worker path must be absolute");
+  if (!STABLE_NODE_PATHS.has(nodePath)) {
+    fail(
+      "approved stable Node path is required (/opt/homebrew/bin/node or /usr/local/bin/node)"
+    );
+  }
+  if (!FULL_SHA_PATTERN.test(candidateHead)) fail("candidate head is invalid");
+  if (!PACKAGE_VERSION_PATTERN.test(packageVersion)) {
+    fail("candidate package version is invalid");
+  }
+  if (!SHA256_PATTERN.test(manifestSHA256)) {
+    fail("candidate manifest SHA-256 is invalid");
+  }
+  const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
+  return {
+    versionID,
+    nextState: {
+      schemaVersion: 1,
+      installationKind: "credential-free-cli",
+      launchdLabel,
+      nodePath,
+      candidateHead,
+      packageVersion,
+      manifestSHA256
+    },
+    publicSummary: {
+      action: "first-install",
+      launchdLabel,
+      packageVersion,
+      candidateHead,
+      createsLaunchAgent: false,
+      startsDaemon: false,
+      readsCredentials: false
+    }
   };
 }
 

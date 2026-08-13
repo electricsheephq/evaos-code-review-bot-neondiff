@@ -268,18 +268,35 @@ For a B0 customer, the native first-run path is:
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
 2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
    PEM, then choose **Store in Keychain**.
-3. On a clean install, choose **Initialize Local Config**. This invokes the
-   non-destructive `neondiff init` path and never supplies `--force`; an existing
-   config is not overwritten. The generated config keeps its runtime, state,
-   evidence, and license files in bot-isolated directories beside the config,
-   outside the packaged worker or source checkout.
-   If NeonDiff reports that the local worker command is unavailable, this and
-   the later CLI-backed setup controls remain disabled. Choose **Install /
-   Update Local Worker** to open the version-matched release guide. Continue
-   only when that exact release provides a checksum-bound worker bundle and a
-   supported first-install path. The current B0 update/rollback installer
-   requires an existing LaunchAgent and does not bootstrap a clean Mac; until a
-   matching first-install artifact exists, this is a release blocker.
+3. On a clean install, if NeonDiff reports that the local worker command is
+   unavailable, choose **Install / Update Local Worker** before **Initialize
+   Local Config**. From the verified extracted bundle, use Node.js 26 or newer
+   through the approved stable path `/opt/homebrew/bin/node` or
+   `/usr/local/bin/node`, then preview the credential-free install:
+
+   ```bash
+   BUNDLE_DIR="$(pwd -P)"
+   node install-b0-worker-candidate.mjs first-install \
+     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
+     --manifest-sha256 <manifest-sha256-from-release> \
+     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
+     --launchd-label com.electricsheephq.evaos-code-review-bot \
+     --dry-run true
+   ```
+
+   Inspect the public-safe preview, then repeat it with
+   `--dry-run false --confirm true`. It installs only the exact verified CLI
+   into a private versioned current-user directory and writes a 0600
+   credential-free marker. It creates or loads no LaunchAgent, starts no
+   daemon, and never reads or writes GitHub, provider, or license credentials.
+   It refuses an existing LaunchAgent or worker state; use the existing-worker
+   update flow below for those machines. Return to NeonDiff and choose
+   **Install / Update Local Worker** once more to refresh discovery; when the
+   worker is available, choose **Initialize Local Config**. Initialization
+   invokes the non-destructive `neondiff init` path without `--force`, never
+   overwrites an existing config, and keeps bot-isolated runtime, state,
+   evidence, and license paths beside the config. Review and daemon readiness
+   remain separate gates.
 4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
    Repository**. The app writes the allowlist through the typed local `config
    patch` command; the customer does not edit a config file.

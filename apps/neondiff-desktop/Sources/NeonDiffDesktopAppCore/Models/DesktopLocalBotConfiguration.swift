@@ -331,6 +331,91 @@ package enum DesktopLaunchAgentExecutionContextParser {
     }
 }
 
+package enum DesktopInstalledWorkerExecutionContextParser {
+    private struct Installation: Decodable {
+        let schemaVersion: Int
+        let installationKind: String
+        let launchdLabel: String
+        let nodePath: String
+        let candidateHead: String
+        let packageVersion: String
+        let manifestSHA256: String
+    }
+
+    package static func parse(
+        data: Data,
+        expectedLabel: String,
+        installedWorkerRoot: URL,
+        resolveCLI: (URL) -> URL?,
+        cliIsSafe: (URL) -> Bool,
+        nodeIsExecutable: (URL) -> Bool
+    ) -> DesktopLocalBotExecutionContext? {
+        let allowedKeys: Set<String> = [
+            "schemaVersion",
+            "installationKind",
+            "launchdLabel",
+            "nodePath",
+            "candidateHead",
+            "packageVersion",
+            "manifestSHA256"
+        ]
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any],
+              Set(dictionary.keys) == allowedKeys,
+              let installation = try? JSONDecoder().decode(
+            Installation.self,
+            from: data
+        ),
+        installation.schemaVersion == 1,
+        installation.installationKind == "credential-free-cli",
+        installation.launchdLabel == expectedLabel,
+        ["/opt/homebrew/bin/node", "/usr/local/bin/node"].contains(
+            installation.nodePath
+        ),
+        isLowercaseHex(installation.candidateHead, count: 40),
+        installation.packageVersion.range(
+            of: #"^1\.1\.0-beta\.[1-9][0-9]{0,3}$"#,
+            options: .regularExpression
+        ) != nil,
+        isLowercaseHex(installation.manifestSHA256, count: 64)
+        else {
+            return nil
+        }
+        let nodeURL = URL(filePath: installation.nodePath).standardizedFileURL
+        guard nodeIsExecutable(nodeURL) else { return nil }
+
+        let candidateCLI = installedWorkerRoot
+            .appendingPathComponent(
+                "current/node_modules/neondiff/dist/src/cli.js"
+            )
+            .standardizedFileURL
+        let versionID = "\(installation.packageVersion)-\(installation.candidateHead.prefix(12))"
+        let expectedResolvedCLI = installedWorkerRoot
+            .appendingPathComponent("versions/\(versionID)", isDirectory: true)
+            .appendingPathComponent("node_modules/neondiff/dist/src/cli.js")
+            .standardizedFileURL
+        guard let resolvedCLI = resolveCLI(candidateCLI),
+              resolvedCLI.standardizedFileURL == expectedResolvedCLI,
+              cliIsSafe(resolvedCLI)
+        else {
+            return nil
+        }
+        return DesktopLocalBotExecutionContext(
+            configPath: "",
+            executablePath: nodeURL.path,
+            argumentPrefix: [candidateCLI.path],
+            environmentOverrides: [:]
+        )
+    }
+
+    private static func isLowercaseHex(_ value: String, count: Int) -> Bool {
+        value.utf8.count == count
+            && value.utf8.allSatisfy {
+                ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+            }
+    }
+}
+
 private func approvedNeonDiffDaemonInvocation(
     _ arguments: [String],
     workingDirectory: URL,
@@ -505,7 +590,9 @@ package enum DesktopLocalBotExecutionContextResolver {
         guard rawConfigPath.hasPrefix("/") else { return nil }
         let configPath = URL(filePath: rawConfigPath).standardizedFileURL.path
         let matches = executionContexts.filter {
-            URL(filePath: $0.configPath).standardizedFileURL.path == configPath
+            !$0.configPath.isEmpty
+                && URL(filePath: $0.configPath).standardizedFileURL.path
+                    == configPath
         }
         guard matches.count == 1 else { return nil }
         return matches[0]

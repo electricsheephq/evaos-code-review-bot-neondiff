@@ -38,6 +38,117 @@ import Testing
         ))
     }
 
+    @Test func discoversCredentialFreeInstalledWorkerForBoundedFirstRunCommands() throws {
+        let label = "com.electricsheephq.evaos-code-review-bot"
+        let workerRoot = URL(
+            filePath: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers"
+        )
+        .appendingPathComponent(label, isDirectory: true)
+        let head = String(repeating: "7", count: 40)
+        let version = "1.1.0-beta.27"
+        let versionID = "\(version)-\(head.prefix(12))"
+        let currentCLI = workerRoot.appendingPathComponent(
+            "current/node_modules/neondiff/dist/src/cli.js"
+        )
+        let resolvedCLI = workerRoot.appendingPathComponent(
+            "versions/\(versionID)/node_modules/neondiff/dist/src/cli.js"
+        )
+        let data = try #require(
+            """
+            {"schemaVersion":1,"installationKind":"credential-free-cli","launchdLabel":"\(label)","nodePath":"/opt/homebrew/bin/node","candidateHead":"\(head)","packageVersion":"\(version)","manifestSHA256":"\(String(repeating: "a", count: 64))"}
+            """.data(using: .utf8)
+        )
+
+        let context = try #require(
+            DesktopInstalledWorkerExecutionContextParser.parse(
+                data: data,
+                expectedLabel: label,
+                installedWorkerRoot: workerRoot,
+                resolveCLI: { $0 == currentCLI ? resolvedCLI : nil },
+                cliIsSafe: { $0 == resolvedCLI },
+                nodeIsExecutable: { $0.path == "/opt/homebrew/bin/node" }
+            )
+        )
+        #expect(context.environmentOverrides.isEmpty)
+        #expect(context.configPath.isEmpty)
+
+        let isolatedConfig =
+            "/Users/test/Library/Application Support/NeonDiffDesktop/Accounts/account/Bots/new-bot/config.local.json"
+        let arguments = ["init", "--config", isolatedConfig]
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [context]
+        ) == "/opt/homebrew/bin/node")
+        #expect(DesktopLocalBotExecutionContextResolver.resolveArguments(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [context]
+        ) == [currentCLI.path] + arguments)
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [context]
+        ).isEmpty)
+
+        let arbitraryNode = Data(
+            String(decoding: data, as: UTF8.self)
+                .replacingOccurrences(
+                    of: "/opt/homebrew/bin/node",
+                    with: "/tmp/node"
+                )
+                .utf8
+        )
+        #expect(DesktopInstalledWorkerExecutionContextParser.parse(
+            data: arbitraryNode,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot,
+            resolveCLI: { _ in resolvedCLI },
+            cliIsSafe: { _ in true },
+            nodeIsExecutable: { _ in true }
+        ) == nil)
+        let unexpectedField = Data(
+            String(decoding: data, as: UTF8.self)
+                .replacingOccurrences(
+                    of: #"{"schemaVersion""#,
+                    with: #"{"unexpected":"value","schemaVersion""#
+                )
+                .utf8
+        )
+        #expect(DesktopInstalledWorkerExecutionContextParser.parse(
+            data: unexpectedField,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot,
+            resolveCLI: { _ in resolvedCLI },
+            cliIsSafe: { _ in true },
+            nodeIsExecutable: { _ in true }
+        ) == nil)
+        let mismatchedVersion = Data(
+            String(decoding: data, as: UTF8.self)
+                .replacingOccurrences(
+                    of: version,
+                    with: "1.1.0-beta.28"
+                )
+                .utf8
+        )
+        #expect(DesktopInstalledWorkerExecutionContextParser.parse(
+            data: mismatchedVersion,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot,
+            resolveCLI: { _ in resolvedCLI },
+            cliIsSafe: { _ in true },
+            nodeIsExecutable: { _ in true }
+        ) == nil)
+        #expect(DesktopInstalledWorkerExecutionContextParser.parse(
+            data: data,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot,
+            resolveCLI: { _ in resolvedCLI },
+            cliIsSafe: { _ in false },
+            nodeIsExecutable: { _ in true }
+        ) == nil)
+    }
+
     @Test func rejectsWrongLabelMissingConfigAndConflictingAppIDs() throws {
         let configURL = URL(filePath: "/tmp/existing-neondiff-worker.json")
         let wrongLabel = try propertyList(
@@ -160,6 +271,32 @@ import Testing
             localBotConfigurations: [configuration],
             fallback: fallback
         ) == fallback)
+    }
+
+    @Test func emptyInstalledWorkerSentinelCannotMatchProcessWorkingDirectory() {
+        let normalizedWorkingDirectory =
+            URL(filePath: "").standardizedFileURL.path
+        let emptySentinel = DesktopLocalBotExecutionContext(
+            configPath: "",
+            executablePath: "/usr/local/bin/node",
+            argumentPrefix: ["/should/not/run.js"],
+            environmentOverrides: ["SHOULD_NOT_LEAK": "value"]
+        )
+        let arguments = [
+            "doctor", "github",
+            "--config", normalizedWorkingDirectory
+        ]
+
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [emptySentinel]
+        ).isEmpty)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [emptySentinel]
+        ) == nil)
     }
 
     @Test func normalizesExistingWorkerCredentialCoordinatesForOneExactConfig() throws {

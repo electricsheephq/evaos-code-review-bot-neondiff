@@ -4,16 +4,20 @@ import NeonDiffDesktopCore
 
 struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
     private let localBotConfigurations: [DesktopLocalBotConfiguration]
-    private let localBotExecutionContexts: [DesktopLocalBotExecutionContext]
+    private let localBotExecutionContextProvider:
+        @Sendable () -> [DesktopLocalBotExecutionContext]
     private let defaultWorkingDirectory: URL?
 
     init(
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
         localBotExecutionContexts: [DesktopLocalBotExecutionContext] = [],
+        localBotExecutionContextProvider:
+            (@Sendable () -> [DesktopLocalBotExecutionContext])? = nil,
         defaultWorkingDirectory: URL? = NeonDiffCLIResolver.defaultWorkingDirectory()
     ) {
         self.localBotConfigurations = localBotConfigurations
-        self.localBotExecutionContexts = localBotExecutionContexts
+        self.localBotExecutionContextProvider =
+            localBotExecutionContextProvider ?? { localBotExecutionContexts }
         self.defaultWorkingDirectory = defaultWorkingDirectory
     }
 
@@ -23,6 +27,7 @@ struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
         standardInput: Data?,
         timeout: TimeInterval
     ) async throws -> CLIRunResult {
+        let localBotExecutionContexts = localBotExecutionContextProvider()
         let workingDirectory = DesktopLocalBotWorkingDirectoryResolver.resolve(
             arguments: arguments,
             localBotConfigurations: localBotConfigurations,

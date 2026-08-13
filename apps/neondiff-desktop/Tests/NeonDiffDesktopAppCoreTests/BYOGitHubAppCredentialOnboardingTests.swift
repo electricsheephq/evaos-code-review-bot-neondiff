@@ -33,6 +33,35 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.urlOpener.urls == [guideURL])
     }
 
+    @Test func installerActionRefreshesNewCredentialFreeWorkerWithoutRelaunch() {
+        let fixture = ModelDependencyFixture(
+            preferenceStrings: [
+                "neondiff.cliPath": "neondiff",
+                "neondiff.configPath":
+                    "/Users/test/Library/Application Support/NeonDiffDesktop/Accounts/account/Bots/new-bot/config.local.json"
+            ],
+            productionBoundary: exactB0Boundary
+        )
+        let workerCLI =
+            "/Users/test/Library/Application Support/NeonDiffDesktop/Workers/com.electricsheephq.evaos-code-review-bot/current/node_modules/neondiff/dist/src/cli.js"
+        fixture.model.localWorkerExecutionContextProvider = {
+            [
+                DesktopLocalBotExecutionContext(
+                    configPath: "",
+                    executablePath: "/usr/local/bin/node",
+                    argumentPrefix: [workerCLI],
+                    environmentOverrides: [:]
+                )
+            ]
+        }
+
+        #expect(!fixture.model.localWorkerCLIAvailable)
+        fixture.model.openLocalWorkerUpdateGuide()
+
+        #expect(fixture.model.localWorkerCLIAvailable)
+        #expect(fixture.urlOpener.urls.isEmpty)
+    }
+
     @Test func cleanInstallInitializationUsesNonDestructiveCLIInit() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(CLIRunResult(

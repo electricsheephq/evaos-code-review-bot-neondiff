@@ -107,6 +107,8 @@ the same immutable GitHub prerelease as the app rather than an unpublished npm
 version or an unpinned source checkout. No invitation is required when the
 versioned public GitHub prerelease is published and the neondiff.com
 purchase/download path is live.
+The worker installer requires Node.js 26 or newer resolving through the
+approved stable path `/opt/homebrew/bin/node` or `/usr/local/bin/node`.
 When the app reports **Worker update required**, choose **Install / Update Local
 Worker**. Verify the outer worker bundle ZIP against the prerelease notes, then
 verify the extracted release manifest and inner `.tgz` tarball against the
@@ -177,10 +179,13 @@ is a paid path for every repository and does not claim the managed public-free
 model. On a clean Mac without an executable local worker, native first run
 blocks **Initialize Local Config**, **Apply Repository**, and **Verify App
 Access** and routes the customer to **Install / Update Local Worker** instead
-of invoking a missing `neondiff` command. The current checksum-bound worker
-installer updates or rolls back one existing LaunchAgent; it does not yet
-bootstrap a worker on a Mac with no LaunchAgent. That exact first-install
-artifact and clean-Mac proof remain a separate distribution gate. Once an
+of invoking a missing `neondiff` command. The checksum-bound bundle's explicit
+`first-install` command installs only its verified CLI in a private current-user
+version directory and writes a credential-free installation marker. It creates
+or loads no LaunchAgent and starts no daemon. Native first run can use that
+exact worker for bounded setup commands; review and daemon readiness remain
+separate gates. The immutable published prerelease and clean-Mac artifact proof
+remain distribution gates. Once an
 executable global or checksum-managed worker is available, native first run
 exposes **Initialize Local Config** (non-destructive; never force-overwrites),
 **Add Repository**, **Apply Repository**, and **Verify App Access** without a

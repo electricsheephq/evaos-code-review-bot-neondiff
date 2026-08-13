@@ -21,11 +21,15 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  planWorkerFirstInstall,
   planWorkerRollback,
   planWorkerUpdate,
+  recoverFailedFirstInstall,
   recoverPreviouslyLoadedWorker,
+  requireFirstInstallLaunchdUnloaded,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
+  selectWorkerVersionAction,
   validateWorkerCandidate
 } from "./lib/b0-worker-installer.mjs";
 
@@ -33,6 +37,7 @@ const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_TARBALL_BYTES = 100 * 1024 * 1024;
 const MAX_PLIST_BYTES = 1024 * 1024;
 const STATE_FILENAME = "state.json";
+const INSTALLATION_FILENAME = "installation.json";
 const LOCK_DIRECTORY = ".install-lock";
 const LOCK_OWNER_FILENAME = "owner.json";
 const LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -52,18 +57,26 @@ function usage() {
   console.log(`Install or roll back one checksum-bound NeonDiff B0 worker.
 
 Usage:
+  node install-b0-worker-candidate.mjs first-install \\
+    --manifest /absolute/path/manifest.json \\
+    --manifest-sha256 <64-lowercase-hex> \\
+    --tarball /absolute/path/neondiff-1.1.0-beta.N.tgz \\
+    --launchd-label <label> [--dry-run true]
+
   node install-b0-worker-candidate.mjs update \\
     --manifest /absolute/path/manifest.json \\
     --manifest-sha256 <64-lowercase-hex> \\
     --tarball /absolute/path/neondiff-1.1.0-beta.N.tgz \\
     --launchd-label <label> [--dry-run true]
 
+  node install-b0-worker-candidate.mjs first-install ... --dry-run false --confirm true
   node install-b0-worker-candidate.mjs update ... --dry-run false --confirm true
   node install-b0-worker-candidate.mjs rollback --launchd-label <label> [--dry-run true]
   node install-b0-worker-candidate.mjs rollback --launchd-label <label> --dry-run false --confirm true
 
-The installer uses a user-owned versioned prefix, preserves the existing
-config and LaunchAgent environment, and never reads or copies private-key bytes.
+First install creates only a credential-free CLI worker; it does not create or
+load a LaunchAgent. Updates preserve the existing config and LaunchAgent
+environment. The installer never reads or copies private-key bytes.
 Dry-run is the default. Live mutation requires --dry-run false --confirm true.`);
 }
 
@@ -153,9 +166,33 @@ function standardPaths(label) {
     versionsRoot: join(workerRoot, "versions"),
     currentLink: join(workerRoot, "current"),
     statePath: join(workerRoot, STATE_FILENAME),
+    installationPath: join(workerRoot, INSTALLATION_FILENAME),
     lockPath: join(workerRoot, LOCK_DIRECTORY),
     plistPath: join(home, "Library", "LaunchAgents", `${label}.plist`)
   };
+}
+
+function pathEntryExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function assertFirstInstallTargetUnused(paths) {
+  if (pathEntryExists(paths.plistPath)) {
+    fail("first install refuses an existing LaunchAgent; use update instead");
+  }
+  if (
+    pathEntryExists(paths.currentLink)
+    || pathEntryExists(paths.statePath)
+    || pathEntryExists(paths.installationPath)
+  ) {
+    fail("first install refuses existing or ambiguous worker state");
+  }
 }
 
 function parsePlist(path) {
@@ -254,10 +291,19 @@ function verifyInstalledWorker(versionRoot, expectedVersion) {
   }
 }
 
-function installVersion({ versionsRoot, versionID, tarballPath, manifestBytes, manifestSHA256, packageVersion }) {
+function installVersion({
+  versionsRoot,
+  versionID,
+  tarballPath,
+  manifestBytes,
+  manifestSHA256,
+  packageVersion,
+  rejectExisting
+}) {
   const versionRoot = join(versionsRoot, versionID);
   if (!pathIsInside(versionsRoot, versionRoot)) fail("worker version path escaped the version root");
-  if (existsSync(versionRoot)) {
+  const action = selectWorkerVersionAction(versionRoot, { rejectExisting });
+  if (action === "reuse") {
     const embeddedManifest = join(versionRoot, ".neondiff-candidate-manifest.json");
     requireAbsoluteRegularFile(embeddedManifest, MAX_MANIFEST_BYTES, "installed candidate manifest");
     const embeddedBytes = readFileSync(embeddedManifest);
@@ -303,8 +349,29 @@ function currentTarget(currentLink, versionsRoot) {
 
 function switchCurrent(currentLink, relativeTarget) {
   const temporary = `${currentLink}.next-${process.pid}-${randomUUID()}`;
-  symlinkSync(relativeTarget, temporary);
-  renameSync(temporary, currentLink);
+  try {
+    symlinkSync(relativeTarget, temporary);
+    renameSync(temporary, currentLink);
+  } catch (error) {
+    safeUnlink(temporary);
+    throw error;
+  }
+}
+
+function removeFreshWorkerVersion(versionRoot, versionsRoot) {
+  if (!pathIsInside(versionsRoot, versionRoot)) {
+    fail("first-install recovery version escaped the version root");
+  }
+  const entry = lstatSync(versionRoot);
+  if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    fail("first-install recovery version is not the created directory");
+  }
+  const realVersionsRoot = realpathSync(versionsRoot);
+  const realVersionRoot = realpathSync(versionRoot);
+  if (!pathIsInside(realVersionsRoot, realVersionRoot)) {
+    fail("first-install recovery version escaped the real version root");
+  }
+  rmSync(realVersionRoot, { recursive: true });
 }
 
 function launchdState(label) {
@@ -481,6 +548,95 @@ function withWorkerLock(paths, operation) {
   }
 }
 
+function firstInstall(args) {
+  const dryRun = requireLiveConfirmation(args);
+  const manifestPath = requireAbsoluteRegularFile(
+    required(args, "manifest"),
+    MAX_MANIFEST_BYTES,
+    "candidate manifest"
+  );
+  const tarballPath = requireAbsoluteRegularFile(
+    required(args, "tarball"),
+    MAX_TARBALL_BYTES,
+    "candidate tarball"
+  );
+  const manifestSHA256 = required(args, "manifest-sha256");
+  const label = required(args, "launchd-label");
+  const paths = standardPaths(label);
+  assertFirstInstallTargetUnused(paths);
+  const manifestBytes = readFileSync(manifestPath);
+  const candidate = validateWorkerCandidate({
+    manifestBytes,
+    manifestSHA256,
+    tarballBytes: readFileSync(tarballPath),
+    tarballFilename: basename(tarballPath)
+  });
+  const nodePath = selectStableNodeLaunchPath({
+    execPath: process.execPath,
+    stableCandidates: ["/opt/homebrew/bin/node", "/usr/local/bin/node"],
+    resolvePath: realpathSync
+  });
+  const plan = planWorkerFirstInstall({
+    launchdLabel: label,
+    workerRoot: paths.workerRoot,
+    nodePath,
+    candidateHead: candidate.candidateHead,
+    packageVersion: candidate.packageVersion,
+    manifestSHA256
+  });
+  requireFirstInstallLaunchdUnloaded(launchdState(label));
+  if (dryRun) {
+    console.log(JSON.stringify({ ok: true, dryRun: true, ...plan.publicSummary }));
+    return;
+  }
+  withWorkerLock(paths, () => {
+    assertFirstInstallTargetUnused(paths);
+    requireFirstInstallLaunchdUnloaded(launchdState(label));
+    const versionRoot = installVersion({
+      versionsRoot: paths.versionsRoot,
+      versionID: plan.versionID,
+      tarballPath,
+      manifestBytes,
+      manifestSHA256,
+      packageVersion: candidate.packageVersion,
+      rejectExisting: true
+    });
+    const relativeTarget = join("versions", plan.versionID);
+    try {
+      writeState(paths.installationPath, plan.nextState);
+      switchCurrent(paths.currentLink, relativeTarget);
+    } catch (error) {
+      try {
+        recoverFailedFirstInstall({
+          expectedCurrentTarget: relativeTarget,
+          observedCurrentTarget: currentTarget(
+            paths.currentLink,
+            paths.versionsRoot
+          ),
+          removeCurrent: () => safeUnlink(paths.currentLink),
+          removeMarker: () => safeUnlink(paths.installationPath),
+          removeVersion: () => removeFreshWorkerVersion(
+            versionRoot,
+            paths.versionsRoot
+          )
+        });
+      } catch (recoveryError) {
+        fail(
+          `first install failed and cleanup was incomplete: ${
+            error instanceof Error ? error.message : String(error)
+          }; ${
+            recoveryError instanceof Error
+              ? recoveryError.message
+              : String(recoveryError)
+          }`
+        );
+      }
+      throw error;
+    }
+  });
+  console.log(JSON.stringify({ ok: true, dryRun: false, ...plan.publicSummary }));
+}
+
 function update(args) {
   const dryRun = requireLiveConfirmation(args);
   const manifestPath = requireAbsoluteRegularFile(
@@ -533,7 +689,8 @@ function update(args) {
       tarballPath,
       manifestBytes,
       manifestSHA256,
-      packageVersion: candidate.packageVersion
+      packageVersion: candidate.packageVersion,
+      rejectExisting: false
     });
     const relativeTarget = join("versions", plan.versionID);
     const restarted = mutateLaunchAgent({
@@ -593,9 +750,10 @@ function main() {
   }
   requireSupportedRuntime();
   const args = parseArgs(values);
-  if (action === "update") update(args);
+  if (action === "first-install") firstInstall(args);
+  else if (action === "update") update(args);
   else if (action === "rollback") rollback(args);
-  else fail("action must be update or rollback");
+  else fail("action must be first-install, update, or rollback");
 }
 
 try {

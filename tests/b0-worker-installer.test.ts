@@ -1,12 +1,24 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync
+} from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  planWorkerFirstInstall,
   planWorkerRollback,
   planWorkerUpdate,
+  recoverFailedFirstInstall,
   recoverPreviouslyLoadedWorker,
+  requireFirstInstallLaunchdUnloaded,
   retryTransientLaunchdBootstrap,
+  selectWorkerVersionAction,
   selectStableNodeLaunchPath,
   validateWorkerCandidate
 } from "../scripts/lib/b0-worker-installer.mjs";
@@ -71,6 +83,97 @@ function launchAgent() {
 }
 
 describe("B0 worker installer", () => {
+  it("classifies strict first-install rejection and legacy update reuse", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-worker-reuse-"));
+    const versionsRoot = join(root, "versions");
+    const outsideRoot = join(root, "outside");
+    const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
+    const symlinkVersion = join(versionsRoot, versionID);
+    const forgedVersion = join(versionsRoot, `${versionID}-forged`);
+    mkdirSync(versionsRoot, { mode: 0o700 });
+    mkdirSync(outsideRoot, { mode: 0o700 });
+    symlinkSync(outsideRoot, symlinkVersion);
+    mkdirSync(forgedVersion, { mode: 0o700 });
+
+    for (const versionRoot of [symlinkVersion, forgedVersion]) {
+      expect(() => selectWorkerVersionAction(
+        versionRoot,
+        { rejectExisting: true }
+      )).toThrow("worker version already exists; refusing unverified reuse");
+      expect(selectWorkerVersionAction(
+        versionRoot,
+        { rejectExisting: false }
+      )).toBe("reuse");
+    }
+    expect(selectWorkerVersionAction(
+      join(versionsRoot, "missing"),
+      { rejectExisting: true }
+    )).toBe("install");
+  });
+
+  it("requires a definitively unloaded launchd label for first install", () => {
+    expect(() => requireFirstInstallLaunchdUnloaded({ loaded: true }))
+      .toThrow("first install refuses a loaded LaunchAgent");
+    expect(requireFirstInstallLaunchdUnloaded({ loaded: false })).toBe(false);
+  });
+
+  it("recovers only the fresh first-install activation after a later failure", () => {
+    const removals: string[] = [];
+    recoverFailedFirstInstall({
+      expectedCurrentTarget: "versions/exact",
+      observedCurrentTarget: "versions/exact",
+      removeCurrent: () => removals.push("current"),
+      removeMarker: () => removals.push("marker"),
+      removeVersion: () => removals.push("version")
+    });
+    expect(removals).toEqual(["current", "marker", "version"]);
+
+    expect(() => recoverFailedFirstInstall({
+      expectedCurrentTarget: "versions/exact",
+      observedCurrentTarget: "versions/other",
+      removeCurrent: () => removals.push("wrong-current"),
+      removeMarker: () => removals.push("wrong-marker"),
+      removeVersion: () => removals.push("wrong-version")
+    })).toThrow("first-install recovery found an unexpected current worker");
+    expect(removals).toEqual(["current", "marker", "version"]);
+  });
+
+  it("plans a credential-free clean-Mac worker install without a LaunchAgent", () => {
+    const plan = planWorkerFirstInstall({
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      workerRoot:
+        "/Users/test/Library/Application Support/NeonDiffDesktop/Workers/com.electricsheephq.evaos-code-review-bot",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    });
+
+    expect(plan.versionID).toBe(`1.1.0-beta.27-${candidateHead.slice(0, 12)}`);
+    expect(plan.nextState).toEqual({
+      schemaVersion: 1,
+      installationKind: "credential-free-cli",
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    });
+    expect(JSON.stringify(plan)).not.toMatch(
+      /EnvironmentVariables|private.?key|github.?app/i
+    );
+    expect(() => planWorkerFirstInstall({
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers/test",
+      nodePath: "/tmp/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    })).toThrow(
+      "approved stable Node path is required (/opt/homebrew/bin/node or /usr/local/bin/node)"
+    );
+  });
+
   it("keeps a stable Node command when it resolves to the running Node binary", () => {
     const resolved = new Map([
       ["/opt/homebrew/Cellar/node/26.5.1/bin/node", "/opt/homebrew/Cellar/node/26.5.1/bin/node"],
@@ -114,6 +217,7 @@ describe("B0 worker installer", () => {
     const help = spawnSync(process.execPath, [scriptPath, "--help"], { encoding: "utf8" });
     expect(help.status).toBe(0);
     expect(help.stdout).toContain("update");
+    expect(help.stdout).toContain("first-install");
     expect(help.stdout).toContain("rollback");
     expect(help.stdout).toContain("--manifest-sha256");
     expect(help.stdout).toContain("--dry-run false --confirm true");
