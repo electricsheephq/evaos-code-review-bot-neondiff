@@ -77,7 +77,7 @@ Minimum local visible-smoke checklist:
 
 1. Run `script/build_and_run.sh run` from `apps/neondiff-desktop/`.
 2. Record the source SHA and built app path, including the exact
-   `dist/NeonDiffDesktop.app` path passed to Computer Use.
+   `dist/NeonDiff.app` path passed to Computer Use.
 3. Record `Welcome visible`: the Welcome screen is present in the launched app.
 4. Navigate to the changed step.
 5. Record `changed button/action clicked`: click the changed button/action.
@@ -122,7 +122,7 @@ Before building, run the read-only credential doctor:
 ```sh
 apps/neondiff-desktop/script/preflight-credentials.sh
 apps/neondiff-desktop/script/preflight-credentials.sh --json \
-  > /Volumes/LEXAR/Codex/evidence/neondiff-desktop/<date>/<version>/credential-preflight.json
+  > /Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/credential-preflight.json
 ```
 
 The doctor reports presence only. It does not sign, notarize, upload, fetch
@@ -145,7 +145,7 @@ Required owner/Codex inputs for a real signing run:
 - Sparkle public key as `NEONDIFF_SPARKLE_PUBLIC_ED_KEY`.
 - Sparkle feed URL as `NEONDIFF_SPARKLE_FEED_URL`.
 - Appcast hosting destination and rollback destination.
-- Evidence packet directory under `/Volumes/LEXAR/Codex/evidence/`.
+- Evidence packet directory under `/Users/m1/Codex/evidence/`.
 
 ## Build The Release App
 
@@ -167,16 +167,16 @@ script/build_and_run.sh release-bundle-check
 Expected output artifact:
 
 ```text
-apps/neondiff-desktop/dist/NeonDiffDesktop.app
+apps/neondiff-desktop/dist/NeonDiff.app
 ```
 
 Record the bundle metadata and checksum:
 
 ```sh
-/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" dist/NeonDiffDesktop.app/Contents/Info.plist
-/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/NeonDiffDesktop.app/Contents/Info.plist
-/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" dist/NeonDiffDesktop.app/Contents/Info.plist
-shasum -a 256 dist/NeonDiffDesktop.app/Contents/MacOS/NeonDiffDesktop
+/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" dist/NeonDiff.app/Contents/Info.plist
+/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/NeonDiff.app/Contents/Info.plist
+/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" dist/NeonDiff.app/Contents/Info.plist
+shasum -a 256 dist/NeonDiff.app/Contents/MacOS/NeonDiffDesktop
 ```
 
 Do not ship a dev/ad-hoc artifact from this step. The build is only a candidate
@@ -185,21 +185,29 @@ all pass.
 
 ## Codesign
 
-Sign the embedded framework first when `Sparkle.framework` exists, then sign the
-outer app with hardened runtime and timestamp enabled.
+Sign the sealed worker with its minimal Node JIT entitlements, then the embedded
+framework when it exists, and finally the outer app. Do not use `--deep` to
+replace the already-reviewed nested signatures.
 
 ```sh
 cd apps/neondiff-desktop
 IDENTITY="Developer ID Application: <Team Name> (<TEAMID>)"
-APP="dist/NeonDiffDesktop.app"
+APP="dist/NeonDiff.app"
 SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+SEALED_WORKER="$APP/Contents/Helpers/NeonDiffWorker"
+WORKER_ENTITLEMENTS="script/worker-runtime.entitlements.plist"
+
+codesign --force --options runtime --timestamp \
+  --entitlements "$WORKER_ENTITLEMENTS" \
+  --sign "$IDENTITY" "$SEALED_WORKER"
 
 if [ -d "$SPARKLE_FRAMEWORK" ]; then
   codesign --force --options runtime --timestamp --sign "$IDENTITY" "$SPARKLE_FRAMEWORK"
 fi
 
-codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
+codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
+codesign -d --entitlements :- "$SEALED_WORKER"
 spctl -a -vv --type execute "$APP"
 ```
 
@@ -221,8 +229,8 @@ the notarization paths documented in #324.
 
 ```sh
 cd apps/neondiff-desktop
-APP="dist/NeonDiffDesktop.app"
-ZIP="/Volumes/LEXAR/Codex/evidence/neondiff-desktop/<date>/<version>/NeonDiffDesktop.zip"
+APP="dist/NeonDiff.app"
+ZIP="/Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/NeonDiff.zip"
 
 ditto -c -k --keepParent "$APP" "$ZIP"
 shasum -a 256 "$ZIP"
@@ -275,7 +283,7 @@ fabricate a real Sparkle signature.
 ```sh
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture apps/neondiff-desktop/fixtures/appcast/beta.json \
-  --output /Volumes/LEXAR/Codex/evidence/neondiff-desktop/<date>/<version>/neondiff-beta-appcast.xml \
+  --output /Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/neondiff-beta-appcast.xml \
   --dry-run
 ```
 
@@ -315,7 +323,7 @@ License boundary:
 Create a public-safe packet under:
 
 ```text
-/Volumes/LEXAR/Codex/evidence/neondiff-desktop/<date>/<version>/
+/Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/
 ```
 
 Minimum files:

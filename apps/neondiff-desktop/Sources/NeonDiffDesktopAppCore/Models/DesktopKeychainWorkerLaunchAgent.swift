@@ -1,0 +1,371 @@
+import Foundation
+import NeonDiffDesktopCore
+
+package struct DesktopKeychainWorkerLaunchAgentRequest:
+    Equatable,
+    Sendable
+{
+    package let appID: String
+    package let configPath: String
+    package let launchdLabel: String
+
+    package init(
+        appID: String,
+        configPath: String,
+        launchdLabel: String,
+        homeDirectory: URL
+    ) throws {
+        guard appID.range(
+            of: #"^[1-9][0-9]{0,19}$"#,
+            options: .regularExpression
+        ) != nil else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidAppID
+        }
+        guard launchdLabel.range(
+            of: #"^[A-Za-z0-9][A-Za-z0-9.-]{2,127}$"#,
+            options: .regularExpression
+        ) != nil else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidLaunchdLabel
+        }
+        let normalizedConfig = URL(filePath: configPath).standardizedFileURL
+        guard Self.isAccountBotConfig(
+            normalizedConfig,
+            homeDirectory: homeDirectory
+        ) else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidConfigPath
+        }
+        self.appID = appID
+        self.configPath = normalizedConfig.path
+        self.launchdLabel = launchdLabel
+    }
+
+    private static func isAccountBotConfig(
+        _ configURL: URL,
+        homeDirectory: URL
+    ) -> Bool {
+        let expectedRoot = homeDirectory
+            .appending(
+                path: "Library/Application Support/NeonDiffDesktop/Accounts",
+                directoryHint: .isDirectory
+            )
+            .standardizedFileURL
+        let components = configURL.pathComponents
+        let rootComponents = expectedRoot.pathComponents
+        guard components.count == rootComponents.count + 4,
+              Array(components.prefix(rootComponents.count)) == rootComponents
+        else {
+            return false
+        }
+        let suffix = Array(components.suffix(4))
+        return !suffix[0].isEmpty
+            && suffix[0] != "_unselected"
+            && suffix[1] == "Bots"
+            && suffix[2].range(
+                of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"#,
+                options: .regularExpression
+            ) != nil
+            && suffix[3] == "config.local.json"
+    }
+}
+
+package enum DesktopKeychainWorkerLaunchAgentError:
+    Error,
+    LocalizedError
+{
+    case invalidAppID
+    case invalidConfigPath
+    case invalidLaunchdLabel
+    case invalidAppExecutable
+    case serializationFailed
+
+    package var errorDescription: String? {
+        switch self {
+        case .invalidAppID:
+            "The customer-owned GitHub App ID is invalid."
+        case .invalidConfigPath:
+            "The local worker config must be the selected account bot config."
+        case .invalidLaunchdLabel:
+            "The local worker LaunchAgent label is invalid."
+        case .invalidAppExecutable:
+            "The signed NeonDiff app executable path is invalid."
+        case .serializationFailed:
+            "The secret-free worker LaunchAgent could not be serialized."
+        }
+    }
+}
+
+package enum DesktopKeychainWorkerLaunchAgentContract {
+    package static let headlessFlag = "--neondiff-worker-daemon"
+
+    package static func headlessArguments(
+        request: DesktopKeychainWorkerLaunchAgentRequest
+    ) -> [String] {
+        [
+            headlessFlag,
+            "--config", request.configPath,
+            "--launchd-label", request.launchdLabel,
+            "--github-app-id", request.appID
+        ]
+    }
+
+    package static func propertyListData(
+        request: DesktopKeychainWorkerLaunchAgentRequest,
+        appExecutableURL: URL
+    ) throws -> Data {
+        let executable = appExecutableURL.standardizedFileURL
+        guard executable.path.hasPrefix("/"),
+              executable.lastPathComponent == "NeonDiffDesktop"
+        else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidAppExecutable
+        }
+        let propertyList: [String: Any] = [
+            "Label": request.launchdLabel,
+            "ProgramArguments":
+                [executable.path] + headlessArguments(request: request),
+            "RunAtLoad": true,
+            "KeepAlive": true,
+            "ProcessType": "Background",
+            "LimitLoadToSessionType": "Aqua",
+            "ThrottleInterval": 10,
+            "StandardOutPath": "/dev/null",
+            "StandardErrorPath": "/dev/null"
+        ]
+        do {
+            return try PropertyListSerialization.data(
+                fromPropertyList: propertyList,
+                format: .xml,
+                options: 0
+            )
+        } catch {
+            throw DesktopKeychainWorkerLaunchAgentError.serializationFailed
+        }
+    }
+
+    package static func parsePropertyList(
+        _ data: Data,
+        expectedLabel: String,
+        homeDirectory: URL,
+        appExecutableIsSafe: (URL) -> Bool,
+        configExists: (URL) -> Bool
+    ) -> DesktopKeychainWorkerLaunchAgentRequest? {
+        guard let object = try? PropertyListSerialization.propertyList(
+            from: data,
+            options: [],
+            format: nil
+        ),
+        let root = object as? [String: Any],
+        Set(root.keys) == [
+            "Label",
+            "ProgramArguments",
+            "RunAtLoad",
+            "KeepAlive",
+            "ProcessType",
+            "LimitLoadToSessionType",
+            "ThrottleInterval",
+            "StandardOutPath",
+            "StandardErrorPath"
+        ],
+        root["Label"] as? String == expectedLabel,
+        root["RunAtLoad"] as? Bool == true,
+        root["KeepAlive"] as? Bool == true,
+        root["ProcessType"] as? String == "Background",
+        root["LimitLoadToSessionType"] as? String == "Aqua",
+        root["ThrottleInterval"] as? Int == 10,
+        root["StandardOutPath"] as? String == "/dev/null",
+        root["StandardErrorPath"] as? String == "/dev/null",
+        let programArguments = root["ProgramArguments"] as? [String],
+        programArguments.count == 8,
+        let executablePath = programArguments.first,
+        executablePath.hasPrefix("/")
+        else {
+            return nil
+        }
+        let executable = URL(filePath: executablePath).standardizedFileURL
+        guard appExecutableIsSafe(executable),
+              let request = parseHeadlessArguments(
+                Array(programArguments.dropFirst()),
+                homeDirectory: homeDirectory
+              ),
+              request.launchdLabel == expectedLabel,
+              configExists(URL(filePath: request.configPath))
+        else {
+            return nil
+        }
+        return request
+    }
+
+    package static func parseHeadlessArguments(
+        _ arguments: [String],
+        homeDirectory: URL
+    ) -> DesktopKeychainWorkerLaunchAgentRequest? {
+        guard arguments.count == 7,
+              arguments[0] == headlessFlag,
+              arguments[1] == "--config",
+              arguments[3] == "--launchd-label",
+              arguments[5] == "--github-app-id"
+        else {
+            return nil
+        }
+        return try? DesktopKeychainWorkerLaunchAgentRequest(
+            appID: arguments[6],
+            configPath: arguments[2],
+            launchdLabel: arguments[4],
+            homeDirectory: homeDirectory
+        )
+    }
+
+    package static func runningPID(
+        launchctlPrint: String
+    ) -> Int32? {
+        let lines = launchctlPrint.split(
+            whereSeparator: \.isNewline
+        ).map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        guard lines.contains("state = running") else { return nil }
+        let pidLines = lines.filter { $0.hasPrefix("pid = ") }
+        guard pidLines.count == 1,
+              let rawPID = pidLines.first?.dropFirst("pid = ".count),
+              let pid = Int32(rawPID),
+              pid > 0
+        else {
+            return nil
+        }
+        return pid
+    }
+}
+
+package enum DesktopTrustedBundledWorkerContract {
+    package static let expectedBundlePath = "/Applications/NeonDiff.app"
+    package static let workerRelativePath =
+        "Contents/Helpers/NeonDiffWorker"
+
+    package static func requiresTrustedWorker(
+        arguments: [String],
+        hasStandardInput: Bool
+    ) -> Bool {
+        guard hasStandardInput else { return false }
+        return [
+            "--runtime-credentials-stdin",
+            "--github-app-private-key-stdin",
+            "--license-key-stdin"
+        ].contains { arguments.contains($0) }
+    }
+
+    package static func executionContext(
+        appBundleURL: URL,
+        appSignatureIsValid: (URL) -> Bool,
+        sealedFileIsValid: (URL) -> Bool
+    ) -> DesktopLocalBotExecutionContext? {
+        let bundle = appBundleURL.standardizedFileURL
+        guard bundle.path == expectedBundlePath,
+              bundle.resolvingSymlinksInPath().path == bundle.path,
+              appSignatureIsValid(bundle)
+        else {
+            return nil
+        }
+        let worker = bundle.appending(
+            path: workerRelativePath,
+            directoryHint: .notDirectory
+        ).standardizedFileURL
+        guard sealedFileIsValid(worker)
+        else {
+            return nil
+        }
+        return DesktopLocalBotExecutionContext(
+            configPath: "",
+            executablePath: worker.path,
+            argumentPrefix: [],
+            environmentOverrides: [:]
+        )
+    }
+
+}
+
+package protocol DesktopKeychainWorkerLaunchAgentManaging: Sendable {
+    func preview(
+        request: DesktopKeychainWorkerLaunchAgentRequest
+    ) async throws -> String
+
+    func installAndStart(
+        request: DesktopKeychainWorkerLaunchAgentRequest
+    ) async throws -> String
+}
+
+package struct UnavailableDesktopKeychainWorkerLaunchAgentManager:
+    DesktopKeychainWorkerLaunchAgentManaging
+{
+    package init() {}
+
+    package func preview(
+        request: DesktopKeychainWorkerLaunchAgentRequest
+    ) async throws -> String {
+        throw DesktopKeychainWorkerLaunchAgentError.invalidAppExecutable
+    }
+
+    package func installAndStart(
+        request: DesktopKeychainWorkerLaunchAgentRequest
+    ) async throws -> String {
+        throw DesktopKeychainWorkerLaunchAgentError.invalidAppExecutable
+    }
+}
+
+package struct DesktopLocalBotDiscoverySnapshot: Sendable {
+    package let configurations: [DesktopLocalBotConfiguration]
+    package let executionContexts: [DesktopLocalBotExecutionContext]
+
+    package init(
+        configurations: [DesktopLocalBotConfiguration],
+        executionContexts: [DesktopLocalBotExecutionContext]
+    ) {
+        self.configurations = configurations
+        self.executionContexts = executionContexts
+    }
+}
+
+package struct DesktopRuntimeCredentialEnvelope: Sendable {
+    private let appID: String
+    private let privateKey: String
+    private let licenseKey: String
+
+    package init(
+        appID: String,
+        privateKey: String,
+        licenseKey: String
+    ) throws {
+        self.appID = try BYOGitHubAppCredentialValidator
+            .normalizedAppId(appID)
+        self.privateKey = try BYOGitHubAppCredentialValidator
+            .normalizedPrivateKey(privateKey)
+        guard licenseKey.range(
+            of: #"^nd_live_[A-Za-z0-9_-]{8,}$"#,
+            options: .regularExpression
+        ) != nil else {
+            throw DesktopRuntimeCredentialEnvelopeError.invalidLicenseKey
+        }
+        self.licenseKey = licenseKey
+    }
+
+    package func encodedData() throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: [
+                "schemaVersion": 1,
+                "githubAppId": appID,
+                "githubPrivateKey": privateKey,
+                "licenseKey": licenseKey
+            ],
+            options: []
+        )
+    }
+}
+
+package enum DesktopRuntimeCredentialEnvelopeError:
+    Error,
+    LocalizedError
+{
+    case invalidLicenseKey
+
+    package var errorDescription: String? {
+        "The API-backed NeonDiff activation credential is invalid."
+    }
+}

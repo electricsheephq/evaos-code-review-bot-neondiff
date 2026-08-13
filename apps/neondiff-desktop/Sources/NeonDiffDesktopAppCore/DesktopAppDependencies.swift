@@ -139,6 +139,10 @@ package struct DesktopAppDependencies {
     package let localBotConfigurations: [DesktopLocalBotConfiguration]
     package let localBotExecutionContexts: [DesktopLocalBotExecutionContext]
     package let localBotExecutionConfigPaths: [String]
+    package let localBotDiscoveryProvider:
+        (@Sendable (String) -> DesktopLocalBotDiscoverySnapshot)?
+    package let keychainWorkerLaunchAgentManager:
+        any DesktopKeychainWorkerLaunchAgentManaging
 
     package init(
         clipboard: any DesktopClipboard,
@@ -160,7 +164,12 @@ package struct DesktopAppDependencies {
         cliWorkingDirectory: URL? = nil,
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
         localBotExecutionContexts: [DesktopLocalBotExecutionContext] = [],
-        localBotExecutionConfigPaths: [String] = []
+        localBotExecutionConfigPaths: [String] = [],
+        localBotDiscoveryProvider:
+            (@Sendable (String) -> DesktopLocalBotDiscoverySnapshot)? = nil,
+        keychainWorkerLaunchAgentManager:
+            any DesktopKeychainWorkerLaunchAgentManaging =
+                UnavailableDesktopKeychainWorkerLaunchAgentManager()
     ) {
         self.clipboard = clipboard
         self.urlOpener = urlOpener
@@ -180,5 +189,8 @@ package struct DesktopAppDependencies {
         self.localBotConfigurations = localBotConfigurations
         self.localBotExecutionContexts = localBotExecutionContexts
         self.localBotExecutionConfigPaths = localBotExecutionConfigPaths
+        self.localBotDiscoveryProvider = localBotDiscoveryProvider
+        self.keychainWorkerLaunchAgentManager =
+            keychainWorkerLaunchAgentManager
     }
 }

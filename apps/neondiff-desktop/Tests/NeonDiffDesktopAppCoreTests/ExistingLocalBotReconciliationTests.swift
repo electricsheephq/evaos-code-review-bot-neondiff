@@ -766,6 +766,7 @@ import NeonDiffDesktopCore
         ]
         let readChecks =
             #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
+        let reviewHeadSHA = String(repeating: "a", count: 40)
         let fixture = ModelDependencyFixture(
             cliOutcomes: [
                 .success(CLIRunResult(
@@ -795,6 +796,11 @@ import NeonDiffDesktopCore
                      "privateRepoAllowed":true,"updateEntitlement":true,
                      "plan":"internal-owner-recovery","seats":1}}
                     """,
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"review-pr","dryRun":true,"useZCode":true,"scope":{"repo":"\#(targetRepository)","pullNumber":760,"headSha":"\#(reviewHeadSHA)","url":"https://github.com/\#(targetRepository)/pull/760"},"result":{"reposScanned":1,"pullsSeen":1,"reviewed":1,"failed":0,"skippedProcessed":0}}"#,
                     stderr: ""
                 ))
             ],
@@ -871,6 +877,25 @@ import NeonDiffDesktopCore
             fixture.model.existingLocalBotBYOGitHubVerificationStatus
                 .contains("entitlement")
         )
+
+        fixture.model.pendingReviewPullNumber = "760"
+        fixture.model.runScopedDryReview()
+        #expect(await reachesCallCount(fixture, 5))
+        for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
+            await Task.yield()
+        }
+        let reviewCall = try #require(fixture.cli.calls.last)
+        #expect(reviewCall.arguments == [
+            "review-pr",
+            "--config", configPath,
+            "--repo", targetRepository,
+            "--pr", "760",
+            "--expected-config-revision",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--dry-run", "true",
+            "--zcode", "true"
+        ])
+        #expect(reviewCall.standardInput == nil)
 
         fixture.model.applyAccountWorkspaceCatalog(.loaded([
             workspace(entitlement: .none)

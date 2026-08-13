@@ -166,6 +166,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set) var localWorkerReviewCompatibility: DesktopLocalWorkerReviewCompatibility = .unknown
     @Published package private(set) var currentLocalWorkerExecutionContexts:
         [DesktopLocalBotExecutionContext] = []
+    @Published package private(set) var currentLocalBotConfigurations:
+        [DesktopLocalBotConfiguration] = []
+    @Published package private(set) var currentLocalBotExecutionConfigPaths:
+        [String] = []
+    @Published package private(set)
+        var isKeychainWorkerLaunchAgentOperationInProgress = false
+    @Published package private(set) var keychainWorkerLaunchAgentStatus =
+        "Install and start the local review worker when setup is ready."
     package var localWorkerExecutionContextProvider:
         (@MainActor () -> [DesktopLocalBotExecutionContext])?
     @Published package var logText = "No logs loaded."
@@ -425,6 +433,35 @@ package final class NeonDiffDesktopModel: ObservableObject {
         productionUsefulWorkAvailable
             && reviewTargetRuntimeReady
             && scopedReviewProviderReady
+            && !isKeychainWorkerLaunchAgentOperationInProgress
+            && (
+                !dependencies.productionBoundary.byoGitHubEnabled
+                    || existingLocalAgentAccessAvailable
+                    || keychainWorkerLaunchAgentInstallAvailable
+            )
+    }
+
+    package var keychainWorkerLaunchAgentInstallAvailable: Bool {
+        dependencies.productionBoundary.byoGitHubEnabled
+            && byoGitHubCredentialsStored
+            && byoGitHubCredentialsVerified
+            && storedBYOGitHubAppId != nil
+            && localWorkerCLIAvailable
+            && !isKeychainWorkerLaunchAgentOperationInProgress
+    }
+
+    package var daemonStartActionTitle: String {
+        existingLocalAgentAccessAvailable
+            ? "Start/Restart"
+            : "Install & Start"
+    }
+
+    private var keychainWorkerLaunchAgentActive: Bool {
+        guard matchingLocalBotConfigurationAvailable else { return false }
+        return currentLocalWorkerExecutionContexts.contains { context in
+            normalizedPath(context.configPath) == normalizedPath(configPath)
+                && context.environmentOverrides.isEmpty
+        }
     }
 
     package var scopedLiveReviewConfirmationAvailable: Bool {
@@ -582,14 +619,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return false
         }
-        return dependencies.localBotExecutionConfigPaths.contains { path in
+        return currentLocalBotExecutionConfigPaths.contains { path in
             normalizedPath(path) == normalizedPath(configPath)
         }
     }
 
     private var matchingLocalBotConfigurationAvailable: Bool {
         guard let bot = selectedBotInstallation else { return false }
-        return dependencies.localBotConfigurations.contains { configuration in
+        return currentLocalBotConfigurations.contains { configuration in
             configuration.appID == bot.appID
                 && normalizedPath(configuration.configPath)
                     == normalizedPath(configPath)
@@ -742,6 +779,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         self.activationLicenseClientOverride = activationLicenseClient
         self.currentLocalWorkerExecutionContexts =
             dependencies.localBotExecutionContexts
+        self.currentLocalBotConfigurations =
+            dependencies.localBotConfigurations
+        self.currentLocalBotExecutionConfigPaths =
+            dependencies.localBotExecutionConfigPaths
         self.configPath = dependencies.preferences.string(forKey: Self.configPathPreferenceKey)
             ?? dependencies.fileWriter.applicationSupportDirectory
                 .appendingPathComponent("config.local.json")
@@ -1382,7 +1423,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
 
         var candidates: [DesktopLocalBotCandidate] = []
-        for configuration in dependencies.localBotConfigurations {
+        for configuration in currentLocalBotConfigurations {
             let configurationURL = URL(filePath: configuration.configPath)
                 .standardizedFileURL
             guard dependencies.fileWriter.fileExists(at: configurationURL) else {
@@ -2326,6 +2367,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func previewStartDaemon() {
         guard requireProductionDaemonStartAuthorization() else { return }
+        if keychainWorkerLaunchAgentActive
+            || (!existingLocalAgentAccessAvailable
+                && keychainWorkerLaunchAgentInstallAvailable)
+        {
+            previewKeychainWorkerLaunchAgent()
+            return
+        }
         runCLI(arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "true"], displayCommand: startDaemonDryRunCommand)
     }
 
@@ -2336,6 +2384,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func startDaemon() {
         guard requireProductionDaemonStartAuthorization() else { return }
+        if keychainWorkerLaunchAgentActive
+            || (!existingLocalAgentAccessAvailable
+                && keychainWorkerLaunchAgentInstallAvailable)
+        {
+            installAndStartKeychainWorkerLaunchAgent()
+            return
+        }
         persistLocalSettings()
         runCLI(
             arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
@@ -2421,7 +2476,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func openLocalWorkerUpdateGuide() {
-        if let localWorkerExecutionContextProvider {
+        if dependencies.localBotDiscoveryProvider != nil {
+            refreshLocalBotDiscovery()
+            if localWorkerCLIAvailable {
+                lastError = nil
+                return
+            }
+        } else if let localWorkerExecutionContextProvider {
             currentLocalWorkerExecutionContexts =
                 localWorkerExecutionContextProvider()
             if localWorkerCLIAvailable {
@@ -2434,6 +2495,149 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         lastError = nil
+    }
+
+    private func previewKeychainWorkerLaunchAgent() {
+        guard let request = keychainWorkerLaunchAgentRequest() else {
+            return
+        }
+        let manager = dependencies.keychainWorkerLaunchAgentManager
+        isKeychainWorkerLaunchAgentOperationInProgress = true
+        keychainWorkerLaunchAgentStatus =
+            "Validating the signed app, selected config, and sealed worker…"
+        Task { [weak self] in
+            do {
+                let status = try await manager.preview(request: request)
+                guard let self else { return }
+                self.isKeychainWorkerLaunchAgentOperationInProgress = false
+                self.keychainWorkerLaunchAgentStatus = status
+                self.lastError = nil
+            } catch {
+                guard let self else { return }
+                self.isKeychainWorkerLaunchAgentOperationInProgress = false
+                self.lastError = NeonDiffRedactor.redact(
+                    error.localizedDescription
+                )
+                self.keychainWorkerLaunchAgentStatus =
+                    self.lastError ?? "Worker LaunchAgent preview failed."
+            }
+        }
+    }
+
+    private func installAndStartKeychainWorkerLaunchAgent() {
+        guard let request = keychainWorkerLaunchAgentRequest() else {
+            return
+        }
+        let manager = dependencies.keychainWorkerLaunchAgentManager
+        isKeychainWorkerLaunchAgentOperationInProgress = true
+        keychainWorkerLaunchAgentStatus =
+            "Installing and starting the secret-free local review worker…"
+        Task { [weak self] in
+            do {
+                let status = try await manager.installAndStart(
+                    request: request
+                )
+                guard let self else { return }
+                self.refreshLocalBotDiscovery()
+                self.isKeychainWorkerLaunchAgentOperationInProgress = false
+                self.keychainWorkerLaunchAgentStatus = status
+                self.lastError = nil
+                self.onboardingFlow.daemonBootstrapChecked = true
+                self.checkLocalWorkerReviewCompatibility()
+            } catch {
+                guard let self else { return }
+                self.isKeychainWorkerLaunchAgentOperationInProgress = false
+                self.lastError = NeonDiffRedactor.redact(
+                    error.localizedDescription
+                )
+                self.keychainWorkerLaunchAgentStatus =
+                    self.lastError ?? "Worker LaunchAgent install failed."
+                self.onboardingFlow.daemonBootstrapChecked = false
+            }
+        }
+    }
+
+    private func keychainWorkerLaunchAgentRequest()
+        -> DesktopKeychainWorkerLaunchAgentRequest?
+    {
+        guard let appID = storedBYOGitHubAppId else {
+            lastError =
+                "Store and verify the customer-owned GitHub App before installing the worker service."
+            keychainWorkerLaunchAgentStatus =
+                lastError ?? "GitHub App setup required."
+            return nil
+        }
+        let homeDirectory = dependencies.fileWriter
+            .applicationSupportDirectory
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        do {
+            return try DesktopKeychainWorkerLaunchAgentRequest(
+                appID: appID,
+                configPath: configPath,
+                launchdLabel: launchdLabel,
+                homeDirectory: homeDirectory
+            )
+        } catch {
+            lastError = NeonDiffRedactor.redact(error.localizedDescription)
+            keychainWorkerLaunchAgentStatus =
+                lastError ?? "The worker coordinates are invalid."
+            return nil
+        }
+    }
+
+    private func refreshLocalBotDiscovery() {
+        guard let provider = dependencies.localBotDiscoveryProvider else {
+            return
+        }
+        let snapshot = provider(launchdLabel)
+        currentLocalBotConfigurations = snapshot.configurations
+        currentLocalWorkerExecutionContexts = snapshot.executionContexts
+        currentLocalBotExecutionConfigPaths = snapshot.executionContexts
+            .map(\.configPath)
+            .filter { !$0.isEmpty }
+    }
+
+    private var runtimeCredentialsForReviewRequired: Bool {
+        dependencies.productionBoundary.byoGitHubEnabled
+            && byoGitHubCredentialsStored
+            && (
+                !existingLocalAgentAccessAvailable
+                    || keychainWorkerLaunchAgentActive
+            )
+    }
+
+    private func runtimeCredentialsForReview() -> Data? {
+        guard runtimeCredentialsForReviewRequired,
+              byoGitHubCredentialsVerified,
+              let appID = storedBYOGitHubAppId
+        else {
+            return nil
+        }
+        do {
+            guard let privateKey = try dependencies.secretStore.readSecret(
+                account: BYOGitHubAppKeychainAccount.privateKey,
+                allowUserInteraction: false
+            ),
+            let licenseKey = try dependencies.secretStore.readSecret(
+                account: activationKeyAccount,
+                allowUserInteraction: false
+            ) else {
+                throw BYOGitHubAppCredentialError.invalidPrivateKey
+            }
+            return try DesktopRuntimeCredentialEnvelope(
+                appID: appID,
+                privateKey: privateKey,
+                licenseKey: licenseKey
+            ).encodedData()
+        } catch {
+            lastError =
+                "The GitHub App or API-backed activation credential could not be read safely from Keychain."
+            scopedReviewStatus =
+                "Review blocked before worker execution because Keychain access failed."
+            return nil
+        }
     }
 
     package func runScopedDryReview() {
@@ -2460,7 +2664,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             workerCompatibilityGeneration:
                 localWorkerReviewCompatibilityGeneration
         )
-        let arguments = [
+        let runtimeCredentials = runtimeCredentialsForReview()
+        if runtimeCredentialsForReviewRequired,
+           runtimeCredentials == nil {
+            return
+        }
+        var arguments = [
             "review-pr",
             "--config", configPath,
             "--repo", repository,
@@ -2469,6 +2678,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             "--dry-run", "true",
             "--zcode", "true"
         ]
+        if runtimeCredentials != nil {
+            arguments += [
+                "--runtime-credentials-stdin", "true"
+            ]
+        }
+        var standardInput = runtimeCredentials
         let executablePath = cliPath
         let cli = dependencies.cli
         invalidateScopedReviewApproval()
@@ -2486,11 +2701,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         ].joined(separator: " ")
 
         scopedReviewTask = Task.detached {
+            defer {
+                if let count = standardInput?.count {
+                    standardInput?.resetBytes(in: 0..<count)
+                }
+            }
             do {
                 let result = try await cli.run(
                     executablePath: executablePath,
                     arguments: arguments,
-                    standardInput: nil,
+                    standardInput: standardInput,
                     timeout: 600
                 )
                 await MainActor.run {
@@ -2526,7 +2746,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
-        let arguments = [
+        let runtimeCredentials = runtimeCredentialsForReview()
+        if runtimeCredentialsForReviewRequired,
+           runtimeCredentials == nil {
+            return
+        }
+        var arguments = [
             "review-pr",
             "--config", approval.configPath,
             "--repo", approval.repo,
@@ -2537,6 +2762,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             "--confirm", "true",
             "--zcode", "true"
         ]
+        if runtimeCredentials != nil {
+            arguments += [
+                "--runtime-credentials-stdin", "true"
+            ]
+        }
+        var standardInput = runtimeCredentials
         let executablePath = cliPath
         let cli = dependencies.cli
         isScopedReviewInProgress = true
@@ -2554,11 +2785,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         ].joined(separator: " ")
 
         scopedReviewTask = Task.detached {
+            defer {
+                if let count = standardInput?.count {
+                    standardInput?.resetBytes(in: 0..<count)
+                }
+            }
             do {
                 let result = try await cli.run(
                     executablePath: executablePath,
                     arguments: arguments,
-                    standardInput: nil,
+                    standardInput: standardInput,
                     timeout: 600
                 )
                 await MainActor.run {

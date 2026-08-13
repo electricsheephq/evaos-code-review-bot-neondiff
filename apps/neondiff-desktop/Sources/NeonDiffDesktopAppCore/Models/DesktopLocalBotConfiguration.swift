@@ -564,6 +564,12 @@ package enum DesktopLocalBotExecutionContextResolver {
                     || reviewHelpCommand
                     || Array(arguments.prefix(2)) == ["config", "inspect"]
                     || Array(arguments.prefix(2)) == ["license", "status"]
+                    || (
+                        arguments.count >= 2
+                            && arguments[0] == "daemon"
+                            && ["start", "stop", "status"]
+                                .contains(arguments[1])
+                    )
             }
         }
     }
@@ -615,9 +621,14 @@ package enum DesktopLocalBotExecutionContextResolver {
         else {
             return nil
         }
-        let matches = executionContexts.filter(isInstallerManagedWorker)
-        guard matches.count == 1 else { return nil }
-        return matches[0]
+        let trusted = executionContexts.filter(isTrustedBundledWorker)
+        if trusted.count == 1 {
+            return trusted[0]
+        }
+        guard trusted.isEmpty else { return nil }
+        let installed = executionContexts.filter(isInstallerManagedWorker)
+        guard installed.count == 1 else { return nil }
+        return installed[0]
     }
 
     private static func isSupportedUnboundCommand(_ arguments: [String]) -> Bool {
@@ -717,6 +728,20 @@ package enum DesktopLocalBotExecutionContextResolver {
             && suffix[5] == "Bots"
             && !suffix[6].isEmpty
             && suffix[7] == "config.local.json"
+    }
+
+    private static func isTrustedBundledWorker(
+        _ context: DesktopLocalBotExecutionContext
+    ) -> Bool {
+        guard let executablePath = context.executablePath,
+              executablePath
+                == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
+              context.argumentPrefix.isEmpty,
+              context.environmentOverrides.isEmpty
+        else {
+            return false
+        }
+        return true
     }
 
     private static func isInstallerManagedWorker(

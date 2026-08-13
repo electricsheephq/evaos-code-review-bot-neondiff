@@ -23,7 +23,7 @@ struct LegacyCoreChecksScenarioInventory: Sendable {
 
 let legacyCoreChecksScenarioInventory: [LegacyCoreChecksScenario: LegacyCoreChecksScenarioInventory] = [
     .onboardingFlowContracts: .init(assertionCount: 10, sortedMessageSHA256: "fa52ef66cfc15da0fc622891de083cb4f8c6989b75cda294aa0dce7965ffed11"),
-    .cliResolutionAndStandardInputContracts: .init(assertionCount: 6, sortedMessageSHA256: "562eaee1dd13c170588d3482b5a822bf6e1fe6d363d2221c908f47e857cf8889"),
+    .cliResolutionAndStandardInputContracts: .init(assertionCount: 8, sortedMessageSHA256: "5ebac651f7c224b7c6da0cfd1432bc89eba7b9dccca8f02d8c01ede48e0b48a9"),
     .cliCancellationContracts: .init(assertionCount: 10, sortedMessageSHA256: "4d93d68b30b32e326aad8d2f93dacf515d346cc3fb373a1a9061f829f3c0c0ad"),
     .cliStandardInputTimeoutContracts: .init(assertionCount: 14, sortedMessageSHA256: "a979b18020324519db8eb863c445a7bd2ca9d3a61f7f8e6a447a3742527864d4"),
     .cliCleanupDeadlineAndOutputContracts: .init(assertionCount: 15, sortedMessageSHA256: "8c562230f44b6c485ddbb0a3f414bb193a05f53a22207445c9da3590b39b2989"),
@@ -63,9 +63,9 @@ final class LegacyCoreChecksAggregate: @unchecked Sendable {
             #expect(values.count == expected?.assertionCount, Comment("scenario \(scenario.rawValue) assertion count"))
             #expect(coreChecksSHA256(values.sorted()) == expected?.sortedMessageSHA256, Comment("scenario \(scenario.rawValue) message inventory"))
         }
-        #expect(messages.count == 399)
-        #expect(Set(messages).count == 305)
-        #expect(coreChecksSHA256(messages.sorted()) == "f2083dd698110687a5ca34d02c211c29fda4d25e4d0e007a03a5cef0d6de5ba0")
+        #expect(messages.count == 401)
+        #expect(Set(messages).count == 307)
+        #expect(coreChecksSHA256(messages.sorted()) == "64e75c14a9906ebf8df47ac2b7556d58b14c8408becabc07652e172e220431fc")
     }
 }
 

@@ -118,6 +118,8 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(job?.defaults?.run?.["working-directory"]).toBe("apps/neondiff-desktop");
 
     for (const command of [
+      "node-version: 26",
+      "npm ci --ignore-scripts",
       "scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests",
       "scripts/run-required-swift-test-suite.sh NeonDiffDesktopAppCoreTests",
       "scripts/run-required-swift-test-suite.sh NeonDiffDesktopEvaluationSupportTests",
@@ -139,7 +141,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     );
     expect(fixtureBoundaryStep?.["working-directory"]).toBe(".");
     expect(fixtureBoundaryStep?.run).toBe(
-      "npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist/NeonDiffDesktop.app"
+      "npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist/NeonDiff.app"
     );
     expect(workflow).toContain("unsigned");
     expect(workflow).toMatch(/macOS 15 Keychain contract compilation/);
@@ -211,6 +213,32 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(bundler).toContain('find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents');
     expect(bundler).toContain('"$SCRIPT_DIR/release-rpaths.sh" sanitize "$APP_BINARY"');
     expect(bundler).toContain('"$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"');
+    expect(bundler).toContain("build-desktop-sealed-worker.mjs");
+    expect(bundler).toContain('"$APP_HELPERS/NeonDiffWorker" --version');
+  });
+
+  it("builds the credential-bearing worker as one pinned sealed executable", () => {
+    const script = read("scripts/build-desktop-sealed-worker.mjs");
+    const entitlements = read(
+      "apps/neondiff-desktop/script/worker-runtime.entitlements.plist"
+    );
+
+    expect(script).toContain("https://nodejs.org/dist/");
+    expect(script).toContain(
+      "7ee659a7768e641bbfd5360940660b8e8fd0052f77488f365562bac522fc15d4"
+    );
+    expect(script).toContain("--build-sea");
+    expect(script).toContain('mainFormat: "module"');
+    expect(script).toContain('format: "esm"');
+    expect(script).toContain("/usr/bin/codesign");
+    expect(script).toContain("/usr/bin/otool");
+    expect(entitlements).toContain(
+      "com.apple.security.cs.allow-jit"
+    );
+    expect(entitlements).not.toContain("get-task-allow");
+    expect(entitlements).not.toContain(
+      "disable-library-validation"
+    );
   });
 
   it("removes machine-local release rpaths and fails closed on inspection errors", () => {

@@ -37,6 +37,7 @@ import { DEFAULT_REVIEW_LENS_CONFIG, validateReviewLensConfig, type ReviewLensCo
 import type { ReviewEventPolicyConfig } from "./review-event-policy.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
+import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
 
 const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
 
@@ -129,6 +130,7 @@ export interface BotConfig {
   github: {
     appId?: string;
     clientId?: string;
+    privateKey?: string;
     privateKeyPath?: string;
     token?: string;
     apiBaseUrl?: string;
@@ -607,7 +609,13 @@ export function loadConfig(configPath?: string): BotConfig {
 }
 
 export function loadConfigFromObject(fromFile: unknown): BotConfig {
+  if (isRecord(fromFile)
+    && isRecord(fromFile.github)
+    && Object.prototype.hasOwnProperty.call(fromFile.github, "privateKey")) {
+    throw new Error("config files must not contain github.privateKey; use the bounded runtime stdin channel");
+  }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
+  merged.github = { ...merged.github };
   merged.worktreeCleanup = { ...merged.worktreeCleanup! };
   const configuredCleanup = isRecord(fromFile) && isRecord(fromFile.worktreeCleanup)
     ? fromFile.worktreeCleanup
@@ -632,6 +640,7 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
   }) ?? merged.github.privateKeyPath;
   merged.github.token = process.env.GITHUB_TOKEN ?? merged.github.token;
   validateConfig(merged);
+  applyRuntimeGitHubCredentials(merged.github);
 
   return merged;
 }
