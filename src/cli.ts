@@ -2605,6 +2605,17 @@ function resolvePackageRoot(): string {
 }
 
 function resolvePackageVersion(): string {
+  const sealedPackageVersion = (
+    import.meta as ImportMeta & {
+      neondiffPackageVersion?: unknown;
+    }
+  ).neondiffPackageVersion;
+  if (
+    typeof sealedPackageVersion === "string"
+    && sealedPackageVersion.length > 0
+  ) {
+    return sealedPackageVersion;
+  }
   const packageJson = JSON.parse(readFileSync(join(resolvePackageRoot(), "package.json"), "utf8"));
   if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
     throw new Error("package.json is missing a version string");
