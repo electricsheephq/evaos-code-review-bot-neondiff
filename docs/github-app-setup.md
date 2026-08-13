@@ -144,19 +144,19 @@ integration proof under #630.
    existing local bot on the same account or allocate another numbered config
    directory; the customer can explicitly choose another account or bot to end
    the pending flow.
-   If one exact checksum-managed worker already exists for the selected
-   LaunchAgent label, these isolated config commands and the bounded
-   private-key-stdin GitHub doctor reuse that worker instead of resolving
-   through a global `neondiff` command. The new bot never inherits the existing
-   bot's credential environment. Zero or ambiguous managed-worker discovery
-   does not select this reuse path; the exact worker installation remains a
-   separate distribution gate.
+   If one exact checksum-managed worker exists, these isolated config commands
+   and the bounded private-key-stdin GitHub doctor reuse that worker instead of
+   resolving through a global `neondiff` command. On a clean Mac, the bundle's
+   confirmed `first-install` command creates only a private versioned CLI and
+   credential-free 0600 marker; it creates or loads no LaunchAgent and starts
+   no daemon. The new bot receives no inherited credential environment. Zero
+   or ambiguous managed-worker discovery does not select this reuse path.
    If the configured local worker command is unavailable, the CLI-backed
    controls remain disabled and **Install / Update Local Worker** opens the
-   version-matched release guide. Do not treat that link as clean-Mac bootstrap
-   proof: the current B0 update/rollback installer requires an existing
-   LaunchAgent. A clean Mac remains blocked until the exact release supplies a
-   checksum-bound worker bundle and supported first-install path.
+   version-matched release guide. Continue only with its checksum-bound
+   manifest/tarball and dry-run-default, confirm-required `first-install`
+   command. Source support does not prove that immutable release publication,
+   signing, clean-Mac execution, review, or daemon readiness has passed.
 
 GitHub setup and paid activation remain separate gates. After Checkout returns
 the one-shot NeonDiff Activation Key, the customer pastes it in the native

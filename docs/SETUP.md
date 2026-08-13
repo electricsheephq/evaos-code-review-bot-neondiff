@@ -275,11 +275,27 @@ For a B0 customer, the native first-run path is:
    outside the packaged worker or source checkout.
    If NeonDiff reports that the local worker command is unavailable, this and
    the later CLI-backed setup controls remain disabled. Choose **Install /
-   Update Local Worker** to open the version-matched release guide. Continue
-   only when that exact release provides a checksum-bound worker bundle and a
-   supported first-install path. The current B0 update/rollback installer
-   requires an existing LaunchAgent and does not bootstrap a clean Mac; until a
-   matching first-install artifact exists, this is a release blocker.
+   Update Local Worker** to open the version-matched release guide. From the
+   verified extracted bundle, preview the credential-free install:
+
+   ```bash
+   BUNDLE_DIR="$(pwd -P)"
+   node install-b0-worker-candidate.mjs first-install \
+     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
+     --manifest-sha256 <manifest-sha256-from-release> \
+     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
+     --launchd-label com.electricsheephq.evaos-code-review-bot \
+     --dry-run true
+   ```
+
+   Inspect the public-safe preview, then repeat it with
+   `--dry-run false --confirm true`. It installs only the exact verified CLI
+   into a private versioned current-user directory and writes a 0600
+   credential-free marker. It creates or loads no LaunchAgent, starts no
+   daemon, and never reads or writes GitHub, provider, or license credentials.
+   It refuses an existing LaunchAgent or worker state; use the existing-worker
+   update flow below for those machines. Return to NeonDiff and retry the
+   initialization action. Review and daemon readiness remain separate gates.
 4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
    Repository**. The app writes the allowlist through the typed local `config
    patch` command; the customer does not edit a config file.

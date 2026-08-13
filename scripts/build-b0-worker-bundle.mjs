@@ -111,7 +111,27 @@ The installer verifies the inner \`.tgz\` tarball
 \`${tarballFilename}\` against the release manifest before mutation. Compare
 that tarball SHA-256 with the prerelease notes as well.
 
-From this extracted directory, preview the exact migration:
+On a clean Mac with no NeonDiff LaunchAgent or worker state, preview the
+credential-free CLI install:
+
+\`\`\`sh
+BUNDLE_DIR="$(pwd -P)"
+node install-b0-worker-candidate.mjs first-install \\
+  --manifest "$BUNDLE_DIR/${manifestFilename}" \\
+  --manifest-sha256 ${manifestSHA256} \\
+  --tarball "$BUNDLE_DIR/${tarballFilename}" \\
+  --launchd-label com.electricsheephq.evaos-code-review-bot \\
+  --dry-run true
+\`\`\`
+
+After the preview reports the expected label/version, repeat it with
+\`--dry-run false --confirm true\`. First install writes only the verified
+versioned CLI and its private installation marker. It creates or loads no
+LaunchAgent, starts no daemon, and reads no credentials. Return to NeonDiff and
+continue with **Initialize Local Config**; review and daemon readiness remain
+separate gates.
+
+For an existing LaunchAgent, preview the exact migration instead:
 
 \`\`\`sh
 BUNDLE_DIR="$(pwd -P)"

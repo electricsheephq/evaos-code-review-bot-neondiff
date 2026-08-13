@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
+  planWorkerFirstInstall,
   planWorkerRollback,
   planWorkerUpdate,
   recoverPreviouslyLoadedWorker,
@@ -71,6 +72,40 @@ function launchAgent() {
 }
 
 describe("B0 worker installer", () => {
+  it("plans a credential-free clean-Mac worker install without a LaunchAgent", () => {
+    const plan = planWorkerFirstInstall({
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      workerRoot:
+        "/Users/test/Library/Application Support/NeonDiffDesktop/Workers/com.electricsheephq.evaos-code-review-bot",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    });
+
+    expect(plan.versionID).toBe(`1.1.0-beta.27-${candidateHead.slice(0, 12)}`);
+    expect(plan.nextState).toEqual({
+      schemaVersion: 1,
+      installationKind: "credential-free-cli",
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      nodePath: "/opt/homebrew/bin/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    });
+    expect(JSON.stringify(plan)).not.toMatch(
+      /EnvironmentVariables|private.?key|github.?app/i
+    );
+    expect(() => planWorkerFirstInstall({
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      workerRoot: "/Users/test/Library/Application Support/NeonDiffDesktop/Workers/test",
+      nodePath: "/tmp/node",
+      candidateHead,
+      packageVersion,
+      manifestSHA256: "a".repeat(64)
+    })).toThrow("approved stable Node path is required");
+  });
+
   it("keeps a stable Node command when it resolves to the running Node binary", () => {
     const resolved = new Map([
       ["/opt/homebrew/Cellar/node/26.5.1/bin/node", "/opt/homebrew/Cellar/node/26.5.1/bin/node"],
@@ -114,6 +149,7 @@ describe("B0 worker installer", () => {
     const help = spawnSync(process.execPath, [scriptPath, "--help"], { encoding: "utf8" });
     expect(help.status).toBe(0);
     expect(help.stdout).toContain("update");
+    expect(help.stdout).toContain("first-install");
     expect(help.stdout).toContain("rollback");
     expect(help.stdout).toContain("--manifest-sha256");
     expect(help.stdout).toContain("--dry-run false --confirm true");

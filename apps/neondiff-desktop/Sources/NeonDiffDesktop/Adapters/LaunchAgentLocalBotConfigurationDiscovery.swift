@@ -25,8 +25,44 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
             )
             .appendingPathComponent(label, isDirectory: true)
             .standardizedFileURL
-        guard let data = try? Data(contentsOf: launchAgentURL, options: .mappedIfSafe) else {
+        let launchAgentData = try? Data(
+            contentsOf: launchAgentURL,
+            options: .mappedIfSafe
+        )
+        if launchAgentData == nil, entryExists(launchAgentURL) {
             return Snapshot(configurations: [], executionContexts: [])
+        }
+        guard let data = launchAgentData else {
+            let installationURL = installedWorkerRoot
+                .appendingPathComponent("installation.json")
+            guard isSafeInstallationFile(installationURL),
+                  let installationData = try? Data(
+                    contentsOf: installationURL,
+                    options: .mappedIfSafe
+                  ),
+                  let context =
+                    DesktopInstalledWorkerExecutionContextParser.parse(
+                        data: installationData,
+                        expectedLabel: label,
+                        installedWorkerRoot: installedWorkerRoot,
+                        resolveCLI: {
+                            let resolved = $0.resolvingSymlinksInPath()
+                            return resolved == $0 ? nil : resolved
+                        },
+                        cliIsSafe: {
+                            isSafeInstalledCLI($0, fileManager: fileManager)
+                        },
+                        nodeIsExecutable: {
+                            isExecutableRegularFile($0, fileManager: fileManager)
+                        }
+                    )
+            else {
+                return Snapshot(configurations: [], executionContexts: [])
+            }
+            return Snapshot(
+                configurations: [],
+                executionContexts: [context]
+            )
         }
         let configuration = DesktopLaunchAgentBotConfigurationParser.parse(
             data: data,
@@ -85,5 +121,45 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
             return false
         }
         return true
+    }
+
+    private static func isSafeInstallationFile(_ url: URL) -> Bool {
+        var entry = stat()
+        return lstat(url.path, &entry) == 0
+            && (entry.st_mode & S_IFMT) == S_IFREG
+            && entry.st_uid == getuid()
+            && (entry.st_mode & 0o077) == 0
+            && entry.st_size > 0
+            && entry.st_size <= 1024 * 1024
+    }
+
+    private static func entryExists(_ url: URL) -> Bool {
+        var entry = stat()
+        return lstat(url.path, &entry) == 0
+    }
+
+    private static func isSafeInstalledCLI(
+        _ url: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        var entry = stat()
+        return lstat(url.path, &entry) == 0
+            && (entry.st_mode & S_IFMT) == S_IFREG
+            && entry.st_uid == getuid()
+            && (entry.st_mode & 0o022) == 0
+            && entry.st_size > 0
+            && entry.st_size <= 50 * 1024 * 1024
+            && fileManager.isReadableFile(atPath: url.path)
+    }
+
+    private static func isExecutableRegularFile(
+        _ url: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        let resolved = url.resolvingSymlinksInPath()
+        var entry = stat()
+        return lstat(resolved.path, &entry) == 0
+            && (entry.st_mode & S_IFMT) == S_IFREG
+            && fileManager.isExecutableFile(atPath: resolved.path)
     }
 }

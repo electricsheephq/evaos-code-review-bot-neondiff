@@ -5,6 +5,10 @@ const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const PACKAGE_VERSION_PATTERN = /^1\.1\.0-beta\.[1-9][0-9]{0,3}$/;
 const LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const STABLE_NODE_PATHS = new Set([
+  "/opt/homebrew/bin/node",
+  "/usr/local/bin/node"
+]);
 const REQUIRED_REVIEW_FLAGS = ["--expected-config-revision", "--zcode"];
 const APP_ID_KEYS = ["NEONDIFF_GITHUB_APP_ID", "EVAOS_REVIEW_BOT_APP_ID"];
 const PRIVATE_KEY_KEYS = [
@@ -183,6 +187,48 @@ export function validateWorkerCandidate({
     packageVersion,
     tarballSHA256: manifest.package.sha256,
     reviewFlags: [...REQUIRED_REVIEW_FLAGS]
+  };
+}
+
+export function planWorkerFirstInstall({
+  launchdLabel,
+  workerRoot,
+  nodePath,
+  candidateHead,
+  packageVersion,
+  manifestSHA256
+}) {
+  if (!LABEL_PATTERN.test(launchdLabel)) fail("launchd label is invalid");
+  if (!isAbsolute(workerRoot)) fail("worker path must be absolute");
+  if (!STABLE_NODE_PATHS.has(nodePath)) fail("approved stable Node path is required");
+  if (!FULL_SHA_PATTERN.test(candidateHead)) fail("candidate head is invalid");
+  if (!PACKAGE_VERSION_PATTERN.test(packageVersion)) {
+    fail("candidate package version is invalid");
+  }
+  if (!SHA256_PATTERN.test(manifestSHA256)) {
+    fail("candidate manifest SHA-256 is invalid");
+  }
+  const versionID = `${packageVersion}-${candidateHead.slice(0, 12)}`;
+  return {
+    versionID,
+    nextState: {
+      schemaVersion: 1,
+      installationKind: "credential-free-cli",
+      launchdLabel,
+      nodePath,
+      candidateHead,
+      packageVersion,
+      manifestSHA256
+    },
+    publicSummary: {
+      action: "first-install",
+      launchdLabel,
+      packageVersion,
+      candidateHead,
+      createsLaunchAgent: false,
+      startsDaemon: false,
+      readsCredentials: false
+    }
   };
 }
 
