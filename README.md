@@ -107,6 +107,8 @@ the same immutable GitHub prerelease as the app rather than an unpublished npm
 version or an unpinned source checkout. No invitation is required when the
 versioned public GitHub prerelease is published and the neondiff.com
 purchase/download path is live.
+The worker installer requires Node.js 26 or newer resolving through the
+approved stable path `/opt/homebrew/bin/node` or `/usr/local/bin/node`.
 When the app reports **Worker update required**, choose **Install / Update Local
 Worker**. Verify the outer worker bundle ZIP against the prerelease notes, then
 verify the extracted release manifest and inner `.tgz` tarball against the

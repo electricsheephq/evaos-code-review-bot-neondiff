@@ -210,6 +210,31 @@ export function selectWorkerVersionAction(
   return "reuse";
 }
 
+export function requireFirstInstallLaunchdUnloaded(state) {
+  if (state?.loaded !== false) {
+    fail("first install refuses a loaded LaunchAgent");
+  }
+  return false;
+}
+
+export function recoverFailedFirstInstall({
+  expectedCurrentTarget,
+  observedCurrentTarget,
+  removeCurrent,
+  removeMarker,
+  removeVersion
+}) {
+  if (
+    observedCurrentTarget !== null
+    && observedCurrentTarget !== expectedCurrentTarget
+  ) {
+    fail("first-install recovery found an unexpected current worker");
+  }
+  if (observedCurrentTarget === expectedCurrentTarget) removeCurrent();
+  removeMarker();
+  removeVersion();
+}
+
 export function planWorkerFirstInstall({
   launchdLabel,
   workerRoot,
@@ -220,7 +245,11 @@ export function planWorkerFirstInstall({
 }) {
   if (!LABEL_PATTERN.test(launchdLabel)) fail("launchd label is invalid");
   if (!isAbsolute(workerRoot)) fail("worker path must be absolute");
-  if (!STABLE_NODE_PATHS.has(nodePath)) fail("approved stable Node path is required");
+  if (!STABLE_NODE_PATHS.has(nodePath)) {
+    fail(
+      "approved stable Node path is required (/opt/homebrew/bin/node or /usr/local/bin/node)"
+    );
+  }
   if (!FULL_SHA_PATTERN.test(candidateHead)) fail("candidate head is invalid");
   if (!PACKAGE_VERSION_PATTERN.test(packageVersion)) {
     fail("candidate package version is invalid");

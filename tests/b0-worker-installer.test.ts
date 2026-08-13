@@ -14,7 +14,9 @@ import {
   planWorkerFirstInstall,
   planWorkerRollback,
   planWorkerUpdate,
+  recoverFailedFirstInstall,
   recoverPreviouslyLoadedWorker,
+  requireFirstInstallLaunchdUnloaded,
   retryTransientLaunchdBootstrap,
   selectWorkerVersionAction,
   selectStableNodeLaunchPath,
@@ -81,7 +83,7 @@ function launchAgent() {
 }
 
 describe("B0 worker installer", () => {
-  it("rejects every existing version entry before CLI execution", () => {
+  it("classifies strict first-install rejection and legacy update reuse", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-worker-reuse-"));
     const versionsRoot = join(root, "versions");
     const outsideRoot = join(root, "outside");
@@ -94,12 +96,10 @@ describe("B0 worker installer", () => {
     mkdirSync(forgedVersion, { mode: 0o700 });
 
     for (const versionRoot of [symlinkVersion, forgedVersion]) {
-      let cliExecutions = 0;
-      expect(() => {
-        selectWorkerVersionAction(versionRoot, { rejectExisting: true });
-        cliExecutions += 1;
-      }).toThrow("worker version already exists; refusing unverified reuse");
-      expect(cliExecutions).toBe(0);
+      expect(() => selectWorkerVersionAction(
+        versionRoot,
+        { rejectExisting: true }
+      )).toThrow("worker version already exists; refusing unverified reuse");
       expect(selectWorkerVersionAction(
         versionRoot,
         { rejectExisting: false }
@@ -109,6 +109,33 @@ describe("B0 worker installer", () => {
       join(versionsRoot, "missing"),
       { rejectExisting: true }
     )).toBe("install");
+  });
+
+  it("requires a definitively unloaded launchd label for first install", () => {
+    expect(() => requireFirstInstallLaunchdUnloaded({ loaded: true }))
+      .toThrow("first install refuses a loaded LaunchAgent");
+    expect(requireFirstInstallLaunchdUnloaded({ loaded: false })).toBe(false);
+  });
+
+  it("recovers only the fresh first-install activation after a later failure", () => {
+    const removals: string[] = [];
+    recoverFailedFirstInstall({
+      expectedCurrentTarget: "versions/exact",
+      observedCurrentTarget: "versions/exact",
+      removeCurrent: () => removals.push("current"),
+      removeMarker: () => removals.push("marker"),
+      removeVersion: () => removals.push("version")
+    });
+    expect(removals).toEqual(["current", "marker", "version"]);
+
+    expect(() => recoverFailedFirstInstall({
+      expectedCurrentTarget: "versions/exact",
+      observedCurrentTarget: "versions/other",
+      removeCurrent: () => removals.push("wrong-current"),
+      removeMarker: () => removals.push("wrong-marker"),
+      removeVersion: () => removals.push("wrong-version")
+    })).toThrow("first-install recovery found an unexpected current worker");
+    expect(removals).toEqual(["current", "marker", "version"]);
   });
 
   it("plans a credential-free clean-Mac worker install without a LaunchAgent", () => {
@@ -142,7 +169,9 @@ describe("B0 worker installer", () => {
       candidateHead,
       packageVersion,
       manifestSHA256: "a".repeat(64)
-    })).toThrow("approved stable Node path is required");
+    })).toThrow(
+      "approved stable Node path is required (/opt/homebrew/bin/node or /usr/local/bin/node)"
+    );
   });
 
   it("keeps a stable Node command when it resolves to the running Node binary", () => {

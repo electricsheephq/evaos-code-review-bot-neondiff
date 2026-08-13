@@ -130,9 +130,13 @@ integration proof under #630.
 4. Pick one repository for the B0 onboarding run.
 5. Confirm the permissions above.
 6. Save the generated private key outside this repository.
-7. In native NeonDiff first run, store the App ID and private key, and on a clean
-   install choose **Initialize Local Config**. Enter the same `owner/repo`, then
-   choose **Add Repository**, **Apply Repository**, and **Verify App Access**.
+7. In native NeonDiff first run, store the App ID and private key. On a clean
+   Mac, choose **Install / Update Local Worker** and complete the checksum-bound
+   `first-install` with Node.js 26 or newer through `/opt/homebrew/bin/node` or
+   `/usr/local/bin/node`. Return to NeonDiff, choose **Install / Update Local
+   Worker** once more to refresh discovery, then choose **Initialize Local
+   Config**. Enter the same `owner/repo`, then choose **Add Repository**,
+   **Apply Repository**, and **Verify App Access**.
    Initialization never uses `--force`; the app updates `pilotRepos` through
    `config patch`, and no operator edits the customer's config file. Each new
    bot config receives isolated runtime, state, evidence, and license paths

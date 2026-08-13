@@ -590,7 +590,9 @@ package enum DesktopLocalBotExecutionContextResolver {
         guard rawConfigPath.hasPrefix("/") else { return nil }
         let configPath = URL(filePath: rawConfigPath).standardizedFileURL.path
         let matches = executionContexts.filter {
-            URL(filePath: $0.configPath).standardizedFileURL.path == configPath
+            !$0.configPath.isEmpty
+                && URL(filePath: $0.configPath).standardizedFileURL.path
+                    == configPath
         }
         guard matches.count == 1 else { return nil }
         return matches[0]

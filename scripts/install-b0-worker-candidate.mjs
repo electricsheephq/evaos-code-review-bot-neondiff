@@ -24,7 +24,9 @@ import {
   planWorkerFirstInstall,
   planWorkerRollback,
   planWorkerUpdate,
+  recoverFailedFirstInstall,
   recoverPreviouslyLoadedWorker,
+  requireFirstInstallLaunchdUnloaded,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
   selectWorkerVersionAction,
@@ -347,8 +349,29 @@ function currentTarget(currentLink, versionsRoot) {
 
 function switchCurrent(currentLink, relativeTarget) {
   const temporary = `${currentLink}.next-${process.pid}-${randomUUID()}`;
-  symlinkSync(relativeTarget, temporary);
-  renameSync(temporary, currentLink);
+  try {
+    symlinkSync(relativeTarget, temporary);
+    renameSync(temporary, currentLink);
+  } catch (error) {
+    safeUnlink(temporary);
+    throw error;
+  }
+}
+
+function removeFreshWorkerVersion(versionRoot, versionsRoot) {
+  if (!pathIsInside(versionsRoot, versionRoot)) {
+    fail("first-install recovery version escaped the version root");
+  }
+  const entry = lstatSync(versionRoot);
+  if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    fail("first-install recovery version is not the created directory");
+  }
+  const realVersionsRoot = realpathSync(versionsRoot);
+  const realVersionRoot = realpathSync(versionRoot);
+  if (!pathIsInside(realVersionsRoot, realVersionRoot)) {
+    fail("first-install recovery version escaped the real version root");
+  }
+  rmSync(realVersionRoot, { recursive: true });
 }
 
 function launchdState(label) {
@@ -561,13 +584,15 @@ function firstInstall(args) {
     packageVersion: candidate.packageVersion,
     manifestSHA256
   });
+  requireFirstInstallLaunchdUnloaded(launchdState(label));
   if (dryRun) {
     console.log(JSON.stringify({ ok: true, dryRun: true, ...plan.publicSummary }));
     return;
   }
   withWorkerLock(paths, () => {
     assertFirstInstallTargetUnused(paths);
-    installVersion({
+    requireFirstInstallLaunchdUnloaded(launchdState(label));
+    const versionRoot = installVersion({
       versionsRoot: paths.versionsRoot,
       versionID: plan.versionID,
       tarballPath,
@@ -576,11 +601,36 @@ function firstInstall(args) {
       packageVersion: candidate.packageVersion,
       rejectExisting: true
     });
-    writeState(paths.installationPath, plan.nextState);
+    const relativeTarget = join("versions", plan.versionID);
     try {
-      switchCurrent(paths.currentLink, join("versions", plan.versionID));
+      writeState(paths.installationPath, plan.nextState);
+      switchCurrent(paths.currentLink, relativeTarget);
     } catch (error) {
-      safeUnlink(paths.installationPath);
+      try {
+        recoverFailedFirstInstall({
+          expectedCurrentTarget: relativeTarget,
+          observedCurrentTarget: currentTarget(
+            paths.currentLink,
+            paths.versionsRoot
+          ),
+          removeCurrent: () => safeUnlink(paths.currentLink),
+          removeMarker: () => safeUnlink(paths.installationPath),
+          removeVersion: () => removeFreshWorkerVersion(
+            versionRoot,
+            paths.versionsRoot
+          )
+        });
+      } catch (recoveryError) {
+        fail(
+          `first install failed and cleanup was incomplete: ${
+            error instanceof Error ? error.message : String(error)
+          }; ${
+            recoveryError instanceof Error
+              ? recoveryError.message
+              : String(recoveryError)
+          }`
+        );
+      }
       throw error;
     }
   });

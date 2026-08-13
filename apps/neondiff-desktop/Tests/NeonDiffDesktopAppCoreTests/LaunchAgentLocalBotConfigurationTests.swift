@@ -123,6 +123,30 @@ import Testing
             cliIsSafe: { _ in true },
             nodeIsExecutable: { _ in true }
         ) == nil)
+        let mismatchedVersion = Data(
+            String(decoding: data, as: UTF8.self)
+                .replacingOccurrences(
+                    of: version,
+                    with: "1.1.0-beta.28"
+                )
+                .utf8
+        )
+        #expect(DesktopInstalledWorkerExecutionContextParser.parse(
+            data: mismatchedVersion,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot,
+            resolveCLI: { _ in resolvedCLI },
+            cliIsSafe: { _ in true },
+            nodeIsExecutable: { _ in true }
+        ) == nil)
+        #expect(DesktopInstalledWorkerExecutionContextParser.parse(
+            data: data,
+            expectedLabel: label,
+            installedWorkerRoot: workerRoot,
+            resolveCLI: { _ in resolvedCLI },
+            cliIsSafe: { _ in false },
+            nodeIsExecutable: { _ in true }
+        ) == nil)
     }
 
     @Test func rejectsWrongLabelMissingConfigAndConflictingAppIDs() throws {
@@ -247,6 +271,32 @@ import Testing
             localBotConfigurations: [configuration],
             fallback: fallback
         ) == fallback)
+    }
+
+    @Test func emptyInstalledWorkerSentinelCannotMatchProcessWorkingDirectory() {
+        let normalizedWorkingDirectory =
+            URL(filePath: "").standardizedFileURL.path
+        let emptySentinel = DesktopLocalBotExecutionContext(
+            configPath: "",
+            executablePath: "/usr/local/bin/node",
+            argumentPrefix: ["/should/not/run.js"],
+            environmentOverrides: ["SHOULD_NOT_LEAK": "value"]
+        )
+        let arguments = [
+            "doctor", "github",
+            "--config", normalizedWorkingDirectory
+        ]
+
+        #expect(DesktopLocalBotExecutionContextResolver.resolve(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [emptySentinel]
+        ).isEmpty)
+        #expect(DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+            executablePath: "neondiff",
+            arguments: arguments,
+            executionContexts: [emptySentinel]
+        ) == nil)
     }
 
     @Test func normalizesExistingWorkerCredentialCoordinatesForOneExactConfig() throws {

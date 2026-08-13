@@ -163,6 +163,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package private(set) var scopedDryRunHeadSHA: String?
     @Published package private(set) var scopedReviewStatus = "Verify current access before running a dry review."
     @Published package private(set) var localWorkerReviewCompatibility: DesktopLocalWorkerReviewCompatibility = .unknown
+    @Published package private(set) var currentLocalWorkerExecutionContexts:
+        [DesktopLocalBotExecutionContext] = []
+    package var localWorkerExecutionContextProvider:
+        (@MainActor () -> [DesktopLocalBotExecutionContext])?
     @Published package var logText = "No logs loaded."
     @Published package var lastError: String?
     @Published package var lastCommandLine = ""
@@ -465,7 +469,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             || DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
                 executablePath: cliPath,
                 arguments: ["init", "--config", configPath],
-                executionContexts: dependencies.localBotExecutionContexts
+                executionContexts: currentLocalWorkerExecutionContexts
             ) != nil
             || NeonDiffCLIResolver.resolveExecutablePath(
                 cliPath,
@@ -734,6 +738,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
         self.activationLicenseClientOverride = activationLicenseClient
+        self.currentLocalWorkerExecutionContexts =
+            dependencies.localBotExecutionContexts
         self.configPath = dependencies.preferences.string(forKey: Self.configPathPreferenceKey)
             ?? dependencies.fileWriter.applicationSupportDirectory
                 .appendingPathComponent("config.local.json")
@@ -2413,6 +2419,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func openLocalWorkerUpdateGuide() {
+        if let localWorkerExecutionContextProvider {
+            currentLocalWorkerExecutionContexts =
+                localWorkerExecutionContextProvider()
+            if localWorkerCLIAvailable {
+                lastError = nil
+                return
+            }
+        }
         guard dependencies.urlOpener.open(dependencies.localWorkerUpdateGuideURL) else {
             lastError = "NeonDiff could not open the local worker installer guide."
             return

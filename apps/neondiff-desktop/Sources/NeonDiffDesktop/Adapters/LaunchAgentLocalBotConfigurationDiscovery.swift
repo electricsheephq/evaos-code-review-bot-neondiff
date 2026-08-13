@@ -25,6 +25,7 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
             )
             .appendingPathComponent(label, isDirectory: true)
             .standardizedFileURL
+            .resolvingSymlinksInPath()
         let launchAgentData = try? Data(
             contentsOf: launchAgentURL,
             options: .mappedIfSafe

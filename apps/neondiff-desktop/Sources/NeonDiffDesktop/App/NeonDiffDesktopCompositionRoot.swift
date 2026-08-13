@@ -40,12 +40,19 @@ enum NeonDiffDesktopCompositionRoot {
             LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot()
         let localBotConfigurations = localBotSnapshot.configurations
         let localBotExecutionContexts = localBotSnapshot.executionContexts
-        return NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+        let localBotExecutionContextProvider:
+            @Sendable () -> [DesktopLocalBotExecutionContext] = {
+                LaunchAgentLocalBotConfigurationDiscovery
+                    .discoverExecutionContexts()
+            }
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: AppKitClipboard(),
             urlOpener: AppKitURLOpener(),
             cli: FoundationDesktopCLIExecutor(
                 localBotConfigurations: localBotConfigurations,
                 localBotExecutionContexts: localBotExecutionContexts,
+                localBotExecutionContextProvider:
+                    localBotExecutionContextProvider,
                 defaultWorkingDirectory: cliWorkingDirectory
             ),
             dashboard: FoundationDesktopDashboardLauncher(),
@@ -70,5 +77,8 @@ enum NeonDiffDesktopCompositionRoot {
                 \.configPath
             )
         ))
+        model.localWorkerExecutionContextProvider =
+            localBotExecutionContextProvider
+        return model
     }
 }
