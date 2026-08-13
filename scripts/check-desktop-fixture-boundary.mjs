@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 
 const MAX_FILES = 20_000;
 const MAX_TRAVERSAL_ENTRIES = MAX_FILES * 2;
-const MAX_FILE_BYTES = 128 * 1024 * 1024;
+const MAX_FILE_BYTES = 192 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 const FORBIDDEN_MARKERS = [
   "--ui-testing",
