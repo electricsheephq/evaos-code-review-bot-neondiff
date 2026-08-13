@@ -60,9 +60,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
       "ditto -x -k",
       "codesign --verify --deep --strict",
       "TeamIdentifier=TC6MS3T6NN",
-      "Developer ID Application: Andrew Ryan (TC6MS3T6NN)",
+      "grep -Eq '^Authority=Developer ID Application:.+$'",
       "xcrun stapler validate",
-      "spctl -a -vv -t exec",
+      "spctl --assess --type execute",
       "/Applications/NeonDiff.app",
       'test "$(uname -m)" = "arm64"',
       'test "$release_beta" = "$artifact_beta"'
@@ -73,6 +73,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).toMatch(/actions\/upload-artifact@[0-9a-f]{40}/);
     expect(workflow).not.toMatch(/actions\/upload-artifact@v4/);
     expect(workflow).not.toMatch(/\$\{\{\s*secrets\./);
+    expect(workflow).not.toContain("spctl -a -vv");
     expect(workflow).not.toContain("open -n");
     expect(workflow).not.toContain("NeonDiffDesktop");
   });
