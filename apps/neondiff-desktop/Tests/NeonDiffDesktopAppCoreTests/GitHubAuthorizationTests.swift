@@ -176,6 +176,7 @@ import NeonDiffDesktopCore
                 stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["electric/public"]}}"#,
                 stderr: ""
             ))],
+            preferenceStrings: ["neondiff.cliPath": "/usr/bin/true"],
             productionBoundary: .testVerified
         )
         fixture.model.repos = [RepoMonitor(name: "electric/public", enabled: true)]
@@ -207,6 +208,7 @@ import NeonDiffDesktopCore
                 stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["electric/public"]}}"#,
                 stderr: ""
             ))],
+            preferenceStrings: ["neondiff.cliPath": "/usr/bin/true"],
             productionBoundary: .testVerified
         )
         fixture.model.repos = [RepoMonitor(name: "electric/public", enabled: true)]
@@ -228,6 +230,7 @@ import NeonDiffDesktopCore
                 stderr: ""
             ))],
             suspendCLIRuns: true,
+            preferenceStrings: ["neondiff.cliPath": "/usr/bin/true"],
             productionBoundary: .testVerified
         )
         fixture.model.repos = [RepoMonitor(name: "electric/public", enabled: true)]

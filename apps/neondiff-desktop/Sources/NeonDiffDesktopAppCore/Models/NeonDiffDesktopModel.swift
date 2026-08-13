@@ -457,6 +457,28 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && !isScopedReviewInProgress
     }
 
+    /// Resolve only the configured executable through the same fixed desktop
+    /// resolver used by the production CLI client. An exact existing-agent
+    /// execution context is already discovery-proven and remains eligible.
+    package var localWorkerCLIAvailable: Bool {
+        existingLocalAgentAccessAvailable
+            || DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+                executablePath: cliPath,
+                arguments: ["init", "--config", configPath],
+                executionContexts: dependencies.localBotExecutionContexts
+            ) != nil
+            || NeonDiffCLIResolver.resolveExecutablePath(
+                cliPath,
+                workingDirectory: dependencies.cliWorkingDirectory
+            ) != nil
+    }
+
+    package var localWorkerCLIStatus: String {
+        localWorkerCLIAvailable
+            ? "Local worker command is available."
+            : "Local worker command \(cliPath) is unavailable. Install the version-matched worker before continuing."
+    }
+
     /// Stopping an already-running daemon is a safety remediation, not useful
     /// review work. Keep it available for a verified production build even if
     /// the current repository binding or entitlement proof has been revoked.
@@ -2583,6 +2605,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Local config initialization is available only in the customer-owned GitHub App beta path."
             return
         }
+        guard requireLocalWorkerCLI() else { return }
         guard canEditProviderConfiguration else {
             lastError = providerVerificationSafetyLatchMessage ?? "Wait for provider verification cleanup before changing config."
             return
@@ -3420,6 +3443,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard !isSetupMutationBlocked else {
             lastError = "Retry account verification before verifying GitHub App setup."
             byoGitHubCredentialStatus = lastError ?? "Account check required"
+            return
+        }
+        guard requireLocalWorkerCLI() else {
+            byoGitHubCredentialStatus = lastError ?? "Local worker unavailable"
             return
         }
         guard byoGitHubCredentialOnboardingAvailable else {
@@ -4955,6 +4982,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     private func runRepoSelectionPatch(dryRun: Bool) {
+        guard requireLocalWorkerCLI() else { return }
         guard canEditProviderConfiguration else {
             lastError = "Wait for provider verification cleanup before changing config."
             return
@@ -5007,6 +5035,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
             displayCommand: dryRun ? repoSelectionPatchPreviewCommand : repoSelectionPatchApplyCommand,
             repoPatchProof: proof
         )
+    }
+
+    @discardableResult
+    private func requireLocalWorkerCLI() -> Bool {
+        guard localWorkerCLIAvailable else {
+            let message =
+                "Local worker command \(cliPath) is unavailable. Choose Install / Update Local Worker before continuing."
+            lastError = message
+            logText = message
+            configInitializationStatus = message
+            return false
+        }
+        return true
     }
 
     private func gitHubAccessTokenForAPI(workspaceGeneration: UInt64) async throws -> String {

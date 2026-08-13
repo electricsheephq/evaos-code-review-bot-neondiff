@@ -252,6 +252,7 @@ struct ModelDependencyFixture {
         preferenceBools: [String: Bool] = [:],
         preferenceStrings: [String: String] = [:],
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
+        localBotExecutionContexts: [DesktopLocalBotExecutionContext] = [],
         localBotExecutionConfigPaths: [String] = [],
         productionBoundary: DesktopProductionBoundary = .testVerified,
         localWorkerUpdateGuideURL: URL = DesktopReleaseRouting.localWorkerUpdateGuideURL(
@@ -293,6 +294,7 @@ struct ModelDependencyFixture {
             productionBoundary: productionBoundary,
             localWorkerUpdateGuideURL: localWorkerUpdateGuideURL,
             localBotConfigurations: localBotConfigurations,
+            localBotExecutionContexts: localBotExecutionContexts,
             localBotExecutionConfigPaths: localBotExecutionConfigPaths
         ), activationLicenseClient: activationLicenseClient)
     }

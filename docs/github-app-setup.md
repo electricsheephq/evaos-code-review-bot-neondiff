@@ -151,6 +151,12 @@ integration proof under #630.
    bot's credential environment. Zero or ambiguous managed-worker discovery
    does not select this reuse path; the exact worker installation remains a
    separate distribution gate.
+   If the configured local worker command is unavailable, the CLI-backed
+   controls remain disabled and **Install / Update Local Worker** opens the
+   version-matched release guide. Do not treat that link as clean-Mac bootstrap
+   proof: the current B0 update/rollback installer requires an existing
+   LaunchAgent. A clean Mac remains blocked until the exact release supplies a
+   checksum-bound worker bundle and supported first-install path.
 
 GitHub setup and paid activation remain separate gates. After Checkout returns
 the one-shot NeonDiff Activation Key, the customer pastes it in the native

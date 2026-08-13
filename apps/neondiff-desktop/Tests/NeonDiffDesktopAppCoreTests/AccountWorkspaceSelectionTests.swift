@@ -1051,7 +1051,8 @@ import NeonDiffDesktopCore
                 .success(CLIRunResult(exitCode: 0, stdout: resultA, stderr: "")),
                 .success(CLIRunResult(exitCode: 0, stdout: resultB, stderr: ""))
             ],
-            suspendCLIRuns: true
+            suspendCLIRuns: true,
+            preferenceStrings: ["neondiff.cliPath": "/usr/bin/true"]
         )
         fixture.model.applyAccountWorkspaceCatalog(.loaded([accountA, accountB]))
         fixture.model.selectBotInstallation(botA.id)

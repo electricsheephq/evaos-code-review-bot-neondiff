@@ -633,6 +633,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         let fixture = ModelDependencyFixture(
             githubBroker: broker,
             activationLicenseClient: ActiveManagedActivationClient(),
+            preferenceStrings: availableManagedCLIPreference,
             productionBoundary: .testManaged
         )
         fixture.model.startManagedGitHubConnection()
@@ -668,6 +669,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         let fixture = ModelDependencyFixture(
             githubBroker: broker,
             activationLicenseClient: ActiveManagedActivationClient(),
+            preferenceStrings: availableManagedCLIPreference,
             productionBoundary: .testManaged
         )
         fixture.model.startManagedGitHubConnection()
@@ -728,6 +730,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         let broker = ScriptedGitHubBroker()
         let fixture = ModelDependencyFixture(
             githubBroker: broker,
+            preferenceStrings: availableManagedCLIPreference,
             productionBoundary: .testManaged
         )
         fixture.model.startManagedGitHubConnection()
@@ -761,6 +764,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         let broker = ScriptedGitHubBroker()
         let fixture = ModelDependencyFixture(
             githubBroker: broker,
+            preferenceStrings: availableManagedCLIPreference,
             productionBoundary: .testManaged
         )
         fixture.model.startManagedGitHubConnection()
@@ -793,6 +797,7 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         let broker = ScriptedGitHubBroker()
         let fixture = ModelDependencyFixture(
             githubBroker: broker,
+            preferenceStrings: availableManagedCLIPreference,
             productionBoundary: .testManaged
         )
         fixture.model.startManagedGitHubConnection()
@@ -814,6 +819,10 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(fixture.model.lastError == nil)
     }
 }
+
+private let availableManagedCLIPreference = [
+    "neondiff.cliPath": "/usr/bin/true"
+]
 
 private func managedRepoPatchJSON(repository: String, wrote: Bool = true) -> String {
     let revisionAfter = wrote

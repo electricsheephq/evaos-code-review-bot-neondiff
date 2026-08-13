@@ -1569,6 +1569,7 @@ import NeonDiffDesktopCore
                 ))
             ],
             githubBroker: broker,
+            preferenceStrings: ["neondiff.cliPath": "/usr/bin/true"],
             productionBoundary: .testManaged
         )
         let bot = DesktopBotInstallation(
