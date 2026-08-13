@@ -191,14 +191,23 @@ export function validateWorkerCandidate({
   };
 }
 
-export function requireMissingWorkerVersion(versionRoot) {
+export function selectWorkerVersionAction(
+  versionRoot,
+  { rejectExisting }
+) {
+  if (rejectExisting !== true && rejectExisting !== false) {
+    fail("worker version policy is invalid");
+  }
   try {
     lstatSync(versionRoot);
   } catch (error) {
-    if (error && typeof error === "object" && error.code === "ENOENT") return;
+    if (error && typeof error === "object" && error.code === "ENOENT") return "install";
     throw error;
   }
-  fail("worker version already exists; refusing unverified reuse");
+  if (rejectExisting) {
+    fail("worker version already exists; refusing unverified reuse");
+  }
+  return "reuse";
 }
 
 export function planWorkerFirstInstall({

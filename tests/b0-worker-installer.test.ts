@@ -16,7 +16,7 @@ import {
   planWorkerUpdate,
   recoverPreviouslyLoadedWorker,
   retryTransientLaunchdBootstrap,
-  requireMissingWorkerVersion,
+  selectWorkerVersionAction,
   selectStableNodeLaunchPath,
   validateWorkerCandidate
 } from "../scripts/lib/b0-worker-installer.mjs";
@@ -96,11 +96,19 @@ describe("B0 worker installer", () => {
     for (const versionRoot of [symlinkVersion, forgedVersion]) {
       let cliExecutions = 0;
       expect(() => {
-        requireMissingWorkerVersion(versionRoot);
+        selectWorkerVersionAction(versionRoot, { rejectExisting: true });
         cliExecutions += 1;
       }).toThrow("worker version already exists; refusing unverified reuse");
       expect(cliExecutions).toBe(0);
+      expect(selectWorkerVersionAction(
+        versionRoot,
+        { rejectExisting: false }
+      )).toBe("reuse");
     }
+    expect(selectWorkerVersionAction(
+      join(versionsRoot, "missing"),
+      { rejectExisting: true }
+    )).toBe("install");
   });
 
   it("plans a credential-free clean-Mac worker install without a LaunchAgent", () => {

@@ -25,9 +25,9 @@ import {
   planWorkerRollback,
   planWorkerUpdate,
   recoverPreviouslyLoadedWorker,
-  requireMissingWorkerVersion,
   retryTransientLaunchdBootstrap,
   selectStableNodeLaunchPath,
+  selectWorkerVersionAction,
   validateWorkerCandidate
 } from "./lib/b0-worker-installer.mjs";
 
@@ -289,10 +289,26 @@ function verifyInstalledWorker(versionRoot, expectedVersion) {
   }
 }
 
-function installVersion({ versionsRoot, versionID, tarballPath, manifestBytes, manifestSHA256, packageVersion }) {
+function installVersion({
+  versionsRoot,
+  versionID,
+  tarballPath,
+  manifestBytes,
+  manifestSHA256,
+  packageVersion,
+  rejectExisting
+}) {
   const versionRoot = join(versionsRoot, versionID);
   if (!pathIsInside(versionsRoot, versionRoot)) fail("worker version path escaped the version root");
-  requireMissingWorkerVersion(versionRoot);
+  const action = selectWorkerVersionAction(versionRoot, { rejectExisting });
+  if (action === "reuse") {
+    const embeddedManifest = join(versionRoot, ".neondiff-candidate-manifest.json");
+    requireAbsoluteRegularFile(embeddedManifest, MAX_MANIFEST_BYTES, "installed candidate manifest");
+    const embeddedBytes = readFileSync(embeddedManifest);
+    if (Buffer.compare(embeddedBytes, manifestBytes) !== 0) fail("installed candidate manifest mismatch");
+    verifyInstalledWorker(versionRoot, packageVersion);
+    return versionRoot;
+  }
 
   const staging = join(versionsRoot, `.staging-${process.pid}-${randomUUID()}`);
   mkdirSync(staging, { mode: 0o700 });
@@ -557,7 +573,8 @@ function firstInstall(args) {
       tarballPath,
       manifestBytes,
       manifestSHA256,
-      packageVersion: candidate.packageVersion
+      packageVersion: candidate.packageVersion,
+      rejectExisting: true
     });
     writeState(paths.installationPath, plan.nextState);
     try {
@@ -622,7 +639,8 @@ function update(args) {
       tarballPath,
       manifestBytes,
       manifestSHA256,
-      packageVersion: candidate.packageVersion
+      packageVersion: candidate.packageVersion,
+      rejectExisting: false
     });
     const relativeTarget = join("versions", plan.versionID);
     const restarted = mutateLaunchAgent({
