@@ -61,6 +61,31 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.configInitializeCommand.commandLine.contains("--force"))
     }
 
+    @Test func isolatedNewBotCanReuseOneInstallerManagedWorker() {
+        let configPath =
+            "/Users/test/Library/Application Support/NeonDiffDesktop/Accounts/account-a/Bots/new-neondiff-bot/config.local.json"
+        let workerCLI =
+            "/Users/test/Library/Application Support/NeonDiffDesktop/Workers/v1.1.0-beta.44/current/node_modules/neondiff/dist/src/cli.js"
+        let fixture = ModelDependencyFixture(
+            preferenceStrings: [
+                "neondiff.cliPath": "neondiff",
+                "neondiff.configPath": configPath
+            ],
+            localBotExecutionContexts: [
+                DesktopLocalBotExecutionContext(
+                    configPath: "/Users/test/existing/config.local.json",
+                    executablePath: "/usr/local/bin/node",
+                    argumentPrefix: [workerCLI],
+                    environmentOverrides: [:]
+                )
+            ],
+            productionBoundary: exactB0Boundary
+        )
+
+        #expect(fixture.model.configPath == configPath)
+        #expect(fixture.model.localWorkerCLIAvailable)
+    }
+
     @Test func repositoryRemovalIsBlockedDuringProviderVerificationCleanup() {
         let fixture = ModelDependencyFixture(productionBoundary: exactB0Boundary)
         let repository = RepoMonitor(name: "acme/demo", enabled: true)
@@ -173,6 +198,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         )
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(doctorResult)],
+            preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
         )
         fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
@@ -224,6 +250,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
             cliOutcomes: [.success(doctorResult(
                 readChecks: doctorReadCheck(repo: "acme/demo")
             ))],
+            preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
         )
         fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
@@ -262,6 +289,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
                 ))
             ],
             activationLicenseClient: ActiveBYOActivationClient(),
+            preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
         )
         fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
@@ -350,6 +378,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         for scenario in scenarios {
             let fixture = ModelDependencyFixture(
                 cliOutcomes: [.success(doctorResult(readChecks: scenario.readChecks))],
+                preferenceStrings: availableCLIPreference,
                 productionBoundary: exactB0Boundary
             )
             fixture.model.repos = scenario.configuredRepositories
@@ -376,6 +405,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
     @Test func enabledRepositoryMutationRevokesUsefulWorkUntilReverified() async throws {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo")))],
+            preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
         )
         fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
@@ -401,6 +431,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo")))],
             suspendCLIRuns: true,
+            preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
         )
         fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
@@ -428,6 +459,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.failure(NSError(domain: "fixture-old-workspace", code: 1))],
             suspendCLIRuns: true,
+            preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
         )
         let accountA = fixtureWorkspace(id: "account-a")
@@ -453,6 +485,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo")))],
             suspendCLIRuns: true,
+            preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
         )
         fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
@@ -489,6 +522,10 @@ private func fixtureWorkspace(id: String) -> DesktopAccountWorkspace {
         bots: []
     )
 }
+
+private let availableCLIPreference = [
+    "neondiff.cliPath": "/usr/bin/true"
+]
 
 @MainActor
 private func waitForBYOVerification(_ fixture: ModelDependencyFixture) async {

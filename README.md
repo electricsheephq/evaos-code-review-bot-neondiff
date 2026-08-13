@@ -174,13 +174,20 @@ The public paid B0 BYO beta build uses a separate exact
 no managed-broker fields. That contract enables the existing local direct/BYO
 path and API-backed native activation without a hidden defaults mutation. It
 is a paid path for every repository and does not claim the managed public-free
-model. On a clean Mac, native first run exposes **Initialize Local Config**
-(non-destructive; never force-overwrites), **Add Repository**, **Apply
-Repository**, and **Verify App Access**, so the customer does not need a
-terminal or an operator edit to reach the repository-verification gate. When
-the verified account has no bot yet, the app allocates that isolated new-bot
-plan before it presents the initialization action; it never initializes the
-`_unselected` placeholder. If the customer quits during that setup, the next
+model. On a clean Mac without an executable local worker, native first run
+blocks **Initialize Local Config**, **Apply Repository**, and **Verify App
+Access** and routes the customer to **Install / Update Local Worker** instead
+of invoking a missing `neondiff` command. The current checksum-bound worker
+installer updates or rolls back one existing LaunchAgent; it does not yet
+bootstrap a worker on a Mac with no LaunchAgent. That exact first-install
+artifact and clean-Mac proof remain a separate distribution gate. Once an
+executable global or checksum-managed worker is available, native first run
+exposes **Initialize Local Config** (non-destructive; never force-overwrites),
+**Add Repository**, **Apply Repository**, and **Verify App Access** without a
+terminal or operator config edit. When the verified account has no bot yet,
+the app allocates that isolated new-bot plan before it presents the
+initialization action; it never initializes the `_unselected` placeholder. If
+the customer quits during that setup, the next
 launch restores the same pending bot and config path when its saved selection
 is still current. If an older build or manual rollback selected a verified
 existing bot under the same account, the app keeps that authoritative bot

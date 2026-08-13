@@ -462,6 +462,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// execution context is already discovery-proven and remains eligible.
     package var localWorkerCLIAvailable: Bool {
         existingLocalAgentAccessAvailable
+            || DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+                executablePath: cliPath,
+                arguments: ["init", "--config", configPath],
+                executionContexts: dependencies.localBotExecutionContexts
+            ) != nil
             || NeonDiffCLIResolver.resolveExecutablePath(
                 cliPath,
                 workingDirectory: dependencies.cliWorkingDirectory

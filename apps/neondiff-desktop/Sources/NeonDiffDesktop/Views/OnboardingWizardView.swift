@@ -431,6 +431,20 @@ struct OnboardingWizardView: View {
                 }
             }
 
+            if !model.localWorkerCLIAvailable {
+                Text(model.localWorkerCLIStatus)
+                    .font(.caption)
+                    .foregroundStyle(NeonDiffTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button {
+                    model.openLocalWorkerUpdateGuide()
+                } label: {
+                    Label("Install / Update Local Worker", systemImage: "arrow.down.circle")
+                }
+                .accessibilityIdentifier("neondiff-onboarding-worker-update-guide")
+            }
+
             if let recovery = model.managedGitHubRecovery {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(recovery.message)
@@ -529,6 +543,7 @@ struct OnboardingWizardView: View {
                 }
                 .disabled(
                     model.selectedManagedGitHubRepository == nil
+                        || !model.localWorkerCLIAvailable
                         || model.isConfigPatchInProgress
                         || model.isConfigInspectInProgress
                 )

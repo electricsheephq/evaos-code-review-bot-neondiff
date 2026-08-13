@@ -137,6 +137,7 @@ package struct DesktopAppDependencies {
     package let localWorkerUpdateGuideURL: URL
     package let cliWorkingDirectory: URL?
     package let localBotConfigurations: [DesktopLocalBotConfiguration]
+    package let localBotExecutionContexts: [DesktopLocalBotExecutionContext]
     package let localBotExecutionConfigPaths: [String]
 
     package init(
@@ -158,6 +159,7 @@ package struct DesktopAppDependencies {
         ),
         cliWorkingDirectory: URL? = nil,
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
+        localBotExecutionContexts: [DesktopLocalBotExecutionContext] = [],
         localBotExecutionConfigPaths: [String] = []
     ) {
         self.clipboard = clipboard
@@ -176,6 +178,7 @@ package struct DesktopAppDependencies {
         self.localWorkerUpdateGuideURL = localWorkerUpdateGuideURL
         self.cliWorkingDirectory = cliWorkingDirectory
         self.localBotConfigurations = localBotConfigurations
+        self.localBotExecutionContexts = localBotExecutionContexts
         self.localBotExecutionConfigPaths = localBotExecutionConfigPaths
     }
 }
