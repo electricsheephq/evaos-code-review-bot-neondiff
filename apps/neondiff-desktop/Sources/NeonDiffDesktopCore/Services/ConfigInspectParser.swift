@@ -76,11 +76,21 @@ public enum ConfigInspectParser {
             }.sorted()
             : pilotRepos
         let repos = reposToShow.map { repo in
-            let profile = repoProfiles[repo] as? [String: Any]
+            let profileKey = repoProfiles.keys
+                .sorted()
+                .first {
+                    $0.caseInsensitiveCompare(repo) == .orderedSame
+                }
+            let canonicalRepo = profileKey ?? repo
+            let profile = repoProfiles[canonicalRepo] as? [String: Any]
             let enabled = profile?["enabled"] as? Bool ?? true
             let displayName = profile?["displayName"] as? String
             let reviewProfile = profile?["reviewProfile"] as? String
-            return RepoMonitor(name: repo, enabled: enabled, profile: displayName ?? reviewProfile ?? "default")
+            return RepoMonitor(
+                name: canonicalRepo,
+                enabled: enabled,
+                profile: displayName ?? reviewProfile ?? "default"
+            )
         }
 
         let zcode = config["zcode"] as? [String: Any]

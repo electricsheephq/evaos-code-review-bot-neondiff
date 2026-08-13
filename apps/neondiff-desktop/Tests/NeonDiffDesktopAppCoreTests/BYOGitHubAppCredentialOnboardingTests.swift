@@ -336,13 +336,54 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(disabledProfile["enabled"] as? Bool == false)
     }
 
+    @Test func removingFinalRepositoryDisablesItsPersistedPolicyProfile() async throws {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":[],"repoProfiles":{"repos":{"acme/demo":{"enabled":false}}}}}"#,
+                stderr: ""
+            ))],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        let repository = RepoMonitor(name: "acme/demo", enabled: true)
+        fixture.model.repos = [repository]
+
+        fixture.model.removeRepoFromAllowlist(repository)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        let write = try #require(fixture.fileWriter.writes.last)
+        let patch = try #require(
+            JSONSerialization.jsonObject(with: write.data) as? [String: Any]
+        )
+        #expect(patch["pilotRepos"] as? [String] == [])
+        let repoProfiles = try #require(patch["repoProfiles"] as? [String: Any])
+        let repositories = try #require(repoProfiles["repos"] as? [String: Any])
+        let removedProfile = try #require(repositories["acme/demo"] as? [String: Any])
+        #expect(removedProfile["enabled"] as? Bool == false)
+    }
+
+    @Test func configInspectReusesExistingPolicyProfileCasing() throws {
+        let snapshot = try #require(ConfigInspectParser.parse(
+            #"{"ok":true,"command":"config inspect","config":{"pilotRepos":["acme/demo"],"repoProfiles":{"repos":{"Acme/Demo":{"enabled":false,"reviewProfile":"strict"}}}}}"#,
+            providerKeyStored: false,
+            licenseKeyStored: false
+        ))
+
+        #expect(snapshot.repos.map(\.name) == ["Acme/Demo"])
+        #expect(snapshot.repos.map(\.profile) == ["strict"])
+    }
+
     @Test func missingRepositoryProfileReportsPolicyRecoveryInsteadOfInstallationFailure() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(doctorResult(
                 readChecks: doctorReadCheck(
                     repo: "acme/demo",
                     skippedByPolicy: "repo_profile_missing"
-                )
+                ),
+                exitCode: 1,
+                ok: false
             ))],
             preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
@@ -367,7 +408,9 @@ struct BYOGitHubAppCredentialOnboardingTests {
                 readChecks: doctorReadCheck(
                     repo: "acme/demo",
                     skippedByPolicy: "repo_profile_disabled"
-                )
+                ),
+                exitCode: 1,
+                ok: false
             ))],
             preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
@@ -649,10 +692,14 @@ private func byoRepoPatchJSON(repository: String) -> String {
     #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":["\#(repository)"]}}"#
 }
 
-private func doctorResult(readChecks: String) -> CLIRunResult {
+private func doctorResult(
+    readChecks: String,
+    exitCode: Int32 = 0,
+    ok: Bool = true
+) -> CLIRunResult {
     CLIRunResult(
-        exitCode: 0,
-        stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
+        exitCode: exitCode,
+        stdout: #"{"ok":\#(ok),"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
         stderr: ""
     )
 }
