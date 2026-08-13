@@ -417,14 +417,14 @@ jobs:
           release_bin="$(cd apps/neondiff-desktop && swift build -c release --show-bin-path)"
           npm run check:secret-corpus-boundary -- \
             "$RELEASE_ARCHIVE" \
-            "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app"
+            "apps/neondiff-desktop/dist-release/NeonDiff.app"
           npm run check:desktop-fixture-boundary -- \
             "$release_bin/NeonDiffDesktop" \
             "$release_bin/NeonDiffDesktopCore.build" \
             "$release_bin/NeonDiffDesktopAppCore.build" \
             "$release_bin/Modules/NeonDiffDesktopCore.swiftmodule" \
             "$release_bin/Modules/NeonDiffDesktopAppCore.swiftmodule" \
-            "apps/neondiff-desktop/dist-release/NeonDiffDesktop.app" \
+            "apps/neondiff-desktop/dist-release/NeonDiff.app" \
             "$RELEASE_ARCHIVE"
 
   swift-desktop-candidate-gate:

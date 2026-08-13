@@ -403,14 +403,16 @@ describe("desktop fixture release-artifact boundary", () => {
 
   it("scans only release fixture surfaces and all debug/release Core and AppCore secret surfaces", () => {
     const gate = readFileSync(".github/workflows/swift-desktop-gate.yml", "utf8");
+    const scanner = readFileSync("scripts/check-desktop-fixture-boundary.mjs", "utf8");
 
     expect(gate).toMatch(/npm run check:desktop-fixture-boundary --[\s\S]*?"\$release_bin\/NeonDiffDesktop"/);
     expect(gate).toContain('"$release_bin/NeonDiffDesktopCore.build"');
     expect(gate).toContain('"$release_bin/NeonDiffDesktopAppCore.build"');
     expect(gate).toContain('"$release_bin/Modules/NeonDiffDesktopCore.swiftmodule"');
     expect(gate).toContain('"$release_bin/Modules/NeonDiffDesktopAppCore.swiftmodule"');
-    expect(gate).toContain('"apps/neondiff-desktop/dist-release/NeonDiffDesktop.app"');
+    expect(gate).toContain('"apps/neondiff-desktop/dist-release/NeonDiff.app"');
     expect(gate).toContain('"$RELEASE_ARCHIVE"');
+    expect(scanner).toContain("const MAX_FILE_BYTES = 192 * 1024 * 1024;");
     expect(gate).not.toMatch(/npm run check:desktop-fixture-boundary --[\s\S]*?"\$debug_bin\/NeonDiffDesktop/);
     expect(gate).toMatch(
       /Archive Release fixture boundary[\s\S]*?npm run check:secret-corpus-boundary --[\s\S]*?"\$RELEASE_ARCHIVE"/

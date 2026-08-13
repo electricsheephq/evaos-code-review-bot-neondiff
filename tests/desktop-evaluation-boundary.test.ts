@@ -80,7 +80,7 @@ describe("desktop evaluation production boundary", () => {
     expect(gate).toMatch(/release_bin\/NeonDiffDesktop/);
     expect(gate).toMatch(/NEONDIFF_DESKTOP_DIST_DIR=.*dist-release/);
     expect(gate).toMatch(/release-bundle-check/);
-    expect(gate).toMatch(/dist-release\/NeonDiffDesktop\.app/);
+    expect(gate).toMatch(/dist-release\/NeonDiff\.app/);
 
     const bundleBuilder = readFileSync("apps/neondiff-desktop/script/build_and_run.sh", "utf8");
     expect(bundleBuilder).toMatch(/NEONDIFF_DESKTOP_BUILD_CONFIGURATION/);
