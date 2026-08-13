@@ -830,6 +830,49 @@ exit 1
     expect(list.proofBoundary).not.toMatch(/remains ZCode-backed/i);
   });
 
+  it("doctors the active Codex runtime without reading the retired ZCode config", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-codex-cli-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const missingZCodeConfigPath = join(root, "retired-zcode-config.json");
+    writeFileSync(configPath, JSON.stringify({
+      pilotRepos: [],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      codexRuntime: {
+        enabled: true,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        timeoutMs: 300_000,
+        maxOutputBytes: 20 * 1024 * 1024,
+        contextWindowTokens: 128_000
+      },
+      zcode: {
+        appConfigPath: missingZCodeConfigPath
+      }
+    }));
+
+    const doctor = JSON.parse((await runCli([
+      "doctor",
+      "--config",
+      configPath
+    ])).stdout);
+
+    expect(doctor).toMatchObject({
+      ok: true,
+      activeRuntime: {
+        providerId: "codex-cli-oauth",
+        adapter: "codex-cli",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        auth: "existing-codex-session"
+      }
+    });
+    expect(doctor).not.toHaveProperty("zcode");
+  });
+
   it("blocks providers doctor smoke before contacting a configured endpoint without activation", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cli-"));
     roots.push(root);
