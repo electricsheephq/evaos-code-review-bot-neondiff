@@ -2598,17 +2598,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
             .filter { !$0.isEmpty }
     }
 
-    private func runtimeCredentialsForReview() -> Data?
-    {
-        guard dependencies.productionBoundary.byoGitHubEnabled,
-              byoGitHubCredentialsStored,
+    private var runtimeCredentialsForReviewRequired: Bool {
+        dependencies.productionBoundary.byoGitHubEnabled
+            && byoGitHubCredentialsStored
+            && (
+                !existingLocalAgentAccessAvailable
+                    || keychainWorkerLaunchAgentActive
+            )
+    }
+
+    private func runtimeCredentialsForReview() -> Data? {
+        guard runtimeCredentialsForReviewRequired,
               byoGitHubCredentialsVerified,
               let appID = storedBYOGitHubAppId
         else {
-            return nil
-        }
-        if existingLocalAgentAccessAvailable,
-           !keychainWorkerLaunchAgentActive {
             return nil
         }
         do {
@@ -2661,8 +2664,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 localWorkerReviewCompatibilityGeneration
         )
         let runtimeCredentials = runtimeCredentialsForReview()
-        if dependencies.productionBoundary.byoGitHubEnabled,
-           byoGitHubCredentialsStored,
+        if runtimeCredentialsForReviewRequired,
            runtimeCredentials == nil {
             return
         }
@@ -2744,8 +2746,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
 
         let runtimeCredentials = runtimeCredentialsForReview()
-        if dependencies.productionBoundary.byoGitHubEnabled,
-           byoGitHubCredentialsStored,
+        if runtimeCredentialsForReviewRequired,
            runtimeCredentials == nil {
             return
         }
