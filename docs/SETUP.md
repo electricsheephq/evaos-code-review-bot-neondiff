@@ -303,10 +303,12 @@ For a B0 customer, the native first-run path is:
    policy profile; the customer does not edit a config file. Existing
    per-repository policy fields are preserved.
 5. Choose **Verify App Access**. Continue remains disabled until GitHub verifies
-   the exact configured repository through that App installation.
+   the exact configured repository through that App installation. If the local
+   profile is missing or disabled, apply the repository again before retrying
+   verification.
 
-If verification reports a missing repository policy, choose **Apply
-Repository** again before retrying **Verify App Access**. This is a local
+If verification reports a missing or disabled repository policy profile,
+choose **Apply Repository** again before retrying **Verify App Access**. This is a local
 configuration recovery step, not evidence that the GitHub App installation is
 missing.
 

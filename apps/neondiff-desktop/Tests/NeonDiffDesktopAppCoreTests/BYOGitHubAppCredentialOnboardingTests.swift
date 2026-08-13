@@ -361,6 +361,31 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.lastError?.contains("App installation") == false)
     }
 
+    @Test func disabledRepositoryProfileReportsPolicyRecoveryInsteadOfInstallationFailure() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(doctorResult(
+                readChecks: doctorReadCheck(
+                    repo: "acme/demo",
+                    skippedByPolicy: "repo_profile_disabled"
+                )
+            ))],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.lastError?.contains("repository policy") == true)
+        #expect(fixture.model.lastError?.contains("Apply Repository") == true)
+        #expect(fixture.model.lastError?.contains("App installation") == false)
+    }
+
     @Test func cleanInstallBYOUnlocksAfterExactSetupAndActivation() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [

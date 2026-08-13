@@ -140,8 +140,9 @@ integration proof under #630.
    Initialization never uses `--force`; the app updates `pilotRepos` and the
    selected repository's enabled policy profile through `config patch`, and no
    operator edits the customer's config file. Existing policy fields for that
-   repository are preserved. If verification reports a missing repository
-   policy, apply the repository again before retrying verification; that
+   repository are preserved. If verification reports a missing or disabled
+   repository policy profile, apply the repository again before retrying
+   verification; that
    message does not mean the App installation is missing. Each new
    bot config receives isolated runtime, state, evidence, and license paths
    beside that config rather than the packaged worker's placeholder paths. An

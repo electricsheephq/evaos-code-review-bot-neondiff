@@ -3717,16 +3717,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
            !expectedRepositories.isEmpty,
            reportedRepositories == expectedRepositories
         {
-            let missingProfiles = report.github.readChecks
-                .filter { $0.skippedByPolicy == "repo_profile_missing" }
+            let unavailableProfiles = report.github.readChecks
+                .filter {
+                    $0.skippedByPolicy == "repo_profile_missing"
+                        || $0.skippedByPolicy == "repo_profile_disabled"
+                }
                 .map(\.repo)
                 .sorted {
                     $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
                 }
-            if !missingProfiles.isEmpty {
+            if !unavailableProfiles.isEmpty {
                 byoGitHubCredentialsVerified = false
                 lastError =
-                    "NeonDiff repository policy is missing an enabled profile for \(missingProfiles.joined(separator: ", ")). Apply Repository again, then retry App verification."
+                    "NeonDiff repository policy is missing an enabled profile for \(unavailableProfiles.joined(separator: ", ")). Apply Repository again, then retry App verification."
                 byoGitHubCredentialStatus = lastError ?? "Repository policy missing"
                 logText =
                     "GitHub credentials and installation access were not accepted because the selected repository is missing an enabled local policy profile."
