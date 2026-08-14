@@ -346,6 +346,11 @@ package enum DesktopTrustedBundledWorkerContract {
         arguments: [String],
         hasStandardInput: Bool
     ) -> Bool {
+        if Array(arguments.prefix(2)) == ["license", "status"],
+           arguments.contains("--license-machine-id")
+        {
+            return true
+        }
         guard hasStandardInput else { return false }
         return [
             "--runtime-credentials-stdin",
