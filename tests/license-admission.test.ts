@@ -71,17 +71,23 @@ describe("production useful-work admission", () => {
   it("rejects an explicit empty machine identity before network admission", async () => {
     let fetchCalls = 0;
 
-    await expect(requireActiveProductionLicense({
+    const result = await requireActiveProductionLicense({
       config: fixtureConfig(),
+      operation: "daemon_cycle",
       machineId: "",
       fetchImpl: (async () => {
         fetchCalls += 1;
         return new Response(null, { status: 500 });
       }) as typeof fetch
-    })).rejects.toThrow(
-      "license machine ID must be one RFC 7638 SHA-256 broker device id"
-    );
+    });
 
+    expect(result).toMatchObject({
+      ok: false,
+      decision: {
+        status: "invalid",
+        detail: "license machine ID must be one RFC 7638 SHA-256 broker device id"
+      }
+    });
     expect(fetchCalls).toBe(0);
   });
 
