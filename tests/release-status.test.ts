@@ -4857,7 +4857,156 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
       ok: true,
       detail: "fresh; age 1000ms; max 120000ms; event daemon_cycle_complete; cycle 5"
     });
+    expect(status.health).toMatchObject({
+      state: "green",
+      active: { failedQueueJobs: 0, staleReviewLeases: 0 },
+      recent: { unrecoveredReviewErrors: 0 },
+      history: { reviewErrors: 0, failedQueueJobs: 0 }
+    });
     expect(status.database.skippedCount).toBe(16);
+  });
+
+  it("keeps recovered historical review failures visible without blocking current database health", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-recovered-history-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null,
+          primary key (repo, pull_number, head_sha)
+        );
+      `);
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, error, created_at)
+         values (?, 42, ?, ?, ?, ?)`
+      ).run("electricsheephq/WorldOS", "failed-head", "failed", "provider timeout", "2026-08-10T00:00:00.100Z");
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, error, created_at)
+         values (?, 42, ?, ?, null, ?)`
+      ).run("electricsheephq/WorldOS", "posted-head", "posted", "2026-08-10T00:00:00.900Z");
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-08-10T02:00:00.000Z")
+    });
+
+    expect(status.database).toMatchObject({
+      errorCount: 1,
+      unrecoveredErrorCount: 0,
+      recentUnrecoveredErrorCount: 0,
+      lastErrorAt: "2026-08-10T00:00:00.100Z"
+    });
+    expect(status.gates).toContainEqual({
+      name: "live_db_no_errors",
+      ok: true,
+      detail: expect.stringContaining("1 retained history")
+    });
+    const databaseHealth = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/config/live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/config/live.json",
+        dryRun: false,
+        nodeOptions: "--use-system-ca",
+        usesSystemCa: true
+      },
+      database: status.database,
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-08-10T02:00:00.000Z")
+    });
+    expect(databaseHealth.health).toMatchObject({
+      state: "amber",
+      recent: { unrecoveredReviewErrors: 0 },
+      history: { reviewErrors: 1 }
+    });
+  });
+
+  it("keeps a recent unrecovered review failure red inside the health window", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-recent-failure-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null,
+          primary key (repo, pull_number, head_sha)
+        );
+      `);
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, error, created_at)
+         values (?, 43, ?, 'failed', ?, ?)`
+      ).run("electricsheephq/WorldOS", "failed-head", "posting failed", "2026-08-10T01:30:00.000Z");
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, error, created_at)
+         values (?, 43, ?, 'skipped', ?, ?)`
+      ).run(
+        "electricsheephq/WorldOS",
+        "skipped-head",
+        "provider_rate_limit_cooldown_until=2026-08-10T03:00:00.000Z;reason=provider_request_rate_limit",
+        "2026-08-10T01:45:00.000Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-08-10T02:00:00.000Z")
+    });
+
+    expect(status.database).toMatchObject({
+      errorCount: 1,
+      unrecoveredErrorCount: 1,
+      recentUnrecoveredErrorCount: 1,
+      lastErrorAt: "2026-08-10T01:30:00.000Z"
+    });
+    expect(status.gates).toContainEqual({
+      name: "live_db_no_errors",
+      ok: false,
+      detail: expect.stringContaining("1 recent unrecovered blocking error row(s) in 24h")
+    });
+    expect(status.health).toMatchObject({
+      state: "red",
+      recent: { unrecoveredReviewErrors: 1 },
+      history: { reviewErrors: 1 }
+    });
   });
 
   it("reports active provider cooldown skips without treating them as blocking DB errors", () => {
@@ -6072,7 +6221,8 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 0,
         providerDeferred: 0,
         retryableProviderDeferred: 0,
-        failed: 1
+        failed: 1,
+        activeFailed: 1
       },
       {
         repo: "100yenadmin/evaOS-GUI",
@@ -6082,7 +6232,8 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 0,
         providerDeferred: 2,
         retryableProviderDeferred: 1,
-        failed: 0
+        failed: 0,
+        activeFailed: 0
       },
       {
         repo: "electricsheephq/WorldOS",
@@ -6092,7 +6243,8 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 1,
         providerDeferred: 0,
         retryableProviderDeferred: 0,
-        failed: 0
+        failed: 0,
+        activeFailed: 0
       }
     ]);
     expect(status.gates).toContainEqual({
@@ -6126,6 +6278,128 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     });
     expect(detailedStatus.budget?.wouldLease.length).toBeLessThanOrEqual(1);
     expect(detailedStatus.budget?.delayed.length).toBeLessThanOrEqual(1);
+  });
+
+  it("preserves sub-second queue recovery ordering in both directions", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-subsecond-recovery-"));
+    roots.push(root);
+    const dbPath = join(root, "reviews.sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        create table processed_reviews (
+          repo text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          status text not null,
+          event text,
+          review_url text,
+          error text,
+          created_at text not null,
+          primary key (repo, pull_number, head_sha)
+        );
+
+        create table review_queue_jobs (
+          job_id text primary key,
+          attempt_id text not null unique,
+          source text not null,
+          lane text not null,
+          repo text not null,
+          org text not null,
+          pull_number integer not null,
+          head_sha text not null,
+          base_sha text,
+          provider_id text,
+          priority integer not null,
+          state text not null,
+          next_eligible_at text,
+          lease_id text,
+          session_id text,
+          comment_id integer,
+          review_url text,
+          last_error text,
+          created_at text not null,
+          updated_at text not null,
+          started_at text,
+          finished_at text
+        );
+      `);
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 1, 'failed', ?, ?, ?)`
+      ).run(
+        "failed-subsecond",
+        "automatic:owner/repo#17@failed-head",
+        "owner/repo",
+        "owner",
+        17,
+        "failed-head",
+        "provider failed",
+        "2026-07-01T00:00:00.100Z",
+        "2026-07-01T00:00:00.100Z"
+      );
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 1, 'failed', ?, ?, ?)`
+      ).run(
+        "failed-after-post",
+        "automatic:owner/repo#18@failed-head",
+        "owner/repo",
+        "owner",
+        18,
+        "failed-head",
+        "provider failed",
+        "2026-07-01T00:00:00.900Z",
+        "2026-07-01T00:00:00.900Z"
+      );
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, event, review_url, error, created_at)
+         values (?, ?, ?, 'posted', 'COMMENT', ?, null, ?)`
+      ).run(
+        "owner/repo",
+        17,
+        "later-clean-head",
+        "https://github.test/owner/repo/pull/17#pullrequestreview-1",
+        "2026-07-01T00:00:00.900Z"
+      );
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, event, review_url, error, created_at)
+         values (?, ?, ?, 'posted', 'COMMENT', ?, null, ?)`
+      ).run(
+        "owner/repo",
+        18,
+        "earlier-clean-head",
+        "https://github.test/owner/repo/pull/18#pullrequestreview-1",
+        "2026-07-01T00:00:00.100Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const status = collectReleaseStatus({
+      cwd: process.cwd(),
+      statePath: dbPath,
+      configPath: undefined,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-07-01T00:05:00.000Z")
+    });
+
+    expect(status.database).toMatchObject({
+      failedReviewQueueJobCount: 2,
+      activeFailedReviewQueueJobCount: 1,
+      recentActiveFailedReviewQueueJobCount: 1
+    });
+    expect(status.gates.find((gate) => gate.name === "queue_no_failed_jobs")).toMatchObject({
+      name: "queue_no_failed_jobs",
+      ok: false,
+      detail: expect.stringContaining("1 active failed durable queue job(s); 2 retained history")
+    });
   });
 
   it("does not fail the provider-deferred gate when retryable jobs are waiting on capacity", () => {

@@ -97,7 +97,9 @@ import {
   collectOperatorReviewQueue,
   explainPullStatus,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
+  resolveActiveFailedQueueJobCount,
   summarizeAgentInventory,
   type OperatorDurableQueueSnapshot,
   type OperatorQueueSnapshot
@@ -595,7 +597,7 @@ async function main(): Promise<void> {
       budgetJobLimit
     });
     const readyToRetry = status.budget?.providerDeferred.readyToRetry ?? 0;
-    const failed = status.database.failedReviewQueueJobCount ?? 0;
+    const failed = resolveActiveFailedQueueJobCount(status);
     const ok = status.budget?.enabled === true &&
       status.budget.details.inputJobsTruncated !== true &&
       readyToRetry === 0 &&
@@ -720,7 +722,7 @@ async function main(): Promise<void> {
       }),
       issueEnrichmentRuntime
     });
-    console.log(stringifyRedactedJson(status));
+    console.log(args.human === "true" ? formatOperatorStatusHuman(status) : stringifyRedactedJson(status));
     if (!status.ok) process.exitCode = 1;
     return;
   }
@@ -2220,7 +2222,14 @@ async function main(): Promise<void> {
         includeDetails: false,
         inputJobLimit: durableQueue.jobs.length + activeProviderCooldowns.length
       });
-      const failedQueueJobs = durableQueue.summary.failed;
+      const release = collectReleaseStatus({
+        cwd: process.cwd(),
+        configPath: args.config,
+        statePath,
+        now: checkedAt
+      });
+      const retainedFailedQueueJobs = durableQueue.summary.failed;
+      const failedQueueJobs = resolveActiveFailedQueueJobCount(release, retainedFailedQueueJobs, args.repo);
       const retryableProviderDeferred = durableQueue.summary.retryableProviderDeferred;
       const readyToRetry = budget.providerDeferred.readyToRetry;
       const activeProviderCooldownCount = activeProviderCooldowns.length;
@@ -2233,7 +2242,9 @@ async function main(): Promise<void> {
         {
           name: "provider_cooldowns_no_failed_queue_jobs",
           ok: failedQueueJobs === 0,
-          detail: `${failedQueueJobs} failed durable queue job(s)`
+          detail: failedQueueJobs === retainedFailedQueueJobs
+            ? `${failedQueueJobs} failed durable queue job(s)`
+            : `${failedQueueJobs} active failed durable queue job(s); ${retainedFailedQueueJobs} retained history`
         },
         {
           name: "provider_cooldowns_no_retryable_provider_deferred_jobs",
@@ -2259,6 +2270,7 @@ async function main(): Promise<void> {
           total: rows.length,
           expired: expiredCount,
           failedQueueJobs,
+          retainedFailedQueueJobs,
           providerDeferredJobs: durableQueue.summary.providerDeferred,
           retryableProviderDeferredJobs: retryableProviderDeferred,
           readyToRetryProviderDeferredJobs: readyToRetry,

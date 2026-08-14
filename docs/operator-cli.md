@@ -22,7 +22,16 @@ evaos-review-bot status --config config.local.json
 
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
-  durable queue counts, and recommended actions.
+  durable queue counts, and recommended actions. JSON is the default; use
+  `--human` for a compact explanation. Health is `red` when a current gate or a
+  recent unrecovered review failure is actionable, `amber` when current gates
+  pass but retained failure history exists, and `green` when current gates pass
+  without recorded review or queue failure history. The recent-failure window
+  is 24 hours. Retained historical counts and last-failure timestamps remain
+  visible; a later clean posted outcome for the same PR can classify an older
+  retained row as recovered. The existing same-head retry replacement behavior
+  is unchanged, so these fields are not an append-only attempt ledger.
+  Malformed timestamps fail closed as recent.
 - `runtime-inventory`: read-only runtime classifier for release operators. It
   includes release status, coverage, durable queue work, provider cooldowns,
   budget status, leases, heartbeat, and bot-owned process rows. It can classify

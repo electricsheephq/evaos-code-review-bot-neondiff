@@ -3599,6 +3599,88 @@ exit 1
     }
   });
 
+  it("does not block provider-cooldowns on recovered failed queue history", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cooldown-recovered-history-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const statePath = join(root, "state.sqlite");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath,
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+    new ReviewStateStore(statePath).close();
+    const db = new DatabaseSync(statePath);
+    try {
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 1, 'failed', ?, ?, ?)`
+      ).run(
+        "failed-recovered-history",
+        "automatic:owner/repo#127@failed-head",
+        "owner/repo",
+        "owner",
+        127,
+        "failed-head",
+        "provider failed",
+        "2026-07-03T00:00:00.100Z",
+        "2026-07-03T00:00:00.100Z"
+      );
+      db.prepare(
+        `insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha,
+           priority, state, last_error, created_at, updated_at)
+         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 1, 'failed', ?, ?, ?)`
+      ).run(
+        "failed-other-repo",
+        "automatic:owner/other#128@failed-head",
+        "owner/other",
+        "owner",
+        128,
+        "failed-head",
+        "provider failed",
+        "2026-07-03T00:00:00.100Z",
+        "2026-07-03T00:00:00.100Z"
+      );
+      db.prepare(
+        `insert into processed_reviews
+          (repo, pull_number, head_sha, status, event, review_url, error, created_at)
+         values (?, ?, ?, 'posted', 'COMMENT', ?, null, ?)`
+      ).run(
+        "owner/repo",
+        127,
+        "posted-head",
+        "https://github.test/owner/repo/pull/127#pullrequestreview-1",
+        "2026-07-03T00:00:00.900Z"
+      );
+    } finally {
+      db.close();
+    }
+
+    const { stdout } = await runCli([
+      "provider-cooldowns",
+      "--config",
+      configPath,
+      "--expired-only",
+      "true",
+      "--repo",
+      "owner/repo"
+    ]);
+    const output = JSON.parse(stdout);
+    expect(output).toMatchObject({
+      ok: true,
+      runtimeOk: true,
+      summary: {
+        failedQueueJobs: 0,
+        retainedFailedQueueJobs: 1
+      }
+    });
+    expect(output.failedGates).toEqual([]);
+  });
+
   it("reports provider-cooldowns backpressured when retryable work waits on active provider capacity", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-provider-cooldown-backpressure-"));
     roots.push(root);

@@ -19,7 +19,9 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
+  resolveActiveFailedQueueJobCount,
   summarizeAgentInventory,
   type OperatorAgentInventory,
   type OperatorDurableQueueSnapshot
@@ -98,6 +100,134 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("reports recovered history as amber while keeping current operator gates actionable", () => {
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: true,
+        database: {
+          errorCount: 51,
+          unrecoveredErrorCount: 0,
+          recentUnrecoveredErrorCount: 0,
+          failedReviewQueueJobCount: 52,
+          activeFailedReviewQueueJobCount: 0,
+          lastErrorAt: "2026-08-09T14:08:22.000Z",
+          failureWindowHours: 24
+        }
+      }),
+      coverage: coverageReport({}),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue: durableQueueSnapshot({
+        ok: false,
+        summary: { ...cleanDurableQueueSummary(), total: 52, failed: 52 }
+      })
+    });
+
+    expect(status.ok).toBe(true);
+    expect(status.health).toMatchObject({
+      state: "amber",
+      active: { failedQueueJobs: 0, staleReviewLeases: 0 },
+      recent: { unrecoveredReviewErrors: 0 },
+      history: { reviewErrors: 51, failedQueueJobs: 52 }
+    });
+    expect(status.summary).toMatchObject({
+      failedRows: 51,
+      recentUnrecoveredFailedRows: 0,
+      failedQueueJobs: 52,
+      activeFailedQueueJobs: 0
+    });
+    expect(status.gates).toContainEqual({
+      name: "durable_queue_no_failed_jobs",
+      ok: true,
+      detail: "0 active failed durable queue job(s); 52 retained history"
+    });
+    expect(formatOperatorStatusHuman(status)).toContain("status: amber - current gates pass");
+    expect(formatOperatorStatusHuman(status)).toContain(
+      "current: activeFailedQueueJobs=0 staleReviewLeases=0 recentUnrecoveredReviewErrors=0"
+    );
+    expect(formatOperatorStatusHuman(status)).toContain("history: reviewErrors=51 failedQueueJobs=52");
+    expect(formatOperatorStatusHuman(status)).toContain("actionable: none");
+  });
+
+  it("includes stale active queue jobs in current operator health and human output", () => {
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          staleActiveReviewQueueJobCount: 1
+        }
+      }),
+      coverage: coverageReport({}),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      durableQueue: durableQueueSnapshot({
+        ok: true,
+        summary: cleanDurableQueueSummary()
+      })
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.health).toMatchObject({
+      state: "red",
+      active: { staleReviewLeases: 1 }
+    });
+    expect(status.summary).toMatchObject({
+      staleLeases: 0,
+      staleReviewLeases: 1
+    });
+    expect(status.gates).toContainEqual({
+      name: "agents_no_stale_leases",
+      ok: false,
+      detail: "1 stale review lease/job(s)"
+    });
+    expect(formatOperatorStatusHuman(status)).toContain("staleReviewLeases=1");
+  });
+
+  it("keeps runtime inventory healthy when retained failed queue history is recovered", () => {
+    const inventory = buildRuntimeInventory({
+      release: releaseStatus({
+        ok: true,
+        database: {
+          failedReviewQueueJobCount: 1,
+          activeFailedReviewQueueJobCount: 0
+        }
+      }),
+      agents: agentInventory({ ok: true }),
+      durableQueue: durableQueueSnapshot({
+        ok: false,
+        summary: { ...cleanDurableQueueSummary(), total: 1, failed: 1 }
+      })
+    });
+
+    expect(inventory.ok).toBe(true);
+    expect(inventory.summary).toMatchObject({
+      failedQueueJobs: 1,
+      activeFailedQueueJobs: 0
+    });
+    expect(inventory.gates).toContainEqual({
+      name: "runtime_no_failed_queue_jobs",
+      ok: true,
+      detail: "0 active failed durable queue job(s); 1 retained history"
+    });
+    expect(inventory.recommendedActions).not.toContain("inspect operator queue failed jobs before promotion");
+  });
+
+  it("resolves active failed queue counts for budget and other operator gates", () => {
+    expect(resolveActiveFailedQueueJobCount(releaseStatus({
+      ok: true,
+      database: {
+        failedReviewQueueJobCount: 7,
+        activeFailedReviewQueueJobCount: 0
+      }
+    }))).toBe(0);
+    expect(resolveActiveFailedQueueJobCount(releaseStatus({
+      ok: false,
+      database: {
+        failedReviewQueueJobCount: 7
+      }
+    }))).toBe(7);
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
@@ -1464,6 +1594,87 @@ describe("operator CLI summaries", () => {
     );
     expect(status.recommendedActions).toContain(
       "npx tsx src/cli.ts queue --config /config/live.json --state failed"
+    );
+  });
+
+  it("does not emit retry commands for recovered timeout rows mixed with active failures", () => {
+    const activeTimeout = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 216,
+      headSha: "active-timeout",
+      state: "failed",
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000"
+    });
+    const recoveredTimeout = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 215,
+      headSha: "recovered-timeout",
+      state: "failed",
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000"
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          errorCount: 1,
+          failedReviewQueueJobCount: 2,
+          activeFailedReviewQueueJobCount: 1,
+          zcodeTimeoutFailedReviewQueueJobCount: 2,
+          activeZCodeTimeoutFailedReviewQueueJobCount: 1,
+          activeRetryableZCodeTimeoutFailedReviewQueueJobCount: 1,
+          activeExhaustedZCodeTimeoutFailedReviewQueueJobCount: 0
+        }
+      }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({
+        summary: { ...cleanDurableQueueSummary(), total: 2, failed: 2 },
+        jobs: [activeTimeout, recoveredTimeout]
+      })
+    });
+
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts queue --config /config/live.json --state failed"
+    );
+    expect(status.recommendedActions.join("\n")).not.toContain("retry-failed");
+  });
+
+  it("keeps retry guidance for an active timeout when recovered history is non-timeout", () => {
+    const activeTimeout = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 216,
+      headSha: "active-timeout",
+      state: "failed",
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1; timeout_ms=1200000"
+    });
+    const recoveredOrdinaryFailure = durableJob({
+      repo: "electricsheephq/evaos-code-review-bot-neondiff",
+      pullNumber: 215,
+      headSha: "recovered-ordinary",
+      state: "failed",
+      lastError: "provider failed before posting"
+    });
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        database: {
+          errorCount: 1,
+          failedReviewQueueJobCount: 2,
+          activeFailedReviewQueueJobCount: 1,
+          zcodeTimeoutFailedReviewQueueJobCount: 1,
+          activeZCodeTimeoutFailedReviewQueueJobCount: 1,
+          activeRetryableZCodeTimeoutFailedReviewQueueJobCount: 1,
+          activeExhaustedZCodeTimeoutFailedReviewQueueJobCount: 0
+        }
+      }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({
+        summary: { ...cleanDurableQueueSummary(), total: 2, failed: 2 },
+        jobs: [activeTimeout, recoveredOrdinaryFailure]
+      })
+    });
+
+    expect(status.recommendedActions).toContain(
+      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 216 --head-sha active-timeout --dry-run false --zcode true"
     );
   });
 
