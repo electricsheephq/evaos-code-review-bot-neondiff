@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parsePositiveInteger } from "../src/cli-args.js";
 import { buildRunOnceCliReport, runOnceCliCommand, runOnceCliExitCode, serializeRunOnceCliReport } from "../src/run-once-cli.js";
-import { applyReviewPullResultToRunOnceResult, assertExpectedReviewPrHead, type ReviewPullResult, type RunOnceResult } from "../src/worker.js";
+import {
+  applyReviewPullResultToRunOnceResult,
+  assertExpectedReviewPrHead,
+  type ReviewPullResult,
+  type RunOnceOptions,
+  type RunOnceResult
+} from "../src/worker.js";
 import type { ProductionLicenseAdmission } from "../src/license-admission.js";
 
 describe("run-once CLI reporting", () => {
@@ -68,6 +74,7 @@ describe("run-once CLI reporting", () => {
 
   it("prints review-pr as the command on successful review-pr invocations", async () => {
     let forwardedExpectedHeadSha: string | undefined;
+    let explicitPullReview: RunOnceOptions["explicitPullReview"];
     const command = await runOnceCliCommand({
       options: {
         dryRun: true,
@@ -79,6 +86,7 @@ describe("run-once CLI reporting", () => {
       commandName: "review-pr",
       runOnceImpl: async (options) => {
         forwardedExpectedHeadSha = options.expectedHeadSha;
+        explicitPullReview = options.explicitPullReview;
         return runOnceResult({
           reposScanned: 1,
           pullsSeen: 1,
@@ -96,6 +104,10 @@ describe("run-once CLI reporting", () => {
 
     expect(command.exitCode).toBe(0);
     expect(forwardedExpectedHeadSha).toBe("head-123");
+    expect(explicitPullReview).toEqual({
+      repo: "owner/repo",
+      pullNumber: 123
+    });
     expect(command.report.command).toBe("review-pr");
     expect(JSON.parse(command.output)).toMatchObject({
       ok: true,
@@ -106,6 +118,24 @@ describe("run-once CLI reporting", () => {
         headSha: "head-123"
       }
     });
+  });
+
+  it("does not widen canary access for an incompletely scoped review-pr invocation", async () => {
+    let explicitPullReview: RunOnceOptions["explicitPullReview"];
+    await runOnceCliCommand({
+      options: {
+        dryRun: true,
+        repo: "owner/repo",
+        useZCode: false
+      },
+      commandName: "review-pr",
+      runOnceImpl: async (options) => {
+        explicitPullReview = options.explicitPullReview;
+        return runOnceResult();
+      }
+    });
+
+    expect(explicitPullReview).toBeUndefined();
   });
 
   it("rejects review-pr execution when the fetched PR head differs from the approved head", () => {

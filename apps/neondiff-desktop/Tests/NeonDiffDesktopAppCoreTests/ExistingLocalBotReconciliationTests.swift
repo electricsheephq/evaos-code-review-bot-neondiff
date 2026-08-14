@@ -1490,6 +1490,86 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func scopedDryReviewSurfacesRedactedStructuredFailure() async {
+        let fixture = await preparedExistingAgentVerificationFixture(
+            visibility: "private",
+            licenseResult: existingAgentLicenseStatus(
+                scope: "private",
+                privateRepoAllowed: true
+            )
+        )
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        #expect(await reachesCallCount(fixture, 4))
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 1,
+            stdout: """
+            {"ok":false,"command":"review-pr","dryRun":true,"useZCode":true,
+             "scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff",
+             "pullNumber":768},
+             "error":{"message":"license network: token=abcdefghijklmnop"}}
+            """,
+            stderr: ""
+        )))
+
+        fixture.model.pendingReviewPullNumber = "768"
+        fixture.model.runScopedDryReview()
+        #expect(await reachesCallCount(fixture, 5))
+        for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
+            await Task.yield()
+        }
+
+        #expect(
+            fixture.model.lastError
+                == "Dry review failed safely: license network: [redacted-secret]"
+        )
+        #expect(fixture.model.scopedReviewStatus.contains("failed closed"))
+        #expect(!fixture.model.scopedLiveReviewConfirmationAvailable)
+    }
+
+    @MainActor
+    @Test func scopedDryReviewSurfacesRedactedStringFailure() async {
+        let fixture = await preparedExistingAgentVerificationFixture(
+            visibility: "private",
+            licenseResult: existingAgentLicenseStatus(
+                scope: "private",
+                privateRepoAllowed: true
+            )
+        )
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        #expect(await reachesCallCount(fixture, 4))
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 1,
+            stdout: """
+            {"ok":false,"command":"review-pr","dryRun":true,"useZCode":true,
+             "scope":{"repo":"electricsheephq/evaos-code-review-bot-neondiff",
+             "pullNumber":769},
+             "error":"config rejected: token=abcdefghijklmnop"}
+            """,
+            stderr: ""
+        )))
+
+        fixture.model.pendingReviewPullNumber = "769"
+        fixture.model.runScopedDryReview()
+        #expect(await reachesCallCount(fixture, 5))
+        for _ in 0..<20 where fixture.model.isScopedReviewInProgress {
+            await Task.yield()
+        }
+
+        #expect(
+            fixture.model.lastError
+                == "Dry review failed safely: config rejected: [redacted-secret]"
+        )
+        #expect(fixture.model.scopedReviewStatus.contains("failed closed"))
+        #expect(!fixture.model.scopedLiveReviewConfirmationAvailable)
+    }
+
+    @MainActor
     @Test func staleExactWorkerStatusClearsOwnedProgressState() async throws {
         let fixture = await preparedExistingAgentVerificationFixture(
             visibility: "private",
