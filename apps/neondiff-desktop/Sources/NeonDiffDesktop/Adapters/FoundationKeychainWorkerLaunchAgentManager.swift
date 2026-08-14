@@ -60,14 +60,13 @@ struct FoundationKeychainWorkerLaunchAgentManager:
                     options: .mappedIfSafe
                 )
                 guard DesktopKeychainWorkerLaunchAgentContract
-                    .parsePropertyList(
+                    .propertyListMatchesRequest(
                         existing,
-                        expectedLabel: request.launchdLabel,
+                        request: request,
                         homeDirectory: homeDirectory,
                         appExecutableIsSafe: { $0 == appExecutableURL },
-                        configExists: isSafeConfig,
-                        legacyLicenseMachineID: request.licenseMachineID
-                    ) != nil
+                        configExists: isSafeConfig
+                    )
                 else {
                     throw WorkerLaunchAgentRuntimeError
                         .conflictingLaunchAgent

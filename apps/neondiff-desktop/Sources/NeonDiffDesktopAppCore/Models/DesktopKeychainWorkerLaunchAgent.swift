@@ -216,6 +216,23 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         return request
     }
 
+    package static func propertyListMatchesRequest(
+        _ data: Data,
+        request: DesktopKeychainWorkerLaunchAgentRequest,
+        homeDirectory: URL,
+        appExecutableIsSafe: (URL) -> Bool,
+        configExists: (URL) -> Bool
+    ) -> Bool {
+        parsePropertyList(
+            data,
+            expectedLabel: request.launchdLabel,
+            homeDirectory: homeDirectory,
+            appExecutableIsSafe: appExecutableIsSafe,
+            configExists: configExists,
+            legacyLicenseMachineID: request.licenseMachineID
+        ) == request
+    }
+
     package static func parseHeadlessArguments(
         _ arguments: [String],
         homeDirectory: URL

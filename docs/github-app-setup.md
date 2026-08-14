@@ -171,13 +171,15 @@ integration proof under #630.
    native daemon step's **Preview Start** and **Install & Start** actions. The
    signed app writes a secret-free LaunchAgent that points back to
    `/Applications/NeonDiff.app` with only the public App ID, exact selected
-   config, and launchd label. Its headless mode validates the checksum-managed
-   worker, reads the private key and API-backed activation credential from the
-   app-owned Keychain, and hands them to the local worker only through one
-   bounded JSON stdin envelope. It never exports either secret, writes a PEM or
-   license file, places a secret in the plist or environment, or uses a generic
-   `security -w` wrapper. Any coordinate mismatch or unavailable Keychain item
-   fails closed before the worker starts.
+   config, launchd label, and non-secret activation device ID. Its headless mode
+   re-derives that device ID from the existing broker identity in the app-owned
+   Keychain, rejects any mismatch before reading credentials, validates the
+   checksum-managed worker, and hands the private key plus API-backed activation
+   credential to the local worker only through one bounded JSON stdin envelope.
+   It never exports either secret, writes a PEM or license file, places a secret
+   in the plist or environment, or uses a generic `security -w` wrapper. Any
+   bot coordinate, device identity, or Keychain-item mismatch fails closed
+   before the worker starts.
 
 GitHub setup and paid activation remain separate gates. After Checkout returns
 the one-shot NeonDiff Activation Key, the customer pastes it in the native

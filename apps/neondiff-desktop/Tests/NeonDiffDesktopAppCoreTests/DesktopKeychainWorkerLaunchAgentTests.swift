@@ -125,6 +125,49 @@ import NeonDiffDesktopCore
         ) == request)
     }
 
+    @Test func legacyReplacementMustMatchTheSelectedBotCoordinates() throws {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        )
+        let request = try DesktopKeychainWorkerLaunchAgentRequest(
+            appID: appID,
+            licenseMachineID: licenseMachineID,
+            configPath: config.path,
+            launchdLabel: label,
+            homeDirectory: home
+        )
+        let currentData = try DesktopKeychainWorkerLaunchAgentContract
+            .propertyListData(
+                request: request,
+                appExecutableURL: appExecutable
+            )
+        var legacy = try #require(
+            PropertyListSerialization.propertyList(
+                from: currentData,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        var arguments = try #require(legacy["ProgramArguments"] as? [String])
+        arguments.removeLast(2)
+        arguments[7] = "9999999"
+        legacy["ProgramArguments"] = arguments
+        let legacyData = try PropertyListSerialization.data(
+            fromPropertyList: legacy,
+            format: .xml,
+            options: 0
+        )
+
+        #expect(!DesktopKeychainWorkerLaunchAgentContract
+            .propertyListMatchesRequest(
+                legacyData,
+                request: request,
+                homeDirectory: home,
+                appExecutableIsSafe: { $0 == self.appExecutable },
+                configExists: { $0 == config }
+            ))
+    }
+
     @Test func runtimeEnvelopeContainsBothKeychainSecretsOnlyInBoundedInput() throws {
         let privateKeyLabel = "PRIVATE" + " KEY"
         let privateKey = """

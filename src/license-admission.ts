@@ -117,7 +117,7 @@ export async function requireActiveProductionLicense(
     config,
     refresh: true,
     ...(input.repo ? { repo: input.repo } : {}),
-    ...(machineId ? { machineId } : {}),
+    ...(machineId !== undefined ? { machineId } : {}),
     ...(input.now ? { now: input.now } : {}),
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
     licenseSecretReader: input.secretReader ?? productionLicenseSecretReader
