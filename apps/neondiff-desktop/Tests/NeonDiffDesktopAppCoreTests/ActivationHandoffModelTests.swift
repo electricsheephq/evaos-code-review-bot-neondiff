@@ -192,6 +192,22 @@ import NeonDiffDesktopCore
         #expect(keychain.readAccounts.contains(activationKeyAccount))
     }
 
+    @Test func nativePrimaryActionLeavesKeyReadySynchronouslyBeforeActivationAwait() throws {
+        let keychain = RecordingKeychain()
+        try keychain.setSecret("NDL-STORED-0123456789", account: activationKeyAccount)
+        let client = GatedActivationClient()
+        let model = makeModel(secretStore: keychain, client: client)
+        model.activationState = .keyReady
+
+        model.beginActivationSubmission()
+
+        #expect(
+            model.activationState == .activationPending,
+            "the native button action must publish progress before asynchronous Keychain/API work"
+        )
+        client.release(activeSummary())
+    }
+
     @Test func provideExistingKeyWithoutStoredKeyStaysAtEntry() {
         let model = makeModel()
         model.activationState = .checkoutPaused
