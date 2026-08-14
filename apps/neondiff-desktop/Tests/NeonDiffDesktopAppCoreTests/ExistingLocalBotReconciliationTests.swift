@@ -730,6 +730,10 @@ import NeonDiffDesktopCore
         let targetRepository =
             "electricsheephq/evaos-code-review-bot-neondiff"
         let otherRepository = "electricsheephq/WorldOS"
+        let activationKey = "NDL-EXISTING-BOT-REVALIDATION-FIXTURE"
+        let activationClient = ExistingBotRecordingActivationClient(
+            expectedKey: activationKey
+        )
         let readCheck =
             #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
         let fixture = ModelDependencyFixture(
@@ -751,12 +755,9 @@ import NeonDiffDesktopCore
                     exitCode: 0,
                     stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
                     stderr: ""
-                )),
-                .success(existingAgentLicenseStatus(
-                    scope: "private",
-                    privateRepoAllowed: true
                 ))
             ],
+            activationLicenseClient: activationClient,
             localBotConfigurations: [
                 DesktopLocalBotConfiguration(
                     appID: 4_184_532,
@@ -780,9 +781,13 @@ import NeonDiffDesktopCore
         fixture.model.pendingBYOGitHubAppPrivateKey =
             existingBotFixturePrivateKey
         fixture.model.storeBYOGitHubAppCredentials()
-        let licenseMachineID = try GitHubBrokerDeviceIdentityStore(
+        _ = try GitHubBrokerDeviceIdentityStore(
             secretStore: fixture.secretStore
         ).loadOrCreate().deviceId
+        try fixture.secretStore.setSecret(
+            activationKey,
+            account: "license/default"
+        )
         fixture.model.applyAccountWorkspaceCatalog(.loaded([
             workspace(entitlement: .internalAdmin)
         ]))
@@ -808,8 +813,6 @@ import NeonDiffDesktopCore
         for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
             await Task.yield()
         }
-
-        #expect(await reachesCallCount(fixture, 4))
         let verificationCall = fixture.cli.calls[2]
         #expect(verificationCall.arguments == [
             "doctor", "github",
@@ -824,16 +827,13 @@ import NeonDiffDesktopCore
                 == Data(existingBotFixturePrivateKey.utf8)
         )
         #expect(fixture.model.byoGitHubCredentialsVerified)
-        let entitlementCall = try #require(fixture.cli.calls.last)
-        #expect(entitlementCall.arguments == [
-            "license", "status",
-            "--config", configPath,
-            "--repo", targetRepository,
-            "--refresh", "true",
-            "--license-machine-id", licenseMachineID,
-            "--json"
-        ])
-        #expect(entitlementCall.standardInput == nil)
+        for _ in 0..<100 where activationClient.revalidationCount == 0 {
+            await Task.yield()
+        }
+        #expect(fixture.cli.calls.count == 3)
+        #expect(activationClient.activationCount == 0)
+        #expect(activationClient.revalidationCount == 1)
+        #expect(activationClient.receivedExpectedKey)
         #expect(fixture.model.currentRepositoryActivationReady)
         #expect(fixture.model.activationState == .active)
         #expect(fixture.model.productionUsefulWorkAvailable)
@@ -2200,6 +2200,58 @@ private struct ExistingBotRejectedActivationClient: ActivationLicenseClienting {
 
     func revalidate(key: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
         .invalid
+    }
+}
+
+private final class ExistingBotRecordingActivationClient:
+    ActivationLicenseClienting,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private let expectedKey: String
+    private var activations = 0
+    private var revalidations = 0
+    private var matchedExpectedKey = false
+
+    init(expectedKey: String) {
+        self.expectedKey = expectedKey
+    }
+
+    var activationCount: Int {
+        lock.withLock { activations }
+    }
+
+    var revalidationCount: Int {
+        lock.withLock { revalidations }
+    }
+
+    var receivedExpectedKey: Bool {
+        lock.withLock { matchedExpectedKey }
+    }
+
+    func activate(
+        key: ActivationKeyMaterial
+    ) async throws -> ActivationClientOutcome {
+        lock.withLock { activations += 1 }
+        return .serviceError
+    }
+
+    func revalidate(
+        key: ActivationKeyMaterial
+    ) async throws -> ActivationClientOutcome {
+        lock.withLock {
+            revalidations += 1
+            matchedExpectedKey = key.withRawValue { $0 == expectedKey }
+        }
+        return .active(.init(
+            status: .active,
+            repoVisibilityScope: "private",
+            privateRepoAllowed: true,
+            updateEntitlement: true,
+            expiresAt: nil,
+            plan: "beta",
+            seats: 1
+        ))
     }
 }
 
