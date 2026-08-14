@@ -4139,9 +4139,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
         }
 
-        if expectedContext.source == .existingLocalAgent,
-           let readCheck = report.github.readChecks.first
-        {
+        if expectedContext.source == .existingLocalAgent
+            || (
+                expectedContext.source == .keychainStdinExistingBot
+                    && existingLocalAgentAccessAvailable
+            ),
+           let readCheck = report.github.readChecks.first {
             verifyExistingLocalAgentEntitlement(
                 expectedContext: expectedContext,
                 visibility: readCheck.visibilityResult
@@ -4156,7 +4159,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard existingLocalAgentAccessAvailable,
               existingLocalBotIdentityReady,
               selectedAccountEntitlementSupportsCurrentPath,
-              expectedContext.source == .existingLocalAgent,
+              (
+                  expectedContext.source == .existingLocalAgent
+                      || expectedContext.source
+                          == .keychainStdinExistingBot
+              ),
               expectedContext.repositories.count == 1,
               let repository = expectedContext.repositories.first,
               selectedReviewRepository?.caseInsensitiveCompare(repository)

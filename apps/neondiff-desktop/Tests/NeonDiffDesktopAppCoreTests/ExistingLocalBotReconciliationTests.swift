@@ -751,6 +751,10 @@ import NeonDiffDesktopCore
                     exitCode: 0,
                     stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
                     stderr: ""
+                )),
+                .success(existingAgentLicenseStatus(
+                    scope: "private",
+                    privateRepoAllowed: true
                 ))
             ],
             localBotConfigurations: [
@@ -791,8 +795,10 @@ import NeonDiffDesktopCore
         fixture.model.selectBYOReviewRepository(
             fullName: targetRepository
         )
+        fixture.model.activationState = .active
 
         #expect(fixture.model.existingLocalAgentAccessAvailable)
+        #expect(!fixture.model.currentRepositoryActivationReady)
 
         fixture.model.verifyExistingLocalBotGitHubAccess()
         #expect(await reachesCallCount(fixture, 3))
@@ -800,7 +806,8 @@ import NeonDiffDesktopCore
             await Task.yield()
         }
 
-        let verificationCall = try #require(fixture.cli.calls.last)
+        #expect(await reachesCallCount(fixture, 4))
+        let verificationCall = fixture.cli.calls[2]
         #expect(verificationCall.arguments == [
             "doctor", "github",
             "--config", configPath,
@@ -814,6 +821,18 @@ import NeonDiffDesktopCore
                 == Data(existingBotFixturePrivateKey.utf8)
         )
         #expect(fixture.model.byoGitHubCredentialsVerified)
+        let entitlementCall = try #require(fixture.cli.calls.last)
+        #expect(entitlementCall.arguments == [
+            "license", "status",
+            "--config", configPath,
+            "--repo", targetRepository,
+            "--refresh", "true",
+            "--json"
+        ])
+        #expect(entitlementCall.standardInput == nil)
+        #expect(fixture.model.currentRepositoryActivationReady)
+        #expect(fixture.model.activationState == .active)
+        #expect(fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.lastError == nil)
         #expect(fixture.model.repos.filter(\.enabled).count == 2)
     }
