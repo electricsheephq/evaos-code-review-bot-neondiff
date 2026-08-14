@@ -6,11 +6,13 @@ package struct DesktopKeychainWorkerLaunchAgentRequest:
     Sendable
 {
     package let appID: String
+    package let licenseMachineID: String
     package let configPath: String
     package let launchdLabel: String
 
     package init(
         appID: String,
+        licenseMachineID: String,
         configPath: String,
         launchdLabel: String,
         homeDirectory: URL
@@ -27,6 +29,12 @@ package struct DesktopKeychainWorkerLaunchAgentRequest:
         ) != nil else {
             throw DesktopKeychainWorkerLaunchAgentError.invalidLaunchdLabel
         }
+        guard licenseMachineID.range(
+            of: #"^[A-Za-z0-9_-]{43}$"#,
+            options: .regularExpression
+        ) != nil else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidLicenseMachineID
+        }
         let normalizedConfig = URL(filePath: configPath).standardizedFileURL
         guard Self.isAccountBotConfig(
             normalizedConfig,
@@ -35,6 +43,7 @@ package struct DesktopKeychainWorkerLaunchAgentRequest:
             throw DesktopKeychainWorkerLaunchAgentError.invalidConfigPath
         }
         self.appID = appID
+        self.licenseMachineID = licenseMachineID
         self.configPath = normalizedConfig.path
         self.launchdLabel = launchdLabel
     }
@@ -75,6 +84,7 @@ package enum DesktopKeychainWorkerLaunchAgentError:
     case invalidAppID
     case invalidConfigPath
     case invalidLaunchdLabel
+    case invalidLicenseMachineID
     case invalidAppExecutable
     case serializationFailed
 
@@ -86,6 +96,8 @@ package enum DesktopKeychainWorkerLaunchAgentError:
             "The local worker config must be the selected account bot config."
         case .invalidLaunchdLabel:
             "The local worker LaunchAgent label is invalid."
+        case .invalidLicenseMachineID:
+            "The local worker license device identity is invalid."
         case .invalidAppExecutable:
             "The signed NeonDiff app executable path is invalid."
         case .serializationFailed:
@@ -104,7 +116,8 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
             headlessFlag,
             "--config", request.configPath,
             "--launchd-label", request.launchdLabel,
-            "--github-app-id", request.appID
+            "--github-app-id", request.appID,
+            "--license-machine-id", request.licenseMachineID
         ]
     }
 
@@ -146,7 +159,8 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         expectedLabel: String,
         homeDirectory: URL,
         appExecutableIsSafe: (URL) -> Bool,
-        configExists: (URL) -> Bool
+        configExists: (URL) -> Bool,
+        legacyLicenseMachineID: String? = nil
     ) -> DesktopKeychainWorkerLaunchAgentRequest? {
         guard let object = try? PropertyListSerialization.propertyList(
             from: data,
@@ -174,18 +188,26 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         root["StandardOutPath"] as? String == "/dev/null",
         root["StandardErrorPath"] as? String == "/dev/null",
         let programArguments = root["ProgramArguments"] as? [String],
-        programArguments.count == 8,
+        [8, 10].contains(programArguments.count),
         let executablePath = programArguments.first,
         executablePath.hasPrefix("/")
         else {
             return nil
         }
         let executable = URL(filePath: executablePath).standardizedFileURL
-        guard appExecutableIsSafe(executable),
-              let request = parseHeadlessArguments(
-                Array(programArguments.dropFirst()),
+        let headlessArguments = Array(programArguments.dropFirst())
+        let request = parseHeadlessArguments(
+            headlessArguments,
+            homeDirectory: homeDirectory
+        ) ?? legacyLicenseMachineID.flatMap {
+            parseLegacyHeadlessArguments(
+                headlessArguments,
+                licenseMachineID: $0,
                 homeDirectory: homeDirectory
-              ),
+            )
+        }
+        guard appExecutableIsSafe(executable),
+              let request,
               request.launchdLabel == expectedLabel,
               configExists(URL(filePath: request.configPath))
         else {
@@ -198,6 +220,29 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         _ arguments: [String],
         homeDirectory: URL
     ) -> DesktopKeychainWorkerLaunchAgentRequest? {
+        guard arguments.count == 9,
+              arguments[0] == headlessFlag,
+              arguments[1] == "--config",
+              arguments[3] == "--launchd-label",
+              arguments[5] == "--github-app-id",
+              arguments[7] == "--license-machine-id"
+        else {
+            return nil
+        }
+        return try? DesktopKeychainWorkerLaunchAgentRequest(
+            appID: arguments[6],
+            licenseMachineID: arguments[8],
+            configPath: arguments[2],
+            launchdLabel: arguments[4],
+            homeDirectory: homeDirectory
+        )
+    }
+
+    private static func parseLegacyHeadlessArguments(
+        _ arguments: [String],
+        licenseMachineID: String,
+        homeDirectory: URL
+    ) -> DesktopKeychainWorkerLaunchAgentRequest? {
         guard arguments.count == 7,
               arguments[0] == headlessFlag,
               arguments[1] == "--config",
@@ -208,6 +253,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         }
         return try? DesktopKeychainWorkerLaunchAgentRequest(
             appID: arguments[6],
+            licenseMachineID: licenseMachineID,
             configPath: arguments[2],
             launchdLabel: arguments[4],
             homeDirectory: homeDirectory
@@ -327,11 +373,13 @@ package struct DesktopRuntimeCredentialEnvelope: Sendable {
     private let appID: String
     private let privateKey: String
     private let licenseKey: String
+    private let licenseMachineID: String
 
     package init(
         appID: String,
         privateKey: String,
-        licenseKey: String
+        licenseKey: String,
+        licenseMachineID: String
     ) throws {
         self.appID = try BYOGitHubAppCredentialValidator
             .normalizedAppId(appID)
@@ -343,15 +391,24 @@ package struct DesktopRuntimeCredentialEnvelope: Sendable {
             throw DesktopRuntimeCredentialEnvelopeError.invalidLicenseKey
         }
         self.licenseKey = licenseKey
+        guard licenseMachineID.range(
+            of: #"^[A-Za-z0-9_-]{43}$"#,
+            options: .regularExpression
+        ) != nil else {
+            throw DesktopRuntimeCredentialEnvelopeError
+                .invalidLicenseMachineID
+        }
+        self.licenseMachineID = licenseMachineID
     }
 
     package func encodedData() throws -> Data {
         try JSONSerialization.data(
             withJSONObject: [
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "githubAppId": appID,
                 "githubPrivateKey": privateKey,
-                "licenseKey": licenseKey
+                "licenseKey": licenseKey,
+                "licenseMachineId": licenseMachineID
             ],
             options: []
         )
@@ -411,8 +468,14 @@ package enum DesktopRuntimeCredentialEnvelopeError:
     LocalizedError
 {
     case invalidLicenseKey
+    case invalidLicenseMachineID
 
     package var errorDescription: String? {
-        "The API-backed NeonDiff activation credential is invalid."
+        switch self {
+        case .invalidLicenseKey:
+            "The API-backed NeonDiff activation credential is invalid."
+        case .invalidLicenseMachineID:
+            "The API-backed NeonDiff activation device identity is invalid."
+        }
     }
 }

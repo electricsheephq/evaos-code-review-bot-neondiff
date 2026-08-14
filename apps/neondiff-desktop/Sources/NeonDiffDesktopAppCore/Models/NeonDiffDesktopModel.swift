@@ -2567,6 +2567,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 lastError ?? "GitHub App setup required."
             return nil
         }
+        guard let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
+            secretStore: dependencies.secretStore
+        ).loadExisting(allowUserInteraction: false).deviceId else {
+            lastError =
+                "The saved activation device identity is unavailable. Reconnect or reactivate before installing the worker service."
+            keychainWorkerLaunchAgentStatus =
+                lastError ?? "Activation device identity required."
+            return nil
+        }
         let homeDirectory = dependencies.fileWriter
             .applicationSupportDirectory
             .deletingLastPathComponent()
@@ -2575,6 +2584,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         do {
             return try DesktopKeychainWorkerLaunchAgentRequest(
                 appID: appID,
+                licenseMachineID: licenseMachineID,
                 configPath: configPath,
                 launchdLabel: launchdLabel,
                 homeDirectory: homeDirectory
@@ -2623,13 +2633,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
             let licenseKey = try dependencies.secretStore.readSecret(
                 account: activationKeyAccount,
                 allowUserInteraction: false
-            ) else {
+            ),
+            let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
+                secretStore: dependencies.secretStore
+            ).loadExisting(allowUserInteraction: false).deviceId else {
                 throw BYOGitHubAppCredentialError.invalidPrivateKey
             }
             return try DesktopRuntimeCredentialEnvelope(
                 appID: appID,
                 privateKey: privateKey,
-                licenseKey: licenseKey
+                licenseKey: licenseKey,
+                licenseMachineID: licenseMachineID
             ).encodedData()
         } catch {
             lastError =

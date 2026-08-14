@@ -349,14 +349,18 @@ supported LaunchAgent exists. Preview validates the exact signed
 the worker sealed inside the signed app. Confirmed install writes one 0600 secret-free plist in
 `~/Library/LaunchAgents` and starts it through the current user's launchd
 domain. The plist invokes the signed app's bounded headless mode and contains no
-private-key value or file path. That mode revalidates the same public
-coordinates, reads the App key from NeonDiff's own Keychain without user
+private-key value or file path. It includes the non-secret broker device ID
+already used for native activation. That mode revalidates the same public
+coordinates, re-derives the device ID from NeonDiff's own Keychain identity,
+rejects a mismatched plist, reads the App key from Keychain without user
 interaction, reads the API-backed activation credential from the same app-owned
 Keychain service, validates the running sealed worker process, and only then
-pipes both values once in a bounded JSON envelope to its stdin. A conflicting
-plist, unsafe app/config/worker path, unavailable Keychain item, or launchd
-failure fails closed. Do not replace this with a `security -w` wrapper, export
-the key to disk, or weaken its Keychain access control.
+pipes both secret values plus that non-secret device ID once in a bounded JSON
+envelope to its stdin. License validation then uses the same machine binding as
+native activation instead of the CLI's legacy host hash. A conflicting plist,
+unsafe app/config/worker path, unavailable Keychain item, device mismatch, or
+launchd failure fails closed. Do not replace this with a `security -w` wrapper,
+export the key to disk, or weaken its Keychain access control.
 
 After Checkout displays the one-shot NeonDiff Activation Key, return to the
 native **License** pane, paste the key, and choose **Continue with this key**,

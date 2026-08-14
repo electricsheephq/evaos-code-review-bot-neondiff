@@ -1,6 +1,7 @@
 import { getLicenseStatus, type LicenseConfig, type RepoVisibilityScope } from "./license.js";
 import { resolveProductionLicensePolicy } from "./license-production-policy.js";
 import { productionLicenseSecretReader, type LicenseSecretReader } from "./license-secret-store.js";
+import { readRuntimeLicenseMachineId } from "./runtime-github-credentials.js";
 
 const mintedProductionAdmissions = new WeakSet<object>();
 
@@ -41,6 +42,7 @@ export function isAuthenticProductionLicenseAdmission(
 type ProductionLicenseValidationInput = {
   config: LicenseConfig;
   repo?: string;
+  machineId?: string;
   now?: Date;
   fetchImpl?: typeof fetch;
   secretReader?: LicenseSecretReader;
@@ -110,10 +112,12 @@ export async function requireActiveProductionLicense(
   input: ProductionLicenseAdmissionInput
 ): Promise<{ ok: true; admission: ProductionLicenseAdmission } | { ok: false; decision: RedactedLicenseDecision }> {
   const config = resolveProductionLicensePolicy(input.config);
+  const machineId = input.machineId ?? readRuntimeLicenseMachineId();
   const status = await getLicenseStatus({
     config,
     refresh: true,
     ...(input.repo ? { repo: input.repo } : {}),
+    ...(machineId ? { machineId } : {}),
     ...(input.now ? { now: input.now } : {}),
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
     licenseSecretReader: input.secretReader ?? productionLicenseSecretReader

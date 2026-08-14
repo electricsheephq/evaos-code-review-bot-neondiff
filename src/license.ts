@@ -300,12 +300,20 @@ function matchesNativeKeychainCredential(input: KeychainCredentialReference): bo
 export async function getLicenseStatus(input: {
   config: LicenseConfig;
   repo?: string;
+  machineId?: string;
   refresh?: boolean;
   now?: Date;
   fetchImpl?: typeof fetch;
   licenseSecretReader?: LicenseSecretReader;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
+  if (input.machineId !== undefined
+    && !RFC7638_SHA256_THUMBPRINT_PATTERN.test(input.machineId)) {
+    return invalidApiResult(
+      now,
+      "license machine ID must be one RFC 7638 SHA-256 broker device id"
+    );
+  }
   const cached = readLicenseCache(input.config.cachePath, () => readCacheRedactionLicenseKey(input.config));
   if (!input.refresh) return statusFromCache(cached, now);
 
@@ -330,6 +338,7 @@ export async function getLicenseStatus(input: {
     path: "/v1/license/validate",
     licenseKey,
     repo: input.repo,
+    machineId: input.machineId,
     now,
     fetchImpl: input.fetchImpl
   });

@@ -65,6 +65,20 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
         #expect(secrets.values["broker-device-fixture"] == "not-valid-private-key-material")
     }
 
+    @Test func existingIdentityCanBeLoadedWithoutInteractiveKeychainAccess() throws {
+        let secrets = BrokerMemorySecretStore()
+        let store = GitHubBrokerDeviceIdentityStore(
+            secretStore: secrets,
+            account: "broker-device-fixture"
+        )
+        let created = try store.loadOrCreate()
+
+        let loaded = try store.loadExisting(allowUserInteraction: false)
+
+        #expect(loaded.deviceId == created.deviceId)
+        #expect(secrets.nonInteractiveReadCount == 1)
+    }
+
     @Test func secretStoreFailuresStayInsidePublicErrorBoundary() {
         let readFailure = GitHubBrokerDeviceIdentityStore(
             secretStore: BrokerFailingSecretStore(failRead: true)
@@ -778,9 +792,14 @@ private let brokerCredentialResponseField = ["to", "ken"].joined()
 private final class BrokerMemorySecretStore: DesktopSecretStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String: String] = [:]
+    private var nonInteractiveReads = 0
 
     var values: [String: String] {
         lock.withLock { storage }
+    }
+
+    var nonInteractiveReadCount: Int {
+        lock.withLock { nonInteractiveReads }
     }
 
     func setSecret(_ secret: String, account: String) throws {
@@ -789,6 +808,18 @@ private final class BrokerMemorySecretStore: DesktopSecretStoring, @unchecked Se
 
     func readSecret(account: String) throws -> String? {
         lock.withLock { storage[account] }
+    }
+
+    func readSecret(
+        account: String,
+        allowUserInteraction: Bool
+    ) throws -> String? {
+        lock.withLock {
+            if !allowUserInteraction {
+                nonInteractiveReads += 1
+            }
+            return storage[account]
+        }
     }
 
     func containsSecret(account: String) -> Bool {

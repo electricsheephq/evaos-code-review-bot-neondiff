@@ -65,7 +65,8 @@ struct FoundationKeychainWorkerLaunchAgentManager:
                         expectedLabel: request.launchdLabel,
                         homeDirectory: homeDirectory,
                         appExecutableIsSafe: { $0 == appExecutableURL },
-                        configExists: isSafeConfig
+                        configExists: isSafeConfig,
+                        legacyLicenseMachineID: request.licenseMachineID
                     ) != nil
                 else {
                     throw WorkerLaunchAgentRuntimeError

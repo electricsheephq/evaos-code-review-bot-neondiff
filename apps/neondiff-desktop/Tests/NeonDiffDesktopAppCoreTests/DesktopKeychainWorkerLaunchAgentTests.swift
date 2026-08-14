@@ -10,6 +10,7 @@ import NeonDiffDesktopCore
     )
     private let label = "com.electricsheephq.evaos-code-review-bot"
     private let appID = "4184532"
+    private let licenseMachineID = String(repeating: "a", count: 43)
 
     @Test func plistContainsOnlyPublicExactCoordinates() throws {
         let config = home.appending(
@@ -17,6 +18,7 @@ import NeonDiffDesktopCore
         )
         let request = try DesktopKeychainWorkerLaunchAgentRequest(
             appID: appID,
+            licenseMachineID: licenseMachineID,
             configPath: config.path,
             launchdLabel: label,
             homeDirectory: home
@@ -51,7 +53,8 @@ import NeonDiffDesktopCore
             "--neondiff-worker-daemon",
             "--config", config.path,
             "--launchd-label", label,
-            "--github-app-id", appID
+            "--github-app-id", appID,
+            "--license-machine-id", licenseMachineID
         ]
 
         #expect(DesktopKeychainWorkerLaunchAgentContract.parseHeadlessArguments(
@@ -73,6 +76,55 @@ import NeonDiffDesktopCore
         ) == nil)
     }
 
+    @Test func exactLegacyLaunchAgentCanBeReplacedWithDeviceBoundContract() throws {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        )
+        let request = try DesktopKeychainWorkerLaunchAgentRequest(
+            appID: appID,
+            licenseMachineID: licenseMachineID,
+            configPath: config.path,
+            launchdLabel: label,
+            homeDirectory: home
+        )
+        let currentData = try DesktopKeychainWorkerLaunchAgentContract
+            .propertyListData(
+                request: request,
+                appExecutableURL: appExecutable
+            )
+        var legacy = try #require(
+            PropertyListSerialization.propertyList(
+                from: currentData,
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        var arguments = try #require(legacy["ProgramArguments"] as? [String])
+        arguments.removeLast(2)
+        legacy["ProgramArguments"] = arguments
+        let legacyData = try PropertyListSerialization.data(
+            fromPropertyList: legacy,
+            format: .xml,
+            options: 0
+        )
+
+        #expect(DesktopKeychainWorkerLaunchAgentContract.parsePropertyList(
+            legacyData,
+            expectedLabel: label,
+            homeDirectory: home,
+            appExecutableIsSafe: { $0 == self.appExecutable },
+            configExists: { $0 == config }
+        ) == nil)
+        #expect(DesktopKeychainWorkerLaunchAgentContract.parsePropertyList(
+            legacyData,
+            expectedLabel: label,
+            homeDirectory: home,
+            appExecutableIsSafe: { $0 == self.appExecutable },
+            configExists: { $0 == config },
+            legacyLicenseMachineID: licenseMachineID
+        ) == request)
+    }
+
     @Test func runtimeEnvelopeContainsBothKeychainSecretsOnlyInBoundedInput() throws {
         let privateKeyLabel = "PRIVATE" + " KEY"
         let privateKey = """
@@ -83,18 +135,20 @@ import NeonDiffDesktopCore
         let data = try DesktopRuntimeCredentialEnvelope(
             appID: appID,
             privateKey: privateKey,
-            licenseKey: "nd_live_runtime_fixture_1234"
+            licenseKey: "nd_live_runtime_fixture_1234",
+            licenseMachineID: licenseMachineID
         ).encodedData()
         let object = try #require(
             JSONSerialization.jsonObject(with: data) as? [String: Any]
         )
-        #expect(object["schemaVersion"] as? Int == 1)
+        #expect(object["schemaVersion"] as? Int == 2)
         #expect(object["githubAppId"] as? String == appID)
         #expect(object["githubPrivateKey"] as? String == privateKey)
         #expect(
             object["licenseKey"] as? String
                 == "nd_live_runtime_fixture_1234"
         )
+        #expect(object["licenseMachineId"] as? String == licenseMachineID)
     }
 
     @Test func runtimeEnvelopeNormalizesLegacyHexEncodedPrivateKeyInMemory() throws {
@@ -111,7 +165,8 @@ import NeonDiffDesktopCore
         let data = try DesktopRuntimeCredentialEnvelope(
             appID: appID,
             privateKey: legacyHex,
-            licenseKey: "nd_live_runtime_fixture_1234"
+            licenseKey: "nd_live_runtime_fixture_1234",
+            licenseMachineID: licenseMachineID
         ).encodedData()
         let object = try #require(
             JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -130,7 +185,26 @@ import NeonDiffDesktopCore
             try DesktopRuntimeCredentialEnvelope(
                 appID: appID,
                 privateKey: nonKeyHex,
-                licenseKey: "nd_live_runtime_fixture_1234"
+                licenseKey: "nd_live_runtime_fixture_1234",
+                licenseMachineID: licenseMachineID
+            )
+        }
+    }
+
+    @Test func runtimeEnvelopeRejectsInvalidBrokerDeviceIdentity() {
+        let privateKeyLabel = "PRIVATE" + " KEY"
+        let privateKey = """
+        -----BEGIN \(privateKeyLabel)-----
+        ZmFrZS1maXh0dXJlLXByaXZhdGUta2V5
+        -----END \(privateKeyLabel)-----
+        """
+
+        #expect(throws: DesktopRuntimeCredentialEnvelopeError.invalidLicenseMachineID) {
+            try DesktopRuntimeCredentialEnvelope(
+                appID: appID,
+                privateKey: privateKey,
+                licenseKey: "nd_live_runtime_fixture_1234",
+                licenseMachineID: "local-host-hash"
             )
         }
     }
