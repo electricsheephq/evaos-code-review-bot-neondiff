@@ -335,6 +335,30 @@ import NeonDiffDesktopCore
         ))
     }
 
+    @Test func deviceBoundLicenseStatusRequiresTheSignedBundledWorker() {
+        #expect(DesktopTrustedBundledWorkerContract.requiresTrustedWorker(
+            arguments: [
+                "license", "status",
+                "--config", "/fixture/config.local.json",
+                "--repo", "electricsheephq/evaos-code-review-bot-neondiff",
+                "--refresh", "true",
+                "--license-machine-id", licenseMachineID,
+                "--json"
+            ],
+            hasStandardInput: false
+        ))
+        #expect(!DesktopTrustedBundledWorkerContract.requiresTrustedWorker(
+            arguments: [
+                "license", "status",
+                "--config", "/fixture/config.local.json",
+                "--repo", "electricsheephq/evaos-code-review-bot-neondiff",
+                "--refresh", "true",
+                "--json"
+            ],
+            hasStandardInput: false
+        ))
+    }
+
     @Test func trustedBundledWorkerUsesOnlySealedAppCoordinates() throws {
         let app = URL(filePath: "/Applications/NeonDiff.app")
         let context = try #require(

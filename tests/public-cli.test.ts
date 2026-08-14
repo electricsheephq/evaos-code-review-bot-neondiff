@@ -349,6 +349,44 @@ describe("public NeonDiff CLI surface", () => {
     expect(existsSync(cachePath)).toBe(false);
   });
 
+  it("forwards the native broker device identity during a refreshed license status", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-native-status-binding-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/private"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: activatedLicenseTestConfig(root)
+    })}\n`);
+
+    const output = JSON.parse((await runCli([
+      "license",
+      "status",
+      "--config",
+      configPath,
+      "--repo",
+      "acme/private",
+      "--refresh",
+      "true",
+      "--license-machine-id",
+      BROKER_DEVICE_ID,
+      "--json"
+    ], {
+      env: {
+        ...activatedLicenseTestEnv(),
+        NEONDIFF_TEST_EXPECT_LICENSE_MACHINE_ID: BROKER_DEVICE_ID
+      }
+    })).stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      status: "active",
+      source: "api"
+    });
+  });
+
   it("redacts secret-like values from structured status JSON stdout", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-cli-status-"));
     roots.push(root);

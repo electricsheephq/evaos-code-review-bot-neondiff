@@ -4193,44 +4193,129 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let expectedConfigPath = configPath
         let executablePath = cliPath
         let cli = dependencies.cli
-        let arguments = [
+        let expectedLicenseMachineID: String?
+        if expectedContext.source == .keychainStdinExistingBot {
+            guard let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
+                secretStore: dependencies.secretStore
+            ).loadExisting(allowUserInteraction: false).deviceId else {
+                isBYOGitHubVerificationInProgress = false
+                applyActivationEvent(.activationServiceError)
+                lastError =
+                    "The saved activation device identity is unavailable. Reactivate this Mac before verifying current access."
+                byoGitHubCredentialStatus =
+                    "GitHub access was verified, but the Keychain-backed entitlement identity could not be loaded safely."
+                return
+            }
+            expectedLicenseMachineID = licenseMachineID
+        } else {
+            expectedLicenseMachineID = nil
+        }
+        let keychainRevalidation:
+            (client: any ActivationLicenseClienting, key: ActivationKeyMaterial)?
+        if expectedContext.source == .keychainStdinExistingBot {
+            guard let expectedLicenseMachineID,
+                  let client = activationLicenseClientOverride
+                    ?? liveActivationLicenseClient(
+                        machineId: expectedLicenseMachineID,
+                        repository: repository
+                    )
+            else {
+                isBYOGitHubVerificationInProgress = false
+                applyActivationEvent(.activationServiceError)
+                lastError =
+                    "The signed activation verifier is unavailable. Reopen NeonDiff and verify existing access again."
+                byoGitHubCredentialStatus =
+                    "GitHub access was verified, but the API-backed entitlement verifier is unavailable."
+                return
+            }
+            let rawActivationKey: String?
+            do {
+                rawActivationKey = try dependencies.secretStore.readSecret(
+                    account: activationKeyAccount,
+                    allowUserInteraction: false
+                )
+            } catch {
+                rawActivationKey = nil
+            }
+            guard let rawActivationKey,
+                  !ActivationKeyMaterial(rawActivationKey).isEmpty
+            else {
+                isBYOGitHubVerificationInProgress = false
+                applyActivationEvent(.activationServiceError)
+                lastError =
+                    "The stored NeonDiff Activation Key is unavailable without user interaction. Use the License pane to authorize this Mac again."
+                byoGitHubCredentialStatus =
+                    "GitHub access was verified, but the stored API-backed entitlement credential is unavailable."
+                return
+            }
+            keychainRevalidation = (
+                client,
+                ActivationKeyMaterial(rawActivationKey)
+            )
+        } else {
+            keychainRevalidation = nil
+        }
+        var arguments = [
             "license", "status",
             "--config", configPath,
             "--repo", repository,
-            "--refresh", "true",
-            "--json"
+            "--refresh", "true"
         ]
+        if let expectedLicenseMachineID {
+            arguments.append(contentsOf: [
+                "--license-machine-id", expectedLicenseMachineID
+            ])
+        }
+        arguments.append("--json")
         isBYOGitHubVerificationInProgress = true
         byoGitHubCredentialStatus =
             "GitHub access verified. Checking the existing local agent's API-backed entitlement…"
-        lastCommandLine =
-            "\(shellQuote(cliPath)) license status --config \(shellQuote(configPath)) --repo \(shellQuote(repository)) --refresh true --json"
+        let redactedDeviceBinding = expectedLicenseMachineID == nil
+            ? ""
+            : " --license-machine-id [stored device ID]"
+        if keychainRevalidation == nil {
+            lastCommandLine =
+                "\(shellQuote(cliPath)) license status --config \(shellQuote(configPath)) --repo \(shellQuote(repository)) --refresh true\(redactedDeviceBinding) --json"
+        } else {
+            lastCommandLine =
+                "\(shellQuote(cliPath)) license activate --config \(shellQuote(configPath)) --license-storage keychain --license-key-stdin true --persist-local-state false\(redactedDeviceBinding) --repo \(shellQuote(repository)) --json"
+        }
 
         Task.detached {
             let outcome: ActivationClientOutcome
-            do {
-                let result = try await cli.run(
-                    executablePath: executablePath,
-                    arguments: arguments,
-                    standardInput: nil,
-                    timeout: 20
-                )
-                outcome = result.stdout.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ).isEmpty
-                    ? .serviceError
-                    : CLIActivationLicenseClient.classify(
-                        stdout: result.stdout
+            if let keychainRevalidation {
+                do {
+                    outcome = try await keychainRevalidation.client.revalidate(
+                        key: keychainRevalidation.key
                     )
-            } catch let error as NeonDiffCLIError {
-                switch error {
-                case .timedOut, .cancelled, .cleanupTimedOut:
+                } catch {
                     outcome = .offline
-                case .launchFailed, .standardInputTooLarge, .outputTooLarge:
-                    outcome = .serviceError
                 }
-            } catch {
-                outcome = .offline
+            } else {
+                do {
+                    let result = try await cli.run(
+                        executablePath: executablePath,
+                        arguments: arguments,
+                        standardInput: nil,
+                        timeout: 20
+                    )
+                    outcome = result.stdout.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+                        ? .serviceError
+                        : CLIActivationLicenseClient.classify(
+                            stdout: result.stdout
+                        )
+                } catch let error as NeonDiffCLIError {
+                    switch error {
+                    case .timedOut, .cancelled, .cleanupTimedOut:
+                        outcome = .offline
+                    case .launchFailed, .standardInputTooLarge, .outputTooLarge:
+                        outcome = .serviceError
+                    }
+                } catch {
+                    outcome = .offline
+                }
             }
 
             await MainActor.run {
@@ -4254,6 +4339,27 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         "GitHub access was verified, but stale entitlement proof was discarded. Verify existing access again."
                     return
                 }
+                if let expectedLicenseMachineID {
+                    let currentLicenseMachineID =
+                        try? GitHubBrokerDeviceIdentityStore(
+                            secretStore: self.dependencies.secretStore
+                        ).loadExisting(
+                            allowUserInteraction: false
+                        ).deviceId
+                    guard currentLicenseMachineID
+                            == expectedLicenseMachineID
+                    else {
+                        self.isBYOGitHubVerificationInProgress = false
+                        self.applyActivationEvent(
+                            .activationServiceError
+                        )
+                        self.lastError =
+                            "The activation device identity changed before entitlement verification finished."
+                        self.byoGitHubCredentialStatus =
+                            "GitHub access was verified, but stale device-bound entitlement proof was discarded."
+                        return
+                    }
+                }
                 self.isBYOGitHubVerificationInProgress = false
                 let resolved =
                     self.resolveExistingLocalAgentEntitlementOutcome(
@@ -4267,7 +4373,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     resolved,
                     repository: repository,
                     activeLogMessage:
-                        "Current repository entitlement verified through the existing local agent. No Activation Key was copied."
+                        "Current repository entitlement verified through the existing local agent's API-backed credential path."
                 )
                 switch resolved {
                 case .active:
@@ -4546,17 +4652,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private var activationLicenseClient: (any ActivationLicenseClienting)? {
         if let activationLicenseClientOverride { return activationLicenseClientOverride }
-        // Keep the real adapter behind the rollout flag until production billing
-        // and activation canaries pass. When enabled, it uses the CLI's explicit
-        // no-local-state mode: the app-owned Keychain item remains the only raw
-        // credential copy and the key crosses only over bounded stdin.
-        let bundleEnablesActivation = dependencies.productionBoundary.byoGitHubEnabled
-        let rolloutEnablesActivation = dependencies.preferences.bool(forKey: activationCliBackedEnabledKey)
-        guard dependencies.productionBoundary.nativeActivationBrokerVerified,
-              bundleEnablesActivation || rolloutEnablesActivation
-        else {
-            return nil
-        }
         guard let selectedReviewRepository,
               repos.contains(where: {
                   $0.enabled
@@ -4569,12 +4664,36 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return nil
         }
+        return liveActivationLicenseClient(
+            machineId: identity.deviceId,
+            repository: selectedReviewRepository
+        )
+    }
+
+    private func liveActivationLicenseClient(
+        machineId: String,
+        repository: String
+    ) -> (any ActivationLicenseClienting)? {
+        // Keep the real adapter behind the rollout flag until production billing
+        // and activation canaries pass. When enabled, it uses the CLI's explicit
+        // no-local-state mode: the app-owned Keychain item remains the only raw
+        // credential copy and the key crosses only over bounded stdin.
+        let bundleEnablesActivation =
+            dependencies.productionBoundary.byoGitHubEnabled
+        let rolloutEnablesActivation = dependencies.preferences.bool(
+            forKey: activationCliBackedEnabledKey
+        )
+        guard dependencies.productionBoundary.nativeActivationBrokerVerified,
+              bundleEnablesActivation || rolloutEnablesActivation
+        else {
+            return nil
+        }
         return DesktopActivationLicenseClient(
             cli: dependencies.cli,
             executablePath: cliPath,
             configPath: configPath,
-            machineId: identity.deviceId,
-            repository: selectedReviewRepository
+            machineId: machineId,
+            repository: repository
         )
     }
 

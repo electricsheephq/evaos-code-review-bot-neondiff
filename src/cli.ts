@@ -408,6 +408,9 @@ async function main(): Promise<void> {
       const result = await getLicenseStatus({
         config: licenseConfig,
         refresh: args.refresh === undefined ? false : parseBooleanArg(args.refresh, "--refresh"),
+        ...(args["license-machine-id"]
+          ? { machineId: parseLicenseMachineIdArg(args["license-machine-id"]) }
+          : {}),
         ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
       });
       console.log(stringifyRedactedJson({ command: "license status", ...result }));
