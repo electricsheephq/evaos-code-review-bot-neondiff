@@ -384,8 +384,11 @@ the same Mac. In that exact case it opens a reconciliation path:
   private key;
 - it reports the server-authoritative account entitlement separately from
   current-launch review authorization;
-- it treats `zcode-app-config` and `none` provider auth modes as config-backed,
-  not as missing NeonDiff Keychain API keys;
+- when the inspected config enables `codexRuntime`, it reports the exact Codex
+  CLI path, model, and reasoning effort as the active review runtime without
+  reading or storing the CLI's OAuth material; otherwise it treats
+  `zcode-app-config` and `none` provider auth modes as config-backed, not as
+  missing NeonDiff Keychain API keys;
 - if the worker allowlist contains multiple repositories, it keeps every entry
   unchanged and requires one explicit **Review Target** for native activation;
   that target is restored only for the same config path;
@@ -569,14 +572,18 @@ provider readiness with redacted output. Use the provider card's `Verify API Key
 button checks the selected provider path and reports pass/fail without printing
 the submitted key.
 
-In the native Mac pane, the selected `providers.defaultProviderId` registry
-entry is the source of truth. Endpoint/model edits are dirty until a successful
-Preview and confirmed Apply/readback. Verify stays disabled until that saved
-state is current, then invokes the exact provider ID and config revision. The
-Keychain value crosses only bounded stdin; it is never added to the registry
-patch, argv, environment, logs, or evidence. That Keychain flow applies only to
-`api-key-env` providers. `zcode-app-config` and `none` providers use their
-declared app/config path and must not prompt for an unrelated NeonDiff API key.
+In the native Mac pane, an enabled and valid `codexRuntime` is the active review
+execution backend. The app displays its exact CLI path, model, and reasoning
+effort from `config inspect`; it does not read or store the Codex OAuth session.
+When Codex runtime is disabled, the selected
+`providers.defaultProviderId` registry entry is the source of truth.
+Endpoint/model edits are dirty until a successful Preview and confirmed
+Apply/readback. Verify stays disabled until that saved state is current, then
+invokes the exact provider ID and config revision. The Keychain value crosses
+only bounded stdin; it is never added to the registry patch, argv, environment,
+logs, or evidence. That Keychain flow applies only to `api-key-env` providers.
+`zcode-app-config` and `none` providers use their declared app/config path and
+must not prompt for an unrelated NeonDiff API key.
 
 The full doctor output is JSON. Check:
 

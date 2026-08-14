@@ -269,10 +269,14 @@ This source composition is not proof that the production broker is enabled,
 that billing is live, or that a signed customer artifact exists. Update,
 rollback, daemon admission, and live-review behavior still require exact signed
 candidate validation before distribution.
-The native Providers pane reads and edits the saved `providers` registry, not
-the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview, and
-Apply the exact selected provider before Verify is enabled; verification pins
-both the provider ID and inspected config revision. A provider with
+The native Providers pane reads the active review runtime from the inspected
+config. When `codexRuntime.enabled` is true, it shows the exact Codex CLI path,
+model, and reasoning effort and treats that existing authenticated CLI session
+as the review execution backend; NeonDiff never reads or stores its OAuth
+material. Otherwise the pane reads and edits the saved `providers` registry,
+not the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview,
+and Apply the exact selected provider before Verify is enabled; verification
+pins both the provider ID and inspected config revision. A provider with
 `authMode: zcode-app-config` or `none` does not use a NeonDiff-stored API key,
 so the native app reports its loaded config without showing a false missing-key
 state. `api-key-env` providers retain the Keychain and verification gate.

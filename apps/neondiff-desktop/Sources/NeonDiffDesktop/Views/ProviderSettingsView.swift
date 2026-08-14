@@ -17,14 +17,42 @@ struct ProviderSettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                OperatorSection("ZCode / GLM") {
-                    OperatorTextField(title: "Model", text: $model.providers.zcodeModel)
-                    OperatorTextField(title: "CLI Path", text: $model.providers.zcodeCliPath)
-                    OperatorTextField(title: "App Config Path", text: $model.providers.zcodeAppConfigPath)
+                if model.providers.codexRuntime.enabled {
+                    OperatorSection("Active Review Runtime") {
+                        OperatorBadge(
+                            text: model.providers.codexRuntime.isReady
+                                ? "CODEX CLI READY"
+                                : "CODEX CLI CONFIG REQUIRED",
+                            color: model.providers.codexRuntime.isReady
+                                ? NeonDiffTheme.accent
+                                : NeonDiffTheme.warning
+                        )
+                        LabeledContent("Runtime", value: "Codex CLI (existing OAuth session)")
+                        LabeledContent("Model", value: model.providers.codexRuntime.model)
+                        LabeledContent(
+                            "Reasoning effort",
+                            value: model.providers.codexRuntime.reasoningEffort
+                        )
+                        LabeledContent("CLI", value: model.providers.codexRuntime.cliPath)
+                        Text("NeonDiff invokes this existing authenticated Codex CLI session without reading or storing its OAuth material.")
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    OperatorSection("ZCode / GLM") {
+                        OperatorTextField(title: "Model", text: $model.providers.zcodeModel)
+                        OperatorTextField(title: "CLI Path", text: $model.providers.zcodeCliPath)
+                        OperatorTextField(title: "App Config Path", text: $model.providers.zcodeAppConfigPath)
+                    }
+                    .disabled(!model.canEditProviderConfiguration)
                 }
-                .disabled(!model.canEditProviderConfiguration)
 
-                OperatorSection("Saved Provider Registry") {
+                OperatorSection(
+                    model.providers.codexRuntime.enabled
+                        ? "Fallback Provider Registry"
+                        : "Saved Provider Registry"
+                ) {
                     Picker("Provider", selection: $model.providers.selectedProviderId) {
                         ForEach(model.providers.registryTargets) { target in
                             Text("\(target.displayName) (\(target.id))").tag(target.id)

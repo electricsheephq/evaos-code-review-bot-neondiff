@@ -123,6 +123,32 @@ public struct ProviderRegistryTarget: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct CodexRuntimeSettings: Equatable, Sendable {
+    public var enabled: Bool
+    public var cliPath: String
+    public var model: String
+    public var reasoningEffort: String
+
+    public init(
+        enabled: Bool = false,
+        cliPath: String = "/usr/local/bin/codex",
+        model: String = "gpt-5.6-luna",
+        reasoningEffort: String = "max"
+    ) {
+        self.enabled = enabled
+        self.cliPath = cliPath
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+    }
+
+    public var isReady: Bool {
+        enabled
+            && NSString(string: cliPath).isAbsolutePath
+            && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && ["low", "medium", "high", "xhigh", "max"].contains(reasoningEffort)
+    }
+}
+
 public struct ProviderSettings: Equatable {
     public static var defaultZCodeAppConfigPath: String {
         FileManager.default.homeDirectoryForCurrentUser
@@ -138,6 +164,7 @@ public struct ProviderSettings: Equatable {
     public var providerKeyStored: Bool
     public var selectedProviderId: String
     public var registryTargets: [ProviderRegistryTarget]
+    public var codexRuntime: CodexRuntimeSettings
 
     public init(
         zcodeModel: String = "GLM-5.2",
@@ -147,7 +174,8 @@ public struct ProviderSettings: Equatable {
         openAICompatibleEndpoint: String = "http://localhost:8000/v1",
         providerKeyStored: Bool = false,
         selectedProviderId: String = "zcode-glm",
-        registryTargets: [ProviderRegistryTarget] = []
+        registryTargets: [ProviderRegistryTarget] = [],
+        codexRuntime: CodexRuntimeSettings = CodexRuntimeSettings()
     ) {
         self.zcodeModel = zcodeModel
         self.zcodeCliPath = zcodeCliPath
@@ -157,6 +185,7 @@ public struct ProviderSettings: Equatable {
         self.providerKeyStored = providerKeyStored
         self.selectedProviderId = selectedProviderId
         self.registryTargets = registryTargets
+        self.codexRuntime = codexRuntime
     }
 
     public var selectedRegistryTarget: ProviderRegistryTarget? {

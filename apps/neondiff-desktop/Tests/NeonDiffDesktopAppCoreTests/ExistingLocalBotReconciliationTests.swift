@@ -602,6 +602,24 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func scopedReviewAcceptsEnabledCodexRuntimeWithoutLegacyZCodeBinding() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(
+            existingBotConfig(
+                authMode: "zcode-app-config",
+                zcodeProviderId: nil,
+                codexRuntimeEnabled: true
+            )
+        )
+
+        #expect(fixture.model.providerSetupReady)
+        #expect(fixture.model.scopedReviewProviderReady)
+    }
+
+    @MainActor
     @Test func selectedExistingBYOBotReusesKeychainCredentialForReverification() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -1985,12 +2003,26 @@ import NeonDiffDesktopCore
         authMode: String,
         repositories: [String] = ["electricsheephq/WorldOS"],
         zcodeProviderId: String? = "zcode-glm",
+        codexRuntimeEnabled: Bool = false,
         revision: String = String(repeating: "a", count: 64)
     ) -> String {
         let adapter = authMode == "zcode-app-config" ? "zcode" : "openai-compatible"
         let zcodeProviderEntry = zcodeProviderId.map {
             #""providerId": "\#($0)","#
         } ?? ""
+        let codexRuntimeEntry = codexRuntimeEnabled
+            ? #"""
+            "codexRuntime": {
+              "enabled": true,
+              "cliPath": "/Users/m1/.local/bin/codex",
+              "model": "gpt-5.6-sol",
+              "reasoningEffort": "high",
+              "timeoutMs": 600000,
+              "maxOutputBytes": 20971520,
+              "contextWindowTokens": 128000
+            },
+            """#
+            : ""
         let repositoryJSON = repositories
             .map { "\"\($0)\"" }
             .joined(separator: ", ")
@@ -2001,6 +2033,7 @@ import NeonDiffDesktopCore
           "revision": "\#(revision)",
           "config": {
             "pilotRepos": [\#(repositoryJSON)],
+            \#(codexRuntimeEntry)
             "zcode": {
               \#(zcodeProviderEntry)
               "model": "GLM-5.2",

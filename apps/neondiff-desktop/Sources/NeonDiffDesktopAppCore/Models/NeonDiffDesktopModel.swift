@@ -899,8 +899,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var providerSetupReady: Bool {
         guard providerLoadedSnapshot?.configPath == configPath,
               providerLoadedRevision != nil,
-              providerLoadedSnapshot == currentProviderConfigurationSnapshot,
-              let provider = providers.selectedRegistryTarget,
+              providerLoadedSnapshot == currentProviderConfigurationSnapshot
+        else {
+            return false
+        }
+        if providers.codexRuntime.isReady {
+            return true
+        }
+        guard let provider = providers.selectedRegistryTarget,
               provider.enabled
         else {
             return false
@@ -920,14 +926,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    /// The current scoped-review bridge executes ZCode, so its authorization
-    /// must be bound to the same app configuration ZCode will read. A provider
-    /// verified through NeonDiff's separate API-key adapter remains valid for
-    /// provider setup, but cannot authorize this bridge until direct adapter
-    /// execution is supported.
+    /// Scoped review uses the config-selected Codex runtime when enabled.
+    /// Otherwise it executes ZCode and requires an explicit execution provider
+    /// from ZCode's own namespace. A separately verified API-key registry
+    /// provider cannot authorize either execution bridge.
     package var scopedReviewProviderReady: Bool {
-        providerSetupReady
-            && providers.selectedRegistryTarget?.authMode == "zcode-app-config"
+        guard providerSetupReady else { return false }
+        if providers.codexRuntime.isReady {
+            return true
+        }
+        return providers.selectedRegistryTarget?.authMode == "zcode-app-config"
             && !providers.zcodeProviderId
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
@@ -6488,6 +6496,7 @@ private struct ProviderConfigurationSnapshot: Equatable, Sendable {
     let zcodeProviderId: String
     let selectedProviderId: String
     let registryTargets: [ProviderRegistryTarget]
+    let codexRuntime: CodexRuntimeSettings
 
     init(
         providers: ProviderSettings,
@@ -6500,6 +6509,7 @@ private struct ProviderConfigurationSnapshot: Equatable, Sendable {
         zcodeProviderId = providers.zcodeProviderId
         selectedProviderId = providers.selectedProviderId
         registryTargets = providers.registryTargets
+        codexRuntime = providers.codexRuntime
     }
 }
 
