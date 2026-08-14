@@ -2320,6 +2320,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func refreshStatus() {
+        // The executor resolves the sealed worker from a live provider. Keep
+        // the model's install/preview gate on that same current discovery so a
+        // worker that became available after launch is not left cached absent.
+        if dependencies.localBotDiscoveryProvider != nil {
+            refreshLocalBotDiscovery()
+        } else if let localWorkerExecutionContextProvider {
+            currentLocalWorkerExecutionContexts =
+                localWorkerExecutionContextProvider()
+        }
         persistLocalSettings()
         statusRefreshFailureMessage = nil
         runCLI(arguments: ["daemon", "status", "--config", configPath, "--launchd-label", launchdLabel], displayCommand: statusCommand)

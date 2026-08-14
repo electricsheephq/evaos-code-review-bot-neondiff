@@ -62,6 +62,35 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.urlOpener.urls.isEmpty)
     }
 
+    @Test func statusCheckRefreshesLateSealedWorkerForNativeInstallGate() {
+        let configPath =
+            "/Users/test/Library/Application Support/NeonDiffDesktop/Accounts/account/Bots/existing-bot/config.local.json"
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            preferenceStrings: [
+                "neondiff.cliPath": "neondiff",
+                "neondiff.configPath": configPath
+            ],
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.localWorkerExecutionContextProvider = {
+            [
+                DesktopLocalBotExecutionContext(
+                    configPath: "",
+                    executablePath:
+                        "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
+                    argumentPrefix: [],
+                    environmentOverrides: [:]
+                )
+            ]
+        }
+
+        #expect(!fixture.model.localWorkerCLIAvailable)
+        fixture.model.refreshStatus()
+
+        #expect(fixture.model.localWorkerCLIAvailable)
+    }
+
     @Test func cleanInstallInitializationUsesNonDestructiveCLIInit() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(CLIRunResult(
