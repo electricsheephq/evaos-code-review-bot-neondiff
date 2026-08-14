@@ -68,6 +68,7 @@ describe("run-once CLI reporting", () => {
 
   it("prints review-pr as the command on successful review-pr invocations", async () => {
     let forwardedExpectedHeadSha: string | undefined;
+    let explicitPullReview: boolean | undefined;
     const command = await runOnceCliCommand({
       options: {
         dryRun: true,
@@ -79,6 +80,7 @@ describe("run-once CLI reporting", () => {
       commandName: "review-pr",
       runOnceImpl: async (options) => {
         forwardedExpectedHeadSha = options.expectedHeadSha;
+        explicitPullReview = options.explicitPullReview;
         return runOnceResult({
           reposScanned: 1,
           pullsSeen: 1,
@@ -96,6 +98,7 @@ describe("run-once CLI reporting", () => {
 
     expect(command.exitCode).toBe(0);
     expect(forwardedExpectedHeadSha).toBe("head-123");
+    expect(explicitPullReview).toBe(true);
     expect(command.report.command).toBe("review-pr");
     expect(JSON.parse(command.output)).toMatchObject({
       ok: true,

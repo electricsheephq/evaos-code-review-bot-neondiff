@@ -17,6 +17,24 @@ describe("canary PR allowlist", () => {
     expect(isCanaryAllowed(config, "electricsheephq/WorldOS", 1185)).toBe(false);
     expect(isCanaryAllowed(config, "100yenadmin/evaOS-GUI", 410)).toBe(false);
   });
+
+  it("allows one explicit review-pr target without widening broad canary scans", () => {
+    const config = {
+      canaryPulls: ["example-org/example-repo#1"]
+    };
+
+    expect(isCanaryAllowed(
+      config,
+      "electricsheephq/evaos-code-review-bot-neondiff",
+      769
+    )).toBe(false);
+    expect(isCanaryAllowed(
+      config,
+      "electricsheephq/evaos-code-review-bot-neondiff",
+      769,
+      { explicitPullReview: true }
+    )).toBe(true);
+  });
 });
 
 describe("local evidence date folders", () => {

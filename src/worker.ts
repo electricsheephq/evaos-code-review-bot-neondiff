@@ -220,6 +220,7 @@ export interface RunOnceOptions {
   dryRun: boolean;
   repo?: string;
   pullNumber?: number;
+  explicitPullReview?: boolean;
   expectedHeadSha?: string;
   expectedConfigRevision?: string;
   processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run";
@@ -500,6 +501,9 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             state,
             repo,
             pull,
+            ...(options.explicitPullReview
+              ? { explicitPullReview: true }
+              : {}),
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
             ...(reviewApprovalRevision
@@ -1433,6 +1437,7 @@ export interface ReviewPullInput {
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
+  explicitPullReview?: boolean;
   dryRun: boolean;
   useZCode: boolean;
   configRevision?: string;
@@ -1449,7 +1454,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const repoPolicy = resolveRepoProfile(config, repo);
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
-  if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
+  if (!isCanaryAllowed(
+    config,
+    repo,
+    pull.number,
+    { explicitPullReview: input.explicitPullReview }
+  )) return "skipped_canary";
   if (!input.licenseAdmission) throw new Error("production license admission is required for pull review");
   const visibility = visibilityFromPullSummary(pull);
   const visibilityDecision = authorizeAdmissionForVisibility(
@@ -2910,7 +2920,13 @@ export function activateRepoForNewOnlyReview(input: {
   return { activated: true, baselined };
 }
 
-export function isCanaryAllowed(config: Pick<BotConfig, "canaryPulls">, repo: string, pullNumber: number): boolean {
+export function isCanaryAllowed(
+  config: Pick<BotConfig, "canaryPulls">,
+  repo: string,
+  pullNumber: number,
+  options: { explicitPullReview?: boolean } = {}
+): boolean {
+  if (options.explicitPullReview) return true;
   if (!config.canaryPulls || config.canaryPulls.length === 0) return true;
   return new Set(config.canaryPulls).has(`${repo}#${pullNumber}`);
 }

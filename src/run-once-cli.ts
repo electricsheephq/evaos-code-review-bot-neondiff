@@ -102,6 +102,11 @@ export async function runOnceCliCommand(input: {
       : input.options.licenseAdmission;
     result = await (input.runOnceImpl ?? runOnce)({
       ...input.options,
+      // `review-pr` is already scoped to one explicit repo/PR. Keep
+      // canaryPulls as the broad daemon/run-once rollout boundary.
+      ...(input.commandName === "review-pr"
+        ? { explicitPullReview: true }
+        : {}),
       ...(licenseAdmission ? { licenseAdmission } : {})
     });
   } catch (error) {
