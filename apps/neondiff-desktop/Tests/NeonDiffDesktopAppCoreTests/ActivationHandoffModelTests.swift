@@ -174,6 +174,19 @@ import NeonDiffDesktopCore
         #expect(model.activationKeyRedactedPrefix?.contains("EXISTING") == false)
     }
 
+    @Test func provideExistingKeyUsesAlreadyStoredKeyWithoutReentry() throws {
+        let keychain = RecordingKeychain()
+        try keychain.setSecret("NDL-STORED-0123456789", account: activationKeyAccount)
+        let model = makeModel(secretStore: keychain)
+        model.activationState = .checkoutPaused
+
+        model.provideExistingActivationKey()
+
+        #expect(model.activationState == .keyReady)
+        #expect(model.pendingActivationKey.isEmpty)
+        #expect(keychain.readAccounts.isEmpty, "recovery must not decrypt the key before activation")
+    }
+
     @Test func submitActivationSuccessUnlocksAndPersists() async {
         let prefs = MemoryPreferences()
         let keychain = RecordingKeychain()
