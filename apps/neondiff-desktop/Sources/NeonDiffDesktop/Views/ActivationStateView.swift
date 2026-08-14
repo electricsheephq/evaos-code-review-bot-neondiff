@@ -62,7 +62,11 @@ struct ActivationStateView: View {
                     .accessibilityIdentifier("neondiff.activation.choose-review-target")
                 } else if let recovery = presentation.recovery {
                     Button(recovery.label) {
-                        Task { await model.performActivationRecovery() }
+                        if recovery.event == .submitActivation {
+                            model.beginActivationSubmission()
+                        } else {
+                            Task { await model.performActivationRecovery() }
+                        }
                     }
                     .buttonStyle(NDBracketButtonStyle())
                     .accessibilityLabel(recovery.accessibilityLabel)

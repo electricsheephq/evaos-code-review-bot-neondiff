@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import NeonDiffDesktopAppCore
+import NeonDiffDesktopCore
 
 @Suite struct DesktopKeychainWorkerLaunchAgentTests {
     private let home = URL(filePath: "/Users/test")
@@ -94,6 +95,44 @@ import Testing
             object["licenseKey"] as? String
                 == "nd_live_runtime_fixture_1234"
         )
+    }
+
+    @Test func runtimeEnvelopeNormalizesLegacyHexEncodedPrivateKeyInMemory() throws {
+        let privateKeyLabel = "RSA PRIVATE" + " KEY"
+        let privateKey = """
+        -----BEGIN \(privateKeyLabel)-----
+        ZmFrZS1sZWdhY3ktcHJpdmF0ZS1rZXk=
+        -----END \(privateKeyLabel)-----
+        """
+        let legacyHex = privateKey.utf8.map {
+            String(format: "%02x", $0)
+        }.joined()
+
+        let data = try DesktopRuntimeCredentialEnvelope(
+            appID: appID,
+            privateKey: legacyHex,
+            licenseKey: "nd_live_runtime_fixture_1234"
+        ).encodedData()
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        #expect(object["githubPrivateKey"] as? String == privateKey)
+        #expect(object["githubPrivateKey"] as? String != legacyHex)
+    }
+
+    @Test func runtimeEnvelopeRejectsHexThatDoesNotDecodeToAPrivateKey() {
+        let nonKeyHex = "not-a-private-key".utf8.map {
+            String(format: "%02x", $0)
+        }.joined()
+
+        #expect(throws: BYOGitHubAppCredentialError.invalidPrivateKey) {
+            try DesktopRuntimeCredentialEnvelope(
+                appID: appID,
+                privateKey: nonKeyHex,
+                licenseKey: "nd_live_runtime_fixture_1234"
+            )
+        }
     }
 
     @Test func credentialBearingCommandsRequireTheSignedBundledWorker() {

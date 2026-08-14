@@ -4592,15 +4592,32 @@ package final class NeonDiffDesktopModel: ObservableObject {
         logText = "You'll be notified when \(ActivationTerminology.activationKey) checkout reopens. Existing keys still activate now."
     }
 
-    package func submitActivation() async {
-        guard activationState == .keyReady else { return }
+    @discardableResult
+    private func prepareActivationSubmission() -> Bool {
+        guard activationState == .keyReady else { return false }
         // A corrected/replacement key typed on the key-entry screen must be stored
         // (and thus used) before we activate — otherwise the previous, rejected key
         // would be retried.
         if !pendingActivationKey.isEmpty {
-            guard persistPendingActivationKey() else { return }
+            guard persistPendingActivationKey() else { return false }
         }
         applyActivationEvent(.submitActivation)
+        return true
+    }
+
+    /// The native button must publish `activation_pending` synchronously before
+    /// Keychain or network work begins. This gives the installed UI an observable
+    /// action boundary and leaves cancellation able to win before the task starts.
+    package func beginActivationSubmission() {
+        guard prepareActivationSubmission() else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.activationState == .activationPending else { return }
+            await self.performActivation()
+        }
+    }
+
+    package func submitActivation() async {
+        guard prepareActivationSubmission() else { return }
         await performActivation()
     }
 

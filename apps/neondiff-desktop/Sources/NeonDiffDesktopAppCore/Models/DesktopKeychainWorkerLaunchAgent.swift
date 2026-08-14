@@ -335,8 +335,7 @@ package struct DesktopRuntimeCredentialEnvelope: Sendable {
     ) throws {
         self.appID = try BYOGitHubAppCredentialValidator
             .normalizedAppId(appID)
-        self.privateKey = try BYOGitHubAppCredentialValidator
-            .normalizedPrivateKey(privateKey)
+        self.privateKey = try Self.normalizedPrivateKey(privateKey)
         guard licenseKey.range(
             of: #"^nd_live_[A-Za-z0-9_-]{8,}$"#,
             options: .regularExpression
@@ -356,6 +355,54 @@ package struct DesktopRuntimeCredentialEnvelope: Sendable {
             ],
             options: []
         )
+    }
+
+    private static func normalizedPrivateKey(_ value: String) throws -> String {
+        do {
+            return try BYOGitHubAppCredentialValidator
+                .normalizedPrivateKey(value)
+        } catch {
+            let encoded = Array(
+                value.trimmingCharacters(in: .whitespacesAndNewlines).utf8
+            )
+            guard !encoded.isEmpty,
+                  encoded.count.isMultiple(of: 2),
+                  encoded.count
+                    <= BYOGitHubAppCredentialValidator.maximumPrivateKeyBytes * 2
+            else {
+                throw error
+            }
+
+            var decoded: [UInt8] = []
+            decoded.reserveCapacity(encoded.count / 2)
+            for index in stride(from: 0, to: encoded.count, by: 2) {
+                guard let high = hexadecimalNibble(encoded[index]),
+                      let low = hexadecimalNibble(encoded[index + 1])
+                else {
+                    throw error
+                }
+                decoded.append((high << 4) | low)
+            }
+            guard let decodedValue = String(bytes: decoded, encoding: .utf8)
+            else {
+                throw error
+            }
+            return try BYOGitHubAppCredentialValidator
+                .normalizedPrivateKey(decodedValue)
+        }
+    }
+
+    private static func hexadecimalNibble(_ byte: UInt8) -> UInt8? {
+        switch byte {
+        case 48 ... 57:
+            byte - 48
+        case 65 ... 70:
+            byte - 55
+        case 97 ... 102:
+            byte - 87
+        default:
+            nil
+        }
     }
 }
 
