@@ -631,6 +631,83 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func existingBotWithoutLocalAgentScopesKeychainVerificationToReviewTarget() async throws {
+        let targetRepository =
+            "electricsheephq/evaos-code-review-bot-neondiff"
+        let otherRepository = "electricsheephq/WorldOS"
+        let readCheck =
+            #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: existingBotConfig(
+                        authMode: "zcode-app-config",
+                        repositories: [otherRepository, targetRepository]
+                    ),
+                    stderr: ""
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: [
+                "neondiff.cliPath": "/usr/bin/true"
+            ],
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.pendingBYOGitHubAppId = "4184532"
+        fixture.model.pendingBYOGitHubAppPrivateKey =
+            existingBotFixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        #expect(await reachesCallCount(fixture, 1))
+        for _ in 0..<20 where fixture.model.isConfigInspectInProgress {
+            await Task.yield()
+        }
+        fixture.model.selectBYOReviewRepository(
+            fullName: targetRepository
+        )
+        fixture.model.cliPath = "/usr/bin/true"
+
+        #expect(!fixture.model.existingLocalAgentAccessAvailable)
+        #expect(fixture.model.existingLocalBotBYOGitHubVerificationAvailable)
+        #expect(fixture.model.localWorkerCLIAvailable)
+
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        #expect(await reachesCallCount(fixture, 2))
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+
+        let verificationCall = try #require(fixture.cli.calls.last)
+        #expect(verificationCall.arguments == [
+            "doctor", "github",
+            "--config", configPath,
+            "--repo", targetRepository,
+            "--github-app-id", "4184532",
+            "--github-app-private-key-stdin", "true",
+            "--json"
+        ])
+        #expect(
+            verificationCall.standardInput
+                == Data(existingBotFixturePrivateKey.utf8)
+        )
+        #expect(fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.repositoryConfigurationReady)
+        #expect(fixture.model.lastError == nil)
+        #expect(fixture.model.repos.filter(\.enabled).count == 2)
+        #expect(
+            fixture.model.selectedReviewRepository == targetRepository
+        )
+    }
+
+    @MainActor
     @Test func incompatibleLocalWorkerBlocksReviewAndOffersVisibleRecovery() async throws {
         let repository = "electricsheephq/evaos-code-review-bot-neondiff"
         let staleHelp = #"{"ok":true,"command":"review-pr","licenseBoundary":{"packageVersion":"1.0.4"},"usage":{"command":"review-pr","flags":[{"name":"--config"},{"name":"--repo"},{"name":"--pr"},{"name":"--dry-run"},{"name":"--confirm"}]}}"#

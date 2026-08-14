@@ -3725,6 +3725,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyBYOGitHubAppCredentials() {
+        verifyBYOGitHubAppCredentials(
+            repositoryScope: nil,
+            source: .keychainStdin
+        )
+    }
+
+    private func verifyBYOGitHubAppCredentials(
+        repositoryScope: String?,
+        source: BYOGitHubVerificationContext.CredentialSource
+    ) {
         guard !isSetupMutationBlocked else {
             lastError = "Retry account verification before verifying GitHub App setup."
             byoGitHubCredentialStatus = lastError ?? "Account check required"
@@ -3762,21 +3772,30 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
-        let arguments = [
+        var arguments = [
             "doctor", "github",
-            "--config", configPath,
+            "--config", configPath
+        ]
+        if let repositoryScope {
+            arguments += ["--repo", repositoryScope]
+        }
+        arguments += [
             "--github-app-id", appId,
             "--github-app-private-key-stdin", "true",
             "--json"
         ]
-        let safeCommand = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --github-app-id \(shellQuote(appId)) --github-app-private-key-stdin true --json < [secure Keychain input]"
+        let repoArgument = repositoryScope.map {
+            " --repo \(shellQuote($0))"
+        } ?? ""
+        let safeCommand = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath))\(repoArgument) --github-app-id \(shellQuote(appId)) --github-app-private-key-stdin true --json < [secure Keychain input]"
         let verificationContext = BYOGitHubVerificationContext(
             appId: appId,
-            source: .keychainStdin,
+            source: source,
             credentialRevision: byoGitHubCredentialRevision,
             cliPath: cliPath,
             configPath: configPath,
-            repositories: repos.filter(\.enabled).map(\.name).sorted(),
+            repositories: repositoryScope.map { [$0] }
+                ?? repos.filter(\.enabled).map(\.name).sorted(),
             workspaceGeneration: workspaceContextGeneration
         )
         var standardInput = Data(privateKey.utf8)
@@ -3786,7 +3805,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         byoGitHubCredentialsVerified = false
         lastError = nil
         lastCommandLine = safeCommand
-        byoGitHubCredentialStatus = "Verifying the configured repositories against the customer-owned GitHub App installation…"
+        byoGitHubCredentialStatus = repositoryScope == nil
+            ? "Verifying the configured repositories against the customer-owned GitHub App installation…"
+            : "Verifying the selected Review Target against the customer-owned GitHub App installation…"
 
         Task.detached {
             defer {
@@ -3825,9 +3846,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
         if let bot = selectedBotInstallation,
            let storedAppID = storedBYOGitHubAppId,
            storedAppID == String(bot.appID),
-           byoGitHubPrivateKeyStored
+           byoGitHubPrivateKeyStored,
+           let targetRepository = selectedBYOReviewRepository,
+           repos.contains(where: {
+               $0.enabled
+                   && $0.name.caseInsensitiveCompare(targetRepository)
+                       == .orderedSame
+           })
         {
-            verifyBYOGitHubAppCredentials()
+            verifyBYOGitHubAppCredentials(
+                repositoryScope: targetRepository,
+                source: .keychainStdinExistingBot
+            )
             return
         }
         let diagnosis = existingLocalBotBYOGitHubVerificationStatus
@@ -3942,6 +3972,33 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     workspaceGeneration: workspaceContextGeneration
                 )
             }
+        case .keychainStdinExistingBot:
+            currentContext = existingLocalBotIdentityReady
+                ? selectedBotInstallation.flatMap { bot in
+                    selectedBYOReviewRepository.flatMap { targetRepository in
+                        guard let storedAppID = storedBYOGitHubAppId,
+                              storedAppID == String(bot.appID),
+                              repos.contains(where: {
+                                  $0.enabled
+                                      && $0.name.caseInsensitiveCompare(
+                                          targetRepository
+                                      ) == .orderedSame
+                              })
+                        else {
+                            return nil
+                        }
+                        return BYOGitHubVerificationContext(
+                            appId: storedAppID,
+                            source: .keychainStdinExistingBot,
+                            credentialRevision: byoGitHubCredentialRevision,
+                            cliPath: cliPath,
+                            configPath: configPath,
+                            repositories: [targetRepository],
+                            workspaceGeneration: workspaceContextGeneration
+                        )
+                    }
+                }
+                : nil
         case .existingLocalAgent:
             currentContext = existingLocalAgentAccessAvailable
                 ? selectedBotInstallation.flatMap { bot in
@@ -3968,7 +4025,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         let expectedCredentialSource: String
         switch expectedContext.source {
-        case .keychainStdin:
+        case .keychainStdin, .keychainStdinExistingBot:
             expectedCredentialSource = "stdin"
         case .existingLocalAgent:
             expectedCredentialSource = "configured"
@@ -4042,12 +4099,23 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }.joined(separator: ", ")
         byoGitHubCredentialsVerified = true
         lastError = nil
-        byoGitHubCredentialStatus = expectedContext.source == .existingLocalAgent
-            ? "Verified existing local agent App installation access for \(repositories). Worker dry/live review has not run yet."
-            : "Verified App installation access for \(repositories). Worker dry/live review has not run yet."
-        logText = expectedContext.source == .existingLocalAgent
-            ? "Existing local agent GitHub App installation and repository access verified. No credential was copied and no review was executed or posted."
-            : "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
+        switch expectedContext.source {
+        case .existingLocalAgent:
+            byoGitHubCredentialStatus =
+                "Verified existing local agent App installation access for \(repositories). Worker dry/live review has not run yet."
+            logText =
+                "Existing local agent GitHub App installation and repository access verified. No credential was copied and no review was executed or posted."
+        case .keychainStdinExistingBot:
+            byoGitHubCredentialStatus =
+                "Verified App installation access for the selected Review Target \(repositories). Worker installation and dry/live review have not run yet."
+            logText =
+                "Selected existing-bot GitHub App installation access verified through the signed bundled worker. The full configured allowlist was not rewritten."
+        case .keychainStdin:
+            byoGitHubCredentialStatus =
+                "Verified App installation access for \(repositories). Worker dry/live review has not run yet."
+            logText =
+                "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
+        }
 
         if expectedContext.source == .existingLocalAgent,
            let readCheck = report.github.readChecks.first
@@ -6537,6 +6605,7 @@ private struct BYOGitHubDoctorReport: Decodable {
 private struct BYOGitHubVerificationContext: Equatable, Sendable {
     enum CredentialSource: Equatable, Sendable {
         case keychainStdin
+        case keychainStdinExistingBot
         case existingLocalAgent
     }
 
