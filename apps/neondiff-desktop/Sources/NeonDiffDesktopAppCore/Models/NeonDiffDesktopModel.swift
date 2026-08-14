@@ -4521,7 +4521,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// Existing keys still activate while checkout is paused. The key is stored in
     /// the Keychain only; only a redacted prefix is retained in memory for display.
     package func provideExistingActivationKey() {
-        guard persistPendingActivationKey(requireNonEmpty: true) else { return }
+        if ActivationKeyMaterial(pendingActivationKey).isEmpty {
+            guard dependencies.secretStore.containsSecret(account: activationKeyAccount) else {
+                lastError = "Enter your \(ActivationTerminology.activationKey) to continue."
+                return
+            }
+            pendingActivationKey = ""
+        } else {
+            guard persistPendingActivationKey(requireNonEmpty: true) else { return }
+        }
         lastError = nil
         applyActivationEvent(.provideExistingKey)
     }
