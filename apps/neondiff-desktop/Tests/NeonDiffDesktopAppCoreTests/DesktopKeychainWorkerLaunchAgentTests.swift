@@ -45,6 +45,56 @@ import NeonDiffDesktopCore
         #expect(parsed == request)
     }
 
+    @Test func previewExposesTheCompleteRedactedMutationPlan() throws {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        )
+        let request = try DesktopKeychainWorkerLaunchAgentRequest(
+            appID: appID,
+            licenseMachineID: licenseMachineID,
+            configPath: config.path,
+            launchdLabel: label,
+            homeDirectory: home
+        )
+
+        let preview = DesktopKeychainWorkerLaunchAgentContract
+            .redactedPreviewText(
+                request: request,
+                appExecutableURL: appExecutable,
+                sealedWorkerPath:
+                    "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
+                homeDirectory: home,
+                preservedRepositoryCount: 53
+            )
+
+        #expect(preview.contains(
+            "/Users/test/Library/LaunchAgents/\(label).plist"
+        ))
+        #expect(preview.contains(appExecutable.path))
+        #expect(preview.contains(
+            "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker"
+        ))
+        #expect(preview.contains("--config \(config.path)"))
+        #expect(preview.contains("--launchd-label \(label)"))
+        #expect(preview.contains("--github-app-id [stored App ID]"))
+        #expect(preview.contains(
+            "--license-machine-id [stored device ID]"
+        ))
+        #expect(preview.contains("EnvironmentVariables: none"))
+        #expect(preview.contains(
+            "RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua"
+        ))
+        #expect(preview.contains("stdout=/dev/null; stderr=/dev/null"))
+        #expect(preview.contains(
+            "Repository allowlist: preserved unchanged (53 configured repositories)"
+        ))
+        #expect(preview.contains("no config write"))
+        #expect(!preview.contains(appID))
+        #expect(!preview.contains(licenseMachineID))
+        #expect(!preview.localizedCaseInsensitiveContains("private key"))
+        #expect(!preview.localizedCaseInsensitiveContains("license key"))
+    }
+
     @Test func headlessArgumentsFailClosedOutsideAccountConfigOrExactAppIdentity() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"

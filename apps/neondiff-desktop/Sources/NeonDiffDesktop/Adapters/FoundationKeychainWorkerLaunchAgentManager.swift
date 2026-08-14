@@ -22,10 +22,20 @@ struct FoundationKeychainWorkerLaunchAgentManager:
     }
 
     func preview(
-        request: DesktopKeychainWorkerLaunchAgentRequest
+        request: DesktopKeychainWorkerLaunchAgentRequest,
+        preservedRepositoryCount: Int
     ) async throws -> String {
         try validate(request)
-        return "Ready to install a secret-free LaunchAgent for the selected account bot and start the worker sealed inside the signed NeonDiff app."
+        guard let sealedWorkerPath = trustedBundledWorker.executablePath else {
+            throw WorkerLaunchAgentRuntimeError.invalidCoordinates
+        }
+        return DesktopKeychainWorkerLaunchAgentContract.redactedPreviewText(
+            request: request,
+            appExecutableURL: appExecutableURL,
+            sealedWorkerPath: sealedWorkerPath,
+            homeDirectory: homeDirectory,
+            preservedRepositoryCount: preservedRepositoryCount
+        )
     }
 
     func installAndStart(

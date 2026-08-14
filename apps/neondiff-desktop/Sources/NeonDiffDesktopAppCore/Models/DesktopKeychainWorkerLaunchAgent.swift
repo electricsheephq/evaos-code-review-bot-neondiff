@@ -121,6 +121,45 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         ]
     }
 
+    package static func redactedPreviewText(
+        request: DesktopKeychainWorkerLaunchAgentRequest,
+        appExecutableURL: URL,
+        sealedWorkerPath: String,
+        homeDirectory: URL,
+        preservedRepositoryCount: Int
+    ) -> String {
+        let plistPath = homeDirectory
+            .appending(
+                path: "Library/LaunchAgents/\(request.launchdLabel).plist",
+                directoryHint: .notDirectory
+            )
+            .standardizedFileURL
+            .path
+        let redactedArguments = [
+            headlessFlag,
+            "--config", request.configPath,
+            "--launchd-label", request.launchdLabel,
+            "--github-app-id", "[stored App ID]",
+            "--license-machine-id", "[stored device ID]"
+        ].joined(separator: " ")
+        let repositoryLabel = preservedRepositoryCount == 1
+            ? "repository"
+            : "repositories"
+
+        return """
+        Ready to install and start the secret-free local review worker.
+        LaunchAgent: \(plistPath)
+        Program: \(appExecutableURL.standardizedFileURL.path)
+        ProgramArguments: \(redactedArguments)
+        Sealed worker: \(sealedWorkerPath)
+        EnvironmentVariables: none
+        Launch policy: RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua; stdout=/dev/null; stderr=/dev/null.
+        Credentials: Keychain-only at runtime; no secret values in the plist, arguments, or environment.
+        Repository allowlist: preserved unchanged (\(preservedRepositoryCount) configured \(repositoryLabel)); no config write.
+        Mutation: write only the selected user LaunchAgent, then restart that exact service.
+        """
+    }
+
     package static func propertyListData(
         request: DesktopKeychainWorkerLaunchAgentRequest,
         appExecutableURL: URL
@@ -347,7 +386,8 @@ package enum DesktopTrustedBundledWorkerContract {
 
 package protocol DesktopKeychainWorkerLaunchAgentManaging: Sendable {
     func preview(
-        request: DesktopKeychainWorkerLaunchAgentRequest
+        request: DesktopKeychainWorkerLaunchAgentRequest,
+        preservedRepositoryCount: Int
     ) async throws -> String
 
     func installAndStart(
@@ -361,7 +401,8 @@ package struct UnavailableDesktopKeychainWorkerLaunchAgentManager:
     package init() {}
 
     package func preview(
-        request: DesktopKeychainWorkerLaunchAgentRequest
+        request: DesktopKeychainWorkerLaunchAgentRequest,
+        preservedRepositoryCount: Int
     ) async throws -> String {
         throw DesktopKeychainWorkerLaunchAgentError.invalidAppExecutable
     }
