@@ -4526,6 +4526,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 lastError = "Enter your \(ActivationTerminology.activationKey) to continue."
                 return
             }
+            pendingActivationKey = ""
         } else {
             guard persistPendingActivationKey(requireNonEmpty: true) else { return }
         }
