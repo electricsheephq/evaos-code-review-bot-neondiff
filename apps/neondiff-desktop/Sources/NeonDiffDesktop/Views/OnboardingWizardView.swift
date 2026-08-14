@@ -556,11 +556,33 @@ struct OnboardingWizardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 OperatorSection("Provider") {
-                    OperatorTextField(title: "Model", text: $model.providers.zcodeModel)
-                    OperatorTextField(title: "CLI Path", text: $model.providers.zcodeCliPath)
-                    OperatorTextField(title: "App Config Path", text: $model.providers.zcodeAppConfigPath)
-                    OperatorTextField(title: "OpenAI-Compatible Endpoint", text: $model.providers.openAICompatibleEndpoint)
-                    if model.selectedProviderRequiresAPIKey {
+                    if model.providers.codexRuntime.enabled {
+                        OperatorBadge(
+                            text: model.providers.codexRuntime.isReady
+                                ? "CODEX CLI READY"
+                                : "CODEX CLI CONFIG REQUIRED",
+                            color: model.providers.codexRuntime.isReady
+                                ? NeonDiffTheme.accent
+                                : NeonDiffTheme.warning
+                        )
+                        LabeledContent("Runtime", value: "Codex CLI")
+                        LabeledContent("Model", value: model.providers.codexRuntime.model)
+                        LabeledContent(
+                            "Reasoning effort",
+                            value: model.providers.codexRuntime.reasoningEffort
+                        )
+                        LabeledContent("CLI", value: model.providers.codexRuntime.cliPath)
+                        Text("Uses the existing authenticated Codex CLI session. NeonDiff does not read or store its OAuth material.")
+                            .operatorBodyText()
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        OperatorTextField(title: "Model", text: $model.providers.zcodeModel)
+                        OperatorTextField(title: "CLI Path", text: $model.providers.zcodeCliPath)
+                        OperatorTextField(title: "App Config Path", text: $model.providers.zcodeAppConfigPath)
+                        OperatorTextField(title: "OpenAI-Compatible Endpoint", text: $model.providers.openAICompatibleEndpoint)
+                    }
+                    if !model.providers.codexRuntime.enabled,
+                       model.selectedProviderRequiresAPIKey {
                         OperatorTextField(
                             title: "Provider API Key",
                             text: $model.pendingProviderKey,
@@ -588,7 +610,7 @@ struct OnboardingWizardView: View {
                             .font(.caption)
                             .foregroundStyle(NeonDiffTheme.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
-                    } else {
+                    } else if !model.providers.codexRuntime.enabled {
                         OperatorBadge(
                             text: model.providerSetupReady ? "APP CONFIG LOADED" : "CONFIG REQUIRED",
                             color: model.providerSetupReady ? NeonDiffTheme.accent : NeonDiffTheme.warning

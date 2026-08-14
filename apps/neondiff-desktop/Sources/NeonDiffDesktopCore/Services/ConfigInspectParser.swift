@@ -99,6 +99,7 @@ public enum ConfigInspectParser {
         let reviewConcurrency = config["reviewConcurrency"] as? [String: Any]
         let reviewGate = config["reviewGate"] as? [String: Any]
         let issueEnrichment = config["issueEnrichment"] as? [String: Any]
+        let codexRuntime = config["codexRuntime"] as? [String: Any]
         let providerRegistry = config["providers"] as? [String: Any]
         let selectedProviderId = providerRegistry?["defaultProviderId"] as? String ?? "zcode-glm"
         let registryEntries = providerRegistry?["providers"] as? [String: Any] ?? [:]
@@ -130,7 +131,14 @@ public enum ConfigInspectParser {
             openAICompatibleEndpoint: desktop?["openAICompatibleEndpoint"] as? String ?? "http://localhost:8000/v1",
             providerKeyStored: providerKeyStored,
             selectedProviderId: selectedProviderId,
-            registryTargets: registryTargets
+            registryTargets: registryTargets,
+            codexRuntime: CodexRuntimeSettings(
+                enabled: codexRuntime?["enabled"] as? Bool ?? false,
+                cliPath: codexRuntime?["cliPath"] as? String ?? "",
+                model: codexRuntime?["model"] as? String ?? "",
+                reasoningEffort: codexRuntime?["reasoningEffort"] as? String
+                    ?? ""
+            )
         )
         let license = LicenseStatus(
             keyStored: licenseKeyStored,

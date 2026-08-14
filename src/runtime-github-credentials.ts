@@ -6,6 +6,7 @@ export interface RuntimeGitHubCredentials {
   appId: string;
   privateKey: string;
   licenseKey?: string;
+  licenseMachineId?: string;
 }
 
 interface RuntimeGitHubCredentialInput {
@@ -85,17 +86,19 @@ export async function resolveRuntimeCredentialEnvelope(input: {
     throw new Error("runtime credential stdin must be one JSON object");
   }
   const record = envelope as Record<string, unknown>;
-  if (Object.keys(record).length !== 4
+  if (Object.keys(record).length !== 5
     || ![
       "schemaVersion",
       "githubAppId",
       "githubPrivateKey",
-      "licenseKey"
+      "licenseKey",
+      "licenseMachineId"
     ].every((key) => Object.prototype.hasOwnProperty.call(record, key))
-    || record.schemaVersion !== 1
+    || record.schemaVersion !== 2
     || typeof record.githubAppId !== "string"
     || typeof record.githubPrivateKey !== "string"
-    || typeof record.licenseKey !== "string") {
+    || typeof record.licenseKey !== "string"
+    || typeof record.licenseMachineId !== "string") {
     throw new Error("runtime credential stdin has an unsupported schema");
   }
   const appId = record.githubAppId.trim();
@@ -108,10 +111,15 @@ export async function resolveRuntimeCredentialEnvelope(input: {
   if (!/^nd_live_[A-Za-z0-9_-]{8,}$/.test(licenseKey)) {
     throw new Error("runtime credential license key must be one valid production key");
   }
+  const licenseMachineId = record.licenseMachineId.trim();
+  if (!/^[A-Za-z0-9_-]{43}$/.test(licenseMachineId)) {
+    throw new Error("runtime credential license machine ID must be one RFC 7638 SHA-256 broker device id");
+  }
   return {
     appId,
     privateKey,
-    licenseKey
+    licenseKey,
+    licenseMachineId
   };
 }
 
@@ -146,6 +154,10 @@ export function applyRuntimeGitHubCredentials(
 
 export function readRuntimeLicenseKey(): string | undefined {
   return storage.getStore()?.licenseKey;
+}
+
+export function readRuntimeLicenseMachineId(): string | undefined {
+  return storage.getStore()?.licenseMachineId;
 }
 
 function validatePrivateKey(privateKey: string): void {

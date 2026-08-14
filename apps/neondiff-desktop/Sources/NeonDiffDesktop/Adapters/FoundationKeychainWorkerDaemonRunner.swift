@@ -54,6 +54,12 @@ enum FoundationKeychainWorkerDaemonRunner {
         }
 
         let secretStore = KeychainSecretStore()
+        let identity = try GitHubBrokerDeviceIdentityStore(
+            secretStore: secretStore
+        ).loadExisting(allowUserInteraction: false)
+        guard identity.deviceId == request.licenseMachineID else {
+            throw WorkerDaemonRunnerError.invalidInvocation
+        }
         guard let stored = try secretStore.readSecret(
             account: BYOGitHubAppKeychainAccount.privateKey,
             allowUserInteraction: false
@@ -67,7 +73,8 @@ enum FoundationKeychainWorkerDaemonRunner {
         var standardInput = try DesktopRuntimeCredentialEnvelope(
             appID: request.appID,
             privateKey: stored,
-            licenseKey: licenseKey
+            licenseKey: licenseKey,
+            licenseMachineID: request.licenseMachineID
         ).encodedData()
         defer {
             standardInput.resetBytes(in: 0..<standardInput.count)
@@ -132,6 +139,7 @@ enum FoundationKeychainWorkerDaemonRunner {
         let standardized = configURL.standardizedFileURL
         guard (try? DesktopKeychainWorkerLaunchAgentRequest(
             appID: "1",
+            licenseMachineID: String(repeating: "a", count: 43),
             configPath: standardized.path,
             launchdLabel: "com.example.neondiff",
             homeDirectory: homeDirectory

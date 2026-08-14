@@ -10,9 +10,11 @@ import {
   type ProductionLicenseAdmission
 } from "../src/license-admission.js";
 import type { LicenseConfig } from "../src/license.js";
+import { withRuntimeGitHubCredentials } from "../src/runtime-github-credentials.js";
 
 const roots: string[] = [];
 const key = () => ["nd", "live", "admission0123456789abcdef"].join("_");
+const brokerDeviceId = "b".repeat(43);
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -40,6 +42,55 @@ function fixtureConfig(): LicenseConfig {
 }
 
 describe("production useful-work admission", () => {
+  it("uses the native broker device identity for runtime daemon admission", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const result = await withRuntimeGitHubCredentials({
+      appId: "4184532",
+      privateKey: "runtime-private-key-fixture",
+      licenseKey: key(),
+      licenseMachineId: brokerDeviceId
+    }, () => requireActiveDaemonCycleAdmissions({
+      config: fixtureConfig(),
+      fetchImpl: (async (_url, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({
+          status: "active",
+          expiresAt: "2026-08-01T00:00:00.000Z",
+          repoVisibilityScope: "private",
+          privateRepoAllowed: true,
+          updateEntitlement: true
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+      now: new Date("2026-07-11T00:00:00.000Z")
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(requestBody?.machineId).toBe(brokerDeviceId);
+  });
+
+  it("rejects an explicit empty machine identity before network admission", async () => {
+    let fetchCalls = 0;
+
+    const result = await requireActiveProductionLicense({
+      config: fixtureConfig(),
+      operation: "daemon_cycle",
+      machineId: "",
+      fetchImpl: (async () => {
+        fetchCalls += 1;
+        return new Response(null, { status: 500 });
+      }) as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      decision: {
+        status: "invalid",
+        detail: "license machine ID must be one RFC 7638 SHA-256 broker device id"
+      }
+    });
+    expect(fetchCalls).toBe(0);
+  });
+
   it("mints the daemon operation bundle from one live API validation", async () => {
     let fetchCalls = 0;
     const result = await requireActiveDaemonCycleAdmissions({

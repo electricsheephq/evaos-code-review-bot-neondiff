@@ -36,6 +36,13 @@ final class MemorySecretStore: DesktopSecretStoring, @unchecked Sendable {
         storage.read { $0[account] }
     }
 
+    func readSecret(
+        account: String,
+        allowUserInteraction _: Bool
+    ) throws -> String? {
+        storage.read { $0[account] }
+    }
+
     func containsSecret(account: String) -> Bool {
         storage.read { $0[account] != nil }
     }

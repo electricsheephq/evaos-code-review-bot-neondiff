@@ -8,6 +8,7 @@ import {
   resolveRuntimeGitHubCredentials,
   resolveRuntimeCredentialEnvelope,
   readRuntimeLicenseKey,
+  readRuntimeLicenseMachineId,
   withRuntimeGitHubCredentials
 } from "../src/runtime-github-credentials.js";
 
@@ -16,6 +17,7 @@ const privateKey = generateKeyPairSync("rsa", {
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
   publicKeyEncoding: { type: "spki", format: "pem" }
 }).privateKey;
+const brokerDeviceId = "a".repeat(43);
 
 describe("runtime GitHub credentials", () => {
   it("binds bounded stdin credentials only to raw daemon and review-pr execution", async () => {
@@ -92,10 +94,11 @@ describe("runtime GitHub credentials", () => {
       subcommand: undefined,
       runtimeCredentialsStdin: "true",
       stdin: Readable.from([JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         githubAppId: "4184532",
         githubPrivateKey: privateKey,
-        licenseKey: "nd_live_runtime_fixture_1234"
+        licenseKey: "nd_live_runtime_fixture_1234",
+        licenseMachineId: brokerDeviceId
       })])
     });
 
@@ -104,12 +107,14 @@ describe("runtime GitHub credentials", () => {
       expect(config.github.appId).toBe("4184532");
       expect(config.github.privateKey).toBe(privateKey.trim());
       expect(readRuntimeLicenseKey()).toBe("nd_live_runtime_fixture_1234");
+      expect(readRuntimeLicenseMachineId()).toBe(brokerDeviceId);
       expect(productionLicenseSecretReader.read(config.license!))
         .toBe("nd_live_runtime_fixture_1234");
       expect(JSON.stringify(config)).not.toContain(privateKey.trim());
       expect(JSON.stringify(config)).not.toContain("nd_live_runtime_fixture_1234");
     });
     expect(readRuntimeLicenseKey()).toBeUndefined();
+    expect(readRuntimeLicenseMachineId()).toBeUndefined();
   });
 
   it("preserves runtime App credentials when related-context options are copied", async () => {
@@ -118,10 +123,11 @@ describe("runtime GitHub credentials", () => {
       subcommand: undefined,
       runtimeCredentialsStdin: "true",
       stdin: Readable.from([JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         githubAppId: "4184532",
         githubPrivateKey: privateKey,
-        licenseKey: "nd_live_runtime_fixture_1234"
+        licenseKey: "nd_live_runtime_fixture_1234",
+        licenseMachineId: brokerDeviceId
       })])
     });
 

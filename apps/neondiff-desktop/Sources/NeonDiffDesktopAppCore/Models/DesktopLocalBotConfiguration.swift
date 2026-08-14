@@ -647,6 +647,14 @@ package enum DesktopLocalBotExecutionContextResolver {
         if Array(arguments.prefix(2)) == ["config", "patch"] {
             return isSupportedConfigPatch(arguments)
         }
+        if arguments.count == 6,
+           Array(arguments.prefix(2)) == ["daemon", "status"],
+           arguments[2] == "--config",
+           arguments[4] == "--launchd-label",
+           !arguments[5].isEmpty
+        {
+            return true
+        }
         guard arguments.count == 9,
               Array(arguments.prefix(2)) == ["doctor", "github"],
               arguments[2] == "--config",
@@ -733,7 +741,8 @@ package enum DesktopLocalBotExecutionContextResolver {
     private static func isTrustedBundledWorker(
         _ context: DesktopLocalBotExecutionContext
     ) -> Bool {
-        guard let executablePath = context.executablePath,
+        guard context.configPath.isEmpty,
+              let executablePath = context.executablePath,
               executablePath
                 == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
               context.argumentPrefix.isEmpty,

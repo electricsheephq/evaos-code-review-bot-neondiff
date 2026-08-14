@@ -193,8 +193,11 @@ executable is the signed NeonDiff app. Before releasing either Keychain secret,
 the app validates its exact Developer ID signature and the running sealed
 worker process, then pipes one bounded JSON envelope to that process's stdin.
 The plist contains only the
-public App ID, config path, launchd label, and signed app path—never a key value
-or key-file path. Review and daemon readiness remain separate gates. The
+public App ID, config path, launchd label, the non-secret broker device ID used
+by the existing API-backed activation, and the signed app path—never a key
+value or key-file path. The headless app re-derives that device ID from its
+Keychain identity and rejects a mismatched plist before releasing credentials.
+Review and daemon readiness remain separate gates. The
 immutable published prerelease and clean-Mac artifact proof remain distribution
 gates. Unsigned development builds still require an executable global or
 checksum-managed worker before native first run
@@ -266,10 +269,14 @@ This source composition is not proof that the production broker is enabled,
 that billing is live, or that a signed customer artifact exists. Update,
 rollback, daemon admission, and live-review behavior still require exact signed
 candidate validation before distribution.
-The native Providers pane reads and edits the saved `providers` registry, not
-the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview, and
-Apply the exact selected provider before Verify is enabled; verification pins
-both the provider ID and inspected config revision. A provider with
+The native Providers pane reads the active review runtime from the inspected
+config. When `codexRuntime.enabled` is true, it shows the exact Codex CLI path,
+model, and reasoning effort and treats that existing authenticated CLI session
+as the review execution backend; NeonDiff never reads or stores its OAuth
+material. Otherwise the pane reads and edits the saved `providers` registry,
+not the legacy `desktop.openAICompatibleEndpoint` field. Load config, Preview,
+and Apply the exact selected provider before Verify is enabled; verification
+pins both the provider ID and inspected config revision. A provider with
 `authMode: zcode-app-config` or `none` does not use a NeonDiff-stored API key,
 so the native app reports its loaded config without showing a false missing-key
 state. `api-key-env` providers retain the Keychain and verification gate.

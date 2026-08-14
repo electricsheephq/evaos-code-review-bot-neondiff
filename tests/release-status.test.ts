@@ -1093,6 +1093,34 @@ describe("beta release status", () => {
     expect(redactedOutput).toContain("electricsheephq/evaos-code-review-bot-neondiff/issues/559");
   });
 
+  it("fails closed without throwing when runtime status is collected outside a Git checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-non-git-cwd-"));
+    roots.push(root);
+
+    const status = collectReleaseStatus({
+      cwd: root,
+      statePath: join(root, "missing-live-state.sqlite"),
+      configPath: join(root, "missing-config.json"),
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot"
+    });
+
+    expect(status.repo).toEqual({
+      branch: "(unknown)",
+      head: "(unknown)",
+      dirtyFiles: ["(git unavailable)"]
+    });
+    expect(status.gates).toContainEqual({
+      name: "release_branch",
+      ok: false,
+      detail: "(unknown)"
+    });
+    expect(status.gates).toContainEqual({
+      name: "clean_checkout",
+      ok: false,
+      detail: "1 dirty file(s)"
+    });
+  });
+
   it("fails closed without throwing when collectReleaseStatus receives a missing public manifest path", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-missing-public-manifest-"));
     roots.push(root);
@@ -4622,6 +4650,53 @@ describe("beta release status", () => {
       name: "launchd_node_system_ca",
       ok: false,
       detail: "NODE_OPTIONS missing --use-system-ca"
+    });
+  });
+
+  it("does not require Node system CA for the exact signed sealed desktop worker", () => {
+    const configPath =
+      "/Users/m1/Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json";
+    const launchd = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/501/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\tpid = 70954
+\tprogram = /Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop
+\targuments = {
+\t\t/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop
+\t\t--neondiff-worker-daemon
+\t\t--config
+\t\t${configPath}
+\t\t--launchd-label
+\t\tcom.electricsheephq.evaos-code-review-bot
+\t}
+\tenvironment = {
+\t\tOSLogRateLimit => 64
+\t}
+}
+`);
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath,
+      launchd,
+      database: { rowCount: 0, errorCount: 0 },
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(launchd).toMatchObject({
+      program: "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop",
+      sealedDesktopWorker: true,
+      usesSystemCa: false
+    });
+    expect(status.gates).toContainEqual({
+      name: "launchd_node_system_ca",
+      ok: true,
+      detail: "not applicable to the signed sealed desktop worker"
     });
   });
 

@@ -142,18 +142,27 @@ public final class GitHubBrokerDeviceIdentityStore {
     /// Loads a previously-created identity without rotating or creating one.
     /// Saved-binding verification must use this path so a missing Keychain item
     /// cannot silently orphan the server-side binding.
-    public func loadExisting() throws -> GitHubBrokerDeviceIdentity {
+    public func loadExisting(
+        allowUserInteraction: Bool = true
+    ) throws -> GitHubBrokerDeviceIdentity {
         try lock.withLock {
-            guard let encoded = try readStoredIdentity() else {
+            guard let encoded = try readStoredIdentity(
+                allowUserInteraction: allowUserInteraction
+            ) else {
                 throw GitHubBrokerDeviceIdentityError.storedIdentityMissing
             }
             return try decodeIdentity(encoded)
         }
     }
 
-    private func readStoredIdentity() throws -> String? {
+    private func readStoredIdentity(
+        allowUserInteraction: Bool = true
+    ) throws -> String? {
         do {
-            return try secretStore.readSecret(account: account)
+            return try secretStore.readSecret(
+                account: account,
+                allowUserInteraction: allowUserInteraction
+            )
         } catch {
             throw GitHubBrokerDeviceIdentityError.identityStorageUnavailable
         }

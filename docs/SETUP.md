@@ -349,14 +349,18 @@ supported LaunchAgent exists. Preview validates the exact signed
 the worker sealed inside the signed app. Confirmed install writes one 0600 secret-free plist in
 `~/Library/LaunchAgents` and starts it through the current user's launchd
 domain. The plist invokes the signed app's bounded headless mode and contains no
-private-key value or file path. That mode revalidates the same public
-coordinates, reads the App key from NeonDiff's own Keychain without user
+private-key value or file path. It includes the non-secret broker device ID
+already used for native activation. That mode revalidates the same public
+coordinates, re-derives the device ID from NeonDiff's own Keychain identity,
+rejects a mismatched plist, reads the App key from Keychain without user
 interaction, reads the API-backed activation credential from the same app-owned
 Keychain service, validates the running sealed worker process, and only then
-pipes both values once in a bounded JSON envelope to its stdin. A conflicting
-plist, unsafe app/config/worker path, unavailable Keychain item, or launchd
-failure fails closed. Do not replace this with a `security -w` wrapper, export
-the key to disk, or weaken its Keychain access control.
+pipes both secret values plus that non-secret device ID once in a bounded JSON
+envelope to its stdin. License validation then uses the same machine binding as
+native activation instead of the CLI's legacy host hash. A conflicting plist,
+unsafe app/config/worker path, unavailable Keychain item, device mismatch, or
+launchd failure fails closed. Do not replace this with a `security -w` wrapper,
+export the key to disk, or weaken its Keychain access control.
 
 After Checkout displays the one-shot NeonDiff Activation Key, return to the
 native **License** pane, paste the key, and choose **Continue with this key**,
@@ -380,8 +384,11 @@ the same Mac. In that exact case it opens a reconciliation path:
   private key;
 - it reports the server-authoritative account entitlement separately from
   current-launch review authorization;
-- it treats `zcode-app-config` and `none` provider auth modes as config-backed,
-  not as missing NeonDiff Keychain API keys;
+- when the inspected config enables `codexRuntime`, it reports the exact Codex
+  CLI path, model, and reasoning effort as the active review runtime without
+  reading or storing the CLI's OAuth material; otherwise it treats
+  `zcode-app-config` and `none` provider auth modes as config-backed, not as
+  missing NeonDiff Keychain API keys;
 - if the worker allowlist contains multiple repositories, it keeps every entry
   unchanged and requires one explicit **Review Target** for native activation;
   that target is restored only for the same config path;
@@ -390,12 +397,17 @@ the same Mac. In that exact case it opens a reconciliation path:
   file with no group/other permissions. Only its file path—not its key bytes—is
   supplied as a child-process environment coordinate for the exact config;
 - its single **Verify existing access** action first proves the exact App and
-  Review Target with `doctor github --repo`, then runs credential-free
-  `license status --refresh true` through the same matched worker and config.
-  The native app never reads, copies, migrates, or prompts for the worker's
-  Activation Key. GitHub-reported repository visibility and an active live API
-  entitlement covering that visibility are both required; unknown, expired,
-  revoked, malformed, or offline proof fails closed;
+  Review Target with `doctor github --repo`. A legacy credential-bearing
+  matched worker then runs credential-free
+  `license status --refresh true` through that exact worker and config. A
+  secret-free Keychain-backed worker instead reads the app-owned Activation Key
+  noninteractively and revalidates it through the signed sealed worker's
+  idempotent API path, with the key crossing only bounded stdin and no local
+  CLI-state write. Neither path places the key in argv, environment, config,
+  logs, or evidence. GitHub-reported repository visibility and an active live
+  API entitlement covering that visibility are both required; an unavailable
+  Keychain item, unknown visibility, expired or revoked access, malformed
+  output, or offline proof fails closed;
 - Overview runs one provider-backed repository/PR-scoped dry review first. A
   live review is enabled only for that config revision and the returned
   40-character head SHA, and requires explicit confirmation (see
@@ -565,14 +577,18 @@ provider readiness with redacted output. Use the provider card's `Verify API Key
 button checks the selected provider path and reports pass/fail without printing
 the submitted key.
 
-In the native Mac pane, the selected `providers.defaultProviderId` registry
-entry is the source of truth. Endpoint/model edits are dirty until a successful
-Preview and confirmed Apply/readback. Verify stays disabled until that saved
-state is current, then invokes the exact provider ID and config revision. The
-Keychain value crosses only bounded stdin; it is never added to the registry
-patch, argv, environment, logs, or evidence. That Keychain flow applies only to
-`api-key-env` providers. `zcode-app-config` and `none` providers use their
-declared app/config path and must not prompt for an unrelated NeonDiff API key.
+In the native Mac pane, an enabled and valid `codexRuntime` is the active review
+execution backend. The app displays its exact CLI path, model, and reasoning
+effort from `config inspect`; it does not read or store the Codex OAuth session.
+When Codex runtime is disabled, the selected
+`providers.defaultProviderId` registry entry is the source of truth.
+Endpoint/model edits are dirty until a successful Preview and confirmed
+Apply/readback. Verify stays disabled until that saved state is current, then
+invokes the exact provider ID and config revision. The Keychain value crosses
+only bounded stdin; it is never added to the registry patch, argv, environment,
+logs, or evidence. That Keychain flow applies only to `api-key-env` providers.
+`zcode-app-config` and `none` providers use their declared app/config path and
+must not prompt for an unrelated NeonDiff API key.
 
 The full doctor output is JSON. Check:
 

@@ -229,7 +229,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package var customerRuntimeBoundaryMessage: String {
         if byoGitHubCredentialOnboardingAvailable,
-           repos.filter(\.enabled).count > 1 {
+           repos.filter(\.enabled).count > 1,
+           !reviewTargetRuntimeReady {
             let target = selectedBYOReviewRepository.map {
                 "Activation can be verified for \($0), but "
             } ?? "Choose one Review Target for activation. "
@@ -287,10 +288,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard let selectedBYOReviewRepository else {
             return false
         }
-        return enabledRepositories.count == 1
-            && enabledRepositories[0].caseInsensitiveCompare(
+        let selectedTargetIsEnabled = enabledRepositories.contains {
+            $0.caseInsensitiveCompare(
                 selectedBYOReviewRepository
             ) == .orderedSame
+        }
+        guard selectedTargetIsEnabled else {
+            return false
+        }
+        if enabledRepositories.count == 1 {
+            return true
+        }
+        return existingLocalBotIdentityReady
+            && selectedAccountWorkspace?.entitlement == .internalAdmin
     }
 
     /// Existing-account entitlement is useful setup context, but it must not
@@ -427,8 +437,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     /// Starting the long-running daemon remains stricter than one scoped
-    /// review. A multi-repository worker cannot be started from the native app
-    /// until its runtime scope can be narrowed without rewriting the allowlist.
+    /// review. Customer BYO workers require one enabled repository. A verified
+    /// existing internal-admin bot may retain its existing multi-repository
+    /// allowlist while the current activation remains bound to one selected
+    /// review target.
     package var productionDaemonStartAvailable: Bool {
         productionUsefulWorkAvailable
             && reviewTargetRuntimeReady
@@ -887,8 +899,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var providerSetupReady: Bool {
         guard providerLoadedSnapshot?.configPath == configPath,
               providerLoadedRevision != nil,
-              providerLoadedSnapshot == currentProviderConfigurationSnapshot,
-              let provider = providers.selectedRegistryTarget,
+              providerLoadedSnapshot == currentProviderConfigurationSnapshot
+        else {
+            return false
+        }
+        if providers.codexRuntime.isReady {
+            return true
+        }
+        guard let provider = providers.selectedRegistryTarget,
               provider.enabled
         else {
             return false
@@ -908,14 +926,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    /// The current scoped-review bridge executes ZCode, so its authorization
-    /// must be bound to the same app configuration ZCode will read. A provider
-    /// verified through NeonDiff's separate API-key adapter remains valid for
-    /// provider setup, but cannot authorize this bridge until direct adapter
-    /// execution is supported.
+    /// Scoped review uses the config-selected Codex runtime when enabled.
+    /// Otherwise it executes ZCode and requires an explicit execution provider
+    /// from ZCode's own namespace. A separately verified API-key registry
+    /// provider cannot authorize either execution bridge.
     package var scopedReviewProviderReady: Bool {
-        providerSetupReady
-            && providers.selectedRegistryTarget?.authMode == "zcode-app-config"
+        guard providerSetupReady else { return false }
+        if providers.codexRuntime.isReady {
+            return true
+        }
+        return providers.selectedRegistryTarget?.authMode == "zcode-app-config"
             && !providers.zcodeProviderId
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty
@@ -2308,6 +2328,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func refreshStatus() {
+        // The executor resolves the sealed worker from a live provider. Keep
+        // the model's install/preview gate on that same current discovery so a
+        // worker that became available after launch is not left cached absent.
+        if dependencies.localBotDiscoveryProvider != nil {
+            refreshLocalBotDiscovery()
+        } else if let localWorkerExecutionContextProvider {
+            currentLocalWorkerExecutionContexts =
+                localWorkerExecutionContextProvider()
+        }
         persistLocalSettings()
         statusRefreshFailureMessage = nil
         runCLI(arguments: ["daemon", "status", "--config", configPath, "--launchd-label", launchdLabel], displayCommand: statusCommand)
@@ -2502,12 +2531,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         let manager = dependencies.keychainWorkerLaunchAgentManager
+        let preservedRepositoryCount = repos.count
         isKeychainWorkerLaunchAgentOperationInProgress = true
         keychainWorkerLaunchAgentStatus =
             "Validating the signed app, selected config, and sealed worker…"
         Task { [weak self] in
             do {
-                let status = try await manager.preview(request: request)
+                let status = try await manager.preview(
+                    request: request,
+                    preservedRepositoryCount: preservedRepositoryCount
+                )
                 guard let self else { return }
                 self.isKeychainWorkerLaunchAgentOperationInProgress = false
                 self.keychainWorkerLaunchAgentStatus = status
@@ -2567,6 +2600,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 lastError ?? "GitHub App setup required."
             return nil
         }
+        guard let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
+            secretStore: dependencies.secretStore
+        ).loadExisting(allowUserInteraction: false).deviceId else {
+            lastError =
+                "The saved activation device identity is unavailable. Reconnect or reactivate before installing the worker service."
+            keychainWorkerLaunchAgentStatus =
+                lastError ?? "Activation device identity required."
+            return nil
+        }
         let homeDirectory = dependencies.fileWriter
             .applicationSupportDirectory
             .deletingLastPathComponent()
@@ -2575,6 +2617,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         do {
             return try DesktopKeychainWorkerLaunchAgentRequest(
                 appID: appID,
+                licenseMachineID: licenseMachineID,
                 configPath: configPath,
                 launchdLabel: launchdLabel,
                 homeDirectory: homeDirectory
@@ -2623,13 +2666,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
             let licenseKey = try dependencies.secretStore.readSecret(
                 account: activationKeyAccount,
                 allowUserInteraction: false
-            ) else {
+            ),
+            let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
+                secretStore: dependencies.secretStore
+            ).loadExisting(allowUserInteraction: false).deviceId else {
                 throw BYOGitHubAppCredentialError.invalidPrivateKey
             }
             return try DesktopRuntimeCredentialEnvelope(
                 appID: appID,
                 privateKey: privateKey,
-                licenseKey: licenseKey
+                licenseKey: licenseKey,
+                licenseMachineID: licenseMachineID
             ).encodedData()
         } catch {
             lastError =
@@ -3699,6 +3746,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func verifyBYOGitHubAppCredentials() {
+        verifyBYOGitHubAppCredentials(
+            repositoryScope: nil,
+            source: .keychainStdin
+        )
+    }
+
+    private func verifyBYOGitHubAppCredentials(
+        repositoryScope: String?,
+        source: BYOGitHubVerificationContext.CredentialSource
+    ) {
         guard !isSetupMutationBlocked else {
             lastError = "Retry account verification before verifying GitHub App setup."
             byoGitHubCredentialStatus = lastError ?? "Account check required"
@@ -3736,21 +3793,30 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
-        let arguments = [
+        var arguments = [
             "doctor", "github",
-            "--config", configPath,
+            "--config", configPath
+        ]
+        if let repositoryScope {
+            arguments += ["--repo", repositoryScope]
+        }
+        arguments += [
             "--github-app-id", appId,
             "--github-app-private-key-stdin", "true",
             "--json"
         ]
-        let safeCommand = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --github-app-id \(shellQuote(appId)) --github-app-private-key-stdin true --json < [secure Keychain input]"
+        let repoArgument = repositoryScope.map {
+            " --repo \(shellQuote($0))"
+        } ?? ""
+        let safeCommand = "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath))\(repoArgument) --github-app-id \(shellQuote(appId)) --github-app-private-key-stdin true --json < [secure Keychain input]"
         let verificationContext = BYOGitHubVerificationContext(
             appId: appId,
-            source: .keychainStdin,
+            source: source,
             credentialRevision: byoGitHubCredentialRevision,
             cliPath: cliPath,
             configPath: configPath,
-            repositories: repos.filter(\.enabled).map(\.name).sorted(),
+            repositories: repositoryScope.map { [$0] }
+                ?? repos.filter(\.enabled).map(\.name).sorted(),
             workspaceGeneration: workspaceContextGeneration
         )
         var standardInput = Data(privateKey.utf8)
@@ -3760,7 +3826,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         byoGitHubCredentialsVerified = false
         lastError = nil
         lastCommandLine = safeCommand
-        byoGitHubCredentialStatus = "Verifying the configured repositories against the customer-owned GitHub App installation…"
+        byoGitHubCredentialStatus = repositoryScope == nil
+            ? "Verifying the configured repositories against the customer-owned GitHub App installation…"
+            : "Verifying the selected Review Target against the customer-owned GitHub App installation…"
 
         Task.detached {
             defer {
@@ -3791,7 +3859,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func verifyExistingLocalBotGitHubAccess() {
         if existingLocalAgentAccessAvailable,
-           selectedBotInstallation != nil
+           selectedBotInstallation != nil,
+           !keychainWorkerLaunchAgentActive
         {
             verifyGitHubAccessThroughExistingLocalAgent()
             return
@@ -3799,9 +3868,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
         if let bot = selectedBotInstallation,
            let storedAppID = storedBYOGitHubAppId,
            storedAppID == String(bot.appID),
-           byoGitHubPrivateKeyStored
+           byoGitHubPrivateKeyStored,
+           let targetRepository = selectedBYOReviewRepository,
+           repos.contains(where: {
+               $0.enabled
+                   && $0.name.caseInsensitiveCompare(targetRepository)
+                       == .orderedSame
+           })
         {
-            verifyBYOGitHubAppCredentials()
+            verifyBYOGitHubAppCredentials(
+                repositoryScope: targetRepository,
+                source: .keychainStdinExistingBot
+            )
             return
         }
         let diagnosis = existingLocalBotBYOGitHubVerificationStatus
@@ -3916,6 +3994,33 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     workspaceGeneration: workspaceContextGeneration
                 )
             }
+        case .keychainStdinExistingBot:
+            currentContext = existingLocalBotIdentityReady
+                ? selectedBotInstallation.flatMap { bot in
+                    selectedBYOReviewRepository.flatMap { targetRepository in
+                        guard let storedAppID = storedBYOGitHubAppId,
+                              storedAppID == String(bot.appID),
+                              repos.contains(where: {
+                                  $0.enabled
+                                      && $0.name.caseInsensitiveCompare(
+                                          targetRepository
+                                      ) == .orderedSame
+                              })
+                        else {
+                            return nil
+                        }
+                        return BYOGitHubVerificationContext(
+                            appId: storedAppID,
+                            source: .keychainStdinExistingBot,
+                            credentialRevision: byoGitHubCredentialRevision,
+                            cliPath: cliPath,
+                            configPath: configPath,
+                            repositories: [targetRepository],
+                            workspaceGeneration: workspaceContextGeneration
+                        )
+                    }
+                }
+                : nil
         case .existingLocalAgent:
             currentContext = existingLocalAgentAccessAvailable
                 ? selectedBotInstallation.flatMap { bot in
@@ -3942,7 +4047,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         let expectedCredentialSource: String
         switch expectedContext.source {
-        case .keychainStdin:
+        case .keychainStdin, .keychainStdinExistingBot:
             expectedCredentialSource = "stdin"
         case .existingLocalAgent:
             expectedCredentialSource = "configured"
@@ -4016,16 +4121,30 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }.joined(separator: ", ")
         byoGitHubCredentialsVerified = true
         lastError = nil
-        byoGitHubCredentialStatus = expectedContext.source == .existingLocalAgent
-            ? "Verified existing local agent App installation access for \(repositories). Worker dry/live review has not run yet."
-            : "Verified App installation access for \(repositories). Worker dry/live review has not run yet."
-        logText = expectedContext.source == .existingLocalAgent
-            ? "Existing local agent GitHub App installation and repository access verified. No credential was copied and no review was executed or posted."
-            : "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
+        switch expectedContext.source {
+        case .existingLocalAgent:
+            byoGitHubCredentialStatus =
+                "Verified existing local agent App installation access for \(repositories). Worker dry/live review has not run yet."
+            logText =
+                "Existing local agent GitHub App installation and repository access verified. No credential was copied and no review was executed or posted."
+        case .keychainStdinExistingBot:
+            byoGitHubCredentialStatus =
+                "Verified App installation access for the selected Review Target \(repositories). Worker installation and dry/live review have not run yet."
+            logText =
+                "Selected existing-bot GitHub App installation access verified through the signed bundled worker. The full configured allowlist was not rewritten."
+        case .keychainStdin:
+            byoGitHubCredentialStatus =
+                "Verified App installation access for \(repositories). Worker dry/live review has not run yet."
+            logText =
+                "Customer-owned GitHub App installation and repository access verified through the local CLI. No review was executed or posted."
+        }
 
-        if expectedContext.source == .existingLocalAgent,
-           let readCheck = report.github.readChecks.first
-        {
+        if expectedContext.source == .existingLocalAgent
+            || (
+                expectedContext.source == .keychainStdinExistingBot
+                    && existingLocalAgentAccessAvailable
+            ),
+           let readCheck = report.github.readChecks.first {
             verifyExistingLocalAgentEntitlement(
                 expectedContext: expectedContext,
                 visibility: readCheck.visibilityResult
@@ -4040,7 +4159,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard existingLocalAgentAccessAvailable,
               existingLocalBotIdentityReady,
               selectedAccountEntitlementSupportsCurrentPath,
-              expectedContext.source == .existingLocalAgent,
+              (
+                  expectedContext.source == .existingLocalAgent
+                      || expectedContext.source
+                          == .keychainStdinExistingBot
+              ),
               expectedContext.repositories.count == 1,
               let repository = expectedContext.repositories.first,
               selectedReviewRepository?.caseInsensitiveCompare(repository)
@@ -4070,44 +4193,129 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let expectedConfigPath = configPath
         let executablePath = cliPath
         let cli = dependencies.cli
-        let arguments = [
+        let expectedLicenseMachineID: String?
+        if expectedContext.source == .keychainStdinExistingBot {
+            guard let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
+                secretStore: dependencies.secretStore
+            ).loadExisting(allowUserInteraction: false).deviceId else {
+                isBYOGitHubVerificationInProgress = false
+                applyActivationEvent(.activationServiceError)
+                lastError =
+                    "The saved activation device identity is unavailable. Reactivate this Mac before verifying current access."
+                byoGitHubCredentialStatus =
+                    "GitHub access was verified, but the Keychain-backed entitlement identity could not be loaded safely."
+                return
+            }
+            expectedLicenseMachineID = licenseMachineID
+        } else {
+            expectedLicenseMachineID = nil
+        }
+        let keychainRevalidation:
+            (client: any ActivationLicenseClienting, key: ActivationKeyMaterial)?
+        if expectedContext.source == .keychainStdinExistingBot {
+            guard let expectedLicenseMachineID,
+                  let client = activationLicenseClientOverride
+                    ?? liveActivationLicenseClient(
+                        machineId: expectedLicenseMachineID,
+                        repository: repository
+                    )
+            else {
+                isBYOGitHubVerificationInProgress = false
+                applyActivationEvent(.activationServiceError)
+                lastError =
+                    "The signed activation verifier is unavailable. Reopen NeonDiff and verify existing access again."
+                byoGitHubCredentialStatus =
+                    "GitHub access was verified, but the API-backed entitlement verifier is unavailable."
+                return
+            }
+            let rawActivationKey: String?
+            do {
+                rawActivationKey = try dependencies.secretStore.readSecret(
+                    account: activationKeyAccount,
+                    allowUserInteraction: false
+                )
+            } catch {
+                rawActivationKey = nil
+            }
+            guard let rawActivationKey,
+                  !ActivationKeyMaterial(rawActivationKey).isEmpty
+            else {
+                isBYOGitHubVerificationInProgress = false
+                applyActivationEvent(.activationServiceError)
+                lastError =
+                    "The stored NeonDiff Activation Key is unavailable without user interaction. Use the License pane to authorize this Mac again."
+                byoGitHubCredentialStatus =
+                    "GitHub access was verified, but the stored API-backed entitlement credential is unavailable."
+                return
+            }
+            keychainRevalidation = (
+                client,
+                ActivationKeyMaterial(rawActivationKey)
+            )
+        } else {
+            keychainRevalidation = nil
+        }
+        var arguments = [
             "license", "status",
             "--config", configPath,
             "--repo", repository,
-            "--refresh", "true",
-            "--json"
+            "--refresh", "true"
         ]
+        if let expectedLicenseMachineID {
+            arguments.append(contentsOf: [
+                "--license-machine-id", expectedLicenseMachineID
+            ])
+        }
+        arguments.append("--json")
         isBYOGitHubVerificationInProgress = true
         byoGitHubCredentialStatus =
             "GitHub access verified. Checking the existing local agent's API-backed entitlement…"
-        lastCommandLine =
-            "\(shellQuote(cliPath)) license status --config \(shellQuote(configPath)) --repo \(shellQuote(repository)) --refresh true --json"
+        let redactedDeviceBinding = expectedLicenseMachineID == nil
+            ? ""
+            : " --license-machine-id [stored device ID]"
+        if keychainRevalidation == nil {
+            lastCommandLine =
+                "\(shellQuote(cliPath)) license status --config \(shellQuote(configPath)) --repo \(shellQuote(repository)) --refresh true\(redactedDeviceBinding) --json"
+        } else {
+            lastCommandLine =
+                "\(shellQuote(cliPath)) license activate --config \(shellQuote(configPath)) --license-storage keychain --license-key-stdin true --persist-local-state false\(redactedDeviceBinding) --repo \(shellQuote(repository)) --json"
+        }
 
         Task.detached {
             let outcome: ActivationClientOutcome
-            do {
-                let result = try await cli.run(
-                    executablePath: executablePath,
-                    arguments: arguments,
-                    standardInput: nil,
-                    timeout: 20
-                )
-                outcome = result.stdout.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ).isEmpty
-                    ? .serviceError
-                    : CLIActivationLicenseClient.classify(
-                        stdout: result.stdout
+            if let keychainRevalidation {
+                do {
+                    outcome = try await keychainRevalidation.client.revalidate(
+                        key: keychainRevalidation.key
                     )
-            } catch let error as NeonDiffCLIError {
-                switch error {
-                case .timedOut, .cancelled, .cleanupTimedOut:
+                } catch {
                     outcome = .offline
-                case .launchFailed, .standardInputTooLarge, .outputTooLarge:
-                    outcome = .serviceError
                 }
-            } catch {
-                outcome = .offline
+            } else {
+                do {
+                    let result = try await cli.run(
+                        executablePath: executablePath,
+                        arguments: arguments,
+                        standardInput: nil,
+                        timeout: 20
+                    )
+                    outcome = result.stdout.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+                        ? .serviceError
+                        : CLIActivationLicenseClient.classify(
+                            stdout: result.stdout
+                        )
+                } catch let error as NeonDiffCLIError {
+                    switch error {
+                    case .timedOut, .cancelled, .cleanupTimedOut:
+                        outcome = .offline
+                    case .launchFailed, .standardInputTooLarge, .outputTooLarge:
+                        outcome = .serviceError
+                    }
+                } catch {
+                    outcome = .offline
+                }
             }
 
             await MainActor.run {
@@ -4131,6 +4339,27 @@ package final class NeonDiffDesktopModel: ObservableObject {
                         "GitHub access was verified, but stale entitlement proof was discarded. Verify existing access again."
                     return
                 }
+                if let expectedLicenseMachineID {
+                    let currentLicenseMachineID =
+                        try? GitHubBrokerDeviceIdentityStore(
+                            secretStore: self.dependencies.secretStore
+                        ).loadExisting(
+                            allowUserInteraction: false
+                        ).deviceId
+                    guard currentLicenseMachineID
+                            == expectedLicenseMachineID
+                    else {
+                        self.isBYOGitHubVerificationInProgress = false
+                        self.applyActivationEvent(
+                            .activationServiceError
+                        )
+                        self.lastError =
+                            "The activation device identity changed before entitlement verification finished."
+                        self.byoGitHubCredentialStatus =
+                            "GitHub access was verified, but stale device-bound entitlement proof was discarded."
+                        return
+                    }
+                }
                 self.isBYOGitHubVerificationInProgress = false
                 let resolved =
                     self.resolveExistingLocalAgentEntitlementOutcome(
@@ -4144,7 +4373,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     resolved,
                     repository: repository,
                     activeLogMessage:
-                        "Current repository entitlement verified through the existing local agent. No Activation Key was copied."
+                        "Current repository entitlement verified through the existing local agent's API-backed credential path."
                 )
                 switch resolved {
                 case .active:
@@ -4423,17 +4652,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private var activationLicenseClient: (any ActivationLicenseClienting)? {
         if let activationLicenseClientOverride { return activationLicenseClientOverride }
-        // Keep the real adapter behind the rollout flag until production billing
-        // and activation canaries pass. When enabled, it uses the CLI's explicit
-        // no-local-state mode: the app-owned Keychain item remains the only raw
-        // credential copy and the key crosses only over bounded stdin.
-        let bundleEnablesActivation = dependencies.productionBoundary.byoGitHubEnabled
-        let rolloutEnablesActivation = dependencies.preferences.bool(forKey: activationCliBackedEnabledKey)
-        guard dependencies.productionBoundary.nativeActivationBrokerVerified,
-              bundleEnablesActivation || rolloutEnablesActivation
-        else {
-            return nil
-        }
         guard let selectedReviewRepository,
               repos.contains(where: {
                   $0.enabled
@@ -4446,12 +4664,36 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return nil
         }
+        return liveActivationLicenseClient(
+            machineId: identity.deviceId,
+            repository: selectedReviewRepository
+        )
+    }
+
+    private func liveActivationLicenseClient(
+        machineId: String,
+        repository: String
+    ) -> (any ActivationLicenseClienting)? {
+        // Keep the real adapter behind the rollout flag until production billing
+        // and activation canaries pass. When enabled, it uses the CLI's explicit
+        // no-local-state mode: the app-owned Keychain item remains the only raw
+        // credential copy and the key crosses only over bounded stdin.
+        let bundleEnablesActivation =
+            dependencies.productionBoundary.byoGitHubEnabled
+        let rolloutEnablesActivation = dependencies.preferences.bool(
+            forKey: activationCliBackedEnabledKey
+        )
+        guard dependencies.productionBoundary.nativeActivationBrokerVerified,
+              bundleEnablesActivation || rolloutEnablesActivation
+        else {
+            return nil
+        }
         return DesktopActivationLicenseClient(
             cli: dependencies.cli,
             executablePath: cliPath,
             configPath: configPath,
-            machineId: identity.deviceId,
-            repository: selectedReviewRepository
+            machineId: machineId,
+            repository: repository
         )
     }
 
@@ -4919,7 +5161,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         isScopedReviewInProgress = false
         scopedReviewTask = nil
-        guard currentScopedReviewCoordinatesMatch(expectedContext),
+        let coordinatesMatch =
+            currentScopedReviewCoordinatesMatch(expectedContext)
+        let structuredFailure =
+            scopedReviewStructuredFailureMessage(result.stdout)
+        guard coordinatesMatch,
               result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let report = try? JSONDecoder().decode(
@@ -4937,8 +5183,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
               isValidGitHubCommitSHA(report.scope.headSha)
         else {
             invalidateScopedReviewApproval()
-            lastError =
-                "The dry review did not produce exact repository, pull request, and head proof."
+            lastError = coordinatesMatch
+                ? (structuredFailure
+                    ?? "The dry review did not produce exact repository, pull request, and head proof.")
+                : "The dry review context changed before exact repository, pull request, and head proof completed."
             scopedReviewStatus =
                 "Dry review failed closed. No live review is authorized."
             return
@@ -5002,6 +5250,24 @@ package final class NeonDiffDesktopModel: ObservableObject {
         scopedReviewStatus =
             "Review posted for \(expectedApproval.repo)#\(expectedApproval.pullNumber) at \(expectedApproval.headSHA.prefix(12))."
         invalidateScopedReviewApproval(preserveStatus: true)
+    }
+
+    private func scopedReviewStructuredFailureMessage(
+        _ stdout: String
+    ) -> String? {
+        guard let data = stdout.data(using: .utf8),
+              let report = try? JSONDecoder().decode(
+                  ScopedReviewFailureReport.self,
+                  from: data
+              ),
+              let rawMessage = report.error?.message
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawMessage.isEmpty
+        else {
+            return nil
+        }
+        let redacted = NeonDiffRedactor.redact(rawMessage)
+        return "Dry review failed safely: \(redacted.prefix(512))"
     }
 
     private func currentScopedReviewCoordinatesMatch(
@@ -6385,6 +6651,7 @@ private struct ProviderConfigurationSnapshot: Equatable, Sendable {
     let zcodeProviderId: String
     let selectedProviderId: String
     let registryTargets: [ProviderRegistryTarget]
+    let codexRuntime: CodexRuntimeSettings
 
     init(
         providers: ProviderSettings,
@@ -6397,6 +6664,7 @@ private struct ProviderConfigurationSnapshot: Equatable, Sendable {
         zcodeProviderId = providers.zcodeProviderId
         selectedProviderId = providers.selectedProviderId
         registryTargets = providers.registryTargets
+        codexRuntime = providers.codexRuntime
     }
 }
 
@@ -6511,6 +6779,7 @@ private struct BYOGitHubDoctorReport: Decodable {
 private struct BYOGitHubVerificationContext: Equatable, Sendable {
     enum CredentialSource: Equatable, Sendable {
         case keychainStdin
+        case keychainStdinExistingBot
         case existingLocalAgent
     }
 
@@ -6564,6 +6833,28 @@ private struct ScopedReviewCommandReport: Decodable {
     let dryRun: Bool
     let scope: Scope
     let result: Result
+}
+
+private struct ScopedReviewFailureReport: Decodable {
+    struct Failure: Decodable {
+        let message: String
+
+        private enum CodingKeys: String, CodingKey {
+            case message
+        }
+
+        init(from decoder: Decoder) throws {
+            let singleValue = try decoder.singleValueContainer()
+            if let message = try? singleValue.decode(String.self) {
+                self.message = message
+                return
+            }
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            message = try values.decode(String.self, forKey: .message)
+        }
+    }
+
+    let error: Failure?
 }
 
 private let licenseKeyAccount = "license/default"
