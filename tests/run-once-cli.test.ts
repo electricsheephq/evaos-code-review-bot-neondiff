@@ -74,7 +74,7 @@ describe("run-once CLI reporting", () => {
 
   it("prints review-pr as the command on successful review-pr invocations", async () => {
     let forwardedExpectedHeadSha: string | undefined;
-    let explicitPullReview: boolean | undefined;
+    let explicitPullReview: RunOnceOptions["explicitPullReview"];
     const command = await runOnceCliCommand({
       options: {
         dryRun: true,
