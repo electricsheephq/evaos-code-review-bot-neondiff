@@ -4193,18 +4193,43 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let expectedConfigPath = configPath
         let executablePath = cliPath
         let cli = dependencies.cli
-        let arguments = [
+        let expectedLicenseMachineID: String?
+        if expectedContext.source == .keychainStdinExistingBot {
+            guard let licenseMachineID = try? GitHubBrokerDeviceIdentityStore(
+                secretStore: dependencies.secretStore
+            ).loadExisting(allowUserInteraction: false).deviceId else {
+                isBYOGitHubVerificationInProgress = false
+                applyActivationEvent(.activationServiceError)
+                lastError =
+                    "The saved activation device identity is unavailable. Reactivate this Mac before verifying current access."
+                byoGitHubCredentialStatus =
+                    "GitHub access was verified, but the Keychain-backed entitlement identity could not be loaded safely."
+                return
+            }
+            expectedLicenseMachineID = licenseMachineID
+        } else {
+            expectedLicenseMachineID = nil
+        }
+        var arguments = [
             "license", "status",
             "--config", configPath,
             "--repo", repository,
-            "--refresh", "true",
-            "--json"
+            "--refresh", "true"
         ]
+        if let expectedLicenseMachineID {
+            arguments.append(contentsOf: [
+                "--license-machine-id", expectedLicenseMachineID
+            ])
+        }
+        arguments.append("--json")
         isBYOGitHubVerificationInProgress = true
         byoGitHubCredentialStatus =
             "GitHub access verified. Checking the existing local agent's API-backed entitlement…"
+        let redactedDeviceBinding = expectedLicenseMachineID == nil
+            ? ""
+            : " --license-machine-id [stored device ID]"
         lastCommandLine =
-            "\(shellQuote(cliPath)) license status --config \(shellQuote(configPath)) --repo \(shellQuote(repository)) --refresh true --json"
+            "\(shellQuote(cliPath)) license status --config \(shellQuote(configPath)) --repo \(shellQuote(repository)) --refresh true\(redactedDeviceBinding) --json"
 
         Task.detached {
             let outcome: ActivationClientOutcome
@@ -4253,6 +4278,27 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     self.byoGitHubCredentialStatus =
                         "GitHub access was verified, but stale entitlement proof was discarded. Verify existing access again."
                     return
+                }
+                if let expectedLicenseMachineID {
+                    let currentLicenseMachineID =
+                        try? GitHubBrokerDeviceIdentityStore(
+                            secretStore: self.dependencies.secretStore
+                        ).loadExisting(
+                            allowUserInteraction: false
+                        ).deviceId
+                    guard currentLicenseMachineID
+                            == expectedLicenseMachineID
+                    else {
+                        self.isBYOGitHubVerificationInProgress = false
+                        self.applyActivationEvent(
+                            .activationServiceError
+                        )
+                        self.lastError =
+                            "The activation device identity changed before entitlement verification finished."
+                        self.byoGitHubCredentialStatus =
+                            "GitHub access was verified, but stale device-bound entitlement proof was discarded."
+                        return
+                    }
                 }
                 self.isBYOGitHubVerificationInProgress = false
                 let resolved =

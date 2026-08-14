@@ -780,6 +780,9 @@ import NeonDiffDesktopCore
         fixture.model.pendingBYOGitHubAppPrivateKey =
             existingBotFixturePrivateKey
         fixture.model.storeBYOGitHubAppCredentials()
+        let licenseMachineID = try GitHubBrokerDeviceIdentityStore(
+            secretStore: fixture.secretStore
+        ).loadOrCreate().deviceId
         fixture.model.applyAccountWorkspaceCatalog(.loaded([
             workspace(entitlement: .internalAdmin)
         ]))
@@ -827,6 +830,7 @@ import NeonDiffDesktopCore
             "--config", configPath,
             "--repo", targetRepository,
             "--refresh", "true",
+            "--license-machine-id", licenseMachineID,
             "--json"
         ])
         #expect(entitlementCall.standardInput == nil)
