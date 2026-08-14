@@ -374,4 +374,50 @@ import NeonDiffDesktopCore
             ) == arguments
         )
     }
+
+    @Test func sealedWorkerRunsIsolatedDaemonStatusWithoutLaunchAgent() {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        ).path
+        let sealed = DesktopLocalBotExecutionContext(
+            configPath: "",
+            executablePath:
+                "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
+            argumentPrefix: [],
+            environmentOverrides: [:]
+        )
+        let status = [
+            "daemon", "status",
+            "--config", config,
+            "--launchd-label", label
+        ]
+
+        #expect(
+            DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+                executablePath: "neondiff",
+                arguments: status,
+                executionContexts: [sealed]
+            ) == sealed.executablePath
+        )
+        #expect(
+            DesktopLocalBotExecutionContextResolver.resolveArguments(
+                executablePath: "neondiff",
+                arguments: status,
+                executionContexts: [sealed]
+            ) == status
+        )
+        for mutation in ["start", "stop"] {
+            #expect(
+                DesktopLocalBotExecutionContextResolver.resolveExecutablePath(
+                    executablePath: "neondiff",
+                    arguments: [
+                        "daemon", mutation,
+                        "--config", config,
+                        "--launchd-label", label
+                    ],
+                    executionContexts: [sealed]
+                ) == nil
+            )
+        }
+    }
 }
