@@ -3859,7 +3859,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func verifyExistingLocalBotGitHubAccess() {
         if existingLocalAgentAccessAvailable,
-           selectedBotInstallation != nil
+           selectedBotInstallation != nil,
+           !keychainWorkerLaunchAgentActive
         {
             verifyGitHubAccessThroughExistingLocalAgent()
             return
