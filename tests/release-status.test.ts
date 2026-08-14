@@ -4653,6 +4653,53 @@ describe("beta release status", () => {
     });
   });
 
+  it("does not require Node system CA for the exact signed sealed desktop worker", () => {
+    const configPath =
+      "/Users/m1/Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json";
+    const launchd = parseLaunchdPrintStatus("com.electricsheephq.evaos-code-review-bot", `
+gui/501/com.electricsheephq.evaos-code-review-bot = {
+\tstate = running
+\tpid = 70954
+\tprogram = /Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop
+\targuments = {
+\t\t/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop
+\t\t--neondiff-worker-daemon
+\t\t--config
+\t\t${configPath}
+\t\t--launchd-label
+\t\tcom.electricsheephq.evaos-code-review-bot
+\t}
+\tenvironment = {
+\t\tOSLogRateLimit => 64
+\t}
+}
+`);
+    const status = buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath,
+      launchd,
+      database: { rowCount: 0, errorCount: 0 },
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(launchd).toMatchObject({
+      program: "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop",
+      sealedDesktopWorker: true,
+      usesSystemCa: false
+    });
+    expect(status.gates).toContainEqual({
+      name: "launchd_node_system_ca",
+      ok: true,
+      detail: "not applicable to the signed sealed desktop worker"
+    });
+  });
+
   it("fails closed when launchd NODE_OPTIONS cannot be verified", () => {
     const status = buildReleaseStatus({
       repo: {
