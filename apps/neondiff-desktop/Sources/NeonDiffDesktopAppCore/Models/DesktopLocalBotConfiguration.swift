@@ -741,7 +741,8 @@ package enum DesktopLocalBotExecutionContextResolver {
     private static func isTrustedBundledWorker(
         _ context: DesktopLocalBotExecutionContext
     ) -> Bool {
-        guard let executablePath = context.executablePath,
+        guard context.configPath.isEmpty,
+              let executablePath = context.executablePath,
               executablePath
                 == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
               context.argumentPrefix.isEmpty,

@@ -91,6 +91,42 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.localWorkerCLIAvailable)
     }
 
+    @Test func statusCheckIgnoresConfigBoundDuplicateOfUnboundSealedWorker() {
+        let configPath =
+            "/Users/test/Library/Application Support/NeonDiffDesktop/Accounts/account/Bots/existing-bot/config.local.json"
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            preferenceStrings: [
+                "neondiff.cliPath": "neondiff",
+                "neondiff.configPath": configPath
+            ],
+            productionBoundary: exactB0Boundary
+        )
+        let sealedWorker =
+            "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker"
+        fixture.model.localWorkerExecutionContextProvider = {
+            [
+                DesktopLocalBotExecutionContext(
+                    configPath: configPath,
+                    executablePath: sealedWorker,
+                    argumentPrefix: [],
+                    environmentOverrides: [:]
+                ),
+                DesktopLocalBotExecutionContext(
+                    configPath: "",
+                    executablePath: sealedWorker,
+                    argumentPrefix: [],
+                    environmentOverrides: [:]
+                )
+            ]
+        }
+
+        #expect(!fixture.model.localWorkerCLIAvailable)
+        fixture.model.refreshStatus()
+
+        #expect(fixture.model.localWorkerCLIAvailable)
+    }
+
     @Test func cleanInstallInitializationUsesNonDestructiveCLIInit() async {
         let fixture = ModelDependencyFixture(
             cliOutcomes: [.success(CLIRunResult(
