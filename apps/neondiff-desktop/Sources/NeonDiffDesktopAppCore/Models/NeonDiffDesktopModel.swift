@@ -5161,7 +5161,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         isScopedReviewInProgress = false
         scopedReviewTask = nil
-        guard currentScopedReviewCoordinatesMatch(expectedContext),
+        let coordinatesMatch =
+            currentScopedReviewCoordinatesMatch(expectedContext)
+        let structuredFailure =
+            scopedReviewStructuredFailureMessage(result.stdout)
+        guard coordinatesMatch,
               result.exitCode == 0,
               let data = result.stdout.data(using: .utf8),
               let report = try? JSONDecoder().decode(
@@ -5179,8 +5183,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
               isValidGitHubCommitSHA(report.scope.headSha)
         else {
             invalidateScopedReviewApproval()
-            lastError =
-                "The dry review did not produce exact repository, pull request, and head proof."
+            lastError = coordinatesMatch
+                ? (structuredFailure
+                    ?? "The dry review did not produce exact repository, pull request, and head proof.")
+                : "The dry review context changed before exact repository, pull request, and head proof completed."
             scopedReviewStatus =
                 "Dry review failed closed. No live review is authorized."
             return
@@ -5244,6 +5250,24 @@ package final class NeonDiffDesktopModel: ObservableObject {
         scopedReviewStatus =
             "Review posted for \(expectedApproval.repo)#\(expectedApproval.pullNumber) at \(expectedApproval.headSHA.prefix(12))."
         invalidateScopedReviewApproval(preserveStatus: true)
+    }
+
+    private func scopedReviewStructuredFailureMessage(
+        _ stdout: String
+    ) -> String? {
+        guard let data = stdout.data(using: .utf8),
+              let report = try? JSONDecoder().decode(
+                  ScopedReviewFailureReport.self,
+                  from: data
+              ),
+              let rawMessage = report.error?.message
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawMessage.isEmpty
+        else {
+            return nil
+        }
+        let redacted = NeonDiffRedactor.redact(rawMessage)
+        return "Dry review failed safely: \(redacted.prefix(512))"
     }
 
     private func currentScopedReviewCoordinatesMatch(
@@ -6809,6 +6833,14 @@ private struct ScopedReviewCommandReport: Decodable {
     let dryRun: Bool
     let scope: Scope
     let result: Result
+}
+
+private struct ScopedReviewFailureReport: Decodable {
+    struct Failure: Decodable {
+        let message: String
+    }
+
+    let error: Failure?
 }
 
 private let licenseKeyAccount = "license/default"
