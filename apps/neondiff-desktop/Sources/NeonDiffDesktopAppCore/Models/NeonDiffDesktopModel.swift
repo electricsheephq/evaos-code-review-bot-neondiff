@@ -229,7 +229,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package var customerRuntimeBoundaryMessage: String {
         if byoGitHubCredentialOnboardingAvailable,
-           repos.filter(\.enabled).count > 1 {
+           repos.filter(\.enabled).count > 1,
+           !reviewTargetRuntimeReady {
             let target = selectedBYOReviewRepository.map {
                 "Activation can be verified for \($0), but "
             } ?? "Choose one Review Target for activation. "
@@ -287,10 +288,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard let selectedBYOReviewRepository else {
             return false
         }
-        return enabledRepositories.count == 1
-            && enabledRepositories[0].caseInsensitiveCompare(
+        let selectedTargetIsEnabled = enabledRepositories.contains {
+            $0.caseInsensitiveCompare(
                 selectedBYOReviewRepository
             ) == .orderedSame
+        }
+        guard selectedTargetIsEnabled else {
+            return false
+        }
+        if enabledRepositories.count == 1 {
+            return true
+        }
+        return existingLocalBotIdentityReady
+            && selectedAccountWorkspace?.entitlement == .internalAdmin
     }
 
     /// Existing-account entitlement is useful setup context, but it must not
@@ -427,8 +437,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     /// Starting the long-running daemon remains stricter than one scoped
-    /// review. A multi-repository worker cannot be started from the native app
-    /// until its runtime scope can be narrowed without rewriting the allowlist.
+    /// review. Customer BYO workers require one enabled repository. A verified
+    /// existing internal-admin bot may retain its existing multi-repository
+    /// allowlist while the current activation remains bound to one selected
+    /// review target.
     package var productionDaemonStartAvailable: Bool {
         productionUsefulWorkAvailable
             && reviewTargetRuntimeReady

@@ -2062,14 +2062,22 @@ function readBoolean(value: unknown): boolean | undefined {
 }
 
 function readRepoStatus(cwd: string): ReleaseRepoStatus {
-  return {
-    branch: git(cwd, ["branch", "--show-current"]) || "(detached)",
-    head: git(cwd, ["rev-parse", "HEAD"]),
-    dirtyFiles: git(cwd, ["status", "--short"])
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-  };
+  try {
+    return {
+      branch: gitQuiet(cwd, ["branch", "--show-current"]) || "(detached)",
+      head: gitQuiet(cwd, ["rev-parse", "HEAD"]),
+      dirtyFiles: gitQuiet(cwd, ["status", "--short"])
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+    };
+  } catch {
+    return {
+      branch: "(unknown)",
+      head: "(unknown)",
+      dirtyFiles: ["(git unavailable)"]
+    };
+  }
 }
 
 function readLaunchdStatus(label: string): ReleaseLaunchdStatus {
@@ -2926,6 +2934,18 @@ function stripLeadingV(version: string): string {
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function gitQuiet(cwd: string, args: string[]): string {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.status !== 0) {
+    throw new Error("git repository status unavailable");
+  }
+  return result.stdout.trim();
 }
 
 function isProcessAlive(pid: number): boolean {

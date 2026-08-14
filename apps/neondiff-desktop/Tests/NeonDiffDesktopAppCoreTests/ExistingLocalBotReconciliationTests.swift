@@ -404,7 +404,7 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
-    @Test func multiRepoWorkerExplainsRuntimeScopeBlockAfterTargetSelection() {
+    @Test func internalAdminMultiRepoWorkerKeepsAllowlistAndUnlocksRuntimeScope() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
             productionBoundary: .testAccountLink
@@ -425,11 +425,39 @@ import NeonDiffDesktopCore
         )
 
         #expect(
+            !fixture.model.customerRuntimeBoundaryMessage
+                .contains("multiple repositories")
+        )
+        #expect(fixture.model.reviewTargetRuntimeReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @MainActor
+    @Test func paidCustomerMultiRepoWorkerRemainsRuntimeBlocked() {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .paid)
+        ]))
+        fixture.model.selectBotInstallation("bot-evaos-code-review-bot")
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [
+                "electricsheephq/WorldOS",
+                "electricsheephq/evaos-code-review-bot-neondiff"
+            ]
+        ))
+        fixture.model.selectBYOReviewRepository(
+            fullName: "electricsheephq/WorldOS"
+        )
+
+        #expect(
             fixture.model.customerRuntimeBoundaryMessage
                 .contains("multiple repositories")
         )
         #expect(!fixture.model.reviewTargetRuntimeReady)
-        #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
     @MainActor
@@ -1278,7 +1306,7 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
-    @Test func selectedTargetUnlocksScopedReviewButNotMultiRepoDaemonStart() async throws {
+    @Test func selectedTargetUnlocksScopedReviewAndInternalAdminMultiRepoDaemonStart() async throws {
         let targetRepository = "electricsheephq/evaos-code-review-bot-neondiff"
         let otherRepository = "electricsheephq/WorldOS"
         let headSHA = String(repeating: "a", count: 40)
@@ -1394,7 +1422,7 @@ import NeonDiffDesktopCore
             "--json"
         ])
         #expect(fixture.model.productionUsefulWorkAvailable)
-        #expect(!fixture.model.productionDaemonStartAvailable)
+        #expect(fixture.model.productionDaemonStartAvailable)
 
         fixture.model.pendingReviewPullNumber = "685"
         fixture.model.runScopedDryReview()

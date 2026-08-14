@@ -1093,6 +1093,34 @@ describe("beta release status", () => {
     expect(redactedOutput).toContain("electricsheephq/evaos-code-review-bot-neondiff/issues/559");
   });
 
+  it("fails closed without throwing when runtime status is collected outside a Git checkout", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-non-git-cwd-"));
+    roots.push(root);
+
+    const status = collectReleaseStatus({
+      cwd: root,
+      statePath: join(root, "missing-live-state.sqlite"),
+      configPath: join(root, "missing-config.json"),
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot"
+    });
+
+    expect(status.repo).toEqual({
+      branch: "(unknown)",
+      head: "(unknown)",
+      dirtyFiles: ["(git unavailable)"]
+    });
+    expect(status.gates).toContainEqual({
+      name: "release_branch",
+      ok: false,
+      detail: "(unknown)"
+    });
+    expect(status.gates).toContainEqual({
+      name: "clean_checkout",
+      ok: false,
+      detail: "1 dirty file(s)"
+    });
+  });
+
   it("fails closed without throwing when collectReleaseStatus receives a missing public manifest path", () => {
     const root = mkdtempSync(join(tmpdir(), "release-status-missing-public-manifest-"));
     roots.push(root);
