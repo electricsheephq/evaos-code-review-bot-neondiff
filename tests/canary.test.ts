@@ -32,8 +32,24 @@ describe("canary PR allowlist", () => {
       config,
       "electricsheephq/evaos-code-review-bot-neondiff",
       769,
-      { explicitPullReview: true }
+      {
+        explicitPullReview: {
+          repo: "electricsheephq/evaos-code-review-bot-neondiff",
+          pullNumber: 769
+        }
+      }
     )).toBe(true);
+    expect(isCanaryAllowed(
+      config,
+      "electricsheephq/evaos-code-review-bot-neondiff",
+      770,
+      {
+        explicitPullReview: {
+          repo: "electricsheephq/evaos-code-review-bot-neondiff",
+          pullNumber: 769
+        }
+      }
+    )).toBe(false);
   });
 });
 

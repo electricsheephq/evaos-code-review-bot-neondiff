@@ -220,7 +220,7 @@ export interface RunOnceOptions {
   dryRun: boolean;
   repo?: string;
   pullNumber?: number;
-  explicitPullReview?: boolean;
+  explicitPullReview?: ExplicitPullReviewScope;
   expectedHeadSha?: string;
   expectedConfigRevision?: string;
   processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run";
@@ -502,7 +502,7 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             repo,
             pull,
             ...(options.explicitPullReview
-              ? { explicitPullReview: true }
+              ? { explicitPullReview: options.explicitPullReview }
               : {}),
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
@@ -1437,7 +1437,7 @@ export interface ReviewPullInput {
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
-  explicitPullReview?: boolean;
+  explicitPullReview?: ExplicitPullReviewScope;
   dryRun: boolean;
   useZCode: boolean;
   configRevision?: string;
@@ -2924,11 +2924,19 @@ export function isCanaryAllowed(
   config: Pick<BotConfig, "canaryPulls">,
   repo: string,
   pullNumber: number,
-  options: { explicitPullReview?: boolean } = {}
+  options: { explicitPullReview?: ExplicitPullReviewScope } = {}
 ): boolean {
-  if (options.explicitPullReview) return true;
+  if (
+    options.explicitPullReview?.pullNumber === pullNumber &&
+    options.explicitPullReview.repo.toLowerCase() === repo.toLowerCase()
+  ) return true;
   if (!config.canaryPulls || config.canaryPulls.length === 0) return true;
   return new Set(config.canaryPulls).has(`${repo}#${pullNumber}`);
+}
+
+export interface ExplicitPullReviewScope {
+  repo: string;
+  pullNumber: number;
 }
 
 export type StaleHeadPhase = "before_command" | "before_review" | "before_chunk" | "before_plan" | "before_post";

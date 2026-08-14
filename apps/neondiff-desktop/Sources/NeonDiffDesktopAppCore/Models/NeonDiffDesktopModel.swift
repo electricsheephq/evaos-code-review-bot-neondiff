@@ -6838,6 +6838,20 @@ private struct ScopedReviewCommandReport: Decodable {
 private struct ScopedReviewFailureReport: Decodable {
     struct Failure: Decodable {
         let message: String
+
+        private enum CodingKeys: String, CodingKey {
+            case message
+        }
+
+        init(from decoder: Decoder) throws {
+            let singleValue = try decoder.singleValueContainer()
+            if let message = try? singleValue.decode(String.self) {
+                self.message = message
+                return
+            }
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            message = try values.decode(String.self, forKey: .message)
+        }
     }
 
     let error: Failure?

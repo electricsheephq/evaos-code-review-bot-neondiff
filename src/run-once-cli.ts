@@ -97,6 +97,20 @@ export async function runOnceCliCommand(input: {
 }): Promise<RunOnceCliCommandResult> {
   let result: RunOnceResult;
   try {
+    const explicitRepo = input.options.repo;
+    const explicitPullNumber = input.options.pullNumber;
+    const explicitPullReview =
+      input.commandName === "review-pr" &&
+      typeof explicitRepo === "string" &&
+      explicitRepo.trim().length > 0 &&
+      typeof explicitPullNumber === "number" &&
+      Number.isInteger(explicitPullNumber) &&
+      explicitPullNumber > 0
+        ? {
+            repo: explicitRepo,
+            pullNumber: explicitPullNumber
+          }
+        : undefined;
     const licenseAdmission = input.admitImpl
       ? await input.admitImpl()
       : input.options.licenseAdmission;
@@ -104,8 +118,8 @@ export async function runOnceCliCommand(input: {
       ...input.options,
       // `review-pr` is already scoped to one explicit repo/PR. Keep
       // canaryPulls as the broad daemon/run-once rollout boundary.
-      ...(input.commandName === "review-pr"
-        ? { explicitPullReview: true }
+      ...(explicitPullReview
+        ? { explicitPullReview }
         : {}),
       ...(licenseAdmission ? { licenseAdmission } : {})
     });
