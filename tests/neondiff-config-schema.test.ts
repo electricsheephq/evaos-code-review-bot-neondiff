@@ -186,6 +186,69 @@ describe("NeonDiff config schema draft", () => {
     }
   });
 
+  it("accepts repo-specific issue policy fields and rejects wrong field types", () => {
+    const validate = compileSchema();
+    const baseConfig = readJson(join(fixtureRoot, "valid-minimal.json"));
+    const issueEnrichment = asRecord(baseConfig.issueEnrichment);
+    const repos = {
+      "electricsheephq/lcm-x": {
+        enabled: true,
+        allowedLabels: ["issue-label"],
+        allowedReviewers: ["issue-reviewer"],
+        advisoryPolicy: "Hermes ContextEngine lossless memory policy",
+        validationSuggestions: ["Reproduce on current main or name a mandatory invariant."],
+        suggestedLabels: ["documentation", "test"],
+        suggestedReviewers: ["Tosko4"],
+        labelAliases: { docs: "documentation", tests: "test" },
+        maxIssuesPerCycle: 3,
+        maxCommentsPerCycle: 1,
+        cooldownMs: 3_600_000,
+        burstWindowMs: 3_600_000,
+        maxIssuesPerBurst: 6,
+        lookbackMs: 600_000,
+        processExistingOpenIssuesOnActivation: false
+      }
+    };
+
+    expectValidFixture(validate, "repo-specific issue policy", {
+      ...baseConfig,
+      issueEnrichment: { ...issueEnrichment, repos }
+    });
+
+    const invalidErrors = validateConfig(validate, {
+      ...baseConfig,
+      issueEnrichment: {
+        ...issueEnrichment,
+        repos: {
+          "electricsheephq/lcm-x": {
+            ...repos["electricsheephq/lcm-x"],
+            suggestedLabels: "documentation"
+          }
+        }
+      }
+    });
+    expect(errorPaths(invalidErrors)).toContain(
+      "/issueEnrichment/repos/electricsheephq~1lcm-x/suggestedLabels"
+    );
+
+    const oversizedErrors = validateConfig(validate, {
+      ...baseConfig,
+      issueEnrichment: {
+        ...issueEnrichment,
+        repos: {
+          "electricsheephq/lcm-x": {
+            advisoryPolicy: "x".repeat(4_001),
+            validationSuggestions: Array.from({ length: 21 }, () => "check")
+          }
+        }
+      }
+    });
+    expect(errorPaths(oversizedErrors)).toEqual(expect.arrayContaining([
+      "/issueEnrichment/repos/electricsheephq~1lcm-x/advisoryPolicy",
+      "/issueEnrichment/repos/electricsheephq~1lcm-x/validationSuggestions"
+    ]));
+  });
+
   it("validates JSON fixtures against the published JSON Schema", () => {
     const validate = compileSchema();
     const validFixtures = fixtureNames("valid", ".json");

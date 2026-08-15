@@ -2,7 +2,16 @@
 
 Issue enrichment is a separate lane from PR review monitoring. `pilotRepos`, `canaryPulls`, `repoProfiles.repos`, and `repoProfiles.suggestedLabels` or `suggestedReviewers` do not opt a repo into issue enrichment.
 
-Use `issueEnrichment.allowlist` for issue scanning and comment eligibility. Use `issueEnrichment.allowedLabels` and `issueEnrichment.allowedReviewers` for issue suggestions only; repo-level `issueEnrichment.repos.<owner/repo>.allowedLabels` and `allowedReviewers` override those suggestion allowlists for that issue repo.
+Use `issueEnrichment.allowlist` for issue scanning and comment eligibility. Use `issueEnrichment.allowedLabels` and `issueEnrichment.allowedReviewers` for issue suggestions only; repo-level `issueEnrichment.repos.<owner/repo>.allowedLabels` and `allowedReviewers` override those suggestion allowlists for that issue repo. Repo overrides may also carry `advisoryPolicy`, `validationSuggestions`, `suggestedLabels`, `suggestedReviewers`, and `labelAliases`. These fields shape the rendered advisory comment only: labels and reviewers are never mutated.
+
+The tracked LCM-X profile (`electricsheephq/lcm-x`) is intentionally explicit:
+
+- LCM-X is an independent Hermes ContextEngine extension for lossless context memory, not OpenClaw.
+- Review data loss/duplication, chronology/provenance, profile/session contamination, source coverage, tool-call/result grouping, fresh-tail behavior, SQLite/concurrency/crash safety, import idempotency, and unsupported Hermes host assumptions.
+- Require current-main reproduction or a named mandatory invariant, and distinguish NeonDiff severity from LCM-X P0-P4.
+- Suggested labels are `data-integrity`, `security`, `performance`, `needs-repro`, `test`, `documentation`, and `upstream-evidence`; `docs` aliases to `documentation` and `tests` aliases to `test`; suggested reviewer is `Tosko4`.
+
+Aliases apply to inferred and configured suggestions before the issue allowlist filter. `processExistingOpenIssuesOnActivation` remains explicitly `false` in the tracked example, and no path filters are used for this issue policy.
 
 Live issue comments are blocked until all of these are true:
 
@@ -31,7 +40,12 @@ Keep new rollouts dry-run first:
         "burstWindowMs": 3600000,
         "maxIssuesPerBurst": 6,
         "lookbackMs": 600000,
-        "processExistingOpenIssuesOnActivation": false
+        "processExistingOpenIssuesOnActivation": false,
+        "advisoryPolicy": "Keep this repo's issue guidance explicit and suggestion-only.",
+        "validationSuggestions": ["Require current-main reproduction or a named mandatory invariant."],
+        "suggestedLabels": ["documentation"],
+        "suggestedReviewers": ["maintainer-login"],
+        "labelAliases": { "docs": "documentation", "tests": "test" }
       }
     }
   }

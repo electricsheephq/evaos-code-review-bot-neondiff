@@ -12,6 +12,7 @@ import {
   type ReviewLensConfig,
   type ReviewLensPacket
 } from "./review-lenses.js";
+import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
 import type { IssueEnrichmentRecord, IssueEnrichmentRecordStatus, ReviewStateStore } from "./state.js";
 import { isAuthenticProductionLicenseAdmission, type ProductionLicenseAdmission } from "./license-admission.js";
@@ -60,6 +61,11 @@ export interface IssueEnrichmentRepoOverride {
   enabled?: boolean;
   allowedLabels?: string[];
   allowedReviewers?: string[];
+  advisoryPolicy?: string;
+  validationSuggestions?: string[];
+  suggestedLabels?: string[];
+  suggestedReviewers?: string[];
+  labelAliases?: Record<string, string>;
   maxIssuesPerCycle?: number;
   maxCommentsPerCycle?: number;
   cooldownMs?: number;
@@ -67,6 +73,14 @@ export interface IssueEnrichmentRepoOverride {
   maxIssuesPerBurst?: number;
   lookbackMs?: number;
   processExistingOpenIssuesOnActivation?: boolean;
+}
+
+export interface IssueEnrichmentRepoPolicy {
+  advisoryPolicy?: string;
+  validationSuggestions: string[];
+  suggestedLabels: string[];
+  suggestedReviewers: string[];
+  labelAliases: Record<string, string>;
 }
 
 export interface IssueEnrichmentStatus {
@@ -340,7 +354,11 @@ function reposMissingLiveIssueEnrichmentThresholds(config: IssueEnrichmentConfig
 }
 
 export async function collectIssueEnrichmentScan(input: {
-  config: { issueEnrichment?: IssueEnrichmentConfig };
+  config: {
+    issueEnrichment?: IssueEnrichmentConfig;
+    enrichment?: { maxSuggestions?: number };
+    confidenceCalibration?: { publicDisplay: PublicConfidenceDisplayPolicy };
+  };
   reader: IssueEnrichmentReader;
   dryRun: boolean;
   repos?: string[];
@@ -355,6 +373,7 @@ export async function collectIssueEnrichmentScan(input: {
 }): Promise<IssueEnrichmentScanResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const status = buildIssueEnrichmentStatus({
     config: input.config,
     canPostAsApp: input.canPostAsApp ?? false,
@@ -428,6 +447,8 @@ export async function collectIssueEnrichmentScan(input: {
       issues,
       throttle: policy.throttle,
       suggestions: policy.suggestions,
+      repoPolicy: policy.repoPolicy,
+      renderPolicy,
       postIssueComment: config.postIssueComment,
       checkedAt,
       shouldCountItem: input.shouldCountItem
@@ -486,7 +507,12 @@ export async function collectIssueEnrichmentScan(input: {
 }
 
 export async function runIssueEnrichmentCycle(input: {
-  config: { issueEnrichment?: IssueEnrichmentConfig; reviewLenses?: ReviewLensConfig };
+  config: {
+    issueEnrichment?: IssueEnrichmentConfig;
+    reviewLenses?: ReviewLensConfig;
+    enrichment?: { maxSuggestions?: number };
+    confidenceCalibration?: { publicDisplay: PublicConfidenceDisplayPolicy };
+  };
   state: Pick<
     ReviewStateStore,
     "getIssueEnrichmentRecord" |
@@ -513,6 +539,7 @@ export async function runIssueEnrichmentCycle(input: {
   }
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const releasePreacquiredLeaseBeforeRun = () => {
     if (!input.dryRun && input.preacquiredLease) {
       input.state.releaseIssueEnrichmentRunLease(input.preacquiredLease.leaseId);
@@ -638,7 +665,14 @@ export async function runIssueEnrichmentCycle(input: {
       if (cached) return cached;
       const issue = issuesByKey.get(key);
       if (!issue) return undefined;
-      const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue, undefined, reviewLensPacket);
+      const enrichment = buildIssueEnrichmentForCycle(
+        config,
+        item.repo,
+        issue,
+        renderPolicy,
+        undefined,
+        reviewLensPacket
+      );
       plannedEnrichmentByIssue.set(key, enrichment);
       return enrichment;
     };
@@ -656,7 +690,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const bodyHash = issue && shouldCompareIssueEnrichmentBodyHash(existing, issueUpdatedAt)
+      const bodyHash = issue && shouldCompareIssueEnrichmentBodyHash(existing)
         ? plannedBodyHashForItem(item)
         : undefined;
       return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, bodyHash, item.action));
@@ -721,7 +755,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const bodyHash = shouldCompareIssueEnrichmentBodyHash(existing, issueUpdatedAt) ||
+      const bodyHash = shouldCompareIssueEnrichmentBodyHash(existing) ||
         shouldBackfillIssueEnrichmentBodyHash(existing, issueUpdatedAt, item.action)
         ? plannedBodyHashForItem(item)
         : undefined;
@@ -800,8 +834,15 @@ export async function runIssueEnrichmentCycle(input: {
         // #263: attach the mapped lifecycle state (`enriched`) to the marker at post time. This is a
         // renaming of the decision already made (status=posted) and rides the diagnostic state marker
         // only; bodyHash excludes the marker, so idempotency is unaffected.
-        const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue, { state: "enriched" }, reviewLensPacket);
-        const postBodyHash = plannedBodyHashForItem(item) ?? enrichment.bodyHash;
+        const enrichment = buildIssueEnrichmentForCycle(
+          config,
+          item.repo,
+          issue,
+          renderPolicy,
+          { state: "enriched" },
+          reviewLensPacket
+        );
+        const postBodyHash = enrichment.bodyHash;
         const post = await postEnrichmentComment({
           enabled: true,
           dryRun: false,
@@ -875,6 +916,7 @@ export function resolveIssueEnrichmentRepoPolicy(
   reason?: "not_issue_enrichment_allowlisted" | "issue_enrichment_repo_disabled";
   throttle: IssueEnrichmentThrottlePolicy;
   suggestions: IssueEnrichmentSuggestionPolicy;
+  repoPolicy: IssueEnrichmentRepoPolicy;
 } {
   const override = config.repos?.[repo];
   const throttle = {
@@ -891,9 +933,16 @@ export function resolveIssueEnrichmentRepoPolicy(
     allowedLabels: resolveIssueSuggestionAllowlist(config.allowedLabels, override?.allowedLabels),
     allowedReviewers: resolveIssueSuggestionAllowlist(config.allowedReviewers, override?.allowedReviewers)
   };
-  if (!config.allowlist.includes(repo)) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle, suggestions };
-  if (override?.enabled === false) return { allowed: false, reason: "issue_enrichment_repo_disabled", throttle, suggestions };
-  return { allowed: true, throttle, suggestions };
+  const repoPolicy: IssueEnrichmentRepoPolicy = {
+    ...(override?.advisoryPolicy !== undefined ? { advisoryPolicy: override.advisoryPolicy } : {}),
+    validationSuggestions: [...(override?.validationSuggestions ?? [])],
+    suggestedLabels: [...(override?.suggestedLabels ?? [])],
+    suggestedReviewers: [...(override?.suggestedReviewers ?? [])],
+    labelAliases: { ...(override?.labelAliases ?? {}) }
+  };
+  if (!config.allowlist.includes(repo)) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle, suggestions, repoPolicy };
+  if (override?.enabled === false) return { allowed: false, reason: "issue_enrichment_repo_disabled", throttle, suggestions, repoPolicy };
+  return { allowed: true, throttle, suggestions, repoPolicy };
 }
 
 function resolveIssueSuggestionAllowlist(globalAllowlist: string[], repoOverride: string[] | undefined): string[] {
@@ -906,6 +955,8 @@ function planRepoIssueScan(input: {
   issues: GitHubRelatedIssueOrPull[];
   throttle: IssueEnrichmentThrottlePolicy;
   suggestions: IssueEnrichmentSuggestionPolicy;
+  repoPolicy: IssueEnrichmentRepoPolicy;
+  renderPolicy: IssueEnrichmentRenderPolicy;
   postIssueComment: boolean;
   checkedAt: string;
   shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
@@ -916,8 +967,9 @@ function planRepoIssueScan(input: {
     issue,
     allowedLabels: allowlists.allowedLabels,
     allowedOwners: allowlists.allowedOwners,
+    repoPolicy: input.repoPolicy,
     maxRelatedRefs: 8,
-    maxSuggestions: 8
+    ...input.renderPolicy
   }));
   const eligible = planned.filter((output) => !output.skipped);
   const countableEligible = input.shouldCountItem
@@ -1201,12 +1253,10 @@ function shouldSkipIssueEnrichmentRecord(
 }
 
 function shouldCompareIssueEnrichmentBodyHash(
-  existing: IssueEnrichmentRecord | undefined,
-  issueUpdatedAt: string
+  existing: IssueEnrichmentRecord | undefined
 ): boolean {
   return existing?.status === "posted" &&
-    Boolean(existing.bodyHash) &&
-    existing.issueUpdatedAt !== issueUpdatedAt;
+    Boolean(existing.bodyHash);
 }
 
 function shouldBackfillIssueEnrichmentBodyHash(
@@ -1232,6 +1282,7 @@ function buildIssueEnrichmentForCycle(
   config: IssueEnrichmentConfig,
   repo: string,
   issue: GitHubRelatedIssueOrPull,
+  renderPolicy: IssueEnrichmentRenderPolicy,
   lifecycle?: IssueEnrichmentLifecycleInput,
   reviewLensPacket?: ReviewLensPacket
 ): EnrichmentComment {
@@ -1240,12 +1291,33 @@ function buildIssueEnrichmentForCycle(
   return buildIssueEnrichmentComment({
     repo,
     issue,
+    repoPolicy: policy.repoPolicy,
     allowedLabels: allowlists.allowedLabels,
     allowedOwners: allowlists.allowedOwners,
+    ...renderPolicy,
     postIssueComment: true,
     ...(reviewLensPacket ? { reviewLensPacket } : {}),
     ...(lifecycle ? { lifecycle } : {})
   });
+}
+
+interface IssueEnrichmentRenderPolicy {
+  maxSuggestions?: number;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+}
+
+function resolveIssueEnrichmentRenderPolicy(config: {
+  enrichment?: { maxSuggestions?: number };
+  confidenceCalibration?: { publicDisplay: PublicConfidenceDisplayPolicy };
+}): IssueEnrichmentRenderPolicy {
+  return {
+    ...(config.enrichment?.maxSuggestions !== undefined
+      ? { maxSuggestions: config.enrichment.maxSuggestions }
+      : {}),
+    ...(config.confidenceCalibration?.publicDisplay
+      ? { publicConfidencePolicy: config.confidenceCalibration.publicDisplay }
+      : {})
+  };
 }
 
 function buildIssueEnrichmentReviewLensPacket(config?: ReviewLensConfig): ReviewLensPacket | undefined {

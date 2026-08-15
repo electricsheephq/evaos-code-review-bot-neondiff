@@ -11,6 +11,7 @@ import {
 import { buildReviewLensIssueSections, type ReviewLensPacket } from "./review-lenses.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import type { IssueEnrichmentRepoPolicy } from "./issue-enrichment.js";
 import type {
   EnrichmentComment as PlanEnrichmentComment,
   EnrichmentCommentPostResult as PlanEnrichmentCommentPostResult,
@@ -170,6 +171,7 @@ export function buildEnrichmentComment(input: {
 export function buildIssueEnrichmentComment(input: {
   repo: string;
   issue: GitHubRelatedIssueOrPull;
+  repoPolicy?: IssueEnrichmentRepoPolicy;
   suggestedLabels?: string[];
   suggestedOwners?: string[];
   allowedLabels?: string[];
@@ -197,17 +199,42 @@ export function buildIssueEnrichmentComment(input: {
   const allowedOwnerKeys = input.allowedOwners === undefined || input.allowedOwners.length === 0
     ? undefined
     : new Set(uniqueCaseInsensitive(input.allowedOwners).map(normalizedSuggestionKey));
-  const suggestedLabels = uniqueCaseInsensitive([
+  const suggestedLabels = uniqueCaseInsensitive(applyIssueLabelAliases([
+    ...(input.repoPolicy?.suggestedLabels ?? []),
     ...(input.suggestedLabels ?? []),
     ...suggestLabelsFromIssue(input.issue)
-  ]).filter((label) => {
+  ], input.repoPolicy?.labelAliases)).filter((label) => {
     const key = normalizedSuggestionKey(label);
     return !existingLabelKeys.has(key) && (allowedLabelKeys === undefined || allowedLabelKeys.has(key));
   }).slice(0, input.maxSuggestions ?? 8);
   const owners = uniqueCaseInsensitive(input.suggestedOwners ?? []).filter((owner) => {
     return allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(owner));
   }).slice(0, input.maxSuggestions ?? 8);
-  const validationSuggestions = unique(input.validationSuggestions ?? []).slice(0, input.maxSuggestions ?? 8);
+  const reviewers = uniqueCaseInsensitive(input.repoPolicy?.suggestedReviewers ?? []).filter((reviewer) => {
+    return allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(reviewer));
+  }).slice(0, input.maxSuggestions ?? 8);
+  const policyValidationSuggestions = unique(
+    input.repoPolicy?.validationSuggestions ?? [],
+    input.publicConfidencePolicy
+  )
+    .slice(0, input.maxSuggestions ?? 8);
+  const validationSuggestions = unique([
+    ...policyValidationSuggestions,
+    ...(input.validationSuggestions ?? [])
+  ], input.publicConfidencePolicy).slice(0, input.maxSuggestions ?? 8);
+  const repoPolicySection = input.repoPolicy?.advisoryPolicy || policyValidationSuggestions.length
+    ? [
+        "",
+        "### Repo policy",
+        "",
+        ...(input.repoPolicy?.advisoryPolicy
+          ? [`Advisory policy: ${formatPublicText(input.repoPolicy.advisoryPolicy, input.publicConfidencePolicy)}`]
+          : []),
+        ...(policyValidationSuggestions.length
+          ? ["", "Policy validation guidance:", ...policyValidationSuggestions.map((item) => `- ${formatPublicText(item, input.publicConfidencePolicy)}`)]
+          : [])
+      ]
+    : [];
   const gaps = inferIssueAcceptanceGaps(input.issue);
   const planner = buildIssuePlannerPacket({
     issue: input.issue,
@@ -225,6 +252,8 @@ export function buildIssueEnrichmentComment(input: {
     `Existing labels: ${existingLabels.length ? existingLabels.join(", ") : "none"}.`,
     `Suggested labels: ${suggestedLabels.length ? suggestedLabels.join(", ") : "none"}.`,
     `Suggested owners: ${owners.length ? owners.join(", ") : "none"}.`,
+    `Suggested reviewers: ${reviewers.length ? reviewers.join(", ") : "none"}.`,
+    ...repoPolicySection,
     "",
     "### Related context",
     "",
@@ -319,6 +348,7 @@ function buildIssueLifecycleFields(
 export function buildIssueEnrichmentDryRunOutput(input: {
   repo: string;
   issue: GitHubRelatedIssueOrPull;
+  repoPolicy?: IssueEnrichmentRepoPolicy;
   suggestedLabels?: string[];
   suggestedOwners?: string[];
   allowedLabels?: string[];
@@ -346,6 +376,7 @@ export function buildIssueEnrichmentDryRunOutput(input: {
   const enrichment = buildIssueEnrichmentComment({
     repo: input.repo,
     issue: input.issue,
+    repoPolicy: input.repoPolicy,
     suggestedLabels: input.suggestedLabels,
     suggestedOwners: input.suggestedOwners,
     allowedLabels: input.allowedLabels,
@@ -366,6 +397,12 @@ export function buildIssueEnrichmentDryRunOutput(input: {
     ...(input.issue.html_url ? { url: redactSecrets(input.issue.html_url) } : {}),
     body: enrichment.body
   };
+}
+
+function applyIssueLabelAliases(labels: string[], aliases: Record<string, string> | undefined): string[] {
+  if (!aliases || Object.keys(aliases).length === 0) return labels;
+  const normalizedAliases = new Map(Object.entries(aliases).map(([from, to]) => [normalizedSuggestionKey(from), to]));
+  return labels.map((label) => normalizedAliases.get(normalizedSuggestionKey(label)) ?? label);
 }
 
 export async function postEnrichmentComment(input: {
@@ -700,8 +737,8 @@ function formatPublicText(value: string | undefined, publicConfidencePolicy?: Pu
   ).trim();
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values.map((value) => formatPublicText(value)).filter(Boolean))];
+function unique(values: string[], publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string[] {
+  return [...new Set(values.map((value) => formatPublicText(value, publicConfidencePolicy)).filter(Boolean))];
 }
 
 function uniqueCaseInsensitive(values: string[]): string[] {

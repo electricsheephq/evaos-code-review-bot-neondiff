@@ -90,6 +90,16 @@ evidence are recorded.
 - `suggestedLabels` / `suggestedReviewers`: reserved for later enrichment; they
   do not auto-apply labels or reviewers.
 
+For issue enrichment, keep repo-specific policy in the separate
+`issueEnrichment.repos.<owner/repo>` object. It may define `advisoryPolicy`,
+`validationSuggestions`, `suggestedLabels`, `suggestedReviewers`, and
+`labelAliases`. The issue-enrichment renderer applies aliases (for example,
+`docs` to `documentation` and `tests` to `test`) before filtering suggestions,
+then prints the policy and suggestions without mutating GitHub labels or
+reviewer assignments. The tracked `electricsheephq/lcm-x` example describes
+Hermes ContextEngine lossless memory, not OpenClaw, and keeps this policy
+separate from PR profile path filters.
+
 ## Review Settings Preview
 
 Each review now records a `review-settings-preview.json` evidence file and, when
