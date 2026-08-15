@@ -447,6 +447,54 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).not.toContain("ghp_fake_token");
   });
 
+  it("renders an explicit repo policy and applies label aliases before allowlist filtering", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 780,
+      title: "Review LCM-X context memory",
+      state: "open",
+      body: "Validate current-main behavior and preserve lossless context memory.",
+      labels: []
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/lcm-x",
+      issue,
+      allowedLabels: ["documentation", "test", "data-integrity"],
+      repoPolicy: {
+        advisoryPolicy: "LCM-X is an independent Hermes ContextEngine extension for lossless context memory, not OpenClaw. Require current-main reproduction or a named mandatory invariant; distinguish NeonDiff severity from LCM-X P0-P4.",
+        validationSuggestions: ["Reproduce on current main or name a mandatory invariant."],
+        suggestedLabels: ["docs", "tests", "data-integrity"],
+        suggestedReviewers: ["Tosko4"],
+        labelAliases: { docs: "documentation", tests: "test" }
+      }
+    });
+
+    expect(comment.body).toContain("### Repo policy");
+    expect(comment.body).toContain("Hermes ContextEngine extension for lossless context memory");
+    expect(comment.body).toContain("not OpenClaw");
+    expect(comment.body).toContain("current-main reproduction or a named mandatory invariant");
+    expect(comment.body).toContain("NeonDiff severity from LCM-X P0-P4");
+    expect(comment.body).toContain("Suggested labels: documentation, test, data-integrity");
+    expect(comment.body).toContain("Suggested reviewers: Tosko4");
+    expect(comment.body).toContain("- Reproduce on current main or name a mandatory invariant.");
+    expect(comment.body).toContain("No labels, owners, reviewers, or roadmap fields were changed by this bot.");
+  });
+
+  it("does not add an empty repo policy section to generic issue enrichment", () => {
+    const comment = buildIssueEnrichmentComment({
+      repo: "owner/generic",
+      issue: {
+        number: 781,
+        title: "Document the supported setup",
+        state: "open",
+        body: "Add validation evidence before implementation.",
+        labels: []
+      }
+    });
+
+    expect(comment.body).not.toContain("### Repo policy");
+  });
+
   it("adds a build-borrow-buy planner packet for research-triggered issue classes", () => {
     const issue: GitHubRelatedIssueOrPull = {
       number: 89,

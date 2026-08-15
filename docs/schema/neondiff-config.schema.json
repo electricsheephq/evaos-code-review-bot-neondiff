@@ -408,6 +408,13 @@
               "default": 60
             }
           }
+        },
+        "repos": {
+          "description": "Optional repo-specific advisory issue policy. Suggestions are rendered only; labels and reviewers are never mutated.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/repoSlug" },
+          "additionalProperties": { "$ref": "#/$defs/issueEnrichmentRepoPolicy" },
+          "default": {}
         }
       }
     },
@@ -475,6 +482,67 @@
     "repoSlug": {
       "type": "string",
       "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$"
+    },
+    "issueEnrichmentRepoPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allowedLabels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "allowedReviewers": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "advisoryPolicy": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": ".*\\S.*"
+        },
+        "validationSuggestions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "suggestedLabels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "suggestedReviewers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "labelAliases": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": ".*\\S.*"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": ".*\\S.*"
+          }
+        },
+        "maxIssuesPerCycle": { "type": "integer", "minimum": 1 },
+        "maxCommentsPerCycle": { "type": "integer", "minimum": 0 },
+        "cooldownMs": { "type": "integer", "minimum": 1 },
+        "burstWindowMs": { "type": "integer", "minimum": 1 },
+        "maxIssuesPerBurst": { "type": "integer", "minimum": 1 },
+        "lookbackMs": { "type": "integer", "minimum": 1 },
+        "processExistingOpenIssuesOnActivation": { "type": "boolean" }
+      }
     }
   }
 }

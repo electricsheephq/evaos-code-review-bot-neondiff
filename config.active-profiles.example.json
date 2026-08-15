@@ -78,6 +78,7 @@
     "enabled": false,
     "postIssueComment": false,
     "allowlist": [
+      "electricsheephq/lcm-x",
       "electricsheephq/WorldOS",
       "electricsheephq/evaos-code-review-bot-neondiff",
       "electricsheephq/electric-sheep-website-dashboard-6158a244",
@@ -122,6 +123,38 @@
     "lookbackMs": 600000,
     "processExistingOpenIssuesOnActivation": false,
     "repos": {
+      "electricsheephq/lcm-x": {
+        "enabled": true,
+        "maxIssuesPerCycle": 3,
+        "maxCommentsPerCycle": 1,
+        "cooldownMs": 3600000,
+        "burstWindowMs": 3600000,
+        "maxIssuesPerBurst": 6,
+        "lookbackMs": 600000,
+        "processExistingOpenIssuesOnActivation": false,
+        "advisoryPolicy": "LCM-X is an independent Hermes ContextEngine extension for lossless context memory, not OpenClaw. Prioritize data loss/duplication, chronology/provenance, profile/session contamination, source coverage, tool-call/result grouping, fresh tail, SQLite/concurrency/crash safety, import idempotency, and unsupported Hermes host assumptions. Require current-main reproduction or a named mandatory invariant, and distinguish NeonDiff severity from LCM-X P0-P4.",
+        "validationSuggestions": [
+          "Require current-main reproduction or a named mandatory invariant before treating a concern as verified.",
+          "Check lossless ordering, provenance, session/profile isolation, fresh-tail behavior, and tool-call/result grouping.",
+          "Exercise SQLite concurrency, crash recovery, and import idempotency where the change touches persistence."
+        ],
+        "suggestedLabels": [
+          "data-integrity",
+          "security",
+          "performance",
+          "needs-repro",
+          "test",
+          "documentation",
+          "upstream-evidence"
+        ],
+        "suggestedReviewers": [
+          "Tosko4"
+        ],
+        "labelAliases": {
+          "docs": "documentation",
+          "tests": "test"
+        }
+      },
       "electricsheephq/WorldOS": {
         "maxIssuesPerCycle": 3,
         "maxCommentsPerCycle": 1,
@@ -2392,6 +2425,37 @@
             "enabled": false
           }
         }
+      },
+      "electricsheephq/lcm-x": {
+        "displayName": "LCM-X",
+        "defaultBranch": "main",
+        "reviewProfile": "assertive",
+        "promptNote": "LCM-X is an independent Hermes ContextEngine extension for lossless context memory, not OpenClaw. Prioritize data loss/duplication, chronology/provenance, profile/session contamination, source coverage, tool-call/result grouping, fresh tail, SQLite/concurrency/crash safety, import idempotency, and unsupported Hermes host assumptions. Require current-main reproduction or a named mandatory invariant, and distinguish NeonDiff severity from LCM-X P0-P4.",
+        "proofExpectations": [
+          "Require current-main reproduction or a named mandatory invariant before treating a concern as verified.",
+          "Check lossless ordering, provenance, session/profile isolation, fresh-tail behavior, and tool-call/result grouping.",
+          "Exercise SQLite concurrency, crash recovery, and import idempotency where the change touches persistence."
+        ],
+        "validationHints": [
+          "Suggested labels: data-integrity, security, performance, needs-repro, test, documentation, upstream-evidence.",
+          "Suggested reviewer: Tosko4. Label aliases map docs to documentation and tests to test before allowlist filtering.",
+          "Do not conflate NeonDiff severity with LCM-X P0-P4."
+        ],
+        "readinessHints": [
+          "Keep this profile advisory and suggestion-only; no labels or reviewers are mutated by issue enrichment."
+        ],
+        "suggestedLabels": [
+          "data-integrity",
+          "security",
+          "performance",
+          "needs-repro",
+          "test",
+          "documentation",
+          "upstream-evidence"
+        ],
+        "suggestedReviewers": [
+          "Tosko4"
+        ]
       }
     }
   }

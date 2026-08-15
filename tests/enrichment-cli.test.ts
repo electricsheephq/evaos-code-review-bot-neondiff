@@ -63,6 +63,50 @@ describe("build-enrichment-comment issue CLI", () => {
     });
   });
 
+  it("threads the resolved repo issue policy through the existing build command", async () => {
+    await withMockGitHub(async ({ apiBaseUrl }) => {
+      const root = createRoot(roots);
+      const evidenceDir = join(root, "evidence");
+      const outputDir = join(evidenceDir, "issue-policy");
+      const configPath = writeConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
+      config.issueEnrichment.repos = {
+        "owner/repo": {
+          advisoryPolicy: "Hermes ContextEngine lossless memory policy",
+          validationSuggestions: ["Reproduce on current main or name a mandatory invariant."],
+          suggestedLabels: ["docs", "tests"],
+          suggestedReviewers: ["Tosko4"],
+          labelAliases: { docs: "documentation", tests: "test" }
+        }
+      };
+      config.issueEnrichment.allowedLabels = ["documentation", "test"];
+      config.issueEnrichment.allowedReviewers = ["Tosko4"];
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      await runCli([
+        "build-enrichment-comment",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/repo",
+        "--issue",
+        "17",
+        "--output-dir",
+        outputDir
+      ]);
+
+      const markdown = readFileSync(join(outputDir, "enrichment.md"), "utf8");
+      expect(markdown).toContain("### Repo policy");
+      expect(markdown).toContain("Hermes ContextEngine lossless memory policy");
+      expect(markdown).toContain("Suggested labels: documentation, test.");
+      expect(markdown).toContain("Suggested reviewers: Tosko4.");
+      expect(markdown).not.toContain("Suggested owners: Tosko4.");
+      expect(markdown.match(/Tosko4/g)).toHaveLength(1);
+      expect(markdown).toContain("- Reproduce on current main or name a mandatory invariant.");
+      expect(markdown).toContain("No labels, owners, reviewers, or roadmap fields were changed by this bot.");
+    });
+  });
+
   it("writes only JSON for skipped issue dry runs", async () => {
     await withMockGitHub(async ({ apiBaseUrl }) => {
       const root = createRoot(roots);

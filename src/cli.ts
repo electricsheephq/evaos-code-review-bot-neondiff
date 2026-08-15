@@ -1240,9 +1240,12 @@ async function main(): Promise<void> {
       const output = buildIssueEnrichmentDryRunOutput({
         repo,
         issue,
+        repoPolicy: issuePolicy.repoPolicy,
         allowedLabels: issuePolicy.suggestions.allowedLabels,
         allowedOwners: issuePolicy.suggestions.allowedReviewers,
-        validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
+        validationSuggestions: [
+          "Confirm owner, acceptance criteria, and validation evidence before implementation."
+        ],
         maxRelatedRefs: enrichmentConfig.maxRelatedRefs,
         maxSuggestions: enrichmentConfig.maxSuggestions,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
@@ -1395,6 +1398,7 @@ async function main(): Promise<void> {
         const preview = buildIssueEnrichmentDryRunOutput({
           repo,
           issue,
+          repoPolicy: policy.repoPolicy,
           allowedLabels: policy.suggestions.allowedLabels,
           allowedOwners: policy.suggestions.allowedReviewers,
           validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],

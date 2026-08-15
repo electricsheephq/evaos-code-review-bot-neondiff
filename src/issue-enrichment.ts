@@ -60,6 +60,11 @@ export interface IssueEnrichmentRepoOverride {
   enabled?: boolean;
   allowedLabels?: string[];
   allowedReviewers?: string[];
+  advisoryPolicy?: string;
+  validationSuggestions?: string[];
+  suggestedLabels?: string[];
+  suggestedReviewers?: string[];
+  labelAliases?: Record<string, string>;
   maxIssuesPerCycle?: number;
   maxCommentsPerCycle?: number;
   cooldownMs?: number;
@@ -67,6 +72,14 @@ export interface IssueEnrichmentRepoOverride {
   maxIssuesPerBurst?: number;
   lookbackMs?: number;
   processExistingOpenIssuesOnActivation?: boolean;
+}
+
+export interface IssueEnrichmentRepoPolicy {
+  advisoryPolicy?: string;
+  validationSuggestions: string[];
+  suggestedLabels: string[];
+  suggestedReviewers: string[];
+  labelAliases: Record<string, string>;
 }
 
 export interface IssueEnrichmentStatus {
@@ -875,6 +888,7 @@ export function resolveIssueEnrichmentRepoPolicy(
   reason?: "not_issue_enrichment_allowlisted" | "issue_enrichment_repo_disabled";
   throttle: IssueEnrichmentThrottlePolicy;
   suggestions: IssueEnrichmentSuggestionPolicy;
+  repoPolicy: IssueEnrichmentRepoPolicy;
 } {
   const override = config.repos?.[repo];
   const throttle = {
@@ -891,9 +905,16 @@ export function resolveIssueEnrichmentRepoPolicy(
     allowedLabels: resolveIssueSuggestionAllowlist(config.allowedLabels, override?.allowedLabels),
     allowedReviewers: resolveIssueSuggestionAllowlist(config.allowedReviewers, override?.allowedReviewers)
   };
-  if (!config.allowlist.includes(repo)) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle, suggestions };
-  if (override?.enabled === false) return { allowed: false, reason: "issue_enrichment_repo_disabled", throttle, suggestions };
-  return { allowed: true, throttle, suggestions };
+  const repoPolicy: IssueEnrichmentRepoPolicy = {
+    ...(override?.advisoryPolicy !== undefined ? { advisoryPolicy: override.advisoryPolicy } : {}),
+    validationSuggestions: [...(override?.validationSuggestions ?? [])],
+    suggestedLabels: [...(override?.suggestedLabels ?? [])],
+    suggestedReviewers: [...(override?.suggestedReviewers ?? [])],
+    labelAliases: { ...(override?.labelAliases ?? {}) }
+  };
+  if (!config.allowlist.includes(repo)) return { allowed: false, reason: "not_issue_enrichment_allowlisted", throttle, suggestions, repoPolicy };
+  if (override?.enabled === false) return { allowed: false, reason: "issue_enrichment_repo_disabled", throttle, suggestions, repoPolicy };
+  return { allowed: true, throttle, suggestions, repoPolicy };
 }
 
 function resolveIssueSuggestionAllowlist(globalAllowlist: string[], repoOverride: string[] | undefined): string[] {
@@ -1240,6 +1261,7 @@ function buildIssueEnrichmentForCycle(
   return buildIssueEnrichmentComment({
     repo,
     issue,
+    repoPolicy: policy.repoPolicy,
     allowedLabels: allowlists.allowedLabels,
     allowedOwners: allowlists.allowedOwners,
     postIssueComment: true,

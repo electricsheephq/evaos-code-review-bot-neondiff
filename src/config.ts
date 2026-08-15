@@ -1272,9 +1272,33 @@ function validateIssueEnrichmentConfig(value: unknown, label: string): void {
 
 function validateIssueEnrichmentRepoOverride(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const allowedKeys = new Set([
+    "enabled", "allowedLabels", "allowedReviewers", "advisoryPolicy", "validationSuggestions",
+    "suggestedLabels", "suggestedReviewers", "labelAliases", "maxIssuesPerCycle", "maxCommentsPerCycle",
+    "cooldownMs", "burstWindowMs", "maxIssuesPerBurst", "lookbackMs", "processExistingOpenIssuesOnActivation"
+  ]);
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) throw new Error(`${label} has unknown key "${key}"`);
+  }
   if (value.enabled !== undefined) validateBoolean(value.enabled, `${label}.enabled`);
   validateOptionalStringArray(value.allowedLabels, `${label}.allowedLabels`);
   validateOptionalStringArray(value.allowedReviewers, `${label}.allowedReviewers`);
+  validateOptionalString(value.advisoryPolicy, `${label}.advisoryPolicy`);
+  if (typeof value.advisoryPolicy === "string" && value.advisoryPolicy.trim().length === 0) {
+    throw new Error(`${label}.advisoryPolicy must be a non-empty string`);
+  }
+  validateOptionalStringArray(value.validationSuggestions, `${label}.validationSuggestions`);
+  validateOptionalStringArray(value.suggestedLabels, `${label}.suggestedLabels`);
+  validateOptionalStringArray(value.suggestedReviewers, `${label}.suggestedReviewers`);
+  if (value.labelAliases !== undefined) {
+    if (!isRecord(value.labelAliases)) throw new Error(`${label}.labelAliases must be an object`);
+    for (const [from, to] of Object.entries(value.labelAliases)) {
+      if (from.trim().length === 0) throw new Error(`${label}.labelAliases keys must be non-empty strings`);
+      if (typeof to !== "string" || to.trim().length === 0) {
+        throw new Error(`${label}.labelAliases.${from} must be a non-empty string`);
+      }
+    }
+  }
   if (value.maxIssuesPerCycle !== undefined) validatePositiveInteger(value.maxIssuesPerCycle, `${label}.maxIssuesPerCycle`);
   if (value.maxCommentsPerCycle !== undefined) validateNonNegativeInteger(value.maxCommentsPerCycle, `${label}.maxCommentsPerCycle`);
   if (value.cooldownMs !== undefined) validatePositiveInteger(value.cooldownMs, `${label}.cooldownMs`);
