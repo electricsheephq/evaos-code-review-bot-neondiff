@@ -81,6 +81,21 @@ enum FoundationKeychainWorkerDaemonRunner {
         }
 
         let process = Process()
+        let terminationRelay = NeonDiffChildProcessSignalRelay()
+        _ = Darwin.signal(SIGTERM, SIG_IGN)
+        let terminationSource = DispatchSource.makeSignalSource(
+            signal: SIGTERM,
+            queue: DispatchQueue(
+                label: "com.electricsheephq.neondiff.worker-termination"
+            )
+        )
+        terminationSource.setEventHandler {
+            terminationRelay.receive(SIGTERM)
+        }
+        terminationSource.resume()
+        defer {
+            terminationSource.cancel()
+        }
         process.executableURL = URL(filePath: workerPath)
         process.arguments =
             DesktopKeychainWorkerLaunchAgentContract
@@ -93,6 +108,14 @@ enum FoundationKeychainWorkerDaemonRunner {
         let inputPipe = Pipe()
         process.standardInput = inputPipe
         try process.run()
+        terminationRelay.bind(
+            processIdentifier: process.processIdentifier
+        )
+        defer {
+            terminationRelay.unbind(
+                processIdentifier: process.processIdentifier
+            )
+        }
         guard FoundationTrustedBundledWorker.runningProcessIsTrusted(
             process.processIdentifier
         ) else {
@@ -108,6 +131,7 @@ enum FoundationKeychainWorkerDaemonRunner {
             standardInput.resetBytes(in: 0..<standardInput.count)
         } catch {
             process.terminate()
+            process.waitUntilExit()
             throw WorkerDaemonRunnerError.stdinFailed
         }
         process.waitUntilExit()
