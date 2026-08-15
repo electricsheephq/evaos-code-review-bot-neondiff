@@ -45,6 +45,31 @@ import NeonDiffDesktopCore
         #expect(parsed == request)
     }
 
+    @Test func sealedWorkerDaemonRunsLiveAfterExplicitNativeInstall() throws {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        )
+        let request = try DesktopKeychainWorkerLaunchAgentRequest(
+            appID: appID,
+            licenseMachineID: licenseMachineID,
+            configPath: config.path,
+            launchdLabel: label,
+            homeDirectory: home
+        )
+
+        let arguments = DesktopKeychainWorkerLaunchAgentContract
+            .sealedWorkerDaemonArguments(request: request)
+
+        #expect(arguments == [
+            "daemon",
+            "--config", config.path,
+            "--runtime-credentials-stdin", "true",
+            "--dry-run", "false"
+        ])
+        #expect(!arguments.contains(appID))
+        #expect(!arguments.contains(licenseMachineID))
+    }
+
     @Test func previewExposesTheCompleteRedactedMutationPlan() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
