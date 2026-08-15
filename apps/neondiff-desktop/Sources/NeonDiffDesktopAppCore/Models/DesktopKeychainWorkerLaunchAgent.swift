@@ -121,6 +121,17 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         ]
     }
 
+    package static func sealedWorkerDaemonArguments(
+        request: DesktopKeychainWorkerLaunchAgentRequest
+    ) -> [String] {
+        [
+            "daemon",
+            "--config", request.configPath,
+            "--runtime-credentials-stdin", "true",
+            "--dry-run", "false"
+        ]
+    }
+
     package static func redactedPreviewText(
         request: DesktopKeychainWorkerLaunchAgentRequest,
         appExecutableURL: URL,

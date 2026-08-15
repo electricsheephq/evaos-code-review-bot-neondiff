@@ -83,11 +83,8 @@ enum FoundationKeychainWorkerDaemonRunner {
         let process = Process()
         process.executableURL = URL(filePath: workerPath)
         process.arguments =
-            [
-                "daemon",
-                "--config", request.configPath,
-                "--runtime-credentials-stdin", "true"
-            ]
+            DesktopKeychainWorkerLaunchAgentContract
+                .sealedWorkerDaemonArguments(request: request)
         process.environment = boundedEnvironment(homeDirectory: homeDirectory)
         process.currentDirectoryURL =
             URL(filePath: request.configPath).deletingLastPathComponent()
