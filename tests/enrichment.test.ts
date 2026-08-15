@@ -495,6 +495,28 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).not.toContain("### Repo policy");
   });
 
+  it("caps repo policy validation guidance with the issue suggestion limit", () => {
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/lcm-x",
+      issue: {
+        number: 782,
+        title: "Bound policy output",
+        state: "open",
+        body: "Keep dry-run and live comments within the configured suggestion limit."
+      },
+      repoPolicy: {
+        validationSuggestions: ["first policy check", "second policy check"],
+        suggestedLabels: [],
+        suggestedReviewers: [],
+        labelAliases: {}
+      },
+      maxSuggestions: 1
+    });
+
+    expect(comment.body).toContain("- first policy check");
+    expect(comment.body).not.toContain("second policy check");
+  });
+
   it("adds a build-borrow-buy planner packet for research-triggered issue classes", () => {
     const issue: GitHubRelatedIssueOrPull = {
       number: 89,
@@ -954,7 +976,13 @@ describe("sticky enrichment comments", () => {
           maxIssuesPerCycle: 3,
           maxCommentsPerCycle: 1,
           maxIssuesPerBurst: 10,
-          processExistingOpenIssuesOnActivation: false
+          processExistingOpenIssuesOnActivation: false,
+          repos: {
+            "owner/issue-repo": {
+              advisoryPolicy: "Render this policy in cycle dry-run planning.",
+              validationSuggestions: ["Keep the dry-run policy aligned with live output."]
+            }
+          }
         }
       })}\n`);
       const reposScanned: string[] = [];

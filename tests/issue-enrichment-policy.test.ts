@@ -91,6 +91,20 @@ describe("issue enrichment rollout policy", () => {
         }
       }
     })).toThrow('config.issueEnrichment.repos.electricsheephq/lcm-x has unknown key "unknownPolicyKey"');
+    expect(() => loadConfigFromObject({
+      issueEnrichment: {
+        repos: {
+          "electricsheephq/lcm-x": { advisoryPolicy: "x".repeat(4_001) }
+        }
+      }
+    })).toThrow("advisoryPolicy must be at most 4000 characters");
+    expect(() => loadConfigFromObject({
+      issueEnrichment: {
+        repos: {
+          "electricsheephq/lcm-x": { validationSuggestions: Array.from({ length: 21 }, () => "check") }
+        }
+      }
+    })).toThrow("validationSuggestions must contain at most 20 items");
   });
 
   it("blocks live issue comments until every allowlisted repo has explicit repo throttle thresholds", () => {

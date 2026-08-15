@@ -40,6 +40,9 @@ import type { SkillPackContextConfig } from "./skill-packs.js";
 import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
 
 const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
+const MAX_ISSUE_POLICY_TEXT_LENGTH = 4_000;
+const MAX_ISSUE_POLICY_ITEMS = 20;
+const MAX_ISSUE_POLICY_ALIASES = 50;
 
 export interface BotConfig {
   pilotRepos: string[];
@@ -1287,16 +1290,23 @@ function validateIssueEnrichmentRepoOverride(value: unknown, label: string): voi
   if (typeof value.advisoryPolicy === "string" && value.advisoryPolicy.trim().length === 0) {
     throw new Error(`${label}.advisoryPolicy must be a non-empty string`);
   }
-  validateOptionalStringArray(value.validationSuggestions, `${label}.validationSuggestions`);
-  validateOptionalStringArray(value.suggestedLabels, `${label}.suggestedLabels`);
-  validateOptionalStringArray(value.suggestedReviewers, `${label}.suggestedReviewers`);
+  if (typeof value.advisoryPolicy === "string" && value.advisoryPolicy.length > MAX_ISSUE_POLICY_TEXT_LENGTH) {
+    throw new Error(`${label}.advisoryPolicy must be at most ${MAX_ISSUE_POLICY_TEXT_LENGTH} characters`);
+  }
+  validateBoundedOptionalStringArray(value.validationSuggestions, `${label}.validationSuggestions`, 500);
+  validateBoundedOptionalStringArray(value.suggestedLabels, `${label}.suggestedLabels`, 80);
+  validateBoundedOptionalStringArray(value.suggestedReviewers, `${label}.suggestedReviewers`, 80);
   if (value.labelAliases !== undefined) {
     if (!isRecord(value.labelAliases)) throw new Error(`${label}.labelAliases must be an object`);
+    if (Object.keys(value.labelAliases).length > MAX_ISSUE_POLICY_ALIASES) {
+      throw new Error(`${label}.labelAliases must contain at most ${MAX_ISSUE_POLICY_ALIASES} entries`);
+    }
     for (const [from, to] of Object.entries(value.labelAliases)) {
       if (from.trim().length === 0) throw new Error(`${label}.labelAliases keys must be non-empty strings`);
       if (typeof to !== "string" || to.trim().length === 0) {
         throw new Error(`${label}.labelAliases.${from} must be a non-empty string`);
       }
+      if (from.length > 80 || to.length > 80) throw new Error(`${label}.labelAliases entries must be at most 80 characters`);
     }
   }
   if (value.maxIssuesPerCycle !== undefined) validatePositiveInteger(value.maxIssuesPerCycle, `${label}.maxIssuesPerCycle`);
@@ -1748,6 +1758,13 @@ function validateStringArray(value: unknown, label: string): void {
 function validateOptionalStringArray(value: unknown, label: string): void {
   if (value === undefined) return;
   validateStringArray(value, label);
+}
+
+function validateBoundedOptionalStringArray(value: unknown, label: string, maxLength: number): void {
+  validateOptionalStringArray(value, label);
+  if (!Array.isArray(value)) return;
+  if (value.length > MAX_ISSUE_POLICY_ITEMS) throw new Error(`${label} must contain at most ${MAX_ISSUE_POLICY_ITEMS} items`);
+  if (value.some((entry) => entry.length > maxLength)) throw new Error(`${label} entries must be at most ${maxLength} characters`);
 }
 
 function validateBoolean(value: unknown, label: string): void {

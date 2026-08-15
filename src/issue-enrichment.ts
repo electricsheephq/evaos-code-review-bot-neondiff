@@ -441,6 +441,7 @@ export async function collectIssueEnrichmentScan(input: {
       issues,
       throttle: policy.throttle,
       suggestions: policy.suggestions,
+      repoPolicy: policy.repoPolicy,
       postIssueComment: config.postIssueComment,
       checkedAt,
       shouldCountItem: input.shouldCountItem
@@ -927,6 +928,7 @@ function planRepoIssueScan(input: {
   issues: GitHubRelatedIssueOrPull[];
   throttle: IssueEnrichmentThrottlePolicy;
   suggestions: IssueEnrichmentSuggestionPolicy;
+  repoPolicy: IssueEnrichmentRepoPolicy;
   postIssueComment: boolean;
   checkedAt: string;
   shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
@@ -937,6 +939,7 @@ function planRepoIssueScan(input: {
     issue,
     allowedLabels: allowlists.allowedLabels,
     allowedOwners: allowlists.allowedOwners,
+    repoPolicy: input.repoPolicy,
     maxRelatedRefs: 8,
     maxSuggestions: 8
   }));

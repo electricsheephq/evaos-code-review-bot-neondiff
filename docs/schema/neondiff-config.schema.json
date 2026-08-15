@@ -499,39 +499,49 @@
         "advisoryPolicy": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 4000,
           "pattern": ".*\\S.*"
         },
         "validationSuggestions": {
           "type": "array",
+          "maxItems": 20,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 500
           }
         },
         "suggestedLabels": {
           "type": "array",
+          "maxItems": 20,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 80
           }
         },
         "suggestedReviewers": {
           "type": "array",
+          "maxItems": 20,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 80
           }
         },
         "labelAliases": {
           "type": "object",
+          "maxProperties": 50,
           "propertyNames": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 80,
             "pattern": ".*\\S.*"
           },
           "additionalProperties": {
             "type": "string",
             "minLength": 1,
+            "maxLength": 80,
             "pattern": ".*\\S.*"
           }
         },

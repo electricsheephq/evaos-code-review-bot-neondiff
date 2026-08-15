@@ -213,20 +213,22 @@ export function buildIssueEnrichmentComment(input: {
   const reviewers = uniqueCaseInsensitive(input.repoPolicy?.suggestedReviewers ?? []).filter((reviewer) => {
     return allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(reviewer));
   }).slice(0, input.maxSuggestions ?? 8);
+  const policyValidationSuggestions = unique(input.repoPolicy?.validationSuggestions ?? [])
+    .slice(0, input.maxSuggestions ?? 8);
   const validationSuggestions = unique([
-    ...(input.repoPolicy?.validationSuggestions ?? []),
+    ...policyValidationSuggestions,
     ...(input.validationSuggestions ?? [])
   ]).slice(0, input.maxSuggestions ?? 8);
-  const repoPolicySection = input.repoPolicy?.advisoryPolicy || input.repoPolicy?.validationSuggestions.length
+  const repoPolicySection = input.repoPolicy?.advisoryPolicy || policyValidationSuggestions.length
     ? [
         "",
         "### Repo policy",
         "",
-        ...(input.repoPolicy.advisoryPolicy
+        ...(input.repoPolicy?.advisoryPolicy
           ? [`Advisory policy: ${formatPublicText(input.repoPolicy.advisoryPolicy, input.publicConfidencePolicy)}`]
           : []),
-        ...(input.repoPolicy.validationSuggestions.length
-          ? ["", "Policy validation guidance:", ...input.repoPolicy.validationSuggestions.map((item) => `- ${formatPublicText(item, input.publicConfidencePolicy)}`)]
+        ...(policyValidationSuggestions.length
+          ? ["", "Policy validation guidance:", ...policyValidationSuggestions.map((item) => `- ${formatPublicText(item, input.publicConfidencePolicy)}`)]
           : [])
       ]
     : [];

@@ -230,6 +230,23 @@ describe("NeonDiff config schema draft", () => {
     expect(errorPaths(invalidErrors)).toContain(
       "/issueEnrichment/repos/electricsheephq~1lcm-x/suggestedLabels"
     );
+
+    const oversizedErrors = validateConfig(validate, {
+      ...baseConfig,
+      issueEnrichment: {
+        ...issueEnrichment,
+        repos: {
+          "electricsheephq/lcm-x": {
+            advisoryPolicy: "x".repeat(4_001),
+            validationSuggestions: Array.from({ length: 21 }, () => "check")
+          }
+        }
+      }
+    });
+    expect(errorPaths(oversizedErrors)).toEqual(expect.arrayContaining([
+      "/issueEnrichment/repos/electricsheephq~1lcm-x/advisoryPolicy",
+      "/issueEnrichment/repos/electricsheephq~1lcm-x/validationSuggestions"
+    ]));
   });
 
   it("validates JSON fixtures against the published JSON Schema", () => {
