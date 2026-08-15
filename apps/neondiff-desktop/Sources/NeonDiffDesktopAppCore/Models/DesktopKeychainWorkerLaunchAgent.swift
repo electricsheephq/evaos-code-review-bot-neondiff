@@ -109,6 +109,21 @@ package enum DesktopKeychainWorkerLaunchAgentError:
 package enum DesktopKeychainWorkerLaunchAgentContract {
     package static let headlessFlag = "--neondiff-worker-daemon"
 
+    package static func restartCommands(
+        domain: String,
+        label: String,
+        plistPath: String,
+        isLoaded: Bool
+    ) -> [[String]] {
+        let target = "\(domain)/\(label)"
+        var commands: [[String]] = []
+        if isLoaded {
+            commands.append(["bootout", target])
+        }
+        commands.append(["bootstrap", domain, plistPath])
+        return commands
+    }
+
     package static func headlessArguments(
         request: DesktopKeychainWorkerLaunchAgentRequest
     ) -> [String] {
