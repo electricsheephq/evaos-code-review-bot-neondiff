@@ -69,7 +69,7 @@ import NeonDiffDesktopCore
                     .restartObservationIntervalMicroseconds
             )
 
-        #expect(observationWindowMicroseconds >= 6_000_000)
+        #expect(observationWindowMicroseconds >= 15_000_000)
     }
 
     @Test func plistContainsOnlyPublicExactCoordinates() throws {
