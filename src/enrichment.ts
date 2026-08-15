@@ -41,6 +41,7 @@ export interface EnrichmentConfig {
 
 export type EnrichmentComment = PlanEnrichmentComment;
 export type EnrichmentCommentPostResult = PlanEnrichmentCommentPostResult;
+export const ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION = 1;
 type IssueEnrichmentSkipReason =
   | "stale_issue_closed"
   | "issue_is_pull_request"

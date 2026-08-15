@@ -289,6 +289,7 @@ export function buildIssueAnalysisInputHash(input: {
   allowedOwners: string[];
   suggestedOwners: string[];
   publicConfidencePolicy?: unknown;
+  rendererVersion: number;
   model: string;
   reasoningEffort: string;
   maxSuggestions: number;
@@ -319,7 +320,8 @@ export function buildIssueAnalysisInputHash(input: {
       allowedLabels: [...input.allowedLabels].map((value) => value.toLowerCase()).sort(),
       allowedOwners: [...input.allowedOwners].map((value) => value.toLowerCase()).sort(),
       suggestedOwners: [...input.suggestedOwners].map((value) => value.toLowerCase()).sort(),
-      publicConfidencePolicy: input.publicConfidencePolicy ?? null
+      publicConfidencePolicy: input.publicConfidencePolicy ?? null,
+      rendererVersion: input.rendererVersion
     }
   };
   return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
@@ -409,6 +411,7 @@ export function evaluateIssueAnalysisQuality(input: {
     (input.analysis.priority === "P0" || input.analysis.priority === "P1") &&
     input.analysis.confidence !== "verified-current"
   );
+  const secretLike = containsSecretLikeText(text);
   const actionability = input.analysis.reproductionOrInvariantGap.length >= 20 &&
     input.analysis.nextGate.length >= 20 &&
     !GENERIC_NEXT_GATE_PATTERN.test(input.analysis.nextGate.trim());
@@ -427,10 +430,12 @@ export function evaluateIssueAnalysisQuality(input: {
     },
     {
       name: "factual_grounding",
-      ok: finalSevereGrounded && !containsSecretLikeText(text),
-      detail: finalSevereGrounded
-        ? "severity/confidence relationship is grounded and no secret-like text was detected"
-        : "final P0/P1 requires verified-current confidence"
+      ok: finalSevereGrounded && !secretLike,
+      detail: !finalSevereGrounded
+        ? "final P0/P1 requires verified-current confidence"
+        : secretLike
+          ? "secret-like text was detected in the analysis"
+          : "severity/confidence relationship is grounded and no secret-like text was detected"
     },
     {
       name: "actionability",

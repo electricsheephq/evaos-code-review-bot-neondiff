@@ -11,7 +11,10 @@ import {
   runIssueAnalysis,
   type IssueAnalysis
 } from "../src/issue-analysis.js";
-import { buildIssueAnalysisEnrichmentComment } from "../src/enrichment.js";
+import {
+  buildIssueAnalysisEnrichmentComment,
+  ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION
+} from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
 
 const issue: GitHubRelatedIssueOrPull = {
@@ -82,8 +85,12 @@ describe("model-backed issue analysis", () => {
 
   it("parses a grounded structured result and rejects missing fields", () => {
     expect(parseIssueAnalysis(analysis)).toEqual(analysis);
-    expect(() => parseIssueAnalysis({ ...analysis, nextGate: undefined })).toThrow(
-      "issue_analysis_schema_invalid"
+    const { nextGate: _omitted, ...withoutNextGate } = analysis;
+    expect(() => parseIssueAnalysis(withoutNextGate)).toThrow(
+      "result fields do not match the strict schema"
+    );
+    expect(() => parseIssueAnalysis({ ...analysis, extraField: "unexpected" })).toThrow(
+      "result fields do not match the strict schema"
     );
   });
 
@@ -135,6 +142,26 @@ describe("model-backed issue analysis", () => {
     expect(scorecard.gates.find((gate) => gate.name === "prompt_config_leak")?.ok).toBe(false);
   });
 
+  it("records the actual factual-grounding reason for secret-like output", () => {
+    const secretLike = {
+      ...analysis,
+      evidence: `Issue #7 includes ghp_${"a".repeat(40)}.`
+    } satisfies IssueAnalysis;
+    const scorecard = evaluateIssueAnalysisQuality({
+      repo: "electricsheephq/lcm-x",
+      issue,
+      analysis: secretLike,
+      repoPolicy,
+      suggestedLabels: ["needs-repro"],
+      allowedLabels: ["data-integrity", "needs-repro"]
+    });
+
+    expect(scorecard.gates.find((gate) => gate.name === "factual_grounding")).toMatchObject({
+      ok: false,
+      detail: "secret-like text was detected in the analysis"
+    });
+  });
+
   it("rejects a copied policy fragment even when the complete policy is absent", () => {
     const fragmentLeak = {
       ...analysis,
@@ -164,6 +191,7 @@ describe("model-backed issue analysis", () => {
       allowedOwners: ["Tosko4"],
       suggestedOwners: [],
       publicConfidencePolicy: { mode: "hidden" },
+      rendererVersion: ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION,
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
       maxSuggestions: 8
@@ -182,6 +210,10 @@ describe("model-backed issue analysis", () => {
       ...base,
       publicConfidencePolicy: { mode: "calibrated" }
     })).not.toBe(identity);
+    expect(buildIssueAnalysisInputHash({
+      ...base,
+      rendererVersion: ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION + 1
+    })).not.toBe(identity);
   });
 
   it("renders issue-specific public analysis with stable identity and no policy or planner scaffolding", () => {
@@ -192,6 +224,7 @@ describe("model-backed issue analysis", () => {
       allowedLabels: ["data-integrity", "needs-repro"],
       allowedOwners: ["Tosko4"],
       suggestedOwners: [],
+      rendererVersion: ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION,
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
       maxSuggestions: 8

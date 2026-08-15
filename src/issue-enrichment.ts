@@ -3,6 +3,7 @@ import {
   buildIssueAnalysisEnrichmentComment,
   buildIssueEnrichmentComment,
   buildIssueEnrichmentDryRunOutput,
+  ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION,
   postEnrichmentComment,
   type EnrichmentComment,
   type EnrichmentCommentGithub,
@@ -723,6 +724,7 @@ export async function runIssueEnrichmentCycle(input: {
         allowedOwners: allowlists.allowedOwners,
         suggestedOwners: [],
         publicConfidencePolicy: renderPolicy.publicConfidencePolicy,
+        rendererVersion: ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION,
         model: input.config.codexRuntime?.model ?? "injected-issue-analysis",
         reasoningEffort: input.config.codexRuntime?.reasoningEffort ?? "unspecified",
         maxSuggestions: renderPolicy.maxSuggestions ?? 8

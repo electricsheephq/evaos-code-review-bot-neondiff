@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -207,6 +207,36 @@ describe("Codex CLI review runtime", () => {
       .toHaveProperty("properties.classification");
     expect(readFileSync(join(evidenceDir, "codex-issue-analysis-result.json"), "utf8"))
       .toContain('"classification":"bug"');
+    expect(existsSync(join(evidenceDir, "codex-issue-analysis-stdout.txt"))).toBe(true);
+    expect(existsSync(join(evidenceDir, "codex-issue-analysis-stderr.txt"))).toBe(true);
+  });
+
+  it("rejects unsafe structured-output artifact prefixes before process execution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-prefix-"));
+    temporaryRoots.push(root);
+    let invoked = false;
+
+    await expect(runCodexStructuredOutput({
+      cwd: join(root, "worktree"),
+      prompt: "unused",
+      cliPath: "/Users/test/.local/bin/codex",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "max",
+      evidenceDir: join(root, "evidence"),
+      timeoutMs: 30_000,
+      maxOutputBytes: 1024 * 1024,
+      artifactPrefix: "../escaped",
+      schema: {},
+      parse: () => ({})
+    }, {
+      captureWorktreeState: () => "clean",
+      runProcess: async () => {
+        invoked = true;
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    })).rejects.toThrow("codex_runtime_invalid_artifact_prefix");
+
+    expect(invoked).toBe(false);
   });
 
   it("replaces a rejected secret-like result artifact before failing closed", async () => {
