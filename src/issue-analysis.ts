@@ -285,6 +285,10 @@ export function buildIssueAnalysisInputHash(input: {
   repo: string;
   issue: GitHubRelatedIssueOrPull;
   repoPolicy: IssueAnalysisPolicyContext;
+  allowedLabels: string[];
+  allowedOwners: string[];
+  suggestedOwners: string[];
+  publicConfidencePolicy?: unknown;
   model: string;
   reasoningEffort: string;
   maxSuggestions: number;
@@ -311,7 +315,11 @@ export function buildIssueAnalysisInputHash(input: {
     runtime: {
       model: input.model,
       reasoningEffort: input.reasoningEffort,
-      maxSuggestions: input.maxSuggestions
+      maxSuggestions: input.maxSuggestions,
+      allowedLabels: [...input.allowedLabels].map((value) => value.toLowerCase()).sort(),
+      allowedOwners: [...input.allowedOwners].map((value) => value.toLowerCase()).sort(),
+      suggestedOwners: [...input.suggestedOwners].map((value) => value.toLowerCase()).sort(),
+      publicConfidencePolicy: input.publicConfidencePolicy ?? null
     }
   };
   return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
@@ -480,8 +488,26 @@ export function findIssueAnalysisPublicLeaks(
     if (normalizedSource.length >= 20 && normalizedText.includes(normalizedSource)) {
       leaks.push(`verbatim_policy_${index}`);
     }
+    if (hasSharedPolicyFragment(text, source, 6)) {
+      leaks.push(`policy_fragment_${index}`);
+    }
   }
   return [...new Set(leaks)];
+}
+
+function hasSharedPolicyFragment(text: string, policy: string, wordCount: number): boolean {
+  const publicTokens = new Set(tokenWindows(text, wordCount));
+  if (publicTokens.size === 0) return false;
+  return tokenWindows(policy, wordCount).some((window) => publicTokens.has(window));
+}
+
+function tokenWindows(value: string, wordCount: number): string[] {
+  const tokens = value.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/g) ?? [];
+  if (tokens.length < wordCount) return [];
+  return Array.from(
+    { length: tokens.length - wordCount + 1 },
+    (_, index) => tokens.slice(index, index + wordCount).join(" ")
+  );
 }
 
 function issueKeywords(issue: GitHubRelatedIssueOrPull): string[] {

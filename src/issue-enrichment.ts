@@ -714,10 +714,15 @@ export async function runIssueEnrichmentCycle(input: {
     const plannedBodyHashByIssue = new Map<string, string | undefined>();
     const analysisIdentityHash = (repo: string, issue: GitHubRelatedIssueOrPull): string => {
       const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
+      const allowlists = issueSuggestionAllowlists(policy.suggestions);
       return buildIssueAnalysisInputHash({
         repo,
         issue,
         repoPolicy: policy.repoPolicy,
+        allowedLabels: allowlists.allowedLabels,
+        allowedOwners: allowlists.allowedOwners,
+        suggestedOwners: [],
+        publicConfidencePolicy: renderPolicy.publicConfidencePolicy,
         model: input.config.codexRuntime?.model ?? "injected-issue-analysis",
         reasoningEffort: input.config.codexRuntime?.reasoningEffort ?? "unspecified",
         maxSuggestions: renderPolicy.maxSuggestions ?? 8

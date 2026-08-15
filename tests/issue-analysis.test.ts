@@ -135,11 +135,63 @@ describe("model-backed issue analysis", () => {
     expect(scorecard.gates.find((gate) => gate.name === "prompt_config_leak")?.ok).toBe(false);
   });
 
+  it("rejects a copied policy fragment even when the complete policy is absent", () => {
+    const fragmentLeak = {
+      ...analysis,
+      repositoryImpact:
+        "LCM-X internal maintainer policy require current-main reproduction before this mixed-row report advances."
+    } satisfies IssueAnalysis;
+    expect(fragmentLeak.repositoryImpact).not.toContain(repoPolicy.advisoryPolicy);
+
+    const scorecard = evaluateIssueAnalysisQuality({
+      repo: "electricsheephq/lcm-x",
+      issue,
+      analysis: fragmentLeak,
+      repoPolicy,
+      suggestedLabels: ["needs-repro"],
+      allowedLabels: ["data-integrity", "needs-repro"]
+    });
+
+    expect(scorecard.gates.find((gate) => gate.name === "prompt_config_leak")?.ok).toBe(false);
+  });
+
+  it("changes sticky identity when any public rendering policy changes", () => {
+    const base = {
+      repo: "electricsheephq/lcm-x",
+      issue,
+      repoPolicy,
+      allowedLabels: ["data-integrity", "needs-repro"],
+      allowedOwners: ["Tosko4"],
+      suggestedOwners: [],
+      publicConfidencePolicy: { mode: "hidden" },
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      maxSuggestions: 8
+    };
+    const identity = buildIssueAnalysisInputHash(base);
+
+    expect(buildIssueAnalysisInputHash({
+      ...base,
+      allowedLabels: ["data-integrity"]
+    })).not.toBe(identity);
+    expect(buildIssueAnalysisInputHash({
+      ...base,
+      allowedOwners: []
+    })).not.toBe(identity);
+    expect(buildIssueAnalysisInputHash({
+      ...base,
+      publicConfidencePolicy: { mode: "calibrated" }
+    })).not.toBe(identity);
+  });
+
   it("renders issue-specific public analysis with stable identity and no policy or planner scaffolding", () => {
     const identityHash = buildIssueAnalysisInputHash({
       repo: "electricsheephq/lcm-x",
       issue,
       repoPolicy,
+      allowedLabels: ["data-integrity", "needs-repro"],
+      allowedOwners: ["Tosko4"],
+      suggestedOwners: [],
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
       maxSuggestions: 8
