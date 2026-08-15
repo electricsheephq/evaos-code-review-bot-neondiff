@@ -231,6 +231,14 @@ describe("model-backed issue analysis", () => {
       ...base,
       rendererVersion: ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION + 1
     })).not.toBe(identity);
+    expect(buildIssueAnalysisInputHash({
+      ...base,
+      repoPolicy: {
+        ...repoPolicy,
+        advisoryPolicy: "private policy changed",
+        validationSuggestions: ["private validation changed"]
+      }
+    })).toBe(identity);
   });
 
   it("renders issue-specific public analysis with stable identity and no policy or planner scaffolding", () => {
@@ -257,7 +265,8 @@ describe("model-backed issue analysis", () => {
       postIssueComment: true
     });
 
-    expect(comment.bodyHash).toBe(identityHash);
+    expect(comment.bodyHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(comment.bodyHash).not.toBe(identityHash);
     expect(comment.body).toContain("### LCM-X impact");
     expect(comment.body).toContain("Mixed replay and fresh-row reconciliation");
     expect(comment.body).toContain("### Current-main applicability");
@@ -273,6 +282,40 @@ describe("model-backed issue analysis", () => {
     expect(comment.body).not.toContain("### Agent-start packet");
     expect(comment.body).not.toContain("Build / borrow / buy scan");
     expect(comment.body).not.toContain("Context-source taxonomy");
+
+    const changedPrivateIdentity = buildIssueAnalysisInputHash({
+      repo: "electricsheephq/lcm-x",
+      issue,
+      repoPolicy: {
+        ...repoPolicy,
+        advisoryPolicy: "private policy changed",
+        validationSuggestions: ["private validation changed"]
+      },
+      allowedLabels: ["data-integrity", "needs-repro"],
+      allowedOwners: ["Tosko4"],
+      suggestedOwners: [],
+      rendererVersion: ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION,
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      maxSuggestions: 8
+    });
+    const changedPrivateComment = buildIssueAnalysisEnrichmentComment({
+      repo: "electricsheephq/lcm-x",
+      issue,
+      analysis,
+      identityHash: changedPrivateIdentity,
+      repoPolicy: {
+        ...repoPolicy,
+        advisoryPolicy: "private policy changed",
+        validationSuggestions: ["private validation changed"]
+      },
+      allowedLabels: ["data-integrity", "needs-repro"],
+      allowedOwners: ["Tosko4"],
+      postIssueComment: true
+    });
+    expect(changedPrivateIdentity).toBe(identityHash);
+    expect(changedPrivateComment.bodyHash).toBe(comment.bodyHash);
+    expect(changedPrivateComment.body).toBe(comment.body);
   });
 
   it("runs strict model analysis, writes a quality scorecard, and returns only an accepted result", async () => {

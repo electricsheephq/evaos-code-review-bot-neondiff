@@ -31,7 +31,7 @@ describe("review state store", () => {
     store.close();
   });
 
-  it("stores normalized issue enrichment body hashes and rejects invalid hashes", () => {
+  it("stores normalized issue enrichment public and private hashes and rejects invalid hashes", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-body-hash-"));
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
@@ -41,6 +41,7 @@ describe("review state store", () => {
       issueNumber: 17,
       issueUpdatedAt: "2026-07-03T00:00:00.000Z",
       bodyHash: "A".repeat(64),
+      analysisInputHash: "B".repeat(64),
       status: "posted",
       commentUrl: "https://github.test/owner/issue-repo/issues/17#issuecomment-17",
       now: new Date("2026-07-03T00:00:01.000Z")
@@ -51,6 +52,7 @@ describe("review state store", () => {
       issueNumber: 17,
       issueUpdatedAt: "2026-07-03T00:00:00.000Z",
       bodyHash: "a".repeat(64),
+      analysisInputHash: "b".repeat(64),
       status: "posted",
       commentUrl: "https://github.test/owner/issue-repo/issues/17#issuecomment-17"
     });
@@ -60,6 +62,12 @@ describe("review state store", () => {
       bodyHash: "not-a-64-hex-digest",
       status: "dry_run"
     })).toThrow("bodyHash must be a 64-character hex digest");
+    expect(() => store.recordIssueEnrichment({
+      repo: "owner/issue-repo",
+      issueNumber: 18,
+      analysisInputHash: "not-a-64-hex-digest",
+      status: "dry_run"
+    })).toThrow("analysisInputHash must be a 64-character hex digest");
     store.close();
   });
 
@@ -87,11 +95,13 @@ describe("review state store", () => {
 
     const store = new ReviewStateStore(dbPath);
     const bodyHash = "b".repeat(64);
+    const analysisInputHash = "c".repeat(64);
     const record = store.recordIssueEnrichment({
       repo: "owner/issue-repo",
       issueNumber: 19,
       issueUpdatedAt: "2026-07-03T00:00:00.000Z",
       bodyHash,
+      analysisInputHash,
       status: "dry_run",
       reason: "dry_run_only",
       now: new Date("2026-07-03T00:00:01.000Z")
@@ -102,12 +112,13 @@ describe("review state store", () => {
     try {
       const columns = migratedDb.prepare("pragma table_info(issue_enrichment_records)").all() as Array<{ name: string }>;
       const row = migratedDb
-        .prepare("select body_hash from issue_enrichment_records where repo = ? and issue_number = ?")
-        .get("owner/issue-repo", 19) as { body_hash: string } | undefined;
+        .prepare("select body_hash, analysis_input_hash from issue_enrichment_records where repo = ? and issue_number = ?")
+        .get("owner/issue-repo", 19) as { body_hash: string; analysis_input_hash: string } | undefined;
 
       expect(columns.map((column) => column.name)).toContain("body_hash");
-      expect(record).toMatchObject({ status: "dry_run", bodyHash });
-      expect(row).toEqual({ body_hash: bodyHash });
+      expect(columns.map((column) => column.name)).toContain("analysis_input_hash");
+      expect(record).toMatchObject({ status: "dry_run", bodyHash, analysisInputHash });
+      expect(row).toEqual({ body_hash: bodyHash, analysis_input_hash: analysisInputHash });
     } finally {
       migratedDb.close();
     }

@@ -712,7 +712,7 @@ export async function runIssueEnrichmentCycle(input: {
 
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
     const plannedEnrichmentByIssue = new Map<string, EnrichmentComment>();
-    const plannedBodyHashByIssue = new Map<string, string | undefined>();
+    const plannedAnalysisInputHashByIssue = new Map<string, string | undefined>();
     const analysisIdentityHash = (repo: string, issue: GitHubRelatedIssueOrPull): string => {
       const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
       const allowlists = issueSuggestionAllowlists(policy.suggestions);
@@ -748,26 +748,26 @@ export async function runIssueEnrichmentCycle(input: {
       plannedEnrichmentByIssue.set(key, enrichment);
       return enrichment;
     };
-    const plannedBodyHashForItem = (item: IssueEnrichmentScanItem): string | undefined => {
+    const plannedAnalysisInputHashForItem = (item: IssueEnrichmentScanItem): string | undefined => {
       if (!isIssueEnrichmentCommentAction(item.action)) return undefined;
       const key = issueKey(item.repo, item.issueNumber);
-      if (plannedBodyHashByIssue.has(key)) return plannedBodyHashByIssue.get(key);
+      if (plannedAnalysisInputHashByIssue.has(key)) return plannedAnalysisInputHashByIssue.get(key);
       const issue = issuesByKey.get(key);
-      const bodyHash = issue
+      const analysisInputHash = issue
         ? analysisIdentityHash(item.repo, issue)
         : plannedEnrichmentForItem(item)?.bodyHash;
-      plannedBodyHashByIssue.set(key, bodyHash);
-      return bodyHash;
+      plannedAnalysisInputHashByIssue.set(key, analysisInputHash);
+      return analysisInputHash;
     };
     const shouldCountItem = (item: IssueEnrichmentScanItem) => {
       if (input.force === true) return true;
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const bodyHash = issue && shouldCompareIssueEnrichmentBodyHash(existing)
-        ? plannedBodyHashForItem(item)
+      const analysisInputHash = issue && shouldCompareIssueEnrichmentAnalysisInputHash(existing)
+        ? plannedAnalysisInputHashForItem(item)
         : undefined;
-      return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, bodyHash, item.action));
+      return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action));
     };
     const scanned = reposToScan.length
       ? await collectIssueEnrichmentScan({
@@ -829,18 +829,22 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const bodyHash = shouldCompareIssueEnrichmentBodyHash(existing) ||
-        shouldBackfillIssueEnrichmentBodyHash(existing, issueUpdatedAt, item.action)
-        ? plannedBodyHashForItem(item)
+      const analysisInputHash = shouldCompareIssueEnrichmentAnalysisInputHash(existing) ||
+        shouldBackfillIssueEnrichmentAnalysisInputHash(existing, issueUpdatedAt, item.action)
+        ? plannedAnalysisInputHashForItem(item)
         : undefined;
-      if (input.force !== true && existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, bodyHash, item.action)) {
-        const refreshedBodyHash = existing.bodyHash ?? bodyHash;
-        if (!input.dryRun && (existing.issueUpdatedAt !== issueUpdatedAt || refreshedBodyHash !== existing.bodyHash)) {
+      if (input.force !== true && existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action)) {
+        const refreshedAnalysisInputHash = existing.analysisInputHash ?? analysisInputHash;
+        if (!input.dryRun && (
+          existing.issueUpdatedAt !== issueUpdatedAt ||
+          refreshedAnalysisInputHash !== existing.analysisInputHash
+        )) {
           input.state.recordIssueEnrichment({
             repo: item.repo,
             issueNumber: item.issueNumber,
             issueUpdatedAt,
-            ...(refreshedBodyHash ? { bodyHash: refreshedBodyHash } : {}),
+            ...(existing.bodyHash ? { bodyHash: existing.bodyHash } : {}),
+            ...(refreshedAnalysisInputHash ? { analysisInputHash: refreshedAnalysisInputHash } : {}),
             status: existing.status,
             ...(existing.reason ? { reason: existing.reason } : {}),
             ...(existing.commentUrl ? { commentUrl: existing.commentUrl } : {}),
@@ -888,12 +892,12 @@ export async function runIssueEnrichmentCycle(input: {
       }
 
       if (!config.postIssueComment || item.action === "would_enrich") {
-        const dryRunBodyHash = plannedBodyHashForItem(item);
+        const dryRunAnalysisInputHash = plannedAnalysisInputHashForItem(item);
         input.state.recordIssueEnrichment({
           repo: item.repo,
           issueNumber: item.issueNumber,
           issueUpdatedAt,
-          ...(dryRunBodyHash ? { bodyHash: dryRunBodyHash } : {}),
+          ...(dryRunAnalysisInputHash ? { analysisInputHash: dryRunAnalysisInputHash } : {}),
           status: "dry_run",
           reason: "dry_run_only",
           now: new Date(checkedAt)
@@ -908,7 +912,7 @@ export async function runIssueEnrichmentCycle(input: {
         const policy = resolveIssueEnrichmentRepoPolicy(config, item.repo);
         if (!policy.allowed) throw new Error(`Issue analysis policy is not enabled for ${item.repo}`);
         const allowlists = issueSuggestionAllowlists(policy.suggestions);
-        const identityHash = plannedBodyHashForItem(item);
+        const identityHash = plannedAnalysisInputHashForItem(item);
         if (!identityHash) throw new Error(`Issue analysis identity missing for ${item.repo}#${item.issueNumber}`);
         let workspacePath = "";
         let analysisEvidenceDir = "";
@@ -963,6 +967,27 @@ export async function runIssueEnrichmentCycle(input: {
           lifecycle: { state: "enriched" }
         });
         const postBodyHash = enrichment.bodyHash;
+        if (input.force !== true && existing?.status === "posted" && existing.bodyHash === postBodyHash) {
+          input.state.recordIssueEnrichment({
+            repo: item.repo,
+            issueNumber: item.issueNumber,
+            issueUpdatedAt,
+            bodyHash: postBodyHash,
+            analysisInputHash: identityHash,
+            status: "posted",
+            ...(existing.reason ? { reason: existing.reason } : {}),
+            ...(existing.commentUrl ? { commentUrl: existing.commentUrl } : {}),
+            now: new Date(checkedAt)
+          });
+          summary.alreadyProcessed += 1;
+          items.push({
+            ...item,
+            skippedExisting: true,
+            recordStatus: "posted",
+            ...(existing.commentUrl ? { commentUrl: existing.commentUrl } : {})
+          });
+          continue;
+        }
         const post = await postEnrichmentComment({
           enabled: true,
           dryRun: false,
@@ -978,6 +1003,7 @@ export async function runIssueEnrichmentCycle(input: {
           issueNumber: item.issueNumber,
           issueUpdatedAt,
           ...(postBodyHash ? { bodyHash: postBodyHash } : {}),
+          analysisInputHash: identityHash,
           status: "posted",
           ...(commentUrl ? { commentUrl } : {}),
           now: new Date(checkedAt)
@@ -990,7 +1016,7 @@ export async function runIssueEnrichmentCycle(input: {
           repo: item.repo,
           issueNumber: item.issueNumber,
           issueUpdatedAt,
-          ...(bodyHash ? { bodyHash } : {}),
+          ...(analysisInputHash ? { analysisInputHash } : {}),
           status: "failed",
           reason: "analysis_or_post_failed",
           error: message,
@@ -1355,7 +1381,7 @@ function shouldSkipIssueEnrichmentRecord(
   existing: IssueEnrichmentRecord,
   issueUpdatedAt: string,
   checkedAt: string,
-  bodyHash?: string,
+  analysisInputHash?: string,
   action?: IssueEnrichmentScanAction
 ): boolean {
   if (existing.status === "failed") return false;
@@ -1364,28 +1390,28 @@ function shouldSkipIssueEnrichmentRecord(
     const now = Date.parse(checkedAt);
     if (Number.isFinite(nextEligibleAt) && Number.isFinite(now) && nextEligibleAt <= now) return false;
   }
-  if (existing.bodyHash && bodyHash && existing.status === "posted") {
-    return existing.bodyHash === bodyHash.toLowerCase();
+  if (existing.analysisInputHash && analysisInputHash && existing.status === "posted") {
+    return existing.analysisInputHash === analysisInputHash.toLowerCase();
   }
   if (existing.status === "dry_run" && action === "would_comment") return false;
   if (existing.issueUpdatedAt !== issueUpdatedAt) return false;
   return true;
 }
 
-function shouldCompareIssueEnrichmentBodyHash(
+function shouldCompareIssueEnrichmentAnalysisInputHash(
   existing: IssueEnrichmentRecord | undefined
 ): boolean {
   return existing?.status === "posted" &&
-    Boolean(existing.bodyHash);
+    Boolean(existing.analysisInputHash);
 }
 
-function shouldBackfillIssueEnrichmentBodyHash(
+function shouldBackfillIssueEnrichmentAnalysisInputHash(
   existing: IssueEnrichmentRecord | undefined,
   issueUpdatedAt: string,
   action: IssueEnrichmentScanAction
 ): boolean {
   return existing?.status === "posted" &&
-    !existing.bodyHash &&
+    !existing.analysisInputHash &&
     existing.issueUpdatedAt === issueUpdatedAt &&
     isIssueEnrichmentCommentAction(action);
 }

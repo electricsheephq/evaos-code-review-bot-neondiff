@@ -296,9 +296,7 @@ export function buildIssueAnalysisInputHash(input: {
       labels: normalizeLabels(input.issue).map((label) => label.toLowerCase()).sort(),
       milestone: input.issue.milestone?.title ?? ""
     },
-    policy: {
-      advisoryPolicy: input.repoPolicy.advisoryPolicy ?? "",
-      validationSuggestions: input.repoPolicy.validationSuggestions,
+    publicSuggestionPolicy: {
       suggestedLabels: input.repoPolicy.suggestedLabels,
       suggestedReviewers: input.repoPolicy.suggestedReviewers,
       labelAliases: Object.fromEntries(Object.entries(input.repoPolicy.labelAliases).sort(([a], [b]) => a.localeCompare(b)))

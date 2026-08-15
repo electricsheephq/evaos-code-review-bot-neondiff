@@ -1997,7 +1997,10 @@ describe("sticky enrichment comments", () => {
         const changedCapRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 32);
 
         expect(dryRunOnly.summary).toMatchObject({ dryRunRecorded: 1, alreadyProcessed: 0, posted: 0, failed: 0 });
-        expect(dryRunRecord).toMatchObject({ status: "dry_run", bodyHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+        expect(dryRunRecord).toMatchObject({
+          status: "dry_run",
+          analysisInputHash: expect.stringMatching(/^[a-f0-9]{64}$/)
+        });
         expect(live.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
         expect(unchanged.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
         expect(changedCap.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
@@ -2007,9 +2010,11 @@ describe("sticky enrichment comments", () => {
         expect(posted[0]?.body).toContain(`hash=${liveRecord?.bodyHash}`);
         expect(liveRecord).toMatchObject({
           status: "posted",
-          bodyHash: dryRunRecord?.bodyHash,
+          bodyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          analysisInputHash: dryRunRecord?.analysisInputHash,
           commentUrl: "https://github.test/owner/issue-repo/issues/32#issuecomment-32"
         });
+        expect(liveRecord?.bodyHash).not.toBe(liveRecord?.analysisInputHash);
         expect(posted[1]?.body).toContain("Suggested reviewers: first-reviewer, second-reviewer.");
         expect(posted[1]?.body).toContain(`hash=${changedCapRecord?.bodyHash}`);
         expect(changedCapRecord?.bodyHash).not.toBe(liveRecord?.bodyHash);
@@ -2085,23 +2090,32 @@ describe("sticky enrichment comments", () => {
         });
         if (preview.skipped) throw new Error("expected preview body");
         let postedBody = "";
+        let analysisCalls = 0;
+        let postCalls = 0;
+        const github = {
+          listIssuesForEnrichment: async () => [issue],
+          canPostAsApp: () => true,
+          upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+            postCalls += 1;
+            postedBody = input.body;
+            return {
+              action: "created" as const,
+              id: input.issueNumber,
+              html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
+            };
+          }
+        };
+        const analyzeIssue = async ({ issue: analysisIssue }: { issue: GitHubRelatedIssueOrPull }) => {
+          analysisCalls += 1;
+          return fixtureIssueAnalysis(analysisIssue);
+        };
         const live = await runIssueEnrichmentCycle({
           config,
           state,
-          github: {
-            listIssuesForEnrichment: async () => [issue],
-            canPostAsApp: () => true,
-            upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
-              postedBody = input.body;
-              return {
-                action: "created" as const,
-                id: input.issueNumber,
-                html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
-              };
-            }
-          },
+          github,
           dryRun: false,
-          checkedAt: "2026-07-03T01:05:00.000Z"
+          checkedAt: "2026-07-03T01:05:00.000Z",
+          analyzeIssue
         });
 
         expect(live.summary).toMatchObject({ posted: 1, failed: 0 });
@@ -2115,6 +2129,27 @@ describe("sticky enrichment comments", () => {
         expect(postedBody).toContain("### Next gate");
         expect(postedBody).not.toContain("[confidence not calibrated]");
         expect(postedBody).toContain(`hash=${state.getIssueEnrichmentRecord("owner/issue-repo", 33)?.bodyHash}`);
+        const changedPrivateConfig = JSON.parse(readFileSync(configPath, "utf8")) as {
+          issueEnrichment: {
+            repos: Record<string, { advisoryPolicy: string; validationSuggestions: string[] }>;
+          };
+        };
+        changedPrivateConfig.issueEnrichment.repos["owner/issue-repo"] = {
+          advisoryPolicy: "Private policy changed without public effect.",
+          validationSuggestions: ["Private validation changed without public effect."]
+        };
+        writeFileSync(configPath, `${JSON.stringify(changedPrivateConfig)}\n`);
+        const privatePolicyOnly = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T01:06:00.000Z",
+          analyzeIssue
+        });
+        expect(privatePolicyOnly.summary).toMatchObject({ reposScanned: 0, posted: 0, failed: 0 });
+        expect(analysisCalls).toBe(1);
+        expect(postCalls).toBe(1);
       } finally {
         state.close();
       }
@@ -2879,12 +2914,15 @@ describe("sticky enrichment comments", () => {
           commentUrl: "https://github.test/comment/1"
         });
         expect(firstRecord?.bodyHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(firstRecord?.analysisInputHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(firstRecord?.analysisInputHash).not.toBe(firstRecord?.bodyHash);
         expect(backfilledRecord).toMatchObject({
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:00:00.000Z",
           commentUrl: "https://github.test/comment/1",
-          bodyHash: firstRecord?.bodyHash
+          analysisInputHash: firstRecord?.analysisInputHash
         });
+        expect(backfilledRecord?.bodyHash).toBeUndefined();
         // #263: live-posted markers now carry the mapped `enriched` lifecycle state + fields after
         // the hash token, so the hash is no longer the final token. The hash token itself is stable.
         expect(posts[0]!.body).toContain(`hash=${firstRecord?.bodyHash}`);
@@ -2893,8 +2931,9 @@ describe("sticky enrichment comments", () => {
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:07:00.000Z",
           commentUrl: "https://github.test/comment/1",
-          bodyHash: firstRecord?.bodyHash
+          analysisInputHash: firstRecord?.analysisInputHash
         });
+        expect(refreshedRecord?.bodyHash).toBeUndefined();
         const changedRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 41);
         expect(changedRecord).toMatchObject({
           status: "posted",
@@ -2902,9 +2941,9 @@ describe("sticky enrichment comments", () => {
           commentUrl: "https://github.test/comment/2"
         });
         expect(changedRecord?.bodyHash).toMatch(/^[a-f0-9]{64}$/);
-        expect(changedRecord?.bodyHash).not.toBe(firstRecord?.bodyHash);
+        expect(changedRecord?.bodyHash).toBe(firstRecord?.bodyHash);
+        expect(changedRecord?.analysisInputHash).not.toBe(firstRecord?.analysisInputHash);
         expect(posts[1]!.body).toContain(`hash=${changedRecord?.bodyHash}`);
-        expect(posts[1]!.body).toContain("lifecycle=enriched");
       } finally {
         state.close();
       }

@@ -401,7 +401,10 @@ export function buildIssueAnalysisEnrichmentComment(input: {
   ].join("\n");
   const redactedVisibleBody = redactSecrets(visibleBody);
   assertIssueAnalysisPublicSafe(redactedVisibleBody, input.repoPolicy);
-  const bodyHash = input.identityHash.toLowerCase();
+  // The public marker must commit only to the rendered public-safe body. The
+  // private analysis input identity is retained by the local state store for
+  // idempotency, but is never published.
+  const bodyHash = hashBody(redactedVisibleBody);
   const stateMarker = buildIssueStateMarker({
     repo: input.repo,
     issueNumber: input.issue.number,
