@@ -1565,6 +1565,14 @@ exit 1
           privateKeyPath,
           apiBaseUrl: `http://127.0.0.1:${address.port}`
         },
+        codexRuntime: {
+          enabled: true,
+          cliPath: "/usr/bin/codex",
+          model: "gpt-5.6-luna",
+          reasoningEffort: "max",
+          timeoutMs: 30_000,
+          maxOutputBytes: 1_048_576
+        },
         zcode: {
           cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
           appConfigPath: join(root, "zcode-config.json"),
