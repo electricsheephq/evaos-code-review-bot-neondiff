@@ -1,5 +1,6 @@
 {
   "pilotRepos": [
+    "electricsheephq/lcm-x",
     "electricsheephq/WorldOS",
     "electricsheephq/evaos-code-review-bot-neondiff",
     "electricsheephq/electric-sheep-website-dashboard-6158a244",
@@ -2455,7 +2456,33 @@
         ],
         "suggestedReviewers": [
           "Tosko4"
-        ]
+        ],
+        "finishingTouches": {
+          "docs": {
+            "enabled": false
+          },
+          "docstrings": {
+            "enabled": false
+          },
+          "unitTests": {
+            "enabled": false
+          },
+          "simplifySuggestion": {
+            "enabled": false
+          },
+          "changelogDraft": {
+            "enabled": false
+          },
+          "riskExplanation": {
+            "enabled": false
+          },
+          "reviewReady": {
+            "enabled": false
+          },
+          "stackedPr": {
+            "enabled": false
+          }
+        }
       }
     }
   }

@@ -1850,7 +1850,8 @@ describe("sticky enrichment comments", () => {
               burstWindowMs: 3_600_000,
               maxIssuesPerBurst: 10,
               lookbackMs: 600_000,
-              advisoryPolicy: "Review confidence 97% after calibrated evidence."
+              advisoryPolicy: "Review confidence 97% after calibrated evidence.",
+              validationSuggestions: ["Validation confidence 96% after calibrated evidence."]
             }
           }
         }
@@ -1898,7 +1899,9 @@ describe("sticky enrichment comments", () => {
 
         expect(live.summary).toMatchObject({ posted: 1, failed: 0 });
         expect(preview.body).toContain("Review confidence 97% after calibrated evidence.");
+        expect(preview.body).toContain("Validation confidence 96% after calibrated evidence.");
         expect(postedBody).toContain("Review confidence 97% after calibrated evidence.");
+        expect(postedBody).toContain("Validation confidence 96% after calibrated evidence.");
         expect(postedBody).not.toContain("[confidence not calibrated]");
         expect(postedBody.split("\n").slice(2)).toEqual(preview.body.split("\n").slice(2));
         expect(postedBody).toContain(`hash=${state.getIssueEnrichmentRecord("owner/issue-repo", 33)?.bodyHash}`);
