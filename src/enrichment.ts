@@ -213,12 +213,15 @@ export function buildIssueEnrichmentComment(input: {
   const reviewers = uniqueCaseInsensitive(input.repoPolicy?.suggestedReviewers ?? []).filter((reviewer) => {
     return allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(reviewer));
   }).slice(0, input.maxSuggestions ?? 8);
-  const policyValidationSuggestions = unique(input.repoPolicy?.validationSuggestions ?? [])
+  const policyValidationSuggestions = unique(
+    input.repoPolicy?.validationSuggestions ?? [],
+    input.publicConfidencePolicy
+  )
     .slice(0, input.maxSuggestions ?? 8);
   const validationSuggestions = unique([
     ...policyValidationSuggestions,
     ...(input.validationSuggestions ?? [])
-  ]).slice(0, input.maxSuggestions ?? 8);
+  ], input.publicConfidencePolicy).slice(0, input.maxSuggestions ?? 8);
   const repoPolicySection = input.repoPolicy?.advisoryPolicy || policyValidationSuggestions.length
     ? [
         "",
@@ -734,8 +737,8 @@ function formatPublicText(value: string | undefined, publicConfidencePolicy?: Pu
   ).trim();
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values.map((value) => formatPublicText(value)).filter(Boolean))];
+function unique(values: string[], publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string[] {
+  return [...new Set(values.map((value) => formatPublicText(value, publicConfidencePolicy)).filter(Boolean))];
 }
 
 function uniqueCaseInsensitive(values: string[]): string[] {

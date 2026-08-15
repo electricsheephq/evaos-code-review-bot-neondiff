@@ -811,6 +811,7 @@ const pull: PullRequestSummary = {
 };
 
 const activeMonitorRepos = [
+  "electricsheephq/lcm-x",
   "electricsheephq/WorldOS",
   "electricsheephq/evaos-code-review-bot-neondiff",
   "electricsheephq/electric-sheep-website-dashboard-6158a244",
