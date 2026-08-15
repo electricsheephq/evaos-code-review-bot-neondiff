@@ -39,6 +39,27 @@ import NeonDiffDesktopCore
         )
     }
 
+    @Test func stableServiceWinsOverTransientBootstrapExitFailure() {
+        #expect(
+            DesktopKeychainWorkerLaunchAgentContract.restartOutcome(
+                bootstrapStatus: 5,
+                stablePIDObserved: true
+            ) == .accepted
+        )
+        #expect(
+            DesktopKeychainWorkerLaunchAgentContract.restartOutcome(
+                bootstrapStatus: 5,
+                stablePIDObserved: false
+            ) == .launchctlRejected
+        )
+        #expect(
+            DesktopKeychainWorkerLaunchAgentContract.restartOutcome(
+                bootstrapStatus: 0,
+                stablePIDObserved: false
+            ) == .notReady
+        )
+    }
+
     @Test func plistContainsOnlyPublicExactCoordinates() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"

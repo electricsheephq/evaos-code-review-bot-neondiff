@@ -242,10 +242,18 @@ private func restartLaunchAgent(label: String, plistURL: URL) throws {
         plistPath: plistURL.path,
         isLoaded: status == 0
     )
-    for command in commands {
+    guard let bootstrapCommand = commands.last else {
+        throw WorkerLaunchAgentRuntimeError.launchctlFailed
+    }
+    for command in commands.dropLast() {
         _ = try runLaunchctl(command)
     }
+    let bootstrapStatus = try runLaunchctl(
+        bootstrapCommand,
+        acceptsFailure: true
+    )
     var previousPID: Int32?
+    var stablePIDObserved = false
     for _ in 0..<12 {
         usleep(250_000)
         let sample = try runLaunchctlCapture(
@@ -262,11 +270,22 @@ private func restartLaunchAgent(label: String, plistURL: URL) throws {
             continue
         }
         if previousPID == pid {
-            return
+            stablePIDObserved = true
+            break
         }
         previousPID = pid
     }
-    throw WorkerLaunchAgentRuntimeError.launchctlNotReady
+    switch DesktopKeychainWorkerLaunchAgentContract.restartOutcome(
+        bootstrapStatus: bootstrapStatus,
+        stablePIDObserved: stablePIDObserved
+    ) {
+    case .accepted:
+        return
+    case .launchctlRejected:
+        throw WorkerLaunchAgentRuntimeError.launchctlFailed
+    case .notReady:
+        throw WorkerLaunchAgentRuntimeError.launchctlNotReady
+    }
 }
 
 private func bootoutLaunchAgent(label: String) throws {

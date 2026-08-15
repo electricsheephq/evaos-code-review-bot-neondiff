@@ -106,6 +106,12 @@ package enum DesktopKeychainWorkerLaunchAgentError:
     }
 }
 
+package enum DesktopKeychainWorkerLaunchAgentRestartOutcome: Equatable {
+    case accepted
+    case launchctlRejected
+    case notReady
+}
+
 package enum DesktopKeychainWorkerLaunchAgentContract {
     package static let headlessFlag = "--neondiff-worker-daemon"
 
@@ -122,6 +128,16 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         }
         commands.append(["bootstrap", domain, plistPath])
         return commands
+    }
+
+    package static func restartOutcome(
+        bootstrapStatus: Int32,
+        stablePIDObserved: Bool
+    ) -> DesktopKeychainWorkerLaunchAgentRestartOutcome {
+        if stablePIDObserved {
+            return .accepted
+        }
+        return bootstrapStatus == 0 ? .notReady : .launchctlRejected
     }
 
     package static func headlessArguments(
