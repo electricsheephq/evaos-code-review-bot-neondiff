@@ -105,6 +105,13 @@ describe("issue enrichment rollout policy", () => {
         }
       }
     })).toThrow("validationSuggestions must contain at most 20 items");
+    expect(() => loadConfigFromObject({
+      issueEnrichment: {
+        repos: {
+          "electricsheephq/lcm-x": { suggestedReviewers: [""] }
+        }
+      }
+    })).toThrow("suggestedReviewers must be an array of non-empty strings");
   });
 
   it("blocks live issue comments until every allowlisted repo has explicit repo throttle thresholds", () => {

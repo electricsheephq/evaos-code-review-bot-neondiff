@@ -1679,6 +1679,7 @@ describe("sticky enrichment comments", () => {
       const statePath = join(root, "state.sqlite");
       const writeConfig = (postIssueComment: boolean) => writeFileSync(configPath, `${JSON.stringify({
         statePath,
+        enrichment: { maxSuggestions: 1 },
         issueEnrichment: {
           enabled: true,
           postIssueComment,
@@ -1693,7 +1694,8 @@ describe("sticky enrichment comments", () => {
               cooldownMs: 60_000,
               burstWindowMs: 3_600_000,
               maxIssuesPerBurst: 10,
-              lookbackMs: 600_000
+              lookbackMs: 600_000,
+              suggestedReviewers: ["first-reviewer", "second-reviewer"]
             }
           }
         }
@@ -1709,7 +1711,7 @@ describe("sticky enrichment comments", () => {
           body: "Acceptance criteria and owner present."
         };
         const reader = { listIssuesForEnrichment: async () => [issue] };
-        const posted: number[] = [];
+        const posted: Array<{ issueNumber: number; body: string }> = [];
 
         const dryRunOnly = await runIssueEnrichmentCycle({
           config: loadConfig(configPath),
@@ -1732,8 +1734,8 @@ describe("sticky enrichment comments", () => {
           github: {
             ...reader,
             canPostAsApp: () => true,
-            upsertIssueComment: async (input: { issueNumber: number }) => {
-              posted.push(input.issueNumber);
+            upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+              posted.push(input);
               return {
                 action: "created" as const,
                 id: input.issueNumber,
@@ -1749,7 +1751,9 @@ describe("sticky enrichment comments", () => {
         expect(dryRunOnly.summary).toMatchObject({ dryRunRecorded: 1, alreadyProcessed: 0, posted: 0, failed: 0 });
         expect(dryRunRecord).toMatchObject({ status: "dry_run", bodyHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
         expect(live.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
-        expect(posted).toEqual([32]);
+        expect(posted.map((entry) => entry.issueNumber)).toEqual([32]);
+        expect(posted[0]?.body).toContain("Suggested reviewers: first-reviewer.");
+        expect(posted[0]?.body).not.toContain("second-reviewer");
         expect(state.getIssueEnrichmentRecord("owner/issue-repo", 32)).toMatchObject({
           status: "posted",
           bodyHash: dryRunRecord?.bodyHash,

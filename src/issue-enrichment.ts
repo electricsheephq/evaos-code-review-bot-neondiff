@@ -500,7 +500,11 @@ export async function collectIssueEnrichmentScan(input: {
 }
 
 export async function runIssueEnrichmentCycle(input: {
-  config: { issueEnrichment?: IssueEnrichmentConfig; reviewLenses?: ReviewLensConfig };
+  config: {
+    issueEnrichment?: IssueEnrichmentConfig;
+    reviewLenses?: ReviewLensConfig;
+    enrichment?: { maxSuggestions?: number };
+  };
   state: Pick<
     ReviewStateStore,
     "getIssueEnrichmentRecord" |
@@ -652,7 +656,14 @@ export async function runIssueEnrichmentCycle(input: {
       if (cached) return cached;
       const issue = issuesByKey.get(key);
       if (!issue) return undefined;
-      const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue, undefined, reviewLensPacket);
+      const enrichment = buildIssueEnrichmentForCycle(
+        config,
+        item.repo,
+        issue,
+        input.config.enrichment?.maxSuggestions,
+        undefined,
+        reviewLensPacket
+      );
       plannedEnrichmentByIssue.set(key, enrichment);
       return enrichment;
     };
@@ -814,7 +825,14 @@ export async function runIssueEnrichmentCycle(input: {
         // #263: attach the mapped lifecycle state (`enriched`) to the marker at post time. This is a
         // renaming of the decision already made (status=posted) and rides the diagnostic state marker
         // only; bodyHash excludes the marker, so idempotency is unaffected.
-        const enrichment = buildIssueEnrichmentForCycle(config, item.repo, issue, { state: "enriched" }, reviewLensPacket);
+        const enrichment = buildIssueEnrichmentForCycle(
+          config,
+          item.repo,
+          issue,
+          input.config.enrichment?.maxSuggestions,
+          { state: "enriched" },
+          reviewLensPacket
+        );
         const postBodyHash = plannedBodyHashForItem(item) ?? enrichment.bodyHash;
         const post = await postEnrichmentComment({
           enabled: true,
@@ -1256,6 +1274,7 @@ function buildIssueEnrichmentForCycle(
   config: IssueEnrichmentConfig,
   repo: string,
   issue: GitHubRelatedIssueOrPull,
+  maxSuggestions?: number,
   lifecycle?: IssueEnrichmentLifecycleInput,
   reviewLensPacket?: ReviewLensPacket
 ): EnrichmentComment {
@@ -1267,6 +1286,7 @@ function buildIssueEnrichmentForCycle(
     repoPolicy: policy.repoPolicy,
     allowedLabels: allowlists.allowedLabels,
     allowedOwners: allowlists.allowedOwners,
+    ...(maxSuggestions !== undefined ? { maxSuggestions } : {}),
     postIssueComment: true,
     ...(reviewLensPacket ? { reviewLensPacket } : {}),
     ...(lifecycle ? { lifecycle } : {})
