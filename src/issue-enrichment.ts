@@ -12,6 +12,7 @@ import {
   type ReviewLensConfig,
   type ReviewLensPacket
 } from "./review-lenses.js";
+import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
 import type { IssueEnrichmentRecord, IssueEnrichmentRecordStatus, ReviewStateStore } from "./state.js";
 import { isAuthenticProductionLicenseAdmission, type ProductionLicenseAdmission } from "./license-admission.js";
@@ -353,7 +354,11 @@ function reposMissingLiveIssueEnrichmentThresholds(config: IssueEnrichmentConfig
 }
 
 export async function collectIssueEnrichmentScan(input: {
-  config: { issueEnrichment?: IssueEnrichmentConfig };
+  config: {
+    issueEnrichment?: IssueEnrichmentConfig;
+    enrichment?: { maxSuggestions?: number };
+    confidenceCalibration?: { publicDisplay: PublicConfidenceDisplayPolicy };
+  };
   reader: IssueEnrichmentReader;
   dryRun: boolean;
   repos?: string[];
@@ -368,6 +373,7 @@ export async function collectIssueEnrichmentScan(input: {
 }): Promise<IssueEnrichmentScanResult> {
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const status = buildIssueEnrichmentStatus({
     config: input.config,
     canPostAsApp: input.canPostAsApp ?? false,
@@ -442,6 +448,7 @@ export async function collectIssueEnrichmentScan(input: {
       throttle: policy.throttle,
       suggestions: policy.suggestions,
       repoPolicy: policy.repoPolicy,
+      renderPolicy,
       postIssueComment: config.postIssueComment,
       checkedAt,
       shouldCountItem: input.shouldCountItem
@@ -504,6 +511,7 @@ export async function runIssueEnrichmentCycle(input: {
     issueEnrichment?: IssueEnrichmentConfig;
     reviewLenses?: ReviewLensConfig;
     enrichment?: { maxSuggestions?: number };
+    confidenceCalibration?: { publicDisplay: PublicConfidenceDisplayPolicy };
   };
   state: Pick<
     ReviewStateStore,
@@ -531,6 +539,7 @@ export async function runIssueEnrichmentCycle(input: {
   }
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const releasePreacquiredLeaseBeforeRun = () => {
     if (!input.dryRun && input.preacquiredLease) {
       input.state.releaseIssueEnrichmentRunLease(input.preacquiredLease.leaseId);
@@ -660,7 +669,7 @@ export async function runIssueEnrichmentCycle(input: {
         config,
         item.repo,
         issue,
-        input.config.enrichment?.maxSuggestions,
+        renderPolicy,
         undefined,
         reviewLensPacket
       );
@@ -681,7 +690,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const bodyHash = issue && shouldCompareIssueEnrichmentBodyHash(existing, issueUpdatedAt)
+      const bodyHash = issue && shouldCompareIssueEnrichmentBodyHash(existing)
         ? plannedBodyHashForItem(item)
         : undefined;
       return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, bodyHash, item.action));
@@ -746,7 +755,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const bodyHash = shouldCompareIssueEnrichmentBodyHash(existing, issueUpdatedAt) ||
+      const bodyHash = shouldCompareIssueEnrichmentBodyHash(existing) ||
         shouldBackfillIssueEnrichmentBodyHash(existing, issueUpdatedAt, item.action)
         ? plannedBodyHashForItem(item)
         : undefined;
@@ -829,11 +838,11 @@ export async function runIssueEnrichmentCycle(input: {
           config,
           item.repo,
           issue,
-          input.config.enrichment?.maxSuggestions,
+          renderPolicy,
           { state: "enriched" },
           reviewLensPacket
         );
-        const postBodyHash = plannedBodyHashForItem(item) ?? enrichment.bodyHash;
+        const postBodyHash = enrichment.bodyHash;
         const post = await postEnrichmentComment({
           enabled: true,
           dryRun: false,
@@ -947,6 +956,7 @@ function planRepoIssueScan(input: {
   throttle: IssueEnrichmentThrottlePolicy;
   suggestions: IssueEnrichmentSuggestionPolicy;
   repoPolicy: IssueEnrichmentRepoPolicy;
+  renderPolicy: IssueEnrichmentRenderPolicy;
   postIssueComment: boolean;
   checkedAt: string;
   shouldCountItem?: (item: IssueEnrichmentScanItem) => boolean;
@@ -959,7 +969,7 @@ function planRepoIssueScan(input: {
     allowedOwners: allowlists.allowedOwners,
     repoPolicy: input.repoPolicy,
     maxRelatedRefs: 8,
-    maxSuggestions: 8
+    ...input.renderPolicy
   }));
   const eligible = planned.filter((output) => !output.skipped);
   const countableEligible = input.shouldCountItem
@@ -1243,12 +1253,10 @@ function shouldSkipIssueEnrichmentRecord(
 }
 
 function shouldCompareIssueEnrichmentBodyHash(
-  existing: IssueEnrichmentRecord | undefined,
-  issueUpdatedAt: string
+  existing: IssueEnrichmentRecord | undefined
 ): boolean {
   return existing?.status === "posted" &&
-    Boolean(existing.bodyHash) &&
-    existing.issueUpdatedAt !== issueUpdatedAt;
+    Boolean(existing.bodyHash);
 }
 
 function shouldBackfillIssueEnrichmentBodyHash(
@@ -1274,7 +1282,7 @@ function buildIssueEnrichmentForCycle(
   config: IssueEnrichmentConfig,
   repo: string,
   issue: GitHubRelatedIssueOrPull,
-  maxSuggestions?: number,
+  renderPolicy: IssueEnrichmentRenderPolicy,
   lifecycle?: IssueEnrichmentLifecycleInput,
   reviewLensPacket?: ReviewLensPacket
 ): EnrichmentComment {
@@ -1286,11 +1294,30 @@ function buildIssueEnrichmentForCycle(
     repoPolicy: policy.repoPolicy,
     allowedLabels: allowlists.allowedLabels,
     allowedOwners: allowlists.allowedOwners,
-    ...(maxSuggestions !== undefined ? { maxSuggestions } : {}),
+    ...renderPolicy,
     postIssueComment: true,
     ...(reviewLensPacket ? { reviewLensPacket } : {}),
     ...(lifecycle ? { lifecycle } : {})
   });
+}
+
+interface IssueEnrichmentRenderPolicy {
+  maxSuggestions?: number;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+}
+
+function resolveIssueEnrichmentRenderPolicy(config: {
+  enrichment?: { maxSuggestions?: number };
+  confidenceCalibration?: { publicDisplay: PublicConfidenceDisplayPolicy };
+}): IssueEnrichmentRenderPolicy {
+  return {
+    ...(config.enrichment?.maxSuggestions !== undefined
+      ? { maxSuggestions: config.enrichment.maxSuggestions }
+      : {}),
+    ...(config.confidenceCalibration?.publicDisplay
+      ? { publicConfidencePolicy: config.confidenceCalibration.publicDisplay }
+      : {})
+  };
 }
 
 function buildIssueEnrichmentReviewLensPacket(config?: ReviewLensConfig): ReviewLensPacket | undefined {

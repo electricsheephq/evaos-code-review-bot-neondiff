@@ -1672,14 +1672,14 @@ describe("sticky enrichment comments", () => {
     }
   });
 
-  it("does not let a dry-run-only body hash suppress the first live issue comment", async () => {
+  it("derives idempotency from the exact capped body and reposts meaningful cap changes", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-dry-run-to-live-"));
     try {
       const configPath = join(root, "config.json");
       const statePath = join(root, "state.sqlite");
-      const writeConfig = (postIssueComment: boolean) => writeFileSync(configPath, `${JSON.stringify({
+      const writeConfig = (postIssueComment: boolean, maxSuggestions: number) => writeFileSync(configPath, `${JSON.stringify({
         statePath,
-        enrichment: { maxSuggestions: 1 },
+        enrichment: { maxSuggestions },
         issueEnrichment: {
           enabled: true,
           postIssueComment,
@@ -1700,7 +1700,7 @@ describe("sticky enrichment comments", () => {
           }
         }
       })}\n`);
-      writeConfig(false);
+      writeConfig(false, 1);
       const state = new ReviewStateStore(statePath);
       try {
         const issue: GitHubRelatedIssueOrPull = {
@@ -1727,7 +1727,7 @@ describe("sticky enrichment comments", () => {
           checkedAt: "2026-07-03T01:05:00.000Z"
         });
         const dryRunRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 32);
-        writeConfig(true);
+        writeConfig(true, 1);
         const live = await runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
@@ -1747,18 +1747,161 @@ describe("sticky enrichment comments", () => {
           includeExisting: true,
           checkedAt: "2026-07-03T01:06:00.000Z"
         });
+        const liveRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 32);
+        const unchanged = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            ...reader,
+            canPostAsApp: () => true,
+            upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+              posted.push(input);
+              return {
+                action: "updated" as const,
+                id: input.issueNumber,
+                html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
+              };
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-07-03T01:07:00.000Z"
+        });
+        writeConfig(true, 2);
+        const changedCap = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            ...reader,
+            canPostAsApp: () => true,
+            upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+              posted.push(input);
+              return {
+                action: "updated" as const,
+                id: input.issueNumber,
+                html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
+              };
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-07-03T01:08:00.000Z"
+        });
+        const changedCapRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 32);
 
         expect(dryRunOnly.summary).toMatchObject({ dryRunRecorded: 1, alreadyProcessed: 0, posted: 0, failed: 0 });
         expect(dryRunRecord).toMatchObject({ status: "dry_run", bodyHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
         expect(live.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
-        expect(posted.map((entry) => entry.issueNumber)).toEqual([32]);
+        expect(unchanged.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+        expect(changedCap.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
+        expect(posted.map((entry) => entry.issueNumber)).toEqual([32, 32]);
         expect(posted[0]?.body).toContain("Suggested reviewers: first-reviewer.");
         expect(posted[0]?.body).not.toContain("second-reviewer");
-        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 32)).toMatchObject({
+        expect(posted[0]?.body).toContain(`hash=${liveRecord?.bodyHash}`);
+        expect(liveRecord).toMatchObject({
           status: "posted",
           bodyHash: dryRunRecord?.bodyHash,
           commentUrl: "https://github.test/owner/issue-repo/issues/32#issuecomment-32"
         });
+        expect(posted[1]?.body).toContain("Suggested reviewers: first-reviewer, second-reviewer.");
+        expect(posted[1]?.body).toContain(`hash=${changedCapRecord?.bodyHash}`);
+        expect(changedCapRecord?.bodyHash).not.toBe(liveRecord?.bodyHash);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps calibrated repo-policy confidence identical between preview and live issue rendering", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-confidence-parity-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        confidenceCalibration: {
+          publicDisplay: {
+            mode: "calibrated",
+            evidenceUrl: "https://github.com/electricsheephq/evaos-code-review-bot/actions/runs/123",
+            datasetId: "confidence-calibration-v1",
+            labeledFindings: 100,
+            minLabeledFindings: 100,
+            p0p1Labels: 30,
+            minP0P1Labels: 30,
+            negativeControlScenarios: 10,
+            minNegativeControlScenarios: 10,
+            wilsonLowerBound: 0.95,
+            minWilsonLowerBound: 0.95
+          }
+        },
+        enrichment: { maxSuggestions: 1 },
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 60_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000,
+              advisoryPolicy: "Review confidence 97% after calibrated evidence."
+            }
+          }
+        }
+      })}\n`);
+      const config = loadConfig(configPath);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const issue: GitHubRelatedIssueOrPull = {
+          number: 33,
+          title: "Preserve calibrated confidence",
+          state: "open",
+          updated_at: "2026-07-03T01:00:00.000Z",
+          body: "Acceptance criteria and owner present."
+        };
+        const policy = resolveIssueEnrichmentRepoPolicy(config.issueEnrichment!, "owner/issue-repo");
+        const preview = buildIssueEnrichmentDryRunOutput({
+          repo: "owner/issue-repo",
+          issue,
+          repoPolicy: policy.repoPolicy,
+          allowedLabels: policy.suggestions.allowedLabels,
+          allowedOwners: policy.suggestions.allowedReviewers,
+          maxSuggestions: config.enrichment?.maxSuggestions,
+          publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+        });
+        if (preview.skipped) throw new Error("expected preview body");
+        let postedBody = "";
+        const live = await runIssueEnrichmentCycle({
+          config,
+          state,
+          github: {
+            listIssuesForEnrichment: async () => [issue],
+            canPostAsApp: () => true,
+            upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+              postedBody = input.body;
+              return {
+                action: "created" as const,
+                id: input.issueNumber,
+                html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
+              };
+            }
+          },
+          dryRun: false,
+          checkedAt: "2026-07-03T01:05:00.000Z"
+        });
+
+        expect(live.summary).toMatchObject({ posted: 1, failed: 0 });
+        expect(preview.body).toContain("Review confidence 97% after calibrated evidence.");
+        expect(postedBody).toContain("Review confidence 97% after calibrated evidence.");
+        expect(postedBody).not.toContain("[confidence not calibrated]");
+        expect(postedBody.split("\n").slice(2)).toEqual(preview.body.split("\n").slice(2));
+        expect(postedBody).toContain(`hash=${state.getIssueEnrichmentRecord("owner/issue-repo", 33)?.bodyHash}`);
       } finally {
         state.close();
       }
