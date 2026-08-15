@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,7 +7,8 @@ import {
   buildCodexExecInvocation,
   buildCodexRuntimeEnv,
   CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
-  runCodexReview
+  runCodexReview,
+  runCodexStructuredOutput
 } from "../src/codex-runtime.js";
 import { buildReviewProviderMetadata, resolveSelfConsistencyBackend } from "../src/worker.js";
 
@@ -157,6 +158,85 @@ describe("Codex CLI review runtime", () => {
         return { stdout: "", stderr: "", status: 0, signal: null };
       }
     })).rejects.toThrow("codex_runtime_unsafe_write_attempt");
+  });
+
+  it("supports a named strict structured result without weakening the read-only runtime", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-structured-"));
+    temporaryRoots.push(root);
+    const evidenceDir = join(root, "evidence");
+    const result = await runCodexStructuredOutput({
+      cwd: join(root, "worktree"),
+      prompt: "Return the fixture classification.",
+      cliPath: "/Users/test/.local/bin/codex",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "max",
+      evidenceDir,
+      timeoutMs: 30_000,
+      maxOutputBytes: 1024 * 1024,
+      artifactPrefix: "codex-issue-analysis",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["classification"],
+        properties: {
+          classification: { type: "string", enum: ["bug"] }
+        }
+      },
+      parse: (value) => {
+        if (
+          typeof value !== "object" ||
+          value === null ||
+          !("classification" in value) ||
+          value.classification !== "bug"
+        ) {
+          throw new Error("invalid fixture");
+        }
+        return { classification: "bug" as const };
+      }
+    }, {
+      captureWorktreeState: () => "clean",
+      runProcess: async (invocation) => {
+        writeFileSync(invocation.outputPath, JSON.stringify({ classification: "bug" }));
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    });
+
+    expect(result.value).toEqual({ classification: "bug" });
+    expect(result.rawResponse).toBe('{"classification":"bug"}');
+    expect(JSON.parse(readFileSync(join(evidenceDir, "codex-issue-analysis-schema.json"), "utf8")))
+      .toHaveProperty("properties.classification");
+    expect(readFileSync(join(evidenceDir, "codex-issue-analysis-result.json"), "utf8"))
+      .toContain('"classification":"bug"');
+    expect(existsSync(join(evidenceDir, "codex-issue-analysis-stdout.txt"))).toBe(true);
+    expect(existsSync(join(evidenceDir, "codex-issue-analysis-stderr.txt"))).toBe(true);
+  });
+
+  it("rejects unsafe structured-output artifact prefixes before process execution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-codex-prefix-"));
+    temporaryRoots.push(root);
+    let invoked = false;
+
+    await expect(runCodexStructuredOutput({
+      cwd: join(root, "worktree"),
+      prompt: "unused",
+      cliPath: "/Users/test/.local/bin/codex",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "max",
+      evidenceDir: join(root, "evidence"),
+      timeoutMs: 30_000,
+      maxOutputBytes: 1024 * 1024,
+      artifactPrefix: "../escaped",
+      schema: {},
+      parse: () => ({})
+    }, {
+      captureWorktreeState: () => "clean",
+      runProcess: async () => {
+        invoked = true;
+        return { stdout: "", stderr: "", status: 0, signal: null };
+      }
+    })).rejects.toThrow("codex_runtime_invalid_artifact_prefix");
+
+    expect(invoked).toBe(false);
   });
 
   it("replaces a rejected secret-like result artifact before failing closed", async () => {

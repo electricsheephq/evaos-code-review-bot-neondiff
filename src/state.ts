@@ -453,6 +453,7 @@ export interface IssueEnrichmentRecord {
   issueNumber: number;
   issueUpdatedAt?: string;
   bodyHash?: string;
+  analysisInputHash?: string;
   status: IssueEnrichmentRecordStatus;
   reason?: string;
   commentUrl?: string;
@@ -475,6 +476,7 @@ export interface RecordIssueEnrichmentInput {
   issueNumber: number;
   issueUpdatedAt?: string;
   bodyHash?: string;
+  analysisInputHash?: string;
   status: IssueEnrichmentRecordStatus;
   reason?: string;
   commentUrl?: string;
@@ -796,6 +798,7 @@ export class ReviewStateStore {
         issue_number integer not null,
         issue_updated_at text,
         body_hash text,
+        analysis_input_hash text,
         status text not null,
         reason text,
         comment_url text,
@@ -828,6 +831,7 @@ export class ReviewStateStore {
     `);
     this.ensureProcessedReviewColumns();
     this.ensureIssueEnrichmentBodyHashColumn();
+    this.ensureIssueEnrichmentAnalysisInputHashColumn();
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
     this.ensureReviewQueueJobColumns();
@@ -1310,18 +1314,20 @@ export class ReviewStateStore {
     const nowIso = (input.now ?? new Date()).toISOString();
     const reason = input.reason ? redactSecrets(input.reason).trim().slice(0, 500) : undefined;
     const bodyHash = input.bodyHash ? input.bodyHash.trim().toLowerCase() : undefined;
+    const analysisInputHash = input.analysisInputHash ? input.analysisInputHash.trim().toLowerCase() : undefined;
     const commentUrl = input.commentUrl ? redactSecrets(input.commentUrl).trim().slice(0, 500) : undefined;
     const error = input.error ? redactSecrets(input.error).trim().slice(0, 1_000) : undefined;
     const nextEligibleAt = input.nextEligibleAt ? new Date(Date.parse(input.nextEligibleAt)).toISOString() : undefined;
     this.db
       .prepare(
         `insert into issue_enrichment_records
-          (repo, issue_number, issue_updated_at, body_hash, status, reason, comment_url, error,
+          (repo, issue_number, issue_updated_at, body_hash, analysis_input_hash, status, reason, comment_url, error,
            next_eligible_at, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(repo, issue_number) do update set
            issue_updated_at = excluded.issue_updated_at,
            body_hash = excluded.body_hash,
+           analysis_input_hash = excluded.analysis_input_hash,
            status = excluded.status,
            reason = excluded.reason,
            comment_url = excluded.comment_url,
@@ -1334,6 +1340,7 @@ export class ReviewStateStore {
         input.issueNumber,
         input.issueUpdatedAt ?? null,
         bodyHash ?? null,
+        analysisInputHash ?? null,
         input.status,
         reason ?? null,
         commentUrl ?? null,
@@ -1349,7 +1356,7 @@ export class ReviewStateStore {
     validateRepoIssue(repo, issueNumber);
     const row = this.db
       .prepare(
-        `select repo, issue_number, issue_updated_at, body_hash, status, reason, comment_url, error,
+        `select repo, issue_number, issue_updated_at, body_hash, analysis_input_hash, status, reason, comment_url, error,
                 next_eligible_at, created_at, updated_at
          from issue_enrichment_records
          where repo = ? and issue_number = ?
@@ -1386,7 +1393,7 @@ export class ReviewStateStore {
     if (input.limit) params.push(input.limit);
     const rows = this.db
       .prepare(
-        `select repo, issue_number, issue_updated_at, body_hash, status, reason, comment_url, error,
+        `select repo, issue_number, issue_updated_at, body_hash, analysis_input_hash, status, reason, comment_url, error,
                 next_eligible_at, created_at, updated_at
          from issue_enrichment_records
          ${where}
@@ -3601,6 +3608,13 @@ export class ReviewStateStore {
     }
   }
 
+  private ensureIssueEnrichmentAnalysisInputHashColumn(): void {
+    const columns = this.db.prepare("pragma table_info(issue_enrichment_records)").all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "analysis_input_hash")) {
+      this.db.exec("alter table issue_enrichment_records add column analysis_input_hash text");
+    }
+  }
+
   private ensureDaemonHeartbeatColumns(): void {
     const columns = this.db
       .prepare("pragma table_info(daemon_heartbeat)")
@@ -3815,6 +3829,9 @@ function validateIssueEnrichmentInput(input: RecordIssueEnrichmentInput): void {
   if (input.bodyHash !== undefined && !/^[0-9a-f]{64}$/i.test(input.bodyHash)) {
     throw new Error("bodyHash must be a 64-character hex digest");
   }
+  if (input.analysisInputHash !== undefined && !/^[0-9a-f]{64}$/i.test(input.analysisInputHash)) {
+    throw new Error("analysisInputHash must be a 64-character hex digest");
+  }
   if (input.nextEligibleAt !== undefined && !Number.isFinite(Date.parse(input.nextEligibleAt))) {
     throw new Error("nextEligibleAt must be an ISO timestamp");
   }
@@ -3826,6 +3843,7 @@ function validateIssueEnrichmentInput(input: RecordIssueEnrichmentInput): void {
     String(input.issueNumber),
     input.issueUpdatedAt ?? "",
     input.bodyHash ?? "",
+    input.analysisInputHash ?? "",
     input.reason ?? "",
     input.commentUrl ?? "",
     input.error ?? "",
@@ -4233,6 +4251,7 @@ interface IssueEnrichmentRecordRow {
   issue_number: number;
   issue_updated_at: string | null;
   body_hash: string | null;
+  analysis_input_hash: string | null;
   status: IssueEnrichmentRecordStatus;
   reason: string | null;
   comment_url: string | null;
@@ -4332,6 +4351,7 @@ function mapIssueEnrichmentRecordRow(row: IssueEnrichmentRecordRow): IssueEnrich
     issueNumber: row.issue_number,
     ...(row.issue_updated_at ? { issueUpdatedAt: row.issue_updated_at } : {}),
     ...(row.body_hash ? { bodyHash: row.body_hash } : {}),
+    ...(row.analysis_input_hash ? { analysisInputHash: row.analysis_input_hash } : {}),
     status: row.status,
     ...(row.reason ? { reason: row.reason } : {}),
     ...(row.comment_url ? { commentUrl: row.comment_url } : {}),

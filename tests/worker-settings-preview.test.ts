@@ -38,7 +38,7 @@ describe("worker review settings preview evidence", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("writes review settings preview evidence and threads it into walkthrough output", async () => {
+  it("writes review settings preview evidence without threading internal settings into public walkthrough output", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-worker-settings-preview-"));
     roots.push(root);
     const config = minimalConfig(root);
@@ -92,10 +92,21 @@ describe("worker review settings preview evidence", () => {
       reviewEventPolicy: { mode: "trusted_command_only" }
     });
     expect(preview).not.toHaveProperty("reviewEventAuthorization");
-    expect(walkthrough).toContain("### Review Settings Preview");
+    expect(preview.pathInstructions).toContainEqual({
+      pattern: "src/`templates`/**",
+      instructions: ["Do not quote [redacted-secret] in public comments."]
+    });
+    expect(walkthrough).not.toContain("### Review Settings Preview");
     expect(walkthrough).toContain("Provider: GLM/Z.ai through ZCode (`zcode-glm`, zcode, model `GLM-5.2`).");
-    expect(walkthrough).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (inline_review)");
-    expectSettingsPathInstructionCodeSpan(walkthrough, "src/`templates`/**");
+    expect(walkthrough).toContain("### Changed Files");
+    expect(walkthrough).toContain("### Review Signal");
+    expect(walkthrough).toContain("### Validation and Proof");
+    expect(walkthrough).not.toContain("Enabled sections:");
+    expect(walkthrough).not.toContain("Path instructions:");
+    expect(walkthrough).not.toContain("Label suggestions:");
+    expect(walkthrough).not.toContain("Reviewer suggestions:");
+    expect(walkthrough).not.toContain("Suggestion behavior:");
+    expect(walkthrough).not.toContain("Roadmap-only settings:");
     expect(walkthrough).not.toContain(secretLikeToken);
     expect(ledger.runtime).toMatchObject({
       provider: "zcode-glm",
@@ -187,18 +198,6 @@ describe("worker review settings preview evidence", () => {
     });
   });
 });
-
-function expectSettingsPathInstructionCodeSpan(body: string, expectedPattern: string): void {
-  const line = body.split("\n").find((candidate) => candidate.startsWith("- Path instructions: "));
-  expect(line).toBeDefined();
-  const remainder = line!.slice("- Path instructions: ".length);
-  const delimiter = remainder.match(/^`+/)?.[0];
-  expect(delimiter).toBeDefined();
-  const closingIndex = remainder.indexOf(delimiter!, delimiter!.length);
-  expect(closingIndex).toBeGreaterThan(delimiter!.length - 1);
-  expect(remainder.slice(delimiter!.length, closingIndex)).toBe(expectedPattern);
-  expect(remainder.slice(closingIndex + delimiter!.length)).toBe(" - Do not quote [redacted-secret] in public comments.");
-}
 
 function minimalConfig(root: string): BotConfig {
   return {

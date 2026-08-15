@@ -135,10 +135,50 @@ export async function runCodexReview(input: {
   runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
   captureWorktreeState?: (cwd: string) => string;
 } = {}): Promise<ZCodeReviewResult> {
+  const result = await runCodexStructuredOutput({
+    ...input,
+    artifactPrefix: "codex-review",
+    schema: CODEX_REVIEW_FINDINGS_JSON_SCHEMA,
+    parse: (parsed) => {
+      const { findings, dropped } = parseFindings(parsed);
+      if (dropped.length > 0) {
+        throw new Error(`${dropped.length} finding(s) failed NeonDiff validation`);
+      }
+      return findings;
+    }
+  }, dependencies);
+  return {
+    findings: result.value,
+    droppedFromSchema: [],
+    rawResponse: result.rawResponse,
+    attempts: 1,
+    degradedRecovery: false
+  };
+}
+
+export async function runCodexStructuredOutput<T>(input: {
+  cwd: string;
+  prompt: string;
+  cliPath: string;
+  model: string;
+  reasoningEffort: CodexReasoningEffort;
+  evidenceDir: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+  artifactPrefix: string;
+  schema: unknown;
+  parse: (value: unknown) => T;
+}, dependencies: {
+  runProcess?: (invocation: CodexExecInvocation) => Promise<CodexProcessResult>;
+  captureWorktreeState?: (cwd: string) => string;
+} = {}): Promise<{ value: T; rawResponse: string }> {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.artifactPrefix)) {
+    throw new Error("codex_runtime_invalid_artifact_prefix");
+  }
   mkdirSync(input.evidenceDir, { recursive: true });
-  const schemaPath = join(input.evidenceDir, "codex-review-schema.json");
-  const outputPath = join(input.evidenceDir, "codex-review-result.json");
-  writeSecureFileSync(schemaPath, `${JSON.stringify(CODEX_REVIEW_FINDINGS_JSON_SCHEMA, null, 2)}\n`);
+  const schemaPath = join(input.evidenceDir, `${input.artifactPrefix}-schema.json`);
+  const outputPath = join(input.evidenceDir, `${input.artifactPrefix}-result.json`);
+  writeSecureFileSync(schemaPath, `${JSON.stringify(input.schema, null, 2)}\n`);
   const command = buildCodexExecInvocation({
     cliPath: input.cliPath,
     cwd: input.cwd,
@@ -162,8 +202,8 @@ export async function runCodexReview(input: {
   const after = captureWorktreeState(input.cwd);
   const stdout = redactSecrets(result.stdout);
   const stderr = redactSecrets(result.stderr);
-  writeSecureFileSync(join(input.evidenceDir, "codex-stdout.txt"), stdout);
-  writeSecureFileSync(join(input.evidenceDir, "codex-stderr.txt"), stderr);
+  writeSecureFileSync(join(input.evidenceDir, `${input.artifactPrefix}-stdout.txt`), stdout);
+  writeSecureFileSync(join(input.evidenceDir, `${input.artifactPrefix}-stderr.txt`), stderr);
 
   if (before !== after) {
     throw new Error("codex_runtime_unsafe_write_attempt: checkout state changed during read-only review");
@@ -205,17 +245,13 @@ export async function runCodexReview(input: {
   } catch (error) {
     throw new Error(`codex_runtime_schema_invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const { findings, dropped } = parseFindings(parsed);
-  if (dropped.length > 0) {
-    throw new Error(`codex_runtime_schema_invalid: ${dropped.length} finding(s) failed NeonDiff validation`);
+  let value: T;
+  try {
+    value = input.parse(parsed);
+  } catch (error) {
+    throw new Error(`codex_runtime_schema_invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return {
-    findings,
-    droppedFromSchema: [],
-    rawResponse,
-    attempts: 1,
-    degradedRecovery: false
-  };
+  return { value, rawResponse };
 }
 
 function captureGitWorktreeState(cwd: string): string {
