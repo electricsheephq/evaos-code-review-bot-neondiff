@@ -32,18 +32,6 @@ const pull: PullRequestSummary = {
   requested_reviewers: [{ login: "reviewer-one" }]
 };
 
-function expectPathInstructionCodeSpan(body: string, expectedContent: string): void {
-  const line = body.split("\n").find((candidate) => candidate.startsWith("- Path instructions: "));
-  expect(line).toBeDefined();
-  const remainder = line!.slice("- Path instructions: ".length);
-  const delimiter = remainder.match(/^`+/)?.[0];
-  expect(delimiter).toBeDefined();
-  const closingIndex = remainder.indexOf(delimiter!, delimiter!.length);
-  expect(closingIndex).toBeGreaterThan(delimiter!.length - 1);
-  expect(remainder.slice(delimiter!.length, closingIndex)).toBe(expectedContent);
-  expect(remainder.slice(closingIndex + delimiter!.length)).toMatch(/^ - /);
-}
-
 describe("walkthrough comment rendering", () => {
   it("renders a stable marked walkthrough with files, effort, related refs, and text-only suggestions", () => {
     const files: PullFilePatch[] = [
@@ -253,7 +241,7 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("REQUEST_CHANGES is only used when eligible P0/P1 findings survive validation.");
   });
 
-  it("renders CodeRabbit-style settings parity as preview-only walkthrough metadata", () => {
+  it("keeps useful review and proof content while omitting every internal settings and profile-policy field", () => {
     const settingsPreview: ReviewSettingsPreview = {
       profile: "assertive",
       sections: [
@@ -291,23 +279,58 @@ describe("walkthrough comment rendering", () => {
       comments: [],
       dropped: [],
       event: "COMMENT",
+      validation: {
+        summary: "1 required validation/proof recommendation(s) selected from changed files.",
+        docsOnly: false,
+        recommendations: [{
+          id: "typescript_build",
+          title: "TypeScript build",
+          status: "required",
+          reason: "Runtime TypeScript changed.",
+          matchedPaths: ["src/worker.ts"],
+          proofTypes: ["npm run build", "focused Vitest"]
+        }],
+        profileHints: {
+          validationHints: ["Internal profile validation text must stay private."],
+          proofExpectations: ["Internal profile proof text must stay private."]
+        }
+      },
+      proof: {
+        status: "missing",
+        summary: "TypeScript build proof is not attached.",
+        requiredRecommendationIds: ["typescript_build"],
+        missingRecommendationIds: ["typescript_build"],
+        detectedEvidence: []
+      },
       settingsPreview
     });
 
-    expect(walkthrough.body).toContain("### Review Settings Preview");
-    expect(walkthrough.body).toContain("- Profile: assertive");
-    expect(walkthrough.body).toContain("- Enabled sections: Review summary (inline_review); Walkthrough (issue_comment); Changed-files table (walkthrough); Effort estimate (walkthrough); Review status comment (sticky_status)");
-    expect(walkthrough.body).toContain("- Path instructions: `src/**` - Prioritize runtime correctness and duplicate-posting regressions.");
-    expect(walkthrough.body).toContain("- Label suggestions: review-settings");
-    expect(walkthrough.body).toContain("- Reviewer suggestions: maintainer-one");
-    expect(walkthrough.body).toContain("- Suggestion behavior: suggestions only; labels and reviewers are not auto-applied.");
-    expect(walkthrough.body).toContain("- Roadmap-only settings: auto-apply labels; auto-request reviewers");
-    expect(walkthrough.body).not.toContain("auto-apply enabled");
-    expect(walkthrough.body).not.toContain("auto-request reviewers enabled");
-    expect(walkthrough.body).not.toContain("labels were auto-applied");
+    expect(walkthrough.body).toContain("### Changed Files");
+    expect(walkthrough.body).toContain("### Review Signal");
+    expect(walkthrough.body).toContain("### Validation and Proof");
+    expect(walkthrough.body).toContain("TypeScript build");
+    expect(walkthrough.body).toContain("Proof status: missing");
+    expect(walkthrough.body).toContain("### Pre-merge checklist");
+    for (const rejected of [
+      "### Review Settings Preview",
+      "Profile: assertive",
+      "Enabled sections:",
+      "Path instructions:",
+      "Prioritize runtime correctness and duplicate-posting regressions.",
+      "Label suggestions: review-settings",
+      "Reviewer suggestions: maintainer-one",
+      "Suggestion behavior:",
+      "Roadmap-only settings:",
+      "Internal profile validation text must stay private.",
+      "Internal profile proof text must stay private.",
+      "Profile validation hints:",
+      "Profile proof expectations:"
+    ]) {
+      expect(walkthrough.body).not.toContain(rejected);
+    }
   });
 
-  it("redacts secrets and escapes markdown backticks in settings preview metadata", () => {
+  it("redacts provider secrets while discarded settings never reach public output", () => {
     const secretLikeToken = "ghp_fake_token";
     const settingsPreview: ReviewSettingsPreview = {
       profile: "assertive",
@@ -354,106 +377,12 @@ describe("walkthrough comment rendering", () => {
       settingsPreview
     });
 
-    expectPathInstructionCodeSpan(walkthrough.body, "src/`templates`/**");
     expect(walkthrough.body).not.toContain(secretLikeToken);
     expect(walkthrough.body).toContain("[redacted-secret]");
     expect(walkthrough.body).toContain("Provider: Gateway [redacted-secret] (`openai-compatible`, openai-compatible, model `review-[redacted-secret]`).");
-  });
-
-  it("uses variable-length code spans for backticks inside inline-code markdown", () => {
-    const settingsPreview: ReviewSettingsPreview = {
-      profile: "assertive",
-      sections: [
-        { key: "reviewSummary", label: "Review summary", enabled: true, mode: "inline_review" }
-      ],
-      pathInstructions: [
-        {
-          pattern: "src/path\\`template\\`/**",
-          instructions: ["Keep inline code markdown intact."]
-        }
-      ],
-      suggestions: {
-        labels: [],
-        reviewers: [],
-        autoApply: false
-      },
-      roadmapOnly: []
-    };
-
-    const walkthrough = buildWalkthroughComment({
-      repo: "electricsheephq/evaos-code-review-bot",
-      pull: {
-        ...pull,
-        head: {
-          ...pull.head,
-          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
-        },
-        base: {
-          ...pull.base,
-          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
-        }
-      },
-      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
-      comments: [],
-      dropped: [],
-      event: "COMMENT",
-      provider: {
-        providerId: "provider`id",
-        adapter: "openai-compatible",
-        model: "model`name"
-      },
-      settingsPreview
-    });
-
-    expectPathInstructionCodeSpan(walkthrough.body, "src/path\\`template\\`/**");
-    expect(walkthrough.body).toContain("Provider: (``provider`id``, openai-compatible, model ``model`name``).");
-  });
-
-  it("sanitizes confidence settings preview metadata while preserving ordinary likely wording", () => {
-    const settingsPreview: ReviewSettingsPreview = {
-      profile: "assertive",
-      sections: [
-        { key: "reviewSummary", label: "Review summary 95% confidence", enabled: true, mode: "inline_review" }
-      ],
-      pathInstructions: [
-        {
-          pattern: "src/confidence-95%.ts",
-          instructions: ["Treat this as 0.91 likely after historical calibration."]
-        }
-      ],
-      suggestions: {
-        labels: ["confidence-95%"],
-        reviewers: ["reviewer-0.91-likely"],
-        autoApply: false
-      },
-      roadmapOnly: ["show 95% confidence after calibration"]
-    };
-
-    const walkthrough = buildWalkthroughComment({
-      repo: "electricsheephq/evaos-code-review-bot",
-      pull: {
-        ...pull,
-        head: {
-          ...pull.head,
-          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
-        },
-        base: {
-          ...pull.base,
-          repo: { full_name: "electricsheephq/evaos-code-review-bot" }
-        }
-      },
-      files: [{ filename: "src/walkthrough.ts", status: "modified", additions: 2, deletions: 1, changes: 3 }],
-      comments: [],
-      dropped: [],
-      event: "COMMENT",
-      settingsPreview
-    });
-
-    expect(walkthrough.body).toContain("confidence not calibrated");
-    expect(walkthrough.body).not.toContain("95% confidence");
-    expect(walkthrough.body).not.toContain("confidence-95%");
-    expect(walkthrough.body).toContain("0.91 likely");
-    expect(walkthrough.body).toContain("0.91-likely");
+    expect(walkthrough.body).not.toContain("Path instructions:");
+    expect(walkthrough.body).not.toContain("Label suggestions:");
+    expect(walkthrough.body).not.toContain("Reviewer suggestions:");
   });
 
   it("does not surface raw confidence-bearing finding text in visible walkthrough prose", () => {

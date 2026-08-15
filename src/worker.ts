@@ -2092,7 +2092,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           event: selectedEvent,
           validation,
           proof,
-          settingsPreview,
           provider: buildReviewProviderMetadata(config),
           postIssueComment: config.walkthrough.postIssueComment,
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
@@ -2343,7 +2342,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         event: plan.event,
         validation,
         proof,
-        settingsPreview,
         provider: buildReviewProviderMetadata(config),
         postIssueComment: config.walkthrough.postIssueComment,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay

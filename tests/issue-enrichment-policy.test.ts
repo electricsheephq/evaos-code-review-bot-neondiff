@@ -126,6 +126,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: true,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -149,6 +150,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: false,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -184,6 +186,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: true,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -219,6 +222,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: true,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -227,6 +231,40 @@ describe("issue enrichment rollout policy", () => {
       state: "ready",
       blockers: [],
       liveThresholdsMissingRepos: []
+    });
+  });
+
+  it("blocks live issue comments when no structured model runtime is available", () => {
+    const config = loadConfigFromObject({
+      issueEnrichment: {
+        enabled: true,
+        postIssueComment: true,
+        allowlist: ["owner/issue-repo"],
+        repos: {
+          "owner/issue-repo": {
+            enabled: true,
+            maxIssuesPerCycle: 3,
+            maxCommentsPerCycle: 1,
+            cooldownMs: 3_600_000,
+            burstWindowMs: 3_600_000,
+            maxIssuesPerBurst: 6,
+            lookbackMs: 600_000,
+            processExistingOpenIssuesOnActivation: false
+          }
+        }
+      }
+    });
+
+    const status = buildIssueEnrichmentStatus({
+      config,
+      canPostAsApp: true,
+      checkedAt: "2026-07-04T11:30:00.000Z"
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      state: "blocked",
+      blockers: ["issue_enrichment_model_runtime_required"]
     });
   });
 
@@ -254,6 +292,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: true,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z",
       issueReadChecks: [
         {
