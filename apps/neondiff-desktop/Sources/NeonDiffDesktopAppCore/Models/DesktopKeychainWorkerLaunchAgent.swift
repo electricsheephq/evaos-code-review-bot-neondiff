@@ -114,6 +114,8 @@ package enum DesktopKeychainWorkerLaunchAgentRestartOutcome: Equatable {
 
 package enum DesktopKeychainWorkerLaunchAgentContract {
     package static let headlessFlag = "--neondiff-worker-daemon"
+    package static let restartObservationAttempts = 24
+    package static let restartObservationIntervalMicroseconds: UInt32 = 250_000
 
     package static func restartCommands(
         domain: String,

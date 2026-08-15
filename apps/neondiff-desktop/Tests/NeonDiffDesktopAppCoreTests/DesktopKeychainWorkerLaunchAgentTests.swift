@@ -60,6 +60,18 @@ import NeonDiffDesktopCore
         )
     }
 
+    @Test func restartObservationCoversDelayedLaunchdSpawn() {
+        let observationWindowMicroseconds =
+            DesktopKeychainWorkerLaunchAgentContract
+                .restartObservationAttempts
+            * Int(
+                DesktopKeychainWorkerLaunchAgentContract
+                    .restartObservationIntervalMicroseconds
+            )
+
+        #expect(observationWindowMicroseconds >= 6_000_000)
+    }
+
     @Test func plistContainsOnlyPublicExactCoordinates() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
