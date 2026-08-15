@@ -12,6 +12,33 @@ import NeonDiffDesktopCore
     private let appID = "4184532"
     private let licenseMachineID = String(repeating: "a", count: 43)
 
+    @Test func restartPlanDoesNotKillTheFreshlyBootstrappedService() {
+        let domain = "gui/501"
+        let plistPath = "/Users/test/Library/LaunchAgents/\(label).plist"
+
+        #expect(
+            DesktopKeychainWorkerLaunchAgentContract.restartCommands(
+                domain: domain,
+                label: label,
+                plistPath: plistPath,
+                isLoaded: true
+            ) == [
+                ["bootout", "\(domain)/\(label)"],
+                ["bootstrap", domain, plistPath]
+            ]
+        )
+        #expect(
+            DesktopKeychainWorkerLaunchAgentContract.restartCommands(
+                domain: domain,
+                label: label,
+                plistPath: plistPath,
+                isLoaded: false
+            ) == [
+                ["bootstrap", domain, plistPath]
+            ]
+        )
+    }
+
     @Test func plistContainsOnlyPublicExactCoordinates() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"

@@ -236,11 +236,15 @@ private func restartLaunchAgent(label: String, plistURL: URL) throws {
     let domain = "gui/\(getuid())"
     let target = "\(domain)/\(label)"
     let status = try runLaunchctl(["print", target], acceptsFailure: true)
-    if status == 0 {
-        _ = try runLaunchctl(["bootout", target])
+    let commands = DesktopKeychainWorkerLaunchAgentContract.restartCommands(
+        domain: domain,
+        label: label,
+        plistPath: plistURL.path,
+        isLoaded: status == 0
+    )
+    for command in commands {
+        _ = try runLaunchctl(command)
     }
-    _ = try runLaunchctl(["bootstrap", domain, plistURL.path])
-    _ = try runLaunchctl(["kickstart", "-k", target])
     var previousPID: Int32?
     for _ in 0..<12 {
         usleep(250_000)
