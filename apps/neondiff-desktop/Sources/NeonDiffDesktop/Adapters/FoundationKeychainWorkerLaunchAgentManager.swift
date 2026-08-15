@@ -254,8 +254,13 @@ private func restartLaunchAgent(label: String, plistURL: URL) throws {
     )
     var previousPID: Int32?
     var stablePIDObserved = false
-    for _ in 0..<12 {
-        usleep(250_000)
+    for _ in 0..<DesktopKeychainWorkerLaunchAgentContract
+        .restartObservationAttempts
+    {
+        usleep(
+            DesktopKeychainWorkerLaunchAgentContract
+                .restartObservationIntervalMicroseconds
+        )
         let sample = try runLaunchctlCapture(
             ["print", target],
             acceptsFailure: true
