@@ -97,7 +97,9 @@ describe("worker review settings preview evidence", () => {
       instructions: ["Do not quote [redacted-secret] in public comments."]
     });
     expect(walkthrough).not.toContain("### Review Settings Preview");
-    expect(walkthrough).toContain("Provider: GLM/Z.ai through ZCode (`zcode-glm`, zcode, model `GLM-5.2`).");
+    expect(walkthrough).not.toContain("Provider:");
+    expect(walkthrough).not.toContain("zcode-glm");
+    expect(walkthrough).not.toContain("GLM-5.2");
     expect(walkthrough).toContain("### Changed Files");
     expect(walkthrough).toContain("### Review Signal");
     expect(walkthrough).toContain("### Maintainer Analysis");
@@ -107,6 +109,9 @@ describe("worker review settings preview evidence", () => {
     expect(walkthrough).not.toContain("Path instructions:");
     expect(walkthrough).not.toContain("Label suggestions:");
     expect(walkthrough).not.toContain("Reviewer suggestions:");
+    expect(walkthrough).not.toContain("Suggested labels:");
+    expect(walkthrough).not.toContain("Suggested reviewers:");
+    expect(walkthrough).not.toContain("Labels and reviewers are suggestions only");
     expect(walkthrough).not.toContain("Suggestion behavior:");
     expect(walkthrough).not.toContain("Roadmap-only settings:");
     expect(walkthrough).not.toContain("Repo-specific instruction:");
