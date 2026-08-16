@@ -179,6 +179,22 @@ import NeonDiffDesktopCore
             publicArguments + ["--private-key", "forbidden"],
             homeDirectory: home
         ) == nil)
+
+        let forcedPublicArguments = publicArguments + ["--force", "true"]
+        let forcedRequest = try #require(
+            DesktopKeychainWorkerLaunchAgentContract.parseIssueRunArguments(
+                forcedPublicArguments,
+                homeDirectory: home
+            )
+        )
+        #expect(DesktopKeychainWorkerLaunchAgentContract
+            .sealedWorkerIssueRunArguments(request: forcedRequest).suffix(2) == [
+                "--force", "true"
+            ])
+        #expect(DesktopKeychainWorkerLaunchAgentContract.parseIssueRunArguments(
+            publicArguments + ["--force", "false"],
+            homeDirectory: home
+        ) == nil)
     }
 
     @Test func previewExposesTheCompleteRedactedMutationPlan() throws {
