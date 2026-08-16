@@ -126,6 +126,12 @@ export function admitIssueCorpus(value: unknown): {
   scenarioCount: 60;
   categoryCounts: Record<Category, number>;
   corpusSha256: string;
+  scenarioBindings: Array<{
+    id: string;
+    category: Category;
+    artifactSha256s: string[];
+    goldReceiptSha256: string;
+  }>;
 } {
   const root = record(value, "corpus", ["schemaVersion", "frozenAt", "scenarios"]);
   literal(root.schemaVersion, "neondiff-issue-corpus/v1", "corpus.schemaVersion");
@@ -152,5 +158,15 @@ export function admitIssueCorpus(value: unknown): {
     frozenAt,
     scenarios: [...scenarios].sort((left, right) => left.id.localeCompare(right.id))
   });
-  return { scenarioCount: 60, categoryCounts, corpusSha256: createHash("sha256").update(canonical).digest("hex") };
+  return {
+    scenarioCount: 60,
+    categoryCounts,
+    corpusSha256: createHash("sha256").update(canonical).digest("hex"),
+    scenarioBindings: scenarios.map((scenario) => ({
+      id: scenario.id,
+      category: scenario.category,
+      artifactSha256s: scenario.artifacts.map((artifact) => artifact.sha256),
+      goldReceiptSha256: scenario.gold.receiptSha256
+    }))
+  };
 }
