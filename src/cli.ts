@@ -1337,6 +1337,13 @@ async function main(): Promise<void> {
   }
 
   if (command === "issue-enrichment-run") {
+    const runtimeCredentials = await resolveRuntimeCredentialEnvelope({
+      command,
+      subcommand: undefined,
+      runtimeCredentialsStdin: args["runtime-credentials-stdin"],
+      stdin: process.stdin
+    });
+    await withRuntimeGitHubCredentials(runtimeCredentials, async () => {
     if (!args.repo) throw new Error("--repo is required for issue-enrichment-run");
     const repo = parseSingleArg(args.repo, "--repo");
     const issueNumbers = parseIssueNumberArgs(args.issue);
@@ -1488,6 +1495,7 @@ async function main(): Promise<void> {
       if (preacquiredLease && !leaseTransferredToCycle) state.releaseIssueEnrichmentRunLease(preacquiredLease.leaseId);
       state.close();
     }
+    });
     return;
   }
 
