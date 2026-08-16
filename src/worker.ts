@@ -48,6 +48,7 @@ import {
   buildReviewSettingsPreview,
   filterPullFilesForProfile,
   listReposToScan,
+  PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW,
   publicReviewForbiddenProfileFragments,
   resolveRepoProfile
 } from "./repo-policy.js";
@@ -1916,7 +1917,11 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const forbiddenPromptFragments = reviewPromptForbiddenFragments();
     const assertReviewOutputSafe = (text: string) => {
       assertPublicReviewOutputSafe(text, forbiddenPromptFragments);
-      assertPublicReviewOutputSafe(text, forbiddenProfileFragments, 3);
+      assertPublicReviewOutputSafe(
+        text,
+        forbiddenProfileFragments,
+        PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
+      );
     };
     writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {

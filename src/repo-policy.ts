@@ -438,6 +438,8 @@ const PUBLIC_REVIEW_CONFIG_LEAK_MARKERS = [
   "readiness hints"
 ] as const;
 
+export const PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW = 8;
+
 export function assertPublicReviewOutputSafe(
   text: string,
   forbiddenFragments: string[] = [],
