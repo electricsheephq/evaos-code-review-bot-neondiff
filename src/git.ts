@@ -23,6 +23,65 @@ export interface PullWorktreeInput {
   protectedCheckoutRoots?: string[];
 }
 
+export interface BranchWorktreeInput {
+  repo: string;
+  branch: string;
+  workRoot: string;
+  protectedCheckoutRoot?: string;
+  protectedCheckoutRoots?: string[];
+}
+
+export function prepareBranchWorktree(input: BranchWorktreeInput): PreparedWorktree {
+  const safeRepo = input.repo.replace(/[^A-Za-z0-9_.-]+/g, "__");
+  const safeBranch = input.branch.replace(/[^A-Za-z0-9_.-]+/g, "__");
+  const mirrorPath = join(input.workRoot, "mirrors", `${safeRepo}.git`);
+  const repoUrl = `https://github.com/${input.repo}.git`;
+  assertPathOutsideProtectedRoot({
+    path: input.workRoot,
+    protectedRoot: input.protectedCheckoutRoot,
+    protectedRoots: input.protectedCheckoutRoots,
+    pathLabel: "workRoot",
+    protectedRootLabel: "the protected live checkout"
+  });
+  run("git", ["check-ref-format", `refs/heads/${input.branch}`]);
+  mkdirSync(join(input.workRoot, "mirrors"), { recursive: true });
+  mkdirSync(join(input.workRoot, "worktrees"), { recursive: true });
+  if (!existsAsGitMirror(mirrorPath)) {
+    run("git", ["clone", "--mirror", repoUrl, mirrorPath]);
+  } else {
+    run("git", ["--git-dir", mirrorPath, "remote", "set-url", "origin", repoUrl]);
+  }
+  run("git", [
+    "--git-dir",
+    mirrorPath,
+    "fetch",
+    "--prune",
+    "origin",
+    `+refs/heads/${input.branch}:refs/heads/${input.branch}`
+  ]);
+  const headSha = run("git", ["--git-dir", mirrorPath, "rev-parse", `refs/heads/${input.branch}`]).stdout.trim();
+  const worktreePath = join(input.workRoot, "worktrees", `${safeRepo}__branch-${safeBranch}__${headSha.slice(0, 12)}`);
+  assertPathOutsideProtectedRoot({
+    path: worktreePath,
+    protectedRoot: input.protectedCheckoutRoot,
+    protectedRoots: input.protectedCheckoutRoots,
+    pathLabel: "worktreePath",
+    protectedRootLabel: "the protected live checkout"
+  });
+  repairExistingReviewWorktreePathForCheckout({
+    worktreePath,
+    mirrorPath,
+    protectedCheckoutRoot: input.protectedCheckoutRoot,
+    protectedCheckoutRoots: input.protectedCheckoutRoots
+  });
+  run("git", ["--git-dir", mirrorPath, "worktree", "add", "--detach", worktreePath, headSha]);
+  const actualHeadSha = run("git", ["-C", worktreePath, "rev-parse", "HEAD"]).stdout.trim();
+  if (actualHeadSha !== headSha) {
+    throw new Error(`Worktree head mismatch for ${input.repo}@${input.branch}: ${actualHeadSha} !== ${headSha}`);
+  }
+  return { path: worktreePath, headSha: actualHeadSha };
+}
+
 export function planPullWorktreePaths(input: PullWorktreeInput): PullWorktreePathPlan {
   const safeRepo = input.repo.replace(/[^A-Za-z0-9_.-]+/g, "__");
   const mirrorPath = join(input.workRoot, "mirrors", `${safeRepo}.git`);

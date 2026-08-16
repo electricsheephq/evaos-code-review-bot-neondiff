@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -42,6 +42,8 @@ const repoPolicy = {
   labelAliases: {}
 };
 
+const HEAD_SHA = "a".repeat(40);
+
 const analysis: IssueAnalysis = {
   classification: "data-integrity",
   priority: "P2",
@@ -51,15 +53,26 @@ const analysis: IssueAnalysis = {
     "Mixed replay and fresh-row reconciliation can duplicate or omit durable LCM-X messages.",
   currentMainApplicability:
     "The report names the current import path, but no current-main reproduction result is attached.",
-  evidence:
-    "Issue #7 identifies the mixed replay/fresh-row boundary and names duplication and loss as the observed risks.",
+  verifiedFacts: [{
+    claim: "The importer inserts a replay row before committing the transaction.",
+    sourceRef: {
+      kind: "source",
+      repo: "electricsheephq/lcm-x",
+      sha: HEAD_SHA,
+      path: "src/importer.py",
+      startLine: 2,
+      endLine: 2,
+      excerpt: "insert_replay_row(message)"
+    }
+  }],
   reproductionOrInvariantGap:
     "Run the importer twice across a simulated interruption and compare ordered message identities before and after recovery.",
-  relatedWork:
-    "Check the linked upstream evidence before deciding whether an existing replay fix supersedes this report.",
+  relatedWork: ["Check linked upstream evidence before deciding whether an existing replay fix supersedes this report."],
   migrationDisposition: "migrate",
   nextGate:
-    "Reproduce on current main with a crash-safe SQLite fixture, then promote or revise the provisional P2."
+    "Reproduce on current main with a crash-safe SQLite fixture, then promote or revise the provisional P2.",
+  limitations: ["No runtime reproduction was executed by issue enrichment."],
+  labelProposals: ["data-integrity", "needs-repro"]
 };
 
 describe("model-backed issue analysis", () => {
@@ -73,7 +86,8 @@ describe("model-backed issue analysis", () => {
   it("keeps raw policy and validation configuration outside the untrusted model boundary", () => {
     const prompt = buildIssueAnalysisPrompt({
       repo: "electricsheephq/lcm-x",
-      issue
+      issue,
+      headSha: HEAD_SHA
     });
 
     expect(prompt).not.toContain(repoPolicy.advisoryPolicy);
@@ -119,7 +133,7 @@ describe("model-backed issue analysis", () => {
     const scorecard = evaluateIssueAnalysisQuality({
       repo: "electricsheephq/lcm-x",
       issue,
-      analysis,
+      analysis: { ...analysis, labelProposals: ["docs"] },
       repoPolicy: {
         ...repoPolicy,
         labelAliases: { docs: "documentation" }
@@ -138,10 +152,9 @@ describe("model-backed issue analysis", () => {
       ...analysis,
       repositoryImpact: repoPolicy.advisoryPolicy,
       currentMainApplicability: "Investigate further.",
-      evidence: "Investigate further.",
       reproductionOrInvariantGap: "Investigate further.",
-      relatedWork: "Investigate further.",
-      nextGate: "Investigate further."
+      nextGate: "Investigate further.",
+      labelProposals: ["made-up-label"]
     } satisfies IssueAnalysis;
 
     const scorecard = evaluateIssueAnalysisQuality({
@@ -162,10 +175,14 @@ describe("model-backed issue analysis", () => {
   it("records the actual factual-grounding reason for secret-like output", () => {
     const secretLike = {
       ...analysis,
-      evidence: `Issue #7 includes ghp_${"a".repeat(40)}.`
+      verifiedFacts: [{
+        ...analysis.verifiedFacts[0]!,
+        claim: `Issue #7 includes ghp_${"a".repeat(40)}.`
+      }]
     } satisfies IssueAnalysis;
     const scorecard = evaluateIssueAnalysisQuality({
       repo: "electricsheephq/lcm-x",
+      headSha: HEAD_SHA,
       issue,
       analysis: secretLike,
       repoPolicy,
@@ -189,6 +206,7 @@ describe("model-backed issue analysis", () => {
 
     const scorecard = evaluateIssueAnalysisQuality({
       repo: "electricsheephq/lcm-x",
+      headSha: HEAD_SHA,
       issue,
       analysis: fragmentLeak,
       repoPolicy,
@@ -202,6 +220,7 @@ describe("model-backed issue analysis", () => {
   it("changes sticky identity when any public rendering policy changes", () => {
     const base = {
       repo: "electricsheephq/lcm-x",
+      headSha: HEAD_SHA,
       issue,
       repoPolicy,
       allowedLabels: ["data-integrity", "needs-repro"],
@@ -233,6 +252,10 @@ describe("model-backed issue analysis", () => {
     })).not.toBe(identity);
     expect(buildIssueAnalysisInputHash({
       ...base,
+      headSha: "b".repeat(40)
+    })).not.toBe(identity);
+    expect(buildIssueAnalysisInputHash({
+      ...base,
       repoPolicy: {
         ...repoPolicy,
         advisoryPolicy: "private policy changed",
@@ -244,6 +267,7 @@ describe("model-backed issue analysis", () => {
   it("renders issue-specific public analysis with stable identity and no policy or planner scaffolding", () => {
     const identityHash = buildIssueAnalysisInputHash({
       repo: "electricsheephq/lcm-x",
+      headSha: HEAD_SHA,
       issue,
       repoPolicy,
       allowedLabels: ["data-integrity", "needs-repro"],
@@ -287,13 +311,14 @@ describe("model-backed issue analysis", () => {
     expect(comment.body).not.toContain("Suggested labels:");
     expect(comment.body).not.toContain("Suggested owners:");
     expect(comment.body).not.toContain("Suggested reviewers:");
-    expect(comment.body).not.toContain("needs-repro");
+    expect(comment.body).toContain("needs-repro");
     expect(comment.body).not.toContain("runtime-owner");
     expect(comment.body).not.toContain("Tosko4");
-    expect(ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION).toBe(2);
+    expect(ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION).toBe(3);
 
     const changedPrivateIdentity = buildIssueAnalysisInputHash({
       repo: "electricsheephq/lcm-x",
+      headSha: HEAD_SHA,
       issue,
       repoPolicy: {
         ...repoPolicy,
@@ -331,13 +356,17 @@ describe("model-backed issue analysis", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-issue-analysis-"));
     try {
       const evidenceDir = join(root, "evidence");
+      const workspacePath = join(root, "workspace");
+      mkdirSync(join(workspacePath, "src"), { recursive: true });
+      writeFileSync(join(workspacePath, "src/importer.py"), "def replay(message):\n    insert_replay_row(message)\n");
       const result = await runIssueAnalysis({
         repo: "electricsheephq/lcm-x",
         issue,
         repoPolicy,
         allowedLabels: ["data-integrity", "needs-repro"],
         suggestedLabels: ["needs-repro"],
-        workspacePath: join(root, "workspace"),
+        workspacePath,
+        headSha: HEAD_SHA,
         evidenceDir,
         cliPath: "/Users/test/.local/bin/codex",
         model: "gpt-5.6-sol",

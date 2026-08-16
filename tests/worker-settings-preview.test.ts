@@ -100,6 +100,8 @@ describe("worker review settings preview evidence", () => {
     expect(walkthrough).toContain("Provider: GLM/Z.ai through ZCode (`zcode-glm`, zcode, model `GLM-5.2`).");
     expect(walkthrough).toContain("### Changed Files");
     expect(walkthrough).toContain("### Review Signal");
+    expect(walkthrough).toContain("### Maintainer Analysis");
+    expect(walkthrough).toContain("### Risk Taxonomy");
     expect(walkthrough).toContain("### Validation and Proof");
     expect(walkthrough).not.toContain("Enabled sections:");
     expect(walkthrough).not.toContain("Path instructions:");
@@ -107,6 +109,11 @@ describe("worker review settings preview evidence", () => {
     expect(walkthrough).not.toContain("Reviewer suggestions:");
     expect(walkthrough).not.toContain("Suggestion behavior:");
     expect(walkthrough).not.toContain("Roadmap-only settings:");
+    expect(walkthrough).not.toContain("Repo-specific instruction:");
+    expect(walkthrough).not.toContain("reviewRiskLens");
+    expect(walkthrough).not.toContain("proofExpectations");
+    expect(walkthrough).not.toContain("validationHints");
+    expect(walkthrough).not.toContain("readinessHints");
     expect(walkthrough).not.toContain(secretLikeToken);
     expect(ledger.runtime).toMatchObject({
       provider: "zcode-glm",

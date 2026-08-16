@@ -159,6 +159,8 @@ export interface RepoProfileConfig {
   defaultBranch?: string;
   reviewProfile?: "chill" | "assertive";
   promptNote?: string;
+  /** Bounded repository-specific risk hints. Cannot replace the canonical review contract. */
+  reviewRiskLens?: string;
   pathFilters?: string[];
   pathInstructions?: Record<string, string[]>;
   riskyPaths?: string[];
@@ -1277,7 +1279,7 @@ function validateIssueEnrichmentRepoOverride(value: unknown, label: string): voi
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   const allowedKeys = new Set([
     "enabled", "allowedLabels", "allowedReviewers", "advisoryPolicy", "validationSuggestions",
-    "suggestedLabels", "suggestedReviewers", "labelAliases", "maxIssuesPerCycle", "maxCommentsPerCycle",
+    "suggestedLabels", "suggestedReviewers", "labelAliases", "promotionMaintainers", "maxIssuesPerCycle", "maxCommentsPerCycle",
     "cooldownMs", "burstWindowMs", "maxIssuesPerBurst", "lookbackMs", "processExistingOpenIssuesOnActivation"
   ]);
   for (const key of Object.keys(value)) {
@@ -1296,6 +1298,33 @@ function validateIssueEnrichmentRepoOverride(value: unknown, label: string): voi
   validateBoundedOptionalStringArray(value.validationSuggestions, `${label}.validationSuggestions`, 500);
   validateBoundedOptionalStringArray(value.suggestedLabels, `${label}.suggestedLabels`, 80);
   validateBoundedOptionalStringArray(value.suggestedReviewers, `${label}.suggestedReviewers`, 80);
+  if (value.promotionMaintainers !== undefined) {
+    if (!Array.isArray(value.promotionMaintainers) || value.promotionMaintainers.length > 50) {
+      throw new Error(`${label}.promotionMaintainers must be an array with at most 50 entries`);
+    }
+    for (const [index, entry] of value.promotionMaintainers.entries()) {
+      if (!isRecord(entry)) throw new Error(`${label}.promotionMaintainers[${index}] must be an object`);
+      const allowed = new Set(["login", "validFrom", "validUntil"]);
+      for (const key of Object.keys(entry)) {
+        if (!allowed.has(key)) throw new Error(`${label}.promotionMaintainers[${index}] has unknown key "${key}"`);
+      }
+      validateOptionalString(entry.login, `${label}.promotionMaintainers[${index}].login`);
+      validateOptionalString(entry.validFrom, `${label}.promotionMaintainers[${index}].validFrom`);
+      validateOptionalString(entry.validUntil, `${label}.promotionMaintainers[${index}].validUntil`);
+      if (typeof entry.login !== "string" || !entry.login.trim()) {
+        throw new Error(`${label}.promotionMaintainers[${index}].login must be a non-empty string`);
+      }
+      if (typeof entry.validFrom !== "string" || !Number.isFinite(Date.parse(entry.validFrom))) {
+        throw new Error(`${label}.promotionMaintainers[${index}].validFrom must be a valid timestamp`);
+      }
+      if (entry.validUntil !== undefined && (typeof entry.validUntil !== "string" || !Number.isFinite(Date.parse(entry.validUntil)))) {
+        throw new Error(`${label}.promotionMaintainers[${index}].validUntil must be a valid timestamp`);
+      }
+      if (typeof entry.validUntil === "string" && Date.parse(entry.validUntil) < Date.parse(entry.validFrom)) {
+        throw new Error(`${label}.promotionMaintainers[${index}].validUntil must not precede validFrom`);
+      }
+    }
+  }
   if (value.labelAliases !== undefined) {
     if (!isRecord(value.labelAliases)) throw new Error(`${label}.labelAliases must be an object`);
     if (Object.keys(value.labelAliases).length > MAX_ISSUE_POLICY_ALIASES) {
@@ -1625,6 +1654,7 @@ function validateProfileRecord(record: Record<string, RepoProfileConfig> | undef
     validateOptionalString(profile.displayName, `${label}.${key}.displayName`);
     validateOptionalString(profile.defaultBranch, `${label}.${key}.defaultBranch`);
     validateOptionalString(profile.promptNote, `${label}.${key}.promptNote`);
+    validateOptionalString(profile.reviewRiskLens, `${label}.${key}.reviewRiskLens`);
     if (profile.reviewProfile && profile.reviewProfile !== "chill" && profile.reviewProfile !== "assertive") {
       throw new Error(`${label}.${key}.reviewProfile must be "chill" or "assertive"`);
     }

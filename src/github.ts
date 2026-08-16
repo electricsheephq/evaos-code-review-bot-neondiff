@@ -253,6 +253,45 @@ export class GitHubApi {
     }
   }
 
+  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
+    event?: string;
+    created_at?: string;
+    actor?: { login?: string | null } | null;
+    label?: { name?: string | null } | null;
+  }>> {
+    const events: Array<{
+      event?: string;
+      created_at?: string;
+      actor?: { login?: string | null } | null;
+      label?: { name?: string | null } | null;
+    }> = [];
+    for (let page = 1; ; page += 1) {
+      const chunk = await this.request<typeof events>(
+        `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`,
+        { token: await this.getReadToken(repo) }
+      );
+      events.push(...chunk);
+      if (chunk.length < 100) return events;
+    }
+  }
+
+  async getCollaboratorPermission(
+    repo: string,
+    login: string
+  ): Promise<"read" | "triage" | "write" | "maintain" | "admin" | "none"> {
+    const result = await this.request<{ permission?: string }>(
+      `/repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+      { token: await this.getReadToken(repo) }
+    );
+    const permission = result.permission?.toLowerCase();
+    if (permission === "pull") return "read";
+    if (permission === "push") return "write";
+    if (permission === "read" || permission === "triage" || permission === "write" || permission === "maintain" || permission === "admin") {
+      return permission;
+    }
+    return "none";
+  }
+
   async getIssueComment(repo: string, commentId: number): Promise<IssueCommentCommandSource> {
     if (!Number.isSafeInteger(commentId) || commentId < 1) {
       throw new Error("commentId must be a positive safe integer");

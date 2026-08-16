@@ -26,6 +26,7 @@ const REPO_PROFILE_DESKTOP_SAFE_FIELDS = [
   "defaultBranch",
   "reviewProfile",
   "promptNote",
+  "reviewRiskLens",
   "pathFilters",
   "riskyPaths",
   "proofExpectations",

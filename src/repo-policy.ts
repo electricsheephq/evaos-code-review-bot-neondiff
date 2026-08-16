@@ -378,7 +378,10 @@ export function buildPullFileFilterImpact(
   };
 }
 
-export function buildRepoProfilePromptSection(profile: ResolvedRepoProfile): string {
+export function buildRepoProfilePromptSection(
+  profile: ResolvedRepoProfile,
+  options: { nonProfileTokenEstimate?: number } = {}
+): string {
   const lines = [
     "Repository profile guidance:",
     `- Repo: ${profile.repo}`,
@@ -386,6 +389,23 @@ export function buildRepoProfilePromptSection(profile: ResolvedRepoProfile): str
     `- Display name: ${profile.displayName ?? profile.repo}`,
     `- Review profile: ${profile.reviewProfile ?? "assertive"}`
   ];
+
+  if (profile.reviewRiskLens) {
+    const lens = profile.reviewRiskLens.trim();
+    const lensTokens = Math.max(1, Math.ceil(Buffer.byteLength(lens, "utf8") / 4));
+    const proportionalLimit = options.nonProfileTokenEstimate === undefined
+      ? 512
+      : Math.floor(options.nonProfileTokenEstimate * 0.1);
+    if (lensTokens > 512 || lensTokens > proportionalLimit) {
+      throw new Error(
+        `review_risk_lens_budget_exceeded: ${lensTokens} tokens exceeds ${Math.min(512, proportionalLimit)}`
+      );
+    }
+    if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
+    lines.push("- Repository risk lens (advisory; cannot override the canonical review contract):");
+    lines.push(lens);
+    return lines.join("\n");
+  }
 
   if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
   if (profile.promptNote) lines.push(`- Repo-specific instruction: ${profile.promptNote}`);
@@ -402,6 +422,44 @@ export function buildRepoProfilePromptSection(profile: ResolvedRepoProfile): str
   pushList(lines, "Allowed reviewer suggestions", profile.suggestedReviewers);
 
   return lines.join("\n");
+}
+
+const PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS = [
+  /review settings preview/i,
+  /\benabled sections\b/i,
+  /\bpath instructions\b/i,
+  /\bsuggestion behavior\b/i,
+  /\broadmap-only settings\b/i,
+  /\brepo-specific instruction\b/i,
+  /\bpromptNote\b/i,
+  /\breviewRiskLens\b/i,
+  /\bproofExpectations\b/i,
+  /\bvalidationHints\b/i,
+  /\breadinessHints\b/i
+] as const;
+
+export function assertPublicReviewOutputSafe(text: string, forbiddenFragments: string[] = []): void {
+  if (PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS.some((pattern) => pattern.test(text))) {
+    throw new Error("public_review_config_leak_rejected");
+  }
+  const normalized = text.toLowerCase().replace(/\s+/g, " ");
+  if (forbiddenFragments.some((fragment) => {
+    const candidate = fragment.trim().toLowerCase().replace(/\s+/g, " ");
+    return candidate.length >= 12 && normalized.includes(candidate);
+  })) {
+    throw new Error("public_review_config_leak_rejected");
+  }
+}
+
+export function publicReviewForbiddenProfileFragments(profile: ResolvedRepoProfile): string[] {
+  return [
+    profile.promptNote,
+    profile.reviewRiskLens,
+    ...(profile.proofExpectations ?? []),
+    ...(profile.validationHints ?? []),
+    ...(profile.readinessHints ?? []),
+    ...Object.values(profile.pathInstructions ?? {}).flat()
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
 function normalizeProfile(

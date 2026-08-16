@@ -22,12 +22,44 @@ type AdvisoryPromptPacket = Pick<
 
 export interface ZCodeReviewResult {
   findings: Finding[];
+  summary: ReviewModelSummary;
   droppedFromSchema: ReturnType<typeof parseFindings>["dropped"];
   rawResponse: string;
   // Provenance (#304): how many parse attempts ran and whether the strict-JSON retry path produced
   // the accepted parse. degradedRecovery is true iff a non-first attempt supplied the findings.
   attempts: number;
   degradedRecovery: boolean;
+}
+
+export interface ReviewModelSummary {
+  changedBehavior: string[];
+  invariants: string[];
+  evidence: string[];
+  limitations: string[];
+  noFindingRationale: string;
+}
+
+export function emptyReviewModelSummary(reason: string): ReviewModelSummary {
+  return {
+    changedBehavior: [],
+    invariants: [],
+    evidence: [],
+    limitations: [reason],
+    noFindingRationale: reason
+  };
+}
+
+export function mergeReviewModelSummaries(summaries: ReviewModelSummary[]): ReviewModelSummary {
+  if (summaries.length === 0) return emptyReviewModelSummary("No provider review was executed.");
+  const merge = (select: (summary: ReviewModelSummary) => string[]): string[] =>
+    [...new Set(summaries.flatMap(select))].slice(0, 12);
+  return {
+    changedBehavior: merge((summary) => summary.changedBehavior),
+    invariants: merge((summary) => summary.invariants),
+    evidence: merge((summary) => summary.evidence),
+    limitations: merge((summary) => summary.limitations),
+    noFindingRationale: summaries.map((summary) => summary.noFindingRationale).filter(Boolean).join(" ").slice(0, 1_000)
+  };
 }
 
 // Distinct, detectable schema/parse-failure marker so runWithProviderRetry can classify persistent
@@ -52,7 +84,8 @@ export function parseZCodeReviewOutput(rawStdouts: string[]): ZCodeReviewResult 
       const rawResponse = extractZCodeResponse(rawStdouts[attempt - 1]!);
       const parsed = JSON.parse(extractJsonObject(rawResponse));
       const { findings, dropped } = parseFindings(parsed);
-      return { findings, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
+      const summary = parseReviewModelSummary(parsed, findings.length);
+      return { findings, summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
     } catch (error) {
       lastParseError = error;
     }
@@ -150,7 +183,7 @@ export function buildReviewPrompt(input: {
     "Do not modify files. Do not run project tests, package scripts, builds, app commands, or arbitrary PR code.",
     "Do not call Bash or shell commands. If more context is needed, use read-only file inspection only. If that is impossible, return no findings rather than executing code.",
     "Only inspect the checkout and the diff provided below.",
-    "Return JSON only, with shape: {\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\",\"category\":\"optional enum hint\"}],\"summary\":\"short review summary\"}.",
+    "Return JSON only, with shape: {\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\",\"category\":\"optional enum hint\"}],\"summary\":{\"changedBehavior\":[\"grounded change\"],\"invariants\":[\"affected invariant\"],\"evidence\":[\"path or check evidence\"],\"limitations\":[\"what was not proven\"],\"noFindingRationale\":\"why no additional finding was validated\"}}.",
     "If you include category, use one of: data_loss, auth, ci_build, unity_scene_prefab, security_boundary, migration, api_compatibility, release_regression, flaky_test_risk, proof_gap, runtime_correctness, dependency, docs_only, unknown.",
     "The deterministic wrapper treats category as a hint only; severity, current diff coordinates, redaction, and gate policy decide posting.",
     "Use P0/P1 only for validated correctness, security, data-loss, CI-breaking, or release-regression issues. Prefer no finding over speculative noise.",
@@ -160,7 +193,9 @@ export function buildReviewPrompt(input: {
     `Pull request: #${input.pull.number} ${input.pull.title}`,
     `Head SHA: ${input.pull.head.sha}`,
     "",
-    ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile), ""] : []),
+    ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile, {
+      nonProfileTokenEstimate: estimateReviewPromptNonProfileTokens(input)
+    }), ""] : []),
     ...(input.skillPackContextPacket ? [buildSkillPackContextPromptSection(input.skillPackContextPacket), ""] : []),
     ...(input.reviewLensPacket ? [buildReviewLensPromptSection(input.reviewLensPacket), ""] : []),
     ...(input.repoMemoryPacket ? [buildRepoMemoryPromptSection(input.repoMemoryPacket), ""] : []),
@@ -328,8 +363,9 @@ export async function runZCodeReview(input: {
       const rawResponse = extractZCodeResponse(result.stdout);
       const parsed = JSON.parse(extractJsonObject(rawResponse));
       const { findings, dropped } = parseFindings(parsed);
+      const summary = parseReviewModelSummary(parsed, findings.length);
       // Provenance (#304): a non-first successful attempt is a degraded (strict-JSON retry) recovery.
-      return { findings, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
+      return { findings, summary, droppedFromSchema: dropped, rawResponse, attempts: attempt, degradedRecovery: attempt > 1 };
     } catch (error) {
       lastParseError = error;
     }
@@ -347,11 +383,78 @@ function buildStrictJsonRetryPrompt(originalPrompt: string): string {
     "Your previous review output was rejected because it was not valid JSON.",
     "Repeat the review and return ONLY the required JSON object. Do not include markdown, prose, analysis, confidence narration, or code fences.",
     "The response must parse with JSON.parse and must have this exact top-level shape:",
-    "{\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\",\"category\":\"optional enum hint\"}],\"summary\":\"short review summary\"}",
-    "If you cannot produce a finding with a current RIGHT-side diff line, return {\"findings\":[],\"summary\":\"No validated current-diff findings.\"}.",
+    "{\"findings\":[{\"severity\":\"P0|P1|P2|P3\",\"path\":\"relative/file\",\"line\":123,\"title\":\"short title\",\"body\":\"specific actionable explanation\",\"confidence\":0.0,\"why_this_matters\":\"optional\",\"category\":\"optional enum hint\"}],\"summary\":{\"changedBehavior\":[],\"invariants\":[],\"evidence\":[],\"limitations\":[],\"noFindingRationale\":\"concise grounded rationale\"}}",
+    "If you cannot produce a finding with a current RIGHT-side diff line, keep findings empty and explain the grounded reason in summary.noFindingRationale.",
     "",
     originalPrompt
   ].join("\n");
+}
+
+export function parseReviewModelSummary(value: unknown, findingCount: number): ReviewModelSummary {
+  const summary = isRecord(value) ? value.summary : undefined;
+  if (typeof summary === "string") {
+    const text = boundedSummaryText(summary, "summary");
+    return {
+      changedBehavior: findingCount > 0 ? [text] : [],
+      invariants: [],
+      evidence: [],
+      limitations: ["Legacy provider summary did not supply structured limitations."],
+      noFindingRationale: findingCount === 0 ? text : "The provider returned validated findings."
+    };
+  }
+  if (!isRecord(summary)) throw new Error("review_summary_schema_invalid: summary must be an object");
+  const expected = ["changedBehavior", "invariants", "evidence", "limitations", "noFindingRationale"].sort();
+  const keys = Object.keys(summary).sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+    throw new Error("review_summary_schema_invalid: fields do not match the strict schema");
+  }
+  const result: ReviewModelSummary = {
+    changedBehavior: parseSummaryList(summary.changedBehavior, "changedBehavior"),
+    invariants: parseSummaryList(summary.invariants, "invariants"),
+    evidence: parseSummaryList(summary.evidence, "evidence"),
+    limitations: parseSummaryList(summary.limitations, "limitations"),
+    noFindingRationale: boundedSummaryText(summary.noFindingRationale, "noFindingRationale")
+  };
+  if (result.limitations.length === 0) {
+    throw new Error("review_summary_schema_invalid: limitations must not be empty");
+  }
+  return result;
+}
+
+function parseSummaryList(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length > 12) {
+    throw new Error(`review_summary_schema_invalid: ${label} must be an array with at most 12 entries`);
+  }
+  return value.map((entry, index) => boundedSummaryText(entry, `${label}[${index}]`));
+}
+
+function boundedSummaryText(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`review_summary_schema_invalid: ${label} must be non-empty text`);
+  }
+  const text = redactSecrets(value.trim());
+  if (text.length > 1_000) throw new Error(`review_summary_schema_invalid: ${label} exceeds 1000 characters`);
+  return text;
+}
+
+function estimateReviewPromptNonProfileTokens(input: Parameters<typeof buildReviewPrompt>[0]): number {
+  const content = [
+    input.repo,
+    input.pull.title,
+    input.pull.body ?? "",
+    ...input.files.flatMap((file) => [file.filename, file.patch ?? ""]),
+    input.repoMemoryPacket?.markdown ?? "",
+    input.repoWikiContextPacket?.markdown ?? "",
+    input.gitnexusContextPacket?.markdown ?? "",
+    input.githubRelatedContextPacket?.markdown ?? "",
+    input.skillPackContextPacket?.markdown ?? "",
+    input.reviewLensPacket?.markdown ?? ""
+  ].join("\n");
+  return Math.max(1, Math.ceil(Buffer.byteLength(content, "utf8") / 4));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 interface ActiveZCodeReviewPolicy {

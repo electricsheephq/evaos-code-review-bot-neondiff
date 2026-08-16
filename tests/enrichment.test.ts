@@ -29,11 +29,24 @@ const fixtureIssueAnalysis = (issue: GitHubRelatedIssueOrPull): IssueAnalysis =>
   confidence: "needs-repro",
   repositoryImpact: `Issue #${issue.number} concerns ${issue.title ?? "an untitled repository path"}.`,
   currentMainApplicability: "Current-main applicability is not established by this fixture.",
-  evidence: `The issue metadata records ${issue.title ?? "an untitled report"}.`,
+  verifiedFacts: [{
+    claim: `The issue metadata records ${issue.title ?? "an untitled report"}.`,
+    sourceRef: {
+      kind: "source",
+      repo: "electricsheephq/lcm-x",
+      sha: "0".repeat(40),
+      path: "README.md",
+      startLine: 1,
+      endLine: 1,
+      excerpt: "fixture"
+    }
+  }],
   reproductionOrInvariantGap: "Attach a focused current-main reproduction or name the mandatory invariant.",
-  relatedWork: "Inspect only the related work linked from the issue before implementation.",
+  relatedWork: ["Inspect only the related work linked from the issue before implementation."],
   migrationDisposition: "needs-repro",
-  nextGate: "Run the smallest supported-path reproduction and record the result on the issue."
+  nextGate: "Run the smallest supported-path reproduction and record the result on the issue.",
+  limitations: ["This deterministic test fixture does not run a repository reproduction."],
+  labelProposals: []
 });
 const runIssueEnrichmentCycle = (input: Parameters<typeof runIssueEnrichmentCycleImpl>[0]) =>
   runIssueEnrichmentCycleImpl({
@@ -910,6 +923,87 @@ describe("sticky enrichment comments", () => {
         });
         expect(analysisCalls).toBe(0);
         expect(postCalls).toBe(0);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("promotes upstream-intake only from an authenticated active-continuation event with current maintainer authority", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-active-continuation-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["electricsheephq/lcm-x"],
+          maxIssuesPerCycle: 1,
+          maxCommentsPerCycle: 1,
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "electricsheephq/lcm-x": {
+              maxIssuesPerCycle: 1,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 60_000,
+              burstWindowMs: 60_000,
+              maxIssuesPerBurst: 2,
+              lookbackMs: 60_000,
+              promotionMaintainers: [{
+                login: "Tosko4",
+                validFrom: "2026-08-01T00:00:00Z",
+                validUntil: "2026-09-01T00:00:00Z"
+              }]
+            }
+          }
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      let analysisCalls = 0;
+      let postCalls = 0;
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => [{
+              number: 127,
+              title: "Continue the imported replay fix",
+              state: "open",
+              updated_at: "2026-08-16T10:01:00Z",
+              labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
+              body: "Continue current-main work for #14."
+            }],
+            listIssueLabelEvents: async () => [{
+              event: "labeled",
+              created_at: "2026-08-16T10:00:00Z",
+              actor: { login: "Tosko4" },
+              label: { name: "active-continuation" }
+            }],
+            getCollaboratorPermission: async () => "maintain",
+            getIssueOrPull: async () => undefined,
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              postCalls += 1;
+              return { action: "created" as const, comment: { html_url: "https://github.test/comment/127" } };
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-08-16T10:02:00.000Z",
+          analyzeIssue: async ({ issue }) => {
+            analysisCalls += 1;
+            return fixtureIssueAnalysis(issue);
+          }
+        });
+
+        expect(result.summary).toMatchObject({ posted: 1, failed: 0 });
+        expect(analysisCalls).toBe(1);
+        expect(postCalls).toBe(1);
       } finally {
         state.close();
       }
@@ -2903,7 +2997,7 @@ describe("sticky enrichment comments", () => {
         expect(posts[0]!.marker).toContain("issue=41");
         expect(posts[0]!.body).toContain("## evaOS issue enrichment");
         expect(posts[0]!.body).toContain("### Current-main applicability");
-        expect(posts[0]!.body).toContain("### Evidence");
+        expect(posts[0]!.body).toContain("### Verified facts");
         expect(posts[0]!.body).not.toContain("Suggested labels:");
         expect(posts[0]!.body).not.toContain("Suggested owners:");
         expect(posts[0]!.body).not.toContain("issue-owner");
