@@ -33,7 +33,7 @@ let legacyCoreChecksScenarioInventory: [LegacyCoreChecksScenario: LegacyCoreChec
     .configInspectAndPatchContracts: .init(assertionCount: 27, sortedMessageSHA256: "c963178d0c437cf22ab1e5cec966440761ac87c1730a9c5cd2ddc3107932393c"),
     .providerRegistryParsingAndPatchContracts: .init(assertionCount: 18, sortedMessageSHA256: "23855ce5b6245a4c51ce0780e361aba8b2802a648a522b35829b7717dccdf440"),
     .providerVerificationTransportAndStrictEnvelopeContracts: .init(assertionCount: 37, sortedMessageSHA256: "27b74eecdf695f4be3fca3d9bf1090c8c41a2d27b1ca20e0e3ad47e6da28199e"),
-    .canonicalRedactorCorpusContracts: .init(assertionCount: 195, sortedMessageSHA256: "b1af4e9101e9255b709cf93af983827cb367a7f37d1993940f004b0da2591c41"),
+    .canonicalRedactorCorpusContracts: .init(assertionCount: 196, sortedMessageSHA256: "af774ef0cbae73cfd6bbb5558edbbf99003d8be7ac8d18bfee94a2ee908ff325"),
     .providerVerificationEscapingAndBudgetContracts: .init(assertionCount: 20, sortedMessageSHA256: "aabd8511ab77476e062c96210aee2ccafabaae2489d31fb44a7545313af56f1a")
 ]
 
@@ -63,9 +63,9 @@ final class LegacyCoreChecksAggregate: @unchecked Sendable {
             #expect(values.count == expected?.assertionCount, Comment("scenario \(scenario.rawValue) assertion count"))
             #expect(coreChecksSHA256(values.sorted()) == expected?.sortedMessageSHA256, Comment("scenario \(scenario.rawValue) message inventory"))
         }
-        #expect(messages.count == 401)
-        #expect(Set(messages).count == 307)
-        #expect(coreChecksSHA256(messages.sorted()) == "64e75c14a9906ebf8df47ac2b7556d58b14c8408becabc07652e172e220431fc")
+        #expect(messages.count == 402)
+        #expect(Set(messages).count == 308)
+        #expect(coreChecksSHA256(messages.sorted()) == "72e8141279d2cf541ba6e62d55fcbd32aae0f499940ca7e8f799f20efb0876b7")
     }
 }
 
