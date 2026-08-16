@@ -132,10 +132,24 @@ describe("review and issue-enrichment quality v2", () => {
       "pathInstructions: hidden configuration",
       "suggestionBehavior: hidden configuration",
       "roadmapOnlySettings: hidden configuration",
-      "repoSpecificInstruction: hidden configuration"
+      "repoSpecificInstruction: hidden configuration",
+      "PROMPTNOTE: hidden configuration",
+      "REVIEWRISKLENS: hidden configuration",
+      "PROOFEXPECTATIONS: hidden configuration",
+      "VALIDATIONHINTS: hidden configuration",
+      "READINESSHINTS: hidden configuration",
+      "REVIEWSETTINGSPREVIEW: hidden configuration",
+      "ENABLEDSECTIONS: hidden configuration",
+      "PATHINSTRUCTIONS: hidden configuration",
+      "SUGGESTIONBEHAVIOR: hidden configuration",
+      "ROADMAPONLYSETTINGS: hidden configuration",
+      "REPOSPECIFICINSTRUCTION: hidden configuration"
     ]) {
       expect(() => assertPublicReviewOutputSafe(leaked)).toThrow("public_review_config_leak_rejected");
     }
+    expect(() => assertPublicReviewOutputSafe(
+      "The PROMPTNOTEBOOK helper was renamed and the previewer remains unchanged."
+    )).not.toThrow();
 
     const profile: ResolvedRepoProfile = {
       repo: "electricsheephq/lcm-x",
@@ -191,7 +205,20 @@ describe("review and issue-enrichment quality v2", () => {
       "roadmapOnlySettings: hidden configuration",
       "agentStartPacket: hidden configuration",
       "buildBorrowBuyScan: hidden configuration",
-      "contextSourceTaxonomy: hidden configuration"
+      "contextSourceTaxonomy: hidden configuration",
+      "REPOPOLICY: hidden configuration",
+      "ADVISORYPOLICY: hidden configuration",
+      "VALIDATIONSUGGESTIONS: hidden configuration",
+      "REVIEWSETTINGSPREVIEW: hidden configuration",
+      "ENABLEDSECTIONS: hidden configuration",
+      "PATHINSTRUCTIONS: hidden configuration",
+      "SUGGESTIONBEHAVIOR: hidden configuration",
+      "ROADMAPONLYSETTINGS: hidden configuration",
+      "AGENTSTARTPACKET: hidden configuration",
+      "BUILDBORROWBUYSCAN: hidden configuration",
+      "CONTEXTSOURCETAXONOMY: hidden configuration",
+      "### `RepoPolicy`",
+      "`Repo policy`"
     ]) {
       expect(() => assertIssueAnalysisPublicSafe(
         leaked,
@@ -200,6 +227,10 @@ describe("review and issue-enrichment quality v2", () => {
     }
     expect(() => assertIssueAnalysisPublicSafe(
       "Source: src/repo-policy.ts:1-2",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).not.toThrow();
+    expect(() => assertIssueAnalysisPublicSafe(
+      "The REPOPOLICYMODULE parser resolves that source path.",
       { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
     )).not.toThrow();
   });

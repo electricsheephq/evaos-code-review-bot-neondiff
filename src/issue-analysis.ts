@@ -284,17 +284,17 @@ const ISSUE_ANALYSIS_TEXT_KEYS = [
   "nextGate"
 ] as const;
 const GENERIC_NEXT_GATE_PATTERN = /^(investigate|investigate further|review|review further|needs review|needs investigation|todo|tbd)[.!]?$/i;
-const PUBLIC_CONFIG_LEAK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
-  { label: "review_settings_preview", pattern: /review settings preview/i },
-  { label: "advisory_policy_key", pattern: /\badvisory policy\b/i },
-  { label: "validation_suggestions_key", pattern: /\bvalidation suggestions\b/i },
-  { label: "enabled_sections", pattern: /\benabled sections\b/i },
-  { label: "path_instructions", pattern: /\bpath instructions\b/i },
-  { label: "suggestion_behavior", pattern: /\bsuggestion behavior\b/i },
-  { label: "roadmap_settings", pattern: /\broadmap only settings\b/i },
-  { label: "agent_start_packet", pattern: /\bagent start packet\b/i },
-  { label: "planner_scaffolding", pattern: /\bbuild borrow buy scan\b/i },
-  { label: "context_source_taxonomy", pattern: /\bcontext source taxonomy\b/i }
+const PUBLIC_CONFIG_LEAK_MARKERS: Array<{ label: string; marker: string }> = [
+  { label: "review_settings_preview", marker: "review settings preview" },
+  { label: "advisory_policy_key", marker: "advisory policy" },
+  { label: "validation_suggestions_key", marker: "validation suggestions" },
+  { label: "enabled_sections", marker: "enabled sections" },
+  { label: "path_instructions", marker: "path instructions" },
+  { label: "suggestion_behavior", marker: "suggestion behavior" },
+  { label: "roadmap_settings", marker: "roadmap only settings" },
+  { label: "agent_start_packet", marker: "agent start packet" },
+  { label: "planner_scaffolding", marker: "build borrow buy scan" },
+  { label: "context_source_taxonomy", marker: "context source taxonomy" }
 ];
 const ISSUE_STOPWORDS = new Set([
   "about",
@@ -686,14 +686,9 @@ export function findIssueAnalysisPublicLeaks(
   text: string,
   repoPolicy: IssueAnalysisPolicyContext
 ): string[] {
-  const normalizedMarkerText = text
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
   const leaks = hasRepoPolicyHeading(text) ? ["repo_policy_heading"] : [];
-  leaks.push(...PUBLIC_CONFIG_LEAK_PATTERNS
-    .filter((entry) => entry.pattern.test(normalizedMarkerText))
+  leaks.push(...PUBLIC_CONFIG_LEAK_MARKERS
+    .filter((entry) => containsCanonicalPublicConfigMarker(text, entry.marker))
     .map((entry) => entry.label));
   const normalizedText = normalizeComparableText(text);
   const policySources = [
@@ -714,8 +709,42 @@ export function findIssueAnalysisPublicLeaks(
 }
 
 function hasRepoPolicyHeading(text: string): boolean {
-  return /^\s*(?:#{1,6}\s*)?repo[^a-z0-9\r\n]+policy(?:\s*:\s*.*)?\s*$/imu.test(text) ||
-    /^\s*(?:#{1,6}\s*)?[rR]epoPolicy(?:\s*:\s*.*)?\s*$/mu.test(text);
+  return text.split(/\r?\n/).some((rawLine) => {
+    const trimmed = rawLine.trim();
+    const markdownHeading = /^#{1,6}\s*/.test(trimmed);
+    let content = trimmed.replace(/^#{1,6}\s*/, "").trim();
+    const quoted = /^`+.*`+$/.test(content);
+    if (quoted) content = content.replace(/^`+|`+$/g, "").trim();
+    const colonIndex = content.indexOf(":");
+    const key = colonIndex >= 0 ? content.slice(0, colonIndex) : content;
+    if (compactPublicConfigMarkerText(key) !== "repopolicy") return false;
+    return colonIndex >= 0 || markdownHeading || quoted ||
+      compactPublicConfigMarkerText(content) === "repopolicy";
+  });
+}
+
+function normalizePublicConfigMarkerText(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function compactPublicConfigMarkerText(value: string): string {
+  return normalizePublicConfigMarkerText(value).replaceAll(" ", "");
+}
+
+function containsCanonicalPublicConfigMarker(value: string, marker: string): boolean {
+  const tokens = normalizePublicConfigMarkerText(value).split(" ").filter(Boolean);
+  const compactMarker = compactPublicConfigMarkerText(marker);
+  return tokens.some((_, start) => {
+    let candidate = "";
+    for (let index = start; index < tokens.length && candidate.length < compactMarker.length; index += 1) {
+      candidate += tokens[index];
+    }
+    return candidate === compactMarker;
+  });
 }
 
 function hasSharedPolicyFragment(text: string, policy: string, wordCount: number): boolean {
