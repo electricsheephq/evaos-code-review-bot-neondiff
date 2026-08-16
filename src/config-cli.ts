@@ -16,7 +16,7 @@ import {
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { loadConfig, loadConfigFromObject, type BotConfig, type RepoProfileConfig } from "./config.js";
-import { isApiKeyEnvName } from "./providers.js";
+import { isApiKeyEnvName, isProviderId } from "./providers.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 
 const SECRET_KEY_PATTERN = /(?:token|secret|password|cookie|license(?:Key|Token|Secret)|api[_-]?key(?!env)|privateKey)/i;
@@ -37,6 +37,7 @@ const REPO_PROFILE_DESKTOP_SAFE_FIELDS = [
 
 const REPO_PROFILE_DESKTOP_SAFE_FIELD_PATTERN = REPO_PROFILE_DESKTOP_SAFE_FIELDS.join("|");
 const CONFIG_NAME_SEGMENT_PATTERN = "[A-Za-z0-9_.-]+";
+const CONFIG_PROVIDER_ID_SEGMENT_PATTERN = "[A-Za-z0-9_.:-]+";
 const CONFIG_REVISION_PATTERN = /^[a-f0-9]{64}$/;
 
 const EXACT_PATCH_PATHS = new Set([
@@ -46,6 +47,11 @@ const EXACT_PATCH_PATHS = new Set([
   "canaryPulls",
   "reviewConcurrency.maxActiveRuns",
   "reviewConcurrency.leaseTtlMs",
+  "reviewEnsemble.enabled",
+  "reviewEnsemble.mode",
+  "worktreeCleanup.enabled",
+  "worktreeCleanup.retentionMs",
+  "worktreeCleanup.intervalMs",
   "reviewGate.maxInlineComments",
   "issueEnrichment.enabled",
   "issueEnrichment.postIssueComment",
@@ -66,6 +72,13 @@ const EXACT_PATCH_PATHS = new Set([
   "zcode.model",
   "zcode.providerId",
   "zcode.timeoutMs",
+  "codexRuntime.enabled",
+  "codexRuntime.cliPath",
+  "codexRuntime.model",
+  "codexRuntime.reasoningEffort",
+  "codexRuntime.timeoutMs",
+  "codexRuntime.maxOutputBytes",
+  "codexRuntime.contextWindowTokens",
   "github.appId",
   "github.clientId",
   "github.botLogin",
@@ -82,10 +95,10 @@ const REPO_PROFILE_NESTED_PATTERN =
   new RegExp(`^repoProfiles\\.repos\\.(${CONFIG_NAME_SEGMENT_PATTERN}\\/${CONFIG_NAME_SEGMENT_PATTERN})\\.(?:autoReview\\.(?:baseBranches|labels)|preMergeChecks\\.(?:title|description|linkedIssue|testEvidence|docs|docstrings)\\.(?:mode|instructions|threshold)|finishingTouches\\.(?:docs|docstrings|unitTests|simplifySuggestion|changelogDraft|riskExplanation|reviewReady|stackedPr)\\.(?:enabled|instructions))$`);
 
 const PROVIDER_SAFE_FIELD_PATTERN =
-  new RegExp(`^providers\\.providers\\.(${CONFIG_NAME_SEGMENT_PATTERN})\\.(?:enabled|adapter|displayName|baseUrl|model|authMode|apiKeyEnv|contextWindowTokens|timeoutMs|retryMaxRetries|retrySchemaFeedbackMax|structuredOutputMode)$`);
+  new RegExp(`^providers\\.providers\\.(${CONFIG_PROVIDER_ID_SEGMENT_PATTERN})\\.(?:enabled|adapter|displayName|baseUrl|model|authMode|apiKeyEnv|contextWindowTokens|timeoutMs|retryMaxRetries|retrySchemaFeedbackMax|structuredOutputMode)$`);
 
 const PROVIDER_CAPABILITY_PATTERN =
-  new RegExp(`^providers\\.providers\\.(${CONFIG_NAME_SEGMENT_PATTERN})\\.capabilities\\.(?:review|jsonOutput|local|streaming)$`);
+  new RegExp(`^providers\\.providers\\.(${CONFIG_PROVIDER_ID_SEGMENT_PATTERN})\\.capabilities\\.(?:review|jsonOutput|local|streaming)$`);
 
 export interface ConfigInspectResult {
   ok: boolean;
@@ -405,9 +418,9 @@ function isPatchPathAllowed(path: string): boolean {
   const nestedMatch = path.match(REPO_PROFILE_NESTED_PATTERN);
   if (nestedMatch?.[1] && isConfigRepoName(nestedMatch[1])) return true;
   const providerFieldMatch = path.match(PROVIDER_SAFE_FIELD_PATTERN);
-  if (providerFieldMatch?.[1] && isConfigNameSegment(providerFieldMatch[1])) return true;
+  if (providerFieldMatch?.[1] && isProviderId(providerFieldMatch[1])) return true;
   const providerCapabilityMatch = path.match(PROVIDER_CAPABILITY_PATTERN);
-  return Boolean(providerCapabilityMatch?.[1] && isConfigNameSegment(providerCapabilityMatch[1]));
+  return Boolean(providerCapabilityMatch?.[1] && isProviderId(providerCapabilityMatch[1]));
 }
 
 function setNestedValue(target: Record<string, unknown>, path: string[], value: unknown): void {
@@ -626,7 +639,7 @@ function findUnsupportedDottedPatchKey(value: unknown, prefix: string[] = []): s
   if (!isRecord(value)) return undefined;
   for (const [key, entry] of Object.entries(value)) {
     const keyPath = [...prefix, key];
-    if (key.includes(".") && !isProfileIdentifierSegment(prefix)) {
+    if (key.includes(".") && !isDynamicIdentifierSegment(prefix)) {
       return keyPath;
     }
     const nested = findUnsupportedDottedPatchKey(entry, keyPath);
@@ -635,8 +648,11 @@ function findUnsupportedDottedPatchKey(value: unknown, prefix: string[] = []): s
   return undefined;
 }
 
-function isProfileIdentifierSegment(prefix: string[]): boolean {
-  return prefix.length === 2 && prefix[0] === "repoProfiles" && (prefix[1] === "repos" || prefix[1] === "orgFallbacks");
+function isDynamicIdentifierSegment(prefix: string[]): boolean {
+  return prefix.length === 2 && (
+    (prefix[0] === "repoProfiles" && (prefix[1] === "repos" || prefix[1] === "orgFallbacks"))
+    || (prefix[0] === "providers" && prefix[1] === "providers")
+  );
 }
 
 function unsupportedDottedKeyError(path: string[]): string {

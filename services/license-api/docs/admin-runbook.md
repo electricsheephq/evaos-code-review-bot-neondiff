@@ -87,10 +87,13 @@ LICENSE_DB_PATH=/data/license.sqlite npm run admin -- \
   --dry-run
 ```
 
-`would_bind` plus the opaque issuance fingerprint is evidence for review, not
-permission to write. Stop on `not_found`, `wrong_source`, `conflict`, or
-`unavailable`. A production write requires explicit owner approval of the
-fingerprint, database, provider account, mode, subscription, and checkout tuple.
+`would_bind` plus both opaque fingerprints is evidence for review, not
+permission to write. The `iss_...` fingerprint identifies the checkout
+issuance; the `bnd_...` fingerprint covers that issuance, the exact provider
+account/mode/subscription/checkout tuple, and the server-derived checkout lookup
+key. Stop on `not_found`, `wrong_source`, `conflict`, or `unavailable`. A
+production write requires explicit owner approval of both fingerprints,
+database, provider account, mode, subscription, checkout, and lookup-key tuple.
 Only then repeat the exact command without `--dry-run`; expect `bound`, or
 `already_bound` for an identical replay.
 

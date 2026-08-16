@@ -6,9 +6,30 @@ struct ReposView: View {
     @ObservedObject var model: NeonDiffDesktopModel
 
     var body: some View {
+        ScrollView(.vertical) {
+            pageContent
+        }
+        .accessibilityIdentifier("neondiff-repos-outer-scroll")
+        .scrollContentBackground(.hidden)
+        .scrollIndicators(.visible, axes: .vertical)
+    }
+
+    private var pageContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            OperatorSection("GitHub Connection") {
-                VStack(alignment: .leading, spacing: 10) {
+            if model.existingLocalBotReconciliationMode {
+                existingLocalBotConnection
+                if model.managedGitHubAvailable {
+                    managedGitHubConnection
+                } else if model.byoGitHubCredentialOnboardingAvailable {
+                    byoGitHubCredentials
+                }
+            } else if model.managedGitHubAvailable {
+                managedGitHubConnection
+            } else if model.byoGitHubCredentialOnboardingAvailable {
+                byoGitHubCredentials
+            } else {
+                OperatorSection("GitHub Connection") {
+                    VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {
                         OperatorBadge(
                             text: model.github.userTokenStored ? "USER AUTHORIZED" : "USER NOT CONNECTED",
@@ -136,6 +157,7 @@ struct ReposView: View {
                         Label("\(model.github.discoveredRepositoryCount) repos discovered", systemImage: "folder.badge.plus")
                             .foregroundStyle(NeonDiffTheme.textSecondary)
                     }
+                    }
                 }
             }
 
@@ -167,7 +189,37 @@ struct ReposView: View {
                                 .foregroundStyle(repo.enabled ? NeonDiffTheme.accent : NeonDiffTheme.textSecondary)
                         }
                         .buttonStyle(.plain)
+                        .disabled(model.managedGitHubAvailable)
                         .accessibilityIdentifier("neondiff-repo-toggle-\(repo.name)")
+                    }
+                    TableColumn("Review Target") { repo in
+                        if model.byoGitHubCredentialOnboardingAvailable {
+                            let isSelected = model.selectedBYOReviewRepository?
+                                .caseInsensitiveCompare(repo.name) == .orderedSame
+                            Button {
+                                model.selectBYOReviewRepository(fullName: repo.name)
+                            } label: {
+                                Image(systemName: isSelected ? "scope" : "circle")
+                                    .foregroundStyle(
+                                        isSelected
+                                            ? NeonDiffTheme.accent
+                                            : NeonDiffTheme.textSecondary
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!model.canSelectBYOReviewRepository(fullName: repo.name))
+                            .accessibilityLabel(
+                                isSelected
+                                    ? "\(repo.name) is the review target"
+                                    : "Use \(repo.name) as the review target"
+                            )
+                            .accessibilityValue(isSelected ? "Selected" : "Not selected")
+                            .accessibilityAddTraits(isSelected ? .isSelected : [])
+                            .accessibilityIdentifier("neondiff-repo-review-target-\(repo.name)")
+                        } else {
+                            Text("—")
+                                .foregroundStyle(NeonDiffTheme.textSecondary)
+                        }
                     }
                     TableColumn("Profile", value: \.profile)
                     TableColumn("Access") { repo in
@@ -192,20 +244,37 @@ struct ReposView: View {
                                 .foregroundStyle(NeonDiffTheme.warning)
                         }
                         .buttonStyle(.plain)
+                        .disabled(model.managedGitHubAvailable)
                         .accessibilityIdentifier("neondiff-repo-remove-\(repo.name)")
                     }
                 }
                 .scrollContentBackground(.hidden)
-                .frame(minHeight: 360)
+                .frame(height: 360)
 
-                HStack(spacing: 10) {
-                    TextField("owner/repo", text: $model.pendingRepoName)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("neondiff-repo-name-input")
-                    Button { model.addPendingRepoToAllowlist() } label: {
-                        Label("Add Repo", systemImage: "plus.circle")
+                if model.byoGitHubCredentialOnboardingAvailable {
+                    if let selectedRepository = model.selectedBYOReviewRepository {
+                        Text("Native activation is bound to \(selectedRepository). The existing worker allowlist remains unchanged. When that worker monitors multiple repositories, native review controls remain blocked until the runtime can be scoped to this target safely.")
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.accent)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if model.activationTargetSelectionRequired {
+                        Text("Choose one Review Target above before activation. This does not remove or disable any repository in the existing worker.")
+                            .font(.caption)
+                            .foregroundStyle(NeonDiffTheme.warning)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .accessibilityIdentifier("neondiff-repo-add")
+                }
+
+                if !model.managedGitHubAvailable {
+                    HStack(spacing: 10) {
+                        TextField("owner/repo", text: $model.pendingRepoName)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("neondiff-repo-name-input")
+                        Button { model.addPendingRepoToAllowlist() } label: {
+                            Label("Add Repo", systemImage: "plus.circle")
+                        }
+                        .accessibilityIdentifier("neondiff-repo-add")
+                    }
                 }
 
                 if !model.discoveredGitHubRepos.isEmpty {
@@ -257,11 +326,294 @@ struct ReposView: View {
             .operatorPanel()
 
             OperatorSection("Boundary") {
-                Text("Repo changes are written through `config patch` only; the desktop does not post reviews or bypass daemon gates.")
+                Text("Repo changes are written through `config patch` only. A review runs only from Overview after an exact repository and pull request are selected; live posting requires a successful dry run and explicit confirmation.")
                     .operatorBodyText()
+                    .accessibilityIdentifier("neondiff-repos-boundary")
             }
         }
         .padding(24)
+        .overlay(alignment: .bottom) {
+            PageBottomSentinel(section: "repos")
+        }
         .disabled(!model.canEditProviderConfiguration)
+    }
+
+    private var existingLocalBotConnection: some View {
+        OperatorSection("Existing GitHub App Connection") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    OperatorBadge(
+                        text: model.githubSetupReady ? "CONNECTED" : "RECOVERY REQUIRED",
+                        color: model.githubSetupReady ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                    OperatorBadge(
+                        text: "\(model.repos.filter(\.enabled).count) CONFIGURED REPOS",
+                        color: model.repositorySetupReady ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                }
+
+                if let bot = model.selectedBotInstallation {
+                    LabeledContent("Bot", value: bot.appSlug)
+                        .foregroundStyle(NeonDiffTheme.textPrimary)
+                    LabeledContent(
+                        "GitHub account",
+                        value: bot.githubAccountLogin ?? "not verified"
+                    )
+                    .foregroundStyle(NeonDiffTheme.textPrimary)
+                    LabeledContent(
+                        "Installation",
+                        value: bot.githubInstallationID.map(String.init) ?? "not verified"
+                    )
+                    .foregroundStyle(NeonDiffTheme.textPrimary)
+                }
+
+                Text("This connection comes from a server-verified account/bot record matched to the exact local config on this Mac. NeonDiff reuses that worker only for an exact scoped command; it will not copy, migrate, or ask you to re-enter the private key, and it will never print it.")
+                    .operatorBodyText()
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(model.customerRuntimeBoundaryMessage)
+                    .font(.caption)
+                    .foregroundStyle(NeonDiffTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if model.byoGitHubCredentialOnboardingAvailable {
+                    HStack(spacing: 10) {
+                        OperatorBadge(
+                            text: model.existingLocalBotCurrentAccessVerified
+                                ? "CURRENT ACCESS VERIFIED"
+                                : "CURRENT ACCESS REQUIRED",
+                            color: model.existingLocalBotCurrentAccessVerified
+                                ? NeonDiffTheme.accent
+                                : NeonDiffTheme.warning
+                        )
+                        Button { model.verifyExistingLocalBotGitHubAccess() } label: {
+                            Label(
+                                model.isBYOGitHubVerificationInProgress
+                                    ? "Verifying…"
+                                    : "Verify Existing Access",
+                                systemImage: "checkmark.shield"
+                            )
+                        }
+                        .disabled(
+                            !model.existingLocalBotBYOGitHubVerificationAvailable
+                                || model.isBYOGitHubVerificationInProgress
+                        )
+                        .accessibilityIdentifier("neondiff-existing-byo-github-verify")
+                    }
+
+                    Text(model.existingLocalBotBYOGitHubVerificationStatus)
+                    .font(.caption)
+                    .foregroundStyle(
+                        model.existingLocalBotCurrentAccessVerified
+                            ? NeonDiffTheme.accent
+                            : NeonDiffTheme.warning
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var byoGitHubCredentials: some View {
+        OperatorSection("Customer-owned GitHub App") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    OperatorBadge(
+                        text: model.byoGitHubAppIdStored ? "APP ID STORED" : "APP ID NEEDED",
+                        color: model.byoGitHubAppIdStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                    OperatorBadge(
+                        text: model.byoGitHubPrivateKeyStored ? "KEYCHAIN KEY STORED" : "PRIVATE KEY NEEDED",
+                        color: model.byoGitHubPrivateKeyStored ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                    OperatorBadge(
+                        text: model.byoGitHubCredentialsVerified ? "APP VERIFIED" : "VERIFY NEEDED",
+                        color: model.byoGitHubCredentialsVerified ? NeonDiffTheme.accent : NeonDiffTheme.warning
+                    )
+                }
+
+                Text("The public paid B0 BYO beta uses a GitHub App owned and installed by the customer. Enter its numeric App ID and paste the full unencrypted PEM private key. NeonDiff stores the key in this Mac's Keychain; it is not written to config or command arguments.")
+                    .operatorBodyText()
+                    .fixedSize(horizontal: false, vertical: true)
+
+                TextField("GitHub App ID", text: $model.pendingBYOGitHubAppId)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("neondiff-byo-github-app-id")
+
+                SecureField("Paste GitHub App private key PEM", text: $model.pendingBYOGitHubAppPrivateKey)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("neondiff-byo-github-private-key")
+
+                HStack(spacing: 10) {
+                    Button { model.storeBYOGitHubAppCredentials() } label: {
+                        Label("Store in Keychain", systemImage: "key.fill")
+                    }
+                    .disabled(
+                        model.pendingBYOGitHubAppId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || model.pendingBYOGitHubAppPrivateKey.isEmpty
+                    )
+                    .accessibilityIdentifier("neondiff-byo-github-store")
+
+                    Button(role: .destructive) { model.clearBYOGitHubAppCredentials() } label: {
+                        Label("Remove Credentials", systemImage: "trash")
+                    }
+                    .disabled(!model.byoGitHubAppIdStored && !model.byoGitHubPrivateKeyStored)
+                    .accessibilityIdentifier("neondiff-byo-github-clear")
+
+                    Button { model.verifyBYOGitHubAppCredentials() } label: {
+                        Label(
+                            model.isBYOGitHubVerificationInProgress ? "Verifying…" : "Verify App Access",
+                            systemImage: "checkmark.shield"
+                        )
+                    }
+                    .disabled(!model.byoGitHubCredentialsStored || model.isBYOGitHubVerificationInProgress)
+                    .accessibilityIdentifier("neondiff-byo-github-verify")
+                }
+
+                Text(model.byoGitHubCredentialStatus)
+                    .font(.caption)
+                    .foregroundStyle(model.byoGitHubCredentialsVerified ? NeonDiffTheme.accent : NeonDiffTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("Apply the repository allowlist, then verify App access. Verification uses the private key only through bounded CLI stdin and checks GitHub installation/repository truth; it does not execute or post a review.")
+                    .font(.caption)
+                    .foregroundStyle(NeonDiffTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var managedGitHubConnection: some View {
+        OperatorSection("Managed GitHub Connection") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    OperatorBadge(
+                        text: model.managedGitHubStatusText,
+                        color: model.isManagedGitHubBound
+                            ? NeonDiffTheme.accent
+                            : NeonDiffTheme.warning
+                    )
+                    Spacer()
+                    if model.managedGitHubConnectionState == .verificationRequired {
+                        Button { model.refreshManagedGitHubRepositories() } label: {
+                            Label("Verify Binding", systemImage: "checkmark.shield")
+                        }
+                        .disabled(model.isManagedGitHubConnectionInProgress)
+                        .accessibilityIdentifier("neondiff-managed-github-verify")
+                    } else if !model.isManagedGitHubBound {
+                        Button { model.startManagedGitHubConnection() } label: {
+                            Label("Connect GitHub", systemImage: "person.crop.circle.badge.checkmark")
+                        }
+                        .disabled(model.isManagedGitHubConnectionInProgress)
+                        .accessibilityIdentifier("neondiff-managed-github-connect")
+                    } else {
+                        Button { model.refreshManagedGitHubRepositories() } label: {
+                            Label("Refresh Bound Repositories", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(model.isManagedGitHubConnectionInProgress)
+                        .accessibilityIdentifier("neondiff-managed-github-refresh")
+                    }
+                }
+
+                Text("The paid-beta path uses the server broker and Keychain-backed device identity. Existing installations may use a transient GitHub user authorization only to prove the selected installation; it is never stored or used to post reviews. Repository scope, visibility, and review credentials come only from the verified GitHub App binding.")
+                    .operatorBodyText()
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let recovery = model.managedGitHubRecovery {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(NeonDiffTheme.warning)
+                        Text(recovery.message)
+                            .operatorBodyText()
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Retry") {
+                            model.performManagedGitHubRecoveryAction()
+                        }
+                        .disabled(model.isManagedGitHubConnectionInProgress)
+                        .accessibilityIdentifier("neondiff-managed-github-recovery")
+                    }
+                }
+
+                if let code = model.githubAuthorizationCode,
+                   model.managedGitHubConnectionState == .awaitingAuthorization {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Authorize existing installation")
+                            .font(.subheadline.weight(.semibold))
+                        Text(code.userCode)
+                            .font(NeonDiffTheme.commandFont)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("neondiff-managed-github-device-code")
+                        HStack(spacing: 10) {
+                            Button("Copy Code") { model.copyGitHubUserCode() }
+                            Button("Open GitHub") { model.openGitHubDeviceVerification() }
+                        }
+                    }
+                }
+
+                if !model.managedGitHubInstallationCandidates.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Choose the App installation to bind")
+                            .font(.subheadline.weight(.semibold))
+                        ForEach(model.managedGitHubInstallationCandidates) { candidate in
+                            Button {
+                                model.selectManagedGitHubInstallation(
+                                    installationId: candidate.installationId
+                                )
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(candidate.account)
+                                        Text("Installation \(candidate.installationId) · \(candidate.repositoryCount) repositories")
+                                            .font(.caption)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier(
+                                "neondiff-managed-github-installation-\(candidate.installationId)"
+                            )
+                        }
+                    }
+                }
+
+                if let selected = model.selectedManagedGitHubRepository {
+                    Label("Selected: \(selected)", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(NeonDiffTheme.accent)
+                }
+
+                if !model.managedGitHubRepositories.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Server-bound repositories")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(NeonDiffTheme.textPrimary)
+                        ForEach(model.managedGitHubRepositories, id: \.fullName) { repository in
+                            Button {
+                                model.selectManagedGitHubRepository(fullName: repository.fullName)
+                            } label: {
+                                HStack {
+                                    Image(systemName: repository.visibility == .public ? "globe" : "lock.fill")
+                                    Text(repository.fullName)
+                                    Spacer()
+                                    Text(repository.visibility == .unknown
+                                        ? "VISIBILITY BLOCKED"
+                                        : repository.visibility.rawValue.uppercased())
+                                        .font(.caption.weight(.semibold))
+                                    if model.selectedManagedGitHubRepository == repository.fullName {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(NeonDiffTheme.accent)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(repository.visibility == .unknown)
+                            .accessibilityIdentifier("neondiff-managed-repository-\(repository.fullName)")
+                        }
+                    }
+                }
+            }
+        }
     }
 }

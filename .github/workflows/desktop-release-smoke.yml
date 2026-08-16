@@ -26,6 +26,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Node.js 26
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install sealed-worker build dependencies
+        working-directory: .
+        run: npm ci --ignore-scripts
+
       - name: Run desktop Core tests with nonzero discovery
         run: scripts/run-required-swift-test-suite.sh NeonDiffDesktopCoreTests
 
@@ -41,11 +51,21 @@ jobs:
       - name: Run desktop appcast checks
         run: swift run NeonDiffDesktopAppcastChecks
 
-      - name: Build unsigned app bundle
-        run: script/build_and_run.sh build
+      - name: Build unsigned Release app bundle
+        env:
+          NEONDIFF_SPARKLE_FEED_URL: https://ci.invalid/neondiff/appcast-beta.xml
+          NEONDIFF_SPARKLE_PUBLIC_ED_KEY: CI_ONLY_NOT_A_RELEASE_KEY
+        run: script/build_and_run.sh release-build
 
-      - name: Check unsigned app bundle
-        run: script/build_and_run.sh bundle-check
+      - name: Check unsigned Release app bundle
+        env:
+          NEONDIFF_SPARKLE_FEED_URL: https://ci.invalid/neondiff/appcast-beta.xml
+          NEONDIFF_SPARKLE_PUBLIC_ED_KEY: CI_ONLY_NOT_A_RELEASE_KEY
+        run: script/build_and_run.sh release-bundle-check
+
+      - name: Enforce release-only fixture boundary
+        working-directory: .
+        run: npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist/NeonDiff.app
 
       - name: Package unsigned app bundle and metadata
         env:
@@ -54,14 +74,14 @@ jobs:
           NEONDIFF_DESKTOP_ARTIFACT_CLASSIFICATION: unsigned-desktop-release-smoke
           NEONDIFF_DESKTOP_UI_LAUNCH: "false"
           NEONDIFF_DESKTOP_VISUAL_SMOKE_REQUIRED: "true"
-          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release app bundle build, macOS 15 Keychain contract compilation, appcast checks, bundle structure check, artifact checksum, and metadata only
+          NEONDIFF_DESKTOP_PROOF_BOUNDARY: non-release Release-configuration app bundle build, macOS 15 Keychain contract compilation, appcast checks, bundle structure and fixture-exclusion checks, artifact checksum, and metadata only
         run: script/release-proof.sh
 
       - name: Upload unsigned app bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: neondiff-desktop-unsigned-app
-          path: apps/neondiff-desktop/dist/release-smoke/NeonDiffDesktop.app.zip
+          path: apps/neondiff-desktop/dist/release-smoke/NeonDiff.app.zip
           if-no-files-found: error
           retention-days: 14
 

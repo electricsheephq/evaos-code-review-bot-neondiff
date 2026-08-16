@@ -65,7 +65,13 @@ npm install -g neondiff
 cp config.example.json "$RUNNER_TEMP/config.local.json"
 neondiff doctor github --config "$RUNNER_TEMP/config.local.json" --json
 neondiff providers list --config "$RUNNER_TEMP/config.local.json" --json
-neondiff review-pr --config "$RUNNER_TEMP/config.local.json" --repo owner/name --pr "$PR_NUMBER" --dry-run true
+neondiff review-pr \
+  --config "$RUNNER_TEMP/config.local.json" \
+  --repo owner/name \
+  --pr "$PR_NUMBER" \
+  --expected-config-revision "<verified-config-revision>" \
+  --zcode true \
+  --dry-run true
 ```
 
 Use CI for one-shot checks. Use [docs/systemd.md](systemd.md) or

@@ -15,9 +15,10 @@ the same local HTML dashboard used by the CLI.
 
 - No review engine runs in the desktop app.
 - No UI path posts GitHub reviews directly.
-- The Mac launcher implements native setup/status controls only where they can
-  write through existing CLI contracts. The local HTML dashboard remains the
-  deeper browser-first setup surface.
+- The native Mac app is the product surface for the Mac customer journey and
+  implements native setup/status controls that write through existing CLI
+  contracts. The local HTML dashboard is a diagnostic/operator surface for
+  CLI-first and non-Mac setups, not the product UI.
 - No signing, notarization, Sparkle appcast, downloadable artifact, TCC, Mac-control, or customer-control proof is claimed here.
 - Provider and license keys are stored in macOS Keychain under a NeonDiff-specific service and are never written to config files.
 - Native provider verification starts only from an explicit **Verify API Key** click. The stored provider key is read from Keychain for that operation and sent to the child CLI only through bounded standard input; it never enters argv, process environment, config, command previews, stdout/stderr, logs, screenshots, or evidence.
@@ -188,6 +189,19 @@ A stored license key is not treated as active entitlement. Repo selection still
 writes only the local allowlist; the worker's pre-checkout license and GitHub App
 gates remain authoritative for review execution.
 
+In the public paid B0 BYO build, first-run onboarding and the Repos pane accept
+a customer-owned numeric App ID and unencrypted RSA private key. The key is
+stored only in the fixed macOS Keychain account. On a clean install, first run
+exposes the non-destructive **Initialize Local Config** action before the
+customer adds one `owner/repo`, applies it through the typed local config patch,
+and chooses **Verify App Access**. Initialization never force-overwrites an
+existing config, and the customer does not need an operator edit. Verification
+reads the key only on that explicit action, supplies it to
+`doctor github` through bounded stdin, and accepts only typed App-installation
+proof for the exact configured repository. Changing the App credentials,
+CLI/config path, or allowlist invalidates that proof. This step does not run a
+provider, execute a review, or post to GitHub.
+
 ## Local Dashboard Launcher
 
 The dev app no longer opens a browser tab automatically. It exposes explicit
@@ -199,9 +213,9 @@ neondiff dashboard --config config.local.json --launchd-label com.electricsheeph
 neondiff dashboard --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot --open true
 ```
 
-The dashboard remains the deeper browser-first setup and readiness surface for
-license status, GitHub App status, daemon status, and provider readiness. The
-Swift Providers pane now also offers the explicit, Keychain-backed verification
-action described above and retains only its redacted result metadata. Neither
-surface proves signed/notarized distribution, Sparkle/appcast delivery,
-browser/native parity, customer readiness, or v1.1 release completion.
+The dashboard is a diagnostic/operator surface for license status, GitHub App
+status, daemon status, and provider readiness; the native Swift app is the
+product surface. The Swift Providers pane now also offers the explicit,
+Keychain-backed verification action described above and retains only its
+redacted result metadata. Neither surface proves signed/notarized distribution,
+Sparkle/appcast delivery, customer readiness, or v1.1 release completion.

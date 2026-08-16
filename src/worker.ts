@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
@@ -10,7 +11,8 @@ import {
   isFinishingTouchCommandAction,
   type CommandDecision
 } from "./commands.js";
-import { loadConfig, type BotConfig } from "./config.js";
+import { loadConfig, type BotConfig, type SelfConsistencyConfig } from "./config.js";
+import { loadConfigAtRevision, readConfigRevision } from "./config-cli.js";
 import { planContextBudget, type ContextBudgetPlan } from "./context-budget.js";
 import { assertGitClean, planPullWorktreePaths, preparePullWorktree } from "./git.js";
 import {
@@ -49,6 +51,14 @@ import {
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
 import {
+  buildReviewEnsembleLeafPrompt,
+  buildReviewEnsemblePlan,
+  executeReviewEnsemble,
+  reduceReviewEnsemble,
+  type ReviewEnsembleRun,
+  type ReviewEnsembleSubject
+} from "./review-ensemble.js";
+import {
   decideReviewEventPolicy,
   type ReviewEventAuthorizationAttempt,
   type ReviewEventDecision,
@@ -83,6 +93,8 @@ import { buildSkillPackContextPacket, type SkillPackContextPacket } from "./skil
 import { writeSecureFileSync } from "./temp-files.js";
 import {
   ACTIVATION_BASELINE_EXISTING_HEAD_ERROR,
+  APPROVED_DRY_RUN_LIVE_CLAIM_ERROR,
+  isRetryableApprovedDryRunPrePostFailure,
   EXACT_AUTHORIZATION_ALREADY_CONSUMED_ERROR,
   POST_REVIEW_HEAD_UNVERIFIED_ERROR,
   REVIEW_POSTED_HEAD_CHANGED_ERROR,
@@ -104,10 +116,12 @@ import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
 import { buildReviewPrompt, extractJsonObject, extractZCodeResponse, isZCodeSchemaFailureError, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
+import { runCodexReview } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
 import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
+import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
 
 const LICENSE_GATE_REPO_VISIBILITY_CACHE_TTL_MS = 10 * 60_000;
 const LICENSE_GATE_UNKNOWN_REPO_VISIBILITY_CACHE_TTL_MS = 2 * 60_000;
@@ -144,7 +158,15 @@ function recordConsumedAuthorizationIncident(input: {
 }
 
 export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMetadata {
-  const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
+  if (config.codexRuntime?.enabled) {
+    return {
+      providerId: "codex-cli-oauth",
+      adapter: "codex-cli",
+      model: config.codexRuntime.model,
+      displayName: "Codex CLI (existing OAuth session)"
+    };
+  }
+  const providerId = resolveReviewRegistryProviderId(config);
   const provider = config.providers?.providers[providerId];
   if (!provider) {
     return {
@@ -163,8 +185,13 @@ export function buildReviewProviderMetadata(config: BotConfig): ReviewProviderMe
 }
 
 function resolveReviewContextWindowTokens(config: BotConfig): number | undefined {
-  const providerId = config.zcode.providerId ?? config.providers?.defaultProviderId ?? "zcode-glm";
+  if (config.codexRuntime?.enabled) return config.codexRuntime.contextWindowTokens;
+  const providerId = resolveReviewRegistryProviderId(config);
   return config.providers?.providers[providerId]?.contextWindowTokens;
+}
+
+function resolveReviewRegistryProviderId(config: BotConfig): string {
+  return config.providers?.defaultProviderId ?? config.zcode.providerId ?? "zcode-glm";
 }
 
 function contextBudgetEvidence(plan: ContextBudgetPlan): Record<string, unknown> {
@@ -193,7 +220,10 @@ export interface RunOnceOptions {
   dryRun: boolean;
   repo?: string;
   pullNumber?: number;
+  explicitPullReview?: ExplicitPullReviewScope;
   expectedHeadSha?: string;
+  expectedConfigRevision?: string;
+  processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run";
   useZCode?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
 }
@@ -231,7 +261,7 @@ export interface RetryFailedHeadResult {
   repo: string;
   pullNumber: number;
   headSha: string;
-  status: ReviewPullResult | "failed" | "dry_run" | "skipped_closed";
+  status: ReviewPullResult | "failed" | "dry_run";
 }
 
 export interface FailedHeadRetryTarget {
@@ -294,7 +324,8 @@ export type ReviewPullResult =
   | "skipped_capacity"
   | "skipped_context_budget"
   | "skipped_provider_cooldown"
-  | "skipped_stale_head";
+  | "skipped_stale_head"
+  | "skipped_closed";
 
 export function isSuccessfulRetryStatus(status: RetryFailedHeadResult["status"]): boolean {
   switch (status) {
@@ -338,8 +369,62 @@ export function assertExpectedReviewPrHead(input: {
   );
 }
 
+export function buildReviewApprovalRevision(input: {
+  configRevision?: string;
+  useZCode: boolean;
+  zcodeAppConfigPath: string;
+}): string | undefined {
+  if (!input.configRevision) return undefined;
+  if (!input.useZCode) return input.configRevision;
+  const zcodeRevision = readConfigRevision(input.zcodeAppConfigPath);
+  return createHash("sha256")
+    .update("neondiff-review-approval-v1")
+    .update("\0")
+    .update(input.configRevision)
+    .update("\0")
+    .update(zcodeRevision)
+    .digest("hex");
+}
+
+export function assertReviewApprovalRevisionCurrent(input: {
+  approvedRevision: string;
+  sourceConfigRevision: string;
+  useZCode: boolean;
+  zcodeAppConfigPath: string;
+}): void {
+  const currentRevision = buildReviewApprovalRevision({
+    configRevision: input.sourceConfigRevision,
+    useZCode: input.useZCode,
+    zcodeAppConfigPath: input.zcodeAppConfigPath
+  });
+  if (currentRevision === input.approvedRevision) return;
+  throw new Error(
+    "review-pr provider configuration changed; run a new dry review before posting"
+  );
+}
+
 export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
-  const config = loadConfig(options.configPath);
+  let config: BotConfig;
+  if (options.expectedConfigRevision !== undefined) {
+    if (!/^[a-f0-9]{64}$/.test(options.expectedConfigRevision)) {
+      throw new Error("review-pr expected config revision must be a lowercase SHA-256 value");
+    }
+    if (!options.configPath) {
+      throw new Error("review-pr expected config revision requires a config path");
+    }
+    const loaded = loadConfigAtRevision(options.configPath);
+    if (loaded.revision !== options.expectedConfigRevision) {
+      throw new Error("review-pr config revision changed; run a new dry review before posting");
+    }
+    config = loaded.config;
+  } else {
+    config = loadConfig(options.configPath);
+  }
+  const reviewApprovalRevision = buildReviewApprovalRevision({
+    configRevision: options.expectedConfigRevision,
+    useZCode: (options.useZCode ?? true) && !config.codexRuntime?.enabled,
+    zcodeAppConfigPath: config.zcode.appConfigPath
+  });
   const result: RunOnceResult = {
     reposScanned: 0,
     pullsSeen: 0,
@@ -416,18 +501,59 @@ export async function runOnce(options: RunOnceOptions): Promise<RunOnceResult> {
             state,
             repo,
             pull,
+            ...(options.explicitPullReview
+              ? { explicitPullReview: options.explicitPullReview }
+              : {}),
             dryRun: options.dryRun,
             useZCode: options.useZCode ?? true,
+            ...(reviewApprovalRevision
+              ? { configRevision: reviewApprovalRevision }
+              : {}),
+            ...(options.expectedConfigRevision
+              ? { sourceConfigRevision: options.expectedConfigRevision }
+              : {}),
             budget,
             licenseAdmission,
+            ...(options.processedHeadPolicy
+              ? { processedHeadPolicy: options.processedHeadPolicy }
+              : {}),
             allowActivationBaselineCommandLookup: options.pullNumber !== undefined
           });
         } catch (error) {
-          if (recordProviderRateLimitCooldownIfNeeded({ config, state, repo, pull, error })) {
+          const recoveredStatus = await recoverPostedReviewReceiptForCurrentHead({
+            config,
+            github,
+            state,
+            repo,
+            pull,
+            error
+          });
+          if (recoveredStatus) {
+            applyReviewPullResultToRunOnceResult(result, recoveredStatus);
+            continue;
+          }
+          const preserveApprovedDryRun =
+            options.processedHeadPolicy === "approved_dry_run" &&
+            !reviewWasAlreadyPosted(error);
+          if (recordProviderRateLimitCooldownIfNeeded({
+            config,
+            state,
+            repo,
+            pull,
+            error,
+            preserveExistingDryRun: preserveApprovedDryRun
+          })) {
             result.skippedProviderCooldown += 1;
             continue;
           }
-          recordFailedReview({ config, state, repo, pull, error });
+          recordFailedReview({
+            config,
+            state,
+            repo,
+            pull,
+            error,
+            preserveExistingDryRun: preserveApprovedDryRun
+          });
           result.failed += 1;
           continue;
         }
@@ -455,6 +581,7 @@ export function applyReviewPullResultToRunOnceResult(result: RunOnceResult, stat
       return;
     case "posted_stale_head":
     case "skipped_stale_head":
+    case "skipped_closed":
       result.skippedStaleHead += 1;
       return;
     case "skipped_draft":
@@ -1310,10 +1437,13 @@ export interface ReviewPullInput {
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
+  explicitPullReview?: ExplicitPullReviewScope;
   dryRun: boolean;
   useZCode: boolean;
+  configRevision?: string;
+  sourceConfigRevision?: string;
   budget?: ReviewRunBudget;
-  processedHeadPolicy?: "normal" | "retry_failed_head";
+  processedHeadPolicy?: "normal" | "approved_dry_run" | "refresh_dry_run" | "retry_failed_head";
   commandCommentId?: number;
   allowActivationBaselineCommandLookup?: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
@@ -1324,7 +1454,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   const repoPolicy = resolveRepoProfile(config, repo);
   if (!repoPolicy.allowed) return "skipped_policy";
   if (config.skipDrafts && pull.draft) return "skipped_draft";
-  if (!isCanaryAllowed(config, repo, pull.number)) return "skipped_canary";
+  if (!isCanaryAllowed(
+    config,
+    repo,
+    pull.number,
+    { explicitPullReview: input.explicitPullReview }
+  )) return "skipped_canary";
   if (!input.licenseAdmission) throw new Error("production license admission is required for pull review");
   const visibility = visibilityFromPullSummary(pull);
   const visibilityDecision = authorizeAdmissionForVisibility(
@@ -1336,8 +1471,36 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     recordLicenseAdmissionBlock({ config, state, repo, pull, decision: visibilityDecision.decision });
     return "skipped_license_gate";
   }
+  if (
+    input.processedHeadPolicy === "approved_dry_run" &&
+    input.configRevision === undefined
+  ) {
+    throw new Error(
+      "approved dry-run transition requires an exact configuration revision"
+    );
+  }
 
   const processed = getProcessedReviewIfAvailable(state, repo, pull.number, pull.head.sha);
+  const retryableApprovedDryRunPrePostFailure =
+    input.dryRun && isRetryableApprovedDryRunPrePostFailure(processed);
+  const refreshableDryRun =
+    input.dryRun &&
+    input.processedHeadPolicy === "refresh_dry_run" &&
+    processed?.status === "dry_run";
+  const scopedActivationBaselineOverride =
+    input.allowActivationBaselineCommandLookup &&
+    isActivationBaselineProcessedReview(processed);
+  const approvedDryRunTransition =
+    input.processedHeadPolicy === "approved_dry_run" &&
+    processed?.status === "dry_run" &&
+    input.configRevision !== undefined &&
+    processed.configRevision === input.configRevision;
+  if (
+    input.processedHeadPolicy === "approved_dry_run" &&
+    !approvedDryRunTransition
+  ) {
+    return "skipped_processed";
+  }
   const reviewEventPolicyMode = config.reviewGate?.reviewEventPolicy?.mode ?? "trusted_command_only";
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
@@ -1552,6 +1715,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   if (
     input.processedHeadPolicy !== "retry_failed_head" &&
     !manualReviewRequested &&
+    !approvedDryRunTransition &&
+    !retryableApprovedDryRunPrePostFailure &&
+    !refreshableDryRun &&
+    !scopedActivationBaselineOverride &&
     (processed || state.hasProcessed(repo, pull.number, pull.head.sha))
   ) {
     // This is a provider-free visibility repair for a GitHub review that is
@@ -1571,13 +1738,21 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     ? state.getActiveRepoProviderCooldown(repo)
     : undefined;
   if (activeCooldown && input.processedHeadPolicy !== "retry_failed_head") {
-    recordProviderCooldownSkip({
-      state,
-      repo,
-      pull,
-      cooldownUntil: activeCooldown.cooldownUntil,
-      reason: activeCooldown.reason
-    });
+    if (
+      !retryableApprovedDryRunPrePostFailure &&
+      !(
+        processed?.status === "dry_run" &&
+        (approvedDryRunTransition || refreshableDryRun)
+      )
+    ) {
+      recordProviderCooldownSkip({
+        state,
+        repo,
+        pull,
+        cooldownUntil: activeCooldown.cooldownUntil,
+        reason: activeCooldown.reason
+      });
+    }
     return "skipped_provider_cooldown";
   }
   if (input.processedHeadPolicy === "retry_failed_head") {
@@ -1597,6 +1772,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
   let lease: ReviewRunLease | undefined;
   let headClaim: ReviewHeadClaim | undefined;
   let budgetStarted = false;
+  let ensembleEvidencePromise: Promise<void> | undefined;
+  let startShadowLeaves: (() => void) | undefined;
   const releaseReviewCapacity = (): void => {
     // Crash-safe release-on-failure (#295): if we hold the per-head claim and the finally runs
     // before recordProcessed retired it (error/early return), release it so the head is re-claimable.
@@ -1748,6 +1925,16 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       return "skipped_context_budget";
     }
 
+    const assertApprovedProviderConfigCurrent = (): void => {
+      if (!input.configRevision || !input.sourceConfigRevision) return;
+      assertReviewApprovalRevisionCurrent({
+        approvedRevision: input.configRevision,
+        sourceConfigRevision: input.sourceConfigRevision,
+        useZCode: input.useZCode && !config.codexRuntime?.enabled,
+        zcodeAppConfigPath: config.zcode.appConfigPath
+      });
+    };
+    assertApprovedProviderConfigCurrent();
     const zcodeExecution = await runReviewWithContextBudget({
       config,
       github,
@@ -1756,13 +1943,64 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pull,
       worktreePath: worktree.path,
       prompt,
+      files: reviewFiles,
       contextBudget,
       promptForFiles,
       useZCode: input.useZCode,
-      evidenceDir
+      evidenceDir,
+      assertProviderConfigCurrent: assertApprovedProviderConfigCurrent
     });
+    startShadowLeaves = zcodeExecution.startShadowLeaves;
+    if (zcodeExecution.ensemblePromise) {
+      ensembleEvidencePromise = zcodeExecution.ensemblePromise
+        .then((ensemble) => {
+          const shadowPacket = reduceReviewEnsemble({
+            subject: {
+              repo,
+              pullNumber: pull.number,
+              baseSha: pull.base.sha,
+              headSha: pull.head.sha
+            },
+            files: reviewFiles,
+            receipts: ensemble.receipts,
+            gatePolicy: {
+              maxInlineComments: config.reviewGate?.maxInlineComments ?? 25,
+              repoMemoryFalsePositiveFingerprints: repoMemory.falsePositiveFingerprints,
+              repoMemoryFalsePositives: repoMemory.falsePositives,
+              publicConfidencePolicy: config.confidenceCalibration?.publicDisplay,
+              ...(config.reviewGate?.requestChangesConfidenceFloors
+                ? { requestChangesConfidenceFloors: config.reviewGate.requestChangesConfidenceFloors }
+                : {}),
+              ...(config.reviewGate?.categoryPrecisionFloors
+                ? { categoryPrecisionFloors: config.reviewGate.categoryPrecisionFloors }
+                : {})
+            }
+          });
+          writeRedactedJson(join(evidenceDir, "review-ensemble", "shadow-packet.json"), shadowPacket);
+        })
+        .catch((error) => {
+          writeRedactedJsonBestEffort(join(evidenceDir, "review-ensemble", "evidence-error.json"), {
+            error: redactSecrets(error instanceof Error ? error.message : String(error)),
+            recordedAt: new Date().toISOString()
+          });
+        });
+    }
+    assertApprovedProviderConfigCurrent();
     if (zcodeExecution.status === "skipped_stale_head") return "skipped_stale_head";
-    if (zcodeExecution.status === "skipped_context_budget") return "skipped_context_budget";
+    if (zcodeExecution.status === "skipped_context_budget") {
+      if (zcodeExecution.deferredFailure) {
+        await ensembleEvidencePromise;
+        recordFailedReview({
+          config,
+          state,
+          repo,
+          pull,
+          error: zcodeExecution.deferredFailure,
+          writeErrorEvidence: false
+        });
+      }
+      return "skipped_context_budget";
+    }
     const zcodeResult = zcodeExecution.result;
 
     assertGitClean(worktree.path);
@@ -1797,13 +2035,20 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     // Opt-in P0/P1 self-consistency re-check (#303): post-dedup, pre-event-decision. Quieter-only —
     // disagreement can lower confidence and strip REQUEST_CHANGES eligibility, never raise/add. When
     // disabled (default) this is a no-op returning the gate's own comments/event, byte-identical.
-    const selfConsistency = await applySelfConsistencyRecheck({
-      config,
-      gate,
-      files: reviewFiles,
-      worktreePath: worktree.path,
-      evidenceDir
-    });
+    let selfConsistency: Awaited<ReturnType<typeof applySelfConsistencyRecheck>>;
+    try {
+      selfConsistency = await applySelfConsistencyRecheck({
+        config,
+        gate,
+        files: reviewFiles,
+        worktreePath: worktree.path,
+        evidenceDir
+      });
+    } finally {
+      startShadowLeaves?.();
+      startShadowLeaves = undefined;
+    }
+    assertApprovedProviderConfigCurrent();
     if (selfConsistency.runtimeNote && Array.isArray(zcodeResult.runtime.notes)) {
       zcodeResult.runtime.notes.push(selfConsistency.runtimeNote);
     }
@@ -1847,7 +2092,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           event: selectedEvent,
           validation,
           proof,
-          settingsPreview,
           provider: buildReviewProviderMetadata(config),
           postIssueComment: config.walkthrough.postIssueComment,
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
@@ -1908,10 +2152,22 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     if (input.dryRun) writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
 
+    assertApprovedProviderConfigCurrent();
     if (input.dryRun) {
-      // Dry-run posts nothing public, so it does NOT acquire a per-head claim (#295): claiming would
-      // add contention/TTL churn for a run that cannot violate the at-most-one-posted-review invariant.
-      state.recordProcessed({ repo, pullNumber: pull.number, headSha: pull.head.sha, status: "dry_run", event: plan.event });
+      // Dry-run posts nothing public, but its durable proof must not replace an
+      // active or completed live review. The state transaction admits this row
+      // only while the exact head remains unclaimed and unprocessed.
+      const recorded = state.tryRecordDryRun({
+        repo,
+        pullNumber: pull.number,
+        headSha: pull.head.sha,
+        ...(input.configRevision ? { configRevision: input.configRevision } : {}),
+        event: plan.event,
+        ...(scopedActivationBaselineOverride
+          ? { allowActivationBaselineSupersession: true }
+          : {})
+      });
+      if (!recorded) return "skipped_processed";
       return manualReviewRequested ? "reviewed_command" : "reviewed";
     }
 
@@ -1927,7 +2183,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       // be able to replace that failed/deferred row after a successful provider retry.
       allowProcessedOwnerSupersession: commandReviewRequested ||
         (exactOwnerReviewRequested && queuedOwnerRequestChanges) ||
-        input.processedHeadPolicy === "retry_failed_head"
+        input.processedHeadPolicy === "approved_dry_run" ||
+        input.processedHeadPolicy === "retry_failed_head",
+      ...(input.processedHeadPolicy === "approved_dry_run"
+        ? {
+            requiredProcessedStatusForSupersession: "dry_run" as const,
+            requiredProcessedConfigRevisionForSupersession: input.configRevision,
+            consumeProcessedApprovalOnAcquire: true
+          }
+        : {})
     });
     if (headClaimAttempt.status === "blocked") {
       if (headClaimAttempt.reason === "active_claim") {
@@ -1946,12 +2210,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     headClaim = headClaimAttempt.claim;
 
-    const liveBeforePost = await github.getPull(repo, pull.number);
-    const staleBeforePost = detectStalePullHead({ expected: pull, live: liveBeforePost, phase: "before_post" });
-    if (staleBeforePost) {
-      recordStaleHeadSkip({ state, repo, pull, stale: staleBeforePost, evidenceDir });
-      return "skipped_stale_head";
-    }
+    const initialLifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+    if (initialLifecycleResult) return initialLifecycleResult;
 
     const authorization = await lookupQueuedReviewEventAuthorization({
       mode: reviewEventPolicyMode,
@@ -2008,12 +2268,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     exactOwnerReviewRequested = exactOwnerReviewRequested || authorization.status === "eligible";
     manualReviewRequested = commandReviewRequested || exactOwnerReviewRequested;
     if (reviewEventPolicyMode === "trusted_command_only") {
-      const liveBeforeConsume = await github.getPull(repo, pull.number);
-      const staleBeforeConsume = detectStalePullHead({ expected: pull, live: liveBeforeConsume, phase: "before_post" });
-      if (staleBeforeConsume) {
-        recordStaleHeadSkip({ state, repo, pull, stale: staleBeforeConsume, evidenceDir });
-        return "skipped_stale_head";
-      }
+      // Check before the irreversible authorization-consumption boundary.
+      const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+      if (lifecycleResult) return lifecycleResult;
     }
     const reviewEventResolution = decideAndConsumeReviewEvent({
       mode: reviewEventPolicyMode,
@@ -2025,12 +2282,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dryRun: false
     });
     const reviewEventDecisionEvidence = buildReviewEventDecisionEvidence(reviewEventResolution, false);
-    if (
-      reviewEventResolution.consumed &&
-      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
-    ) {
-      writeRedactedJson(join(evidenceDir, "review-event-decision.json"), reviewEventDecisionEvidence);
-      return "skipped_stale_head";
+    if (reviewEventResolution.consumed) {
+      // Re-read after consumption so an external close wins before any public POST.
+      const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+      if (lifecycleResult) {
+        writeRedactedJson(join(evidenceDir, "review-event-decision.json"), reviewEventDecisionEvidence);
+        return lifecycleResult;
+      }
     }
     writeRedactedJson(
       join(evidenceDir, "review-event-decision.json"),
@@ -2084,7 +2342,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         event: plan.event,
         validation,
         proof,
-        settingsPreview,
         provider: buildReviewProviderMetadata(config),
         postIssueComment: config.walkthrough.postIssueComment,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
@@ -2102,11 +2359,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       evidenceDir,
       walkthrough: plan.walkthrough
     });
-    if (
-      walkthroughPostAttempted &&
-      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
-    ) {
-      return "skipped_stale_head";
+    if (walkthroughPostAttempted) {
+      const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+      if (lifecycleResult) return lifecycleResult;
     }
     const enrichmentPostAttempted = Boolean(
       config.enrichment?.enabled === true && plan.enrichment?.postIssueComment && reviewGithub.canPostAsApp()
@@ -2120,16 +2375,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       enrichment: plan.enrichment,
       evidenceDir
     });
-    if (
-      enrichmentPostAttempted &&
-      await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })
-    ) {
-      return "skipped_stale_head";
+    if (enrichmentPostAttempted) {
+      const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+      if (lifecycleResult) return lifecycleResult;
     }
     writeRedactedJson(join(evidenceDir, "review-plan.json"), plan);
-    if (await recordStaleHeadBeforePostIfMoved({ state, github, repo, pull, evidenceDir })) {
-      return "skipped_stale_head";
-    }
+    // This deliberately stays the final server read before createReview: PR state
+    // can change independently even when the preceding local work is synchronous.
+    const lifecycleResult = await recordPullLifecycleBeforePost({ state, github, repo, pull, evidenceDir });
+    if (lifecycleResult) return lifecycleResult;
     const priorPosted = state.getProcessedReview(repo, pull.number, pull.head.sha);
     const preservedPriorBlockingRow = Boolean(
       priorPosted?.status === "posted" && priorPosted.event === "REQUEST_CHANGES" && plan.event === "COMMENT"
@@ -2143,31 +2397,48 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       body: reviewBodyAfterWalkthroughPost(plan),
       comments
     });
-    if (reviewEventResolution.consumed) {
-      if (
-        reviewEventResolution.authorization.status !== "eligible" ||
-        !review.html_url
-      ) {
-        throw new Error("consumed owner authorization did not produce a durable review receipt");
+    try {
+      if (reviewEventResolution.consumed) {
+        if (
+          reviewEventResolution.authorization.status !== "eligible" ||
+          !review.html_url
+        ) {
+          throw new Error("consumed owner authorization did not produce a durable review receipt");
+        }
+        state.recordAuthorizedReviewPosted({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          commentId: reviewEventResolution.authorization.commentId,
+          author: reviewEventResolution.authorization.author,
+          event: plan.event,
+          reviewUrl: review.html_url,
+          preserveExistingBlocking: preservedPriorBlockingRow
+        });
+      } else if (!preservedPriorBlockingRow) {
+        state.recordProcessed({
+          repo,
+          pullNumber: pull.number,
+          headSha: pull.head.sha,
+          status: "posted",
+          event: plan.event,
+          reviewUrl: review.html_url
+        });
       }
-      state.recordAuthorizedReviewPosted({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        commentId: reviewEventResolution.authorization.commentId,
-        author: reviewEventResolution.authorization.author,
+    } catch (error) {
+      throw new ReviewPostPersistenceError(error, {
         event: plan.event,
-        reviewUrl: review.html_url,
-        preserveExistingBlocking: preservedPriorBlockingRow
-      });
-    } else if (!preservedPriorBlockingRow) {
-      state.recordProcessed({
-        repo,
-        pullNumber: pull.number,
-        headSha: pull.head.sha,
-        status: "posted",
-        event: plan.event,
-        reviewUrl: review.html_url
+        reviewUrl: review.html_url ?? `${pull.html_url}#pullrequestreview-${review.id}`,
+        preserveExistingBlocking: preservedPriorBlockingRow,
+        ...(reviewEventResolution.consumed &&
+          reviewEventResolution.authorization.status === "eligible"
+          ? {
+              authorization: {
+                commentId: reviewEventResolution.authorization.commentId,
+                author: reviewEventResolution.authorization.author
+              }
+            }
+          : {})
       });
     }
     writeRedactedJsonBestEffort(join(evidenceDir, "posted-review.json"), {
@@ -2234,7 +2505,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         });
       }
     }
-    releaseReviewCapacity();
+    if (!ensembleEvidencePromise) releaseReviewCapacity();
     if (headChangedDuringPost) return "posted_stale_head";
     if (postReviewHeadLookupFailed) return "posted_head_unverified";
     if (!headChangedDuringPost && !postReviewHeadLookupFailed && input.processedHeadPolicy !== "retry_failed_head") {
@@ -2249,6 +2520,8 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     return manualReviewRequested ? "reviewed_command" : "reviewed";
   } finally {
+    startShadowLeaves?.();
+    if (ensembleEvidencePromise) await ensembleEvidencePromise;
     releaseReviewCapacity();
   }
 }
@@ -2645,9 +2918,23 @@ export function activateRepoForNewOnlyReview(input: {
   return { activated: true, baselined };
 }
 
-export function isCanaryAllowed(config: Pick<BotConfig, "canaryPulls">, repo: string, pullNumber: number): boolean {
+export function isCanaryAllowed(
+  config: Pick<BotConfig, "canaryPulls">,
+  repo: string,
+  pullNumber: number,
+  options: { explicitPullReview?: ExplicitPullReviewScope } = {}
+): boolean {
+  if (
+    options.explicitPullReview?.pullNumber === pullNumber &&
+    options.explicitPullReview.repo.toLowerCase() === repo.toLowerCase()
+  ) return true;
   if (!config.canaryPulls || config.canaryPulls.length === 0) return true;
   return new Set(config.canaryPulls).has(`${repo}#${pullNumber}`);
+}
+
+export interface ExplicitPullReviewScope {
+  repo: string;
+  pullNumber: number;
 }
 
 export type StaleHeadPhase = "before_command" | "before_review" | "before_chunk" | "before_plan" | "before_post";
@@ -2976,10 +3263,12 @@ export async function buildGitHubRelatedContext(input: {
 export function createGitHubRelatedContextReader(config: BotConfig, fallback: GitHubRelatedContextReader): GitHubRelatedContextReader {
   const relatedConfig = config.githubRelatedContext;
   if (!relatedConfig?.enabled) return fallback;
-  return new GitHubApi({
+  const githubConfig = {
     ...config.github,
     requestTimeoutMs: relatedConfig.requestTimeoutMs
-  });
+  };
+  applyRuntimeGitHubCredentials(githubConfig);
+  return new GitHubApi(githubConfig);
 }
 
 export function writeDryRunOutcomeLedgerEvidence(input: {
@@ -3065,18 +3354,52 @@ function recordStaleHeadSkip(input: {
   });
 }
 
-async function recordStaleHeadBeforePostIfMoved(input: {
+async function recordPullLifecycleBeforePost(input: {
   state: ReviewStateStore;
   github: GitHubApi;
   repo: string;
   pull: PullRequestSummary;
   evidenceDir: string;
-}): Promise<boolean> {
+}): Promise<"skipped_stale_head" | "skipped_closed" | undefined> {
   const live = await input.github.getPull(input.repo, input.pull.number);
+  if (isClosedPull(live)) {
+    recordClosedPullBeforeReviewPost({ ...input, live });
+    return "skipped_closed";
+  }
   const stale = detectStalePullHead({ expected: input.pull, live, phase: "before_post" });
-  if (!stale) return false;
+  if (!stale) return undefined;
   recordStaleHeadSkip({ ...input, stale });
-  return true;
+  return "skipped_stale_head";
+}
+
+function recordClosedPullBeforeReviewPost(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  live: PullRequestSummary;
+  evidenceDir: string;
+}): void {
+  const state = input.live.state ?? "unknown";
+  const mergedAt = input.live.merged_at ? `; merged_at=${input.live.merged_at}` : "";
+  const error = `closed_or_merged_before_review state=${state}${mergedAt}`;
+  mkdirSync(input.evidenceDir, { recursive: true });
+  writeRedactedJson(join(input.evidenceDir, "closed-before-review-post.json"), {
+    reason: "closed_or_merged_before_review",
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    state,
+    ...(input.live.merged_at ? { mergedAt: input.live.merged_at } : {}),
+    expectedHeadSha: input.pull.head.sha,
+    liveHeadSha: input.live.head.sha
+  });
+  if (input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha)?.status === "posted") return;
+  input.state.recordProcessed({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    headSha: input.pull.head.sha,
+    status: "skipped",
+    error
+  });
 }
 
 /**
@@ -3155,6 +3478,7 @@ export function recordFailedReview(input: {
   pull: PullRequestSummary;
   error: unknown;
   writeErrorEvidence?: boolean;
+  preserveExistingDryRun?: boolean;
 }): string {
   const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, { action: "none", shouldReview: false });
   const previous = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
@@ -3164,6 +3488,21 @@ export function recordFailedReview(input: {
     previousError: previous?.error,
     timeoutMs: input.config.zcode.timeoutMs ?? 180_000
   }) ?? rawErrorMessage;
+  if (
+    previous?.status === "skipped" &&
+    previous.error?.startsWith(APPROVED_DRY_RUN_LIVE_CLAIM_ERROR)
+  ) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "skipped",
+      ...(previous.configRevision ? { configRevision: previous.configRevision } : {}),
+      ...(previous.event ? { event: previous.event } : {}),
+      error: `${APPROVED_DRY_RUN_LIVE_CLAIM_ERROR}; post_error=${errorMessage}`
+    });
+    return errorMessage;
+  }
   if (input.writeErrorEvidence !== false) {
     mkdirSync(evidenceDir, { recursive: true });
     writeRedactedJson(join(evidenceDir, "review-error.json"), {
@@ -3174,13 +3513,18 @@ export function recordFailedReview(input: {
       recordedAt: new Date().toISOString()
     });
   }
-  input.state.recordProcessed({
-    repo: input.repo,
-    pullNumber: input.pull.number,
-    headSha: input.pull.head.sha,
-    status: "failed",
-    error: errorMessage
-  });
+  if (
+    previous?.status !== "posted" &&
+    !(input.preserveExistingDryRun && previous?.status === "dry_run")
+  ) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "failed",
+      error: errorMessage
+    });
+  }
   return errorMessage;
 }
 
@@ -3191,6 +3535,7 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
   pull: PullRequestSummary;
   error: unknown;
   now?: Date;
+  preserveExistingDryRun?: boolean;
 }): boolean {
   if (!input.config.providerCooldown.enabled) return false;
   const classification = classifyProviderError(input.error);
@@ -3207,17 +3552,202 @@ export function recordProviderRateLimitCooldownIfNeeded(input: {
     cooldownUntil,
     reason: classification.reason
   });
-  recordProviderCooldownSkip({
-    state: input.state,
-    repo: input.repo,
-    pull: input.pull,
-    cooldownUntil: cooldownUntil.toISOString(),
-    reason: classification.reason,
-    ...(classification.category === "overloaded" ? { retryAttempt } : {}),
-    ...(classification.category === "overloaded" && classification.providerCode ? { providerCode: classification.providerCode } : {}),
-    ...(classification.category === "overloaded" && classification.retryAfterMs ? { retryAfterMs: classification.retryAfterMs } : {})
-  });
+  if (
+    input.preserveExistingDryRun &&
+    previous?.status === "skipped" &&
+    previous.error?.startsWith(APPROVED_DRY_RUN_LIVE_CLAIM_ERROR)
+  ) {
+    recordFailedReview({
+      config: input.config,
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      error: input.error,
+      preserveExistingDryRun: true
+    });
+    return true;
+  }
+  if (!(input.preserveExistingDryRun && previous?.status === "dry_run")) {
+    recordProviderCooldownSkip({
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      cooldownUntil: cooldownUntil.toISOString(),
+      reason: classification.reason,
+      ...(classification.category === "overloaded" ? { retryAttempt } : {}),
+      ...(classification.category === "overloaded" && classification.providerCode ? { providerCode: classification.providerCode } : {}),
+      ...(classification.category === "overloaded" && classification.retryAfterMs ? { retryAfterMs: classification.retryAfterMs } : {})
+    });
+  }
   return true;
+}
+
+interface PostedReviewReceipt {
+  event: ReviewEvent;
+  reviewUrl: string;
+  preserveExistingBlocking: boolean;
+  authorization?: {
+    commentId: number;
+    author: string;
+  };
+}
+
+class ReviewPostPersistenceError extends Error {
+  readonly reviewAlreadyPosted = true;
+  readonly receipt: PostedReviewReceipt;
+
+  constructor(cause: unknown, receipt: PostedReviewReceipt) {
+    super(
+      `review posted but its durable receipt could not be recorded: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause }
+    );
+    this.name = "ReviewPostPersistenceError";
+    this.receipt = receipt;
+  }
+}
+
+export function reviewWasAlreadyPosted(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "reviewAlreadyPosted" in error &&
+    (error as { reviewAlreadyPosted?: unknown }).reviewAlreadyPosted === true
+  );
+}
+
+export function recoverPostedReviewReceipt(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  error: unknown;
+}): boolean {
+  if (!reviewWasAlreadyPosted(input.error)) return false;
+  const receipt = (input.error as { receipt?: PostedReviewReceipt }).receipt;
+  if (!receipt?.reviewUrl || !receipt.event) {
+    throw new Error("review posted but its recovery receipt is incomplete");
+  }
+  if (receipt.authorization) {
+    input.state.recordAuthorizedReviewPosted({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      commentId: receipt.authorization.commentId,
+      author: receipt.authorization.author,
+      event: receipt.event,
+      reviewUrl: receipt.reviewUrl,
+      preserveExistingBlocking: receipt.preserveExistingBlocking
+    });
+  } else if (!receipt.preserveExistingBlocking) {
+    input.state.recordProcessed({
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      status: "posted",
+      event: receipt.event,
+      reviewUrl: receipt.reviewUrl
+    });
+  }
+  return true;
+}
+
+export async function recoverPostedReviewReceiptForCurrentHead(input: {
+  config: BotConfig;
+  github: Pick<GitHubApi, "getPull">;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  error: unknown;
+}): Promise<ReviewPullResult | undefined> {
+  if (!reviewWasAlreadyPosted(input.error)) return undefined;
+  const receipt = (input.error as { receipt?: PostedReviewReceipt }).receipt;
+  const priorPosted = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+  const preservedPriorVerifiedBlockingRow = Boolean(
+    receipt?.preserveExistingBlocking &&
+    priorPosted?.status === "posted" &&
+    priorPosted.event === "REQUEST_CHANGES" &&
+    !priorPosted.error
+  );
+  const evidenceDir = buildEvidenceDir(input.config, input.repo, input.pull, {
+    action: "none",
+    shouldReview: false
+  });
+  try {
+    recoverPostedReviewReceipt(input);
+  } catch (recoveryError) {
+    writeRedactedJsonBestEffort(join(evidenceDir, "post-receipt-recovery-persistence-failed.json"), {
+      reason: "post_receipt_recovery_persistence_failed",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      reviewUrl: receipt?.reviewUrl,
+      error: redactSecrets(
+        recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
+      ).slice(0, 300)
+    });
+    return "posted_head_unverified";
+  }
+
+  let liveHeadSha: string | undefined;
+  let lookupError: unknown;
+  try {
+    liveHeadSha = (await input.github.getPull(input.repo, input.pull.number)).head.sha;
+  } catch (error) {
+    lookupError = error;
+  }
+
+  const uncertaintyReason = lookupError
+    ? POST_REVIEW_HEAD_UNVERIFIED_ERROR
+    : liveHeadSha !== input.pull.head.sha
+      ? REVIEW_POSTED_HEAD_CHANGED_ERROR
+      : undefined;
+  if (!uncertaintyReason) return "reviewed";
+
+  if (lookupError) {
+    writeRedactedJsonBestEffort(join(evidenceDir, "post-receipt-recovery-head-lookup-failed.json"), {
+      reason: "post_receipt_recovery_head_lookup_failed",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      reviewUrl: receipt?.reviewUrl,
+      error: redactSecrets(lookupError instanceof Error ? lookupError.message : String(lookupError)).slice(0, 300)
+    });
+  } else {
+    writeRedactedJsonBestEffort(join(evidenceDir, "head-changed-during-receipt-recovery.json"), {
+      reason: "head_changed_during_receipt_recovery",
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      expectedHeadSha: input.pull.head.sha,
+      liveHeadSha,
+      reviewUrl: receipt?.reviewUrl
+    });
+  }
+
+  if (!preservedPriorVerifiedBlockingRow) {
+    const durablePosted = input.state.getProcessedReview(input.repo, input.pull.number, input.pull.head.sha);
+    if (durablePosted?.status === "posted") {
+      input.state.recordProcessed({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        status: "posted",
+        ...(durablePosted.event ? { event: durablePosted.event } : {}),
+        ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {}),
+        error: uncertaintyReason
+      });
+      input.state.recordReviewReadiness({
+        repo: input.repo,
+        pullNumber: input.pull.number,
+        headSha: input.pull.head.sha,
+        state: lookupError ? "failed" : "stale",
+        reason: uncertaintyReason,
+        ...(durablePosted.event ? { event: durablePosted.event } : {}),
+        ...(durablePosted.reviewUrl ? { reviewUrl: durablePosted.reviewUrl } : {})
+      });
+    }
+  }
+  return lookupError ? "posted_head_unverified" : "posted_stale_head";
 }
 
 /**
@@ -3349,7 +3879,8 @@ async function applySelfConsistencyRecheck(input: {
     return { comments: input.gate.comments, event: input.gate.event };
   }
 
-  const providerId = selfConsistencyConfig.provider ?? input.config.zcode.providerId;
+  const backend = resolveSelfConsistencyBackend(input.config, selfConsistencyConfig);
+  const providerId = backend.providerId;
   const result = await runSelfConsistencyRecheck({
     comments: input.gate.comments,
     files: input.files,
@@ -3361,16 +3892,35 @@ async function applySelfConsistencyRecheck(input: {
       ? { categoryPrecisionFloors: input.config.reviewGate.categoryPrecisionFloors }
       : {}),
     secondDraw: async ({ comment, hunk }) => {
-      const draw = await runZCodeReview({
-        cwd: input.worktreePath,
-        prompt: buildSelfConsistencyPrompt(comment, hunk),
-        cliPath: input.config.zcode.cliPath,
-        appConfigPath: input.config.zcode.appConfigPath,
-        model: input.config.zcode.model,
-        ...(providerId ? { providerId } : {}),
-        timeoutMs: input.config.zcode.timeoutMs,
-        retryMaxRetries: input.config.zcode.retryMaxRetries
-      });
+      const prompt = buildSelfConsistencyPrompt(comment, hunk);
+      const draw = backend.useCodex
+        ? await runConfiguredReview({
+            config: input.config,
+            worktreePath: input.worktreePath,
+            prompt,
+            evidenceDir: join(
+              input.evidenceDir,
+              "self-consistency-codex",
+              createHash("sha256")
+                .update(comment.path)
+                .update("\0")
+                .update(String(comment.line))
+                .update("\0")
+                .update(comment.title)
+                .digest("hex")
+                .slice(0, 16)
+            )
+          })
+        : await runZCodeReview({
+            cwd: input.worktreePath,
+            prompt,
+            cliPath: input.config.zcode.cliPath,
+            appConfigPath: input.config.zcode.appConfigPath,
+            model: input.config.zcode.model,
+            ...(providerId ? { providerId } : {}),
+            timeoutMs: input.config.zcode.timeoutMs,
+            retryMaxRetries: input.config.zcode.retryMaxRetries
+          });
       return parseSelfConsistencyVerdict(draw.rawResponse);
     }
   });
@@ -3391,6 +3941,17 @@ async function applySelfConsistencyRecheck(input: {
     : undefined;
 
   return { comments: result.comments, event: result.event, ...(runtimeNote ? { runtimeNote } : {}) };
+}
+
+export function resolveSelfConsistencyBackend(
+  config: BotConfig,
+  selfConsistencyConfig: SelfConsistencyConfig
+): { useCodex: boolean; providerId?: string } {
+  const useCodex = Boolean(config.codexRuntime?.enabled && selfConsistencyConfig.provider === undefined);
+  return {
+    useCodex,
+    providerId: useCodex ? "codex-cli-oauth" : (selfConsistencyConfig.provider ?? config.zcode.providerId)
+  };
 }
 
 function buildSelfConsistencyPrompt(comment: DeterministicReviewGateResult["comments"][number], hunk: string): string {
@@ -3423,10 +3984,17 @@ function parseSelfConsistencyVerdict(rawResponse: string): SelfConsistencySecond
   return { verified, confidence };
 }
 
-type ContextBudgetReviewExecution =
-  | { status: "reviewed"; result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } }
-  | { status: "skipped_context_budget" }
-  | { status: "skipped_stale_head" };
+type ContextBudgetReviewExecution = (
+  | {
+      status: "reviewed";
+      result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput };
+    }
+  | { status: "skipped_context_budget"; deferredFailure?: Error }
+  | { status: "skipped_stale_head" }
+) & {
+  ensemblePromise?: Promise<ReviewEnsembleRun>;
+  startShadowLeaves?: () => void;
+};
 
 async function runReviewWithContextBudget(input: {
   config: BotConfig;
@@ -3436,10 +4004,132 @@ async function runReviewWithContextBudget(input: {
   pull: PullRequestSummary;
   worktreePath: string;
   prompt: string;
+  files: PullFilePatch[];
   contextBudget: ContextBudgetPlan;
   promptForFiles: (files: PullFilePatch[]) => string;
   useZCode: boolean;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
+}): Promise<ContextBudgetReviewExecution> {
+  const plan = buildReviewEnsemblePlan(input.config.reviewEnsemble ?? { enabled: false, mode: "shadow" });
+  if (!plan) return runSingleReviewWithContextBudget(input);
+
+  const subject: ReviewEnsembleSubject = {
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    baseSha: input.pull.base.sha,
+    headSha: input.pull.head.sha
+  };
+  const executions = new Map<string, ContextBudgetReviewExecution>();
+  const delayShadowLeaves = Boolean(input.config.reviewGate?.selfConsistency?.enabled);
+  let releaseShadowLeaves: (() => void) | undefined;
+  const shadowStart = delayShadowLeaves
+    ? new Promise<void>((resolve) => {
+        let released = false;
+        releaseShadowLeaves = () => {
+          if (released) return;
+          released = true;
+          resolve();
+        };
+      })
+    : Promise.resolve();
+  const anchorPromise = runSingleReviewWithContextBudget({
+    ...input,
+    authority: "canonical",
+    deferCanonicalFailureRecord: true
+  });
+  const ensemblePromise = executeReviewEnsemble({
+    plan,
+    subject,
+    runLeaf: async (leaf) => {
+      if (leaf.id !== "anchor") await shadowStart;
+      const execution = leaf.id === "anchor"
+        ? await anchorPromise
+        : await (async () => {
+            const prompt = buildReviewEnsembleLeafPrompt(input.prompt, leaf.id);
+            const promptForFiles = (files: PullFilePatch[]) => buildReviewEnsembleLeafPrompt(input.promptForFiles(files), leaf.id);
+            const evidenceDir = join(input.evidenceDir, "review-ensemble", "leaves", leaf.id, "provider");
+            const contextBudget = planContextBudget({
+              prompt,
+              files: input.files,
+              contextWindowTokens: resolveReviewContextWindowTokens(input.config),
+              config: input.config.contextBudget,
+              buildPrompt: promptForFiles
+            });
+            mkdirSync(evidenceDir, { recursive: true });
+            writeRedactedJson(join(evidenceDir, "context-budget.json"), contextBudgetEvidence(contextBudget));
+            if (contextBudget.mode === "skip") {
+              return { status: "skipped_context_budget" } as ContextBudgetReviewExecution;
+            }
+            return runSingleReviewWithContextBudget({
+              ...input,
+              prompt,
+              contextBudget,
+              promptForFiles,
+              evidenceDir,
+              authority: "shadow"
+            });
+          })();
+      executions.set(leaf.id, execution);
+      if (execution.status !== "reviewed") {
+        throw new Error(`review ensemble ${leaf.id} ended with ${execution.status}`);
+      }
+      return {
+        findings: applyRetryDegradedConfidencePenalty(
+          execution.result.findings,
+          execution.result.degradedRecovery,
+          input.config.reviewGate?.retryDegradedConfidencePenalty
+        ),
+        dropped: execution.result.droppedFromSchema,
+        runtime: execution.result.runtime
+      };
+    }
+  }).then((ensemble) => {
+    const ensembleDir = join(input.evidenceDir, "review-ensemble");
+    mkdirSync(ensembleDir, { recursive: true });
+    writeRedactedJson(join(ensembleDir, "manifest.json"), ensemble.manifest);
+    for (const receipt of ensemble.receipts) {
+      const leafDir = join(ensembleDir, "leaves", receipt.leafId);
+      mkdirSync(leafDir, { recursive: true });
+      writeRedactedJson(join(leafDir, "receipt.json"), receipt);
+    }
+    return ensemble;
+  });
+
+  try {
+    const anchor = await anchorPromise;
+    if (anchor.status !== "reviewed") {
+      releaseShadowLeaves?.();
+      return { ...anchor, ensemblePromise };
+    }
+    return {
+      ...anchor,
+      ensemblePromise,
+      ...(releaseShadowLeaves ? { startShadowLeaves: releaseShadowLeaves } : {})
+    };
+  } catch (error) {
+    releaseShadowLeaves?.();
+    await ensemblePromise.catch(() => undefined);
+    throw error;
+  }
+}
+
+async function runSingleReviewWithContextBudget(input: {
+  config: BotConfig;
+  github: GitHubApi;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  worktreePath: string;
+  prompt: string;
+  files: PullFilePatch[];
+  contextBudget: ContextBudgetPlan;
+  promptForFiles: (files: PullFilePatch[]) => string;
+  useZCode: boolean;
+  evidenceDir: string;
+  authority?: "canonical" | "shadow";
+  deferCanonicalFailureRecord?: boolean;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   if (input.contextBudget.mode === "chunk") {
     return runChunkedZCodeReview({
@@ -3449,11 +4139,12 @@ async function runReviewWithContextBudget(input: {
   }
 
   const result = input.useZCode
-    ? await runZCodeReviewWithProviderRetry({
+    ? await runConfiguredReview({
         config: input.config,
         worktreePath: input.worktreePath,
         prompt: input.prompt,
-        evidenceDir: input.evidenceDir
+        evidenceDir: input.evidenceDir,
+        assertProviderConfigCurrent: input.assertProviderConfigCurrent
       })
     : disabledZCodeReviewResult(input.config);
   return { status: "reviewed", result };
@@ -3470,6 +4161,9 @@ async function runChunkedZCodeReview(input: {
   promptForFiles: (files: PullFilePatch[]) => string;
   useZCode: boolean;
   evidenceDir: string;
+  authority?: "canonical" | "shadow";
+  deferCanonicalFailureRecord?: boolean;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ContextBudgetReviewExecution> {
   const startedAt = new Date();
   const findings: ZCodeReviewResult["findings"] = [];
@@ -3484,7 +4178,12 @@ async function runChunkedZCodeReview(input: {
     const livePull = await input.github.getPull(input.repo, input.pull.number);
     const stale = detectStalePullHead({ expected: input.pull, live: livePull, phase: "before_chunk" });
     if (stale) {
-      recordStaleHeadSkip({ state: input.state, repo: input.repo, pull: input.pull, stale, evidenceDir: input.evidenceDir });
+      if (input.authority !== "shadow") {
+        recordStaleHeadSkip({ state: input.state, repo: input.repo, pull: input.pull, stale, evidenceDir: input.evidenceDir });
+      } else {
+        mkdirSync(input.evidenceDir, { recursive: true });
+        writeRedactedJson(join(input.evidenceDir, "stale-head.json"), stale);
+      }
       return { status: "skipped_stale_head" };
     }
     const chunkDir = join(input.evidenceDir, "context-chunks", `chunk-${String(chunk.index).padStart(3, "0")}`);
@@ -3495,11 +4194,12 @@ async function runChunkedZCodeReview(input: {
     let result: ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput };
     try {
       result = input.useZCode
-        ? await runZCodeReviewWithProviderRetry({
+        ? await runConfiguredReview({
             config: input.config,
             worktreePath: input.worktreePath,
             prompt,
-            evidenceDir: chunkDir
+            evidenceDir: chunkDir,
+            assertProviderConfigCurrent: input.assertProviderConfigCurrent
           })
         : disabledZCodeReviewResult(input.config);
     } catch (error) {
@@ -3513,15 +4213,22 @@ async function runChunkedZCodeReview(input: {
         error: failure.message,
         recordedAt: new Date().toISOString()
       });
-      recordFailedReview({
-        config: input.config,
-        state: input.state,
-        repo: input.repo,
-        pull: input.pull,
-        error: failure,
-        writeErrorEvidence: false
-      });
-      return { status: "skipped_context_budget" };
+      if (input.authority !== "shadow" && !input.deferCanonicalFailureRecord) {
+        recordFailedReview({
+          config: input.config,
+          state: input.state,
+          repo: input.repo,
+          pull: input.pull,
+          error: failure,
+          writeErrorEvidence: false
+        });
+      }
+      return {
+        status: "skipped_context_budget",
+        ...(input.authority !== "shadow" && input.deferCanonicalFailureRecord
+          ? { deferredFailure: failure }
+          : {})
+      };
     }
 
     const allowedFilenames = new Set(chunk.filenames);
@@ -3553,8 +4260,8 @@ async function runChunkedZCodeReview(input: {
       attempts,
       degradedRecovery,
       runtime: {
-        provider: input.config.zcode.providerId,
-        model: input.config.zcode.model,
+        provider: input.config.codexRuntime?.enabled ? "codex-cli-oauth" : input.config.zcode.providerId,
+        model: input.config.codexRuntime?.enabled ? input.config.codexRuntime.model : input.config.zcode.model,
         startedAt: startedAt.toISOString(),
         completedAt: completedAt.toISOString(),
         latencyMs: completedAt.getTime() - startedAt.getTime(),
@@ -3566,6 +4273,7 @@ async function runChunkedZCodeReview(input: {
 }
 
 function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput } {
+  const codexRuntime = config.codexRuntime?.enabled ? config.codexRuntime : undefined;
   return {
     findings: [],
     droppedFromSchema: [],
@@ -3573,10 +4281,51 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
     attempts: 0,
     degradedRecovery: false,
     runtime: {
-      provider: config.zcode.providerId,
-      model: config.zcode.model,
+      provider: codexRuntime ? "codex-cli-oauth" : config.zcode.providerId,
+      model: codexRuntime?.model ?? config.zcode.model,
       providerAttempts: 0,
-      notes: ["ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+      notes: [codexRuntime
+        ? "Configured review execution disabled for this dry-run; provider latency and token usage were not measured."
+        : "ZCode execution disabled for this dry-run; provider latency and token usage were not measured."]
+    }
+  };
+}
+
+async function runConfiguredReview(input: {
+  config: BotConfig;
+  worktreePath: string;
+  prompt: string;
+  evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
+}): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
+  if (!input.config.codexRuntime?.enabled) return runZCodeReviewWithProviderRetry(input);
+  input.assertProviderConfigCurrent?.();
+  const startedAt = new Date();
+  const result = await runCodexReview({
+    cwd: input.worktreePath,
+    prompt: input.prompt,
+    cliPath: input.config.codexRuntime.cliPath,
+    model: input.config.codexRuntime.model,
+    reasoningEffort: input.config.codexRuntime.reasoningEffort,
+    evidenceDir: input.evidenceDir,
+    timeoutMs: input.config.codexRuntime.timeoutMs,
+    maxOutputBytes: input.config.codexRuntime.maxOutputBytes
+  });
+  const completedAt = new Date();
+  return {
+    ...result,
+    runtime: {
+      provider: "codex-cli-oauth",
+      model: input.config.codexRuntime.model,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      latencyMs: completedAt.getTime() - startedAt.getTime(),
+      providerAttempts: 1,
+      notes: [
+        `Codex CLI reasoning effort: ${input.config.codexRuntime.reasoningEffort}.`,
+        "Codex CLI used its existing authenticated session; NeonDiff did not read or receive OAuth material.",
+        "Codex runtime retries are disabled; a failed invocation returns one terminal queue failure."
+      ]
     }
   };
 }
@@ -3586,6 +4335,7 @@ async function runZCodeReviewWithProviderRetry(input: {
   worktreePath: string;
   prompt: string;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<ZCodeReviewResult & { runtime: OutcomeLedgerRuntimeInput }> {
   const startedAt = new Date();
   let providerAttempts = 0;
@@ -3593,6 +4343,7 @@ async function runZCodeReviewWithProviderRetry(input: {
     config: input.config,
     evidenceDir: input.evidenceDir,
     operation: () => {
+      input.assertProviderConfigCurrent?.();
       providerAttempts += 1;
       return runZCodeReview({
         cwd: input.worktreePath,

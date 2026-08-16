@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parsePositiveInteger } from "../src/cli-args.js";
 import { buildRunOnceCliReport, runOnceCliCommand, runOnceCliExitCode, serializeRunOnceCliReport } from "../src/run-once-cli.js";
-import { applyReviewPullResultToRunOnceResult, assertExpectedReviewPrHead, type ReviewPullResult, type RunOnceResult } from "../src/worker.js";
+import {
+  applyReviewPullResultToRunOnceResult,
+  assertExpectedReviewPrHead,
+  type ReviewPullResult,
+  type RunOnceOptions,
+  type RunOnceResult
+} from "../src/worker.js";
 import type { ProductionLicenseAdmission } from "../src/license-admission.js";
 
 describe("run-once CLI reporting", () => {
@@ -68,6 +74,7 @@ describe("run-once CLI reporting", () => {
 
   it("prints review-pr as the command on successful review-pr invocations", async () => {
     let forwardedExpectedHeadSha: string | undefined;
+    let explicitPullReview: RunOnceOptions["explicitPullReview"];
     const command = await runOnceCliCommand({
       options: {
         dryRun: true,
@@ -79,6 +86,7 @@ describe("run-once CLI reporting", () => {
       commandName: "review-pr",
       runOnceImpl: async (options) => {
         forwardedExpectedHeadSha = options.expectedHeadSha;
+        explicitPullReview = options.explicitPullReview;
         return runOnceResult({
           reposScanned: 1,
           pullsSeen: 1,
@@ -96,6 +104,10 @@ describe("run-once CLI reporting", () => {
 
     expect(command.exitCode).toBe(0);
     expect(forwardedExpectedHeadSha).toBe("head-123");
+    expect(explicitPullReview).toEqual({
+      repo: "owner/repo",
+      pullNumber: 123
+    });
     expect(command.report.command).toBe("review-pr");
     expect(JSON.parse(command.output)).toMatchObject({
       ok: true,
@@ -106,6 +118,24 @@ describe("run-once CLI reporting", () => {
         headSha: "head-123"
       }
     });
+  });
+
+  it("does not widen canary access for an incompletely scoped review-pr invocation", async () => {
+    let explicitPullReview: RunOnceOptions["explicitPullReview"];
+    await runOnceCliCommand({
+      options: {
+        dryRun: true,
+        repo: "owner/repo",
+        useZCode: false
+      },
+      commandName: "review-pr",
+      runOnceImpl: async (options) => {
+        explicitPullReview = options.explicitPullReview;
+        return runOnceResult();
+      }
+    });
+
+    expect(explicitPullReview).toBeUndefined();
   });
 
   it("rejects review-pr execution when the fetched PR head differs from the approved head", () => {
@@ -134,6 +164,59 @@ describe("run-once CLI reporting", () => {
       }
     });
     expect(runOnceCliExitCode(result)).toBe(1);
+  });
+
+  it("fails a scoped live command that did not post exactly one review", () => {
+    const result = runOnceResult({
+      reposScanned: 1,
+      pullsSeen: 1,
+      reviewed: 0,
+      skippedProcessed: 1,
+      scopedPull: {
+        repo: "owner/repo",
+        pullNumber: 123,
+        headSha: "head-123",
+        title: "already processed",
+        url: "https://github.com/owner/repo/pull/123"
+      }
+    });
+
+    expect(runOnceCliExitCode(result, {
+      dryRun: false,
+      commandName: "review-pr"
+    })).toBe(1);
+    expect(buildRunOnceCliReport({
+      result,
+      dryRun: false,
+      useZCode: true,
+      repo: "owner/repo",
+      pullNumber: 123,
+      commandName: "review-pr"
+    }).ok).toBe(false);
+  });
+
+  it("does not apply review-pr exact-one semantics to a broad run-once scan", () => {
+    const result = runOnceResult({
+      reposScanned: 2,
+      pullsSeen: 2,
+      reviewed: 2,
+      scopedPull: {
+        repo: "owner/repo",
+        pullNumber: 123,
+        headSha: "head-123",
+        title: "one pull in a broader sweep",
+        url: "https://github.com/owner/repo/pull/123"
+      }
+    });
+
+    expect(runOnceCliExitCode(result, {
+      dryRun: false,
+      commandName: "run-once"
+    })).toBe(0);
+    expect(runOnceCliExitCode(result, {
+      dryRun: false,
+      commandName: "review-pr"
+    })).toBe(1);
   });
 
   it.each([
@@ -422,6 +505,47 @@ describe("run-once CLI reporting", () => {
           reviewed: 0,
           skippedPolicy: 1,
           policySkips: [{ repo: "owner/skipped", reason: "repo_profile_disabled" }]
+        }
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails before review work when the pinned config revision changed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "neondiff-review-pr-config-revision-"));
+    try {
+      const configPath = join(dir, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({
+        pilotRepos: ["owner/skipped"],
+        workRoot: join(dir, "runtime"),
+        statePath: join(dir, "state.sqlite"),
+        evidenceDir: join(dir, "evidence"),
+        repoProfiles: {
+          repos: {
+            "owner/skipped": { enabled: false }
+          }
+        }
+      })}\n`);
+
+      const result = await runOnceCliCommand({
+        options: {
+          configPath,
+          repo: "owner/skipped",
+          pullNumber: 123,
+          expectedConfigRevision: "0".repeat(64),
+          dryRun: false,
+          useZCode: true
+        },
+        commandName: "review-pr"
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(JSON.parse(result.output)).toMatchObject({
+        ok: false,
+        command: "review-pr",
+        error: {
+          message: "review-pr config revision changed; run a new dry review before posting"
         }
       });
     } finally {

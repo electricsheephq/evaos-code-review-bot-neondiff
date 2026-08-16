@@ -74,6 +74,13 @@ private final class VisualProofPreferences: DesktopPreferences, @unchecked Senda
     func set(_ value: Bool, forKey key: String) {
         lock.withLock { booleans[key] = value }
     }
+
+    func removeValue(forKey key: String) {
+        lock.withLock {
+            strings.removeValue(forKey: key)
+            booleans.removeValue(forKey: key)
+        }
+    }
 }
 
 private struct VisualProofClock: DesktopClock {
@@ -87,6 +94,7 @@ private struct VisualProofClock: DesktopClock {
 private struct VisualProofFileWriter: DesktopFileWriting {
     let applicationSupportDirectory = URL(filePath: "/visual-proof/NeonDiffDesktop", directoryHint: .isDirectory)
 
+    func fileExists(at url: URL) -> Bool { false }
     func write(_ data: Data, to url: URL) throws {}
 }
 
@@ -113,7 +121,7 @@ private final class VisualProofProviderVerifier: DesktopProviderVerifying, @unch
     }
 }
 
-private final class VisualProofSecretStore: DesktopSecretStoring {
+private final class VisualProofSecretStore: DesktopSecretStoring, @unchecked Sendable {
     private var secrets: [String: String] = [:]
 
     func setSecret(_ secret: String, account: String) throws {

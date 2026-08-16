@@ -3,7 +3,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
-import type { BotConfig } from "./config.js";
+import { loadConfigFromObject, type BotConfig } from "./config.js";
+import { loadConfigAtRevision } from "./config-cli.js";
 import { getLicenseStatus, type LicenseStatusResult } from "./license.js";
 import { isAuthenticProductionLicenseAdmission, requireActiveProductionLicense } from "./license-admission.js";
 import { writeSecureFileSync } from "./temp-files.js";
@@ -145,6 +146,25 @@ export async function buildLocalDashboardStatus(input: {
     : buildProviderStatusItem(input.config.providers!, checkedAt);
   const items = { license, githubApp, daemon, provider };
   const ok = Object.values(items).every((item) => item.state === "healthy" || item.state === "degraded");
+  const candidateConfigRevision = input.providerVerification?.ok
+    ? input.providerVerification.configRevision
+    : undefined;
+  const verifiedConfigRevision = candidateConfigRevision &&
+    /^[a-f0-9]{64}$/.test(candidateConfigRevision)
+    ? candidateConfigRevision
+    : undefined;
+  const selectedProviderId = input.config.providers!.defaultProviderId;
+  const selectedProvider = input.config.providers!.providers[selectedProviderId];
+  const scopedReviewProviderReady =
+    selectedProvider?.enabled === true &&
+    selectedProvider.authMode === "zcode-app-config" &&
+    input.providerVerification?.providerId === selectedProviderId &&
+    input.config.zcode.providerId === selectedProviderId;
+  const quotedConfigPath = shellQuoteCommandArg(input.configPath);
+  const firstReviewCommand = verifiedConfigRevision && scopedReviewProviderReady
+    ? `neondiff review-pr --config ${quotedConfigPath} --repo owner/repo --pr 123 `
+      + `--expected-config-revision ${verifiedConfigRevision} --zcode true --dry-run true`
+    : `neondiff providers doctor --config ${quotedConfigPath} --json`;
 
   return redactedStatus({
     ok,
@@ -162,14 +182,22 @@ export async function buildLocalDashboardStatus(input: {
       options: buildProviderOptions(input.config.providers!)
     },
     firstReviewPreview: {
-      available: ok,
-      detail: ok
+      available: ok && Boolean(verifiedConfigRevision) && scopedReviewProviderReady,
+      detail: ok && verifiedConfigRevision && scopedReviewProviderReady
         ? "Configuration looks ready for a dry-run PR review."
-        : "Complete blocked setup items before running a review.",
-      command: "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true"
+        : ok
+          ? "Verify the provider configuration before running a review."
+          : "Complete blocked setup items before running a review.",
+      command: firstReviewCommand
     },
     proofBoundary: "Local dashboard readiness only; this does not prove signed desktop release, appcast, notarization, or live review quality."
   });
+}
+
+function shellQuoteCommandArg(value: string): string {
+  return /^[A-Za-z0-9_./:=@%+-]+$/.test(value)
+    ? value
+    : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 export async function verifyProviderApiKey(input: ProviderApiKeyVerificationInput): Promise<ProviderApiKeyVerificationResult> {
@@ -535,6 +563,7 @@ export function renderLocalDashboardHtml(status: LocalDashboardStatusContract): 
         });
         const json = await response.json();
         output.textContent = JSON.stringify(json, null, 2);
+        if (response.ok && json.ok) window.location.reload();
       } catch (error) {
         output.textContent = JSON.stringify({ ok: false, error: String(error) }, null, 2);
       } finally {
@@ -654,10 +683,12 @@ export async function startLocalDashboardServer(input: {
   requireActiveProductionLicense?: typeof requireActiveProductionLicense;
 }): Promise<LocalDashboardServerHandle> {
   let latestVerification: ProviderApiKeyVerificationResult | undefined;
+  let statusConfig = input.config;
+  let statusConfigExists = input.configExists;
   let status = await buildLocalDashboardStatus({
-    config: input.config,
+    config: statusConfig,
     configPath: input.configPath,
-    configExists: input.configExists,
+    configExists: statusConfigExists,
     launchdLabel: input.launchdLabel,
     providerVerification: latestVerification
   });
@@ -666,9 +697,9 @@ export async function startLocalDashboardServer(input: {
       const url = new URL(request.url ?? "/", `http://${input.host ?? "127.0.0.1"}`);
       if (request.method === "GET" && url.pathname === "/") {
         status = await buildLocalDashboardStatus({
-          config: input.config,
+          config: statusConfig,
           configPath: input.configPath,
-          configExists: input.configExists,
+          configExists: statusConfigExists,
           launchdLabel: input.launchdLabel,
           providerVerification: latestVerification
         });
@@ -677,9 +708,9 @@ export async function startLocalDashboardServer(input: {
       }
       if (request.method === "GET" && url.pathname === "/api/status") {
         status = await buildLocalDashboardStatus({
-          config: input.config,
+          config: statusConfig,
           configPath: input.configPath,
-          configExists: input.configExists,
+          configExists: statusConfigExists,
           launchdLabel: input.launchdLabel,
           providerVerification: latestVerification
         });
@@ -714,12 +745,55 @@ export async function startLocalDashboardServer(input: {
           return;
         }
         const body = await readJsonBody(request);
-        latestVerification = await verifyProviderApiKey({
-          config: input.config,
+        const configSnapshot = existsSync(input.configPath)
+          ? loadConfigAtRevision(input.configPath)
+          : undefined;
+        if (!configSnapshot) {
+          statusConfig = loadConfigFromObject({});
+          statusConfigExists = false;
+          latestVerification = redactedVerification({
+            ok: false,
+            command: "dashboard verify-provider",
+            checkedAt: new Date().toISOString(),
+            providerId: readOptionalString(body, "providerId")
+              ?? input.config.providers!.defaultProviderId,
+            state: "blocked",
+            mode: "metadata_only",
+            detail: "The NeonDiff config file is missing. Initialize or restore it before provider verification.",
+            redacted: true,
+            troubleshooting: [
+              "Initialize or restore the config file, reload the dashboard, and repeat provider verification."
+            ]
+          });
+          writeResponse(response, 422, "application/json; charset=utf-8", stringifyRedactedJson(latestVerification));
+          return;
+        }
+        const verification = await verifyProviderApiKey({
+          config: configSnapshot.config,
           providerId: readOptionalString(body, "providerId"),
           apiKey: readOptionalString(body, "apiKey"),
           allowRemoteSmoke: readOptionalBoolean(body, "allowRemoteSmoke") || input.allowRemoteSmoke === true
         });
+        {
+          const currentSnapshot = loadConfigAtRevision(input.configPath);
+          latestVerification = currentSnapshot.revision === configSnapshot.revision
+            ? { ...verification, configRevision: configSnapshot.revision }
+            : {
+                ...verification,
+                ok: false,
+                state: "blocked",
+                detail: "Configuration changed during provider verification. Reload and verify again.",
+                troubleshooting: [
+                  "Reload the dashboard and repeat provider verification against the current configuration."
+                ]
+              };
+          statusConfigExists = true;
+          if (currentSnapshot.revision === configSnapshot.revision) {
+            statusConfig = configSnapshot.config;
+          } else {
+            statusConfig = currentSnapshot.config;
+          }
+        }
         writeResponse(response, latestVerification.ok ? 200 : 422, "application/json; charset=utf-8", stringifyRedactedJson(latestVerification));
         return;
       }

@@ -198,6 +198,10 @@ final class MemoryPreferences: DesktopPreferences, @unchecked Sendable {
     func set(_ value: Bool, forKey key: String) {
         values.update { $0[key] = .bool(value) }
     }
+
+    func removeValue(forKey key: String) {
+        _ = values.update { $0.removeValue(forKey: key) }
+    }
 }
 
 final class TestClock: DesktopClock, @unchecked Sendable {
@@ -238,6 +242,35 @@ final class TemporaryFileWriter: DesktopFileWriting, @unchecked Sendable {
     }
 
     var writes: [RecordedFileWrite] { recordedWrites.read { $0 } }
+
+    func fileExists(at url: URL) -> Bool {
+        let destination = url.standardizedFileURL
+        return recordedWrites.read { writes in
+            writes.contains { $0.url.standardizedFileURL == destination }
+        } || FileManager.default.fileExists(atPath: destination.path)
+    }
+
+    func pathsReferToSameFile(_ lhs: URL, _ rhs: URL) -> Bool {
+        let lhsURL = lhs.standardizedFileURL.resolvingSymlinksInPath()
+        let rhsURL = rhs.standardizedFileURL.resolvingSymlinksInPath()
+        if lhsURL.path.caseInsensitiveCompare(rhsURL.path) == .orderedSame {
+            return true
+        }
+        guard let lhsAttributes = try? FileManager.default.attributesOfItem(
+            atPath: lhsURL.path
+        ),
+        let rhsAttributes = try? FileManager.default.attributesOfItem(
+            atPath: rhsURL.path
+        ),
+        let lhsSystem = lhsAttributes[.systemNumber] as? NSNumber,
+        let rhsSystem = rhsAttributes[.systemNumber] as? NSNumber,
+        let lhsFile = lhsAttributes[.systemFileNumber] as? NSNumber,
+        let rhsFile = rhsAttributes[.systemFileNumber] as? NSNumber
+        else {
+            return false
+        }
+        return lhsSystem == rhsSystem && lhsFile == rhsFile
+    }
 
     func write(_ data: Data, to url: URL) throws {
         let destination = url.standardizedFileURL

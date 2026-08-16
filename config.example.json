@@ -10,6 +10,17 @@
     "maxActiveRuns": 5,
     "leaseTtlMs": 900000
   },
+  "_reviewEnsembleComment": "Experimental default-off shadow team. One canonical full-diff anchor plus state, boundary, and failure specialists run concurrently. Only the anchor may post or write canonical processed-head state; specialist output is evidence-only.",
+  "reviewEnsemble": {
+    "enabled": false,
+    "mode": "shadow"
+  },
+  "_worktreeCleanupComment": "Periodic daemon cleanup is limited to stale, clean, Git-registered NeonDiff review worktrees. retentionMs cannot be shorter than two hours or the active review lease TTL. Set enabled:false to disable deletion.",
+  "worktreeCleanup": {
+    "enabled": true,
+    "retentionMs": 7200000,
+    "intervalMs": 1800000
+  },
   "_reviewGateComment": "Deterministic post-model gate plus public review-event selection. trusted_command_only is the safe default; automatic is explicit legacy compatibility only. See docs/neondiff-config.md.",
   "reviewGate": {
     "maxInlineComments": 25,
@@ -322,6 +333,16 @@
     "timeoutMs": 180000,
     "maxPatchBytes": 80000,
     "retryMaxRetries": 0
+  },
+  "codexRuntime": {
+    "_comment": "Optional agent runtime. Uses the existing Codex CLI login internally; never paste OAuth material into this file.",
+    "enabled": false,
+    "cliPath": "/absolute/path/to/codex",
+    "model": "gpt-5.6-luna",
+    "reasoningEffort": "max",
+    "timeoutMs": 600000,
+    "maxOutputBytes": 20971520,
+    "contextWindowTokens": 128000
   },
   "github": {
     "appId": "set via NEONDIFF_GITHUB_APP_ID",

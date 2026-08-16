@@ -77,15 +77,24 @@ public final class NeonDiffCLICancellation: @unchecked Sendable {
 public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable {
     private let executablePath: String
     private let workingDirectory: URL?
+    private let environmentOverrides: [String: String]
     private let standardInputPipeFactory: () -> Pipe
     private let monotonicNow: () -> DispatchTime
     private let standardInputWriter: (Int32, UnsafeRawPointer?, Int) -> Int
     private let beforeProcessLaunch: () -> Void
     private let afterProcessLaunch: () -> Void
+    private let processStartedValidator: @Sendable (Int32) -> Bool
 
-    public init(executablePath: String, workingDirectory: URL? = nil) {
+    public init(
+        executablePath: String,
+        workingDirectory: URL? = nil,
+        environmentOverrides: [String: String] = [:],
+        processStartedValidator:
+            @escaping @Sendable (Int32) -> Bool = { _ in true }
+    ) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
+        self.environmentOverrides = environmentOverrides
         self.standardInputPipeFactory = { Pipe() }
         self.monotonicNow = { DispatchTime.now() }
         self.standardInputWriter = { descriptor, buffer, count in
@@ -93,26 +102,32 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
         }
         self.beforeProcessLaunch = {}
         self.afterProcessLaunch = {}
+        self.processStartedValidator = processStartedValidator
     }
 
     @_spi(Testing) public init(
         executablePath: String,
         workingDirectory: URL? = nil,
+        environmentOverrides: [String: String] = [:],
         standardInputPipeFactory: @escaping () -> Pipe = { Pipe() },
         monotonicNow: @escaping () -> DispatchTime = { DispatchTime.now() },
         standardInputWriter: @escaping (Int32, UnsafeRawPointer?, Int) -> Int = { descriptor, buffer, count in
             Darwin.write(descriptor, buffer, count)
         },
         beforeProcessLaunch: @escaping () -> Void = {},
-        afterProcessLaunch: @escaping () -> Void = {}
+        afterProcessLaunch: @escaping () -> Void = {},
+        processStartedValidator:
+            @escaping @Sendable (Int32) -> Bool = { _ in true }
     ) {
         self.executablePath = executablePath
         self.workingDirectory = workingDirectory
+        self.environmentOverrides = environmentOverrides
         self.standardInputPipeFactory = standardInputPipeFactory
         self.monotonicNow = monotonicNow
         self.standardInputWriter = standardInputWriter
         self.beforeProcessLaunch = beforeProcessLaunch
         self.afterProcessLaunch = afterProcessLaunch
+        self.processStartedValidator = processStartedValidator
     }
 
     public func run(
@@ -170,7 +185,9 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = [executablePath] + arguments
         }
-        process.environment = guiSafeEnvironment()
+        process.environment = guiSafeEnvironment().merging(environmentOverrides) {
+            _, override in override
+        }
         if let workingDirectory {
             process.currentDirectoryURL = workingDirectory
         }
@@ -237,6 +254,18 @@ public final class NeonDiffCLIClient: NeonDiffCLIClienting, @unchecked Sendable 
             throw NeonDiffCLIError.launchFailed("Failed to launch NeonDiff CLI at \(executablePath): \(error.localizedDescription)")
         }
         afterProcessLaunch()
+        guard processStartedValidator(process.processIdentifier) else {
+            try? stdinWriteHandle?.close()
+            try? stdout.fileHandleForReading.close()
+            try? stderr.fileHandleForReading.close()
+            try terminateAndReap(
+                process,
+                terminationObserved: terminationObserved
+            )
+            throw NeonDiffCLIError.launchFailed(
+                "The credential-bearing NeonDiff worker failed signed-process validation"
+            )
+        }
 
         var inputOffset = 0
         var inputClosed = standardInput == nil

@@ -19,6 +19,9 @@ ENV NODE_ENV=production
 ENV NEONDIFF_CONFIG=/config/config.local.json
 
 WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends lsof \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app /app
 RUN npm link \
   && mkdir -p /config /state /evidence /work \

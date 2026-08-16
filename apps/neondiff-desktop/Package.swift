@@ -10,7 +10,11 @@ let package = Package(
         .executable(name: "NeonDiffDesktop", targets: ["NeonDiffDesktop"]),
         .executable(name: "NeonDiffDesktopCoreSmoke", targets: ["NeonDiffDesktopCoreSmoke"]),
         .library(name: "NeonDiffDesktopCore", targets: ["NeonDiffDesktopCore"]),
-        .library(name: "NeonDiffDesktopAppCore", targets: ["NeonDiffDesktopAppCore"])
+        .library(name: "NeonDiffDesktopAppCore", targets: ["NeonDiffDesktopAppCore"]),
+        .library(
+            name: "NeonDiffDesktopEvaluationSupport",
+            targets: ["NeonDiffDesktopEvaluationSupport"]
+        )
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0")
@@ -53,7 +57,19 @@ let package = Package(
         ),
         .executableTarget(
             name: "NeonDiffDesktopCapture",
-            dependencies: ["NeonDiffDesktopCore"]
+            dependencies: ["NeonDiffDesktopCore", "NeonDiffDesktopEvaluationSupport"]
+        ),
+        .executableTarget(
+            name: "NeonDiffDesktopSettledGeometryCapture",
+            dependencies: ["NeonDiffDesktopEvaluationSupport"]
+        ),
+        .executableTarget(
+            name: "NeonDiffDesktopReachabilityChecks",
+            dependencies: ["NeonDiffDesktopEvaluationSupport"]
+        ),
+        .executableTarget(
+            name: "NeonDiffDesktopGeometryChecks",
+            dependencies: ["NeonDiffDesktopEvaluationSupport"]
         ),
         .executableTarget(
             name: "NeonDiffDesktopFixtureResolve",

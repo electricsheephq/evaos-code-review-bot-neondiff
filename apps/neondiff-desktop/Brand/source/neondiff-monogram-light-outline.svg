@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0A1420" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect x="36" y="36" width="952" height="952" rx="218" fill="#F4EFE6" stroke="#0E7490" stroke-width="12"/>
+  <rect x="66" y="66" width="892" height="892" rx="190" fill="none" stroke="#22D3EE" stroke-opacity="0.22" stroke-width="4"/>
+  <g transform="translate(282 718)" fill="#0E7490" filter="url(#shadow)">
+    <path d="M 309.398438 -213.851562 L 348.398438 -213.851562 L 427.050781 -134.550781 L 427.050781 0 L 365.949219 0 L 309.398438 -56.550781 Z M 370.5 -455 L 427.050781 -398.449219 L 427.050781 -189.800781 L 286.648438 -330.199219 L 126.75 -330.199219 L 150.148438 -306.800781 L 150.148438 0 L 89.050781 0 L 32.5 -56.550781 L 32.5 -455 Z M 370.5 -455"/>
+  </g>
+</svg>

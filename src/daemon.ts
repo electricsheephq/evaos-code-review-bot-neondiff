@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { formatDaemonLog } from "./daemon-log.js";
 import { loadConfig } from "./config.js";
 import { GitHubApi } from "./github.js";
@@ -12,6 +13,12 @@ import {
 } from "./license-admission.js";
 import { ReviewStateStore, type DaemonHeartbeatEvent } from "./state.js";
 import { retryProviderCooldowns, runOnce, type RetryProviderCooldownsResult, type RunOnceResult } from "./worker.js";
+import {
+  cleanupStaleReviewWorktrees,
+  probeOpenReviewWorktreePaths,
+  removeRegisteredReviewWorktree,
+  type ReviewWorktreeCleanupSummary
+} from "./worktree-cleanup.js";
 
 export type DaemonCycleResult =
   | { ok: true; result: RunOnceResult }
@@ -31,6 +38,7 @@ export interface RunDaemonCycleOptions {
   commandsEnabled: boolean;
   reviewSchedulerEnabled?: boolean;
   issueEnrichmentEnabled?: boolean;
+  worktreeCleanupDue?: boolean;
   runOnceImpl?: (options: { configPath?: string; dryRun: boolean; licenseAdmission?: ProductionLicenseAdmission }) => Promise<RunOnceResult>;
   retryProviderCooldownsImpl?: (options: {
     configPath?: string;
@@ -45,10 +53,16 @@ export interface RunDaemonCycleOptions {
     dryRun: boolean;
     licenseAdmission?: ProductionLicenseAdmission;
   }) => Promise<IssueEnrichmentCycleResult>;
+  cleanupReviewWorktreesImpl?: (options: { configPath?: string; dryRun: boolean }) => ReviewWorktreeCleanupSummary;
   recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string) => void;
   admitDaemonCycleImpl?: (configPath?: string) => Promise<DaemonCycleAdmissions | void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+}
+
+export interface CleanupReviewWorktreesDeps {
+  loadConfigImpl?: typeof loadConfig;
+  probeOpenReviewWorktreePathsImpl?: typeof probeOpenReviewWorktreePaths;
 }
 
 export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<DaemonCycleResult> {
@@ -81,6 +95,29 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       stderr
     });
   });
+
+  if (input.worktreeCleanupDue === true) {
+    try {
+      const cleanup = (input.cleanupReviewWorktreesImpl ?? cleanupReviewWorktreesFromConfig)({
+        configPath: input.configPath,
+        dryRun: input.dryRun
+      });
+      stdout(formatDaemonLog({
+        event: "daemon_worktree_cleanup",
+        cycle: input.cycle,
+        dryRun: input.dryRun,
+        result: summarizeWorktreeCleanup(cleanup)
+      }));
+    } catch (error) {
+      stderr(formatDaemonLog({
+        event: "daemon_worktree_cleanup_failed",
+        level: "error",
+        cycle: input.cycle,
+        dryRun: input.dryRun,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
 
   recordHeartbeat("daemon_cycle_start");
   stdout(formatDaemonLog({
@@ -159,6 +196,71 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     recordHeartbeat("daemon_cycle_failed", message);
     return { ok: false, failureKind: "runtime_failure", error: message };
   }
+}
+
+export function cleanupReviewWorktreesFromConfig(input: {
+  configPath?: string;
+  dryRun: boolean;
+}, deps: CleanupReviewWorktreesDeps = {}): ReviewWorktreeCleanupSummary {
+  const config = (deps.loadConfigImpl ?? loadConfig)(input.configPath);
+  if (config.worktreeCleanup?.enabled !== true) {
+    return {
+      worktreesRoot: resolve(config.workRoot, "worktrees"),
+      retentionMs: config.worktreeCleanup?.retentionMs ?? 0,
+      checked: 0,
+      deleted: 0,
+      skipped: 0,
+      errors: 0,
+      outcomes: []
+    };
+  }
+  const state = new ReviewStateStore(config.statePath);
+  try {
+    const activeReviewRun = state.hasActiveReviewRunLease();
+    const activeReviewHeads = state
+      .listReviewQueueJobs({ states: ["queued", "leased", "running", "provider_deferred", "blocked_on_proof"] })
+      .map((job) => ({ repo: job.repo, pullNumber: job.pullNumber, headSha: job.headSha }));
+    const openPaths = (deps.probeOpenReviewWorktreePathsImpl ?? probeOpenReviewWorktreePaths)(config.workRoot);
+    if (!openPaths.ok) {
+      throw new Error(`worktree cleanup open-handle probe failed: ${openPaths.error ?? "unknown error"}`);
+    }
+    return cleanupStaleReviewWorktrees({
+      workRoot: config.workRoot,
+      retentionMs: config.worktreeCleanup!.retentionMs,
+      leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
+      activeReviewRun,
+      activeReviewHeads,
+      openWorktreePaths: openPaths.paths,
+      dryRun: input.dryRun,
+      ops: {
+        removeWorktree: (mirrorPath, worktreePath) => {
+          const guarded = state.runWithExclusiveReviewIdleGuard(
+            () => removeRegisteredReviewWorktree(mirrorPath, worktreePath)
+          );
+          return guarded.ran ? guarded.value : { ok: false, reason: "active_review_run" };
+        }
+      }
+    });
+  } finally {
+    state.close();
+  }
+}
+
+function summarizeWorktreeCleanup(cleanup: ReviewWorktreeCleanupSummary): Record<string, unknown> {
+  const outcomeCounts: Record<string, number> = {};
+  for (const outcome of cleanup.outcomes) {
+    const key = `${outcome.status}:${outcome.reason}`;
+    outcomeCounts[key] = (outcomeCounts[key] ?? 0) + 1;
+  }
+  return {
+    worktreesRoot: cleanup.worktreesRoot,
+    retentionMs: cleanup.retentionMs,
+    checked: cleanup.checked,
+    deleted: cleanup.deleted,
+    skipped: cleanup.skipped,
+    errors: cleanup.errors,
+    outcomeCounts
+  };
 }
 
 async function runIssueEnrichmentLane(input: {

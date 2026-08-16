@@ -3,11 +3,27 @@ import { readFileSync } from "node:fs";
 const raw = readFileSync(process.argv[2] ?? "pack.json", "utf8");
 const [pack] = JSON.parse(raw);
 const files = new Set(pack.files.map((file) => file.path));
+const allowB0BundledProductionClosure = process.argv.includes(
+  "--allow-b0-bundled-production-closure"
+);
+const allowedBundledProductionRoots = [
+  "node_modules/spdx-correct/",
+  "node_modules/spdx-exceptions/",
+  "node_modules/spdx-expression-parse/",
+  "node_modules/spdx-license-ids/",
+  "node_modules/validate-npm-package-license/"
+];
+
+function isAllowedBundledProductionFile(path) {
+  return allowedBundledProductionRoots.some((root) => path.startsWith(root));
+}
 
 const forbidden = [...files].filter((path) =>
   path.startsWith("tests/") ||
   path.startsWith("dist/tests/") ||
-  path.startsWith("node_modules/") ||
+  (path.startsWith("node_modules/") && (
+    !allowB0BundledProductionClosure || !isAllowedBundledProductionFile(path)
+  )) ||
   path.startsWith("apps/") ||
   path.startsWith(".git") ||
   path.includes(".env") ||

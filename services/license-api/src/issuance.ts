@@ -22,6 +22,8 @@ const ISSUANCE_FIELDS = new Set([
   "externalCheckoutId",
   "seats"
 ]);
+const ISSUANCE_AUTHORIZATION_PURPOSE = "neondiff-license-issuance-auth-v1";
+const DERIVED_ISSUANCE_AUTHORIZATION_PATTERN = /^v1\.[A-Za-z0-9_-]{43}$/;
 
 export interface LicenseIssuanceRequest {
   idempotencyKey: string;
@@ -160,7 +162,31 @@ export function validateBearerSecret(header: string | string[] | undefined, expe
   return timingSafeEqualDigest(supplied, expected);
 }
 
-function deriveCheckoutLicenseKey(secret: string, idempotencyKey: string): string {
+export function deriveIssuanceAuthorization(secret: string): string {
+  const digest = createHmac("sha256", secret)
+    .update(ISSUANCE_AUTHORIZATION_PURPOSE)
+    .digest("base64url");
+  return `v1.${digest}`;
+}
+
+export function validateIssuanceAuthorization(
+  bearerHeader: string | string[] | undefined,
+  derivedHeader: string | string[] | undefined,
+  expectedSecret: string
+): boolean {
+  const hasBearer = bearerHeader !== undefined;
+  const hasDerived = derivedHeader !== undefined;
+  if (hasBearer === hasDerived) return false;
+
+  if (hasBearer) {
+    return !Array.isArray(bearerHeader) && validateBearerSecret(bearerHeader, expectedSecret);
+  }
+  if (Array.isArray(derivedHeader) || !derivedHeader) return false;
+  if (!DERIVED_ISSUANCE_AUTHORIZATION_PATTERN.test(derivedHeader)) return false;
+  return timingSafeEqualDigest(derivedHeader, deriveIssuanceAuthorization(expectedSecret));
+}
+
+export function deriveCheckoutLicenseKey(secret: string, idempotencyKey: string): string {
   const digest = createHmac("sha256", secret).update(`checkout-license:${idempotencyKey}`).digest();
   return ["nd", "live", digest.subarray(0, 24).toString("base64url")].join("_");
 }

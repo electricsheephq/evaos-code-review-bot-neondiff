@@ -29,7 +29,8 @@ describe("runOnce review result aggregation", () => {
   it.each([
     ["posted_stale_head", { skippedStaleHead: 1, failed: 0 }],
     ["posted_head_unverified", { skippedStaleHead: 0, failed: 1 }],
-    ["skipped_consumed_authorization", { skippedStaleHead: 0, failed: 1 }]
+    ["skipped_consumed_authorization", { skippedStaleHead: 0, failed: 1 }],
+    ["skipped_closed", { skippedStaleHead: 1, failed: 0 }]
   ] as const)("maps %s without counting a completed review", (status, expected) => {
     const result = emptyResult();
     applyReviewPullResultToRunOnceResult(result, status);

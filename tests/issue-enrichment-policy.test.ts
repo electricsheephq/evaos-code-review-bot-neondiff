@@ -42,6 +42,78 @@ describe("issue enrichment rollout policy", () => {
     });
   });
 
+  it("resolves repo-specific advisory policy and suggestion aliases without opting into PR review", () => {
+    const config = loadConfigFromObject({
+      pilotRepos: ["owner/pr-review-repo"],
+      repoProfiles: { repos: { "owner/pr-review-repo": { enabled: true } } },
+      issueEnrichment: {
+        enabled: true,
+        postIssueComment: false,
+        allowlist: ["electricsheephq/lcm-x"],
+        repos: {
+          "electricsheephq/lcm-x": {
+            advisoryPolicy: "Hermes ContextEngine lossless memory policy",
+            validationSuggestions: ["Reproduce on current main or name a mandatory invariant."],
+            suggestedLabels: ["data-integrity", "docs", "tests"],
+            suggestedReviewers: ["Tosko4"],
+            labelAliases: { docs: "documentation", tests: "test" }
+          }
+        }
+      }
+    });
+
+    expect(resolveIssueEnrichmentRepoPolicy(config.issueEnrichment!, "electricsheephq/lcm-x")).toMatchObject({
+      allowed: true,
+      repoPolicy: {
+        advisoryPolicy: "Hermes ContextEngine lossless memory policy",
+        validationSuggestions: ["Reproduce on current main or name a mandatory invariant."],
+        suggestedLabels: ["data-integrity", "docs", "tests"],
+        suggestedReviewers: ["Tosko4"],
+        labelAliases: { docs: "documentation", tests: "test" }
+      }
+    });
+  });
+
+  it("rejects malformed repo policy fields at the runtime config boundary", () => {
+    expect(() => loadConfigFromObject({
+      issueEnrichment: {
+        repos: {
+          "electricsheephq/lcm-x": {
+            suggestedReviewers: "Tosko4"
+          }
+        }
+      }
+    })).toThrow("config.issueEnrichment.repos.electricsheephq/lcm-x.suggestedReviewers must be an array");
+    expect(() => loadConfigFromObject({
+      issueEnrichment: {
+        repos: {
+          "electricsheephq/lcm-x": { unknownPolicyKey: true }
+        }
+      }
+    })).toThrow('config.issueEnrichment.repos.electricsheephq/lcm-x has unknown key "unknownPolicyKey"');
+    expect(() => loadConfigFromObject({
+      issueEnrichment: {
+        repos: {
+          "electricsheephq/lcm-x": { advisoryPolicy: "x".repeat(4_001) }
+        }
+      }
+    })).toThrow("advisoryPolicy must be at most 4000 characters");
+    expect(() => loadConfigFromObject({
+      issueEnrichment: {
+        repos: {
+          "electricsheephq/lcm-x": { validationSuggestions: Array.from({ length: 21 }, () => "check") }
+        }
+      }
+    })).toThrow("validationSuggestions must contain at most 20 items");
+    expect(() => loadConfigFromObject({
+      issueEnrichment: {
+        repos: {
+          "electricsheephq/lcm-x": { suggestedReviewers: [""] }
+        }
+      }
+    })).toThrow("suggestedReviewers must be an array of non-empty strings");
+  });
+
   it("blocks live issue comments until every allowlisted repo has explicit repo throttle thresholds", () => {
     const config = loadConfigFromObject({
       issueEnrichment: {
@@ -54,6 +126,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: true,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -77,6 +150,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: false,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -112,6 +186,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: true,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -147,6 +222,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: true,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z"
     });
 
@@ -155,6 +231,40 @@ describe("issue enrichment rollout policy", () => {
       state: "ready",
       blockers: [],
       liveThresholdsMissingRepos: []
+    });
+  });
+
+  it("blocks live issue comments when no structured model runtime is available", () => {
+    const config = loadConfigFromObject({
+      issueEnrichment: {
+        enabled: true,
+        postIssueComment: true,
+        allowlist: ["owner/issue-repo"],
+        repos: {
+          "owner/issue-repo": {
+            enabled: true,
+            maxIssuesPerCycle: 3,
+            maxCommentsPerCycle: 1,
+            cooldownMs: 3_600_000,
+            burstWindowMs: 3_600_000,
+            maxIssuesPerBurst: 6,
+            lookbackMs: 600_000,
+            processExistingOpenIssuesOnActivation: false
+          }
+        }
+      }
+    });
+
+    const status = buildIssueEnrichmentStatus({
+      config,
+      canPostAsApp: true,
+      checkedAt: "2026-07-04T11:30:00.000Z"
+    });
+
+    expect(status).toMatchObject({
+      ok: false,
+      state: "blocked",
+      blockers: ["issue_enrichment_model_runtime_required"]
     });
   });
 
@@ -182,6 +292,7 @@ describe("issue enrichment rollout policy", () => {
     const status = buildIssueEnrichmentStatus({
       config,
       canPostAsApp: true,
+      modelAnalysisAvailable: true,
       checkedAt: "2026-07-04T11:30:00.000Z",
       issueReadChecks: [
         {

@@ -54,6 +54,25 @@ describe("license service endpoints", () => {
     assert.equal(store.countActivations(hashLicenseKey(key)), 1);
   });
 
+  it("rejects repository rebinding for an existing machine activation", () => {
+    const { key } = issue();
+    const keyHash = hashLicenseKey(key);
+    assert.equal(activate(store, req(key, "machine-a", "acme/private-a"), NOW).httpStatus, 200);
+
+    const rebound = activate(
+      store,
+      req(key, "machine-a", "acme/private-b"),
+      new Date("2026-07-06T00:01:00.000Z")
+    );
+
+    assert.equal(rebound.httpStatus, 409);
+    assert.deepEqual(rebound.body, {
+      status: "scope_mismatch",
+      detail: "license activation is already bound to a different repository"
+    });
+    assert.equal(store.getActivation(keyHash, "machine-a")?.repo, "acme/private-a");
+  });
+
   it("activate rejects a different machine when seats are exhausted → 409 scope_mismatch", () => {
     const { key } = issue({ seats: 1 });
     activate(store, req(key, "machine-a"), NOW);

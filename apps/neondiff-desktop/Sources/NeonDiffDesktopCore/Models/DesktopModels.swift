@@ -17,7 +17,7 @@ public enum DesktopSection: String, CaseIterable, Codable, Identifiable, Sendabl
         case .repos: "Repos"
         case .providers: "Providers"
         case .license: "License"
-        case .logs: "Logs"
+        case .logs: "Activity"
         case .policy: "Policy"
         case .settings: "Settings"
         }
@@ -29,7 +29,7 @@ public enum DesktopSection: String, CaseIterable, Codable, Identifiable, Sendabl
         case .repos: "folder.badge.gearshape"
         case .providers: "cpu"
         case .license: "key"
-        case .logs: "doc.text.magnifyingglass"
+        case .logs: "clock.arrow.circlepath"
         case .policy: "slider.horizontal.3"
         case .settings: "gearshape"
         }
@@ -123,31 +123,69 @@ public struct ProviderRegistryTarget: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct CodexRuntimeSettings: Equatable, Sendable {
+    public var enabled: Bool
+    public var cliPath: String
+    public var model: String
+    public var reasoningEffort: String
+
+    public init(
+        enabled: Bool = false,
+        cliPath: String = "/usr/local/bin/codex",
+        model: String = "gpt-5.6-luna",
+        reasoningEffort: String = "max"
+    ) {
+        self.enabled = enabled
+        self.cliPath = cliPath
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+    }
+
+    public var isReady: Bool {
+        enabled
+            && NSString(string: cliPath).isAbsolutePath
+            && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && ["low", "medium", "high", "xhigh", "max"].contains(reasoningEffort)
+    }
+}
+
 public struct ProviderSettings: Equatable {
+    public static var defaultZCodeAppConfigPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/zcode/config.json")
+            .path
+    }
+
     public var zcodeModel: String
     public var zcodeCliPath: String
     public var zcodeAppConfigPath: String
+    public var zcodeProviderId: String
     public var openAICompatibleEndpoint: String
     public var providerKeyStored: Bool
     public var selectedProviderId: String
     public var registryTargets: [ProviderRegistryTarget]
+    public var codexRuntime: CodexRuntimeSettings
 
     public init(
         zcodeModel: String = "GLM-5.2",
         zcodeCliPath: String = "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
-        zcodeAppConfigPath: String = "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+        zcodeAppConfigPath: String = ProviderSettings.defaultZCodeAppConfigPath,
+        zcodeProviderId: String = "zcode-glm",
         openAICompatibleEndpoint: String = "http://localhost:8000/v1",
         providerKeyStored: Bool = false,
         selectedProviderId: String = "zcode-glm",
-        registryTargets: [ProviderRegistryTarget] = []
+        registryTargets: [ProviderRegistryTarget] = [],
+        codexRuntime: CodexRuntimeSettings = CodexRuntimeSettings()
     ) {
         self.zcodeModel = zcodeModel
         self.zcodeCliPath = zcodeCliPath
         self.zcodeAppConfigPath = zcodeAppConfigPath
+        self.zcodeProviderId = zcodeProviderId
         self.openAICompatibleEndpoint = openAICompatibleEndpoint
         self.providerKeyStored = providerKeyStored
         self.selectedProviderId = selectedProviderId
         self.registryTargets = registryTargets
+        self.codexRuntime = codexRuntime
     }
 
     public var selectedRegistryTarget: ProviderRegistryTarget? {
@@ -169,6 +207,10 @@ public struct ProviderSettings: Equatable {
             guard let index = registryTargets.firstIndex(where: { $0.id == selectedProviderId }) else { return }
             registryTargets[index].baseUrl = newValue
         }
+    }
+
+    public var selectedProviderEndpointIsEditable: Bool {
+        selectedRegistryTarget?.authMode != "zcode-app-config"
     }
 
     public var selectedProviderModel: String {

@@ -14,6 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
+import type { IssueAnalysis } from "../src/issue-analysis.js";
 import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
 import { ReviewStateStore } from "../src/state.js";
@@ -21,8 +22,36 @@ import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 
 const issueEnrichmentTestAdmission = await createTestLicenseAdmission({ operation: "issue_enrichment" });
+const fixtureIssueAnalysis = (issue: GitHubRelatedIssueOrPull): IssueAnalysis => ({
+  classification: "needs-repro",
+  priority: "P3",
+  priorityState: "provisional",
+  confidence: "needs-repro",
+  repositoryImpact: `Issue #${issue.number} concerns ${issue.title ?? "an untitled repository path"}.`,
+  currentMainApplicability: "Current-main applicability is not established by this fixture.",
+  evidence: `The issue metadata records ${issue.title ?? "an untitled report"}.`,
+  reproductionOrInvariantGap: "Attach a focused current-main reproduction or name the mandatory invariant.",
+  relatedWork: "Inspect only the related work linked from the issue before implementation.",
+  migrationDisposition: "needs-repro",
+  nextGate: "Run the smallest supported-path reproduction and record the result on the issue."
+});
 const runIssueEnrichmentCycle = (input: Parameters<typeof runIssueEnrichmentCycleImpl>[0]) =>
-  runIssueEnrichmentCycleImpl({ ...input, licenseAdmission: input.licenseAdmission ?? issueEnrichmentTestAdmission });
+  runIssueEnrichmentCycleImpl({
+    ...input,
+    config: {
+      ...input.config,
+      codexRuntime: {
+        enabled: true,
+        cliPath: input.config.codexRuntime?.cliPath ?? "/Users/test/.local/bin/codex",
+        model: input.config.codexRuntime?.model ?? "gpt-5.6-luna",
+        reasoningEffort: input.config.codexRuntime?.reasoningEffort ?? "max",
+        timeoutMs: input.config.codexRuntime?.timeoutMs ?? 30_000,
+        maxOutputBytes: input.config.codexRuntime?.maxOutputBytes ?? 1024 * 1024
+      }
+    },
+    analyzeIssue: input.analyzeIssue ?? (async ({ issue }) => fixtureIssueAnalysis(issue)),
+    licenseAdmission: input.licenseAdmission ?? issueEnrichmentTestAdmission
+  });
 
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
@@ -447,6 +476,76 @@ describe("sticky enrichment comments", () => {
     expect(comment.body).not.toContain("ghp_fake_token");
   });
 
+  it("keeps repo policy hidden while applying label aliases before allowlist filtering", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 780,
+      title: "Review LCM-X context memory",
+      state: "open",
+      body: "Validate current-main behavior and preserve lossless context memory.",
+      labels: []
+    };
+
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/lcm-x",
+      issue,
+      allowedLabels: ["documentation", "test", "data-integrity"],
+      repoPolicy: {
+        advisoryPolicy: "LCM-X is an independent Hermes ContextEngine extension for lossless context memory, not OpenClaw. Require current-main reproduction or a named mandatory invariant; distinguish NeonDiff severity from LCM-X P0-P4.",
+        validationSuggestions: ["Reproduce on current main or name a mandatory invariant."],
+        suggestedLabels: ["docs", "tests", "data-integrity"],
+        suggestedReviewers: ["Tosko4"],
+        labelAliases: { docs: "documentation", tests: "test" }
+      }
+    });
+
+    expect(comment.body).not.toContain("### Repo policy");
+    expect(comment.body).not.toContain("Hermes ContextEngine extension for lossless context memory");
+    expect(comment.body).not.toContain("not OpenClaw");
+    expect(comment.body).not.toContain("current-main reproduction or a named mandatory invariant");
+    expect(comment.body).not.toContain("NeonDiff severity from LCM-X P0-P4");
+    expect(comment.body).toContain("Suggested labels: documentation, test, data-integrity");
+    expect(comment.body).toContain("Suggested reviewers: Tosko4");
+    expect(comment.body).not.toContain("- Reproduce on current main or name a mandatory invariant.");
+    expect(comment.body).toContain("No labels, owners, reviewers, or roadmap fields were changed by this bot.");
+  });
+
+  it("does not add an empty repo policy section to generic issue enrichment", () => {
+    const comment = buildIssueEnrichmentComment({
+      repo: "owner/generic",
+      issue: {
+        number: 781,
+        title: "Document the supported setup",
+        state: "open",
+        body: "Add validation evidence before implementation.",
+        labels: []
+      }
+    });
+
+    expect(comment.body).not.toContain("### Repo policy");
+  });
+
+  it("never renders repo policy validation guidance", () => {
+    const comment = buildIssueEnrichmentComment({
+      repo: "electricsheephq/lcm-x",
+      issue: {
+        number: 782,
+        title: "Bound policy output",
+        state: "open",
+        body: "Keep dry-run and live comments within the configured suggestion limit."
+      },
+      repoPolicy: {
+        validationSuggestions: ["first policy check", "second policy check"],
+        suggestedLabels: [],
+        suggestedReviewers: [],
+        labelAliases: {}
+      },
+      maxSuggestions: 1
+    });
+
+    expect(comment.body).not.toContain("first policy check");
+    expect(comment.body).not.toContain("second policy check");
+  });
+
   it("adds a build-borrow-buy planner packet for research-triggered issue classes", () => {
     const issue: GitHubRelatedIssueOrPull = {
       number: 89,
@@ -714,6 +813,184 @@ describe("sticky enrichment comments", () => {
     expect(JSON.stringify(output)).not.toContain("body");
   });
 
+  it("skips upstream-intake preservation records before enrichment planning", () => {
+    const issue: GitHubRelatedIssueOrPull = {
+      number: 127,
+      title: "[Upstream PR #461] retrieval: add exhaustive citable recall mode",
+      state: "open",
+      labels: [{ name: "upstream-intake" }, { name: "upstream-pr" }],
+      body: "Attributed preservation record only."
+    };
+
+    const output = buildIssueEnrichmentDryRunOutput({
+      repo: "electricsheephq/lcm-x",
+      issue,
+      maxRelatedRefs: 8,
+      maxSuggestions: 8
+    });
+
+    expect(output).toMatchObject({
+      ok: true,
+      skipped: true,
+      reason: "preservation_only_upstream_intake",
+      repo: "electricsheephq/lcm-x",
+      issueNumber: 127,
+      state: "open"
+    });
+    expect(JSON.stringify(output)).not.toContain("body");
+  });
+
+  it("records upstream-intake as skipped without invoking the model or creating a comment", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-upstream-intake-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["electricsheephq/lcm-x"],
+          maxIssuesPerCycle: 1,
+          maxCommentsPerCycle: 1,
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "electricsheephq/lcm-x": {
+              maxIssuesPerCycle: 1,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 60_000,
+              burstWindowMs: 60_000,
+              maxIssuesPerBurst: 2,
+              lookbackMs: 60_000
+            }
+          }
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      let analysisCalls = 0;
+      let postCalls = 0;
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => [{
+              number: 127,
+              title: "[Upstream PR #461] retrieval: add exhaustive citable recall mode",
+              state: "open",
+              updated_at: "2026-08-15T20:24:56Z",
+              labels: [{ name: "upstream-intake" }, { name: "upstream-pr" }],
+              body: "Attributed preservation record only."
+            }],
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              postCalls += 1;
+              throw new Error("preservation records must not post");
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-08-15T21:00:00.000Z",
+          analyzeIssue: async ({ issue }) => {
+            analysisCalls += 1;
+            return fixtureIssueAnalysis(issue);
+          }
+        });
+
+        expect(result.summary).toMatchObject({
+          skippedRecorded: 1,
+          posted: 0,
+          failed: 0
+        });
+        expect(result.items[0]).toMatchObject({
+          issueNumber: 127,
+          action: "skipped",
+          reason: "preservation_only_upstream_intake",
+          recordStatus: "skipped"
+        });
+        expect(analysisCalls).toBe(0);
+        expect(postCalls).toBe(0);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed without posting when structured issue analysis fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-model-failure-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 1,
+          maxCommentsPerCycle: 1,
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 1,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 60_000,
+              burstWindowMs: 60_000,
+              maxIssuesPerBurst: 2,
+              lookbackMs: 60_000
+            }
+          }
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      let postCalls = 0;
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => [{
+              number: 8,
+              title: "Keep FTS fallback from starving semantic recall",
+              state: "open",
+              updated_at: "2026-08-13T12:58:25Z",
+              body: "Current-main reproduction and owner are present."
+            }],
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              postCalls += 1;
+              throw new Error("must not post after model failure");
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-08-15T21:05:00.000Z",
+          analyzeIssue: async () => {
+            throw new Error("model output invalid ghp_fake_token");
+          }
+        });
+
+        expect(result.summary).toMatchObject({ posted: 0, failed: 1 });
+        expect(postCalls).toBe(0);
+        expect(result.items[0]).toMatchObject({
+          issueNumber: 8,
+          recordStatus: "failed"
+        });
+        expect(result.items[0]?.error).not.toContain("ghp_fake_token");
+        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 8)).toMatchObject({
+          status: "failed",
+          reason: "analysis_or_post_failed"
+        });
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("normalizes issue state casing without treating unknown states as closed", () => {
     const uppercaseOpen: GitHubRelatedIssueOrPull = {
       number: 94,
@@ -906,7 +1183,13 @@ describe("sticky enrichment comments", () => {
           maxIssuesPerCycle: 3,
           maxCommentsPerCycle: 1,
           maxIssuesPerBurst: 10,
-          processExistingOpenIssuesOnActivation: false
+          processExistingOpenIssuesOnActivation: false,
+          repos: {
+            "owner/issue-repo": {
+              advisoryPolicy: "Render this policy in cycle dry-run planning.",
+              validationSuggestions: ["Keep the dry-run policy aligned with live output."]
+            }
+          }
         }
       })}\n`);
       const reposScanned: string[] = [];
@@ -1596,13 +1879,14 @@ describe("sticky enrichment comments", () => {
     }
   });
 
-  it("does not let a dry-run-only body hash suppress the first live issue comment", async () => {
+  it("derives idempotency from public model-backed output and ignores private suggestion cap changes", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-dry-run-to-live-"));
     try {
       const configPath = join(root, "config.json");
       const statePath = join(root, "state.sqlite");
-      const writeConfig = (postIssueComment: boolean) => writeFileSync(configPath, `${JSON.stringify({
+      const writeConfig = (postIssueComment: boolean, maxSuggestions: number) => writeFileSync(configPath, `${JSON.stringify({
         statePath,
+        enrichment: { maxSuggestions },
         issueEnrichment: {
           enabled: true,
           postIssueComment,
@@ -1617,12 +1901,13 @@ describe("sticky enrichment comments", () => {
               cooldownMs: 60_000,
               burstWindowMs: 3_600_000,
               maxIssuesPerBurst: 10,
-              lookbackMs: 600_000
+              lookbackMs: 600_000,
+              suggestedReviewers: ["first-reviewer", "second-reviewer"]
             }
           }
         }
       })}\n`);
-      writeConfig(false);
+      writeConfig(false, 1);
       const state = new ReviewStateStore(statePath);
       try {
         const issue: GitHubRelatedIssueOrPull = {
@@ -1633,7 +1918,7 @@ describe("sticky enrichment comments", () => {
           body: "Acceptance criteria and owner present."
         };
         const reader = { listIssuesForEnrichment: async () => [issue] };
-        const posted: number[] = [];
+        const posted: Array<{ issueNumber: number; body: string }> = [];
 
         const dryRunOnly = await runIssueEnrichmentCycle({
           config: loadConfig(configPath),
@@ -1649,15 +1934,15 @@ describe("sticky enrichment comments", () => {
           checkedAt: "2026-07-03T01:05:00.000Z"
         });
         const dryRunRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 32);
-        writeConfig(true);
+        writeConfig(true, 1);
         const live = await runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
           github: {
             ...reader,
             canPostAsApp: () => true,
-            upsertIssueComment: async (input: { issueNumber: number }) => {
-              posted.push(input.issueNumber);
+            upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+              posted.push(input);
               return {
                 action: "created" as const,
                 id: input.issueNumber,
@@ -1669,16 +1954,201 @@ describe("sticky enrichment comments", () => {
           includeExisting: true,
           checkedAt: "2026-07-03T01:06:00.000Z"
         });
+        const liveRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 32);
+        const unchanged = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            ...reader,
+            canPostAsApp: () => true,
+            upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+              posted.push(input);
+              return {
+                action: "updated" as const,
+                id: input.issueNumber,
+                html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
+              };
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-07-03T01:07:00.000Z"
+        });
+        writeConfig(true, 2);
+        const changedCap = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            ...reader,
+            canPostAsApp: () => true,
+            upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+              posted.push(input);
+              return {
+                action: "updated" as const,
+                id: input.issueNumber,
+                html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
+              };
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-07-03T01:08:00.000Z"
+        });
+        const changedCapRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 32);
 
         expect(dryRunOnly.summary).toMatchObject({ dryRunRecorded: 1, alreadyProcessed: 0, posted: 0, failed: 0 });
-        expect(dryRunRecord).toMatchObject({ status: "dry_run", bodyHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+        expect(dryRunRecord).toMatchObject({
+          status: "dry_run",
+          analysisInputHash: expect.stringMatching(/^[a-f0-9]{64}$/)
+        });
         expect(live.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
-        expect(posted).toEqual([32]);
-        expect(state.getIssueEnrichmentRecord("owner/issue-repo", 32)).toMatchObject({
+        expect(unchanged.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+        expect(changedCap.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+        expect(posted.map((entry) => entry.issueNumber)).toEqual([32]);
+        expect(posted[0]?.body).not.toContain("Suggested reviewers:");
+        expect(posted[0]?.body).not.toContain("first-reviewer");
+        expect(posted[0]?.body).not.toContain("second-reviewer");
+        expect(posted[0]?.body).toContain(`hash=${liveRecord?.bodyHash}`);
+        expect(liveRecord).toMatchObject({
           status: "posted",
-          bodyHash: dryRunRecord?.bodyHash,
+          bodyHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          analysisInputHash: dryRunRecord?.analysisInputHash,
           commentUrl: "https://github.test/owner/issue-repo/issues/32#issuecomment-32"
         });
+        expect(liveRecord?.bodyHash).not.toBe(liveRecord?.analysisInputHash);
+        expect(changedCapRecord?.bodyHash).toBe(liveRecord?.bodyHash);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps repo policy in local preview evidence but excludes it from live model-backed comments", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-confidence-parity-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        confidenceCalibration: {
+          publicDisplay: {
+            mode: "calibrated",
+            evidenceUrl: "https://github.com/electricsheephq/evaos-code-review-bot/actions/runs/123",
+            datasetId: "confidence-calibration-v1",
+            labeledFindings: 100,
+            minLabeledFindings: 100,
+            p0p1Labels: 30,
+            minP0P1Labels: 30,
+            negativeControlScenarios: 10,
+            minNegativeControlScenarios: 10,
+            wilsonLowerBound: 0.95,
+            minWilsonLowerBound: 0.95
+          }
+        },
+        enrichment: { maxSuggestions: 1 },
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              maxIssuesPerCycle: 5,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 60_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 10,
+              lookbackMs: 600_000,
+              advisoryPolicy: "Review confidence 97% after calibrated evidence.",
+              validationSuggestions: ["Validation confidence 96% after calibrated evidence."]
+            }
+          }
+        }
+      })}\n`);
+      const config = loadConfig(configPath);
+      const state = new ReviewStateStore(statePath);
+      try {
+        const issue: GitHubRelatedIssueOrPull = {
+          number: 33,
+          title: "Preserve calibrated confidence",
+          state: "open",
+          updated_at: "2026-07-03T01:00:00.000Z",
+          body: "Acceptance criteria and owner present."
+        };
+        const policy = resolveIssueEnrichmentRepoPolicy(config.issueEnrichment!, "owner/issue-repo");
+        const preview = buildIssueEnrichmentDryRunOutput({
+          repo: "owner/issue-repo",
+          issue,
+          repoPolicy: policy.repoPolicy,
+          allowedLabels: policy.suggestions.allowedLabels,
+          allowedOwners: policy.suggestions.allowedReviewers,
+          maxSuggestions: config.enrichment?.maxSuggestions,
+          publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
+        });
+        if (preview.skipped) throw new Error("expected preview body");
+        let postedBody = "";
+        let analysisCalls = 0;
+        let postCalls = 0;
+        const github = {
+          listIssuesForEnrichment: async () => [issue],
+          canPostAsApp: () => true,
+          upsertIssueComment: async (input: { issueNumber: number; body: string }) => {
+            postCalls += 1;
+            postedBody = input.body;
+            return {
+              action: "created" as const,
+              id: input.issueNumber,
+              html_url: `https://github.test/owner/issue-repo/issues/${input.issueNumber}#issuecomment-${input.issueNumber}`
+            };
+          }
+        };
+        const analyzeIssue = async ({ issue: analysisIssue }: { issue: GitHubRelatedIssueOrPull }) => {
+          analysisCalls += 1;
+          return fixtureIssueAnalysis(analysisIssue);
+        };
+        const live = await runIssueEnrichmentCycle({
+          config,
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T01:05:00.000Z",
+          analyzeIssue
+        });
+
+        expect(live.summary).toMatchObject({ posted: 1, failed: 0 });
+        expect(preview.body).not.toContain("Review confidence 97% after calibrated evidence.");
+        expect(preview.body).not.toContain("Validation confidence 96% after calibrated evidence.");
+        expect(postedBody).not.toContain("Review confidence 97% after calibrated evidence.");
+        expect(postedBody).not.toContain("Validation confidence 96% after calibrated evidence.");
+        expect(postedBody).not.toContain("### Repo policy");
+        expect(postedBody).not.toContain("### Agent-start packet");
+        expect(postedBody).toContain("### Current-main applicability");
+        expect(postedBody).toContain("### Next gate");
+        expect(postedBody).not.toContain("[confidence not calibrated]");
+        expect(postedBody).toContain(`hash=${state.getIssueEnrichmentRecord("owner/issue-repo", 33)?.bodyHash}`);
+        const changedPrivateConfig = JSON.parse(readFileSync(configPath, "utf8")) as {
+          issueEnrichment: {
+            repos: Record<string, { advisoryPolicy: string; validationSuggestions: string[] }>;
+          };
+        };
+        changedPrivateConfig.issueEnrichment.repos["owner/issue-repo"] = {
+          advisoryPolicy: "Private policy changed without public effect.",
+          validationSuggestions: ["Private validation changed without public effect."]
+        };
+        writeFileSync(configPath, `${JSON.stringify(changedPrivateConfig)}\n`);
+        const privatePolicyOnly = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github,
+          dryRun: false,
+          checkedAt: "2026-07-03T01:06:00.000Z",
+          analyzeIssue
+        });
+        expect(privatePolicyOnly.summary).toMatchObject({ reposScanned: 0, posted: 0, failed: 0 });
+        expect(analysisCalls).toBe(1);
+        expect(postCalls).toBe(1);
       } finally {
         state.close();
       }
@@ -2432,9 +2902,10 @@ describe("sticky enrichment comments", () => {
         expect(posts).toHaveLength(2);
         expect(posts[0]!.marker).toContain("issue=41");
         expect(posts[0]!.body).toContain("## evaOS issue enrichment");
-        expect(posts[0]!.body).toContain("Suggested labels: docs.");
-        expect(posts[0]!.body).not.toContain("Suggested labels: docs, security");
-        expect(posts[0]!.body).toContain("Suggested owners: none.");
+        expect(posts[0]!.body).toContain("### Current-main applicability");
+        expect(posts[0]!.body).toContain("### Evidence");
+        expect(posts[0]!.body).not.toContain("Suggested labels:");
+        expect(posts[0]!.body).not.toContain("Suggested owners:");
         expect(posts[0]!.body).not.toContain("issue-owner");
         expect(posts[0]!.body).not.toContain("incident-reviewer");
         expect(firstRecord).toMatchObject({
@@ -2443,12 +2914,15 @@ describe("sticky enrichment comments", () => {
           commentUrl: "https://github.test/comment/1"
         });
         expect(firstRecord?.bodyHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(firstRecord?.analysisInputHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(firstRecord?.analysisInputHash).not.toBe(firstRecord?.bodyHash);
         expect(backfilledRecord).toMatchObject({
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:00:00.000Z",
           commentUrl: "https://github.test/comment/1",
-          bodyHash: firstRecord?.bodyHash
+          analysisInputHash: firstRecord?.analysisInputHash
         });
+        expect(backfilledRecord?.bodyHash).toBeUndefined();
         // #263: live-posted markers now carry the mapped `enriched` lifecycle state + fields after
         // the hash token, so the hash is no longer the final token. The hash token itself is stable.
         expect(posts[0]!.body).toContain(`hash=${firstRecord?.bodyHash}`);
@@ -2457,8 +2931,9 @@ describe("sticky enrichment comments", () => {
           status: "posted",
           issueUpdatedAt: "2026-07-03T02:07:00.000Z",
           commentUrl: "https://github.test/comment/1",
-          bodyHash: firstRecord?.bodyHash
+          analysisInputHash: firstRecord?.analysisInputHash
         });
+        expect(refreshedRecord?.bodyHash).toBeUndefined();
         const changedRecord = state.getIssueEnrichmentRecord("owner/issue-repo", 41);
         expect(changedRecord).toMatchObject({
           status: "posted",
@@ -2466,9 +2941,9 @@ describe("sticky enrichment comments", () => {
           commentUrl: "https://github.test/comment/2"
         });
         expect(changedRecord?.bodyHash).toMatch(/^[a-f0-9]{64}$/);
-        expect(changedRecord?.bodyHash).not.toBe(firstRecord?.bodyHash);
+        expect(changedRecord?.bodyHash).toBe(firstRecord?.bodyHash);
+        expect(changedRecord?.analysisInputHash).not.toBe(firstRecord?.analysisInputHash);
         expect(posts[1]!.body).toContain(`hash=${changedRecord?.bodyHash}`);
-        expect(posts[1]!.body).toContain("lifecycle=enriched");
       } finally {
         state.close();
       }
@@ -2596,7 +3071,7 @@ describe("sticky enrichment comments", () => {
         const record = state.getIssueEnrichmentRecord("owner/issue-repo", 61);
         expect(record).toMatchObject({
           status: "failed",
-          reason: "post_failed"
+          reason: "analysis_or_post_failed"
         });
         expect(record?.error).not.toContain("ghp_fake_token");
       } finally {

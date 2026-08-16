@@ -6,7 +6,14 @@ export const REVIEW_LENS_PACKET_VERSION = "review-lens-packet-v0.1";
 export const REVIEW_LENS_ADVISORY =
   "Review lenses are advisory context only. Current PR diff, checkout files, schema validation, current-head checks, redaction, and posting policy remain authoritative.";
 
-export type ReviewLensId = "first_principles" | "architecture" | "decision" | "lean";
+export type ReviewLensId =
+  | "first_principles"
+  | "architecture"
+  | "decision"
+  | "lean"
+  | "state"
+  | "boundary"
+  | "failure";
 export type ReviewLensSurface = "issue_enrichment" | "pr_shadow" | "walkthrough";
 export type ReviewLensMode = "dry_run" | "summary" | "shadow";
 
@@ -132,8 +139,41 @@ export const BUILT_IN_REVIEW_LENSES: ReviewLensDefinition[] = [
       "Never request changes from this lens alone.",
       "Never suggest removing validation, auth, security, accessibility, observability, migrations, data-loss handling, concurrency protection, or tests for changed behavior."
     ].join("\n")
+  },
+  {
+    id: "state",
+    title: "State and lifecycle review",
+    body: [
+      "Trace creation, resume, retry, cancellation, teardown, and idempotent re-entry.",
+      "Check that state ownership and persisted/in-memory transitions remain consistent across every changed path.",
+      "Report only a concrete supported-path failure; do not propose speculative hardening."
+    ].join("\n")
+  },
+  {
+    id: "boundary",
+    title: "Authority and integration-boundary review",
+    body: [
+      "Trace identities, authorization, API/data-shape contracts, caller/callee assumptions, and default-branch compatibility.",
+      "Check that the changed boundary preserves its documented authority and supported consumers.",
+      "Report only a concrete supported-path failure; do not propose speculative hardening."
+    ].join("\n")
+  },
+  {
+    id: "failure",
+    title: "Failure, concurrency, and operator-truth review",
+    body: [
+      "Trace partial failure, retry, timeout, concurrent execution, rollback, and degraded-mode behavior.",
+      "Check that reported status and durable evidence match what actually happened.",
+      "Report only a concrete supported-path failure; do not propose speculative hardening."
+    ].join("\n")
   }
 ];
+
+export function getBuiltInReviewLensDefinition(id: ReviewLensId): ReviewLensDefinition {
+  const definition = BUILT_IN_REVIEW_LENSES.find((candidate) => candidate.id === id);
+  if (!definition) throw new Error(`No built-in review lens definition exists for ${id}`);
+  return definition;
+}
 
 export function validateReviewLensConfig(config: ReviewLensConfig, label: string): void {
   if (!isRecord(config)) throw new Error(`${label} must be an object`);
@@ -393,7 +433,7 @@ function validateReviewLensActivation(value: unknown, label: string): void {
   for (const key of Object.keys(value)) {
     if (!["id", "surface", "mode"].includes(key)) throw new Error(`${label} has unknown key "${key}"; expected only id, surface, or mode`);
   }
-  if (!isLensId(value.id)) throw new Error(`${label}.id must be one of: first_principles, architecture, decision, lean`);
+  if (!isLensId(value.id)) throw new Error(`${label}.id must be one of: first_principles, architecture, decision, lean, state, boundary, failure`);
   if (!isSurface(value.surface)) throw new Error(`${label}.surface must be one of: issue_enrichment, pr_shadow, walkthrough`);
   if (!isMode(value.mode)) throw new Error(`${label}.mode must be one of: dry_run, summary, shadow`);
 }
@@ -403,7 +443,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isLensId(value: unknown): value is ReviewLensId {
-  return value === "first_principles" || value === "architecture" || value === "decision" || value === "lean";
+  return value === "first_principles" || value === "architecture" || value === "decision" || value === "lean" ||
+    value === "state" || value === "boundary" || value === "failure";
 }
 
 function isSurface(value: unknown): value is ReviewLensSurface {

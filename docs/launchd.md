@@ -56,6 +56,17 @@ Use the JSON-first CLI instead of choosing `bootstrap` or `kickstart` from
 plist existence alone. The executable stop/start sequence and confirmation
 requirements live in [the operator CLI guide](operator-cli.md#common-operator-flows).
 
+For a public paid B0 BYO Mac worker update, do not edit `ProgramArguments`,
+`WorkingDirectory`, or credential environment entries by hand. Use the
+checksum-bound worker bundle from the same immutable GitHub prerelease as the
+app, as described in
+[SETUP.md](SETUP.md#update-an-existing-local-worker). Its installer validates
+the existing NeonDiff invocation, preserves the label and environment, stages a
+versioned user-owned worker, and changes the plist atomically only after
+`--dry-run false --confirm true`. If the LaunchAgent was loaded it is restarted;
+an unloaded service stays unloaded. The paired rollback command restores the
+previous worker or the original invocation without deleting customer state.
+
 After `bootout`, the plist normally remains at
 `~/Library/LaunchAgents/<label>.plist` while the service is absent from the
 launchd domain. `daemon start` detects that state, plans `bootstrap` followed by

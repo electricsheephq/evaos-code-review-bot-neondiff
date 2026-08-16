@@ -1,10 +1,12 @@
 # License API disaster recovery runbook
 
 This runbook covers disaster recovery for the NeonDiff license API SQLite
-database at `/data/license.sqlite`.
+database at `/data/license.sqlite` and, only when the managed GitHub broker is
+enabled, its separate state database at `/data/github-broker.sqlite`.
 
 Issue scope: [#423](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/423)
-and [#562](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/562).
+[#562](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/562),
+and [#613](https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/613).
 This source-only PR does not prove live replication; it only adds the buildable
 Litestream wiring, owner runbook, static assertions, and local client outage
 fail-closed verification. Live object storage, Fly secrets, deploy, and timed restore
@@ -14,7 +16,9 @@ evidence remain Owner-gated.
 
 - RPO target: <= 5 minutes. Litestream is configured to sync from
   `/data/license.sqlite` to the object-store replica every `1s`; the <= 5 minute
-  target leaves room for transient platform or object-store latency.
+  target leaves room for transient platform or object-store latency. When the
+  broker is enabled, the same cadence applies independently to
+  `/data/github-broker.sqlite`.
 - RTO target: <= 30 minutes. A trained owner should be able to provision or
   restart a staging/replacement Fly app, restore the missing DB, pass `/healthz`,
   and validate admin readback inside this window.
@@ -26,10 +30,16 @@ evidence remain Owner-gated.
 ## Architecture
 
 - Primary database: `/data/license.sqlite` on the Fly volume `license_data`.
+- Managed-broker database: `/data/github-broker.sqlite` on the same single-writer
+  volume, with a distinct offsite replica URL. It contains device registrations,
+  authoritative installation/repository bindings, and the decision ledger.
 - Runtime supervisor: `docker-entrypoint.sh`.
-- Replication config: `/etc/litestream.yml`, copied from `litestream.yml`.
-- Replica URL: `LICENSE_REPLICA_URL`, set only through Fly secrets or an
-  equivalent platform secret store.
+- Replication config: `/etc/litestream.yml` before broker DR is provisioned;
+  `/etc/litestream-broker.yml` whenever `GITHUB_BROKER_REPLICA_URL` is present.
+  This keeps broker-state backups fresh while the route-level kill switch is off.
+- Replica URLs: `LICENSE_REPLICA_URL` and, before broker enablement,
+  `GITHUB_BROKER_REPLICA_URL`, set only through Fly secrets or an equivalent
+  platform secret store. The destinations must be distinct.
 - Provider credentials: set through provider-native environment variables or
   Fly secrets. Do not commit values. For S3-compatible storage, use the
   provider's recommended key variables.
@@ -37,7 +47,8 @@ evidence remain Owner-gated.
 The container fails closed by default when `LICENSE_REPLICA_URL` is absent
 because this service is release-required for supported review entitlements. Local
 development may set `LICENSE_LITESTREAM_REQUIRED=false` to run without
-replication.
+replication. Broker enablement always requires both replica URLs and distinct
+database paths; the local/dev bypass never waives broker DR.
 
 ## Schema v2 recovery invariant
 
@@ -95,14 +106,17 @@ chat.
 ```sh
 flyctl secrets set \
   LICENSE_REPLICA_URL="<object-store-url-for-license.sqlite>" \
+  GITHUB_BROKER_REPLICA_URL="<distinct-object-store-url-for-github-broker.sqlite>" \
   AWS_ACCESS_KEY_ID="<provider-access-key-id>" \
   AWS_SECRET_ACCESS_KEY="<provider-secret-access-key>" \
   --app neondiff-license
 ```
 
 Use provider-specific variable names when not using S3-compatible storage. Keep
-the replica path dedicated to this service, for example a `license-api/prod`
-prefix, so restore drills do not collide with unrelated databases.
+both replica paths dedicated and distinct, for example
+`license-api/prod/license` and `license-api/prod/github-broker`, so restore
+drills do not collide with each other or unrelated databases. Provisioning the
+broker replica URL does not enable the broker.
 
 ## Deploy verification
 
@@ -119,6 +133,8 @@ Expected evidence:
 
 - the boot logs show either an existing DB or a missing-file restore attempt;
 - Litestream logs show replication started for `/data/license.sqlite`;
+- when the broker is enabled, logs also show restore/replication for
+  `/data/github-broker.sqlite` through `/etc/litestream-broker.yml`;
 - `/healthz` returns `{"status":"ok"}`;
 - admin readback against `LICENSE_DB_PATH=/data/license.sqlite` lists issued
   license hashes and never raw keys.
@@ -131,7 +147,7 @@ volume; never destroy the production volume as a drill.
 1. Record start time, source commit SHA, app name, volume id, and replica URL
    prefix in the evidence packet.
 2. Create or reset a staging Fly app with a fresh `license_data` volume and no
-   `/data/license.sqlite` file.
+   `/data/license.sqlite` or `/data/github-broker.sqlite` file.
 3. Give the drill read-only credentials to the source replica and a dedicated,
    non-writing replica destination/prefix. Never run `litestream replicate`
    against the production replica from the drill.
@@ -141,8 +157,9 @@ volume; never destroy the production volume as a drill.
    latest-state `-if-replica-exists` startup behavior as rollback proof.
 5. Wait for `/healthz` to pass and run admin `list` against the restored DB.
 6. Record end time and calculate restore duration. The drill passes only if
-   duration is <= 30 minutes and the restored DB contains the expected license
-   hashes/activation rows.
+   duration is <= 30 minutes, the restored license DB contains the expected
+   license hashes/activation rows, and an enabled broker restore contains the
+   expected device, binding, selected-repository, and decision-ledger rows.
 7. Revoke or delete any throwaway keys created solely for the drill, then
    destroy the staging app/volume if it is not reused.
 
@@ -161,6 +178,8 @@ and do not let staging write back into the production replica prefix.
 - Daily: monitor `/healthz` and Fly machine health.
 - Daily: alert on Litestream replication errors, repeated restart loops, or a
   missing `LICENSE_REPLICA_URL` in production.
+- Daily while the broker is enabled: alert on a missing
+  `GITHUB_BROKER_REPLICA_URL` or stale broker replica generation.
 - Weekly: inspect replica freshness using Litestream object-store metadata or a
   provider inventory command; save a compact evidence note.
 - Monthly until GA, then quarterly: run a timed staging restore drill and store
@@ -178,6 +197,8 @@ Minimum alert set:
 - Litestream process exit or repeated replication error in logs.
 - Object-store replica has no recent generation/snapshot evidence within the
   RPO window.
+- License and broker replicas unexpectedly share a destination or only one
+  database restores on a broker-enabled drill.
 - Volume snapshot or object-store lifecycle policy disabled unexpectedly.
 
 Treat healthz-only green as insufficient for DR. Healthz proves the HTTP

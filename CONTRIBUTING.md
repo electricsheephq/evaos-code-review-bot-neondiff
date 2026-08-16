@@ -80,7 +80,7 @@ Every meaningful PR should name the proof it ran:
 - focused validation command
 - `npm test` and `npm run build`, or why CI is the right place for heavier validation
 - dry-run review evidence when the change affects review behavior
-- evidence path such as `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/YYYY-MM-DD/issue-<number>/`
+- evidence path such as `/Users/m1/Codex/evidence/neondiff/YYYY-MM-DD/issue-<number>/`
 
 Evidence should contain public-safe summaries, counts, refs, hashes, setup
 status, blocker codes, and command names. It must not contain secrets, raw PR
@@ -104,8 +104,16 @@ Agents should read [AGENTS.md](AGENTS.md) before editing this repository.
 ## Pull Request Expectations
 
 - Preserve source-available beta wording unless #104 is updated with approved license text.
-- Preserve mandatory API-backed activation for public, private, internal, and
-  unknown repository work; do not reintroduce a free-use bypass.
+- Preserve mandatory API-backed activation for private, internal, and commercial
+  repository work, and fail closed on unknown visibility; the "no free-use bypass"
+  rule protects the PRIVATE-entitlement boundary. Public open-source review will
+  be free with no Activation Key in the native app (managed GitHub App broker
+  #614; owner ruling — policy, not a bypass); the current CLI still requires
+  activation for every repository, since a local visibility flag would trust the
+  client's own claim. Keep
+  GitHub-authoritative visibility with unknown failing closed; provider
+  verification remains required for all tiers. Public-facing website copy migration
+  is owned by website #52.
 - Preserve dry-run before live posting.
 - Preserve current-head duplicate suppression and stale-head checks.
 - Preserve secret-looking finding suppression.

@@ -26,7 +26,8 @@ repo-owned source document and does not pin GitHub UI state.
 | LM Studio, vLLM, or local OpenAI-compatible gateway | `compatible by interface` | Describable as local/self-hosted OpenAI-compatible endpoints | Describable as local/self-hosted OpenAI-compatible endpoints | No-egress only for local/self-hosted endpoints | Fixture and dry-run review proof before live usage |
 | Hosted OpenAI-compatible BYOK gateway | `compatible by interface` | Remote smoke requires explicit opt-in | Remote smoke requires explicit opt-in | Hosted provider receives prompts and diffs | Remote smoke, live review proof, and provider-specific privacy/terms review |
 | Free/trial provider catalogs | `resource only` | Discovery only | Discovery only | Usually hosted; each provider differs | Provider-specific issue, auth boundary, terms review, and NeonDiff proof |
-| Agent runtimes such as Codex CLI, Claude Code, or OpenCode | `planned` / discovery-stage | Not a live provider adapter | Not a live provider adapter | Depends on each runtime and its provider chain | Bounded no-write runtime contract, output schema, timeout handling, current-head behavior |
+| Codex CLI OAuth runtime | `tested by NeonDiff` for the opt-in source and dry-review path | Bounded read-only adapter with strict output, timeout, no-recursive-agent, and no-app controls | Interface support only; no broad Linux runtime claim | Codex receives prompts and diff context through its existing authenticated session; NeonDiff does not read OAuth material | Merged package, installed-worker, exact-head live-post, and customer/release proof |
+| Other agent runtimes such as Claude Code or OpenCode | `planned` / discovery-stage | Not a live provider adapter | Not a live provider adapter | Depends on each runtime and its provider chain | Bounded no-write runtime contract, output schema, timeout handling, and current-head behavior |
 
 See [docs/providers.md](providers.md) for setup examples and the longer
 provider registry.
@@ -40,7 +41,7 @@ provider registry.
 | GitHub App review posting | Live posting is gated by configured repos, current-head checks, duplicate suppression, provider readiness, and dry-run evidence. NeonDiff does not approve PRs, merge, push repairs, or silently expand permissions. |
 | Daemon supervision | The live beta operator path is macOS launchd-oriented. Linux systemd, Docker, and CI-runner assets are packaged and guarded by an Ubuntu smoke workflow, but provider-specific Linux review quality and every distribution shape are not claimed. |
 | Desktop app | macOS dev MVP only. No signed/notarized/appcast/TCC/customer-control readiness is claimed. |
-| License activation | Supported review/provider work requires live API-backed activation for every repository visibility. v1.0.4 grants no offline cache authority. The file backend is the supported CLI path; Desktop useful actions remain blocked until a native broker is proven. |
+| License activation | The current CLI (v1.0.x) requires live API-backed activation for every repository visibility; public open-source review becomes free (no Activation Key) only in the native app via the managed GitHub App broker (#614), which verifies visibility server-side. v1.0.4 grants no offline cache authority. The file backend is the supported CLI path; Desktop useful actions remain blocked until a native broker is proven. |
 | Security | Security policy exists, but this is not an enterprise/customer-ready security certification. Use private GitHub vulnerability reporting for secrets or private data. |
 | Support alias | `support@electricsheephq.com` is listed as a launch support contact that requires owner verification before public launch. This repo has no evidence that the alias is monitored. |
 

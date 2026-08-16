@@ -42,7 +42,7 @@ import NeonDiffDesktopCore
         #expect(write.url == root.appending(path: "control-center-patch.json").standardizedFileURL)
         #expect(write.data == expectedBytes)
         #expect(fixture.cli.calls[0].arguments == [
-            "config", "patch", "--config", "config.local.json",
+            "config", "patch", "--config", root.appending(path: "config.local.json").path,
             "--input", root.appending(path: "control-center-patch.json").path,
             "--dry-run", "true", "--expected-revision", revision
         ])
@@ -70,6 +70,8 @@ import NeonDiffDesktopCore
 
         #expect(fixture.model.lastError?.contains(sensitive) != true)
         #expect(fixture.model.logText.contains(sensitive) == false)
+        #expect(fixture.model.statusRefreshFailureMessage != nil)
+        #expect(fixture.model.status == .unknown)
         #expect(fixture.cli.calls[0].standardInput == nil)
     }
 

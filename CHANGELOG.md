@@ -16,6 +16,14 @@ for the semver/GA-line and npm dist-tag policy.
 
 ### Fixed
 
+- Make clean native bot setup immediately patchable: `neondiff init` now gives
+  configs outside protected source/package roots isolated runtime, state,
+  evidence, and license paths beside the config instead of retaining the
+  packaged worker's `/tmp/neondiff` placeholders.
+- Keep the native paid-BYO License pane usable after browser Checkout: customers
+  can paste the issued one-shot Activation Key through the Keychain-only path,
+  while the checkout action opens the public pricing page without trapping the
+  app in a state that hides existing-key entry.
 - Make configured review concurrency real: ZCode execution is asynchronous,
   each daemon cycle settles one bounded parallel PR batch, issue enrichment
   runs independently at its durable single-lane cap, and execution/session

@@ -56,6 +56,8 @@ jobs:
         run: docker build --tag neondiff-ci:${{ github.sha }} .
       - name: Smoke production Docker entrypoint
         run: docker run --rm neondiff-ci:${{ github.sha }} --help
+      - name: Verify worktree cleanup open-handle prerequisite
+        run: docker run --rm --entrypoint sh neondiff-ci:${{ github.sha }} -c 'command -v lsof'
       - name: Verify Linux daemon command guidance
         run: |
           set -euo pipefail

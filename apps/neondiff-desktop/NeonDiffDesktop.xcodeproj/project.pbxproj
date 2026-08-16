@@ -1,0 +1,531 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000060 /* NeonDiffDesktopAppCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000050 /* NeonDiffDesktopAppCore */; };
+		A10000000000000000000061 /* NeonDiffDesktopCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000051 /* NeonDiffDesktopCore */; };
+		A10000000000000000000062 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000052 /* Sparkle */; };
+		A10000000000000000000063 /* NeonDiffDesktopEvaluationSupport in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000053 /* NeonDiffDesktopEvaluationSupport */; };
+		A10000000000000000000064 /* tab-overview.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* tab-overview.json */; };
+		A10000000000000000000065 /* onboarding-welcome.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000024 /* onboarding-welcome.json */; };
+		A10000000000000000000066 /* onboarding-provider.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000025 /* onboarding-provider.json */; };
+		A10000000000000000000067 /* onboarding-daemon.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* onboarding-daemon.json */; };
+		A10000000000000000000068 /* onboarding-license.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000027 /* onboarding-license.json */; };
+		A10000000000000000000069 /* onboarding-done.json in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* onboarding-done.json */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A10000000000000000000041 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000010;
+			remoteInfo = NeonDiffDesktopHostedApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A10000000000000000000020 /* NeonDiffDesktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NeonDiffDesktop.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000021 /* NeonDiffDesktopUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NeonDiffDesktopUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000022 /* NeonDiffDesktopFixtureResolve */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = NeonDiffDesktopFixtureResolve; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000023 /* tab-overview.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/tab-overview.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000024 /* onboarding-welcome.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-welcome.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000025 /* onboarding-provider.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-provider.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000026 /* onboarding-daemon.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-daemon.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000027 /* onboarding-license.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-license.json; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000028 /* onboarding-done.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fixtures/ui/onboarding-done.json; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A10000000000000000000004 /* NeonDiffDesktop */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Sources/NeonDiffDesktop;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000005 /* UITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000006 /* NeonDiffDesktopFixtureResolve */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Sources/NeonDiffDesktopFixtureResolve;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000031 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000060 /* NeonDiffDesktopAppCore in Frameworks */,
+				A10000000000000000000061 /* NeonDiffDesktopCore in Frameworks */,
+				A10000000000000000000062 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000034 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000036 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000063 /* NeonDiffDesktopEvaluationSupport in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000004 /* NeonDiffDesktop */,
+				A10000000000000000000005 /* UITests */,
+				A10000000000000000000006 /* NeonDiffDesktopFixtureResolve */,
+				A10000000000000000000023 /* tab-overview.json */,
+				A10000000000000000000024 /* onboarding-welcome.json */,
+				A10000000000000000000025 /* onboarding-provider.json */,
+				A10000000000000000000026 /* onboarding-daemon.json */,
+				A10000000000000000000027 /* onboarding-license.json */,
+				A10000000000000000000028 /* onboarding-done.json */,
+				A10000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000020 /* NeonDiffDesktop.app */,
+				A10000000000000000000021 /* NeonDiffDesktopUITests.xctest */,
+				A10000000000000000000022 /* NeonDiffDesktopFixtureResolve */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000010 /* NeonDiffDesktop */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000081 /* Build configuration list for PBXNativeTarget "NeonDiffDesktop" */;
+			buildPhases = (
+				A10000000000000000000030 /* Sources */,
+				A10000000000000000000031 /* Frameworks */,
+				A10000000000000000000032 /* Resources */,
+				A10000000000000000000038 /* Embed Debug Fixture Resolver */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000004 /* NeonDiffDesktop */,
+			);
+			name = NeonDiffDesktopHostedApp;
+			packageProductDependencies = (
+				A10000000000000000000050 /* NeonDiffDesktopAppCore */,
+				A10000000000000000000051 /* NeonDiffDesktopCore */,
+				A10000000000000000000052 /* Sparkle */,
+			);
+			productName = NeonDiffDesktop;
+			productReference = A10000000000000000000020 /* NeonDiffDesktop.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A10000000000000000000011 /* NeonDiffDesktopUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000082 /* Build configuration list for PBXNativeTarget "NeonDiffDesktopUITests" */;
+			buildPhases = (
+				A10000000000000000000033 /* Sources */,
+				A10000000000000000000034 /* Frameworks */,
+				A10000000000000000000035 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A10000000000000000000040 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000005 /* UITests */,
+			);
+			name = NeonDiffDesktopUITests;
+			packageProductDependencies = (
+			);
+			productName = NeonDiffDesktopUITests;
+			productReference = A10000000000000000000021 /* NeonDiffDesktopUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		A10000000000000000000012 /* NeonDiffDesktopFixtureResolve */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000083 /* Build configuration list for PBXNativeTarget "NeonDiffDesktopFixtureResolve" */;
+			buildPhases = (
+				A10000000000000000000037 /* Sources */,
+				A10000000000000000000036 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000006 /* NeonDiffDesktopFixtureResolve */,
+			);
+			name = NeonDiffDesktopFixtureResolve;
+			packageProductDependencies = (
+				A10000000000000000000053 /* NeonDiffDesktopEvaluationSupport */,
+			);
+			productName = NeonDiffDesktopFixtureResolve;
+			productReference = A10000000000000000000022 /* NeonDiffDesktopFixtureResolve */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					A10000000000000000000010 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					A10000000000000000000011 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = A10000000000000000000010;
+					};
+					A10000000000000000000012 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000080 /* Build configuration list for PBXProject "NeonDiffDesktop" */;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000002;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A10000000000000000000090 /* XCLocalSwiftPackageReference "." */,
+				A10000000000000000000091 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A10000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000010 /* NeonDiffDesktop */,
+				A10000000000000000000011 /* NeonDiffDesktopUITests */,
+				A10000000000000000000012 /* NeonDiffDesktopFixtureResolve */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000032 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000035 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000064 /* tab-overview.json in Resources */,
+				A10000000000000000000065 /* onboarding-welcome.json in Resources */,
+				A10000000000000000000066 /* onboarding-provider.json in Resources */,
+				A10000000000000000000067 /* onboarding-daemon.json in Resources */,
+				A10000000000000000000068 /* onboarding-license.json in Resources */,
+				A10000000000000000000069 /* onboarding-done.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000030 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000033 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000037 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A10000000000000000000038 /* Embed Debug Fixture Resolver */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Debug Fixture Resolver";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/NeonDiffDesktopFixtureResolve",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\nhelpers_dir=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\nif [ \"$CONFIGURATION\" != \"Debug\" ]; then\n  rm -f \"$helpers_dir/NeonDiffDesktopFixtureResolve\"\n  exit 0\nfi\nresolver=\"$BUILT_PRODUCTS_DIR/NeonDiffDesktopFixtureResolve\"\ntest -f \"$resolver\"\ntest ! -L \"$resolver\"\ntest -x \"$resolver\"\ninstall -d -m 0755 \"$helpers_dir\"\ninstall -m 0755 \"$resolver\" \"$SCRIPT_OUTPUT_FILE_0\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A10000000000000000000040 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000010 /* NeonDiffDesktop */;
+			targetProxy = A10000000000000000000041 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000070 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A10000000000000000000071 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A10000000000000000000072 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = NeonDiff;
+				INFOPLIST_KEY_CFBundleName = NeonDiff;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -package-name neondiff_desktop";
+				PRODUCT_BUNDLE_IDENTIFIER = com.electricsheephq.NeonDiffDesktop;
+				PRODUCT_NAME = NeonDiffDesktop;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		A10000000000000000000073 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = NeonDiff;
+				INFOPLIST_KEY_CFBundleName = NeonDiff;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -package-name neondiff_desktop";
+				PRODUCT_BUNDLE_IDENTIFIER = com.electricsheephq.NeonDiffDesktop;
+				PRODUCT_NAME = NeonDiffDesktop;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+		A10000000000000000000074 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.electricsheephq.NeonDiffDesktopUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = NeonDiffDesktopHostedApp;
+			};
+			name = Debug;
+		};
+		A10000000000000000000075 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.electricsheephq.NeonDiffDesktopUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = NeonDiffDesktopHostedApp;
+			};
+			name = Release;
+		};
+		A10000000000000000000076 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -package-name neondiff_desktop";
+				PRODUCT_NAME = NeonDiffDesktopFixtureResolve;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A10000000000000000000077 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -package-name neondiff_desktop";
+				PRODUCT_NAME = NeonDiffDesktopFixtureResolve;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000080 /* Build configuration list for PBXProject "NeonDiffDesktop" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000070 /* Debug */,
+				A10000000000000000000071 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000081 /* Build configuration list for PBXNativeTarget "NeonDiffDesktop" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000072 /* Debug */,
+				A10000000000000000000073 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000082 /* Build configuration list for PBXNativeTarget "NeonDiffDesktopUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000074 /* Debug */,
+				A10000000000000000000075 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000083 /* Build configuration list for PBXNativeTarget "NeonDiffDesktopFixtureResolve" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000076 /* Debug */,
+				A10000000000000000000077 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A10000000000000000000090 /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A10000000000000000000091 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000000000000000000050 /* NeonDiffDesktopAppCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000090 /* XCLocalSwiftPackageReference "." */;
+			productName = NeonDiffDesktopAppCore;
+		};
+		A10000000000000000000051 /* NeonDiffDesktopCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000090 /* XCLocalSwiftPackageReference "." */;
+			productName = NeonDiffDesktopCore;
+		};
+		A10000000000000000000052 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000091 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		A10000000000000000000053 /* NeonDiffDesktopEvaluationSupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000090 /* XCLocalSwiftPackageReference "." */;
+			productName = NeonDiffDesktopEvaluationSupport;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A10000000000000000000001 /* Project object */;
+}

@@ -18,10 +18,89 @@ enum NeonDiffDesktopCompositionRoot {
         #endif
 
         let keychain = KeychainSecretStore()
-        return NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
+        var productionBoundary = DesktopProductionBoundary.resolve(
+            infoDictionary: Bundle.main.infoDictionary ?? [:]
+        )
+        let githubBroker = productionBoundary.managedGitHubBrokerOrigin.flatMap {
+            try? GitHubBrokerClient(baseURL: $0)
+        }
+        let accountLink = productionBoundary.accountLinkBrokerOrigin.flatMap { origin in
+            productionBoundary.accountConnectURL.flatMap { connectURL in
+                try? GitHubBrokerClient(
+                    baseURL: origin,
+                    accountConnectURL: connectURL
+                )
+            }
+        }
+        if productionBoundary.managedGitHubBrokerOrigin != nil, githubBroker == nil {
+            productionBoundary = .quarantined
+        }
+        let cliWorkingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
+        let localBotSnapshot =
+            LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot()
+        let trustedBundledWorker =
+            FoundationTrustedBundledWorker.executionContext()
+        let localBotConfigurations = localBotSnapshot.configurations
+        let localBotExecutionContexts =
+            localBotSnapshot.executionContexts
+            + (trustedBundledWorker.map { [$0] } ?? [])
+        let localBotExecutionContextProvider:
+            @Sendable () -> [DesktopLocalBotExecutionContext] = {
+                LaunchAgentLocalBotConfigurationDiscovery
+                    .discoverExecutionContexts()
+                    + (
+                        FoundationTrustedBundledWorker
+                            .executionContext()
+                            .map { [$0] }
+                        ?? []
+                    )
+            }
+        let localBotDiscoveryProvider:
+            @Sendable (String) -> DesktopLocalBotDiscoverySnapshot = {
+                label in
+                let snapshot =
+                    LaunchAgentLocalBotConfigurationDiscovery
+                        .discoverSnapshot(label: label)
+                return DesktopLocalBotDiscoverySnapshot(
+                    configurations: snapshot.configurations,
+                    executionContexts:
+                        snapshot.executionContexts
+                        + (
+                            FoundationTrustedBundledWorker
+                                .executionContext()
+                                .map { [$0] }
+                            ?? []
+                        )
+                )
+            }
+        let keychainWorkerLaunchAgentManager:
+            any DesktopKeychainWorkerLaunchAgentManaging
+        if let appExecutableURL = Bundle.main.executableURL,
+           let trustedBundledWorker {
+            keychainWorkerLaunchAgentManager =
+                FoundationKeychainWorkerLaunchAgentManager(
+                    appExecutableURL: appExecutableURL,
+                    trustedBundledWorker: trustedBundledWorker
+                )
+        } else {
+            keychainWorkerLaunchAgentManager =
+                UnavailableDesktopKeychainWorkerLaunchAgentManager()
+        }
+        let model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: AppKitClipboard(),
             urlOpener: AppKitURLOpener(),
-            cli: FoundationDesktopCLIExecutor(),
+            cli: FoundationDesktopCLIExecutor(
+                localBotConfigurations: localBotConfigurations,
+                localBotExecutionContexts: localBotExecutionContexts,
+                localBotExecutionContextProvider:
+                    localBotExecutionContextProvider,
+                defaultWorkingDirectory: cliWorkingDirectory,
+                trustedBundledWorker: trustedBundledWorker,
+                trustedProcessValidator: {
+                    FoundationTrustedBundledWorker
+                        .runningProcessIsTrusted($0)
+                }
+            ),
             dashboard: FoundationDesktopDashboardLauncher(),
             preferences: UserDefaultsDesktopPreferences(.standard),
             clock: ContinuousDesktopClock(),
@@ -29,8 +108,26 @@ enum NeonDiffDesktopCompositionRoot {
             providerVerifier: FoundationProviderVerifier(secretStore: keychain),
             secretStore: keychain,
             githubAuthenticator: GitHubDeviceAuthClient(),
-            productionBoundary: .quarantined,
-            cliWorkingDirectory: NeonDiffCLIResolver.defaultWorkingDirectory()
+            githubBroker: githubBroker,
+            accountLink: accountLink,
+            productionBoundary: productionBoundary,
+            localWorkerUpdateGuideURL: DesktopReleaseRouting.localWorkerUpdateGuideURL(
+                shortVersion: Bundle.main.object(
+                    forInfoDictionaryKey: "CFBundleShortVersionString"
+                ) as? String
+            ),
+            cliWorkingDirectory: cliWorkingDirectory,
+            localBotConfigurations: localBotConfigurations,
+            localBotExecutionContexts: localBotExecutionContexts,
+            localBotExecutionConfigPaths: localBotExecutionContexts.map(
+                \.configPath
+            ),
+            localBotDiscoveryProvider: localBotDiscoveryProvider,
+            keychainWorkerLaunchAgentManager:
+                keychainWorkerLaunchAgentManager
         ))
+        model.localWorkerExecutionContextProvider =
+            localBotExecutionContextProvider
+        return model
     }
 }

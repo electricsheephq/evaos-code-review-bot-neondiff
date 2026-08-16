@@ -76,11 +76,21 @@ public enum ConfigInspectParser {
             }.sorted()
             : pilotRepos
         let repos = reposToShow.map { repo in
-            let profile = repoProfiles[repo] as? [String: Any]
+            let profileKey = repoProfiles.keys
+                .sorted()
+                .first {
+                    $0.caseInsensitiveCompare(repo) == .orderedSame
+                }
+            let canonicalRepo = profileKey ?? repo
+            let profile = repoProfiles[canonicalRepo] as? [String: Any]
             let enabled = profile?["enabled"] as? Bool ?? true
             let displayName = profile?["displayName"] as? String
             let reviewProfile = profile?["reviewProfile"] as? String
-            return RepoMonitor(name: repo, enabled: enabled, profile: displayName ?? reviewProfile ?? "default")
+            return RepoMonitor(
+                name: canonicalRepo,
+                enabled: enabled,
+                profile: displayName ?? reviewProfile ?? "default"
+            )
         }
 
         let zcode = config["zcode"] as? [String: Any]
@@ -89,6 +99,7 @@ public enum ConfigInspectParser {
         let reviewConcurrency = config["reviewConcurrency"] as? [String: Any]
         let reviewGate = config["reviewGate"] as? [String: Any]
         let issueEnrichment = config["issueEnrichment"] as? [String: Any]
+        let codexRuntime = config["codexRuntime"] as? [String: Any]
         let providerRegistry = config["providers"] as? [String: Any]
         let selectedProviderId = providerRegistry?["defaultProviderId"] as? String ?? "zcode-glm"
         let registryEntries = providerRegistry?["providers"] as? [String: Any] ?? [:]
@@ -110,11 +121,24 @@ public enum ConfigInspectParser {
         let providers = ProviderSettings(
             zcodeModel: zcode?["model"] as? String ?? "GLM-5.2",
             zcodeCliPath: zcode?["cliPath"] as? String ?? "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
-            zcodeAppConfigPath: zcode?["appConfigPath"] as? String ?? "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+            zcodeAppConfigPath: zcode?["appConfigPath"] as? String
+                ?? ProviderSettings.defaultZCodeAppConfigPath,
+            // A legacy config without an explicit execution provider is not
+            // bound. Do not invent equality with the selected registry entry:
+            // the ZCode runtime may otherwise choose a different enabled
+            // provider for a private diff.
+            zcodeProviderId: zcode?["providerId"] as? String ?? "",
             openAICompatibleEndpoint: desktop?["openAICompatibleEndpoint"] as? String ?? "http://localhost:8000/v1",
             providerKeyStored: providerKeyStored,
             selectedProviderId: selectedProviderId,
-            registryTargets: registryTargets
+            registryTargets: registryTargets,
+            codexRuntime: CodexRuntimeSettings(
+                enabled: codexRuntime?["enabled"] as? Bool ?? false,
+                cliPath: codexRuntime?["cliPath"] as? String ?? "",
+                model: codexRuntime?["model"] as? String ?? "",
+                reasoningEffort: codexRuntime?["reasoningEffort"] as? String
+                    ?? ""
+            )
         )
         let license = LicenseStatus(
             keyStored: licenseKeyStored,

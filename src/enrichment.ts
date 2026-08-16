@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import {
+  assertIssueAnalysisPublicSafe,
+  type IssueAnalysis
+} from "./issue-analysis.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
 import {
@@ -11,6 +15,7 @@ import {
 import { buildReviewLensIssueSections, type ReviewLensPacket } from "./review-lenses.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import type { IssueEnrichmentRepoPolicy } from "./issue-enrichment.js";
 import type {
   EnrichmentComment as PlanEnrichmentComment,
   EnrichmentCommentPostResult as PlanEnrichmentCommentPostResult,
@@ -36,7 +41,11 @@ export interface EnrichmentConfig {
 
 export type EnrichmentComment = PlanEnrichmentComment;
 export type EnrichmentCommentPostResult = PlanEnrichmentCommentPostResult;
-type IssueEnrichmentSkipReason = "stale_issue_closed" | "issue_is_pull_request";
+export const ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION = 2;
+type IssueEnrichmentSkipReason =
+  | "stale_issue_closed"
+  | "issue_is_pull_request"
+  | "preservation_only_upstream_intake";
 type IssuePlannerSourceKind =
   | "vision_repo_policy_memory_gitnexus"
   | "same_repo_issues_prs"
@@ -170,6 +179,7 @@ export function buildEnrichmentComment(input: {
 export function buildIssueEnrichmentComment(input: {
   repo: string;
   issue: GitHubRelatedIssueOrPull;
+  repoPolicy?: IssueEnrichmentRepoPolicy;
   suggestedLabels?: string[];
   suggestedOwners?: string[];
   allowedLabels?: string[];
@@ -197,17 +207,24 @@ export function buildIssueEnrichmentComment(input: {
   const allowedOwnerKeys = input.allowedOwners === undefined || input.allowedOwners.length === 0
     ? undefined
     : new Set(uniqueCaseInsensitive(input.allowedOwners).map(normalizedSuggestionKey));
-  const suggestedLabels = uniqueCaseInsensitive([
+  const suggestedLabels = uniqueCaseInsensitive(applyIssueLabelAliases([
+    ...(input.repoPolicy?.suggestedLabels ?? []),
     ...(input.suggestedLabels ?? []),
     ...suggestLabelsFromIssue(input.issue)
-  ]).filter((label) => {
+  ], input.repoPolicy?.labelAliases)).filter((label) => {
     const key = normalizedSuggestionKey(label);
     return !existingLabelKeys.has(key) && (allowedLabelKeys === undefined || allowedLabelKeys.has(key));
   }).slice(0, input.maxSuggestions ?? 8);
   const owners = uniqueCaseInsensitive(input.suggestedOwners ?? []).filter((owner) => {
     return allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(owner));
   }).slice(0, input.maxSuggestions ?? 8);
-  const validationSuggestions = unique(input.validationSuggestions ?? []).slice(0, input.maxSuggestions ?? 8);
+  const reviewers = uniqueCaseInsensitive(input.repoPolicy?.suggestedReviewers ?? []).filter((reviewer) => {
+    return allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(reviewer));
+  }).slice(0, input.maxSuggestions ?? 8);
+  const validationSuggestions = unique(
+    input.validationSuggestions ?? [],
+    input.publicConfidencePolicy
+  ).slice(0, input.maxSuggestions ?? 8);
   const gaps = inferIssueAcceptanceGaps(input.issue);
   const planner = buildIssuePlannerPacket({
     issue: input.issue,
@@ -225,6 +242,7 @@ export function buildIssueEnrichmentComment(input: {
     `Existing labels: ${existingLabels.length ? existingLabels.join(", ") : "none"}.`,
     `Suggested labels: ${suggestedLabels.length ? suggestedLabels.join(", ") : "none"}.`,
     `Suggested owners: ${owners.length ? owners.join(", ") : "none"}.`,
+    `Suggested reviewers: ${reviewers.length ? reviewers.join(", ") : "none"}.`,
     "",
     "### Related context",
     "",
@@ -288,6 +306,92 @@ export function buildIssueEnrichmentComment(input: {
   };
 }
 
+export function buildIssueAnalysisEnrichmentComment(input: {
+  repo: string;
+  issue: GitHubRelatedIssueOrPull;
+  analysis: IssueAnalysis;
+  identityHash: string;
+  repoPolicy: IssueEnrichmentRepoPolicy;
+  suggestedLabels?: string[];
+  suggestedOwners?: string[];
+  allowedLabels?: string[];
+  allowedOwners?: string[];
+  maxSuggestions?: number;
+  postIssueComment?: boolean;
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
+  lifecycle?: IssueEnrichmentLifecycleInput;
+}): EnrichmentComment {
+  validateRepoIssue({ repo: input.repo, issueNumber: input.issue.number });
+  if (!/^[0-9a-f]{64}$/i.test(input.identityHash)) {
+    throw new Error(`Invalid issue analysis identity hash: ${input.identityHash}`);
+  }
+  const eligibility = getIssueEnrichmentEligibility(input.issue);
+  if (eligibility.skip) {
+    throw new Error(`Cannot build issue analysis for ${input.repo}#${input.issue.number}: ${eligibility.skip.reason}`);
+  }
+  const marker = buildIssueEnrichmentMarker({ repo: input.repo, issueNumber: input.issue.number });
+  const impactHeading = input.repo.toLowerCase() === "electricsheephq/lcm-x"
+    ? "### LCM-X impact"
+    : "### Repository impact";
+  const visibleBody = [
+    "## evaOS issue enrichment",
+    "",
+    `Issue: ${input.repo}#${input.issue.number} - ${formatInlinePublicText(input.issue.title ?? "(untitled)", input.publicConfidencePolicy)}`,
+    `State: \`${eligibility.state}\`.`,
+    `Priority: \`${input.analysis.priority}\` (\`${input.analysis.priorityState}\`); classification: \`${input.analysis.classification}\`; confidence: \`${input.analysis.confidence}\`.`,
+    "",
+    impactHeading,
+    "",
+    formatPublicText(input.analysis.repositoryImpact, input.publicConfidencePolicy),
+    "",
+    "### Current-main applicability",
+    "",
+    formatPublicText(input.analysis.currentMainApplicability, input.publicConfidencePolicy),
+    "",
+    "### Evidence",
+    "",
+    formatPublicText(input.analysis.evidence, input.publicConfidencePolicy),
+    "",
+    "### Reproduction or invariant gap",
+    "",
+    formatPublicText(input.analysis.reproductionOrInvariantGap, input.publicConfidencePolicy),
+    "",
+    "### Duplicate or related work",
+    "",
+    formatPublicText(input.analysis.relatedWork, input.publicConfidencePolicy),
+    "",
+    "### Migration disposition",
+    "",
+    `\`${input.analysis.migrationDisposition}\``,
+    "",
+    "### Next gate",
+    "",
+    formatPublicText(input.analysis.nextGate, input.publicConfidencePolicy),
+    "",
+    "Suggestions only. No labels, owners, reviewers, approvals, merges, or roadmap fields were changed by this bot."
+  ].join("\n");
+  const redactedVisibleBody = redactSecrets(visibleBody);
+  assertIssueAnalysisPublicSafe(redactedVisibleBody, input.repoPolicy);
+  // The public marker must commit only to the rendered public-safe body. The
+  // private analysis input identity is retained by the local state store for
+  // idempotency, but is never published.
+  const bodyHash = hashBody(redactedVisibleBody);
+  const stateMarker = buildIssueStateMarker({
+    repo: input.repo,
+    issueNumber: input.issue.number,
+    state: eligibility.state,
+    bodyHash,
+    ...(input.lifecycle?.state ? { lifecycleState: input.lifecycle.state } : {}),
+    ...(input.lifecycle ? { lifecycle: buildIssueLifecycleFields(input.repo, input.issue.number, input.lifecycle) } : {})
+  });
+  return {
+    marker,
+    body: [marker, stateMarker, redactedVisibleBody].join("\n"),
+    bodyHash,
+    postIssueComment: input.postIssueComment ?? false
+  };
+}
+
 /**
  * Optional #263 lifecycle/handoff inputs for an issue enrichment marker. `state` is the mapped
  * issue-side lifecycle state (a renaming of the existing enrichment decision); the rest are
@@ -319,6 +423,7 @@ function buildIssueLifecycleFields(
 export function buildIssueEnrichmentDryRunOutput(input: {
   repo: string;
   issue: GitHubRelatedIssueOrPull;
+  repoPolicy?: IssueEnrichmentRepoPolicy;
   suggestedLabels?: string[];
   suggestedOwners?: string[];
   allowedLabels?: string[];
@@ -346,6 +451,7 @@ export function buildIssueEnrichmentDryRunOutput(input: {
   const enrichment = buildIssueEnrichmentComment({
     repo: input.repo,
     issue: input.issue,
+    repoPolicy: input.repoPolicy,
     suggestedLabels: input.suggestedLabels,
     suggestedOwners: input.suggestedOwners,
     allowedLabels: input.allowedLabels,
@@ -366,6 +472,12 @@ export function buildIssueEnrichmentDryRunOutput(input: {
     ...(input.issue.html_url ? { url: redactSecrets(input.issue.html_url) } : {}),
     body: enrichment.body
   };
+}
+
+function applyIssueLabelAliases(labels: string[], aliases: Record<string, string> | undefined): string[] {
+  if (!aliases || Object.keys(aliases).length === 0) return labels;
+  const normalizedAliases = new Map(Object.entries(aliases).map(([from, to]) => [normalizedSuggestionKey(from), to]));
+  return labels.map((label) => normalizedAliases.get(normalizedSuggestionKey(label)) ?? label);
 }
 
 export async function postEnrichmentComment(input: {
@@ -471,6 +583,9 @@ function getIssueEnrichmentEligibility(issue: GitHubRelatedIssueOrPull): {
   const state = normalizeIssueState(issue);
   if (issue.pull_request) return { state, skip: { reason: "issue_is_pull_request" } };
   if (state === "closed") return { state, skip: { reason: "stale_issue_closed" } };
+  if (normalizeIssueLabels(issue.labels).some((label) => label.trim().toLowerCase() === "upstream-intake")) {
+    return { state, skip: { reason: "preservation_only_upstream_intake" } };
+  }
   return { state };
 }
 
@@ -700,8 +815,8 @@ function formatPublicText(value: string | undefined, publicConfidencePolicy?: Pu
   ).trim();
 }
 
-function unique(values: string[]): string[] {
-  return [...new Set(values.map((value) => formatPublicText(value)).filter(Boolean))];
+function unique(values: string[], publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string[] {
+  return [...new Set(values.map((value) => formatPublicText(value, publicConfidencePolicy)).filter(Boolean))];
 }
 
 function uniqueCaseInsensitive(values: string[]): string[] {

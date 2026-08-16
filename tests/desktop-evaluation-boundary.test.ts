@@ -80,7 +80,7 @@ describe("desktop evaluation production boundary", () => {
     expect(gate).toMatch(/release_bin\/NeonDiffDesktop/);
     expect(gate).toMatch(/NEONDIFF_DESKTOP_DIST_DIR=.*dist-release/);
     expect(gate).toMatch(/release-bundle-check/);
-    expect(gate).toMatch(/dist-release\/NeonDiffDesktop\.app/);
+    expect(gate).toMatch(/dist-release\/NeonDiff\.app/);
 
     const bundleBuilder = readFileSync("apps/neondiff-desktop/script/build_and_run.sh", "utf8");
     expect(bundleBuilder).toMatch(/NEONDIFF_DESKTOP_BUILD_CONFIGURATION/);
@@ -171,8 +171,12 @@ describe("desktop evaluation production boundary", () => {
     expect(app).toContain('keyEquivalent == "n"');
     expect(app).not.toContain('item(withTitle: "File")');
     expect(app).not.toContain('hasPrefix("New NeonDiff Desktop Window")');
-    expect(updater).toContain("Updates blocked pending native activation proof");
-    expect(updater).not.toContain("SPUStandardUpdaterController");
+    expect(updater).toContain("SPUStandardUpdaterController");
+    expect(updater).toContain("startingUpdater: false");
+    expect(updater).toContain("model.desktopUpdateAccess");
+    expect(updater).toContain("mayPerform updateCheck");
+    expect(updater).toContain("shouldProceedWithUpdate");
+    expect(updater).not.toContain("Updates blocked pending native activation proof");
     expect(manifestBuilder).toContain('visualBaseline: { status: "captured-no-reference" }');
     expect(manifestBuilder).not.toContain("goldenMetrics");
     expect(runner).toContain("kill -KILL");

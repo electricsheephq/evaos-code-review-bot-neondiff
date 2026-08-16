@@ -1,0 +1,16 @@
+{
+  "name": "NeonDiff Daylight SAIBA",
+  "source": "neondiff.com approved design system, 2026-07-26",
+  "light": {
+    "background": "#F4EFE6",
+    "mark": "#0E7490",
+    "highlight": "#22D3EE",
+    "ink": "#0A1420"
+  },
+  "dark": {
+    "background": "#000000",
+    "mark": "#39FF88",
+    "highlight": "#7BFFB0",
+    "ink": "#D9FFE6"
+  }
+}

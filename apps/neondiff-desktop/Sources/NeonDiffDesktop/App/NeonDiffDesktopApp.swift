@@ -8,13 +8,19 @@ struct NeonDiffDesktopApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model: NeonDiffDesktopModel
     @StateObject private var updateController: NeonUpdateController
+    @AppStorage("neondiff.appearance") private var appearancePreference = "dark"
+    @State private var settingsContentHeight =
+        SettingsWindowLayout.preferredContentHeight
 #if DEBUG
     private let evaluationContext: DesktopResolvedEvaluationLaunchContext?
     private let evaluationReadinessRequest: DesktopEvaluationReadinessRequest?
     private let evaluationRenderLatch: DesktopEvaluationRenderLatch?
+    private let evaluationSurfaceStatus: DesktopEvaluationSurfaceStatus?
+    @StateObject private var settingsEvaluationStatus = HostedSettingsEvaluationStatus()
 #endif
 
     init() {
+        FoundationKeychainWorkerDaemonRunner.runAndExitIfRequested()
 #if DEBUG
         let context: DesktopResolvedEvaluationLaunchContext?
         do {
@@ -25,6 +31,7 @@ struct NeonDiffDesktopApp: App {
         evaluationContext = context
         let renderLatch = context.map { _ in DesktopEvaluationRenderLatch() }
         evaluationRenderLatch = renderLatch
+        evaluationSurfaceStatus = context.map { _ in DesktopEvaluationSurfaceStatus() }
         if let context,
            let renderLatch,
            let outputPath = ProcessInfo.processInfo.environment[
@@ -44,28 +51,23 @@ struct NeonDiffDesktopApp: App {
         }
         let initialModel = context.map(DesktopEvaluationModelAdapter.makeModel(context:))
             ?? NeonDiffDesktopCompositionRoot.makeModel()
-        let initialUpdateController = NeonUpdateController()
+        let initialUpdateController = NeonUpdateController(model: initialModel)
 #else
         let initialModel = NeonDiffDesktopCompositionRoot.makeModel()
-        let initialUpdateController = NeonUpdateController()
+        let initialUpdateController = NeonUpdateController(model: initialModel)
 #endif
         _model = StateObject(wrappedValue: initialModel)
         _updateController = StateObject(wrappedValue: initialUpdateController)
     }
 
     var body: some Scene {
-        WindowGroup("NeonDiff Desktop") {
-            ContentView(
-                model: model,
-                updateController: updateController,
-                preferredColorScheme: preferredColorScheme,
-                rootAccessibilityIdentifier: rootAccessibilityIdentifier,
-                onSurfaceReady: evaluationSurfaceReadyAction
-            )
+        WindowGroup("NeonDiff") {
+            evaluationTextSizedContentView
                 .frame(
                     minWidth: CGFloat(minimumContentSize.width),
                     minHeight: CGFloat(minimumContentSize.height)
                 )
+                .applyingEvaluationDynamicTypeSize(evaluationDynamicTypeSize)
                 .environment(\.locale, evaluationLocale)
                 .transaction { transaction in
                     if disablesAnimations {
@@ -77,7 +79,29 @@ struct NeonDiffDesktopApp: App {
                     windowConfigurator.allowsHitTesting(false)
                 )
         }
+        .defaultSize(width: 1200, height: 760)
+        .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit NeonDiff") {
+                    model.isOnboardingPresented = false
+                    DispatchQueue.main.async {
+                        NSApplication.shared.terminate(nil)
+                    }
+                }
+                .keyboardShortcut("q", modifiers: [.command])
+            }
+
+            CommandGroup(after: .newItem) {
+                Button("Close NeonDiff Window") {
+                    model.isOnboardingPresented = false
+                    DispatchQueue.main.async {
+                        NSApplication.shared.keyWindow?.performClose(nil)
+                    }
+                }
+                .keyboardShortcut("w", modifiers: [.command])
+            }
+
             CommandMenu("NeonDiff") {
                 Button("Open Local Dashboard") {
                     model.openDashboard()
@@ -88,6 +112,12 @@ struct NeonDiffDesktopApp: App {
                     model.refreshStatus()
                 }
                 .keyboardShortcut("r", modifiers: [.command])
+
+                Button("Switch to \(preferredColorScheme == .light ? "Dark" : "Light") Mode") {
+                    toggleAppearance()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(!appearanceToggleAvailable)
 
                 Button("Copy Status Command") {
                     model.copyCommand(model.statusCommand)
@@ -105,15 +135,92 @@ struct NeonDiffDesktopApp: App {
         }
 
         Settings {
-            ZStack {
-                OperatorBackdrop()
-                SettingsPane(model: model, updateController: updateController)
-            }
-            .buttonStyle(OperatorButtonStyle())
-            .tint(NeonDiffTheme.accent)
-            .preferredColorScheme(preferredColorScheme)
-            .frame(width: 560)
+            evaluationTextSizedSettingsScene
         }
+    }
+
+    @ViewBuilder
+    private var evaluationTextSizedSettingsScene: some View {
+#if DEBUG
+        if evaluationContext?.textSizeMode == .accessibility3 {
+            settingsScene
+                .hostedSettingsEvaluationContent(
+                    enabled: true,
+                    status: settingsEvaluationStatus
+                )
+                .dynamicTypeSize(.accessibility3)
+        } else if evaluationContext != nil {
+            settingsScene
+                .hostedSettingsEvaluationContent(
+                    enabled: true,
+                    status: settingsEvaluationStatus
+                )
+        } else {
+            settingsScene
+        }
+#else
+        settingsScene
+#endif
+    }
+
+    private var settingsScene: some View {
+        ZStack {
+            OperatorBackdrop()
+            SettingsPane(model: model, updateController: updateController)
+        }
+        .buttonStyle(OperatorButtonStyle())
+        .tint(NeonDiffTheme.accent)
+        .preferredColorScheme(preferredColorScheme)
+        .frame(
+            width: SettingsWindowLayout.preferredContentWidth,
+            height: settingsContentHeight
+        )
+        .background(
+            SettingsWindowFitView(contentHeight: $settingsContentHeight)
+                .allowsHitTesting(false)
+        )
+    }
+
+    @ViewBuilder
+    private var evaluationTextSizedContentView: some View {
+#if DEBUG
+        if evaluationContext?.textSizeMode == .accessibility3 {
+            contentView.dynamicTypeSize(.accessibility3)
+        } else {
+            contentView
+        }
+#else
+        contentView
+#endif
+    }
+
+    private var contentView: ContentView {
+#if DEBUG
+        ContentView(
+            model: model,
+            updateController: updateController,
+            preferredColorScheme: preferredColorScheme,
+            rootAccessibilityIdentifier: rootAccessibilityIdentifier,
+            enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled,
+            onSurfaceReady: evaluationSurfaceReadyAction,
+            appearanceLabel: preferredColorScheme == .light ? "LIGHT" : "DARK",
+            appearanceToggleAvailable: appearanceToggleAvailable,
+            toggleAppearance: toggleAppearance,
+            evaluationSurfaceStatus: evaluationSurfaceStatus
+        )
+#else
+        ContentView(
+            model: model,
+            updateController: updateController,
+            preferredColorScheme: preferredColorScheme,
+            rootAccessibilityIdentifier: rootAccessibilityIdentifier,
+            enablesEvaluationRegionBindings: evaluationRegionBindingsEnabled,
+            onSurfaceReady: evaluationSurfaceReadyAction,
+            appearanceLabel: preferredColorScheme == .light ? "LIGHT" : "DARK",
+            appearanceToggleAvailable: appearanceToggleAvailable,
+            toggleAppearance: toggleAppearance
+        )
+#endif
     }
 
     private var requestedContentSize: NSSize? {
@@ -140,13 +247,52 @@ struct NeonDiffDesktopApp: App {
 
     private var preferredColorScheme: ColorScheme? {
 #if DEBUG
-        switch evaluationContext?.fixture.environment.appearance {
-        case .light: .light
-        case .system: nil
-        case .dark, nil: .dark
+        if let evaluationAppearance = evaluationContext?.fixture.environment.appearance {
+            switch evaluationAppearance {
+            case .light: return .light
+            case .system: return nil
+            case .dark: return .dark
+            }
+        }
+#endif
+        return appearancePreference == "light" ? .light : .dark
+    }
+
+    private var appearanceToggleAvailable: Bool {
+#if DEBUG
+        evaluationContext == nil
+#else
+        true
+#endif
+    }
+
+    private func toggleAppearance() {
+        guard appearanceToggleAvailable else { return }
+        appearancePreference = preferredColorScheme == .light ? "dark" : "light"
+    }
+
+    // DEBUG-only hook so design-reference evidence can capture the large-text
+    // appearance of a working screen. Gated on an env var and never set by the
+    // hosted geometry harness, so it does not affect any geometry contract.
+    private var evaluationDynamicTypeSize: DynamicTypeSize? {
+#if DEBUG
+        guard let raw = ProcessInfo.processInfo.environment["NEONDIFF_DESKTOP_EVALUATION_DYNAMIC_TYPE"] else {
+            return nil
+        }
+        switch raw {
+        case "large": return .large
+        case "xLarge": return .xLarge
+        case "xxLarge": return .xxLarge
+        case "xxxLarge": return .xxxLarge
+        case "accessibility1": return .accessibility1
+        case "accessibility2": return .accessibility2
+        case "accessibility3": return .accessibility3
+        case "accessibility4": return .accessibility4
+        case "accessibility5": return .accessibility5
+        default: return nil
         }
 #else
-        .dark
+        return nil
 #endif
     }
 
@@ -171,7 +317,9 @@ struct NeonDiffDesktopApp: App {
         NeonWindowConfigurator(
             requestedContentSize: requestedContentSize,
             disablesAnimations: disablesAnimations,
-            readinessRequest: evaluationReadinessRequest
+            readinessRequest: evaluationReadinessRequest,
+            evaluationSection: evaluationContext == nil ? nil : model.selectedSection,
+            surfaceStatus: evaluationSurfaceStatus
         )
 #else
         NeonWindowConfigurator(
@@ -183,17 +331,34 @@ struct NeonDiffDesktopApp: App {
 
     private var rootAccessibilityIdentifier: String {
 #if DEBUG
-        evaluationContext.map { "neondiff.fixture.\($0.fixture.id)" }
-            ?? "neondiff.desktop.root"
+        guard let evaluationContext else { return "neondiff.desktop.root" }
+        let fixtureId = evaluationContext.fixture.id
+        switch evaluationContext.textSizeMode {
+        case .runnerDefault:
+            return "neondiff.fixture.\(fixtureId)"
+        case .accessibility3:
+            return "neondiff.fixture.\(fixtureId).text-size.accessibility3"
+        }
 #else
         "neondiff.desktop.root"
 #endif
     }
 
-    private var evaluationSurfaceReadyAction: (() -> Void)? {
+    private var evaluationRegionBindingsEnabled: Bool {
+#if DEBUG
+        evaluationContext != nil
+#else
+        false
+#endif
+    }
+
+    private var evaluationSurfaceReadyAction: ((DesktopSection) -> Void)? {
 #if DEBUG
         evaluationRenderLatch.map { latch in
-            { latch.markReady() }
+            { section in
+                latch.markReady()
+                evaluationSurfaceStatus?.markRendered(section: section)
+            }
         }
 #else
         nil
@@ -201,19 +366,235 @@ struct NeonDiffDesktopApp: App {
     }
 }
 
+private enum SettingsWindowLayout {
+    static let preferredContentWidth: CGFloat = 560
+    static let preferredContentHeight: CGFloat = 700
+
+    static func fittedContentHeight(
+        visibleScreenHeight: CGFloat,
+        chromeHeight: CGFloat
+    ) -> CGFloat? {
+        guard visibleScreenHeight.isFinite,
+              visibleScreenHeight > 0,
+              chromeHeight.isFinite,
+              chromeHeight >= 0,
+              visibleScreenHeight > chromeHeight else {
+            return nil
+        }
+        return max(
+            1,
+            min(preferredContentHeight, floor(visibleScreenHeight - chromeHeight))
+        )
+    }
+}
+
+private struct SettingsWindowFitView: NSViewRepresentable {
+    @Binding var contentHeight: CGFloat
+    @Environment(\.colorScheme) private var colorScheme
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.isHidden = true
+        DispatchQueue.main.async {
+            context.coordinator.attach(
+                to: view.window,
+                contentHeight: $contentHeight,
+                colorScheme: colorScheme
+            )
+        }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            context.coordinator.attach(
+                to: view.window,
+                contentHeight: $contentHeight,
+                colorScheme: colorScheme
+            )
+        }
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private weak var window: NSWindow?
+        private var contentHeight: Binding<CGFloat>?
+        private var pendingHeight: CGFloat?
+        private var pendingOriginContainment = false
+        private var attachmentGeneration = 0
+
+        func attach(
+            to window: NSWindow?,
+            contentHeight: Binding<CGFloat>,
+            colorScheme: ColorScheme
+        ) {
+            self.contentHeight = contentHeight
+            window?.appearance = colorScheme == .dark
+                ? NSAppearance(named: .darkAqua)
+                : NSAppearance(named: .aqua)
+            guard self.window !== window else {
+                return
+            }
+            detachObservers()
+            attachmentGeneration += 1
+            pendingHeight = nil
+            pendingOriginContainment = false
+            self.window = window
+            guard let window else { return }
+            let center = NotificationCenter.default
+            center.addObserver(
+                self,
+                selector: #selector(windowScreenDidChange),
+                name: NSWindow.didChangeScreenNotification,
+                object: window
+            )
+            center.addObserver(
+                self,
+                selector: #selector(screenParametersDidChange),
+                name: NSApplication.didChangeScreenParametersNotification,
+                object: nil
+            )
+            fitWindow()
+        }
+
+        func detach() {
+            detachObservers()
+            attachmentGeneration += 1
+            window = nil
+            contentHeight = nil
+            pendingHeight = nil
+            pendingOriginContainment = false
+        }
+
+        @objc private func windowScreenDidChange(_ notification: Notification) {
+            fitWindow(containOrigin: false)
+        }
+
+        @objc private func screenParametersDidChange(_ notification: Notification) {
+            fitWindow()
+        }
+
+        private func fitWindow(containOrigin: Bool = true) {
+            guard let window,
+                  let contentHeight,
+                  let visibleFrame = window.screen?.visibleFrame else {
+                return
+            }
+            let windowFrame = window.frame
+            let contentLayoutRect = window.contentLayoutRect
+            let currentContentHeight = contentHeight.wrappedValue
+            guard Self.isFiniteNonempty(windowFrame),
+                  Self.isFiniteNonempty(contentLayoutRect),
+                  Self.isFiniteNonempty(visibleFrame),
+                  currentContentHeight.isFinite,
+                  currentContentHeight > 0 else {
+                return
+            }
+            let chromeHeight = windowFrame.height - contentLayoutRect.height
+            guard let targetHeight = SettingsWindowLayout.fittedContentHeight(
+                visibleScreenHeight: visibleFrame.height,
+                chromeHeight: chromeHeight
+            ) else {
+                return
+            }
+            if abs(currentContentHeight - targetHeight) > 0.5 {
+                if pendingHeight == targetHeight {
+                    pendingOriginContainment = pendingOriginContainment || containOrigin
+                    return
+                }
+                pendingHeight = targetHeight
+                pendingOriginContainment = containOrigin
+                let generation = attachmentGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          self.window === window,
+                          self.attachmentGeneration == generation,
+                          self.pendingHeight == targetHeight,
+                          let contentHeight = self.contentHeight else {
+                        return
+                    }
+                    let shouldContainOrigin = self.pendingOriginContainment
+                    contentHeight.wrappedValue = targetHeight
+                    self.pendingHeight = nil
+                    self.pendingOriginContainment = false
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self,
+                              self.window === window,
+                              self.attachmentGeneration == generation else {
+                            return
+                        }
+                        self.fitWindow(containOrigin: shouldContainOrigin)
+                    }
+                }
+                return
+            }
+            pendingHeight = nil
+            pendingOriginContainment = false
+            guard containOrigin else { return }
+            var origin = windowFrame.origin
+            origin.x = min(
+                max(origin.x, visibleFrame.minX),
+                max(visibleFrame.minX, visibleFrame.maxX - windowFrame.width)
+            )
+            origin.y = min(
+                max(origin.y, visibleFrame.minY),
+                max(visibleFrame.minY, visibleFrame.maxY - windowFrame.height)
+            )
+            if abs(origin.x - windowFrame.origin.x) > 0.5
+                || abs(origin.y - windowFrame.origin.y) > 0.5 {
+                window.setFrameOrigin(origin)
+            }
+        }
+
+        private static func isFiniteNonempty(_ rect: CGRect) -> Bool {
+            rect.origin.x.isFinite
+                && rect.origin.y.isFinite
+                && rect.width.isFinite
+                && rect.height.isFinite
+                && rect.width > 0
+                && rect.height > 0
+        }
+
+        private func detachObservers() {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func applyingEvaluationDynamicTypeSize(_ size: DynamicTypeSize?) -> some View {
+        if let size {
+            self.dynamicTypeSize(size)
+        } else {
+            self
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldRestoreSecureApplicationState(_ app: NSApplication) -> Bool {
-#if DEBUG
-        if CommandLine.arguments.contains("--ui-testing") { return false }
-#endif
-        return true
+        false
     }
 
     func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool {
-#if DEBUG
-        if CommandLine.arguments.contains("--ui-testing") { return false }
-#endif
-        return true
+        false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        .terminateNow
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

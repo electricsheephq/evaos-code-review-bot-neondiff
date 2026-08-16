@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createPrivateKey } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { loadConfig, validateLicenseConfigOverride, type BotConfig } from "./config.js";
 import { collectCoverageAudit, CoverageStateReader } from "./coverage-audit.js";
@@ -107,6 +108,11 @@ import { runProvidersVerifyCommand } from "./providers-verify-command.js";
 import { collectReleaseStatus, collectReleaseStatusWithConfig, type ReleaseStatus } from "./release-status.js";
 import { buildReviewHeadGate } from "./review-head-gate.js";
 import { buildRepoMemoryPacket, readRepoMemoryMarkdown } from "./repo-memory.js";
+import {
+  assertPathOutsideProtectedRoot,
+  getProtectedCheckoutRoots,
+  resolvePathFollowingExistingSymlinks
+} from "./path-safety.js";
 import { buildRepoPolicySnapshot, listReposToScan, resolveRepoProfile } from "./repo-policy.js";
 import { runOnceCliCommand } from "./run-once-cli.js";
 import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
@@ -129,6 +135,13 @@ import { resolveZCodeProviderEnv } from "./zcode-env.js";
 import { parsePositiveInteger } from "./cli-args.js";
 import { readSecretFromStdin } from "./secret-stdin.js";
 import { classifyCommandLicensePolicy, type CommandLicensePolicy } from "./command-license-policy.js";
+import {
+  applyRuntimeGitHubCredentials,
+  resolveRuntimeGitHubCredentials,
+  resolveRuntimeCredentialEnvelope,
+  withRuntimeGitHubCredentials,
+  type RuntimeGitHubCredentials
+} from "./runtime-github-credentials.js";
 
 const LAUNCHCTL_TIMEOUT_MS = 15_000;
 const PLUTIL_TIMEOUT_MS = 5_000;
@@ -296,16 +309,34 @@ async function main(): Promise<void> {
     }
     const config = loadConfig(args.config);
     if (action === "list") {
+      const codexRuntime = config.codexRuntime?.enabled ? config.codexRuntime : undefined;
       console.log(stringifyProviderOutput({
         ok: true,
         command: "providers list",
-        proofBoundary: "Provider registry visibility only; live review execution remains ZCode-backed until adapter rollout evidence passes.",
+        proofBoundary: codexRuntime
+          ? "Provider registry visibility plus active Codex CLI runtime selection; this does not prove an installed review or GitHub post."
+          : "Provider registry visibility only; live review execution uses the configured ZCode runtime.",
+        activeRuntime: codexRuntime
+          ? {
+              providerId: "codex-cli-oauth",
+              adapter: "codex-cli",
+              model: codexRuntime.model,
+              auth: "existing-codex-session"
+            }
+          : {
+              providerId: config.zcode.providerId,
+              adapter: "zcode",
+              model: config.zcode.model,
+              auth: "zcode-app-config"
+            },
         ...buildProviderRegistrySummary({
           registry: config.providers!,
-          currentZCode: {
-            providerId: config.zcode.providerId,
-            model: config.zcode.model
-          }
+          ...(codexRuntime ? {} : {
+            currentZCode: {
+              providerId: config.zcode.providerId,
+              model: config.zcode.model
+            }
+          })
         })
       }));
       return;
@@ -361,6 +392,12 @@ async function main(): Promise<void> {
       const result = await activateLicense({
         config: licenseConfig,
         licenseKey,
+        persistLocalState: args["persist-local-state"] === undefined
+          ? true
+          : parseBooleanArg(args["persist-local-state"], "--persist-local-state"),
+        ...(args["license-machine-id"]
+          ? { machineId: parseLicenseMachineIdArg(args["license-machine-id"]) }
+          : {}),
         ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
       });
       console.log(stringifyRedactedJson({ command: "license activate", ...result }));
@@ -371,6 +408,9 @@ async function main(): Promise<void> {
       const result = await getLicenseStatus({
         config: licenseConfig,
         refresh: args.refresh === undefined ? false : parseBooleanArg(args.refresh, "--refresh"),
+        ...(args["license-machine-id"]
+          ? { machineId: parseLicenseMachineIdArg(args["license-machine-id"]) }
+          : {}),
         ...(args.repo ? { repo: parseSingleArg(args.repo, "--repo") } : {})
       });
       console.log(stringifyRedactedJson({ command: "license status", ...result }));
@@ -392,16 +432,23 @@ async function main(): Promise<void> {
   if (command === "doctor") {
     const config = loadConfig(args.config);
     if (args._[1] === "github") {
-      const result = await buildDoctorGithubReport(config);
+      const credentials = await resolveDoctorGitHubCredentials(args, process.stdin);
+      const requestedRepo = args.repo ? parseSingleArg(args.repo, "--repo") : undefined;
+      const result = await buildDoctorGithubReport(config, credentials, requestedRepo);
       console.log(stringifyRedactedJson(result));
       if (!result.ok) process.exitCode = 1;
       return;
     }
-    const zcode = resolveZCodeProviderEnv({
-      appConfigPath: config.zcode.appConfigPath,
-      model: config.zcode.model,
-      providerId: config.zcode.providerId
-    });
+    const codexRuntime = config.codexRuntime?.enabled
+      ? config.codexRuntime
+      : undefined;
+    const zcode = codexRuntime
+      ? undefined
+      : resolveZCodeProviderEnv({
+          appConfigPath: config.zcode.appConfigPath,
+          model: config.zcode.model,
+          providerId: config.zcode.providerId
+        });
     const github = new GitHubApi(config.github);
     const readChecks = [];
     const monitoredRepos = listReposToScan(config);
@@ -444,7 +491,17 @@ async function main(): Promise<void> {
       commandsEnabled: config.commands.enabled,
       statePath: config.statePath,
       workRoot: config.workRoot,
-      zcode: zcode.redacted,
+      ...(codexRuntime
+        ? {
+            activeRuntime: {
+              providerId: "codex-cli-oauth",
+              adapter: "codex-cli",
+              model: codexRuntime.model,
+              reasoningEffort: codexRuntime.reasoningEffort,
+              auth: "existing-codex-session"
+            }
+          }
+        : { zcode: zcode!.redacted }),
       github: {
         canPostAsApp: github.canPostAsApp(),
         readMode: github.canPostAsApp() ? "app_installation" : "fallback_token",
@@ -1099,10 +1156,12 @@ async function main(): Promise<void> {
     const generatedAt = args["generated-at"] ?? new Date().toISOString();
     parseCanonicalIsoTimestamp(generatedAt, "--generated-at");
     const relatedConfig = config.githubRelatedContext!;
-    const github = new GitHubApi({
+    const githubConfig = {
       ...config.github,
       requestTimeoutMs: relatedConfig.requestTimeoutMs
-    });
+    };
+    applyRuntimeGitHubCredentials(githubConfig);
+    const github = new GitHubApi(githubConfig);
     const pull = await github.getPull(repo, pullNumber);
     const result = await buildGitHubRelatedContextPacket({
       repo,
@@ -1181,9 +1240,12 @@ async function main(): Promise<void> {
       const output = buildIssueEnrichmentDryRunOutput({
         repo,
         issue,
+        repoPolicy: issuePolicy.repoPolicy,
         allowedLabels: issuePolicy.suggestions.allowedLabels,
         allowedOwners: issuePolicy.suggestions.allowedReviewers,
-        validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
+        validationSuggestions: [
+          "Confirm owner, acceptance criteria, and validation evidence before implementation."
+        ],
         maxRelatedRefs: enrichmentConfig.maxRelatedRefs,
         maxSuggestions: enrichmentConfig.maxSuggestions,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
@@ -1336,6 +1398,7 @@ async function main(): Promise<void> {
         const preview = buildIssueEnrichmentDryRunOutput({
           repo,
           issue,
+          repoPolicy: policy.repoPolicy,
           allowedLabels: policy.suggestions.allowedLabels,
           allowedOwners: policy.suggestions.allowedReviewers,
           validationSuggestions: ["Confirm owner, acceptance criteria, and validation evidence before implementation."],
@@ -2105,6 +2168,9 @@ async function main(): Promise<void> {
       }
     }
     const useZCode = args.zcode !== "false";
+    const expectedConfigRevision = args["expected-config-revision"]
+      ? parseSingleArg(args["expected-config-revision"], "--expected-config-revision")
+      : undefined;
     let pullNumber: number | undefined;
     try {
       pullNumber = args.pr ? parsePositiveInteger(parseSingleArg(args.pr, "--pr"), "--pr") : undefined;
@@ -2121,22 +2187,55 @@ async function main(): Promise<void> {
       }
       throw error;
     }
-    const result = await runOnceCliCommand({
-      options: {
-        configPath: args.config,
-        dryRun,
-        repo,
-        pullNumber,
-        useZCode,
-        expectedHeadSha: reviewPrExpectedHeadSha
-      },
-      commandName: command,
-      admitImpl: async () => {
-        const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
-        if (!admission) throw new Error("review commands require production license admission");
-        return admission;
-      }
-    });
+    if (command === "review-pr" && !expectedConfigRevision) {
+      console.log(JSON.stringify({
+        ok: false,
+        command: "review-pr",
+        ...(repo ? { repo } : {}),
+        error: "review-pr requires --expected-config-revision for dry and live review approval"
+      }, null, 2));
+      process.exitCode = 1;
+      return;
+    }
+    if (command === "review-pr" && !useZCode) {
+      console.log(JSON.stringify({
+        ok: false,
+        command: "review-pr",
+        ...(repo ? { repo } : {}),
+        error: "review-pr requires --zcode true so the approved dry run and live review execute the same provider path"
+      }, null, 2));
+      process.exitCode = 1;
+      return;
+    }
+    const runtimeGitHubCredentials = command === "review-pr"
+      ? await resolveCLIReviewRuntimeCredentials(args)
+      : undefined;
+    const result = await withRuntimeGitHubCredentials(
+      runtimeGitHubCredentials,
+      () => runOnceCliCommand({
+        options: {
+          configPath: args.config,
+          dryRun,
+          repo,
+          pullNumber,
+          useZCode,
+          expectedHeadSha: reviewPrExpectedHeadSha,
+          expectedConfigRevision,
+          processedHeadPolicy:
+            command === "review-pr" && !dryRun && reviewPrExpectedHeadSha
+              ? "approved_dry_run"
+              : command === "review-pr" && dryRun
+                ? "refresh_dry_run"
+                : "normal"
+        },
+        commandName: command,
+        admitImpl: async () => {
+          const admission = await requireClassifiedCommandAdmission(commandLicensePolicy, args.config);
+          if (!admission) throw new Error("review commands require production license admission");
+          return admission;
+        }
+      })
+    );
     console.log(result.output);
     if (result.exitCode !== 0) process.exitCode = result.exitCode;
     return;
@@ -2338,6 +2437,13 @@ async function main(): Promise<void> {
   if (command === "daemon") {
     const daemonAction = args._[1];
     if (daemonAction === "start" || daemonAction === "stop" || daemonAction === "status") {
+      if (args["runtime-credentials-stdin"] !== undefined
+        || args["github-app-private-key-stdin"] !== undefined
+        || args["github-app-id"] !== undefined) {
+        throw new Error(
+          "credential stdin is supported only for the raw daemon process, not daemon start, stop, or status"
+        );
+      }
       if (daemonAction === "start"
         && args["dry-run"] === "false"
         && args.confirm === "true") {
@@ -2351,36 +2457,89 @@ async function main(): Promise<void> {
     if (daemonAction) {
       throw new Error("daemon subcommand must be one of: start, stop, status");
     }
-    const config = loadConfig(args.config);
-    const monitoredRepos = listReposToScan(config);
-    let cycle = 0;
-    const runOnce = args.once === "true";
-    for (;;) {
-      cycle += 1;
-      const dryRun = args["dry-run"] !== "false";
-      const cycleResult = await runDaemonCycle({
-        cycle,
-        dryRun,
-        pilotRepos: config.pilotRepos,
-        monitoredRepos,
-        canaryPulls: config.canaryPulls ?? [],
-        commandsEnabled: config.commands.enabled,
-        reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
-        issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
-        configPath: args.config
-      });
-      if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
-        process.exitCode = 1;
-        return;
-      }
-      if (runOnce) {
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
-    }
+    const runtimeGitHubCredentials =
+      await resolveCLIDaemonRuntimeCredentials(args);
+    await withRuntimeGitHubCredentials(
+      runtimeGitHubCredentials,
+      () => runRawDaemon(args)
+    );
+    return;
   }
 
   throw new Error(`Unknown command: ${command ?? "(missing)"}`);
+}
+
+async function runRawDaemon(args: ParsedArgs): Promise<void> {
+  const config = loadConfig(args.config);
+  const monitoredRepos = listReposToScan(config);
+  let cycle = 0;
+  const runOnce = args.once === "true";
+  for (;;) {
+    cycle += 1;
+    const dryRun = args["dry-run"] !== "false";
+    const cleanupIntervalCycles = Math.max(
+      1,
+      Math.ceil(config.worktreeCleanup!.intervalMs / config.pollIntervalMs)
+    );
+    const cycleResult = await runDaemonCycle({
+      cycle,
+      dryRun,
+      pilotRepos: config.pilotRepos,
+      monitoredRepos,
+      canaryPulls: config.canaryPulls ?? [],
+      commandsEnabled: config.commands.enabled,
+      reviewSchedulerEnabled: config.reviewScheduler?.enabled === true,
+      issueEnrichmentEnabled: config.issueEnrichment?.enabled === true,
+      worktreeCleanupDue:
+        config.worktreeCleanup!.enabled
+        && (cycle === 1 || (cycle - 1) % cleanupIntervalCycles === 0),
+      configPath: args.config
+    });
+    if (shouldExitDaemonAfterFailedCycle(cycleResult, runOnce)) {
+      process.exitCode = 1;
+      return;
+    }
+    if (runOnce) return;
+    await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
+  }
+}
+
+async function resolveCLIReviewRuntimeCredentials(
+  args: ParsedArgs
+): Promise<RuntimeGitHubCredentials | undefined> {
+  const envelope = await resolveRuntimeCredentialEnvelope({
+    command: "review-pr",
+    subcommand: undefined,
+    runtimeCredentialsStdin: args["runtime-credentials-stdin"],
+    stdin: process.stdin
+  });
+  if (envelope) return envelope;
+  return resolveRuntimeGitHubCredentials({
+    command: "review-pr",
+    subcommand: undefined,
+    appId: args["github-app-id"],
+    privateKeyStdin: args["github-app-private-key-stdin"],
+    stdin: process.stdin
+  });
+}
+
+async function resolveCLIDaemonRuntimeCredentials(
+  args: ParsedArgs
+): Promise<RuntimeGitHubCredentials | undefined> {
+  const envelope = await resolveRuntimeCredentialEnvelope({
+    command: "daemon",
+    subcommand: undefined,
+    runtimeCredentialsStdin: args["runtime-credentials-stdin"],
+    stdin: process.stdin
+  });
+  if (envelope) return envelope;
+  return resolveRuntimeGitHubCredentials({
+    command: "daemon",
+    subcommand: undefined,
+    appId: args["github-app-id"],
+    privateKeyStdin: args["github-app-private-key-stdin"],
+    stdin: process.stdin
+  });
 }
 
 async function collectCoverageReport(args: ParsedArgs, config = loadConfig(args.config), forceScoped = false) {
@@ -2450,10 +2609,11 @@ function runInitCommand(args: ParsedArgs): {
   const backupPath = force && existsSync(configPath) ? backupInitForceTarget(configPath) : undefined;
   mkdirSync(dirname(configPath), { recursive: true });
   const exampleConfig = readFileSync(examplePath, "utf8");
+  const initializedConfig = buildInitializedConfig(exampleConfig, configPath);
   if (force) {
-    writeFileAtomic(configPath, exampleConfig);
+    writeFileAtomic(configPath, initializedConfig);
   } else {
-    writeNewFile(configPath, exampleConfig);
+    writeNewFile(configPath, initializedConfig);
   }
   return {
     ok: true,
@@ -2464,10 +2624,51 @@ function runInitCommand(args: ParsedArgs): {
     ...(backupPath ? { backupPath } : {}),
     recommendedCommands: [
       `neondiff doctor --config ${configPath} --json`,
-      `neondiff review-pr --config ${configPath} --repo owner/name --pr 123 --dry-run true --zcode false`,
+      `neondiff review-pr --config ${configPath} --repo owner/name --pr 123 --expected-config-revision <verified-config-revision> --dry-run true --zcode true`,
       `neondiff status --config ${configPath} --json`
     ],
   };
+}
+
+function buildInitializedConfig(exampleConfig: string, configPath: string): string {
+  const configDirectory = resolvePathFollowingExistingSymlinks(dirname(configPath));
+  try {
+    assertPathOutsideProtectedRoot({
+      path: configDirectory,
+      protectedRoot: undefined,
+      protectedRoots: getProtectedCheckoutRoots(),
+      pathLabel: "init config directory",
+      protectedRootLabel: "protected checkout root"
+    });
+  } catch (error) {
+    if (
+      !(error instanceof Error)
+      || !error.message.startsWith("init config directory must be outside protected checkout root; got ")
+    ) {
+      throw error;
+    }
+    return exampleConfig;
+  }
+
+  const initialized = JSON.parse(exampleConfig) as Record<string, unknown>;
+  const stateDirectory = join(configDirectory, "state");
+  initialized.workRoot = join(configDirectory, "runtime");
+  initialized.statePath = join(stateDirectory, "reviews.sqlite");
+  initialized.evidenceDir = join(configDirectory, "evidence");
+
+  const existingLicense = initialized.license;
+  const license = existingLicense !== null
+      && typeof existingLicense === "object"
+      && !Array.isArray(existingLicense)
+    ? { ...(existingLicense as Record<string, unknown>) }
+    : {};
+  license.cachePath = join(stateDirectory, "license", "entitlement-cache.json");
+  if (license.storageBackend === "file") {
+    license.keyPath = join(stateDirectory, "license", "license-key.txt");
+  }
+  initialized.license = license;
+
+  return `${JSON.stringify(initialized, null, 2)}\n`;
 }
 
 function resolvePackageRoot(): string {
@@ -2486,6 +2687,17 @@ function resolvePackageRoot(): string {
 }
 
 function resolvePackageVersion(): string {
+  const sealedPackageVersion = (
+    import.meta as ImportMeta & {
+      neondiffPackageVersion?: unknown;
+    }
+  ).neondiffPackageVersion;
+  if (
+    typeof sealedPackageVersion === "string"
+    && sealedPackageVersion.length > 0
+  ) {
+    return sealedPackageVersion;
+  }
   const packageJson = JSON.parse(readFileSync(join(resolvePackageRoot(), "package.json"), "utf8"));
   if (typeof packageJson.version !== "string" || packageJson.version.length === 0) {
     throw new Error("package.json is missing a version string");
@@ -2519,8 +2731,9 @@ function validateReviewPrRepoAllowed(config: ReturnType<typeof loadConfig>, repo
 }
 
 function canonicalRepoNameForCli(repo: string): string {
-  const [owner, name] = repo.split("/");
-  return `${owner?.toLowerCase() ?? ""}/${name?.toLowerCase() ?? ""}`;
+  const [owner, name, extra] = repo.trim().split("/");
+  if (extra !== undefined || !owner || !name) return "";
+  return `${owner.toLowerCase()}/${name.toLowerCase()}`;
 }
 
 function validateInitForceTarget(configPath: string): string | undefined {
@@ -2977,9 +3190,26 @@ function isProviderDeferredQueueJobEligible(job: ReviewQueueJobRecord, now: Date
   return !Number.isFinite(eligibleAtMs) || eligibleAtMs <= now.getTime();
 }
 
-async function buildDoctorGithubReport(config: BotConfig) {
-  const github = new GitHubApi(config.github);
-  const monitoredRepos = listReposToScan(config);
+type DoctorGitHubCredentialOverride = {
+  appId: string;
+  privateKey: string;
+  source: "stdin";
+};
+
+async function buildDoctorGithubReport(
+  config: BotConfig,
+  credentials?: DoctorGitHubCredentialOverride,
+  requestedRepo?: string
+) {
+  const github = new GitHubApi(credentials
+    ? {
+        ...config.github,
+        appId: credentials.appId,
+        privateKey: credentials.privateKey,
+        privateKeyPath: undefined
+      }
+    : config.github);
+  const monitoredRepos = resolveDoctorGitHubRepos(config, requestedRepo);
   const readChecks = [];
   let activeRepoChecks = 0;
   const appCredentialsConfigured = github.canPostAsApp();
@@ -3047,9 +3277,15 @@ async function buildDoctorGithubReport(config: BotConfig) {
     }
   }
 
-  const issueReadChecks = await collectIssueEnrichmentReadChecks(config, github);
-  const issueEnrichment = buildIssueEnrichmentStatus({
+  const issueReadChecks = await collectIssueEnrichmentReadChecks(
     config,
+    github,
+    requestedRepo ? monitoredRepos : undefined
+  );
+  const issueEnrichment = buildIssueEnrichmentStatus({
+    config: requestedRepo
+      ? scopeDoctorIssueEnrichmentConfig(config, monitoredRepos)
+      : config,
     canPostAsApp: appCredentialsConfigured,
     issueReadChecks
   });
@@ -3061,9 +3297,10 @@ async function buildDoctorGithubReport(config: BotConfig) {
     monitoredRepos,
     activeRepoChecks,
     appCredentials: {
-      appIdConfigured: Boolean(config.github.appId),
-      privateKeyConfigured: Boolean(config.github.privateKeyPath),
-      fallbackTokenConfigured: Boolean(config.github.token)
+      appIdConfigured: Boolean(credentials?.appId ?? config.github.appId),
+      privateKeyConfigured: Boolean(credentials?.privateKey ?? config.github.privateKeyPath),
+      fallbackTokenConfigured: Boolean(config.github.token),
+      source: credentials?.source ?? "configured"
     },
     github: {
       canPostAsApp: appCredentialsConfigured,
@@ -3092,7 +3329,7 @@ async function buildDoctorGithubReport(config: BotConfig) {
       privateRepoDataStaysLocal: true
     },
     nextCommands: [
-      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
+      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --expected-config-revision <verified-config-revision> --dry-run true --zcode true",
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff"
     ],
     troubleshooting: [
@@ -3101,6 +3338,108 @@ async function buildDoctorGithubReport(config: BotConfig) {
       ...(readChecks.some((check) => !check.ok) ? ["Confirm the GitHub App is installed on selected repositories with the required repository permissions."] : [])
     ]
   };
+}
+
+function resolveDoctorGitHubRepos(config: BotConfig, requestedRepo?: string): string[] {
+  const configuredRepos = listReposToScan(config);
+  if (!requestedRepo) return configuredRepos;
+
+  const requestedCanonical = canonicalRepoNameForCli(requestedRepo);
+  if (!requestedCanonical) {
+    throw new Error("doctor github --repo must be exactly one GitHub owner/repo name");
+  }
+  const configuredRepo = configuredRepos.find(
+    (repo) => canonicalRepoNameForCli(repo) === requestedCanonical
+  );
+  if (!configuredRepo) {
+    throw new Error(
+      `doctor github --repo must be present in configured repos: ${configuredRepos.join(", ") || "(none)"}`
+    );
+  }
+  const policy = resolveRepoProfile(config, configuredRepo);
+  if (!policy.allowed) {
+    throw new Error(`doctor github --repo is blocked by repo policy: ${policy.reason}`);
+  }
+  return [configuredRepo];
+}
+
+function scopeDoctorIssueEnrichmentConfig(config: BotConfig, monitoredRepos: string[]): BotConfig {
+  const issueEnrichment = config.issueEnrichment;
+  if (!issueEnrichment) return config;
+
+  const monitored = new Set(monitoredRepos.map(canonicalRepoNameForCli));
+  const allowlist = issueEnrichment.allowlist.filter((repo) =>
+    monitored.has(canonicalRepoNameForCli(repo))
+  );
+  if (allowlist.length === 0) {
+    return {
+      ...config,
+      issueEnrichment: {
+        ...issueEnrichment,
+        enabled: false,
+        allowlist: [],
+        repos: {}
+      }
+    };
+  }
+
+  const repos = Object.fromEntries(
+    Object.entries(issueEnrichment.repos ?? {}).filter(([repo]) =>
+      monitored.has(canonicalRepoNameForCli(repo))
+    )
+  );
+  return {
+    ...config,
+    issueEnrichment: {
+      ...issueEnrichment,
+      allowlist,
+      repos
+    }
+  };
+}
+
+async function resolveDoctorGitHubCredentials(
+  args: ParsedArgs,
+  stdin: NodeJS.ReadableStream
+): Promise<DoctorGitHubCredentialOverride | undefined> {
+  const appIdArg = args["github-app-id"];
+  const privateKeyStdinArg = args["github-app-private-key-stdin"];
+  if (appIdArg === undefined && privateKeyStdinArg === undefined) return undefined;
+
+  if (privateKeyStdinArg !== "true") {
+    throw new Error("doctor github requires --github-app-private-key-stdin true when --github-app-id is supplied");
+  }
+  if (appIdArg === undefined) {
+    throw new Error("doctor github requires --github-app-id with --github-app-private-key-stdin true");
+  }
+  const appId = parseSingleArg(appIdArg, "--github-app-id").trim();
+  if (!/^[1-9][0-9]{0,19}$/.test(appId)) {
+    throw new Error("--github-app-id must be one positive ASCII numeric App ID of at most 20 digits");
+  }
+
+  let privateKey: string;
+  try {
+    privateKey = await readSecretFromStdin(stdin, 64 * 1024, 5_000);
+  } catch (error) {
+    throw new Error((error instanceof Error ? error.message : "GitHub App private-key stdin could not be read")
+      .replaceAll("provider secret", "GitHub App private-key"));
+  }
+  const privateKeyLabel = "PRIVATE" + " KEY";
+  const rsaPrivateKeyLabel = "RSA " + privateKeyLabel;
+  const supportedBoundaries = [
+    [`-----BEGIN ${privateKeyLabel}-----`, `-----END ${privateKeyLabel}-----`],
+    [`-----BEGIN ${rsaPrivateKeyLabel}-----`, `-----END ${rsaPrivateKeyLabel}-----`]
+  ] as const;
+  if (!supportedBoundaries.some(([header, footer]) => privateKey.startsWith(header) && privateKey.endsWith(footer))) {
+    throw new Error("GitHub App private-key stdin must be one unencrypted PKCS#1 or PKCS#8 PEM");
+  }
+  try {
+    const parsed = createPrivateKey(privateKey);
+    if (parsed.asymmetricKeyType !== "rsa") throw new Error("unsupported key type");
+  } catch {
+    throw new Error("GitHub App private-key stdin must be one valid unencrypted RSA private key");
+  }
+  return { appId, privateKey, source: "stdin" };
 }
 
 function buildDoctorGithubLicenseGatePreview(
@@ -3166,13 +3505,16 @@ function licenseGateDecisionForVisibility(
 
 async function collectIssueEnrichmentReadChecks(
   config: BotConfig,
-  github: GitHubApi
+  github: GitHubApi,
+  repoScope?: string[]
 ): Promise<IssueEnrichmentRepoReadCheck[]> {
   const issueConfig = config.issueEnrichment;
   if (!issueConfig || issueConfig.allowlist.length === 0) return [];
   const canRead = github.canPostAsApp() || Boolean(config.github.token);
   const checks: IssueEnrichmentRepoReadCheck[] = [];
+  const scopedRepos = repoScope?.map(canonicalRepoNameForCli);
   for (const repo of issueConfig.allowlist) {
+    if (scopedRepos && !scopedRepos.includes(canonicalRepoNameForCli(repo))) continue;
     const policy = resolveIssueEnrichmentRepoPolicy(issueConfig, repo);
     if (!policy.allowed) {
       checks.push({ repo, ok: true, skippedByPolicy: policy.reason });
@@ -3243,7 +3585,9 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
   doctor: {
     description: "Check repo read access, provider env, and issue-enrichment readiness (add `github` for GitHub-only checks).",
     flags: [
-      { name: "--config", description: "Path to the config file (default config.local.json)." }
+      { name: "--config", description: "Path to the config file (default config.local.json)." },
+      { name: "--github-app-id", description: "Nonsecret customer-owned GitHub App ID used with --github-app-private-key-stdin true." },
+      { name: "--github-app-private-key-stdin", description: "true to read one bounded customer-owned GitHub App private key from stdin." }
     ]
   },
   status: {
@@ -3294,7 +3638,12 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--repo", description: "Repo to review, owner/name (required)." },
       { name: "--pr", description: "Pull request number to review (required)." },
       { name: "--dry-run", description: "true (default) or false; false requires --confirm true." },
-      { name: "--confirm", description: "Must be true to allow --dry-run false." }
+      { name: "--confirm", description: "Must be true to allow --dry-run false." },
+      { name: "--expected-config-revision", description: "Required lowercase SHA-256 config revision from provider verification for dry and live execution." },
+      { name: "--zcode", description: "Must be true so dry and live reviews execute the same provider path." },
+      { name: "--github-app-id", description: "Numeric customer-owned App ID used only with bounded private-key stdin." },
+      { name: "--github-app-private-key-stdin", description: "true to read one bounded runtime-only App key; never accepted from config." },
+      { name: "--runtime-credentials-stdin", description: "true for the signed app to supply one bounded App-key/license-key JSON envelope." }
     ]
   },
   "run-once": {
@@ -3336,7 +3685,10 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--config", description: "Path to the config file." },
       { name: "--launchd-label", description: "launchd label for start/stop/status subcommands." },
       { name: "--dry-run", description: "true (default) or false for the direct poll loop." },
-      { name: "--once", description: "true to run a single cycle instead of looping (direct poll loop only)." }
+      { name: "--once", description: "true to run a single cycle instead of looping (direct poll loop only)." },
+      { name: "--github-app-id", description: "Numeric customer-owned App ID for the raw poll loop only." },
+      { name: "--github-app-private-key-stdin", description: "true to read one bounded runtime-only App key for the raw poll loop; rejected by start/stop/status." },
+      { name: "--runtime-credentials-stdin", description: "true for the signed app to supply one bounded App-key/license-key JSON envelope to the raw poll loop." }
     ]
   },
   providers: {
@@ -3370,6 +3722,9 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
     flags: [
       { name: "--config", description: "Path to the config file." },
       { name: "--license-key-stdin", description: "true to read one bounded license key from stdin (activate only)." },
+      { name: "--license-storage", description: "keychain for the native Keychain-owned activation path; file otherwise." },
+      { name: "--persist-local-state", description: "false only when the submitted key matches the canonical native Keychain item; defaults true." },
+      { name: "--license-machine-id", description: "Native-only non-secret broker device binding; never an Activation Key." },
       { name: "--repo", description: "Repo to scope activation/status to, owner/name." },
       { name: "--refresh", description: "true to force a fresh status check instead of cached." }
     ]
@@ -3485,7 +3840,7 @@ function buildHelp(command?: string) {
       "neondiff license deactivate --config config.local.json --json",
       "neondiff doctor --config config.local.json --json",
       "neondiff doctor github --config config.local.json --json",
-      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --dry-run true --zcode false",
+      "neondiff review-pr --config config.local.json --repo owner/repo --pr 123 --expected-config-revision <verified-config-revision> --dry-run true --zcode true",
       "neondiff daemon status --config config.local.json --launchd-label com.example.neondiff",
       "neondiff daemon start --launchd-label com.example.neondiff --dry-run true",
       "neondiff daemon stop --launchd-label com.example.neondiff --dry-run true",
@@ -3694,7 +4049,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     const key = arg.slice(2);
     const next = argv[index + 1];
-    if (next && !next.startsWith("--")) {
+    // RFC 7638 base64url device thumbprints may legitimately begin with "--".
+    // This option is value-bearing, so consume its next token and let the
+    // dedicated validator reject missing or malformed values fail closed.
+    if (next && (!next.startsWith("--") || key === "license-machine-id")) {
       setParsedArg(parsed, key, next, repeatableArgs);
       index += 1;
     } else {
@@ -3748,6 +4106,17 @@ async function resolveLicenseKeyArg(args: ParsedArgs, stdin: NodeJS.ReadableStre
 function parseLicenseStorageBackend(value: string): "keychain" | "file" {
   if (value === "keychain" || value === "file") return value;
   throw new Error("--license-storage must be keychain or file");
+}
+
+function parseLicenseMachineIdArg(value: ParsedArgs[string]): string {
+  if (value === undefined) {
+    throw new Error("--license-machine-id requires a value");
+  }
+  const machineId = parseSingleArg(value, "--license-machine-id");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(machineId)) {
+    throw new Error("--license-machine-id must be one RFC 7638 SHA-256 broker device id");
+  }
+  return machineId;
 }
 
 function setParsedArg(parsed: ParsedArgs, key: string, value: string, repeatableArgs: Set<string>): void {

@@ -23,4 +23,8 @@ final class UserDefaultsDesktopPreferences: DesktopPreferences, @unchecked Senda
     func set(_ value: Bool, forKey key: String) {
         defaults.set(value, forKey: key)
     }
+
+    func removeValue(forKey key: String) {
+        defaults.removeObject(forKey: key)
+    }
 }

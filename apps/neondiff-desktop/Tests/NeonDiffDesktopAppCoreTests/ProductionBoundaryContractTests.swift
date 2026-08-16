@@ -8,7 +8,9 @@ import Testing
         fixture.model.pendingLicenseKey = "fixture-license-value"
 
         fixture.model.previewStartDaemon()
+        fixture.model.previewStopDaemon()
         fixture.model.startDaemon()
+        fixture.model.stopDaemon()
         fixture.model.verifyProviderKey()
         fixture.model.storeLicenseKey()
         fixture.model.activateLicenseForOnboarding()
@@ -36,6 +38,81 @@ import Testing
         #expect(!fixture.preferences.bool(forKey: "neondiff.hasCompletedActivationOnboarding.v2"))
         #expect(fixture.model.logText.contains("read-only setup surface"))
         #expect(fixture.model.logText.contains("Native activation broker proof is not available"))
+    }
+
+    @MainActor
+    @Test func verifiedButIncompleteBetaOffersNonPersistentReadOnlyEscape() throws {
+        let boundary = DesktopProductionBoundary.resolve(infoDictionary: [
+            "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+            "NeonDiffBYOGitHubEnabled": true
+        ])
+        let fixture = ModelDependencyFixture(productionBoundary: boundary)
+
+        #expect(boundary.nativeActivationBrokerVerified)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.isOnboardingPresented)
+
+        fixture.model.openReadOnlyAppFromQuarantinedOnboarding()
+
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(!fixture.preferences.bool(forKey: "neondiff.hasCompletedActivationOnboarding.v2"))
+        #expect(fixture.model.logText.contains(
+            "Finish GitHub, repository, provider, and activation setup"
+        ))
+    }
+
+    @MainActor
+    @Test func completedUserCanDismissReopenedSetupWithoutLosingCompletion() throws {
+        let fixture = ModelDependencyFixture(
+            preferenceBools: [
+                "neondiff.hasCompletedActivationOnboarding.v2": true
+            ],
+            productionBoundary: .testVerified
+        )
+        fixture.model.isOnboardingPresented = true
+
+        fixture.model.dismissOnboardingPanel()
+
+        #expect(!fixture.model.isOnboardingPresented)
+        #expect(fixture.preferences.bool(
+            forKey: "neondiff.hasCompletedActivationOnboarding.v2"
+        ))
+    }
+
+    @Test func installedWindowPreservesNativeEscapeMovementAndBoundedLaunchSize() throws {
+        let packageRoot = sourceBoundaryPackageRoot()
+        let contentView = try sourceBoundaryText(
+            at: packageRoot.appendingPathComponent(
+                "Sources/NeonDiffDesktop/Views/ContentView.swift"
+            )
+        )
+        let app = try sourceBoundaryText(
+            at: packageRoot.appendingPathComponent(
+                "Sources/NeonDiffDesktop/App/NeonDiffDesktopApp.swift"
+            )
+        )
+
+        #expect(!contentView.contains(".interactiveDismissDisabled("))
+        #expect(contentView.contains(".allowsHitTesting(false)"))
+        #expect(contentView.contains("WindowDragRegion()"))
+        #expect(contentView.contains("override var mouseDownCanMoveWindow: Bool { true }"))
+        #expect(contentView.contains("window?.performDrag(with: event)"))
+        #expect(!contentView.contains(".contentShape(Rectangle())"))
+        #expect(app.contains(".defaultSize(width: 1200, height: 760)"))
+        #expect(app.contains(".windowResizability(.contentMinSize)"))
+        #expect(app.contains("CommandGroup(replacing: .appTermination)"))
+        #expect(app.contains("CommandGroup(after: .newItem)"))
+        #expect(app.contains("model.isOnboardingPresented = false"))
+        #expect(app.contains("NSApplication.shared.keyWindow?.performClose(nil)"))
+        #expect(app.contains(
+            "func applicationShouldRestoreSecureApplicationState(_ app: NSApplication) -> Bool {\n        false"
+        ))
+        #expect(app.contains(
+            "func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool {\n        false"
+        ))
+        #expect(app.contains(
+            "func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {\n        .terminateNow"
+        ))
     }
 
     @MainActor
@@ -115,23 +192,44 @@ import Testing
         }
     }
 
-    @Test func updaterCannotStartBeforeNativeActivationBrokerProof() throws {
+    @Test func updaterUsesSignedFeedAndRevalidatesEntitlementBeforeEachCheck() throws {
         let updaterSource = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Support/NeonUpdateController.swift")
+        let bundleScript = sourceBoundaryPackageRoot()
+            .appendingPathComponent("script/build_and_run.sh")
         let source = try sourceBoundaryText(at: updaterSource)
+        let bundler = try sourceBoundaryText(at: bundleScript)
 
-        #expect(!source.contains("SPUStandardUpdaterController"))
-        #expect(!source.contains("startingUpdater"))
-        #expect(source.contains("Updates blocked pending native activation proof"))
+        #expect(source.contains("import Sparkle"))
+        #expect(source.contains("SPUStandardUpdaterController"))
+        #expect(source.contains("startingUpdater: false"))
+        #expect(source.contains("mayPerform updateCheck"))
+        #expect(source.contains("shouldProceedWithUpdate"))
+        #expect(source.contains("allowedChannels(for updater"))
+        #expect(source.contains("model.desktopUpdateAccess"))
+        #expect(source.contains("Update remained blocked after the current cycle"))
+        #expect(!source.contains("Updates blocked pending native activation proof"))
+        #expect(bundler.contains("NEONDIFF_SPARKLE_REQUIRED"))
+        #expect(bundler.contains("Release builds require NEONDIFF_SPARKLE_REQUIRED=1"))
+        #expect(bundler.contains("Sparkle feed and public key must not contain surrounding whitespace"))
+        #expect(bundler.contains("Sparkle feed and public key must be configured together"))
+        #expect(bundler.contains("A signed Sparkle feed is required for this release build"))
+        #expect(bundler.contains("SUEnableAutomaticChecks"))
+        #expect(bundler.contains("SUScheduledCheckInterval"))
+        #expect(bundler.contains("SUAutomaticallyUpdate"))
     }
 
-    @Test func productionCompositionRootInstallsTheQuarantinedBoundary() throws {
+    @Test func productionCompositionRootResolvesOnlyTheSignedBuildBoundary() throws {
         let compositionRoot = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/App/NeonDiffDesktopCompositionRoot.swift")
         let source = try sourceBoundaryText(at: compositionRoot)
 
-        #expect(source.contains("productionBoundary: .quarantined"))
+        #expect(source.contains("DesktopProductionBoundary.resolve("))
+        #expect(source.contains("Bundle.main.infoDictionary ?? [:]"))
+        #expect(source.contains("GitHubBrokerClient(baseURL: $0)"))
+        #expect(source.contains("productionBoundary: productionBoundary"))
         #expect(!source.contains("productionBoundary: .testVerified"))
+        #expect(!source.contains("productionBoundary: .testManaged"))
     }
 
     @Test func evaluationRootIdentifierDoesNotOverrideDescendantActionIdentifiers() throws {
@@ -143,5 +241,89 @@ import Testing
         #expect(source.contains("private struct EvaluationRootAccessibilityMarker: View"))
         #expect(source.contains(".accessibilityIdentifier(identifier)"))
         #expect(!source.contains(".accessibilityIdentifier(rootAccessibilityIdentifier)"))
+    }
+
+    @Test func managedOnboardingExposesRepositoryApplyAction() throws {
+        let onboardingView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift")
+        let source = try sourceBoundaryText(at: onboardingView)
+
+        #expect(source.contains("model.applyRepoAllowlistPatch()"))
+        #expect(source.contains("neondiff-onboarding-repository-apply"))
+    }
+
+    @Test func b0OnboardingExposesRepositorySetupAndAppVerificationActions() throws {
+        let onboardingView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift")
+        let source = try sourceBoundaryText(at: onboardingView)
+
+        #expect(source.contains("model.initializeConfigForOnboarding()"))
+        #expect(source.contains("neondiff-onboarding-byo-config-initialize"))
+        #expect(source.contains("model.addPendingRepoToAllowlist()"))
+        #expect(source.contains("neondiff-onboarding-byo-repository-add"))
+        #expect(source.contains("neondiff-onboarding-byo-repository-apply"))
+        #expect(source.contains("model.verifyBYOGitHubAppCredentials()"))
+        #expect(source.contains("neondiff-onboarding-byo-github-verify"))
+    }
+
+    @Test func onboardingDaemonActionsUseTheDaemonSpecificReadinessGate() throws {
+        let onboardingView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/OnboardingWizardView.swift")
+        let source = try sourceBoundaryText(at: onboardingView)
+
+        #expect(
+            source.components(
+                separatedBy: ".disabled(!model.productionDaemonStartAvailable)"
+            ).count - 1 == 2
+        )
+        #expect(
+            source.components(
+                separatedBy: ".disabled(!model.productionUsefulWorkAvailable)"
+            ).count - 1 == 1
+        )
+    }
+
+    @Test func b0OverviewExposesDryFirstPinnedLiveReviewActions() throws {
+        let viewsDirectory = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
+        let overview = try sourceBoundaryText(
+            at: viewsDirectory.appendingPathComponent("OverviewView.swift")
+        )
+        let repos = try sourceBoundaryText(
+            at: viewsDirectory.appendingPathComponent("ReposView.swift")
+        )
+
+        #expect(overview.contains("model.runScopedDryReview()"))
+        #expect(overview.contains("neondiff-scoped-review-dry"))
+        #expect(overview.contains("model.scopedLiveReviewConfirmationAvailable"))
+        #expect(overview.contains("model.runScopedLiveReview()"))
+        #expect(overview.contains("confirmationDialog("))
+        #expect(overview.contains("neondiff-scoped-review-live"))
+        #expect(repos.contains("model.verifyExistingLocalBotGitHubAccess()"))
+    }
+
+    @Test func activationEnabledLicenseViewHidesLegacyCredentialAndFalseBoundary() throws {
+        let licenseView = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views/LicenseView.swift")
+        let source = try sourceBoundaryText(at: licenseView)
+
+        #expect(source.contains(
+            "if model.activationHandoffEnabled {\n                    ActivationStateView(model: model)\n                } else {\n                    legacyLicenseContent"
+        ))
+        #expect(source.contains("private var legacyLicenseContent: some View"))
+        #expect(source.contains("OperatorSection(\"License\")"))
+        #expect(source.contains("OperatorSection(\"Boundary\")"))
+    }
+
+    @Test func managedSafetyStopIsNotDisabledByUsefulWorkProofLoss() throws {
+        let viewsDirectory = sourceBoundaryPackageRoot()
+            .appendingPathComponent("Sources/NeonDiffDesktop/Views", isDirectory: true)
+        let source = try ["OverviewView.swift", "OnboardingWizardView.swift"]
+            .map { try sourceBoundaryText(at: viewsDirectory.appendingPathComponent($0)) }
+            .joined(separator: "\n")
+
+        #expect(source.contains("model.productionDaemonStopAvailable"))
+        #expect(!source.contains("Button { model.stopDaemon() } label:")
+            || source.contains(".disabled(!model.productionDaemonStopAvailable)"))
     }
 }

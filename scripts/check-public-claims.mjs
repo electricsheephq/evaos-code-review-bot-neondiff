@@ -15,9 +15,18 @@ const paths = [
   "docs/releases/v1.0.0.md"
 ];
 
+// Licensing framing (owner ruling; technical-merit resolution 2026-07-16). The
+// SHIPPED CLI (v1.0.x) requires API-backed activation for EVERY repository — a
+// local publicReposFree flag would trust the client's own visibility claim, the
+// exact bypass the #614 server-side broker exists to stop. So public-free is the
+// TARGET, gated on the native app + managed GitHub App broker (#614), and must be
+// announced as upcoming — never asserted as current CLI behavior. Website copy
+// migration is owned by website issue #52. These required claims guard that the
+// docs state current CLI truth AND mark the public-free target correctly.
 const required = [
   /source-available/i,
-  /API-backed activation is required/i,
+  /public open-source repositor(?:y|ies) will be free/i,
+  /requires (?:live |active |mandatory )?API-backed activation for every repository/i,
   /private.*commercial.*paid|paid.*private.*commercial/i,
   /\$100\/(?:year|yr)/i,
   /7-day trial/i,
@@ -38,13 +47,6 @@ const forbiddenClaims = [
   /\benterprise-ready\b/i,
   /\bCodeRabbit parity\b/i,
   /\bpublic launch is complete\b/i
-];
-
-const retiredFreeClaims = [
-  /public(?: open-source)? repositor(?:y|ies) (?:are|is) free/i,
-  /free (?:for|on) public repositor(?:y|ies)/i,
-  /public repos? with no license (?:may )?(?:pass|run|review)/i,
-  /PUBLIC · FREE/
 ];
 
 let failed = false;
@@ -70,16 +72,6 @@ for (const path of paths) {
         console.error(`${path}: forbidden public claims phrase outside boundary language: ${match}`);
         failed = true;
       }
-    }
-  }
-}
-
-for (const path of paths.filter((path) => !path.startsWith("docs/releases/"))) {
-  const text = readFileSync(path, "utf8");
-  for (const pattern of retiredFreeClaims) {
-    if (pattern.test(text)) {
-      console.error(`${path}: retired public-free claim remains: ${pattern}`);
-      failed = true;
     }
   }
 }

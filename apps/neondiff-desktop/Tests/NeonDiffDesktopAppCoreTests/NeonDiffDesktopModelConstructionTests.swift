@@ -3,6 +3,18 @@ import Testing
 
 @MainActor
 @Suite struct NeonDiffDesktopModelConstructionTests {
+    @Test func constructingModelDefaultsConfigInsideApplicationSupport() {
+        let root = fixtureURL("/fixture/application-support", directory: true)
+        let fixture = RecordingDesktopDependencies(root: root)
+
+        let model = NeonDiffDesktopModel(dependencies: fixture.dependencies)
+
+        #expect(
+            model.configPath
+                == root.appendingPathComponent("config.local.json").standardizedFileURL.path
+        )
+    }
+
     @Test func constructingModelReadsOnlyInjectedState() {
         let fixture = RecordingDesktopDependencies(
             root: fixtureURL("/fixture/application-support", directory: true)

@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -72,6 +72,10 @@ describe("local HTML dashboard", () => {
     expect(html).toContain("Daemon");
     expect(html).toContain("Provider");
     expect(html).toContain("openai-compatible");
+    expect(status.firstReviewPreview.command).toBe(
+      "neondiff providers doctor --config /Volumes/LEXAR/Codex/neondiff/config.local.json --json"
+    );
+    expect(status.firstReviewPreview.command).not.toContain("<");
   });
 
   it("reports GitHub App client-id readiness without exposing user tokens", async () => {
@@ -222,6 +226,379 @@ describe("local HTML dashboard", () => {
       })
     });
     expect(JSON.stringify(result)).not.toContain(fakeKey);
+  });
+
+  it("returns the stable config revision after browser provider verification", async () => {
+    const modelServer = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/v1/models") {
+        response.end(JSON.stringify({ data: [{ id: "local-review-model" }] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: "not found" }));
+    });
+    servers.push(modelServer);
+    await listen(modelServer);
+    const address = modelServer.address() as AddressInfo;
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dashboard-config-revision-"));
+    const configPath = join(root, "config.local.json");
+    const configObject = {
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            adapter: "openai-compatible",
+            displayName: "Local Review",
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            model: "local-review-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "LOCAL_REVIEW_API_KEY",
+            capabilities: { local: true }
+          }
+        }
+      }
+    };
+    writeFileSync(configPath, JSON.stringify(configObject));
+    const handle = await startLocalDashboardServer({
+      config: loadConfigFromObject(configObject),
+      configPath,
+      configExists: true,
+      openBrowser: false,
+      port: 0,
+      requireActiveProductionLicense: admittedProviderVerification
+    });
+    servers.push(handle.server);
+    const fakeKey = ["sk", "dashboard-revision-1234567890"].join("-");
+
+    const verifyResponse = await fetch(new URL("/api/provider/verify", handle.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        providerId: "openai-compatible",
+        apiKey: fakeKey,
+        allowRemoteSmoke: false
+      })
+    });
+    const verification = await verifyResponse.json() as {
+      ok: boolean;
+      configRevision?: string;
+    };
+    expect(verifyResponse.status).toBe(200);
+    expect(verification.ok).toBe(true);
+    expect(verification.configRevision).toMatch(/^[a-f0-9]{64}$/);
+
+    const statusResponse = await fetch(new URL("/api/status", handle.url));
+    const status = await statusResponse.json() as {
+      firstReviewPreview: { available: boolean; command: string };
+    };
+    expect(status.firstReviewPreview.available).toBe(false);
+    expect(status.firstReviewPreview.command).toBe(
+      `neondiff providers doctor --config ${configPath} --json`
+    );
+    expect(status.firstReviewPreview.command).not.toContain("review-pr");
+    expect(JSON.stringify({ verification, status })).not.toContain(fakeKey);
+  });
+
+  it("tracks a config created after the dashboard starts", async () => {
+    const modelServer = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      response.setHeader("Content-Type", "application/json");
+      if (request.method === "GET" && url.pathname === "/v1/models") {
+        response.end(JSON.stringify({ data: [{ id: "late-model" }] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ message: "not found" }));
+    });
+    servers.push(modelServer);
+    await listen(modelServer);
+    const address = modelServer.address() as AddressInfo;
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dashboard-late-config-"));
+    const configPath = join(root, "config.local.json");
+    const startupConfig = loadConfigFromObject({});
+    const handle = await startLocalDashboardServer({
+      config: startupConfig,
+      configPath,
+      configExists: false,
+      openBrowser: false,
+      port: 0,
+      requireActiveProductionLicense: admittedProviderVerification
+    });
+    servers.push(handle.server);
+
+    const currentConfig = {
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            adapter: "openai-compatible",
+            displayName: "Late Provider",
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            model: "late-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "LATE_PROVIDER_API_KEY",
+            capabilities: { local: true }
+          }
+        }
+      }
+    };
+    writeFileSync(configPath, JSON.stringify(currentConfig));
+    const fakeKey = ["sk", "dashboard-late-config-1234567890"].join("-");
+    const verifyResponse = await fetch(new URL("/api/provider/verify", handle.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        providerId: "openai-compatible",
+        apiKey: fakeKey,
+        allowRemoteSmoke: false
+      })
+    });
+    const verification = await verifyResponse.json() as {
+      ok: boolean;
+      configRevision?: string;
+    };
+
+    expect(verifyResponse.status).toBe(200);
+    expect(verification.ok).toBe(true);
+    expect(verification.configRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(verification)).not.toContain(fakeKey);
+
+    const statusResponse = await fetch(new URL("/api/status", handle.url));
+    const status = await statusResponse.json() as {
+      config: { exists: boolean; source: string };
+      providers: { defaultProviderId: string };
+    };
+    expect(status.config).toEqual({ path: configPath, exists: true, source: "file" });
+    expect(status.providers.defaultProviderId).toBe("openai-compatible");
+  });
+
+  it("renders status from the same changed config snapshot that provider verification accepted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dashboard-config-snapshot-"));
+    const configPath = join(root, "config.local.json");
+    const startupConfig = {
+      providers: {
+        defaultProviderId: "openai-compatible",
+        providers: {
+          "openai-compatible": {
+            enabled: true,
+            adapter: "openai-compatible",
+            displayName: "Startup Provider",
+            baseUrl: "https://startup.example.test/v1",
+            model: "startup-model",
+            authMode: "api-key-env",
+            apiKeyEnv: "STARTUP_API_KEY"
+          }
+        }
+      }
+    };
+    writeFileSync(configPath, JSON.stringify(startupConfig));
+    const handle = await startLocalDashboardServer({
+      config: loadConfigFromObject(startupConfig),
+      configPath,
+      configExists: true,
+      openBrowser: false,
+      port: 0,
+      requireActiveProductionLicense: admittedProviderVerification
+    });
+    servers.push(handle.server);
+
+    const currentConfig = {
+      zcode: {
+        providerId: "zcode-glm",
+        cliPath: "zcode",
+        appConfigPath: "zcode.json",
+        model: "GLM-5.2"
+      },
+      providers: {
+        defaultProviderId: "zcode-glm",
+        providers: {
+          "zcode-glm": {
+            enabled: true,
+            adapter: "zcode",
+            displayName: "Current ZCode Provider",
+            model: "GLM-5.2",
+            authMode: "zcode-app-config",
+            capabilities: {
+              review: true,
+              jsonOutput: true,
+              local: false,
+              streaming: false
+            }
+          }
+        }
+      }
+    };
+    writeFileSync(configPath, JSON.stringify(currentConfig));
+
+    const verifyResponse = await fetch(new URL("/api/provider/verify", handle.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providerId: "zcode-glm" })
+    });
+    expect(verifyResponse.status).toBe(200);
+
+    const statusResponse = await fetch(new URL("/api/status", handle.url));
+    const status = await statusResponse.json() as {
+      providers: { defaultProviderId: string };
+      firstReviewPreview: { available: boolean; command: string };
+    };
+    expect(status.providers.defaultProviderId).toBe("zcode-glm");
+    expect(status.firstReviewPreview.command).toContain("review-pr");
+  });
+
+  it("binds the ZCode review preview to the verified configured path", async () => {
+    const configPath = "/tmp/NeonDiff Config/config.local.json";
+    const revision = "a".repeat(64);
+    const status = await buildLocalDashboardStatus({
+      config: loadConfigFromObject({
+        zcode: {
+          providerId: "zcode-glm",
+          cliPath: "zcode",
+          appConfigPath: "zcode.json",
+          model: "GLM-5.2"
+        },
+        providers: {
+          defaultProviderId: "zcode-glm",
+          providers: {
+            "zcode-glm": {
+              enabled: true,
+              adapter: "zcode",
+              displayName: "GLM through ZCode",
+              model: "GLM-5.2",
+              authMode: "zcode-app-config",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            }
+          }
+        }
+      }),
+      configPath,
+      configExists: true,
+      providerVerification: {
+        ok: true,
+        command: "providers verify",
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        providerId: "zcode-glm",
+        state: "configured_unverified",
+        mode: "metadata_only",
+        detail: "verified ZCode app configuration",
+        redacted: true,
+        troubleshooting: [],
+        configRevision: revision
+      }
+    });
+
+    expect(status.firstReviewPreview.command).toContain(
+      "review-pr --config '/tmp/NeonDiff Config/config.local.json'"
+    );
+    expect(status.firstReviewPreview.command).toContain(
+      `--expected-config-revision ${revision}`
+    );
+    expect(status.firstReviewPreview.command).toContain("--zcode true");
+  });
+
+  it("withholds review when the verified default provider differs from ZCode execution", async () => {
+    const status = await buildLocalDashboardStatus({
+      config: loadConfigFromObject({
+        zcode: {
+          providerId: "zcode-execution",
+          cliPath: "zcode",
+          appConfigPath: "zcode.json",
+          model: "GLM-5.2"
+        },
+        providers: {
+          defaultProviderId: "zcode-verified",
+          providers: {
+            "zcode-verified": {
+              enabled: true,
+              adapter: "zcode",
+              displayName: "Verified provider",
+              model: "GLM-5.2",
+              authMode: "zcode-app-config",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            },
+            "zcode-execution": {
+              enabled: true,
+              adapter: "zcode",
+              displayName: "Execution provider",
+              model: "GLM-5.2",
+              authMode: "zcode-app-config",
+              capabilities: {
+                review: true,
+                jsonOutput: true,
+                local: false,
+                streaming: false
+              }
+            }
+          }
+        }
+      }),
+      configPath: "config.local.json",
+      configExists: true,
+      providerVerification: {
+        ok: true,
+        command: "providers verify",
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        providerId: "zcode-verified",
+        state: "healthy",
+        mode: "metadata_only",
+        detail: "verified",
+        redacted: true,
+        troubleshooting: [],
+        configRevision: "c".repeat(64)
+      }
+    });
+
+    expect(status.firstReviewPreview.available).toBe(false);
+    expect(status.firstReviewPreview.command).toContain("providers doctor");
+  });
+
+  it("automatically refreshes dashboard state after successful provider verification", async () => {
+    const html = renderLocalDashboardHtml(await buildLocalDashboardStatus({
+      config: loadConfigFromObject({}),
+      configPath: "config.local.json",
+      configExists: true
+    }));
+
+    expect(html).toContain("if (response.ok && json.ok) window.location.reload();");
+  });
+
+  it("withholds a review command for a malformed verification revision", async () => {
+    const status = await buildLocalDashboardStatus({
+      config: loadConfigFromObject({}),
+      configPath: "config.local.json",
+      configExists: true,
+      providerVerification: {
+        ok: true,
+        command: "providers verify",
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        providerId: "zcode-glm",
+        state: "healthy",
+        mode: "metadata_only",
+        detail: "verified",
+        redacted: true,
+        troubleshooting: [],
+        configRevision: "not-a-sha"
+      }
+    });
+
+    expect(status.firstReviewPreview.available).toBe(false);
+    expect(status.firstReviewPreview.command).toBe(
+      "neondiff providers doctor --config config.local.json --json"
+    );
   });
 
   it("serves HTML status but blocks provider verification before activation", async () => {

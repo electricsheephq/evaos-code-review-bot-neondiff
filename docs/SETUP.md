@@ -1,8 +1,12 @@
 # NeonDiff Setup
 
-This guide is the first-run path for the current source-available release. The
-recommended path installs the `neondiff` npm package; source checkout remains a
-fallback for contributors and reviewers who want to inspect or build locally. See
+This guide is the CLI-first setup path for the current source-available release,
+and the first-run path on non-Mac platforms. On macOS the native app
+(`apps/neondiff-desktop`) is the human first-run surface; until the native
+broker/launchd proof lands (see the native-broker note below) it hands off to
+this operator/advanced path for setup actions it cannot yet complete natively.
+The recommended path installs the `neondiff` npm package; source checkout remains
+a fallback for contributors and reviewers who want to inspect or build locally. See
 [LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
 for the public/private repo license boundary, and [docs/pricing.md](pricing.md)
 for the support-tier pricing contract.
@@ -18,10 +22,18 @@ for the support-tier pricing contract.
 - npm
 - GitHub App credentials for the repos you want to review
 - a provider/model path available on the machine running the worker
-- NeonDiff license key for API-backed activation before supported review work
+- NeonDiff license key for repository review (the current CLI requires
+  activation for every repository; public open-source review will be free in the
+  native app)
 
-API-backed activation is required for supported public, private, internal, and
-unknown repository review. Support licenses cost $1/month or $10/year for
+The current CLI (v1.0.x) requires API-backed activation for every repository
+(public, private, internal, and unknown); unknown visibility fails closed, and
+GitHub-authoritative visibility (public, private, internal, and unknown) decides
+the tier. Coming with the native app: public open-source repositories will be
+free with no NeonDiff Activation Key, while private, internal, and commercial
+repositories will require an active entitlement (managed GitHub App broker #614;
+not enforced by the current CLI). Support
+licenses cost $1/month or $10/year for
 individuals, or $100/year for organizations. Individual plans include a 7-day
 trial, organization plans include a 30-day trial, and legacy lifetime licenses
 remain honored for existing holders but are no longer sold. Provider/model costs
@@ -68,10 +80,12 @@ npm run build
 If you intentionally use the source checkout without the global package,
 substitute `./dist/src/cli.js` for `neondiff`.
 
-## 2. Create Or Install A GitHub App
+## 2. Create And Install A Customer-Owned GitHub App
 
-Use the public NeonDiff GitHub App install URL for the beta you are testing, or
-create an equivalent App while the public registration is being finalized. See
+For the public paid B0 BYO beta, create a customer-owned GitHub App in your
+GitHub account or organization and use that App's install URL. The public
+organization-owned NeonDiff App belongs to the later managed B1 path and does
+not replace the B0 private key flow. See
 [docs/github-app-setup.md](github-app-setup.md) for the selected-repo install
 path, uninstall path, evidence packet, and troubleshooting details.
 
@@ -100,10 +114,16 @@ export NEONDIFF_GITHUB_APP_CLIENT_ID="<github-app-client-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 ```
 
-For the Mac desktop Repos pane, copy the GitHub App client ID into
-`github.clientId` or `NEONDIFF_GITHUB_APP_CLIENT_ID`, and enable device flow in
-the GitHub App settings. Without that optional feature, GitHub will return
-`device_flow_disabled` when the desktop tries to show a user authorization code.
+For legacy/direct Mac desktop builds, copy the GitHub App client ID into
+`github.clientId` or `NEONDIFF_GITHUB_APP_CLIENT_ID`. A verified managed beta
+build instead carries the official App's public client ID in its production
+boundary, so first-run does not depend on loading CLI config. Enable Device Flow
+in the official App settings: when GitHub does not rerun OAuth-during-install
+for an existing installation, the native app uses Device Flow only as transient
+installation-access proof. It continues polling the broker during that window,
+so a fresh-install callback wins without a second authorization. If Device Flow
+is disabled, GitHub returns `device_flow_disabled` and the existing-install path
+fails closed.
 
 ## 3. Configure Provider And License
 
@@ -193,6 +213,290 @@ The local `machineId` sent to the license API is advisory beta metadata derived
 from host name and platform, not hardware attestation or a durable seat-binding
 primitive.
 
+The managed native beta path replaces that advisory host hash with the
+Keychain-backed GitHub broker device ID and binds activation to the exact
+GitHub-selected `owner/repo`. The Activation Key stays Keychain-owned and
+crosses only two bounded channels: stdin to `license activate`, then the
+fixed-origin broker HTTPS request body when a private token is requested. The
+broker uses it for an in-memory license lookup and never logs, reflects, or
+persists it. Public-repository token requests omit the key and do not call the
+license authority. This path is still rollout-disabled; these contracts do not
+prove production enablement or customer readiness.
+
+The native source composition is also default-off. A release bundle must carry
+all three exact public Info.plist values before the app constructs the managed
+client:
+
+- `NeonDiffPaidBetaContract = paid-mac-beta-v1`
+- `NeonDiffManagedGitHubBrokerEnabled = true`
+- `NeonDiffGitHubBrokerOrigin = https://neondiff-license.fly.dev`
+
+After that exact bundle contract passes, the managed production boundary also
+supplies the compiled official GitHub App public client ID. It is public
+metadata, not a secret, and it is unavailable to quarantined/debug composition.
+This lets native first-run authorize an already-installed App without requiring
+a prior CLI `config inspect`; it does not enable the server kill switch.
+
+`apps/neondiff-desktop/script/build_and_run.sh` accepts those values only for a
+release build and only through the exact matching
+`NEONDIFF_DESKTOP_PAID_BETA_CONTRACT`,
+`NEONDIFF_DESKTOP_MANAGED_GITHUB_BROKER_ENABLED`, and
+`NEONDIFF_DESKTOP_GITHUB_BROKER_ORIGIN` inputs. When all three inputs are
+omitted, the bundle remains quarantined. Any non-empty but incomplete,
+mismatched, or non-release combination fails the build with exit 2. These are
+public configuration values, not secrets, and do not override the server-side
+kill switch. Generic CLI status/deactivate and daemon-admission validation still
+require exact-candidate integration proof under #630.
+
+The public paid B0 BYO beta has a separate, mutually exclusive release
+bundle contract:
+
+- `NeonDiffPaidBetaContract = paid-mac-beta-byo-v1`
+- `NeonDiffBYOGitHubEnabled = true`
+- no managed-broker enable marker or broker origin
+
+The build inputs are `NEONDIFF_DESKTOP_PAID_BETA_CONTRACT` and
+`NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED`. That exact release-only contract enables
+the existing direct/BYO GitHub path and API-backed native activation without a
+manual UserDefaults rollout mutation. It does not make the managed App path
+available and is not proof that GitHub private-key custody, the compatible CLI
+package, billing, signing, or customer canaries have passed.
+
+For a B0 customer, the native first-run path is:
+
+1. Create and install a customer-owned GitHub App with the permissions in
+   [`github-app-setup.md`](github-app-setup.md), selecting one repository.
+2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
+   PEM, then choose **Store in Keychain**.
+3. On a clean install, if NeonDiff reports that the local worker command is
+   unavailable, choose **Install / Update Local Worker** before **Initialize
+   Local Config**. From the verified extracted bundle, use Node.js 26 or newer
+   through the approved stable path `/opt/homebrew/bin/node` or
+   `/usr/local/bin/node`, then preview the credential-free install:
+
+   ```bash
+   BUNDLE_DIR="$(pwd -P)"
+   node install-b0-worker-candidate.mjs first-install \
+     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
+     --manifest-sha256 <manifest-sha256-from-release> \
+     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
+     --launchd-label com.electricsheephq.evaos-code-review-bot \
+     --dry-run true
+   ```
+
+   Inspect the public-safe preview, then repeat it with
+   `--dry-run false --confirm true`. It installs only the exact verified CLI
+   into a private versioned current-user directory and writes a 0600
+   credential-free marker. It creates or loads no LaunchAgent, starts no
+   daemon, and never reads or writes GitHub, provider, or license credentials.
+   It refuses an existing LaunchAgent or worker state; use the existing-worker
+   update flow below for those machines. Return to NeonDiff and choose
+   **Install / Update Local Worker** once more to refresh discovery; when the
+   worker is available, choose **Initialize Local Config**. Initialization
+   invokes the non-destructive `neondiff init` path without `--force`, never
+   overwrites an existing config, and keeps bot-isolated runtime, state,
+   evidence, and license paths beside the config. Review and daemon readiness
+   remain separate gates.
+4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
+   Repository**. The app writes the allowlist through the typed local `config
+   patch` command and ensures every selected repository has an enabled local
+   policy profile; the customer does not edit a config file. Existing
+   per-repository policy fields are preserved.
+5. Choose **Verify App Access**. Continue remains disabled until GitHub verifies
+   the exact configured repository through that App installation. If the local
+   profile is missing or disabled, apply the repository again before retrying
+   verification.
+
+If verification reports a missing or disabled repository policy profile,
+choose **Apply Repository** again before retrying **Verify App Access**. This is a local
+configuration recovery step, not evidence that the GitHub App installation is
+missing.
+
+For a verified account with no bot yet, the app allocates the isolated new-bot
+plan before showing **Initialize Local Config**. It never initializes the
+`Accounts/_unselected` placeholder.
+
+If the customer quits before setup is complete, relaunch NeonDiff and continue
+the same pending bot. The app restores the exact account-scoped config path and
+reopens onboarding rather than creating a second `new-neondiff-bot-*`
+directory. If an older build or manual rollback changed the saved selection to
+a verified existing bot under the same account, relaunch keeps that
+authoritative bot selected and preserves only a structurally valid,
+account-scoped pending plan. Choose **NEW BOT** to resume that preserved setup;
+the app rejects it if any authorized bot now owns the same config identity.
+Choosing another account or explicitly choosing an existing bot ends the
+pending setup.
+
+When the same Mac already has one exact checksum-managed worker for the selected
+LaunchAgent label, the app reuses that worker for the isolated bot's `init`,
+`config inspect`, `config patch`, and private-key-stdin GitHub doctor commands.
+Within that proven one-worker case, it does not resolve those commands through
+an older global `neondiff` package, and it does not pass the existing bot's App
+ID or private-key file environment into the new bot process. Zero or ambiguous
+managed-worker discovery does not select this reuse path; installing and proving
+exactly one managed worker is a separate distribution gate.
+
+This first-run step proves only current App installation and repository access.
+Provider verification, activation, dry run, and live review remain separate
+gates. No invitation is required when the versioned public GitHub prerelease is
+published and the neondiff.com purchase/download path is live. Until both are
+true, the candidate and its GitHub prerelease assets remain held.
+
+After App access, provider, repository, and activation are verified, the native
+daemon step offers **Preview Start** followed by **Install & Start** when no
+supported LaunchAgent exists. Preview validates the exact signed
+`/Applications/NeonDiff.app`, account-scoped config, customer-owned App ID, and
+the worker sealed inside the signed app. Confirmed install writes one 0600 secret-free plist in
+`~/Library/LaunchAgents` and starts it through the current user's launchd
+domain. The plist invokes the signed app's bounded headless mode and contains no
+private-key value or file path. It includes the non-secret broker device ID
+already used for native activation. That mode revalidates the same public
+coordinates, re-derives the device ID from NeonDiff's own Keychain identity,
+rejects a mismatched plist, reads the App key from Keychain without user
+interaction, reads the API-backed activation credential from the same app-owned
+Keychain service, validates the running sealed worker process, and only then
+pipes both secret values plus that non-secret device ID once in a bounded JSON
+envelope to its stdin. License validation then uses the same machine binding as
+native activation instead of the CLI's legacy host hash. A conflicting plist,
+unsafe app/config/worker path, unavailable Keychain item, device mismatch, or
+launchd failure fails closed. Do not replace this with a `security -w` wrapper,
+export the key to disk, or weaken its Keychain access control.
+
+After Checkout displays the one-shot NeonDiff Activation Key, return to the
+native **License** pane, paste the key, and choose **Continue with this key**,
+then **Activate**. **Buy an Activation Key** opens the public pricing page but
+keeps the existing-key field available when the customer returns. The key is
+stored only through the app's Keychain activation path and the plaintext field
+is cleared; do not paste it into Terminal, config, logs, screenshots, or
+evidence.
+
+### Existing bot on this Mac
+
+After account linking, the native app may find a server-verified bot whose App
+identity and GitHub account intersect an existing launchd/config candidate on
+the same Mac. In that exact case it opens a reconciliation path:
+
+- on launch, it keeps the empty onboarding path hidden while account authority
+  and the local config are being restored, then shows onboarding only if no
+  authorized local bot exists;
+- it loads the existing config and repository allowlist without overwriting it;
+- it does not ask the user to paste or migrate the worker's existing GitHub App
+  private key;
+- it reports the server-authoritative account entitlement separately from
+  current-launch review authorization;
+- when the inspected config enables `codexRuntime`, it reports the exact Codex
+  CLI path, model, and reasoning effort as the active review runtime without
+  reading or storing the CLI's OAuth material; otherwise it treats
+  `zcode-app-config` and `none` provider auth modes as config-backed, not as
+  missing NeonDiff Keychain API keys;
+- if the worker allowlist contains multiple repositories, it keeps every entry
+  unchanged and requires one explicit **Review Target** for native activation;
+  that target is restored only for the same config path;
+- it can reverify and invoke the exact matched LaunchAgent configuration without
+  copying its private key. The key file must be a current-user-owned regular
+  file with no group/other permissions. Only its file path—not its key bytes—is
+  supplied as a child-process environment coordinate for the exact config;
+- its single **Verify existing access** action first proves the exact App and
+  Review Target with `doctor github --repo`. A legacy credential-bearing
+  matched worker then runs credential-free
+  `license status --refresh true` through that exact worker and config. A
+  secret-free Keychain-backed worker instead reads the app-owned Activation Key
+  noninteractively and revalidates it through the signed sealed worker's
+  idempotent API path, with the key crossing only bounded stdin and no local
+  CLI-state write. Neither path places the key in argv, environment, config,
+  logs, or evidence. GitHub-reported repository visibility and an active live
+  API entitlement covering that visibility are both required; an unavailable
+  Keychain item, unknown visibility, expired or revoked access, malformed
+  output, or offline proof fails closed;
+- Overview runs one provider-backed repository/PR-scoped dry review first. A
+  live review is enabled only for that config revision and the returned
+  40-character head SHA, and requires explicit confirmation (see
+  [Run A Dry-Run Review](#5-run-a-dry-run-review)); a transport failure revokes
+  the approval and requires a new dry review;
+  daemon-wide start stays blocked for multi-repository workers;
+- it keeps new work blocked until the exact current GitHub/repository and
+  entitlement checks required by the release path pass.
+
+A local config path, launchd label, App ID, or repository name by itself is not
+authority. Suspended, revoked, pending, mismatched, or server-unrecognized bots
+remain in setup/recovery and fail closed.
+
+### Update an existing local worker
+
+The Mac app checks the exact discovered worker's `review-pr` help contract
+before enabling **Run Dry Review**. A package version alone is not sufficient:
+older and compatible technical-beta workers may both report `1.0.4`.
+
+If Overview shows **Worker update required**:
+
+1. Do not run or retry a live review from another terminal. The dry-to-live
+   approval contract is not proven for that worker.
+2. Choose **Install / Update Local Worker**. Use only the outer worker bundle
+   ZIP named in the same immutable GitHub prerelease and release manifest as the
+   installed app. Before extracting it, compare the bundle ZIP SHA-256 with the
+   prerelease notes. After extraction, compare the release manifest SHA-256 with
+   the prerelease notes, then compare the inner `.tgz` tarball SHA-256 with both
+   the release manifest and the prerelease notes. Do not use an unpinned `main`
+   checkout or trust the ambiguous `1.0.4` version string.
+3. Confirm `node --version` reports Node.js 26 or newer. From the extracted
+   directory, preview the checksum-bound migration using the exact LaunchAgent
+   label shown in NeonDiff Settings. The installer requires absolute artifact
+   paths:
+
+   ```bash
+   BUNDLE_DIR="$(pwd -P)"
+   node install-b0-worker-candidate.mjs update \
+     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
+     --manifest-sha256 <manifest-sha256-from-release> \
+     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
+     --launchd-label <existing-label> \
+     --dry-run true
+   ```
+
+4. Inspect the public-safe preview, then repeat it with
+   `--dry-run false --confirm true`. The installer verifies the tarball before
+   mutation, freshly reinstalls an unreferenced leftover from that exact
+   artifact instead of executing it, and installs into a versioned user-owned
+   Application Support prefix,
+   preserves the existing config, LaunchAgent label/environment, GitHub App key
+   file, Keychain entries, provider state, and repository allowlist, and
+   restarts the same LaunchAgent only when it was already loaded. It never reads
+   or copies private-key bytes. Each LaunchAgent label has an isolated worker
+   version, rollback state, and install lock. A lock owned by a process that no
+   longer exists is recovered automatically; a lock with missing or invalid
+   owner metadata fails closed and must be handled with NeonDiff support. When
+   `/opt/homebrew/bin/node` or `/usr/local/bin/node` resolves to the Node runtime
+   executing the installer, that stable command is retained in the LaunchAgent
+   rather than its versioned package-manager target.
+5. Return to Overview and choose **Retry Worker Check**. Dry review stays
+   disabled until the exact installed worker advertises both config-revision
+   approval and the matching ZCode provider path.
+
+The first checksum-managed migration has no trusted prior candidate, so it
+fails closed instead of restoring the unbound original LaunchAgent invocation.
+Retain every verified worker bundle. After installing a later candidate,
+preview rollback from the complete prior bundle:
+
+```bash
+BUNDLE_DIR="$(pwd -P)"
+node install-b0-worker-candidate.mjs rollback \
+  --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.PRIOR-b0-candidate-manifest.json" \
+  --manifest-sha256 <prior-manifest-sha256-from-release> \
+  --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.PRIOR.tgz" \
+  --launchd-label <existing-label> \
+  --dry-run true
+```
+
+Rollback also requires `--dry-run false --confirm true`. It verifies that the
+supplied prior artifacts match the recorded prior candidate, installs them
+through fresh staging, and then switches atomically without executing or
+overwriting either pre-existing candidate tree or touching customer secrets.
+
+Until an immutable GitHub prerelease and release manifest name a compatible
+worker artifact, this state is a release blocker rather than a prompt to repair
+source files manually.
+The app's own Sparkle update does not update an external local worker.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and
@@ -202,6 +506,40 @@ printing secrets:
 ```bash
 neondiff doctor github --config config.local.json --json
 ```
+
+The public paid B0 BYO desktop keeps the customer-owned App private key in the
+macOS Keychain. Its explicit **Verify App Access** action sends that key only to
+the local CLI's bounded stdin for this check. The native app's clean-install
+config lives in its user-writable Application Support directory; the equivalent
+CLI contract is:
+
+```bash
+NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.json"
+neondiff doctor github --config "$NATIVE_CONFIG" \
+  --github-app-id "<numeric-app-id>" \
+  --github-app-private-key-stdin true --json < "/path/to/app-private-key.pem"
+```
+
+The relative `config.local.json` examples elsewhere in this guide remain the
+separate CLI-first/operator path; they do not inspect the native app's config.
+
+The private key must be one unencrypted RSA PKCS#1 or PKCS#8 PEM no larger than
+64 KiB. Do not put the private-key bytes in arguments, environment variables,
+config, logs, or evidence. The reconciled-existing-worker path may supply only
+the already-configured private-key file path to the exact child process. A
+passing doctor proves only current installation/repository read access for the
+configured allowlist; it does not execute or post a review.
+
+The signed Mac app uses the same bounded stdin credential contract for
+`review-pr` and the raw long-running daemon. It routes every credential-bearing
+CLI operation to the single executable worker sealed inside the Developer
+ID-signed app and validates the live process before writing stdin.
+`daemon start|stop|status` control subcommands never accept secret stdin.
+Runtime-only private-key material is
+non-enumerable in the in-memory config object, overrides file/token credentials
+for that operation, and is never accepted from JSON config. Runtime-only
+activation material remains outside the config object and is available only to
+the current async review or daemon operation.
 
 Check:
 
@@ -220,18 +558,37 @@ neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
-The local HTML dashboard is the human first-run surface. It shows license
-status, GitHub App status, daemon status, and provider readiness with redacted
-output. Use the provider card's `Verify API Key` button before launch/use; the
+This SETUP guide is the operator/advanced CLI-first path, and the first-run path
+on non-Mac platforms. The local HTML dashboard is the operator/diagnostic surface
+it drives. On Mac, the native macOS app is the human first-run product surface.
+The exact B0 bundle lets the customer store the customer-owned App key in
+Keychain, select and apply one repository, and verify that installation without
+an operator editing local files. For a reconciled existing worker with a
+multi-repository allowlist, choose one **Review Target** in the repository
+table; this binds activation without changing the worker's other configured
+repositories. Current-access verification uses `doctor github --repo` for that
+one selected target, while the default CLI command without `--repo` continues
+to inspect the complete configured allowlist. The native app can run one scoped
+dry review through the exact matched local agent, then offer a confirmed live
+post pinned to that dry-run head. It still does not start the multi-repository
+daemon or rewrite its allowlist. The managed B1 broker remains a separate path.
+The dashboard shows license status, GitHub App status, daemon status, and
+provider readiness with redacted output. Use the provider card's `Verify API Key` button before launch/use; the
 button checks the selected provider path and reports pass/fail without printing
 the submitted key.
 
-In the native Mac pane, the selected `providers.defaultProviderId` registry
-entry is the source of truth. Endpoint/model edits are dirty until a successful
-Preview and confirmed Apply/readback. Verify stays disabled until that saved
-state is current, then invokes the exact provider ID and config revision. The
-Keychain value crosses only bounded stdin; it is never added to the registry
-patch, argv, environment, logs, or evidence.
+In the native Mac pane, an enabled and valid `codexRuntime` is the active review
+execution backend. The app displays its exact CLI path, model, and reasoning
+effort from `config inspect`; it does not read or store the Codex OAuth session.
+When Codex runtime is disabled, the selected
+`providers.defaultProviderId` registry entry is the source of truth.
+Endpoint/model edits are dirty until a successful Preview and confirmed
+Apply/readback. Verify stays disabled until that saved state is current, then
+invokes the exact provider ID and config revision. The Keychain value crosses
+only bounded stdin; it is never added to the registry patch, argv, environment,
+logs, or evidence. That Keychain flow applies only to `api-key-env` providers.
+`zcode-app-config` and `none` providers use their declared app/config path and
+must not prompt for an unrelated NeonDiff API key.
 
 The full doctor output is JSON. Check:
 
@@ -255,10 +612,12 @@ neondiff review-pr \
   --config config.local.json \
   --repo owner/name \
   --pr 123 \
+  --expected-config-revision <verified-config-revision> \
   --dry-run true \
-  --zcode false
+  --zcode true
 ```
 
+Use the exact `configRevision` returned by the successful provider verification.
 Do not run with `--dry-run false` until dry-run evidence, focused tests, and
 the relevant issue explicitly approve the exact repo, PR, head SHA, and config
 path.
@@ -310,6 +669,19 @@ Live `review-pr` posting is intentionally harder than dry-run inspection. Use
 `--dry-run true` for normal local checks. A live scoped PR review requires
 `--dry-run false --confirm true` after the target repo, PR, head SHA, and config
 path are approved by the relevant issue.
+
+The daemon also performs a bounded worktree cleanup before selected cycles.
+`worktreeCleanup.retentionMs` defaults to two hours and cannot be shorter than
+two hours or `reviewConcurrency.leaseTtlMs`. Cleanup only asks Git to remove
+stale, clean, registered NeonDiff review worktrees; active runs and heads, open
+paths, symlinks, tracked, untracked, or ignored changes, mirrors, and unrelated
+paths are preserved. The open-handle guard requires `lsof` on `PATH`; the
+provided Docker image includes it, while Linux package installs must provide it
+through the host package manager. If the probe is unavailable, cleanup fails
+closed, logs `daemon_worktree_cleanup_failed`, and removes nothing. Set
+`worktreeCleanup.enabled` to `false` to disable the pass. Run the daemon and all
+review workers under the same dedicated account that owns `workRoot`; cleanup
+does not claim visibility into handles owned by unrelated host users.
 
 Launchd and live beta promotion are advanced operator tasks. Use
 [docs/launchd.md](launchd.md), [docs/operator-cli.md](operator-cli.md), and

@@ -47,9 +47,13 @@ export function buildRunOnceCliReport(input: {
   pullNumber?: number;
   commandName?: "run-once" | "review-pr";
 }): RunOnceCliReport {
+  const commandName = input.commandName ?? "run-once";
   return {
-    ok: runOnceCliExitCode(input.result, { dryRun: input.dryRun }) === 0,
-    command: input.commandName ?? "run-once",
+    ok: runOnceCliExitCode(input.result, {
+      dryRun: input.dryRun,
+      commandName
+    }) === 0,
+    command: commandName,
     dryRun: input.dryRun,
     useZCode: input.useZCode,
     scope: {
@@ -62,8 +66,23 @@ export function buildRunOnceCliReport(input: {
   };
 }
 
-export function runOnceCliExitCode(result: RunOnceResult, input: { dryRun?: boolean } = {}): 0 | 1 {
-  return result.failed > 0 || (!input.dryRun && Boolean(result.scopedPull) && (result.skippedLicenseGate ?? 0) > 0) ? 1 : 0;
+export function runOnceCliExitCode(
+  result: RunOnceResult,
+  input: {
+    dryRun?: boolean;
+    commandName?: "run-once" | "review-pr";
+  } = {}
+): 0 | 1 {
+  const scopedLiveDidNotPost =
+    input.commandName === "review-pr" &&
+    !input.dryRun &&
+    Boolean(result.scopedPull) &&
+    result.reviewed !== 1;
+  return result.failed > 0 ||
+    scopedLiveDidNotPost ||
+    (!input.dryRun && Boolean(result.scopedPull) && (result.skippedLicenseGate ?? 0) > 0)
+    ? 1
+    : 0;
 }
 
 export function serializeRunOnceCliReport(report: RunOnceCliReport): string {
@@ -78,11 +97,30 @@ export async function runOnceCliCommand(input: {
 }): Promise<RunOnceCliCommandResult> {
   let result: RunOnceResult;
   try {
+    const explicitRepo = input.options.repo;
+    const explicitPullNumber = input.options.pullNumber;
+    const explicitPullReview =
+      input.commandName === "review-pr" &&
+      typeof explicitRepo === "string" &&
+      explicitRepo.trim().length > 0 &&
+      typeof explicitPullNumber === "number" &&
+      Number.isInteger(explicitPullNumber) &&
+      explicitPullNumber > 0
+        ? {
+            repo: explicitRepo,
+            pullNumber: explicitPullNumber
+          }
+        : undefined;
     const licenseAdmission = input.admitImpl
       ? await input.admitImpl()
       : input.options.licenseAdmission;
     result = await (input.runOnceImpl ?? runOnce)({
       ...input.options,
+      // `review-pr` is already scoped to one explicit repo/PR. Keep
+      // canaryPulls as the broad daemon/run-once rollout boundary.
+      ...(explicitPullReview
+        ? { explicitPullReview }
+        : {}),
       ...(licenseAdmission ? { licenseAdmission } : {})
     });
   } catch (error) {
@@ -111,7 +149,10 @@ export async function runOnceCliCommand(input: {
   return {
     report,
     output: serializeRunOnceCliReport(report),
-    exitCode: runOnceCliExitCode(result, { dryRun: input.options.dryRun })
+    exitCode: runOnceCliExitCode(result, {
+      dryRun: input.options.dryRun,
+      commandName: input.commandName ?? "run-once"
+    })
   };
 }
 

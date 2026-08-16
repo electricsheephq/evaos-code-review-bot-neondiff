@@ -70,6 +70,12 @@ private final class EvaluationPreferences: DesktopPreferences, @unchecked Sendab
     func bool(forKey key: String) -> Bool { lock.withLock { booleans[key] ?? false } }
     func set(_ value: String, forKey key: String) { lock.withLock { strings[key] = value } }
     func set(_ value: Bool, forKey key: String) { lock.withLock { booleans[key] = value } }
+    func removeValue(forKey key: String) {
+        lock.withLock {
+            strings.removeValue(forKey: key)
+            booleans.removeValue(forKey: key)
+        }
+    }
 }
 
 private struct EvaluationClock: DesktopClock {
@@ -84,6 +90,7 @@ private struct EvaluationClock: DesktopClock {
 
 private struct EvaluationFileWriter: DesktopFileWriting {
     let applicationSupportDirectory = URL(filePath: "/fixture/NeonDiffDesktop", directoryHint: .isDirectory)
+    func fileExists(at url: URL) -> Bool { false }
     func write(_ data: Data, to url: URL) throws {}
 }
 
@@ -119,7 +126,7 @@ private final class EvaluationProviderVerifier: DesktopProviderVerifying, @unche
     }
 }
 
-private final class EvaluationSecretStore: DesktopSecretStoring {
+private final class EvaluationSecretStore: DesktopSecretStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var accounts: Set<String>
 

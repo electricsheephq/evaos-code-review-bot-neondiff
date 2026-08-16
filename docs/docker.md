@@ -27,7 +27,8 @@ docker compose -f docker-compose.local.yml logs -f neondiff
 The example also includes an `ollama` service for local OpenAI-compatible
 provider experiments. It is optional; remove it if your provider runs elsewhere.
 
-The image runs as the bundled non-root `node` user. The example daemon command
+The image runs as the bundled non-root `node` user and includes `lsof` for the
+enabled-by-default review-worktree open-handle guard. The example daemon command
 is deliberately explicit about `--dry-run true`, so a first deploy can prove the
 worker loop and evidence path without posting GitHub comments. To post live
 reviews from Docker, change the compose command to:

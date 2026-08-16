@@ -96,4 +96,48 @@ import NeonDiffDesktopCore
         legacy.expect(!fixture.model.isConfigPatchInProgress, "only the owning provider patch response completes the operation")
         legacy.expect(fixture.model.canApplyProviderConfig, "the owning provider patch response consumes its exact proof")
     }
+
+    @Test func legacyProviderApplySendsRequiredConfirmation() async {
+        let fixture = ModelDependencyFixture(productionBoundary: .testVerified)
+        let revisionBefore = String(repeating: "a", count: 64)
+        let revisionAfter = String(repeating: "b", count: 64)
+        fixture.loadConfig(
+            #"{"ok":true,"command":"config inspect","revision":"\#(revisionBefore)","config":{"pilotRepos":[],"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://provider.example/v1","model":"fixture-model","authMode":"api-key-env"}}}}}"#
+        )
+        fixture.model.providers.selectedProviderBaseUrl = "https://edited.example/v1"
+
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 0,
+            stdout: #"{"ok":true,"command":"config patch","dryRun":true,"wrote":false,"revisionBefore":"\#(revisionBefore)","revisionAfter":"\#(revisionBefore)","config":{"pilotRepos":[],"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://edited.example/v1","model":"fixture-model","authMode":"api-key-env"}}}}}"#,
+            stderr: ""
+        )))
+        fixture.model.previewProviderConfigPatch()
+        await fixture.waitForConfigPatchToFinish()
+        #expect(fixture.model.canApplyProviderConfig)
+
+        fixture.cli.enqueue(.success(CLIRunResult(
+            exitCode: 0,
+            stdout: #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"\#(revisionBefore)","revisionAfter":"\#(revisionAfter)","config":{"pilotRepos":[],"zcode":{"model":"GLM-5.2","cliPath":"zcode","appConfigPath":"zcode.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"Fixture provider","baseUrl":"https://edited.example/v1","model":"fixture-model","authMode":"api-key-env"}}}}}"#,
+            stderr: ""
+        )))
+        fixture.model.applyProviderConfigPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        let arguments = fixture.cli.calls.last?.arguments ?? []
+        #expect(arguments.contains("--confirm"))
+        #expect(arguments.contains("true"))
+    }
+
+    @Test func legacyZCodeConfigDoesNotInventBindingOrOfferNoOpApply() {
+        let fixture = ModelDependencyFixture(productionBoundary: .testVerified)
+        let revisionBefore = String(repeating: "a", count: 64)
+        fixture.loadConfig(
+            #"{"ok":true,"command":"config inspect","revision":"\#(revisionBefore)","config":{"pilotRepos":[],"zcode":{"model":"GLM-5.2","cliPath":"/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs","appConfigPath":"/Volumes/LEXAR/zcode/.zcode/v2/config.json"},"providers":{"defaultProviderId":"zcode-glm","providers":{"zcode-glm":{"enabled":true,"adapter":"openai-compatible","displayName":"GLM/Z.ai through ZCode","baseUrl":"","model":"GLM-5.2","authMode":"zcode-app-config"}}}}}"#
+        )
+
+        #expect(fixture.model.providerSetupReady)
+        #expect(!fixture.model.scopedReviewProviderReady)
+        #expect(!fixture.model.canPreviewProviderConfig)
+        #expect(!fixture.model.canApplyProviderConfig)
+    }
 }

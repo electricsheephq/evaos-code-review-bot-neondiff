@@ -1,6 +1,13 @@
 import Foundation
 
 public enum NeonDiffCommandBuilder {
+    public static func configInitialize(cliPath: String, configPath: String) -> DesktopCommand {
+        DesktopCommand(
+            title: "Initialize config",
+            commandLine: "\(shellQuote(cliPath)) init --config \(shellQuote(configPath))"
+        )
+    }
+
     public static func configInspect(cliPath: String, configPath: String) -> DesktopCommand {
         DesktopCommand(
             title: "Inspect config",

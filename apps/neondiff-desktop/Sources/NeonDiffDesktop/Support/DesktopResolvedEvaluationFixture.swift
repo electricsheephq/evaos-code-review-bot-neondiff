@@ -73,14 +73,23 @@ struct DesktopResolvedEvaluationFixture: Codable {
 struct DesktopResolvedEvaluationLaunchContext {
     let fixture: DesktopResolvedEvaluationFixture
     let contentSize: NSSize
+    let textSizeMode: DesktopResolvedEvaluationTextSizeMode
     let disableAnimations: Bool
+}
+
+enum DesktopResolvedEvaluationTextSizeMode: String {
+    case runnerDefault = "runner-default"
+    case accessibility3
 }
 
 enum DesktopResolvedEvaluationLaunch {
     static func load(arguments: [String]) throws -> DesktopResolvedEvaluationLaunchContext? {
-        let flags = ["--ui-testing", "--ui-fixture", "--content-size", "--disable-animations"]
-        guard arguments.contains(where: flags.contains) else { return nil }
-        guard flags.allSatisfy({ flag in arguments.filter({ $0 == flag }).count == 1 }) else {
+        let requiredFlags = ["--ui-testing", "--ui-fixture", "--content-size", "--disable-animations"]
+        let optionalFlags = ["--text-size"]
+        let evaluationFlags = requiredFlags + optionalFlags
+        guard arguments.contains(where: evaluationFlags.contains) else { return nil }
+        guard requiredFlags.allSatisfy({ flag in arguments.filter({ $0 == flag }).count == 1 }),
+              optionalFlags.allSatisfy({ flag in arguments.filter({ $0 == flag }).count <= 1 }) else {
             throw DesktopResolvedEvaluationLaunchError.invalidArguments
         }
         guard let fixturePath = value(after: "--ui-fixture", in: arguments),
@@ -97,6 +106,15 @@ enum DesktopResolvedEvaluationLaunch {
                 .contains(where: { $0 == (width, height) }) else {
             throw DesktopResolvedEvaluationLaunchError.invalidArguments
         }
+        let textSizeValue = value(after: "--text-size", in: arguments)
+        if arguments.contains("--text-size"), textSizeValue == nil {
+            throw DesktopResolvedEvaluationLaunchError.invalidArguments
+        }
+        guard let textSizeMode = DesktopResolvedEvaluationTextSizeMode(
+            rawValue: textSizeValue ?? DesktopResolvedEvaluationTextSizeMode.runnerDefault.rawValue
+        ) else {
+            throw DesktopResolvedEvaluationLaunchError.invalidArguments
+        }
         let fixture = try resolveFixture(arguments: arguments)
         guard fixture.schemaVersion == 1, fixture.environment.disableAnimations else {
             throw DesktopResolvedEvaluationLaunchError.invalidFixture
@@ -104,6 +122,7 @@ enum DesktopResolvedEvaluationLaunch {
         return DesktopResolvedEvaluationLaunchContext(
             fixture: fixture,
             contentSize: NSSize(width: width, height: height),
+            textSizeMode: textSizeMode,
             disableAnimations: true
         )
     }

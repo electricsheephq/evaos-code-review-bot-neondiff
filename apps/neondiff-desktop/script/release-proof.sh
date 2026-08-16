@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="NeonDiffDesktop"
-ARTIFACT_NAME="NeonDiffDesktop.app.zip"
+APP_NAME="NeonDiff"
+EXECUTABLE_NAME="NeonDiffDesktop"
+BUNDLE_NAME="NeonDiff"
+ARTIFACT_NAME="NeonDiff.app.zip"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
-INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
+SOURCE_APP_BUNDLE="$DIST_DIR/$BUNDLE_NAME.app"
 RELEASE_SMOKE_DIR="$DIST_DIR/release-smoke"
+APP_BUNDLE="$RELEASE_SMOKE_DIR/$APP_NAME.app"
+INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
 ARTIFACT_PATH="$RELEASE_SMOKE_DIR/$ARTIFACT_NAME"
 METADATA_PATH="$RELEASE_SMOKE_DIR/desktop-release-smoke-metadata.json"
 
@@ -57,7 +60,7 @@ ensure_clean_source_tree() {
 }
 
 verify_existing_app_launch() {
-  local app_binary="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+  local app_binary="$APP_BUNDLE/Contents/MacOS/$EXECUTABLE_NAME"
   /usr/bin/open -n "$APP_BUNDLE"
   local deadline=$((SECONDS + 10))
   while [ "$SECONDS" -lt "$deadline" ]; do
@@ -67,10 +70,10 @@ verify_existing_app_launch() {
       if [ "$proc_path" = "$app_binary" ]; then
         return 0
       fi
-    done < <(pgrep -x "$APP_NAME" 2>/dev/null || true)
+    done < <(pgrep -x "$EXECUTABLE_NAME" 2>/dev/null || true)
     sleep 0.2
   done
-  echo "app launch proof failed: $APP_NAME did not start from $APP_BUNDLE" >&2
+  echo "app launch proof failed: $EXECUTABLE_NAME did not start from $APP_BUNDLE" >&2
   exit 1
 }
 
@@ -92,15 +95,20 @@ else
   SOURCE_REF="$(git -C "$REPO_ROOT" symbolic-ref -q --short HEAD || git -C "$REPO_ROOT" rev-parse --short HEAD)"
 fi
 
-if [ ! -d "$APP_BUNDLE" ]; then
-  echo "missing app bundle: $APP_BUNDLE" >&2
+if [ ! -d "$SOURCE_APP_BUNDLE" ]; then
+  echo "missing app bundle: $SOURCE_APP_BUNDLE" >&2
   exit 1
 fi
 
-if [ ! -f "$INFO_PLIST" ]; then
-  echo "missing Info.plist: $INFO_PLIST" >&2
+if [ ! -f "$SOURCE_APP_BUNDLE/Contents/Info.plist" ]; then
+  echo "missing Info.plist: $SOURCE_APP_BUNDLE/Contents/Info.plist" >&2
   exit 1
 fi
+
+mkdir -p "$RELEASE_SMOKE_DIR"
+rm -rf "$APP_BUNDLE"
+rm -f "$ARTIFACT_PATH" "$METADATA_PATH"
+ditto "$SOURCE_APP_BUNDLE" "$APP_BUNDLE"
 
 if [ "$UI_LAUNCH" = "true" ]; then
   verify_existing_app_launch
@@ -109,7 +117,6 @@ fi
 UI_LAUNCH_JSON="$(normalize_bool "$UI_LAUNCH" "NEONDIFF_DESKTOP_UI_LAUNCH")"
 VISUAL_SMOKE_REQUIRED_JSON="$(normalize_bool "$VISUAL_SMOKE_REQUIRED" "NEONDIFF_DESKTOP_VISUAL_SMOKE_REQUIRED")"
 
-mkdir -p "$RELEASE_SMOKE_DIR"
 ditto -c -k --keepParent "$APP_BUNDLE" "$ARTIFACT_PATH"
 
 ARTIFACT_SHA256="$(shasum -a 256 "$ARTIFACT_PATH" | awk '{print $1}')"
@@ -132,7 +139,7 @@ jq -n \
   --arg artifact_classification "$ARTIFACT_CLASSIFICATION" \
   --arg source_sha "$SOURCE_SHA" \
   --arg source_ref "$SOURCE_REF" \
-  --arg app_bundle_path "apps/neondiff-desktop/dist/$APP_NAME.app" \
+  --arg app_bundle_path "apps/neondiff-desktop/dist/release-smoke/$APP_NAME.app" \
   --arg bundle_id "$BUNDLE_ID" \
   --arg short_version "$SHORT_VERSION" \
   --arg build_version "$BUILD_VERSION" \

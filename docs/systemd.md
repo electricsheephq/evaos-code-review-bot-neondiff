@@ -15,6 +15,16 @@ resolve to a systemd-visible path such as `/usr/local/bin/neondiff` or
 `ExecStart` in the copied unit file to the absolute path returned by
 `command -v neondiff`.
 
+The enabled-by-default review-worktree cleanup uses `lsof` as a fail-closed
+open-handle guard. Install it with the host package manager before enabling the
+daemon. For Debian or Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y lsof
+command -v lsof
+```
+
 ```bash
 npm install -g neondiff
 command -v neondiff
@@ -146,6 +156,8 @@ sudo journalctl -u neondiff --since "30 minutes ago"
 Common failures:
 
 - `status=203/EXEC`: the `neondiff` binary is not on the service user's PATH.
+- `daemon_worktree_cleanup_failed`: verify `lsof` is installed and visible on
+  the service PATH; cleanup removes nothing when the probe is unavailable.
 - Config load failure: verify `NEONDIFF_CONFIG` points to readable JSON.
 - GitHub read failure: verify App ID, private key path, and selected repo install.
 - Provider failure: verify local provider config and use redacted provider output

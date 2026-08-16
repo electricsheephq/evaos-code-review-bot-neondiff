@@ -1,11 +1,17 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  cleanupReviewWorktreesFromConfig,
   runDaemonCycle as runDaemonCycleImpl,
   shouldExitDaemonAfterFailedCycle,
   type RunDaemonCycleOptions
 } from "../src/daemon.js";
+import type { BotConfig } from "../src/config.js";
 import type { IssueEnrichmentCycleResult } from "../src/issue-enrichment.js";
 import type { ProductionLicenseAdmission } from "../src/license-admission.js";
+import { ReviewStateStore } from "../src/state.js";
 
 const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
   ...input,
@@ -13,6 +19,68 @@ const runDaemonCycle = (input: RunDaemonCycleOptions) => runDaemonCycleImpl({
 });
 
 describe("daemon cycle resilience", () => {
+  it("fails closed and closes state when the production open-handle probe fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-cleanup-probe-"));
+    const close = vi.spyOn(ReviewStateStore.prototype, "close");
+    const config = {
+      statePath: join(root, "state.sqlite"),
+      workRoot: join(root, "runtime"),
+      reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 20 * 60_000 },
+      worktreeCleanup: { enabled: true, retentionMs: 2 * 60 * 60_000, intervalMs: 30 * 60_000 }
+    } as BotConfig;
+
+    try {
+      expect(() => cleanupReviewWorktreesFromConfig(
+        { dryRun: false },
+        {
+          loadConfigImpl: () => config,
+          probeOpenReviewWorktreePathsImpl: () => ({
+            ok: false,
+            paths: new Set(),
+            error: "lsof unavailable"
+          })
+        }
+      )).toThrow("worktree cleanup open-handle probe failed: lsof unavailable");
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("honors a live cleanup disablement before opening state or probing handles", () => {
+    const probe = vi.fn(() => ({ ok: true, paths: new Set<string>() }));
+    const close = vi.spyOn(ReviewStateStore.prototype, "close");
+    const config = {
+      statePath: "/unused/state.sqlite",
+      workRoot: "/runtime",
+      reviewConcurrency: { maxActiveRuns: 1, leaseTtlMs: 20 * 60_000 },
+      worktreeCleanup: { enabled: false, retentionMs: 2 * 60 * 60_000, intervalMs: 30 * 60_000 }
+    } as BotConfig;
+
+    try {
+      expect(cleanupReviewWorktreesFromConfig(
+        { dryRun: false },
+        {
+          loadConfigImpl: () => config,
+          probeOpenReviewWorktreePathsImpl: probe
+        }
+      )).toEqual({
+        worktreesRoot: "/runtime/worktrees",
+        retentionMs: 2 * 60 * 60_000,
+        checked: 0,
+        deleted: 0,
+        skipped: 0,
+        errors: 0,
+        outcomes: []
+      });
+      expect(probe).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      close.mockRestore();
+    }
+  });
+
   it("exits on activation denial but keeps long-running daemons alive after recoverable runtime failures", () => {
     const admissionDenied = { ok: false, failureKind: "admission_denied", error: "license missing" } as const;
     const runtimeFailure = { ok: false, failureKind: "runtime_failure", error: "transient timeout" } as const;
@@ -56,6 +124,89 @@ describe("daemon cycle resilience", () => {
 
     expect(result.ok).toBe(true);
     expect(seen).toEqual([issueEnrichment, reviewDiscovery, reviewDiscovery]);
+  });
+
+  it("runs a due worktree cleanup before review work and logs bounded outcomes", async () => {
+    const calls: string[] = [];
+    const stdout: string[] = [];
+    const result = await runDaemonCycle({
+      cycle: 1,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      worktreeCleanupDue: true,
+      cleanupReviewWorktreesImpl: () => {
+        calls.push("cleanup");
+        return {
+          worktreesRoot: "/tmp/neondiff/runtime/worktrees",
+          retentionMs: 7_200_000,
+          checked: 2,
+          deleted: 1,
+          skipped: 1,
+          errors: 0,
+          outcomes: [
+            { path: "/tmp/neondiff/runtime/worktrees/a", status: "deleted", reason: "stale_clean_owned" },
+            { path: "/tmp/neondiff/runtime/worktrees/b", status: "skipped", reason: "recent" }
+          ]
+        };
+      },
+      runOnceImpl: async () => {
+        calls.push("review");
+        return successfulRunOnceResult();
+      },
+      retryProviderCooldownsImpl: async () => successfulRetryResult(),
+      recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual(["cleanup", "review"]);
+    expect(JSON.parse(stdout[0]!)).toMatchObject({
+      event: "daemon_worktree_cleanup",
+      result: {
+        deleted: 1,
+        skipped: 1,
+        errors: 0,
+        outcomeCounts: {
+          "deleted:stale_clean_owned": 1,
+          "skipped:recent": 1
+        }
+      }
+    });
+  });
+
+  it("keeps the review cycle alive when worktree cleanup fails closed", async () => {
+    const stderr: string[] = [];
+    let reviewRan = false;
+    const result = await runDaemonCycle({
+      cycle: 1,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      worktreeCleanupDue: true,
+      cleanupReviewWorktreesImpl: () => { throw new Error("open-handle probe unavailable"); },
+      runOnceImpl: async () => {
+        reviewRan = true;
+        return successfulRunOnceResult();
+      },
+      retryProviderCooldownsImpl: async () => successfulRetryResult(),
+      recordHeartbeatImpl: () => undefined,
+      stdout: () => undefined,
+      stderr: (line) => stderr.push(line)
+    });
+
+    expect(result.ok).toBe(true);
+    expect(reviewRan).toBe(true);
+    expect(JSON.parse(stderr[0]!)).toMatchObject({
+      event: "daemon_worktree_cleanup_failed",
+      level: "error",
+      error: "open-handle probe unavailable"
+    });
   });
 
   it("denies a cycle before heartbeat, review, retry, or enrichment work", async () => {

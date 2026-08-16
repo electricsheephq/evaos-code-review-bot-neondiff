@@ -1,23 +1,31 @@
 import AppKit
 import SwiftUI
 import NeonDiffDesktopAppCore
+import NeonDiffDesktopCore
 
 struct NeonWindowConfigurator: NSViewRepresentable {
     let requestedContentSize: NSSize?
     let disablesAnimations: Bool
+    @Environment(\.colorScheme) private var colorScheme
 #if DEBUG
     let readinessRequest: DesktopEvaluationReadinessRequest?
+    let evaluationSection: DesktopSection?
+    let surfaceStatus: DesktopEvaluationSurfaceStatus?
 #endif
 
 #if DEBUG
     init(
         requestedContentSize: NSSize? = nil,
         disablesAnimations: Bool = false,
-        readinessRequest: DesktopEvaluationReadinessRequest? = nil
+        readinessRequest: DesktopEvaluationReadinessRequest? = nil,
+        evaluationSection: DesktopSection? = nil,
+        surfaceStatus: DesktopEvaluationSurfaceStatus? = nil
     ) {
         self.requestedContentSize = requestedContentSize
         self.disablesAnimations = disablesAnimations
         self.readinessRequest = readinessRequest
+        self.evaluationSection = evaluationSection
+        self.surfaceStatus = surfaceStatus
     }
 #else
     init(requestedContentSize: NSSize? = nil, disablesAnimations: Bool = false) {
@@ -46,16 +54,14 @@ struct NeonWindowConfigurator: NSViewRepresentable {
     private func configure(window: NSWindow?, coordinator: Coordinator) {
         guard let window else { return }
 
-        window.title = "NeonDiff Desktop"
+        window.title = "NeonDiff"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.backgroundColor = NSColor(
-            calibratedRed: 0.224,
-            green: 1.0,
-            blue: 0.533,
-            alpha: 1.0
+        window.appearance = NSAppearance(
+            named: colorScheme == .dark ? .darkAqua : .aqua
         )
+        window.backgroundColor = referenceChrome
         window.styleMask.insert(.fullSizeContentView)
         window.standardWindowButton(.closeButton)?.isHidden = false
         window.standardWindowButton(.miniaturizeButton)?.isHidden = false
@@ -91,7 +97,62 @@ struct NeonWindowConfigurator: NSViewRepresentable {
                 )
             }
         } else {
-            window.minSize = NSSize(width: 1040, height: 680)
+            let productionMinimumContentSize =
+                DesktopWindowGeometryPolicy.minimumContentSize(requested: nil)
+            let productionMinimumFrameSize = DesktopWindowGeometryPolicy.targetFrameSize(
+                requestedContent: productionMinimumContentSize,
+                currentFrame: DesktopWindowContentSize(
+                    width: window.frame.width,
+                    height: window.frame.height
+                ),
+                currentContent: DesktopWindowContentSize(
+                    width: window.contentLayoutRect.width,
+                    height: window.contentLayoutRect.height
+                )
+            )
+            window.minSize = NSSize(
+                width: productionMinimumFrameSize.width,
+                height: productionMinimumFrameSize.height
+            )
+            if coordinator.configuredProductionWindowNumber != window.windowNumber,
+               let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+                let targetFrameSize = DesktopWindowGeometryPolicy.productionLaunchFrameSize(
+                    currentFrame: DesktopWindowContentSize(
+                        width: window.frame.width,
+                        height: window.frame.height
+                    ),
+                    currentContent: DesktopWindowContentSize(
+                        width: window.contentLayoutRect.width,
+                        height: window.contentLayoutRect.height
+                    ),
+                    visibleFrame: DesktopWindowContentSize(
+                        width: visibleFrame.width,
+                        height: visibleFrame.height
+                    )
+                )
+                let targetOrigin = DesktopWindowGeometryPolicy.centeredOrigin(
+                    frameSize: targetFrameSize,
+                    visibleOrigin: DesktopWindowOrigin(
+                        x: visibleFrame.minX,
+                        y: visibleFrame.minY
+                    ),
+                    visibleFrame: DesktopWindowContentSize(
+                        width: visibleFrame.width,
+                        height: visibleFrame.height
+                    )
+                )
+                window.setFrame(
+                    NSRect(
+                        origin: NSPoint(x: targetOrigin.x, y: targetOrigin.y),
+                        size: NSSize(
+                            width: targetFrameSize.width,
+                            height: targetFrameSize.height
+                        )
+                    ),
+                    display: true
+                )
+                coordinator.configuredProductionWindowNumber = window.windowNumber
+            }
         }
         if requestedContentSize != nil,
            coordinator.positionedWindowNumber != window.windowNumber {
@@ -112,6 +173,7 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         paintNativeTitlebar(in: window)
 #if DEBUG
         scheduleReadinessSample(window: window, coordinator: coordinator)
+        scheduleSurfaceStateSample(window: window, coordinator: coordinator)
 #endif
     }
 
@@ -121,26 +183,50 @@ struct NeonWindowConfigurator: NSViewRepresentable {
         }
 
         titlebarView.wantsLayer = true
-        titlebarView.layer?.backgroundColor = neonGreen.cgColor
+        titlebarView.layer?.backgroundColor = referenceChrome.cgColor
 
-        if !titlebarView.subviews.contains(where: { $0.identifier == nativeTitlebarBackgroundIdentifier }) {
-            let background = NSView(frame: titlebarView.bounds)
+        let background: NSView
+        if let existing = titlebarView.subviews.first(
+            where: { $0.identifier == nativeTitlebarBackgroundIdentifier }
+        ) {
+            background = existing
+        } else {
+            background = NSView(frame: titlebarView.bounds)
             background.identifier = nativeTitlebarBackgroundIdentifier
             background.wantsLayer = true
-            background.layer?.backgroundColor = neonGreen.cgColor
             background.autoresizingMask = [.width, .height]
             titlebarView.addSubview(background, positioned: .below, relativeTo: nil)
         }
+        background.layer?.backgroundColor = referenceChrome.cgColor
+    }
+
+    private var referenceChrome: NSColor {
+        let token = colorScheme == .dark
+            ? NDDesignTokens.background.dark
+            : NDDesignTokens.background.light
+        return NSColor(
+            srgbRed: token.red,
+            green: token.green,
+            blue: token.blue,
+            alpha: token.opacity
+        )
     }
 
     final class Coordinator {
         var positionedWindowNumber: Int?
+        var configuredProductionWindowNumber: Int?
 #if DEBUG
         var readinessSampling = false
         var readinessEmitted = false
         var lastSample: DesktopEvaluationGeometrySample?
         var stableSampleCount = 0
         var readinessAttemptCount = 0
+        var surfaceSection: DesktopSection?
+        var surfaceSamplingToken = 0
+        var surfaceLastSample: DesktopHostedGeometrySample?
+        var surfaceSamples: [DesktopHostedGeometrySample] = []
+        var surfaceSamplingStartedAt: TimeInterval?
+        var surfaceAttemptCount = 0
 #endif
     }
 
@@ -195,13 +281,132 @@ struct NeonWindowConfigurator: NSViewRepresentable {
             sampleReadiness(window: window, coordinator: coordinator)
         }
     }
+
+    private func scheduleSurfaceStateSample(window: NSWindow, coordinator: Coordinator) {
+        guard let surfaceStatus,
+              let evaluationSection,
+              coordinator.surfaceSection != evaluationSection else {
+            return
+        }
+        coordinator.surfaceSection = evaluationSection
+        let generation = surfaceStatus.begin(section: evaluationSection)
+        coordinator.surfaceSamplingToken += 1
+        coordinator.surfaceLastSample = nil
+        coordinator.surfaceSamples = []
+        coordinator.surfaceSamplingStartedAt = nil
+        coordinator.surfaceAttemptCount = 0
+        let token = coordinator.surfaceSamplingToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+            sampleSurfaceState(
+                window: window,
+                section: evaluationSection,
+                generation: generation,
+                token: token,
+                coordinator: coordinator
+            )
+        }
+    }
+
+    private func sampleSurfaceState(
+        window: NSWindow,
+        section: DesktopSection,
+        generation: Int,
+        token: Int,
+        coordinator: Coordinator
+    ) {
+        guard let surfaceStatus,
+              token == coordinator.surfaceSamplingToken,
+              section == coordinator.surfaceSection,
+              surfaceStatus.snapshot?.generation == generation else {
+            return
+        }
+        coordinator.surfaceAttemptCount += 1
+        guard coordinator.surfaceAttemptCount < 50 else {
+            fatalError("NeonDiff Desktop evaluation surface state did not settle within five seconds.")
+        }
+        guard surfaceStatus.isRendered(section: section, generation: generation) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                sampleSurfaceState(
+                    window: window,
+                    section: section,
+                    generation: generation,
+                    token: token,
+                    coordinator: coordinator
+                )
+            }
+            return
+        }
+        let windowSample = DesktopEvaluationSurfaceStateWriter.sample(window: window)
+        let sampledAt = ProcessInfo.processInfo.systemUptime
+        guard let rawSample = surfaceStatus.hostedGeometrySample(
+            windowSample: windowSample,
+            section: section,
+            generation: generation,
+            elapsedMilliseconds: 0
+        ) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                sampleSurfaceState(
+                    window: window,
+                    section: section,
+                    generation: generation,
+                    token: token,
+                    coordinator: coordinator
+                )
+            }
+            return
+        }
+        if let previous = coordinator.surfaceLastSample,
+           let startedAt = coordinator.surfaceSamplingStartedAt,
+           rawSample.approximatelyEquals(previous) {
+            let elapsed = Int(((sampledAt - startedAt) * 1_000).rounded())
+            let priorElapsed = coordinator.surfaceSamples.last?.elapsedMilliseconds ?? 0
+            let interval = elapsed - priorElapsed
+            if interval >= 90, interval <= 150 {
+                coordinator.surfaceSamples.append(
+                    rawSample.withElapsedMilliseconds(elapsed)
+                )
+            } else {
+                coordinator.surfaceSamplingStartedAt = sampledAt
+                coordinator.surfaceSamples = [rawSample.withElapsedMilliseconds(0)]
+            }
+        } else {
+            coordinator.surfaceSamplingStartedAt = sampledAt
+            coordinator.surfaceSamples = [rawSample.withElapsedMilliseconds(0)]
+        }
+        coordinator.surfaceLastSample = rawSample
+        if coordinator.surfaceSamples.count >= 3 {
+            guard surfaceStatus.markQuiescent(
+                section: section,
+                generation: generation,
+                samples: Array(coordinator.surfaceSamples.suffix(3))
+            ) else {
+                return
+            }
+            guard let readinessRequest else { return }
+            do {
+                try DesktopEvaluationSurfaceStateWriter.write(
+                    request: readinessRequest,
+                    window: window,
+                    sample: windowSample,
+                    section: section,
+                    surfaceGeneration: generation
+                )
+            } catch {
+                fatalError("NeonDiff Desktop evaluation surface state failed: \(error.localizedDescription)")
+            }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+            sampleSurfaceState(
+                window: window,
+                section: section,
+                generation: generation,
+                token: token,
+                coordinator: coordinator
+            )
+        }
+    }
 #endif
 }
 
 private let nativeTitlebarBackgroundIdentifier = NSUserInterfaceItemIdentifier("NeonDiffNativeTitlebarBackground")
-private let neonGreen = NSColor(
-    calibratedRed: 0.224,
-    green: 1.0,
-    blue: 0.533,
-    alpha: 1.0
-)

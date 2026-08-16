@@ -20,6 +20,8 @@ export interface ReleaseRepoStatus {
 export interface ReleaseLaunchdStatus {
   label: string;
   state: "running" | "not_running" | "unknown";
+  program?: string;
+  sealedDesktopWorker?: boolean;
   pid?: number;
   configPath?: string;
   dryRun?: boolean;
@@ -251,7 +253,8 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const cleanOk = input.repo.dirtyFiles.length === 0;
   const launchdRunningOk = input.launchd.state === "running";
   const launchdConfigOk = input.launchd.configPath === input.configPath;
-  const launchdSystemCaOk = input.launchd.usesSystemCa === true;
+  const launchdSystemCaOk =
+    input.launchd.sealedDesktopWorker === true || input.launchd.usesSystemCa === true;
   const dbOk = input.database.errorCount === 0;
   const providerThrottleState = input.database.providerThrottleState ?? inferProviderThrottleState(input.database);
   const retryableExpiredProviderCooldownCount =
@@ -307,11 +310,13 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     {
       name: "launchd_node_system_ca",
       ok: launchdSystemCaOk,
-      detail: input.launchd.usesSystemCa === undefined
-        ? "NODE_OPTIONS not detected"
-        : input.launchd.usesSystemCa
-          ? "NODE_OPTIONS includes --use-system-ca"
-          : "NODE_OPTIONS missing --use-system-ca"
+      detail: input.launchd.sealedDesktopWorker === true
+        ? "not applicable to the signed sealed desktop worker"
+        : input.launchd.usesSystemCa === undefined
+          ? "NODE_OPTIONS not detected"
+          : input.launchd.usesSystemCa
+            ? "NODE_OPTIONS includes --use-system-ca"
+            : "NODE_OPTIONS missing --use-system-ca"
     },
     {
       name: "live_db_no_errors",
@@ -2062,14 +2067,22 @@ function readBoolean(value: unknown): boolean | undefined {
 }
 
 function readRepoStatus(cwd: string): ReleaseRepoStatus {
-  return {
-    branch: git(cwd, ["branch", "--show-current"]) || "(detached)",
-    head: git(cwd, ["rev-parse", "HEAD"]),
-    dirtyFiles: git(cwd, ["status", "--short"])
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-  };
+  try {
+    return {
+      branch: gitQuiet(cwd, ["branch", "--show-current"]) || "(detached)",
+      head: gitQuiet(cwd, ["rev-parse", "HEAD"]),
+      dirtyFiles: gitQuiet(cwd, ["status", "--short"])
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+    };
+  } catch {
+    return {
+      branch: "(unknown)",
+      head: "(unknown)",
+      dirtyFiles: ["(git unavailable)"]
+    };
+  }
 }
 
 function readLaunchdStatus(label: string): ReleaseLaunchdStatus {
@@ -2083,15 +2096,27 @@ function readLaunchdStatus(label: string): ReleaseLaunchdStatus {
 export function parseLaunchdPrintStatus(label: string, stdout: string): ReleaseLaunchdStatus {
   const state = stdout.match(/\bstate = (\w+)/)?.[1] === "running" ? "running" : "not_running";
   const pidText = stdout.match(/\bpid = (\d+)/)?.[1];
+  const program = stdout.match(/^\s*program = ([^\n]+)$/m)?.[1]?.trim();
   const args = extractLaunchdSection(stdout, "arguments") ?? "";
+  const programArguments = args
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
   const configMatch = args.match(/--config\s*\n\s*([^\n]+)/);
   const dryRunMatch = args.match(/--dry-run\s*\n\s*([^\n]+)/);
   const environment = extractLaunchdSection(stdout, "environment");
   const nodeOptions = normalizeLaunchdValue(readLaunchdEnvironmentValue(environment, "NODE_OPTIONS"));
   const hasLaunchdEnvironment = environment !== undefined;
+  const sealedDesktopExecutable = "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop";
+  const sealedDesktopWorker =
+    program === sealedDesktopExecutable &&
+    programArguments[0] === sealedDesktopExecutable &&
+    programArguments[1] === "--neondiff-worker-daemon";
   return {
     label,
     state,
+    ...(program ? { program } : {}),
+    ...(sealedDesktopWorker ? { sealedDesktopWorker: true } : {}),
     ...(pidText ? { pid: Number(pidText) } : {}),
     ...(configMatch?.[1] ? { configPath: configMatch[1].trim() } : {}),
     ...(dryRunMatch?.[1] ? { dryRun: dryRunMatch[1].trim() !== "false" } : {}),
@@ -2926,6 +2951,18 @@ function stripLeadingV(version: string): string {
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function gitQuiet(cwd: string, args: string[]): string {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.status !== 0) {
+    throw new Error("git repository status unavailable");
+  }
+  return result.stdout.trim();
 }
 
 function isProcessAlive(pid: number): boolean {

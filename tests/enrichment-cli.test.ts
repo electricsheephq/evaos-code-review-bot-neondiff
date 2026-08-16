@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -60,6 +60,50 @@ describe("build-enrichment-comment issue CLI", () => {
         path: "/repos/owner/repo/issues/17",
         authorization: "Bearer test-token"
       });
+    });
+  });
+
+  it("threads the resolved repo issue policy through the existing build command", async () => {
+    await withMockGitHub(async ({ apiBaseUrl }) => {
+      const root = createRoot(roots);
+      const evidenceDir = join(root, "evidence");
+      const outputDir = join(evidenceDir, "issue-policy");
+      const configPath = writeConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
+      config.issueEnrichment.repos = {
+        "owner/repo": {
+          advisoryPolicy: "Hermes ContextEngine lossless memory policy",
+          validationSuggestions: ["Reproduce on current main or name a mandatory invariant."],
+          suggestedLabels: ["docs", "tests"],
+          suggestedReviewers: ["Tosko4"],
+          labelAliases: { docs: "documentation", tests: "test" }
+        }
+      };
+      config.issueEnrichment.allowedLabels = ["documentation", "test"];
+      config.issueEnrichment.allowedReviewers = ["Tosko4"];
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      await runCli([
+        "build-enrichment-comment",
+        "--config",
+        configPath,
+        "--repo",
+        "owner/repo",
+        "--issue",
+        "17",
+        "--output-dir",
+        outputDir
+      ]);
+
+      const markdown = readFileSync(join(outputDir, "enrichment.md"), "utf8");
+      expect(markdown).not.toContain("### Repo policy");
+      expect(markdown).not.toContain("Hermes ContextEngine lossless memory policy");
+      expect(markdown).toContain("Suggested labels: documentation, test.");
+      expect(markdown).toContain("Suggested reviewers: Tosko4.");
+      expect(markdown).not.toContain("Suggested owners: Tosko4.");
+      expect(markdown.match(/Tosko4/g)).toHaveLength(1);
+      expect(markdown).not.toContain("- Reproduce on current main or name a mandatory invariant.");
+      expect(markdown).toContain("No labels, owners, reviewers, or roadmap fields were changed by this bot.");
     });
   });
 
@@ -1120,10 +1164,21 @@ function writeIssueScanConfig(root: string, apiBaseUrl: string): string {
 
 function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
   const path = join(root, "config.json");
+  const codexCliPath = writeFixtureCodexCli(root);
   writeFileSync(path, `${JSON.stringify({
     pilotRepos: ["owner/pr-review-repo"],
+    workRoot: join(root, "work"),
     statePath: join(root, "state.sqlite"),
     evidenceDir: join(root, "evidence"),
+    codexRuntime: {
+      enabled: true,
+      cliPath: codexCliPath,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "max",
+      timeoutMs: 30_000,
+      maxOutputBytes: 1024 * 1024,
+      contextWindowTokens: 128_000
+    },
     github: {
       token: "test-token",
       apiBaseUrl
@@ -1160,6 +1215,32 @@ function writeIssueRunConfig(root: string, apiBaseUrl: string): string {
       }
     }
   }, null, 2)}\n`);
+  return path;
+}
+
+function writeFixtureCodexCli(root: string): string {
+  const path = join(root, "fixture-codex.cjs");
+  writeFileSync(path, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const outputIndex = args.indexOf("--output-last-message");
+if (outputIndex < 0 || !args[outputIndex + 1]) process.exit(2);
+const result = {
+  classification: "needs-repro",
+  priority: "P3",
+  priorityState: "provisional",
+  confidence: "needs-repro",
+  repositoryImpact: "The open issue concerns acceptance criteria and owner evidence on the selected repository path.",
+  currentMainApplicability: "Current-main applicability is not established by the supplied issue report.",
+  evidence: "The selected open issue records acceptance criteria and an owner but no execution result.",
+  reproductionOrInvariantGap: "Attach a focused current-main reproduction or name the mandatory invariant.",
+  relatedWork: "Inspect only issue links explicitly present in the selected report.",
+  migrationDisposition: "needs-repro",
+  nextGate: "Run the smallest supported-path reproduction and record its result on the issue."
+};
+fs.writeFileSync(args[outputIndex + 1], JSON.stringify(result));
+`);
+  chmodSync(path, 0o700);
   return path;
 }
 

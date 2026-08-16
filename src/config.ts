@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_CONTEXT_BUDGET_CONFIG, type ContextBudgetConfig } from "./context-budget.js";
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
@@ -29,12 +29,20 @@ import { isApiKeyEnvName, isProviderId, isProviderStructuredOutputMode, PROVIDER
 import { REGRESSION_CATEGORIES, type CategoryPrecisionFloors, type RequestChangesConfidenceFloors } from "./regression-taxonomy.js";
 import type { ReviewMode, ReviewModeDefinition, ReviewModesConfig } from "./review-mode-types.js";
 import { validateRelativePacketPath, type RepoWikiContextConfig } from "./repo-wiki-context.js";
+import {
+  validateReviewEnsembleConfig,
+  type ReviewEnsembleConfig
+} from "./review-ensemble.js";
 import { DEFAULT_REVIEW_LENS_CONFIG, validateReviewLensConfig, type ReviewLensConfig } from "./review-lenses.js";
 import type { ReviewEventPolicyConfig } from "./review-event-policy.js";
 import { containsSecretLikeText } from "./secrets.js";
 import type { SkillPackContextConfig } from "./skill-packs.js";
+import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
 
 const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
+const MAX_ISSUE_POLICY_TEXT_LENGTH = 4_000;
+const MAX_ISSUE_POLICY_ITEMS = 20;
+const MAX_ISSUE_POLICY_ALIASES = 50;
 
 export interface BotConfig {
   pilotRepos: string[];
@@ -51,12 +59,18 @@ export interface BotConfig {
     maxActiveRuns: number;
     leaseTtlMs: number;
   };
+  worktreeCleanup?: {
+    enabled: boolean;
+    retentionMs: number;
+    intervalMs: number;
+  };
   reviewerSessions?: {
     enabled: boolean;
     ttlMs: number;
     headCountLimit: number;
   };
   reviewScheduler?: ReviewSchedulerConfig;
+  reviewEnsemble?: ReviewEnsembleConfig;
   riskWeightedQueue?: RiskWeightedQueueConfig;
   /** Review mode router (#266, default off / absent). Absent ⇒ byte-identical + zero evidence. */
   reviewModes?: ReviewModesConfig;
@@ -96,6 +110,15 @@ export interface BotConfig {
   license?: LicenseConfig;
   desktop?: DesktopConfig;
   providers?: ProviderRegistryConfig;
+  codexRuntime?: {
+    enabled: boolean;
+    cliPath: string;
+    model: string;
+    reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max";
+    timeoutMs: number;
+    maxOutputBytes: number;
+    contextWindowTokens: number;
+  };
   repoProfiles?: RepoProfilesConfig;
   commands: CommandConfig;
   zcode: {
@@ -110,6 +133,7 @@ export interface BotConfig {
   github: {
     appId?: string;
     clientId?: string;
+    privateKey?: string;
     privateKeyPath?: string;
     token?: string;
     apiBaseUrl?: string;
@@ -312,6 +336,11 @@ const DEFAULT_CONFIG: BotConfig = {
     maxActiveRuns: 1,
     leaseTtlMs: 15 * 60_000
   },
+  worktreeCleanup: {
+    enabled: true,
+    retentionMs: 2 * 60 * 60_000,
+    intervalMs: 30 * 60_000
+  },
   reviewerSessions: {
     enabled: false,
     ttlMs: 8 * 60 * 60_000,
@@ -325,6 +354,10 @@ const DEFAULT_CONFIG: BotConfig = {
     maxQueuedPerRepo: 10,
     manualCommandReserve: 1,
     backgroundPriority: 50
+  },
+  reviewEnsemble: {
+    enabled: false,
+    mode: "shadow"
   },
   riskWeightedQueue: {
     enabled: false
@@ -561,6 +594,15 @@ const DEFAULT_CONFIG: BotConfig = {
     maxPatchBytes: 80_000,
     retryMaxRetries: 0
   },
+  codexRuntime: {
+    enabled: false,
+    cliPath: "/usr/local/bin/codex",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "max",
+    timeoutMs: 600_000,
+    maxOutputBytes: 20 * 1024 * 1024,
+    contextWindowTokens: 128_000
+  },
   github: {}
 };
 
@@ -570,7 +612,23 @@ export function loadConfig(configPath?: string): BotConfig {
 }
 
 export function loadConfigFromObject(fromFile: unknown): BotConfig {
+  if (isRecord(fromFile)
+    && isRecord(fromFile.github)
+    && Object.prototype.hasOwnProperty.call(fromFile.github, "privateKey")) {
+    throw new Error("config files must not contain github.privateKey; use the bounded runtime stdin channel");
+  }
   const merged = deepMerge(DEFAULT_CONFIG, fromFile) as BotConfig;
+  merged.github = { ...merged.github };
+  merged.worktreeCleanup = { ...merged.worktreeCleanup! };
+  const configuredCleanup = isRecord(fromFile) && isRecord(fromFile.worktreeCleanup)
+    ? fromFile.worktreeCleanup
+    : undefined;
+  if (!configuredCleanup || configuredCleanup.retentionMs === undefined) {
+    merged.worktreeCleanup!.retentionMs = Math.max(
+      merged.worktreeCleanup!.retentionMs,
+      merged.reviewConcurrency.leaseTtlMs
+    );
+  }
 
   merged.github.appId = resolveEnvAlias({
     primaryName: "NEONDIFF_GITHUB_APP_ID",
@@ -585,6 +643,7 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
   }) ?? merged.github.privateKeyPath;
   merged.github.token = process.env.GITHUB_TOKEN ?? merged.github.token;
   validateConfig(merged);
+  applyRuntimeGitHubCredentials(merged.github);
 
   return merged;
 }
@@ -616,6 +675,15 @@ function validateConfig(config: BotConfig): void {
   validateBoolean(config.activation.reviewExistingOpenPrsOnActivation, "config.activation.reviewExistingOpenPrsOnActivation");
   validatePositiveInteger(config.reviewConcurrency.maxActiveRuns, "config.reviewConcurrency.maxActiveRuns");
   validatePositiveInteger(config.reviewConcurrency.leaseTtlMs, "config.reviewConcurrency.leaseTtlMs");
+  const worktreeCleanup = config.worktreeCleanup ?? DEFAULT_CONFIG.worktreeCleanup!;
+  config.worktreeCleanup = worktreeCleanup;
+  validateBoolean(worktreeCleanup.enabled, "config.worktreeCleanup.enabled");
+  validatePositiveInteger(worktreeCleanup.retentionMs, "config.worktreeCleanup.retentionMs");
+  validatePositiveInteger(worktreeCleanup.intervalMs, "config.worktreeCleanup.intervalMs");
+  const worktreeRetentionFloor = Math.max(2 * 60 * 60_000, config.reviewConcurrency.leaseTtlMs);
+  if (worktreeCleanup.enabled && worktreeCleanup.retentionMs < worktreeRetentionFloor) {
+    throw new Error(`config.worktreeCleanup.retentionMs must be at least ${worktreeRetentionFloor}`);
+  }
   const reviewerSessions = config.reviewerSessions ?? DEFAULT_CONFIG.reviewerSessions!;
   config.reviewerSessions = reviewerSessions;
   validateBoolean(reviewerSessions.enabled, "config.reviewerSessions.enabled");
@@ -624,6 +692,9 @@ function validateConfig(config: BotConfig): void {
   const reviewScheduler = config.reviewScheduler ?? DEFAULT_CONFIG.reviewScheduler!;
   config.reviewScheduler = reviewScheduler;
   validateReviewSchedulerConfig(reviewScheduler, "config.reviewScheduler");
+  const reviewEnsemble = config.reviewEnsemble ?? DEFAULT_CONFIG.reviewEnsemble!;
+  config.reviewEnsemble = reviewEnsemble;
+  validateReviewEnsembleConfig(reviewEnsemble, "config.reviewEnsemble");
   const riskWeightedQueue = config.riskWeightedQueue ?? DEFAULT_CONFIG.riskWeightedQueue!;
   config.riskWeightedQueue = riskWeightedQueue;
   validateRiskWeightedQueueConfig(riskWeightedQueue, "config.riskWeightedQueue", reviewScheduler.backgroundPriority);
@@ -719,6 +790,20 @@ function validateConfig(config: BotConfig): void {
   validatePositiveInteger(config.zcode.maxPatchBytes, "config.zcode.maxPatchBytes");
   validateNonNegativeInteger(config.zcode.retryMaxRetries, "config.zcode.retryMaxRetries");
   validateOptionalString(config.zcode.providerId, "config.zcode.providerId");
+  const codexRuntime = config.codexRuntime ?? DEFAULT_CONFIG.codexRuntime!;
+  config.codexRuntime = codexRuntime;
+  validateBoolean(codexRuntime.enabled, "config.codexRuntime.enabled");
+  validateNonEmptyString(codexRuntime.cliPath, "config.codexRuntime.cliPath");
+  if (codexRuntime.enabled && !isAbsolute(codexRuntime.cliPath)) {
+    throw new Error("config.codexRuntime.cliPath must be absolute when enabled");
+  }
+  validateNonEmptyString(codexRuntime.model, "config.codexRuntime.model");
+  if (!["low", "medium", "high", "xhigh", "max"].includes(codexRuntime.reasoningEffort)) {
+    throw new Error("config.codexRuntime.reasoningEffort must be low, medium, high, xhigh, or max");
+  }
+  validatePositiveInteger(codexRuntime.timeoutMs, "config.codexRuntime.timeoutMs");
+  validatePositiveInteger(codexRuntime.maxOutputBytes, "config.codexRuntime.maxOutputBytes");
+  validatePositiveInteger(codexRuntime.contextWindowTokens, "config.codexRuntime.contextWindowTokens");
   validateOptionalString(config.github.appId, "config.github.appId");
   validateOptionalString(config.github.clientId, "config.github.clientId");
   validateOptionalString(config.github.apiBaseUrl, "config.github.apiBaseUrl");
@@ -1190,9 +1275,40 @@ function validateIssueEnrichmentConfig(value: unknown, label: string): void {
 
 function validateIssueEnrichmentRepoOverride(value: unknown, label: string): void {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const allowedKeys = new Set([
+    "enabled", "allowedLabels", "allowedReviewers", "advisoryPolicy", "validationSuggestions",
+    "suggestedLabels", "suggestedReviewers", "labelAliases", "maxIssuesPerCycle", "maxCommentsPerCycle",
+    "cooldownMs", "burstWindowMs", "maxIssuesPerBurst", "lookbackMs", "processExistingOpenIssuesOnActivation"
+  ]);
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) throw new Error(`${label} has unknown key "${key}"`);
+  }
   if (value.enabled !== undefined) validateBoolean(value.enabled, `${label}.enabled`);
   validateOptionalStringArray(value.allowedLabels, `${label}.allowedLabels`);
   validateOptionalStringArray(value.allowedReviewers, `${label}.allowedReviewers`);
+  validateOptionalString(value.advisoryPolicy, `${label}.advisoryPolicy`);
+  if (typeof value.advisoryPolicy === "string" && value.advisoryPolicy.trim().length === 0) {
+    throw new Error(`${label}.advisoryPolicy must be a non-empty string`);
+  }
+  if (typeof value.advisoryPolicy === "string" && value.advisoryPolicy.length > MAX_ISSUE_POLICY_TEXT_LENGTH) {
+    throw new Error(`${label}.advisoryPolicy must be at most ${MAX_ISSUE_POLICY_TEXT_LENGTH} characters`);
+  }
+  validateBoundedOptionalStringArray(value.validationSuggestions, `${label}.validationSuggestions`, 500);
+  validateBoundedOptionalStringArray(value.suggestedLabels, `${label}.suggestedLabels`, 80);
+  validateBoundedOptionalStringArray(value.suggestedReviewers, `${label}.suggestedReviewers`, 80);
+  if (value.labelAliases !== undefined) {
+    if (!isRecord(value.labelAliases)) throw new Error(`${label}.labelAliases must be an object`);
+    if (Object.keys(value.labelAliases).length > MAX_ISSUE_POLICY_ALIASES) {
+      throw new Error(`${label}.labelAliases must contain at most ${MAX_ISSUE_POLICY_ALIASES} entries`);
+    }
+    for (const [from, to] of Object.entries(value.labelAliases)) {
+      if (from.trim().length === 0) throw new Error(`${label}.labelAliases keys must be non-empty strings`);
+      if (typeof to !== "string" || to.trim().length === 0) {
+        throw new Error(`${label}.labelAliases.${from} must be a non-empty string`);
+      }
+      if (from.length > 80 || to.length > 80) throw new Error(`${label}.labelAliases entries must be at most 80 characters`);
+    }
+  }
   if (value.maxIssuesPerCycle !== undefined) validatePositiveInteger(value.maxIssuesPerCycle, `${label}.maxIssuesPerCycle`);
   if (value.maxCommentsPerCycle !== undefined) validateNonNegativeInteger(value.maxCommentsPerCycle, `${label}.maxCommentsPerCycle`);
   if (value.cooldownMs !== undefined) validatePositiveInteger(value.cooldownMs, `${label}.cooldownMs`);
@@ -1225,7 +1341,7 @@ function validateLicenseConfig(value: unknown, label: string): void {
   }
   assertPathOutsideProtectedRoot({
     path: value.cachePath,
-    protectedRoot: process.cwd(),
+    protectedRoot: undefined,
     protectedRoots: getProtectedCheckoutRoots(),
     pathLabel: `${label}.cachePath`,
     protectedRootLabel: "protected checkout root"
@@ -1241,7 +1357,7 @@ function validateLicenseConfig(value: unknown, label: string): void {
   if (typeof value.keyPath === "string" && value.keyPath.trim().length > 0) {
     assertPathOutsideProtectedRoot({
       path: value.keyPath,
-      protectedRoot: process.cwd(),
+      protectedRoot: undefined,
       protectedRoots: getProtectedCheckoutRoots(),
       pathLabel: `${label}.keyPath`,
       protectedRootLabel: "protected checkout root"
@@ -1642,6 +1758,13 @@ function validateStringArray(value: unknown, label: string): void {
 function validateOptionalStringArray(value: unknown, label: string): void {
   if (value === undefined) return;
   validateStringArray(value, label);
+}
+
+function validateBoundedOptionalStringArray(value: unknown, label: string, maxLength: number): void {
+  validateOptionalStringArray(value, label);
+  if (!Array.isArray(value)) return;
+  if (value.length > MAX_ISSUE_POLICY_ITEMS) throw new Error(`${label} must contain at most ${MAX_ISSUE_POLICY_ITEMS} items`);
+  if (value.some((entry) => entry.length > maxLength)) throw new Error(`${label} entries must be at most ${maxLength} characters`);
 }
 
 function validateBoolean(value: unknown, label: string): void {

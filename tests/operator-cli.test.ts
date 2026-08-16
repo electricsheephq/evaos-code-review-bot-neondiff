@@ -442,6 +442,14 @@ describe("operator CLI summaries", () => {
     tempDirs.push(root);
     const configPath = join(root, "config.json");
     writeFileSync(configPath, `${JSON.stringify({
+      codexRuntime: {
+        enabled: true,
+        cliPath: "/usr/bin/codex",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "max",
+        timeoutMs: 30_000,
+        maxOutputBytes: 1_048_576
+      },
       issueEnrichment: {
         enabled: true,
         postIssueComment: true,

@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProviderApiKeyVerificationInput } from "../src/local-dashboard.js";
 import { runProvidersVerifyCommand } from "../src/providers-verify-command.js";
+import { configRevision } from "../src/config-cli.js";
 import { ReviewStateStore } from "../src/state.js";
 import { createTestLicenseAdmission } from "./helpers/license-admission.js";
 import {
@@ -25,6 +26,8 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 const repoRoot = process.cwd();
+const BROKER_DEVICE_ID = "A".repeat(43);
+const DASH_PREFIXED_BROKER_DEVICE_ID = `--${"A".repeat(41)}`;
 const darwinDaemonEnv = { NEONDIFF_TEST_PLATFORM: "darwin" };
 const providerVerificationAdmission = await createTestLicenseAdmission({ operation: "provider_verify" });
 const admittedProviderVerification = async () => ({
@@ -96,13 +99,25 @@ describe("public NeonDiff CLI surface", () => {
       expect.objectContaining({ name: "--expected-config-revision" })
     ]));
     expect(output.examples).toContain("neondiff doctor github --config config.local.json --json");
+    const reviewHelp = JSON.parse((await runCli(["review-pr", "--help"])).stdout);
+    expect(reviewHelp).toMatchObject({ ok: true, command: "review-pr" });
+    expect(reviewHelp.usage.flags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--expected-config-revision" }),
+      expect.objectContaining({ name: "--zcode" })
+    ]));
+    const doctorHelp = JSON.parse((await runCli(["doctor", "--help"])).stdout);
+    expect(doctorHelp.usage.flags).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "--github-app-id" }),
+      expect.objectContaining({ name: "--github-app-private-key-stdin" })
+    ]));
     expect(output.examples).toContain("neondiff license status --config config.local.json --json");
     expect(output.examples.some((example: string) => example.includes("--license-key-stdin true"))).toBe(true);
     expect(output.examples.join("\n")).not.toContain("--license-key-env");
     const licenseHelp = JSON.parse((await runCli(["license", "--help"])).stdout);
     expect(licenseHelp.licenseBoundary.activationRequired).toContain("public, private, internal, and unknown");
     expect(licenseHelp.usage.flags).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: "--license-key-stdin" })
+      expect.objectContaining({ name: "--license-key-stdin" }),
+      expect.objectContaining({ name: "--persist-local-state" })
     ]));
     expect(licenseHelp.usage.flags).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "--license-key-env" })
@@ -119,6 +134,257 @@ describe("public NeonDiff CLI surface", () => {
       "npx tsx src/cli.ts review-head-gate --config /path/to/live.json --repo owner/repo --pr 123 --head-sha HEAD"
     );
     expect(output.examples).toContain("desktop-patch.json uses nested object shape, e.g. {\"zcode\":{\"cliPath\":\"/path/to/neondiff\"}}");
+  });
+
+  it("initializes a config that remains valid when a desktop launch gives the CLI root cwd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-desktop-root-cwd-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const cliSourcePath = join(repoRoot, "src/cli.ts");
+
+    const initialized = await execFileAsync(process.execPath, [
+      tsxCliPath,
+      cliSourcePath,
+      "init",
+      "--config",
+      configPath
+    ], {
+      cwd: "/",
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    });
+    expect(JSON.parse(initialized.stdout)).toMatchObject({
+      ok: true,
+      command: "init",
+      created: true,
+      configPath
+    });
+
+    const inspected = await execFileAsync(process.execPath, [
+      tsxCliPath,
+      cliSourcePath,
+      "config",
+      "inspect",
+      "--config",
+      configPath
+    ], {
+      cwd: "/",
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    });
+    expect(JSON.parse(inspected.stdout)).toMatchObject({
+      ok: true,
+      command: "config inspect"
+    });
+  });
+
+  it("initializes isolated desktop state outside the packaged worker root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-desktop-packaged-worker-"));
+    roots.push(root);
+    const botRoot = join(root, "accounts", "paid-canary", "bots", "private-review");
+    const configPath = join(botRoot, "config.local.json");
+    const cliSourcePath = join(repoRoot, "src/cli.ts");
+    const env = {
+      ...process.env,
+      NODE_OPTIONS: "--experimental-sqlite",
+      NEONDIFF_PROTECTED_CHECKOUT_ROOT: "/tmp/neondiff"
+    };
+
+    const initialized = await execFileAsync(process.execPath, [
+      tsxCliPath,
+      cliSourcePath,
+      "init",
+      "--config",
+      configPath
+    ], {
+      cwd: "/",
+      env
+    });
+    expect(JSON.parse(initialized.stdout)).toMatchObject({
+      ok: true,
+      command: "init",
+      created: true,
+      configPath
+    });
+
+    const initializedConfig = JSON.parse(readFileSync(configPath, "utf8"));
+    const resolvedBotRoot = realpathSync(botRoot);
+    expect(initializedConfig.workRoot).toBe(join(resolvedBotRoot, "runtime"));
+    expect(initializedConfig.statePath).toBe(join(resolvedBotRoot, "state", "reviews.sqlite"));
+    expect(initializedConfig.evidenceDir).toBe(join(resolvedBotRoot, "evidence"));
+
+    const inspected = await execFileAsync(process.execPath, [
+      tsxCliPath,
+      cliSourcePath,
+      "config",
+      "inspect",
+      "--config",
+      configPath
+    ], {
+      cwd: "/",
+      env
+    });
+    expect(JSON.parse(inspected.stdout)).toMatchObject({
+      ok: true,
+      command: "config inspect"
+    });
+  });
+
+  it("keeps packaged example paths when init targets a protected checkout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-init-protected-checkout-"));
+    roots.push(root);
+    const checkoutRoot = join(root, "checkout");
+    const configPath = join(checkoutRoot, "config.local.json");
+    mkdirSync(join(checkoutRoot, ".git"), { recursive: true });
+
+    const { stdout } = await runCli(["init", "--config", configPath], {
+      cwd: "/",
+      env: { NEONDIFF_PROTECTED_CHECKOUT_ROOT: checkoutRoot }
+    });
+
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: true,
+      command: "init",
+      created: true,
+      configPath
+    });
+    expect(readFileSync(configPath, "utf8")).toBe(
+      readFileSync(join(repoRoot, "config.example.json"), "utf8")
+    );
+  });
+
+  it("still rejects license state inside a non-package Git checkout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-non-package-checkout-"));
+    roots.push(root);
+    const checkoutRoot = join(root, "checkout");
+    const configPath = join(root, "config.json");
+    mkdirSync(join(checkoutRoot, ".git"), { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/private"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: {
+        enabled: true,
+        apiBaseUrl: "https://neondiff-license.fly.dev",
+        cachePath: join(checkoutRoot, "state", "entitlement.json"),
+        storageBackend: "file",
+        keyPath: join(checkoutRoot, "state", "license.key")
+      }
+    }, null, 2)}\n`, "utf8");
+
+    await expect(execFileAsync(process.execPath, [
+      tsxCliPath,
+      join(repoRoot, "src/cli.ts"),
+      "config",
+      "inspect",
+      "--config",
+      configPath
+    ], {
+      cwd: checkoutRoot,
+      env: { ...process.env, NODE_OPTIONS: "--experimental-sqlite" }
+    })).rejects.toMatchObject({
+      stdout: expect.stringContaining("config.license.cachePath must be outside protected checkout root")
+    });
+  });
+
+  it("refuses the no-local-state CLI path without the matching native Keychain credential", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-native-activation-cli-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const keyPath = join(root, "license.key");
+    const cachePath = join(root, "entitlement.json");
+    const key = ["nd", "live", "nativekeychainfixture123"].join("_");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/private"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: {
+        enabled: true,
+        apiBaseUrl: "https://neondiff-license.fly.dev",
+        cachePath,
+        storageBackend: "file",
+        keyPath
+      }
+    })}\n`);
+
+    for (const machineId of [
+      BROKER_DEVICE_ID,
+      DASH_PREFIXED_BROKER_DEVICE_ID
+    ]) {
+      let failure: (Error & { code?: number; stdout?: string; stderr?: string }) | undefined;
+      try {
+        await runCliWithStdin([
+          "license",
+          "activate",
+          "--config",
+          configPath,
+          "--license-storage",
+          "keychain",
+          "--license-key-stdin",
+          "true",
+          "--persist-local-state",
+          "false",
+          "--license-machine-id",
+          machineId,
+          "--repo",
+          "acme/private",
+          "--json"
+        ], `${key}\n`, { env: activatedLicenseTestEnv() });
+      } catch (error) {
+        failure = error as Error & { code?: number; stdout?: string; stderr?: string };
+      }
+      expect(failure?.code).toBe(1);
+      const output = JSON.parse(failure?.stdout ?? "{}");
+
+      expect(output).toMatchObject({
+        ok: false,
+        status: "invalid",
+        source: "none",
+        detail: "no-local-state activation requires the matching native Keychain credential"
+      });
+      expect(failure?.stdout).not.toContain(key);
+      expect(failure?.stderr).not.toContain(key);
+    }
+    expect(existsSync(keyPath)).toBe(false);
+    expect(existsSync(cachePath)).toBe(false);
+  });
+
+  it("forwards the native broker device identity during a refreshed license status", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-native-status-binding-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/private"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      license: activatedLicenseTestConfig(root)
+    })}\n`);
+
+    const output = JSON.parse((await runCli([
+      "license",
+      "status",
+      "--config",
+      configPath,
+      "--repo",
+      "acme/private",
+      "--refresh",
+      "true",
+      "--license-machine-id",
+      BROKER_DEVICE_ID,
+      "--json"
+    ], {
+      env: {
+        ...activatedLicenseTestEnv(),
+        NEONDIFF_TEST_EXPECT_LICENSE_MACHINE_ID: BROKER_DEVICE_ID
+      }
+    })).stdout);
+
+    expect(output).toMatchObject({
+      ok: true,
+      status: "active",
+      source: "api"
+    });
   });
 
   it("redacts secret-like values from structured status JSON stdout", async () => {
@@ -571,6 +837,78 @@ exit 1
         })
       ]
     });
+  });
+
+  it("reports Codex as the active review runtime when its adapter is enabled", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-provider-codex-cli-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, JSON.stringify({
+      codexRuntime: {
+        enabled: true,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "max",
+        timeoutMs: 300_000,
+        maxOutputBytes: 20 * 1024 * 1024,
+        contextWindowTokens: 128_000
+      }
+    }));
+
+    const list = JSON.parse((await runCli(["providers", "list", "--config", configPath])).stdout);
+    expect(list).toMatchObject({
+      activeRuntime: {
+        providerId: "codex-cli-oauth",
+        adapter: "codex-cli",
+        model: "gpt-5.6-luna",
+        auth: "existing-codex-session"
+      }
+    });
+    expect(list.proofBoundary).toMatch(/Codex CLI/i);
+    expect(list.proofBoundary).not.toMatch(/remains ZCode-backed/i);
+  });
+
+  it("doctors the active Codex runtime without reading the retired ZCode config", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-codex-cli-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const missingZCodeConfigPath = join(root, "retired-zcode-config.json");
+    writeFileSync(configPath, JSON.stringify({
+      pilotRepos: [],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      codexRuntime: {
+        enabled: true,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        timeoutMs: 300_000,
+        maxOutputBytes: 20 * 1024 * 1024,
+        contextWindowTokens: 128_000
+      },
+      zcode: {
+        appConfigPath: missingZCodeConfigPath
+      }
+    }));
+
+    const doctor = JSON.parse((await runCli([
+      "doctor",
+      "--config",
+      configPath
+    ])).stdout);
+
+    expect(doctor).toMatchObject({
+      ok: true,
+      activeRuntime: {
+        providerId: "codex-cli-oauth",
+        adapter: "codex-cli",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        auth: "existing-codex-session"
+      }
+    });
+    expect(doctor).not.toHaveProperty("zcode");
   });
 
   it("blocks providers doctor smoke before contacting a configured endpoint without activation", async () => {
@@ -1173,7 +1511,7 @@ exit 1
     });
   });
 
-  it("doctor github proves App installation reads without printing secrets", async () => {
+  it("doctor github can scope App installation proof to one configured repo", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-"));
     roots.push(root);
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -1218,7 +1556,7 @@ exit 1
       const address = server.address() as AddressInfo;
       const configPath = join(root, "config.json");
       writeFileSync(configPath, `${JSON.stringify({
-        pilotRepos: ["acme/demo"],
+        pilotRepos: ["acme/demo", "acme/other"],
         workRoot: join(root, "runtime"),
         statePath: join(root, "state.sqlite"),
         evidenceDir: join(root, "evidence"),
@@ -1226,6 +1564,14 @@ exit 1
           appId: "12345",
           privateKeyPath,
           apiBaseUrl: `http://127.0.0.1:${address.port}`
+        },
+        codexRuntime: {
+          enabled: true,
+          cliPath: "/usr/bin/codex",
+          model: "gpt-5.6-luna",
+          reasoningEffort: "max",
+          timeoutMs: 30_000,
+          maxOutputBytes: 1_048_576
         },
         zcode: {
           cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
@@ -1237,19 +1583,31 @@ exit 1
         },
         issueEnrichment: {
           enabled: true,
-          postIssueComment: false,
-          allowlist: ["acme/demo"],
+          postIssueComment: true,
+          allowlist: ["acme/demo", "acme/other"],
           maxIssuesPerCycle: 1,
-          maxCommentsPerCycle: 0,
+          maxCommentsPerCycle: 1,
           cooldownMs: 3_600_000,
           burstWindowMs: 3_600_000,
           maxIssuesPerBurst: 3,
           lookbackMs: 600_000,
-          processExistingOpenIssuesOnActivation: false
+          processExistingOpenIssuesOnActivation: false,
+          repos: {
+            "acme/demo": {
+              maxIssuesPerCycle: 1,
+              maxCommentsPerCycle: 1,
+              cooldownMs: 3_600_000,
+              burstWindowMs: 3_600_000,
+              maxIssuesPerBurst: 1,
+              lookbackMs: 600_000
+            }
+          }
         }
       })}\n`);
 
-      const { stdout } = await runCli(["doctor", "github", "--config", configPath], {
+      const { stdout } = await runCli([
+        "doctor", "github", "--config", configPath, "--repo", "acme/demo"
+      ], {
         env: {
           NEONDIFF_GITHUB_APP_ID: "12345",
           NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH: privateKeyPath
@@ -1260,6 +1618,7 @@ exit 1
       expect(output).toMatchObject({
         ok: true,
         command: "doctor github",
+        monitoredRepos: ["acme/demo"],
         activeRepoChecks: 1,
         appCredentials: {
           appIdConfigured: true,
@@ -1287,7 +1646,9 @@ exit 1
         }
       });
       expect(output.issueEnrichment).toMatchObject({
-        state: "dry_run_only",
+        state: "ready",
+        allowlist: ["acme/demo"],
+        liveThresholdsMissingRepos: [],
         readChecks: [
           {
             repo: "acme/demo",
@@ -1303,9 +1664,102 @@ exit 1
       expect(stdout).not.toContain(privateKeyPem);
       expect(stdout).not.toContain(privateKeyPath);
       expect(stdout).not.toContain(installationToken);
+
+      const stdinConfig = JSON.parse(readFileSync(configPath, "utf8"));
+      delete stdinConfig.github.appId;
+      delete stdinConfig.github.privateKeyPath;
+      writeFileSync(configPath, `${JSON.stringify(stdinConfig)}\n`);
+
+      const { stdout: stdinStdout } = await runCliWithStdin([
+        "doctor",
+        "github",
+        "--config",
+        configPath,
+        "--repo",
+        "acme/demo",
+        "--github-app-id",
+        "12345",
+        "--github-app-private-key-stdin",
+        "true"
+      ], privateKeyPem);
+      const stdinOutput = JSON.parse(stdinStdout);
+      expect(stdinOutput).toMatchObject({
+        ok: true,
+        command: "doctor github",
+        appCredentials: {
+          appIdConfigured: true,
+          privateKeyConfigured: true,
+          source: "stdin"
+        },
+        github: {
+          canPostAsApp: true,
+          readMode: "app_installation",
+          readChecks: [
+            {
+              repo: "acme/demo",
+              ok: true,
+              visibility_result: "public",
+              installation_id_present: true,
+              app_can_read_metadata: true,
+              app_can_read_pull_requests: true
+            }
+          ]
+        }
+      });
+      expect(stdinStdout).not.toContain(privateKeyPem);
+      expect(stdinStdout).not.toContain(installationToken);
     } finally {
       await closeServer(server);
     }
+  });
+
+  it("doctor github rejects malformed, unconfigured, and policy-disabled repository scopes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-doctor-github-scope-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["acme/demo", "acme/disabled"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence"),
+      repoProfiles: {
+        repos: {
+          "acme/disabled": { enabled: false }
+        }
+      }
+    })}\n`);
+
+    await expect(runCli([
+      "doctor", "github", "--config", configPath, "--repo", "acme/demo/extra"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("must be exactly one GitHub owner/repo name")
+    });
+    await expect(runCli([
+      "doctor", "github", "--config", configPath, "--repo", "acme/unconfigured"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("must be present in configured repos")
+    });
+    await expect(runCli([
+      "doctor", "github", "--config", configPath, "--repo", "acme/disabled"
+    ])).rejects.toMatchObject({
+      stderr: expect.stringContaining("is blocked by repo policy")
+    });
+  });
+
+  it("doctor github rejects an invalid App ID before consuming an open secret stdin", async () => {
+    const result = await runCliWithOpenStdin([
+      "doctor",
+      "github",
+      "--github-app-id",
+      "001234",
+      "--github-app-private-key-stdin",
+      "true"
+    ], "private-key-input-must-not-be-consumed");
+
+    expect(result.error).toBeTruthy();
+    expect(result.error?.killed).not.toBe(true);
+    expect(result.stderr).toContain("positive ASCII numeric App ID");
+    expect(result.stderr).not.toContain("private-key-input-must-not-be-consumed");
   });
 
   it("doctor github blocks pre-checkout when public repo PR permission is missing", async () => {
@@ -1646,7 +2100,18 @@ exit 1
     expect(realpathSync(output.configPath)).toBe(realpathSync(configPath));
     expect(existsSync(configPath)).toBe(true);
     const config = readFileSync(configPath, "utf8");
-    expect(config).toBe(example);
+    const parsedConfig = JSON.parse(config);
+    const resolvedRoot = realpathSync(root);
+    expect(parsedConfig).toMatchObject({
+      workRoot: join(resolvedRoot, "runtime"),
+      statePath: join(resolvedRoot, "state", "reviews.sqlite"),
+      evidenceDir: join(resolvedRoot, "evidence"),
+      license: {
+        cachePath: join(resolvedRoot, "state", "license", "entitlement-cache.json"),
+        keyPath: join(resolvedRoot, "state", "license", "license-key.txt")
+      }
+    });
+    expect(config).toContain("\"pilotRepos\"");
     expect(example).toContain("\"pilotRepos\"");
     const fixtureLeakPattern = new RegExp(
       String.raw`ghp_|BEGIN ${"PRIVATE KEY"}|api[_-]?key["']?\s*[:=]\s*["'][A-Za-z0-9._~+/=-]{16,}`,
@@ -2527,6 +2992,65 @@ exit 1
       "false"
     ])).rejects.toMatchObject({
       stdout: expect.stringContaining("repo must be present in configured repos")
+    });
+  });
+
+  it("requires an exact config revision before review-pr can create an approval", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-pr-revision-required-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    writeFileSync(configPath, `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    })}\n`);
+
+    await expect(runCli([
+      "review-pr",
+      "--config",
+      configPath,
+      "--repo",
+      "owner/repo",
+      "--pr",
+      "123",
+      "--dry-run",
+      "true",
+      "--zcode",
+      "true"
+    ])).rejects.toMatchObject({
+      stdout: expect.stringContaining("requires --expected-config-revision")
+    });
+  });
+
+  it("rejects provider-disabled review-pr runs before they can authorize a live review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-pr-provider-required-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+    const configText = `${JSON.stringify({
+      pilotRepos: ["owner/repo"],
+      workRoot: join(root, "runtime"),
+      statePath: join(root, "state.sqlite"),
+      evidenceDir: join(root, "evidence")
+    })}\n`;
+    writeFileSync(configPath, configText);
+
+    await expect(runCli([
+      "review-pr",
+      "--config",
+      configPath,
+      "--repo",
+      "owner/repo",
+      "--pr",
+      "123",
+      "--expected-config-revision",
+      configRevision(configText),
+      "--dry-run",
+      "true",
+      "--zcode",
+      "false"
+    ])).rejects.toMatchObject({
+      stdout: expect.stringContaining("requires --zcode true")
     });
   });
 
@@ -3562,6 +4086,25 @@ exit 0
       "com.example.neondiff"
     ], { env: darwinDaemonEnv })).rejects.toMatchObject({
       stdout: expect.stringContaining("--config is required for daemon status")
+    });
+  });
+
+  it("rejects credential stdin flags on daemon control subcommands", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-daemon-control-credentials-"));
+    roots.push(root);
+    const configPath = join(root, "config.json");
+
+    await expect(runCli([
+      "daemon",
+      "status",
+      "--config",
+      configPath,
+      "--runtime-credentials-stdin",
+      "true"
+    ], { env: darwinDaemonEnv })).rejects.toMatchObject({
+      stderr: expect.stringContaining(
+        "credential stdin is supported only for the raw daemon process"
+      )
     });
   });
 

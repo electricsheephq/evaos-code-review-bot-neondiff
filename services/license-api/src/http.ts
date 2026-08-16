@@ -6,7 +6,8 @@ import {
   issueCheckoutLicense,
   malformedIssuanceResult,
   parseIssuanceRequest,
-  validateBearerSecret
+  validateBearerSecret,
+  validateIssuanceAuthorization
 } from "./issuance.js";
 import {
   activate,
@@ -36,8 +37,36 @@ import {
   SubscriptionLifecycleTransientError,
   SubscriptionLifecycleUnsupportedCommandError
 } from "./store.js";
+import {
+  BrokerError,
+  createGitHubBrokerService,
+  handleGitHubBrokerRequest,
+  isGitHubBrokerPath,
+  type GitHubBrokerDeps
+} from "./github-broker/index.js";
+import {
+  createAccountLinkService,
+  handleAccountLinkRequest,
+  isAccountLinkPath,
+  type AccountLinkDeps
+} from "./account-link/index.js";
+import {
+  CheckoutRedemptionConsumedError,
+  CheckoutRedemptionExpiredError,
+  CheckoutRedemptionInvalidError,
+  CheckoutRedemptionNotFoundError,
+  CheckoutRedemptionTransientError,
+  fulfillStripeCheckoutWebhook,
+  redeemStripeCheckout,
+  StripeCheckoutConflictError,
+  StripeCheckoutInvalidError,
+  StripeCheckoutUnavailableError,
+  type StripeCheckoutRuntime
+} from "./stripe-checkout.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
+const CANONICAL_GITHUB_REPOSITORY_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
 
 class RequestBodyTooLargeError extends Error {}
 
@@ -52,6 +81,12 @@ export interface LicenseHttpOptions {
   trustFlyProxyHeaders?: boolean;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;
+  /** Managed GitHub App authorization broker (#613). Omitted → broker routes 503. */
+  githubBroker?: GitHubBrokerDeps;
+  /** Lovable account linking is independent from the managed GitHub App lane. */
+  accountLink?: AccountLinkDeps;
+  /** Direct Stripe checkout fulfillment and browser redemption. Omitted → routes fail closed. */
+  stripeCheckout?: StripeCheckoutRuntime;
 }
 
 type Handler = (store: LicenseStore, req: LicenseRequest, now: Date) => ServiceResult;
@@ -76,12 +111,48 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
   const subscriptionLifecycleRateLimiter =
     options.subscriptionLifecycleRateLimiter ??
     new RateLimiter({ maxPerWindow: 60, windowMs: 60_000 });
+  // Build the broker service once (it owns a persistent store), mirroring the
+  // license store's per-listener lifecycle.
+  const githubBrokerService = options.githubBroker
+    ? createGitHubBrokerService(options.githubBroker)
+    : undefined;
+  const accountLinkService = options.accountLink
+    ? createAccountLinkService(options.accountLink)
+    : undefined;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (req.method === "GET" && req.url === "/healthz") {
       return writeJson(res, 200, { status: "ok" });
     }
     const path = req.url?.split("?")[0];
+    if (req.method === "POST" && path === "/v1/webhooks/stripe") {
+      return handleStripeCheckoutWebhook(options, req, res);
+    }
+    if (path === "/v1/checkout/redeem") {
+      return handleStripeCheckoutRedemption(options, req, res);
+    }
+    if (isAccountLinkPath(path)) {
+      if (!accountLinkService) {
+        const unavailable = new BrokerError(
+          "account_authority_unavailable",
+          "account linking is not configured"
+        );
+        return writeJson(res, unavailable.httpStatus, unavailable.body());
+      }
+      const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
+      return handleAccountLinkRequest(accountLinkService, req, res, { sourceAddress });
+    }
+    if (isGitHubBrokerPath(path)) {
+      if (!githubBrokerService) {
+        // Fail closed with the broker's typed contract so clients (and tests) can
+        // distinguish the expected pre-provisioning offline state from an untyped
+        // failure.
+        const unavailable = new BrokerError("broker_unavailable", "the GitHub broker is not configured");
+        return writeJson(res, unavailable.httpStatus, unavailable.body());
+      }
+      const sourceAddress = resolveClientAddress(req, options.trustFlyProxyHeaders === true);
+      return handleGitHubBrokerRequest(githubBrokerService, req, res, { sourceAddress });
+    }
     if (req.method === "POST" && path === "/v1/admin/licenses/issue") {
       return handleIssuanceRequest(options, req, res);
     }
@@ -126,6 +197,160 @@ export function createLicenseRequestListener(options: LicenseHttpOptions) {
       // Never surface internal error text (could contain no key, but stay safe) → 500 server.
       return writeJson(res, 500, { status: "server", detail: "internal error" });
     }
+  };
+}
+
+async function handleStripeCheckoutWebhook(
+  options: LicenseHttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  if (!options.stripeCheckout) {
+    return writeJson(res, 503, { status: "unavailable" });
+  }
+  if (hasDuplicateRawHeader(req, "stripe-signature")) {
+    return writeJson(res, 400, { status: "invalid" });
+  }
+  const signature = req.headers["stripe-signature"];
+  if (typeof signature !== "string" || !signature) {
+    return writeJson(res, 400, { status: "invalid" });
+  }
+  try {
+    const result = await fulfillStripeCheckoutWebhook({
+      store: options.store,
+      runtime: options.stripeCheckout,
+      rawBody: await readBody(req),
+      signature,
+      now: (options.now ?? (() => new Date()))()
+    });
+    return writeJson(res, 200, result);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return writeJson(res, 413, { status: "invalid" });
+    }
+    if (error instanceof StripeCheckoutConflictError) {
+      return writeJson(res, 409, { status: "conflict" });
+    }
+    if (error instanceof StripeCheckoutInvalidError) {
+      return writeJson(res, 400, { status: "invalid" });
+    }
+    if (error instanceof StripeCheckoutUnavailableError) {
+      return writeJson(res, 503, { status: "unavailable" });
+    }
+    return writeJson(res, 500, { status: "server" });
+  }
+}
+
+async function handleStripeCheckoutRedemption(
+  options: LicenseHttpOptions,
+  req: IncomingMessage,
+  res: ServerResponse
+): Promise<void> {
+  const runtime = options.stripeCheckout;
+  if (!runtime) {
+    return writeJson(res, 503, { status: "unavailable" });
+  }
+  const corsHeaders = checkoutRedemptionHeaders(req, runtime.allowedOrigin);
+  if (!corsHeaders) {
+    return writeJson(res, 403, { status: "forbidden" }, {
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+      Vary: "Origin"
+    });
+  }
+  if (req.method === "OPTIONS") {
+    return writeJson(res, 204, {}, {
+      ...corsHeaders,
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Max-Age": "600"
+    });
+  }
+  if (req.method !== "POST") {
+    return writeJson(res, 405, { status: "invalid" }, corsHeaders);
+  }
+  try {
+    const parsed = parseCheckoutRedemptionRequest(await readBody(req));
+    const result = redeemStripeCheckout({
+      store: options.store,
+      runtime,
+      sessionId: parsed.sessionId,
+      fulfillmentToken: parsed.fulfillmentToken
+    });
+    return writeJson(res, 200, result, corsHeaders);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return writeJson(res, 413, { status: "invalid" }, corsHeaders);
+    }
+    if (error instanceof CheckoutRedemptionConsumedError) {
+      return writeJson(res, 410, { status: "consumed" }, corsHeaders);
+    }
+    if (error instanceof CheckoutRedemptionExpiredError) {
+      return writeJson(res, 410, { status: "expired" }, corsHeaders);
+    }
+    if (
+      error instanceof CheckoutRedemptionInvalidError ||
+      error instanceof CheckoutRedemptionNotFoundError ||
+      error instanceof StripeCheckoutInvalidError
+    ) {
+      return writeJson(res, 404, { status: "not_found" }, corsHeaders);
+    }
+    if (
+      error instanceof CheckoutRedemptionTransientError ||
+      error instanceof StripeCheckoutUnavailableError
+    ) {
+      return writeJson(res, 503, { status: "unavailable" }, corsHeaders);
+    }
+    return writeJson(res, 500, { status: "server" }, corsHeaders);
+  }
+}
+
+function checkoutRedemptionHeaders(
+  req: IncomingMessage,
+  allowedOrigin: string
+): Record<string, string> | undefined {
+  const origin = req.headers.origin;
+  if (
+    typeof origin !== "string" ||
+    hasDuplicateRawHeader(req, "origin") ||
+    origin !== allowedOrigin
+  ) {
+    return undefined;
+  }
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    Vary: "Origin"
+  };
+}
+
+function parseCheckoutRedemptionRequest(raw: string): {
+  sessionId: string;
+  fulfillmentToken: string;
+} {
+  let parsed: unknown;
+  try {
+    parsed = raw ? (JSON.parse(raw) as unknown) : {};
+  } catch {
+    throw new StripeCheckoutInvalidError("redemption body is invalid");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new StripeCheckoutInvalidError("redemption body is invalid");
+  }
+  const body = parsed as Record<string, unknown>;
+  if (
+    Object.keys(body).some(
+      (key) => key !== "sessionId" && key !== "fulfillmentToken"
+    ) ||
+    typeof body.sessionId !== "string" ||
+    typeof body.fulfillmentToken !== "string"
+  ) {
+    throw new StripeCheckoutInvalidError("redemption body is invalid");
+  }
+  return {
+    sessionId: body.sessionId,
+    fulfillmentToken: body.fulfillmentToken
   };
 }
 
@@ -248,7 +473,15 @@ async function handleIssuanceRequest(
   if (!options.issuanceSecret) {
     return writeJson(res, 503, { status: "server", detail: "license issuance is not configured" });
   }
-  if (!validateBearerSecret(req.headers.authorization, options.issuanceSecret)) {
+  if (
+    hasDuplicateRawHeader(req, "authorization") ||
+    hasDuplicateRawHeader(req, "x-neondiff-issuance-authorization") ||
+    !validateIssuanceAuthorization(
+      req.headers.authorization,
+      req.headers["x-neondiff-issuance-authorization"],
+      options.issuanceSecret
+    )
+  ) {
     return writeJson(res, 401, { status: "unauthorized", detail: "license issuance authorization failed" });
   }
 
@@ -268,6 +501,17 @@ async function handleIssuanceRequest(
       malformedIssuanceResult(error instanceof Error ? error.message : "malformed request body")
     );
   }
+}
+
+function hasDuplicateRawHeader(req: IncomingMessage, name: string): boolean {
+  let matches = 0;
+  for (let index = 0; index < req.rawHeaders.length; index += 2) {
+    if (req.rawHeaders[index]?.toLowerCase() === name) {
+      matches += 1;
+      if (matches > 1) return true;
+    }
+  }
+  return false;
 }
 
 export function startLicenseServer(options: LicenseHttpOptions & { port?: number; host?: string }): Promise<{ server: Server; url: string }> {
@@ -290,7 +534,17 @@ function parseRequest(raw: string): LicenseRequest {
   const machineId = body.machineId;
   if (typeof licenseKey !== "string" || licenseKey.trim().length === 0) throw new Error("licenseKey is required");
   if (typeof machineId !== "string" || machineId.trim().length === 0) throw new Error("machineId is required");
-  const repo = typeof body.repo === "string" && body.repo.length > 0 ? body.repo : undefined;
+  let repo: string | undefined;
+  if (body.repo !== undefined) {
+    if (
+      typeof body.repo !== "string"
+      || body.repo !== body.repo.trim()
+      || !CANONICAL_GITHUB_REPOSITORY_PATTERN.test(body.repo)
+    ) {
+      throw new Error("repo must be a canonical owner/name repository");
+    }
+    repo = body.repo;
+  }
   return { licenseKey: licenseKey.trim(), machineId: machineId.trim(), repo };
 }
 

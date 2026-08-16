@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -19,6 +19,9 @@ import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 import type { LicenseSecretReader } from "./license-secret-store.js";
 
 const MAXIMUM_LICENSE_API_RESPONSE_BYTES = 64 * 1024;
+const CANONICAL_GITHUB_REPOSITORY_PATTERN =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
+const RFC7638_SHA256_THUMBPRINT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export type LicenseStorageBackend = "keychain" | "file";
 export type LicenseStatus =
@@ -111,15 +114,41 @@ export interface LicenseReviewGateResult {
   entitlement?: LicenseEntitlement;
 }
 
+interface KeychainCredentialReference {
+  service: string;
+  account: string;
+  licenseKey: string;
+}
+
 export async function activateLicense(input: {
   config: LicenseConfig;
   licenseKey: string;
   repo?: string;
+  /** Native-only non-secret binding. Defaults to the legacy local host hash. */
+  machineId?: string;
+  /**
+   * Persist the raw key plus redacted entitlement cache for the headless CLI.
+   * Native callers keep the only raw copy in Keychain and set this false.
+   */
+  persistLocalState?: boolean;
+  /** Test seam for the native Keychain ownership check. Production callers use macOS Keychain. */
+  keychainCredentialVerifier?: (credential: KeychainCredentialReference) => boolean;
   now?: Date;
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
-  if (input.config.storageBackend === "keychain") {
+  const persistLocalState = input.persistLocalState ?? true;
+  if (!persistLocalState && input.config.storageBackend !== "keychain") {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "no-local-state activation requires storageBackend=keychain"
+    };
+  }
+  if (input.config.storageBackend === "keychain" && persistLocalState) {
     return {
       ok: false,
       status: "invalid",
@@ -129,15 +158,85 @@ export async function activateLicense(input: {
       detail: "Keychain license activation is disabled in headless CLI until native no-argv secret storage is available; use storageBackend=file"
     };
   }
+  const machineId = input.machineId?.trim();
+  if (
+    !persistLocalState
+    && (
+      !machineId
+      || machineId !== input.machineId
+      || !RFC7638_SHA256_THUMBPRINT_PATTERN.test(machineId)
+    )
+  ) {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "no-local-state activation requires an RFC 7638 broker device identity"
+    };
+  }
+  if (persistLocalState && input.machineId?.trim()) {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "broker device identity requires native no-local-state activation"
+    };
+  }
+  const repository = input.repo?.trim();
+  if (
+    !persistLocalState
+    && (
+      !repository
+      || repository !== input.repo
+      || !CANONICAL_GITHUB_REPOSITORY_PATTERN.test(repository)
+    )
+  ) {
+    return {
+      ok: false,
+      status: "invalid",
+      source: "none",
+      checkedAt: now.toISOString(),
+      classification: "invalid",
+      detail: "no-local-state activation requires one canonical repository"
+    };
+  }
   const licenseKey = input.licenseKey.trim();
   if (!licenseKey) return missingResult(now, "license key is empty");
   if (!input.config.apiBaseUrl) return serverResult(now, "license API base URL is not configured");
+  if (!persistLocalState) {
+    const verifier = input.keychainCredentialVerifier ?? matchesNativeKeychainCredential;
+    let credentialMatches = false;
+    try {
+      credentialMatches = verifier({
+        service: input.config.keychainService,
+        account: input.config.keychainAccount,
+        licenseKey
+      });
+    } catch {
+      credentialMatches = false;
+    }
+    if (!credentialMatches) {
+      return {
+        ok: false,
+        status: "invalid",
+        source: "none",
+        checkedAt: now.toISOString(),
+        classification: "invalid",
+        detail: "no-local-state activation requires the matching native Keychain credential"
+      };
+    }
+  }
 
   const response = await callLicenseApi({
     config: input.config,
     path: "/v1/license/activate",
     licenseKey,
     repo: input.repo,
+    machineId: input.machineId,
     now: input.now,
     fetchImpl: input.fetchImpl
   });
@@ -147,6 +246,13 @@ export async function activateLicense(input: {
     ...response.entitlement,
     licenseFingerprint: fingerprintLicenseKey(licenseKey)
   };
+  if (!persistLocalState) {
+    return {
+      ...response,
+      entitlement,
+      detail: "license activated without local key or cache persistence"
+    };
+  }
   try {
     writeLicenseKey(input.config, licenseKey);
     writeLicenseCache(input.config.cachePath, entitlement);
@@ -156,6 +262,7 @@ export async function activateLicense(input: {
       path: "/v1/license/deactivate",
       licenseKey,
       repo: input.repo,
+      machineId: input.machineId,
       now,
       fetchImpl: input.fetchImpl
     });
@@ -170,15 +277,43 @@ export async function activateLicense(input: {
   };
 }
 
+function matchesNativeKeychainCredential(input: KeychainCredentialReference): boolean {
+  if (platform() !== "darwin") return false;
+  const result = spawnSync(
+    "/usr/bin/security",
+    ["find-generic-password", "-s", input.service, "-a", input.account, "-w"],
+    {
+      encoding: "utf8",
+      timeout: 5_000,
+      maxBuffer: 4 * 1024,
+      windowsHide: true
+    }
+  );
+  if (result.error || result.signal || result.status !== 0 || typeof result.stdout !== "string") {
+    return false;
+  }
+  const stored = Buffer.from(result.stdout.trim(), "utf8");
+  const submitted = Buffer.from(input.licenseKey, "utf8");
+  return stored.length === submitted.length && timingSafeEqual(stored, submitted);
+}
+
 export async function getLicenseStatus(input: {
   config: LicenseConfig;
   repo?: string;
+  machineId?: string;
   refresh?: boolean;
   now?: Date;
   fetchImpl?: typeof fetch;
   licenseSecretReader?: LicenseSecretReader;
 }): Promise<LicenseStatusResult> {
   const now = input.now ?? new Date();
+  if (input.machineId !== undefined
+    && !RFC7638_SHA256_THUMBPRINT_PATTERN.test(input.machineId)) {
+    return invalidApiResult(
+      now,
+      "license machine ID must be one RFC 7638 SHA-256 broker device id"
+    );
+  }
   const cached = readLicenseCache(input.config.cachePath, () => readCacheRedactionLicenseKey(input.config));
   if (!input.refresh) return statusFromCache(cached, now);
 
@@ -203,6 +338,7 @@ export async function getLicenseStatus(input: {
     path: "/v1/license/validate",
     licenseKey,
     repo: input.repo,
+    machineId: input.machineId,
     now,
     fetchImpl: input.fetchImpl
   });
@@ -423,6 +559,7 @@ async function callLicenseApi(input: {
   path: string;
   licenseKey: string;
   repo?: string;
+  machineId?: string;
   now?: Date;
   fetchImpl?: typeof fetch;
 }): Promise<LicenseStatusResult> {
@@ -439,7 +576,7 @@ async function callLicenseApi(input: {
       body: JSON.stringify({
         licenseKey: input.licenseKey,
         repo: input.repo,
-        machineId: localMachineId()
+        machineId: input.machineId ?? localMachineId()
       })
     });
     const text = await readBoundedResponseText(response);

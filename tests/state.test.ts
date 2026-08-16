@@ -31,7 +31,7 @@ describe("review state store", () => {
     store.close();
   });
 
-  it("stores normalized issue enrichment body hashes and rejects invalid hashes", () => {
+  it("stores normalized issue enrichment public and private hashes and rejects invalid hashes", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-body-hash-"));
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
@@ -41,6 +41,7 @@ describe("review state store", () => {
       issueNumber: 17,
       issueUpdatedAt: "2026-07-03T00:00:00.000Z",
       bodyHash: "A".repeat(64),
+      analysisInputHash: "B".repeat(64),
       status: "posted",
       commentUrl: "https://github.test/owner/issue-repo/issues/17#issuecomment-17",
       now: new Date("2026-07-03T00:00:01.000Z")
@@ -51,6 +52,7 @@ describe("review state store", () => {
       issueNumber: 17,
       issueUpdatedAt: "2026-07-03T00:00:00.000Z",
       bodyHash: "a".repeat(64),
+      analysisInputHash: "b".repeat(64),
       status: "posted",
       commentUrl: "https://github.test/owner/issue-repo/issues/17#issuecomment-17"
     });
@@ -60,6 +62,12 @@ describe("review state store", () => {
       bodyHash: "not-a-64-hex-digest",
       status: "dry_run"
     })).toThrow("bodyHash must be a 64-character hex digest");
+    expect(() => store.recordIssueEnrichment({
+      repo: "owner/issue-repo",
+      issueNumber: 18,
+      analysisInputHash: "not-a-64-hex-digest",
+      status: "dry_run"
+    })).toThrow("analysisInputHash must be a 64-character hex digest");
     store.close();
   });
 
@@ -87,11 +95,13 @@ describe("review state store", () => {
 
     const store = new ReviewStateStore(dbPath);
     const bodyHash = "b".repeat(64);
+    const analysisInputHash = "c".repeat(64);
     const record = store.recordIssueEnrichment({
       repo: "owner/issue-repo",
       issueNumber: 19,
       issueUpdatedAt: "2026-07-03T00:00:00.000Z",
       bodyHash,
+      analysisInputHash,
       status: "dry_run",
       reason: "dry_run_only",
       now: new Date("2026-07-03T00:00:01.000Z")
@@ -102,12 +112,13 @@ describe("review state store", () => {
     try {
       const columns = migratedDb.prepare("pragma table_info(issue_enrichment_records)").all() as Array<{ name: string }>;
       const row = migratedDb
-        .prepare("select body_hash from issue_enrichment_records where repo = ? and issue_number = ?")
-        .get("owner/issue-repo", 19) as { body_hash: string } | undefined;
+        .prepare("select body_hash, analysis_input_hash from issue_enrichment_records where repo = ? and issue_number = ?")
+        .get("owner/issue-repo", 19) as { body_hash: string; analysis_input_hash: string } | undefined;
 
       expect(columns.map((column) => column.name)).toContain("body_hash");
-      expect(record).toMatchObject({ status: "dry_run", bodyHash });
-      expect(row).toEqual({ body_hash: bodyHash });
+      expect(columns.map((column) => column.name)).toContain("analysis_input_hash");
+      expect(record).toMatchObject({ status: "dry_run", bodyHash, analysisInputHash });
+      expect(row).toEqual({ body_hash: bodyHash, analysis_input_hash: analysisInputHash });
     } finally {
       migratedDb.close();
     }
@@ -452,6 +463,34 @@ describe("review state store", () => {
     expect(blocked).toBeUndefined();
     store.releaseReviewRunLease(first!.leaseId);
     expect(store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-01T00:00:02.000Z"))).toBeDefined();
+    store.close();
+  });
+
+  it("holds cleanup behind a live review lease and runs it once the lease is released", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const concurrentStore = new ReviewStateStore(dbPath);
+    const lease = store.tryAcquireReviewRunLease(1, 60_000);
+    let cleanupCalls = 0;
+
+    expect(store.hasActiveReviewRunLease()).toBe(true);
+    expect(store.runWithExclusiveReviewIdleGuard(() => { cleanupCalls += 1; })).toEqual({ ran: false });
+    store.releaseReviewRunLease(lease!.leaseId);
+    expect(store.runWithExclusiveReviewIdleGuard(() => {
+      cleanupCalls += 1;
+      expect(concurrentStore.tryAcquireReviewRunLease(1, 60_000)).toBeUndefined();
+      return "removed";
+    })).toEqual({
+      ran: true,
+      value: "removed"
+    });
+    expect(cleanupCalls).toBe(1);
+    const nextLease = concurrentStore.tryAcquireReviewRunLease(1, 60_000);
+    expect(nextLease).toBeDefined();
+    concurrentStore.releaseReviewRunLease(nextLease!.leaseId);
+    concurrentStore.close();
     store.close();
   });
 
@@ -2393,6 +2432,166 @@ describe("review state store", () => {
       allowProcessedOwnerSupersession: true,
       now: new Date("2026-07-06T00:00:01.000Z")
     })).toBeDefined();
+    store.close();
+  });
+
+  it("allows an approved dry-to-live claim only while the processed row is still dry_run", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-head-claim-dry-to-live-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const dryHead = { repo: "r/x", pullNumber: 33, headSha: "sha-dry-to-live" };
+    store.recordProcessed({ ...dryHead, status: "dry_run", event: "COMMENT" });
+
+    expect(store.tryClaimReviewHead({
+      ...dryHead,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      now: new Date("2026-07-06T00:00:01.000Z")
+    })).toBeDefined();
+
+    const postedHead = { repo: "r/x", pullNumber: 34, headSha: "sha-already-posted" };
+    store.recordProcessed({
+      ...postedHead,
+      status: "posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/r/x/pull/34#pullrequestreview-prior"
+    });
+    expect(store.tryClaimReviewHead({
+      ...postedHead,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      now: new Date("2026-07-06T00:00:02.000Z")
+    })).toBeUndefined();
+    store.close();
+  });
+
+  it("records a dry proof only while the head is unclaimed and unprocessed", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dry-proof-claim-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    const openHead = { repo: "r/x", pullNumber: 35, headSha: "sha-open-dry" };
+    expect(store.tryRecordDryRun({ ...openHead, event: "COMMENT" })).toBe(true);
+    expect(store.getProcessedReview(openHead.repo, openHead.pullNumber, openHead.headSha)).toMatchObject({
+      status: "dry_run"
+    });
+
+    const claimedHead = { repo: "r/x", pullNumber: 36, headSha: "sha-claimed-before-dry" };
+    const claim = store.tryClaimReviewHead({
+      ...claimedHead,
+      claimTtlMs: 900_000,
+      now: new Date("2026-07-06T00:00:01.000Z")
+    });
+    expect(claim).toBeDefined();
+    expect(store.tryRecordDryRun(
+      { ...claimedHead, event: "COMMENT" },
+      new Date("2026-07-06T00:00:02.000Z")
+    )).toBe(false);
+    expect(store.getProcessedReview(
+      claimedHead.repo,
+      claimedHead.pullNumber,
+      claimedHead.headSha
+    )).toBeUndefined();
+
+    const postedHead = { repo: "r/x", pullNumber: 37, headSha: "sha-posted-before-dry" };
+    store.recordProcessed({ ...postedHead, status: "posted", event: "COMMENT" });
+    expect(store.tryRecordDryRun({ ...postedHead, event: "COMMENT" })).toBe(false);
+    expect(store.getProcessedReview(
+      postedHead.repo,
+      postedHead.pullNumber,
+      postedHead.headSha
+    )).toMatchObject({ status: "posted" });
+    store.close();
+  });
+
+  it("supersedes only activation baselines when an explicit dry-run override is present", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dry-proof-baseline-supersession-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const baselineHead = { repo: "r/x", pullNumber: 38, headSha: "sha-activation-baseline" };
+    store.recordProcessed({
+      ...baselineHead,
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
+
+    expect(store.tryRecordDryRun({ ...baselineHead, event: "COMMENT" })).toBe(false);
+    expect(store.tryRecordDryRun({
+      ...baselineHead,
+      event: "COMMENT",
+      allowActivationBaselineSupersession: true
+    })).toBe(true);
+    const supersededBaseline = store.getProcessedReview(
+      baselineHead.repo,
+      baselineHead.pullNumber,
+      baselineHead.headSha
+    );
+    expect(supersededBaseline).toMatchObject({ status: "dry_run" });
+    expect(supersededBaseline?.error).toBeUndefined();
+
+    const unrelatedSkippedHead = { repo: "r/x", pullNumber: 39, headSha: "sha-policy-skip" };
+    store.recordProcessed({
+      ...unrelatedSkippedHead,
+      status: "skipped",
+      error: "policy_skip"
+    });
+    expect(store.tryRecordDryRun({
+      ...unrelatedSkippedHead,
+      event: "COMMENT",
+      allowActivationBaselineSupersession: true
+    })).toBe(false);
+    expect(store.getProcessedReview(
+      unrelatedSkippedHead.repo,
+      unrelatedSkippedHead.pullNumber,
+      unrelatedSkippedHead.headSha
+    )).toMatchObject({
+      status: "skipped",
+      error: "policy_skip"
+    });
+    store.close();
+  });
+
+  it("binds dry-to-live claims to the exact config revision and permits a fresh dry proof after failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-dry-proof-revision-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = { repo: "r/x", pullNumber: 38, headSha: "sha-revision-bound" };
+    const revisionA = "a".repeat(64);
+    const revisionB = "b".repeat(64);
+
+    expect(store.tryRecordDryRun({
+      ...head,
+      event: "COMMENT",
+      configRevision: revisionA
+    })).toBe(true);
+    expect(store.tryClaimReviewHead({
+      ...head,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      requiredProcessedConfigRevisionForSupersession: revisionB
+    })).toBeUndefined();
+    const claim = store.tryClaimReviewHead({
+      ...head,
+      claimTtlMs: 900_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      requiredProcessedConfigRevisionForSupersession: revisionA
+    });
+    expect(claim).toBeDefined();
+
+    store.releaseReviewHeadClaim(claim!.claimId);
+    expect(store.tryRecordDryRun({
+      ...head,
+      event: "COMMENT",
+      configRevision: revisionB
+    })).toBe(true);
+    expect(store.getProcessedReview(head.repo, head.pullNumber, head.headSha)).toMatchObject({
+      status: "dry_run",
+      configRevision: revisionB
+    });
     store.close();
   });
 

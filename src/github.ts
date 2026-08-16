@@ -20,6 +20,7 @@ const MAX_REVIEW_COMMENT_PAGES = 5;
 
 export interface GitHubApiOptions {
   appId?: string;
+  privateKey?: string;
   privateKeyPath?: string;
   token?: string;
   apiBaseUrl?: string;
@@ -89,8 +90,11 @@ export class GitHubApi {
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
 
   constructor(options: GitHubApiOptions) {
+    if (options.privateKey && options.privateKeyPath) {
+      throw new Error("GitHub App private key must be supplied inline or by path, not both.");
+    }
     this.appId = options.appId;
-    this.privateKey = options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined;
+    this.privateKey = options.privateKey ?? (options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined);
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
     this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;

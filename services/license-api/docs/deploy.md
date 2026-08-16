@@ -60,21 +60,34 @@ flyctl volumes create license_data --region iad --size 1 \
 
 ## 3. Secrets
 
-Production DR now requires an owner-held Litestream replica URL, provider
-credentials, production `LICENSE_LITESTREAM_REQUIRED=true`, and checkout
-issuance requires `LICENSE_ISSUANCE_SECRET`. Do not commit secret values. Set
+Production DR now requires an owner-held Litestream license replica URL, provider
+credentials, production `LICENSE_LITESTREAM_REQUIRED=true`, and legacy checkout
+issuance requires `LICENSE_ISSUANCE_SECRET`. Direct Stripe fulfillment also
+requires a separate Fly-only key-derivation secret, Stripe restricted key, and
+webhook signing secret. Do not commit secret values. Set
 the replica URL, provider credentials, and issuance secret through Fly secrets
 before deploying with the required flag enabled; otherwise the container
 refuses to start or checkout issuance stays disabled. `LICENSE_DB_PATH` / `PORT` / `HOST` /
 `LITESTREAM_CONFIG` / `LITESTREAM_SYNC_INTERVAL` /
 `LICENSE_LITESTREAM_REQUIRED` are plain config in `fly.toml`, not secrets.
+The managed GitHub broker remains default-off. Before separately provisioning
+`GITHUB_BROKER_ENABLED=true`, the owner must also provision a distinct
+`GITHUB_BROKER_REPLICA_URL`; the entrypoint then selects
+`/etc/litestream-broker.yml`, restores both databases, and supervises both
+replicas. A missing broker replica URL refuses broker-enabled startup. Once the
+replica URL is provisioned, the combined replication config remains active when
+the broker flag is turned back off, preserving backup freshness during rollback.
 
 ```sh
 flyctl secrets set \
   LICENSE_REPLICA_URL="<object-store-url-for-license.sqlite>" \
+  GITHUB_BROKER_REPLICA_URL="<distinct-object-store-url-for-github-broker.sqlite>" \
   AWS_ACCESS_KEY_ID="<provider-access-key-id>" \
   AWS_SECRET_ACCESS_KEY="<provider-secret-access-key>" \
-  LICENSE_ISSUANCE_SECRET="<shared-secret-used-by-website-webhook>" \
+  LICENSE_ISSUANCE_SECRET="<legacy-and-release-lifecycle-derivation-secret>" \
+  NEONDIFF_CHECKOUT_LICENSE_DERIVATION_SECRET="<distinct-Fly-only-secret>" \
+  STRIPE_RESTRICTED_API_KEY="<least-privilege-rk_live-key>" \
+  STRIPE_WEBHOOK_SECRET="<direct-endpoint-signing-secret>" \
   --app neondiff-license
 ```
 
@@ -82,10 +95,26 @@ Use the provider-specific variables for non-S3-compatible storage. See
 [`disaster-recovery.md`](disaster-recovery.md) for the owner-only setup and
 restore drill proof boundary.
 
-`LICENSE_ISSUANCE_SECRET` enables `POST /v1/admin/licenses/issue` for the
-website payment webhook. Keep the same value configured only on the license API
-and the server-side checkout webhook; never expose it to browser code, public
-docs, logs, or generated release packets.
+Do not set `GITHUB_BROKER_ENABLED=true` from this runbook alone. Production App
+registration, OAuth/install configuration, approved broker credentials,
+security approval, authoritative #612 entitlement wiring, and the two-database
+restore/rollback drill remain separate #613 gates.
+
+`LICENSE_ISSUANCE_SECRET` enables the legacy
+`POST /v1/admin/licenses/issue` route and release-lifecycle derivation. New
+website purchases must not call that route or hold this value. Direct Stripe
+fulfillment uses `NEONDIFF_CHECKOUT_LICENSE_DERIVATION_SECRET`, which stays
+only on Fly and is not accepted as HTTP authorization.
+
+Configure the direct authority's non-secret identity and catalog settings on
+Fly: exact live account ID, `STRIPE_PROVIDER_MODE=live`, exact website HTTPS
+origin, and the three allowed Price/Product pairs. Set
+`NEONDIFF_STRIPE_CHECKOUT_ENABLED=true` only when all secrets and non-secret
+settings are present and the direct Stripe endpoint is ready. The restricted
+key needs only current-account, Checkout Session, and subscription read access
+(plus any Stripe-required read permission for expanded Price/Product data).
+Never place the key, signing secret, derivation secret, raw license, or
+fulfillment token in logs or evidence.
 
 After setting the secret and deploying, an unauthenticated request to checkout
 issuance or subscription lifecycle must return a redacted `401`. A `503` means
@@ -130,26 +159,26 @@ curl -s -i -X POST https://neondiff-license.fly.dev/v1/admin/licenses/issue \
   -d '{}'
 ```
 
-## 5. Prepare the schema v2 rollout
+## 5. Prepare the schema v3 rollout
 
 1. Keep checkout and lifecycle delivery stopped.
 2. Separate Stripe test and live accounts, modes, subscriptions, databases,
    replica prefixes, and evidence. Sandbox proof is never live proof.
-3. Immediately before the v2 image rollout, verify and record a fresh pre-v2
+3. Immediately before the v3 image rollout, verify and record a fresh pre-v3
    Litestream recovery point. Do not copy the database file while SQLite is
    open; WAL state may make that copy incomplete.
 4. Review [`subscription-lifecycle.md`](subscription-lifecycle.md), run its
    focused contract/DR checks, and confirm any legacy checkout binding list.
 
-## 6. Deploy and verify schema v2
+## 6. Deploy and verify schema v3
 
-Deploy only after the pre-v2 recovery point is reviewed. `LicenseStore` opens
+Deploy only after the pre-v3 recovery point is reviewed. `LicenseStore` opens
 the database before the HTTP listener starts. It accepts only an empty database,
-the exact legacy three-table schema, or the exact schema v2 signature. Migration
-runs inside one immediate transaction; verification failure rolls back and
-prevents the service from starting.
+the exact legacy three-table schema, the exact schema v2 signature, or the exact
+schema v3 signature. Migration runs inside one immediate transaction;
+verification failure rolls back and prevents the service from starting.
 
-After deploy, verify health, `user_version=2`, redacted admin readback, the real
+After deploy, verify health, `user_version=3`, redacted admin readback, the real
 v1.0.4 activate/validate/deactivate contract, lifecycle idempotency, and
 mandatory-online outage behavior with `offlineGraceMs=0`. The local entitlement
 cache is diagnostic only; it does not authorize review during an outage.
@@ -158,28 +187,30 @@ cache is diagnostic only; it does not authorize review during an outage.
 
 Run `bind-checkout-subscription ... --dry-run` first for every verified legacy
 `source=checkout` issuance. A production write needs explicit owner approval of
-the opaque fingerprint and exact provider tuple. Do not recover a raw key or
-mint a replacement during reconciliation. See
+the opaque issuance and full-tuple fingerprints plus the exact provider and
+server-derived lookup-key tuple. Do not recover a raw key or mint a replacement
+during reconciliation. See
 [`admin-runbook.md`](admin-runbook.md).
 
-Then hand the redacted source/contract evidence to #559. This runbook does not
+Then hand the redacted source/contract evidence to #718 and tracker #610. This
+runbook does not
 change a version, release candidate, public manifest, deployed client config,
 checkout state, or public package. Those remain separately reviewed release
 mutations.
 
 ## Rollback
 
-Image rollback does not reverse the SQLite schema migration. Deploying a pre-v2
-image against a v2 database is not the rollback procedure.
+Image rollback does not reverse the SQLite schema migration. Deploying a pre-v3
+image against a v3 database is not the rollback procedure.
 
-For a v2 migration or data failure, stop writes, preserve the affected volume,
-select the reviewed pre-v2 Litestream recovery point, and restore it to a fresh
+For a v3 migration or data failure, stop writes, preserve the affected volume,
+select the reviewed pre-v3 Litestream recovery point, and restore it to a fresh
 path or volume using the timestamp-selected point-in-time restore command in the
-DR runbook. Verify quick-check, `user_version=0`, and the exact legacy schema
-signature before attaching a pre-v2 image. Never overwrite the existing database
+DR runbook. Verify quick-check, `user_version=2`, and the exact prior v2 schema
+signature before attaching a pre-v3 image. Never overwrite the existing database
 and never copy or force-restore into an open SQLite path. Follow
 [`disaster-recovery.md`](disaster-recovery.md) for verification and evidence.
 
 An emergency service stop makes all supported review work fail closed; it is
 not customer-transparent and does not authorize cache fallback. Restoration,
-deployment, or traffic changes remain owner-gated operations under #559.
+deployment, or traffic changes remain gated under #633 and tracker #610.

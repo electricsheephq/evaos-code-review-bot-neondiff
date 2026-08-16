@@ -113,6 +113,16 @@ function seatExhaustedResult(record: LicenseRecord): ServiceResult {
   };
 }
 
+function repositoryBindingMismatchResult(): ServiceResult {
+  return {
+    httpStatus: 409,
+    body: {
+      status: "scope_mismatch",
+      detail: "license activation is already bound to a different repository"
+    }
+  };
+}
+
 function isExpired(record: LicenseRecord, now: Date): boolean {
   if (!record.expiresAt) return false;
   const ms = Date.parse(record.expiresAt);
@@ -143,6 +153,9 @@ export function activate(store: LicenseStore, req: LicenseRequest, now: Date): S
 
   const existing = store.getActivation(record.licenseKeyHash, req.machineId);
   if (existing) {
+    if (existing.repo && req.repo && existing.repo !== req.repo) {
+      return repositoryBindingMismatchResult();
+    }
     // Same machine re-activating → idempotent active, refresh last_seen_at.
     store.upsertActivation(record.licenseKeyHash, req.machineId, req.repo, nowIso);
     return activeEntitlementBody(record);

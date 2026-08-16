@@ -12,9 +12,12 @@ The machine-readable draft schema lives at [`docs/schema/neondiff-config.schema.
 - Keep provider credentials out of committed repo config.
 - Keep issue enrichment separate from PR review policy.
 - Keep public confidence uncalibrated until evaluation evidence exists; no percentages are displayed in this draft.
-- Preserve the current NeonDiff public boundary: source-available beta with
-  mandatory API-backed activation for public, private, internal, and unknown
-  repository work.
+- Preserve the current NeonDiff public boundary: source-available beta where the
+  current CLI (v1.0.x) requires mandatory API-backed activation for public,
+  private, internal, and unknown repository work. Public open-source review
+  becomes free (no Activation Key) only in the native app via the managed GitHub
+  App broker (#614); the current CLI still requires activation for every
+  repository.
 
 The v1.0.4 package-allowlisted schema retains the compatibility label
 `free-source-available-beta` so the published tarball remains reproducible. That
@@ -293,17 +296,44 @@ PR's changed surface instead of a flat FIFO priority (#301, `src/scheduler.ts`).
 - **`elevatedPriority` must be `<= docsOnlyPriority` whenever `enabled` is `true`.** Config validation fails closed if this invariant is violated, since a higher numeric value leases *later* and an inverted ordering would mean docs-only PRs jump ahead of elevated-risk ones.
 - **Never de-prioritizes a self-repo below its existing elevation**, and elevation is derived solely from the already-shipped changed-surface validation report — this feature introduces no new path-classification logic.
 
+### `reviewEnsemble`
+
+`config.reviewEnsemble` controls the experimental four-lane Luna review team. It is absent/default-off
+unless explicitly enabled. The ordinary full-diff review remains the canonical anchor; state,
+boundary, and failure specialists add isolated shadow evidence.
+
+| Key | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | Runs the three specialist leaves alongside the ordinary anchor. When false, provider execution and evidence paths are unchanged. |
+| `mode` | `"shadow"` | `"shadow"` | The only accepted mode. Specialist findings are reduced into a non-posting packet. |
+
+**Safety invariants:**
+
+- The parent keeps one queue job, lease, exact-head claim, and canonical processed-review row. Leaves
+  are never represented as queue jobs and never call `reviewPull` recursively.
+- The anchor keeps its original prompt and alone controls the GitHub review. Slow or failed specialists
+  cannot delay the canonical post, change its findings/event, or write canonical state.
+- Every leaf reviews the same immutable repo, pull, base SHA, and head SHA using the same strict schema,
+  worktree, read-only Codex runtime, timeout, and output cap. Chunked reviews retain the lane focus in
+  every chunk.
+- Specialist receipts, runtime data, failures, and the globally deduplicated shadow packet are written
+  below `review-ensemble/`. The packet always records `postingEligible: false`.
+- Enabling the team multiplies provider executions per active parent (four full-subject lanes, with
+  additional calls when context chunking applies). Size `reviewConcurrency` and provider capacity for
+  that explicit cost before activation.
+
 ### `reviewLenses`
 
 `config.reviewLenses` controls default-off advisory review lenses (`src/review-lenses.ts`).
 Lenses are small built-in text packets for first-principles, architecture, decision, and lean
-review. They are rendered like other bounded context packets, not as native ZCode skills.
+review plus the state, boundary, and failure specialist prompts used by the shadow ensemble. They are
+rendered like other bounded context packets, not as native ZCode skills.
 
 | Key | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `enabled` | `boolean` | `false` | Master switch. When `false`, no lens packet is built and the review prompt is unchanged. |
 | `packetVersion` | `string` | `review-lens-packet-v0.1` | Packet schema/version marker written into evidence. |
-| `active` | `Array<{id,surface,mode}>` | `[]` | Explicit lens activations. Allowed ids: `first_principles`, `architecture`, `decision`, `lean`. Allowed surfaces: `issue_enrichment`, `pr_shadow`, `walkthrough`. Allowed modes: `dry_run`, `summary`, `shadow`. |
+| `active` | `Array<{id,surface,mode}>` | `[]` | Explicit lens activations. Allowed ids: `first_principles`, `architecture`, `decision`, `lean`, `state`, `boundary`, `failure`. Allowed surfaces: `issue_enrichment`, `pr_shadow`, `walkthrough`. Allowed modes: `dry_run`, `summary`, `shadow`. |
 | `maxLensBytes` | `integer` (`>= 1`) | `4000` | Per-lens byte cap before a lens is omitted from the packet. |
 | `maxPacketBytes` | `integer` (`>= 500`) | `12000` | Total rendered packet cap. Lenses over budget are omitted and recorded in packet evidence. |
 

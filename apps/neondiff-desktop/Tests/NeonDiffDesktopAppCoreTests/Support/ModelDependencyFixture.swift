@@ -32,12 +32,17 @@ final class ScriptedDesktopCLIExecutor: DesktopCLIExecuting, @unchecked Sendable
         var calls: [RecordedCLICall] = []
         var outcomes: [Result<CLIRunResult, Error>]
         var waiters: [Waiter] = []
+        var suspendRuns: Bool
+        var suspendedRunContinuations: [CheckedContinuation<Void, Never>] = []
     }
 
     private let state: ModelFixtureLocked<State>
 
-    init(outcomes: [Result<CLIRunResult, Error>] = []) {
-        state = ModelFixtureLocked(State(outcomes: outcomes))
+    init(
+        outcomes: [Result<CLIRunResult, Error>] = [],
+        suspendRuns: Bool = false
+    ) {
+        state = ModelFixtureLocked(State(outcomes: outcomes, suspendRuns: suspendRuns))
     }
 
     var calls: [RecordedCLICall] { state.read(\.calls) }
@@ -56,6 +61,28 @@ final class ScriptedDesktopCLIExecutor: DesktopCLIExecuting, @unchecked Sendable
             }
             if shouldResume { continuation.resume() }
         }
+    }
+
+    func resumeSuspendedRuns() {
+        let continuations = state.update { state -> [CheckedContinuation<Void, Never>] in
+            state.suspendRuns = false
+            defer { state.suspendedRunContinuations.removeAll() }
+            return state.suspendedRunContinuations
+        }
+        continuations.forEach { $0.resume() }
+    }
+
+    func resumeNextSuspendedRun() {
+        let continuation = state.update {
+            $0.suspendedRunContinuations.isEmpty
+                ? nil
+                : $0.suspendedRunContinuations.removeFirst()
+        }
+        continuation?.resume()
+    }
+
+    func suspendFutureRuns() {
+        state.update { $0.suspendRuns = true }
     }
 
     func run(
@@ -79,6 +106,16 @@ final class ScriptedDesktopCLIExecutor: DesktopCLIExecuting, @unchecked Sendable
             return (outcome, ready.map(\.continuation))
         }
         resumptions.forEach { $0.resume() }
+        if state.read(\.suspendRuns) {
+            await withCheckedContinuation { continuation in
+                let shouldResume = state.update { state -> Bool in
+                    guard state.suspendRuns else { return true }
+                    state.suspendedRunContinuations.append(continuation)
+                    return false
+                }
+                if shouldResume { continuation.resume() }
+            }
+        }
         return try outcome.get()
     }
 }
@@ -95,6 +132,8 @@ final class ScriptedGitHubAuthenticator: GitHubDesktopAuthenticating, @unchecked
         var refreshTokens: [String] = []
         var fetchedAccessTokens: [String] = []
         var listedAccessTokens: [String] = []
+        var suspendRefresh: Bool
+        var suspendedRefreshContinuations: [CheckedContinuation<Void, Never>] = []
     }
 
     private let state: ModelFixtureLocked<State>
@@ -110,14 +149,16 @@ final class ScriptedGitHubAuthenticator: GitHubDesktopAuthenticating, @unchecked
         pollResults: [GitHubDeviceAuthorizationPollResult] = [],
         refreshedToken: GitHubUserToken = GitHubUserToken(accessToken: "fixture-refreshed-token"),
         user: GitHubAuthenticatedUser = GitHubAuthenticatedUser(login: "fixture-user"),
-        repositories: [GitHubDiscoveredRepository] = []
+        repositories: [GitHubDiscoveredRepository] = [],
+        suspendRefresh: Bool = false
     ) {
         state = ModelFixtureLocked(State(
             deviceCode: deviceCode,
             pollResults: pollResults,
             refreshedToken: refreshedToken,
             user: user,
-            repositories: repositories
+            repositories: repositories,
+            suspendRefresh: suspendRefresh
         ))
     }
 
@@ -146,7 +187,26 @@ final class ScriptedGitHubAuthenticator: GitHubDesktopAuthenticating, @unchecked
 
     func refreshUserToken(clientId: String, refreshToken: String) async throws -> GitHubUserToken {
         state.update { $0.refreshTokens.append(refreshToken) }
+        if state.read(\.suspendRefresh) {
+            await withCheckedContinuation { continuation in
+                let shouldResume = state.update { state -> Bool in
+                    guard state.suspendRefresh else { return true }
+                    state.suspendedRefreshContinuations.append(continuation)
+                    return false
+                }
+                if shouldResume { continuation.resume() }
+            }
+        }
         return state.read(\.refreshedToken)
+    }
+
+    func resumeSuspendedRefreshes() {
+        let continuations = state.update { state -> [CheckedContinuation<Void, Never>] in
+            state.suspendRefresh = false
+            defer { state.suspendedRefreshContinuations.removeAll() }
+            return state.suspendedRefreshContinuations
+        }
+        continuations.forEach { $0.resume() }
     }
 
     func fetchCurrentUser(accessToken: String) async throws -> GitHubAuthenticatedUser {
@@ -177,23 +237,40 @@ struct ModelDependencyFixture {
     let providerVerifier: RecordingProviderVerifier
     let secretStore: MemorySecretStore
     let githubAuthenticator: ScriptedGitHubAuthenticator
+    let githubBroker: ScriptedGitHubBroker?
 
     init(
         root: URL = fixtureURL("/fixture/model-app-support", directory: true),
         now: Date = fixtureDate(secondsSince1970: 1_000_000),
         cliOutcomes: [Result<CLIRunResult, Error>] = [],
+        suspendCLIRuns: Bool = false,
         clipboardResult: Bool = true,
         urlResult: Bool = true,
         githubAuthenticator: ScriptedGitHubAuthenticator = ScriptedGitHubAuthenticator(),
+        githubBroker: ScriptedGitHubBroker? = nil,
+        activationLicenseClient: (any ActivationLicenseClienting)? = nil,
         preferenceBools: [String: Bool] = [:],
-        productionBoundary: DesktopProductionBoundary = .testVerified
+        preferenceStrings: [String: String] = [:],
+        localBotConfigurations: [DesktopLocalBotConfiguration] = [],
+        localBotExecutionContexts: [DesktopLocalBotExecutionContext] = [],
+        localBotExecutionConfigPaths: [String] = [],
+        productionBoundary: DesktopProductionBoundary = .testVerified,
+        localWorkerUpdateGuideURL: URL = DesktopReleaseRouting.localWorkerUpdateGuideURL(
+            shortVersion: "1.1.0-beta.37"
+        )
     ) {
         clipboard = RecordingClipboard(result: clipboardResult)
         urlOpener = RecordingURLOpener(result: urlResult)
-        cli = ScriptedDesktopCLIExecutor(outcomes: cliOutcomes)
+        cli = ScriptedDesktopCLIExecutor(
+            outcomes: cliOutcomes,
+            suspendRuns: suspendCLIRuns
+        )
         dashboard = RecordingDashboardLauncher()
         preferences = MemoryPreferences()
         for (key, value) in preferenceBools {
+            preferences.set(value, forKey: key)
+        }
+        for (key, value) in preferenceStrings {
             preferences.set(value, forKey: key)
         }
         clock = TestClock(now: now)
@@ -201,6 +278,7 @@ struct ModelDependencyFixture {
         providerVerifier = RecordingProviderVerifier()
         secretStore = MemorySecretStore()
         self.githubAuthenticator = githubAuthenticator
+        self.githubBroker = githubBroker
         model = NeonDiffDesktopModel(dependencies: DesktopAppDependencies(
             clipboard: clipboard,
             urlOpener: urlOpener,
@@ -212,8 +290,13 @@ struct ModelDependencyFixture {
             providerVerifier: providerVerifier,
             secretStore: secretStore,
             githubAuthenticator: githubAuthenticator,
-            productionBoundary: productionBoundary
-        ))
+            githubBroker: githubBroker,
+            productionBoundary: productionBoundary,
+            localWorkerUpdateGuideURL: localWorkerUpdateGuideURL,
+            localBotConfigurations: localBotConfigurations,
+            localBotExecutionContexts: localBotExecutionContexts,
+            localBotExecutionConfigPaths: localBotExecutionConfigPaths
+        ), activationLicenseClient: activationLicenseClient)
     }
 
     func loadConfig(_ json: String? = nil) {
@@ -237,6 +320,13 @@ struct ModelDependencyFixture {
 
     func waitForGitHubRefreshToFinish() async {
         await waitUntilFalse(model.$isGitHubRepositoryRefreshInProgress, current: model.isGitHubRepositoryRefreshInProgress)
+    }
+
+    func waitForManagedGitHubConnectionToFinish() async {
+        await waitUntilFalse(
+            model.$isManagedGitHubConnectionInProgress,
+            current: model.isManagedGitHubConnectionInProgress
+        )
     }
 
     func waitForDashboardLaunch() async {

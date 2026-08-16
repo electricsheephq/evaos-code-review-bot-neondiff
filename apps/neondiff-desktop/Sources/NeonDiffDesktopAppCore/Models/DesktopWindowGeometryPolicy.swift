@@ -8,11 +8,24 @@ public struct DesktopWindowContentSize: Equatable, Sendable {
     }
 }
 
+public struct DesktopWindowOrigin: Equatable, Sendable {
+    public let x: Double
+    public let y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
+}
+
 public enum DesktopWindowGeometryPolicy {
+    public static let productionDefaultContentSize =
+        DesktopWindowContentSize(width: 1200, height: 760)
+
     public static func minimumContentSize(
         requested: DesktopWindowContentSize?
     ) -> DesktopWindowContentSize {
-        requested ?? DesktopWindowContentSize(width: 1040, height: 680)
+        requested ?? DesktopWindowContentSize(width: 760, height: 560)
     }
 
     public static func targetFrameSize(
@@ -23,6 +36,33 @@ public enum DesktopWindowGeometryPolicy {
         DesktopWindowContentSize(
             width: requestedContent.width + Swift.max(0, currentFrame.width - currentContent.width),
             height: requestedContent.height + Swift.max(0, currentFrame.height - currentContent.height)
+        )
+    }
+
+    public static func productionLaunchFrameSize(
+        currentFrame: DesktopWindowContentSize,
+        currentContent: DesktopWindowContentSize,
+        visibleFrame: DesktopWindowContentSize
+    ) -> DesktopWindowContentSize {
+        let target = targetFrameSize(
+            requestedContent: productionDefaultContentSize,
+            currentFrame: currentFrame,
+            currentContent: currentContent
+        )
+        return DesktopWindowContentSize(
+            width: Swift.min(target.width, visibleFrame.width),
+            height: Swift.min(target.height, visibleFrame.height)
+        )
+    }
+
+    public static func centeredOrigin(
+        frameSize: DesktopWindowContentSize,
+        visibleOrigin: DesktopWindowOrigin,
+        visibleFrame: DesktopWindowContentSize
+    ) -> DesktopWindowOrigin {
+        DesktopWindowOrigin(
+            x: visibleOrigin.x + Swift.max(0, (visibleFrame.width - frameSize.width) / 2),
+            y: visibleOrigin.y + Swift.max(0, (visibleFrame.height - frameSize.height) / 2)
         )
     }
 
