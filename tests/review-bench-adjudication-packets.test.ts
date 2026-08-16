@@ -1265,6 +1265,25 @@ describe("review-bench adjudication response verification", () => {
         verifiedAt: VERIFIED_AT
       })).toThrow(/human verification requires review-bench-adjudication-protocol\/v1/i);
     }
+
+    const forged = fixture();
+    const forgedProtocol =
+      "# review-bench-adjudication-protocol/v1\nForged protocol with the approved version heading.\n";
+    forged.candidate.protocolSha256 = sha256(forgedProtocol);
+    forged.candidate.annotationUniverse.methodSha256 = forged.candidate.protocolSha256;
+    writeJson(forged.candidatePath, forged.candidate);
+    writeFileSync(join(forged.artifactsDirectory, `${forged.candidate.protocolSha256}.protocol.md`), forgedProtocol);
+    const forgedPrepared = prepare(forged);
+    const forgedPaths = responsePaths(
+      forgedPrepared,
+      response(forgedPrepared.packet, "human:one"),
+      response(forgedPrepared.packet, "human:two")
+    );
+    expect(() => verifyReviewBenchAdjudicationResponses({
+      packetPath: forgedPrepared.packetPath,
+      ...forgedPaths,
+      verifiedAt: VERIFIED_AT
+    })).toThrow(/approved human protocol digest/i);
   });
 });
 

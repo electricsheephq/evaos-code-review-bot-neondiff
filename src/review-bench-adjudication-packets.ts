@@ -31,6 +31,8 @@ const MAX_RATIONALE_CHARS = 8_000;
 const BLINDED_ACTIONABILITY_QUESTION =
   "Does this exact final-side anchor contain an actionable correctness or security defect under the bound rubric?";
 const HUMAN_ADJUDICATION_PROTOCOL_VERSION = "review-bench-adjudication-protocol/v1" as const;
+const HUMAN_ADJUDICATION_PROTOCOL_SHA256 =
+  "fd12e8a2a42bcb3fd13bb1dc527628bf4c3b6e254e85ce567cc52644f8a1a2c0" as const;
 const PHASE1_ADVISORY_PROTOCOL_VERSION = "review-bench-phase1-advisory-protocol/v1" as const;
 
 const LANGUAGES: readonly ReviewBenchLanguage[] = [
@@ -410,6 +412,9 @@ export function verifyReviewBenchAdjudicationResponses(input: {
   const packet = packetRead.value;
   if (packet.protocolVersion !== HUMAN_ADJUDICATION_PROTOCOL_VERSION) {
     throw new Error(`human verification requires ${HUMAN_ADJUDICATION_PROTOCOL_VERSION}`);
+  }
+  if (packet.protocolSha256 !== HUMAN_ADJUDICATION_PROTOCOL_SHA256) {
+    throw new Error("human verification requires the approved human protocol digest");
   }
   if (Date.parse(packet.preparedAt) > Date.parse(verifiedAt)) {
     throw new Error("packet preparedAt must not follow verifiedAt");
