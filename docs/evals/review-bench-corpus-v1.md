@@ -144,8 +144,10 @@ creation for eliminating that same-account pathname race.
 `review-bench verify-adjudication` binds two complete canonical `human:*`
 responses to that exact packet. It records agreement counts and either returns
 `ready` or emits a deterministic `needs_resolution` queue. A third distinct,
-later resolver may close only disputed units; it cannot rewrite an undisputed
-verdict or candidate decision. One-tier severity proximity remains an agreement
+later resolver may close only disputed candidate units; it must bind the exact
+canonical primary-response, secondary-response, and disagreement-queue hashes,
+cannot rewrite an undisputed candidate decision, and derives the final verdict
+from the resolved decisions. One-tier severity proximity remains an agreement
 metric; any non-identical final severity still requires resolution. A
 `defect_present` verdict requires at least one actionable, severity-bearing
 candidate, while an empty candidate universe is reserved for clean controls

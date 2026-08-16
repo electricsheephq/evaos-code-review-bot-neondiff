@@ -174,11 +174,14 @@ function response(
 
 function resolver(
   packet: ReviewBenchAdjudicationPacketV1,
+  primary: ReviewBenchAdjudicationResponseV1,
+  secondary: ReviewBenchAdjudicationResponseV1,
   overrides: Partial<ReviewBenchAdjudicationResolverResponseV1> = {}
 ): ReviewBenchAdjudicationResolverResponseV1 {
   return {
     schemaVersion: "review-bench-adjudication-resolver-response/v1",
     packetFingerprint: packet.packetFingerprint,
+    ...resolverInputBinding(primary, secondary),
     adjudicatorId: "human:resolver",
     verdict: "defect_present",
     decisions: packet.annotationUniverse.candidates.map((candidate) => ({
@@ -196,11 +199,14 @@ function resolver(
 
 function aiResolver(
   packet: ReviewBenchAdjudicationPacketV1,
+  primary: ReviewBenchAdvisoryAdjudicationResponseV1,
+  secondary: ReviewBenchAdvisoryAdjudicationResponseV1,
   overrides: Partial<ReviewBenchAdvisoryAiResolverResponseV1> = {}
 ): ReviewBenchAdvisoryAiResolverResponseV1 {
   return {
     schemaVersion: "review-bench-advisory-ai-resolver-response/v1",
     packetFingerprint: packet.packetFingerprint,
+    ...resolverInputBinding(primary, secondary),
     adjudicatorId: "agent:high-reasoning-resolver",
     verdict: "defect_present",
     decisions: packet.annotationUniverse.candidates.map((candidate) => ({
@@ -213,6 +219,31 @@ function aiResolver(
     blindedToProviderIdentity: true,
     reviewedDisagreement: true,
     ...overrides
+  };
+}
+
+function resolverInputBinding(
+  primary: ReviewBenchAdjudicationResponseV1 | ReviewBenchAdvisoryAdjudicationResponseV1,
+  secondary: ReviewBenchAdjudicationResponseV1 | ReviewBenchAdvisoryAdjudicationResponseV1
+) {
+  const secondaryById = new Map(secondary.decisions.map((decision) => [decision.candidateId, decision]));
+  const candidateDisagreements = primary.decisions.flatMap((one) => {
+    const two = secondaryById.get(one.candidateId)!;
+    return stableJson(one) === stableJson(two)
+      ? []
+      : [{ candidateId: one.candidateId, primary: one, secondary: two }];
+  });
+  const disagreementQueue = {
+    schemaVersion: "review-bench-adjudication-disagreement/v1",
+    ...(primary.verdict === secondary.verdict ? {} : {
+      verdictDisagreement: { primary: primary.verdict, secondary: secondary.verdict }
+    }),
+    candidateDisagreements
+  };
+  return {
+    primaryResponseSha256: sha256(`${stableJson(primary)}\n`),
+    secondaryResponseSha256: sha256(`${stableJson(secondary)}\n`),
+    disagreementQueueSha256: sha256(stableJson(disagreementQueue))
   };
 }
 
@@ -313,6 +344,26 @@ describe("review-bench adjudication packet preparation", () => {
     chmodSync(input.root, 0o777);
     expect(() => prepare(input)).toThrow(/group|other users|ownership/i);
     chmodSync(input.root, 0o700);
+  });
+
+  it("rejects private candidate and artifact inputs inside Git or group-writable parents", () => {
+    for (const kind of ["candidate", "artifacts"] as const) {
+      const input = fixture();
+      const checkoutInput = mkdtempSync(join(process.cwd(), ".review-bench-private-input-"));
+      roots.push(checkoutInput);
+      if (kind === "candidate") {
+        input.candidatePath = join(checkoutInput, "candidate.json");
+        writeJson(input.candidatePath, input.candidate);
+      } else {
+        input.artifactsDirectory = join(checkoutInput, "artifacts");
+        cpSync(join(input.root, "artifacts"), input.artifactsDirectory, { recursive: true });
+      }
+      expect(() => prepare(input)).toThrow(/outside a Git checkout/i);
+    }
+
+    const writable = fixture();
+    chmodSync(writable.artifactsDirectory, 0o770);
+    expect(() => prepare(writable)).toThrow(/artifacts directory.*writable by group|writable by group or other/i);
   });
 
   it("rejects extra candidate keys instead of carrying sensitive fields into the packet", () => {
@@ -758,6 +809,16 @@ describe("review-bench adjudication response verification", () => {
       status: "ready",
       receiptKind: "initial_ready"
     });
+    const missingResolverValue = spawnSync("npx", [
+      "tsx", "src/cli.ts", "review-bench", "verify-adjudication",
+      "--packet", packetPath,
+      "--primary", paths.primaryResponsePath,
+      "--secondary", paths.secondaryResponsePath,
+      "--receipt", paths.receiptPath,
+      "--resolver"
+    ], { cwd: process.cwd(), encoding: "utf8" });
+    expect(`${missingResolverValue.stdout}\n${missingResolverValue.stderr}`)
+      .toMatch(/--resolver requires a value/i);
   }, 20_000);
 
   it("exits one while emitting a needs_resolution routing summary", () => {
@@ -892,7 +953,7 @@ describe("review-bench adjudication response verification", () => {
         writeJson(secondaryResponsePath, secondary);
       } else {
         resolverResponsePath = join(checkoutInput, "resolver.json");
-        writeJson(resolverResponsePath, resolver(prepared.packet));
+        writeJson(resolverResponsePath, resolver(prepared.packet, primary, secondary));
       }
 
       expect(() => verifyReviewBenchAdjudicationResponses({
@@ -979,7 +1040,7 @@ describe("review-bench adjudication response verification", () => {
     });
     const paths = responsePaths(prepared, primary, secondary);
     const resolverPath = join(prepared.root, "resolver.json");
-    writeJson(resolverPath, resolver(prepared.packet));
+    writeJson(resolverPath, resolver(prepared.packet, primary, secondary));
     const summary = verifyReviewBenchAdjudicationResponses({
       packetPath: prepared.packetPath,
       ...paths,
@@ -1000,13 +1061,48 @@ describe("review-bench adjudication response verification", () => {
       response(unnecessary.packet, "human:two")
     );
     const unnecessaryResolverPath = join(unnecessary.root, "resolver.json");
-    writeJson(unnecessaryResolverPath, resolver(unnecessary.packet));
+    writeJson(unnecessaryResolverPath, resolver(
+      unnecessary.packet,
+      response(unnecessary.packet, "human:one"),
+      response(unnecessary.packet, "human:two")
+    ));
     expect(() => verifyReviewBenchAdjudicationResponses({
       packetPath: unnecessary.packetPath,
       ...agreePaths,
       resolverResponsePath: unnecessaryResolverPath,
       verifiedAt: VERIFIED_AT
     })).toThrow(/unnecessary|no disagreement/i);
+  });
+
+  it("binds a severity-disagreement resolver to the frozen inputs and permits an actionability downgrade", () => {
+    const prepared = prepare();
+    const primary = response(prepared.packet, "human:one");
+    const secondary = response(prepared.packet, "human:two", {
+      decisions: [{
+        candidateId: prepared.packet.annotationUniverse.candidates[0]!.id,
+        actionability: "actionable",
+        severity: "P3"
+      }]
+    });
+    const paths = responsePaths(prepared, primary, secondary);
+    const resolverPath = join(prepared.root, "bound-resolver.json");
+    const boundResolver = resolver(prepared.packet, primary, secondary, {
+      verdict: "verified_clean",
+      decisions: [{
+        candidateId: prepared.packet.annotationUniverse.candidates[0]!.id,
+        actionability: "not_actionable"
+      }]
+    });
+    const verify = () => verifyReviewBenchAdjudicationResponses({
+      packetPath: prepared.packetPath,
+      ...paths,
+      resolverResponsePath: resolverPath,
+      verifiedAt: VERIFIED_AT
+    });
+    writeJson(resolverPath, { ...boundResolver, disagreementQueueSha256: "0".repeat(64) });
+    expect(verify).toThrow(/exact primary, secondary, and disagreement queue hashes/i);
+    writeJson(resolverPath, boundResolver);
+    expect(verify()).toMatchObject({ status: "ready", receiptKind: "resolved" });
   });
 
   it("supports all-nonactionable clean-control-style responses", () => {
@@ -1087,7 +1183,7 @@ describe("review-bench adjudication response verification", () => {
       });
       const paths = responsePaths(prepared, primary, secondary);
       const resolverPath = join(prepared.root, "resolver.json");
-      writeJson(resolverPath, resolver(prepared.packet, resolverOverride));
+      writeJson(resolverPath, resolver(prepared.packet, primary, secondary, resolverOverride));
       expect(() => verifyReviewBenchAdjudicationResponses({
         packetPath: prepared.packetPath,
         ...paths,
@@ -1147,19 +1243,28 @@ describe("review-bench adjudication response verification", () => {
     })).toThrow(/canonical|duplicate/i);
   });
 
-  it("rejects Phase 1 advisory protocol packets from the human Corpus v1 receipt path", () => {
-    const prepared = prepareAdvisory();
-    const paths = responsePaths(
-      prepared,
-      response(prepared.packet, "human:one"),
-      response(prepared.packet, "human:two")
-    );
+  it("allowlists only the exact human protocol on the human Corpus v1 receipt path", () => {
+    const unrelated = fixture();
+    const unrelatedProtocol = "# unrelated-review-protocol/v1\nNot the human adjudication protocol.\n";
+    unrelated.candidate.protocolVersion = "unrelated-review-protocol/v1";
+    unrelated.candidate.protocolSha256 = sha256(unrelatedProtocol);
+    unrelated.candidate.annotationUniverse.methodVersion = unrelated.candidate.protocolVersion;
+    unrelated.candidate.annotationUniverse.methodSha256 = unrelated.candidate.protocolSha256;
+    writeJson(unrelated.candidatePath, unrelated.candidate);
+    writeFileSync(join(unrelated.artifactsDirectory, `${unrelated.candidate.protocolSha256}.protocol.md`), unrelatedProtocol);
 
-    expect(() => verifyReviewBenchAdjudicationResponses({
-      packetPath: prepared.packetPath,
-      ...paths,
-      verifiedAt: VERIFIED_AT
-    })).toThrow(/rejects the Phase 1 advisory protocol/i);
+    for (const prepared of [prepareAdvisory(), prepare(unrelated)]) {
+      const paths = responsePaths(
+        prepared,
+        response(prepared.packet, "human:one"),
+        response(prepared.packet, "human:two")
+      );
+      expect(() => verifyReviewBenchAdjudicationResponses({
+        packetPath: prepared.packetPath,
+        ...paths,
+        verifiedAt: VERIFIED_AT
+      })).toThrow(/human verification requires review-bench-adjudication-protocol\/v1/i);
+    }
   });
 });
 
@@ -1208,11 +1313,8 @@ describe("review-bench advisory agent response verification", () => {
       }],
       rationale: "The blinded advisory reviewer found no actionable defect."
     });
-    const unresolved = responsePaths(
-      prepared,
-      agentResponse(prepared.packet, "agent:blind-a"),
-      secondary
-    );
+    const primary = agentResponse(prepared.packet, "agent:blind-a");
+    const unresolved = responsePaths(prepared, primary, secondary);
 
     const unresolvedSummary = verifyReviewBenchAdvisoryAdjudicationResponses({
       packetPath: prepared.packetPath,
@@ -1228,7 +1330,7 @@ describe("review-bench advisory agent response verification", () => {
 
     const resolvedReceiptPath = join(prepared.root, "resolved-advisory-receipt.json");
     const resolverPath = join(prepared.root, "ai-resolver.json");
-    writeJson(resolverPath, aiResolver(prepared.packet));
+    writeJson(resolverPath, aiResolver(prepared.packet, primary, secondary));
     const resolvedSummary = verifyReviewBenchAdvisoryAdjudicationResponses({
       packetPath: prepared.packetPath,
       primaryResponsePath: unresolved.primaryResponsePath,
@@ -1369,7 +1471,13 @@ describe("review-bench advisory agent response verification", () => {
       secondary
     );
     const duplicateResolverPath = join(disagreement.root, "duplicate-agent-resolver.json");
-    writeJson(duplicateResolverPath, aiResolver(disagreement.packet, { adjudicatorId: "agent:blind-a" }));
+    const primary = agentResponse(disagreement.packet, "agent:blind-a");
+    writeJson(duplicateResolverPath, aiResolver(
+      disagreement.packet,
+      primary,
+      secondary,
+      { adjudicatorId: "agent:blind-a" }
+    ));
     expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
       packetPath: disagreement.packetPath,
       primaryResponsePath: disagreementPaths.primaryResponsePath,
@@ -1380,7 +1488,11 @@ describe("review-bench advisory agent response verification", () => {
     })).toThrow(/distinct/i);
 
     const humanResolverPath = join(disagreement.root, "human-resolver.json");
-    writeJson(humanResolverPath, resolver(disagreement.packet));
+    writeJson(humanResolverPath, resolver(
+      disagreement.packet,
+      response(disagreement.packet, "human:one"),
+      response(disagreement.packet, "human:two")
+    ));
     expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
       packetPath: disagreement.packetPath,
       primaryResponsePath: disagreementPaths.primaryResponsePath,
@@ -1397,7 +1509,11 @@ describe("review-bench advisory agent response verification", () => {
       agentResponse(agreement.packet, "agent:blind-b")
     );
     const unnecessaryResolverPath = join(agreement.root, "unnecessary-resolver.json");
-    writeJson(unnecessaryResolverPath, resolver(agreement.packet));
+    writeJson(unnecessaryResolverPath, resolver(
+      agreement.packet,
+      response(agreement.packet, "human:one"),
+      response(agreement.packet, "human:two")
+    ));
     expect(() => verifyReviewBenchAdvisoryAdjudicationResponses({
       packetPath: agreement.packetPath,
       primaryResponsePath: agreementPaths.primaryResponsePath,

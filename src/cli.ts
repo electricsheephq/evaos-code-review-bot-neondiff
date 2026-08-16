@@ -4049,6 +4049,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     const key = arg.slice(2);
     const next = argv[index + 1];
+    if (arg.startsWith("--resolver=") || (key === "resolver" && (!next || next.startsWith("--")))) {
+      throw new Error("--resolver requires a value supplied as --resolver <path>");
+    }
     // RFC 7638 base64url device thumbprints may legitimately begin with "--".
     // This option is value-bearing, so consume its next token and let the
     // dedicated validator reject missing or malformed values fail closed.

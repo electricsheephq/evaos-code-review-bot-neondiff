@@ -30,6 +30,7 @@ const MAX_MARKDOWN_BYTES = 512 * 1024;
 const MAX_RATIONALE_CHARS = 8_000;
 const BLINDED_ACTIONABILITY_QUESTION =
   "Does this exact final-side anchor contain an actionable correctness or security defect under the bound rubric?";
+const HUMAN_ADJUDICATION_PROTOCOL_VERSION = "review-bench-adjudication-protocol/v1" as const;
 const PHASE1_ADVISORY_PROTOCOL_VERSION = "review-bench-phase1-advisory-protocol/v1" as const;
 
 const LANGUAGES: readonly ReviewBenchLanguage[] = [
@@ -131,6 +132,9 @@ export interface ReviewBenchAdvisoryAdjudicationResponseV1 {
 export interface ReviewBenchAdjudicationResolverResponseV1 {
   schemaVersion: "review-bench-adjudication-resolver-response/v1";
   packetFingerprint: string;
+  primaryResponseSha256: string;
+  secondaryResponseSha256: string;
+  disagreementQueueSha256: string;
   adjudicatorId: string;
   verdict: "defect_present" | "verified_clean";
   decisions: ReviewBenchAdjudicationDecisionV1[];
@@ -143,6 +147,9 @@ export interface ReviewBenchAdjudicationResolverResponseV1 {
 export interface ReviewBenchAdvisoryAiResolverResponseV1 {
   schemaVersion: "review-bench-advisory-ai-resolver-response/v1";
   packetFingerprint: string;
+  primaryResponseSha256: string;
+  secondaryResponseSha256: string;
+  disagreementQueueSha256: string;
   adjudicatorId: string;
   verdict: "defect_present" | "verified_clean";
   decisions: ReviewBenchAdjudicationDecisionV1[];
@@ -177,42 +184,6 @@ export interface ReviewBenchAdjudicationReceiptV1 {
   resolverAdjudicatorId?: string;
   status: "ready" | "needs_resolution";
   receiptKind: "initial_ready" | "initial_needs_resolution" | "resolved";
-  artifactBothDefectCount: number;
-  artifactPrimaryOnlyDefectCount: number;
-  artifactSecondaryOnlyDefectCount: number;
-  artifactBothCleanCount: number;
-  actionabilityBothActionableCount: number;
-  actionabilityPrimaryOnlyCount: number;
-  actionabilitySecondaryOnlyCount: number;
-  actionabilityNeitherCount: number;
-  severityBothActionableCount: number;
-  severityWithinOneTierCount: number;
-  disagreementCount: number;
-  disagreementQueue: ReviewBenchAdjudicationDisagreementV1;
-  disagreementQueueSha256: string;
-  resolvedDecisionSha256?: string;
-  verifiedAt: string;
-  receiptSha256: string;
-}
-
-export interface ReviewBenchAdvisoryAdjudicationReceiptV1 {
-  schemaVersion: "review-bench-advisory-adjudication-receipt/v1";
-  profile: "phase1_advisory";
-  claimClass: "advisory_model_selection_only";
-  corpusV1Eligible: false;
-  publicationEligible: false;
-  advisoryProtocolVersion: typeof PHASE1_ADVISORY_PROTOCOL_VERSION;
-  advisoryProtocolSha256: string;
-  packetFingerprint: string;
-  packetSha256: string;
-  primaryResponseSha256: string;
-  secondaryResponseSha256: string;
-  resolverResponseSha256?: string;
-  primaryAdjudicatorId: string;
-  secondaryAdjudicatorId: string;
-  resolverAdjudicatorId?: string;
-  status: "pilot_ready" | "needs_human_resolution";
-  receiptKind: "agent_agreement" | "agent_disagreement" | "human_resolved";
   artifactBothDefectCount: number;
   artifactPrimaryOnlyDefectCount: number;
   artifactSecondaryOnlyDefectCount: number;
@@ -305,17 +276,19 @@ export function prepareReviewBenchAdjudicationPacket(input: {
 }): ReviewBenchAdjudicationPrepareSummary {
   const preparedAt = input.preparedAt ?? new Date().toISOString();
   requireIsoTimestamp(preparedAt, "preparedAt");
-  const candidate = readCanonicalJson<ReviewBenchAdjudicationCandidateV1>(
+  const candidateRead = readPrivateCanonicalJsonWithBytes<ReviewBenchAdjudicationCandidateV1>(
     input.candidatePath,
     MAX_CANDIDATE_BYTES,
     "candidate manifest"
   );
+  const candidate = candidateRead.value;
   validateCandidate(candidate);
   if (Date.parse(candidate.annotationUniverse.frozenAt) > Date.parse(preparedAt)) {
     throw new Error("annotation universe frozenAt must not follow preparedAt");
   }
 
-  const artifactsDirectory = requireRealDirectory(input.artifactsDirectory, "artifacts directory");
+  const artifactsParent = captureSafeParent(input.artifactsDirectory, "artifacts directory");
+  const artifactsDirectory = artifactsParent.path;
   const sourceBytes = readDigestArtifact(
     artifactsDirectory,
     candidate.sourceArtifactSha256,
@@ -337,6 +310,7 @@ export function prepareReviewBenchAdjudicationPacket(input: {
     MAX_MARKDOWN_BYTES,
     "protocol artifact"
   );
+  assertSafeParent(artifactsParent, "artifacts directory");
   const diff = decodeUtf8(sourceBytes, "source artifact");
   const rubric = decodeUtf8(rubricBytes, "rubric artifact");
   const protocol = decodeUtf8(protocolBytes, "protocol artifact");
@@ -434,8 +408,8 @@ export function verifyReviewBenchAdjudicationResponses(input: {
   );
   validatePacket(packetRead.value);
   const packet = packetRead.value;
-  if (packet.protocolVersion === PHASE1_ADVISORY_PROTOCOL_VERSION) {
-    throw new Error("human verification rejects the Phase 1 advisory protocol");
+  if (packet.protocolVersion !== HUMAN_ADJUDICATION_PROTOCOL_VERSION) {
+    throw new Error(`human verification requires ${HUMAN_ADJUDICATION_PROTOCOL_VERSION}`);
   }
   if (Date.parse(packet.preparedAt) > Date.parse(verifiedAt)) {
     throw new Error("packet preparedAt must not follow verifiedAt");
@@ -475,6 +449,7 @@ export function verifyReviewBenchAdjudicationResponses(input: {
     );
     validateResolverResponse(resolverRead.value, packet);
     const resolver = resolverRead.value;
+    validateResolverInputBinding(resolver, primaryRead.bytes, secondaryRead.bytes, queue, "resolver response");
     if (resolver.adjudicatorId === primary.adjudicatorId || resolver.adjudicatorId === secondary.adjudicatorId) {
       throw new Error("resolver adjudicator identity must be distinct from primary and secondary");
     }
@@ -597,6 +572,13 @@ export function verifyReviewBenchAdvisoryAdjudicationResponses(input: {
     );
     validateAdvisoryAiResolverResponse(resolverRead.value, packet);
     const resolver = resolverRead.value;
+    validateResolverInputBinding(
+      resolver,
+      primaryRead.bytes,
+      secondaryRead.bytes,
+      queue,
+      "advisory AI resolver response"
+    );
     if (resolver.adjudicatorId === primary.adjudicatorId || resolver.adjudicatorId === secondary.adjudicatorId) {
       throw new Error("advisory AI resolver identity must be distinct from both initial adjudicators");
     }
@@ -870,12 +852,16 @@ function validateResolverResponse(
   packet: ReviewBenchAdjudicationPacketV1
 ): void {
   requireExactKeys(response, [
-    "schemaVersion", "packetFingerprint", "adjudicatorId", "verdict", "decisions", "rationale",
-    "completedAt", "blindedToProviderIdentity", "reviewedDisagreement"
+    "schemaVersion", "packetFingerprint", "primaryResponseSha256", "secondaryResponseSha256",
+    "disagreementQueueSha256", "adjudicatorId", "verdict", "decisions", "rationale", "completedAt",
+    "blindedToProviderIdentity", "reviewedDisagreement"
   ], "resolver response");
   if (response.schemaVersion !== "review-bench-adjudication-resolver-response/v1") {
     throw new Error("resolver response schemaVersion is invalid");
   }
+  requireSha256(response.primaryResponseSha256, "resolver response.primaryResponseSha256");
+  requireSha256(response.secondaryResponseSha256, "resolver response.secondaryResponseSha256");
+  requireSha256(response.disagreementQueueSha256, "resolver response.disagreementQueueSha256");
   validateResponseCommon(response, packet, "resolver response", "human");
   if (response.reviewedDisagreement !== true) throw new Error("resolver must declare reviewedDisagreement");
 }
@@ -885,12 +871,16 @@ function validateAdvisoryAiResolverResponse(
   packet: ReviewBenchAdjudicationPacketV1
 ): void {
   requireExactKeys(response, [
-    "schemaVersion", "packetFingerprint", "adjudicatorId", "verdict", "decisions", "rationale",
-    "completedAt", "blindedToProviderIdentity", "reviewedDisagreement"
+    "schemaVersion", "packetFingerprint", "primaryResponseSha256", "secondaryResponseSha256",
+    "disagreementQueueSha256", "adjudicatorId", "verdict", "decisions", "rationale", "completedAt",
+    "blindedToProviderIdentity", "reviewedDisagreement"
   ], "advisory AI resolver response");
   if (response.schemaVersion !== "review-bench-advisory-ai-resolver-response/v1") {
     throw new Error("advisory AI resolver response schemaVersion is invalid");
   }
+  requireSha256(response.primaryResponseSha256, "advisory AI resolver response.primaryResponseSha256");
+  requireSha256(response.secondaryResponseSha256, "advisory AI resolver response.secondaryResponseSha256");
+  requireSha256(response.disagreementQueueSha256, "advisory AI resolver response.disagreementQueueSha256");
   validateResponseCommon(response, packet, "advisory AI resolver response", "agent");
   if (response.reviewedDisagreement !== true) {
     throw new Error("advisory AI resolver must declare reviewedDisagreement");
@@ -924,6 +914,20 @@ function validateResponseCommon(
   const actionableCount = response.decisions.filter((decision) => decision.actionability === "actionable").length;
   if ((response.verdict === "defect_present") !== (actionableCount > 0)) {
     throw new Error(`${label} verdict must be defect_present iff at least one candidate is actionable`);
+  }
+}
+
+function validateResolverInputBinding(
+  response: ReviewBenchAdjudicationResolverResponseV1 | ReviewBenchAdvisoryAiResolverResponseV1,
+  primaryBytes: Uint8Array,
+  secondaryBytes: Uint8Array,
+  queue: ReviewBenchAdjudicationDisagreementV1,
+  label: string
+): void {
+  if (response.primaryResponseSha256 !== sha256(primaryBytes) ||
+      response.secondaryResponseSha256 !== sha256(secondaryBytes) ||
+      response.disagreementQueueSha256 !== sha256(stableJson(queue))) {
+    throw new Error(`${label} must bind the exact primary, secondary, and disagreement queue hashes`);
   }
 }
 
@@ -1017,10 +1021,9 @@ function resolveDisagreements(
     }
     return normalizeDecision(resolved);
   });
-  if (queue.verdictDisagreement === undefined && resolver.verdict !== primary.verdict) {
-    throw new Error("resolver changed an undisputed artifact verdict");
-  }
-  const verdict = queue.verdictDisagreement === undefined ? primary.verdict : resolver.verdict;
+  const verdict = decisions.some((decision) => decision.actionability === "actionable")
+    ? "defect_present"
+    : "verified_clean";
   return computeResolvedDecisionSha256(verdict, decisions);
 }
 
