@@ -41,7 +41,7 @@ export interface EnrichmentConfig {
 
 export type EnrichmentComment = PlanEnrichmentComment;
 export type EnrichmentCommentPostResult = PlanEnrichmentCommentPostResult;
-export const ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION = 1;
+export const ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION = 2;
 type IssueEnrichmentSkipReason =
   | "stale_issue_closed"
   | "issue_is_pull_request"
@@ -330,28 +330,6 @@ export function buildIssueAnalysisEnrichmentComment(input: {
     throw new Error(`Cannot build issue analysis for ${input.repo}#${input.issue.number}: ${eligibility.skip.reason}`);
   }
   const marker = buildIssueEnrichmentMarker({ repo: input.repo, issueNumber: input.issue.number });
-  const existingLabels = uniqueCaseInsensitive(normalizeIssueLabels(input.issue.labels));
-  const existingLabelKeys = new Set(existingLabels.map(normalizedSuggestionKey));
-  const allowedLabelKeys = input.allowedLabels === undefined || input.allowedLabels.length === 0
-    ? undefined
-    : new Set(uniqueCaseInsensitive(input.allowedLabels).map(normalizedSuggestionKey));
-  const allowedOwnerKeys = input.allowedOwners === undefined || input.allowedOwners.length === 0
-    ? undefined
-    : new Set(uniqueCaseInsensitive(input.allowedOwners).map(normalizedSuggestionKey));
-  const suggestedLabels = uniqueCaseInsensitive(applyIssueLabelAliases([
-    ...input.repoPolicy.suggestedLabels,
-    ...(input.suggestedLabels ?? []),
-    ...suggestLabelsFromIssue(input.issue)
-  ], input.repoPolicy.labelAliases)).filter((label) => {
-    const key = normalizedSuggestionKey(label);
-    return !existingLabelKeys.has(key) && (allowedLabelKeys === undefined || allowedLabelKeys.has(key));
-  }).slice(0, input.maxSuggestions ?? 8);
-  const owners = uniqueCaseInsensitive(input.suggestedOwners ?? []).filter((owner) =>
-    allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(owner))
-  ).slice(0, input.maxSuggestions ?? 8);
-  const reviewers = uniqueCaseInsensitive(input.repoPolicy.suggestedReviewers).filter((reviewer) =>
-    allowedOwnerKeys === undefined || allowedOwnerKeys.has(normalizedSuggestionKey(reviewer))
-  ).slice(0, input.maxSuggestions ?? 8);
   const impactHeading = input.repo.toLowerCase() === "electricsheephq/lcm-x"
     ? "### LCM-X impact"
     : "### Repository impact";
@@ -389,13 +367,6 @@ export function buildIssueAnalysisEnrichmentComment(input: {
     "### Next gate",
     "",
     formatPublicText(input.analysis.nextGate, input.publicConfidencePolicy),
-    "",
-    "### Suggestions",
-    "",
-    `Existing labels: ${existingLabels.length ? existingLabels.join(", ") : "none"}.`,
-    `Suggested labels: ${suggestedLabels.length ? suggestedLabels.join(", ") : "none"}.`,
-    `Suggested owners: ${owners.length ? owners.join(", ") : "none"}.`,
-    `Suggested reviewers: ${reviewers.length ? reviewers.join(", ") : "none"}.`,
     "",
     "Suggestions only. No labels, owners, reviewers, approvals, merges, or roadmap fields were changed by this bot."
   ].join("\n");

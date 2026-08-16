@@ -282,6 +282,11 @@ describe("model-backed issue analysis", () => {
     expect(comment.body).not.toContain("### Agent-start packet");
     expect(comment.body).not.toContain("Build / borrow / buy scan");
     expect(comment.body).not.toContain("Context-source taxonomy");
+    expect(comment.body).not.toContain("### Suggestions");
+    expect(comment.body).not.toContain("Suggested labels:");
+    expect(comment.body).not.toContain("Suggested reviewers:");
+    expect(comment.body).not.toContain("needs-repro");
+    expect(comment.body).not.toContain("Tosko4");
 
     const changedPrivateIdentity = buildIssueAnalysisInputHash({
       repo: "electricsheephq/lcm-x",
