@@ -446,9 +446,9 @@ export function assertPublicReviewOutputSafe(
   if (PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS.some((pattern) => pattern.test(text))) {
     throw new Error("public_review_config_leak_rejected");
   }
-  const normalized = text.toLowerCase().replace(/\s+/g, " ");
+  const normalized = normalizePublicLeakText(text);
   if (forbiddenFragments.some((fragment) => {
-    const candidate = fragment.trim().toLowerCase().replace(/\s+/g, " ");
+    const candidate = normalizePublicLeakText(fragment);
     return candidate.length >= 12 && (
       normalized.includes(candidate) ||
       (sharedWordWindow >= 2 && hasSharedForbiddenWordWindow(normalized, candidate, sharedWordWindow))
@@ -458,9 +458,13 @@ export function assertPublicReviewOutputSafe(
   }
 }
 
+function normalizePublicLeakText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
 function hasSharedForbiddenWordWindow(text: string, forbidden: string, wordCount: number): boolean {
   const windows = (value: string): string[] => {
-    const words = value.match(/[a-z0-9][a-z0-9_-]*/g) ?? [];
+    const words = value.match(/[a-z0-9]+/g) ?? [];
     return words.length < wordCount
       ? []
       : Array.from({ length: words.length - wordCount + 1 }, (_, index) =>

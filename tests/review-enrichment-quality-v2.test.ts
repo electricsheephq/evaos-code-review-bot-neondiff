@@ -135,11 +135,24 @@ describe("review and issue-enrichment quality v2", () => {
       3
     )).toThrow("public_review_config_leak_rejected");
     expect(() => assertPublicReviewOutputSafe(
+      "Check-lossless-ordering",
+      publicReviewForbiddenProfileFragments(profile),
+      3
+    )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertPublicReviewOutputSafe(
       "Do not modify files",
+      reviewPromptForbiddenFragments()
+    )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertPublicReviewOutputSafe(
+      "Do-not-modify-files",
       reviewPromptForbiddenFragments()
     )).toThrow("public_review_config_leak_rejected");
     expect(() => assertIssueAnalysisPublicSafe(
       "You are producing one strict",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).toThrow("issue_analysis_public_leak_rejected");
+    expect(() => assertIssueAnalysisPublicSafe(
+      "You-are-producing-one-strict",
       { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
     )).toThrow("issue_analysis_public_leak_rejected");
   });

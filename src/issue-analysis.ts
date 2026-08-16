@@ -715,7 +715,7 @@ function hasSharedPolicyFragment(text: string, policy: string, wordCount: number
 }
 
 function tokenWindows(value: string, wordCount: number): string[] {
-  const tokens = value.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/g) ?? [];
+  const tokens = value.toLowerCase().match(/[a-z0-9]+/g) ?? [];
   if (tokens.length < wordCount) return [];
   return Array.from(
     { length: tokens.length - wordCount + 1 },
