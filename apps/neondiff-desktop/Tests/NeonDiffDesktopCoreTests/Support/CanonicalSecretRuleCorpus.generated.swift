@@ -33,5 +33,6 @@ enum CanonicalSecretRuleCorpus {
         ("safe-environment-names", "Set NEONDIFF_GITHUB_APP_ID, NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH, NEONDIFF_LICENSE_KEY, and NEONDIFF_PROVIDER_API_KEY."),
         ("non-sensitive-cookie", "Cookie: theme=light; locale=en-US"),
         ("customer-label", "customer_id = acme-corporation-12345"),
+        ("source-token-count-identifier", "source_token_count=source_tokens"),
     ]
 }

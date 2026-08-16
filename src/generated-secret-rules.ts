@@ -114,3 +114,6 @@ export const canonicalSecretSafeLiterals: readonly string[] = [
   "neondiff-openwiki-context-ab-v0.1",
   "neondiff-openwiki-docs-drift-v0.1"
 ];
+export const canonicalSecretAlwaysSafeLiterals: readonly string[] = [
+  "source_token_count"
+];

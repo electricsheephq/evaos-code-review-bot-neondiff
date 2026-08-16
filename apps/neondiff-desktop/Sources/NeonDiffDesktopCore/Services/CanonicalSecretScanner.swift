@@ -84,7 +84,9 @@ struct CanonicalSensitiveCookieRule {
     }
 
     private static func protectSafeLiterals(_ input: String) -> String {
-        CanonicalSecretSafeLiterals.generated.enumerated().reduce(input) { text, item in
+        let alwaysSafe = Set(CanonicalSecretAlwaysSafeLiterals.generated)
+        let allSafe = CanonicalSecretSafeLiterals.generated + CanonicalSecretAlwaysSafeLiterals.generated
+        return allSafe.enumerated().reduce(input) { text, item in
             let (index, literal) = item
             let escaped = NSRegularExpression.escapedPattern(for: literal)
             guard let expression = try? NSRegularExpression(
@@ -99,7 +101,8 @@ struct CanonicalSensitiveCookieRule {
                 let before = (text as NSString).substring(to: match.range.location)
                 let afterStart = match.range.location + match.range.length
                 let after = (text as NSString).substring(from: afterStart)
-                guard !isAssignmentPosition(before: before, after: after) else { continue }
+                guard alwaysSafe.contains(literal)
+                    || !isAssignmentPosition(before: before, after: after) else { continue }
                 mutable.replaceCharacters(in: match.range, with: "__NEONDIFF_SAFE_ENV_\(index)__")
             }
             return mutable as String

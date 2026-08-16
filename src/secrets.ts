@@ -1,8 +1,12 @@
 import {
+  canonicalSecretAlwaysSafeLiterals,
   canonicalSecretRules,
   canonicalSecretSafeLiterals,
   canonicalSensitiveCookieRule
 } from "./generated-secret-rules.js";
+
+const ALL_SAFE_LITERALS = [...canonicalSecretSafeLiterals, ...canonicalSecretAlwaysSafeLiterals];
+const ALWAYS_SAFE_LITERALS = new Set(canonicalSecretAlwaysSafeLiterals);
 
 const SECRET_PATTERNS = canonicalSecretRules.map((rule) => ({
   id: rule.id,
@@ -41,7 +45,7 @@ export function redactSecrets(input: string): string {
 }
 
 function protectAllSafeEnvVarNames(input: string): string {
-  return canonicalSecretSafeLiterals.reduce((text, name, index) => {
+  return ALL_SAFE_LITERALS.reduce((text, name, index) => {
     const pattern = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`, "g");
     return text.replace(pattern, `__NEONDIFF_SAFE_ENV_${index}__`);
   }, input);
@@ -102,12 +106,14 @@ function readSensitiveCookieHeader(line: string): string | undefined {
 }
 
 function protectSafeEnvVarNames(input: string): string {
-  return canonicalSecretSafeLiterals.reduce((text, name, index) => {
+  return ALL_SAFE_LITERALS.reduce((text, name, index) => {
     const pattern = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`, "g");
     return text.replace(pattern, (match, offset: number, whole: string) => {
       const before = whole.slice(0, offset);
       const after = whole.slice(offset + match.length);
-      return isAssignmentPosition(before, after) ? match : `__NEONDIFF_SAFE_ENV_${index}__`;
+      return !ALWAYS_SAFE_LITERALS.has(name) && isAssignmentPosition(before, after)
+        ? match
+        : `__NEONDIFF_SAFE_ENV_${index}__`;
     });
   }, input);
 }
@@ -121,7 +127,7 @@ function isAssignmentPosition(before: string, after: string): boolean {
 }
 
 function restoreSafeEnvVarNames(input: string): string {
-  return canonicalSecretSafeLiterals.reduce(
+  return ALL_SAFE_LITERALS.reduce(
     (text, name, index) => text.replaceAll(`__NEONDIFF_SAFE_ENV_${index}__`, name),
     input
   );

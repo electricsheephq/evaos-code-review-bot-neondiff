@@ -72,6 +72,10 @@ export const canonicalSecretRuleCorpus = {
   {
     "id": "customer-label",
     "text": "customer_id = acme-corporation-12345"
+  },
+  {
+    "id": "source-token-count-identifier",
+    "text": "source_token_count=source_tokens"
   }
 ]
 } as const;

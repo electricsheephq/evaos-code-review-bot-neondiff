@@ -10,6 +10,13 @@ describe("secret redaction", () => {
     expect(redactSecrets(text)).toBe("fixture contains [redacted-secret] in source");
   });
 
+  it("does not treat ordinary token-count identifiers as credentials", () => {
+    const sourceExcerpt = "source_token_count=source_tokens";
+
+    expect(containsSecretLikeText(sourceExcerpt)).toBe(false);
+    expect(redactSecrets(sourceExcerpt)).toBe(sourceExcerpt);
+  });
+
   it("redacts raw email addresses from evidence and comments", () => {
     const text = "Use person@example.com only via env.";
 
