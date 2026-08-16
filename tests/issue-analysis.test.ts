@@ -443,4 +443,66 @@ describe("model-backed issue analysis", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("publishes only facts that pass entailment when at least one verified fact remains", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-issue-entailment-filter-"));
+    try {
+      const evidenceDir = join(root, "evidence");
+      const workspacePath = join(root, "workspace");
+      mkdirSync(join(workspacePath, "src"), { recursive: true });
+      writeFileSync(join(workspacePath, "src/importer.py"), "def replay(message):\n    insert_replay_row(message)\n");
+      const partlyUnsupported = {
+        ...analysis,
+        verifiedFacts: [
+          analysis.verifiedFacts[0]!,
+          {
+            claim: "The importer encrypts every replay row before persistence.",
+            sourceRef: analysis.verifiedFacts[0]!.sourceRef
+          }
+        ]
+      } satisfies IssueAnalysis;
+
+      const result = await runIssueAnalysis({
+        repo: "electricsheephq/lcm-x",
+        issue,
+        repoPolicy,
+        allowedLabels: ["data-integrity", "needs-repro"],
+        suggestedLabels: ["needs-repro"],
+        workspacePath,
+        headSha: HEAD_SHA,
+        evidenceDir,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        timeoutMs: 30_000,
+        maxOutputBytes: 1024 * 1024
+      }, {
+        captureWorktreeState: () => "clean",
+        runProcess: async (invocation) => {
+          writeFileSync(invocation.outputPath, JSON.stringify(
+            invocation.outputPath.includes("fact-adjudication")
+              ? {
+                  facts: [
+                    { index: 0, entailed: true, rationale: "The call supports the claim." },
+                    { index: 1, entailed: false, rationale: "The excerpt contains no encryption behavior." }
+                  ]
+                }
+              : partlyUnsupported
+          ));
+          return { stdout: "", stderr: "", status: 0, signal: null };
+        }
+      });
+
+      expect(result.analysis.verifiedFacts).toEqual([analysis.verifiedFacts[0]]);
+      expect(JSON.parse(readFileSync(join(evidenceDir, "issue-analysis-fact-entailment.json"), "utf8")))
+        .toMatchObject({
+          ok: true,
+          originalFactCount: 2,
+          publishedFactCount: 1,
+          removedFacts: [{ index: 1, rationale: "The excerpt contains no encryption behavior." }]
+        });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

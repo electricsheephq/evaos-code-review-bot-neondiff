@@ -272,17 +272,28 @@ export async function runIssueAnalysis(input: {
     parse: (value) => parseIssueFactEntailment(value, result.value.verifiedFacts.length)
   }, dependencies);
   const unsupported = entailment.value.filter((fact) => !fact.entailed);
+  const unsupportedIndexes = new Set(unsupported.map((fact) => fact.index));
+  const supportedFacts = result.value.verifiedFacts.filter((_fact, index) => !unsupportedIndexes.has(index));
+  const acceptedAnalysis = supportedFacts.length > 0
+    ? { ...result.value, verifiedFacts: supportedFacts }
+    : result.value;
   writeSecureFileSync(
     join(input.evidenceDir, "issue-analysis-fact-entailment.json"),
-    `${JSON.stringify({ ok: unsupported.length === 0, facts: entailment.value }, null, 2)}\n`
+    `${JSON.stringify({
+      ok: supportedFacts.length > 0,
+      originalFactCount: result.value.verifiedFacts.length,
+      publishedFactCount: supportedFacts.length,
+      removedFacts: unsupported.map((fact) => ({ index: fact.index, rationale: fact.rationale })),
+      facts: entailment.value
+    }, null, 2)}\n`
   );
-  if (unsupported.length > 0) {
+  if (supportedFacts.length === 0) {
     throw new Error(`issue_analysis_fact_not_entailed: ${unsupported.map((fact) => `verifiedFacts[${fact.index}]`).join(",")}`);
   }
   const scorecard = evaluateIssueAnalysisQuality({
     repo: input.repo,
     issue: input.issue,
-    analysis: result.value,
+    analysis: acceptedAnalysis,
     repoPolicy: input.repoPolicy,
     suggestedLabels: input.suggestedLabels,
     allowedLabels: input.allowedLabels
@@ -296,7 +307,7 @@ export async function runIssueAnalysis(input: {
     throw new Error(`issue_analysis_quality_rejected: ${failed.join(",")}`);
   }
   return {
-    analysis: result.value,
+    analysis: acceptedAnalysis,
     scorecard,
     rawResponse: result.rawResponse
   };
