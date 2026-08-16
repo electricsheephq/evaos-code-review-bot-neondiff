@@ -139,6 +139,7 @@ describe("runtime GitHub credentials", () => {
         .toBe("nd_live_runtime_fixture_1234");
       expect(readRuntimeLicenseMachineId()).toBe(brokerDeviceId);
     });
+    expect(readRuntimeLicenseMachineId()).toBeUndefined();
   });
 
   it("preserves runtime App credentials when related-context options are copied", async () => {
