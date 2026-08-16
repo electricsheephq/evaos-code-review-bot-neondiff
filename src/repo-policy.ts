@@ -438,17 +438,36 @@ const PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS = [
   /\breadinessHints\b/i
 ] as const;
 
-export function assertPublicReviewOutputSafe(text: string, forbiddenFragments: string[] = []): void {
+export function assertPublicReviewOutputSafe(
+  text: string,
+  forbiddenFragments: string[] = [],
+  sharedWordWindow = 0
+): void {
   if (PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS.some((pattern) => pattern.test(text))) {
     throw new Error("public_review_config_leak_rejected");
   }
   const normalized = text.toLowerCase().replace(/\s+/g, " ");
   if (forbiddenFragments.some((fragment) => {
     const candidate = fragment.trim().toLowerCase().replace(/\s+/g, " ");
-    return candidate.length >= 12 && normalized.includes(candidate);
+    return candidate.length >= 12 && (
+      normalized.includes(candidate) ||
+      (sharedWordWindow >= 2 && hasSharedForbiddenWordWindow(normalized, candidate, sharedWordWindow))
+    );
   })) {
     throw new Error("public_review_config_leak_rejected");
   }
+}
+
+function hasSharedForbiddenWordWindow(text: string, forbidden: string, wordCount: number): boolean {
+  const windows = (value: string): string[] => {
+    const words = value.match(/[a-z0-9][a-z0-9_-]*/g) ?? [];
+    return words.length < wordCount
+      ? []
+      : Array.from({ length: words.length - wordCount + 1 }, (_, index) =>
+          words.slice(index, index + wordCount).join(" "));
+  };
+  const publicWindows = new Set(windows(text));
+  return windows(forbidden).some((window) => publicWindows.has(window));
 }
 
 export function publicReviewForbiddenProfileFragments(profile: ResolvedRepoProfile): string[] {

@@ -51,10 +51,19 @@ const REVIEW_INTERNAL_PROMPT_LINES = [
   "Every finding must point at a RIGHT-side line in the current diff."
 ] as const;
 
+const REVIEW_INTERNAL_PUBLIC_FRAGMENTS = [
+  "You are evaOS Code Review Bot",
+  "Do not modify files",
+  "Do not run project tests",
+  "Do not call Bash or shell commands",
+  "Only inspect the checkout and the diff",
+  "Return JSON only",
+  "The deterministic wrapper treats category as a hint only",
+  "Every finding must point at a RIGHT-side line"
+] as const;
+
 export function reviewPromptForbiddenFragments(): string[] {
-  return REVIEW_INTERNAL_PROMPT_LINES.flatMap((line) => line.split(/(?<=\.)\s+/))
-    .map((fragment) => fragment.trim())
-    .filter((fragment) => fragment.length >= 12);
+  return [...REVIEW_INTERNAL_PUBLIC_FRAGMENTS];
 }
 
 export function emptyReviewModelSummary(reason: string): ReviewModelSummary {

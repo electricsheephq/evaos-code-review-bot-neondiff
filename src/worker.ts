@@ -1912,10 +1912,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeRedactedJson(join(evidenceDir, "repo-profile.json"), repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "filter-impact.json"), filterImpact);
     const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
-    const forbiddenPublicReviewFragments = [
-      ...publicReviewForbiddenProfileFragments(repoPolicy.profile),
-      ...reviewPromptForbiddenFragments()
-    ];
+    const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile);
+    const forbiddenPromptFragments = reviewPromptForbiddenFragments();
+    const assertReviewOutputSafe = (text: string) => {
+      assertPublicReviewOutputSafe(text, forbiddenPromptFragments);
+      assertPublicReviewOutputSafe(text, forbiddenProfileFragments, 3);
+    };
     writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
       writeRedactedJson(join(evidenceDir, "command.json"), commandDecision.command);
@@ -2100,9 +2102,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       dryRun: input.dryRun,
       commandDecision
     });
-    assertPublicReviewOutputSafe(summary, forbiddenPublicReviewFragments);
+    assertReviewOutputSafe(summary);
     for (const comment of comments) {
-      assertPublicReviewOutputSafe(comment.body, forbiddenPublicReviewFragments);
+      assertReviewOutputSafe(comment.body);
     }
     const walkthrough = config.walkthrough.enabled && input.dryRun
       ? buildWalkthroughComment({
@@ -2120,7 +2122,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })
       : undefined;
-    if (walkthrough) assertPublicReviewOutputSafe(walkthrough.body, forbiddenPublicReviewFragments);
+    if (walkthrough) assertReviewOutputSafe(walkthrough.body);
     const enrichment = config.enrichment?.enabled
       ? buildEnrichmentComment({
           repo,
@@ -2371,7 +2373,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         postIssueComment: config.walkthrough.postIssueComment,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
-      assertPublicReviewOutputSafe(plan.walkthrough.body, forbiddenPublicReviewFragments);
+      assertReviewOutputSafe(plan.walkthrough.body);
     }
     if (plan.walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), plan.walkthrough.body);
     if (plan.enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), plan.enrichment.body);

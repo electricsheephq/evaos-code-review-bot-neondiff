@@ -701,7 +701,7 @@ export function findIssueAnalysisPublicLeaks(
     if (normalizedSource.length >= 20 && normalizedText.includes(normalizedSource)) {
       leaks.push(`verbatim_policy_${index}`);
     }
-    if (hasSharedPolicyFragment(text, source, 6)) {
+    if (hasSharedPolicyFragment(text, source, 4)) {
       leaks.push(`policy_fragment_${index}`);
     }
   }
