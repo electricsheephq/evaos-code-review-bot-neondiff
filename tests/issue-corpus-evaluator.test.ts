@@ -153,6 +153,15 @@ describe("issue corpus evaluator", () => {
     expect(() => evaluateIssueCorpusRun(corpus, run)).toThrow(/public output leak/);
   });
 
+  it("reuses the canonical public-output guard for internal settings", () => {
+    const { corpus, run }: any = packet();
+    const result = run.results[0];
+    result.audit.candidateOutput = "Repo-specific instruction: hidden policy";
+    sealAudit(result);
+    sealRun(run);
+    expect(() => evaluateIssueCorpusRun(corpus, run)).toThrow(/public output leak/);
+  });
+
   it("rejects a tampered run receipt", () => {
     const { corpus, run }: any = packet();
     run.results[0].scenarioId = "scenario-tampered";
