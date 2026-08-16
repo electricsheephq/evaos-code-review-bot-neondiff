@@ -83,6 +83,7 @@ package struct DesktopKeychainWorkerIssueRunRequest: Equatable, Sendable {
     package let configPath: String
     package let repository: String
     package let issueNumber: Int
+    package let force: Bool
 
     package init(
         appID: String,
@@ -90,6 +91,7 @@ package struct DesktopKeychainWorkerIssueRunRequest: Equatable, Sendable {
         configPath: String,
         repository: String,
         issueNumber: Int,
+        force: Bool = false,
         homeDirectory: URL
     ) throws {
         let validated = try DesktopKeychainWorkerLaunchAgentRequest(
@@ -113,6 +115,7 @@ package struct DesktopKeychainWorkerIssueRunRequest: Equatable, Sendable {
         self.configPath = validated.configPath
         self.repository = repository
         self.issueNumber = issueNumber
+        self.force = force
     }
 }
 
@@ -214,7 +217,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
     package static func sealedWorkerIssueRunArguments(
         request: DesktopKeychainWorkerIssueRunRequest
     ) -> [String] {
-        [
+        var arguments = [
             "issue-enrichment-run",
             "--config", request.configPath,
             "--repo", request.repository,
@@ -223,13 +226,18 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
             "--confirm", "true",
             "--runtime-credentials-stdin", "true"
         ]
+        if request.force {
+            arguments.append(contentsOf: ["--force", "true"])
+        }
+        return arguments
     }
 
     package static func parseIssueRunArguments(
         _ arguments: [String],
         homeDirectory: URL
     ) -> DesktopKeychainWorkerIssueRunRequest? {
-        guard arguments.count == 15,
+        let force = arguments.count == 17
+        guard (arguments.count == 15 || force),
               arguments[0] == issueRunFlag,
               arguments[1] == "--config",
               arguments[3] == "--github-app-id",
@@ -240,6 +248,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
               arguments[12] == "false",
               arguments[13] == "--confirm",
               arguments[14] == "true",
+              (!force || (arguments[15] == "--force" && arguments[16] == "true")),
               let issueNumber = Int(arguments[10])
         else {
             return nil
@@ -250,6 +259,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
             configPath: arguments[2],
             repository: arguments[8],
             issueNumber: issueNumber,
+            force: force,
             homeDirectory: homeDirectory
         )
     }
