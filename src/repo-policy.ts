@@ -424,18 +424,18 @@ export function buildRepoProfilePromptSection(
   return lines.join("\n");
 }
 
-const PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS = [
-  /review settings preview/i,
-  /\benabled sections\b/i,
-  /\bpath instructions\b/i,
-  /\bsuggestion behavior\b/i,
-  /\broadmap only settings\b/i,
-  /\brepo specific instruction\b/i,
-  /\bprompt note\b/i,
-  /\breview risk lens\b/i,
-  /\bproof expectations\b/i,
-  /\bvalidation hints\b/i,
-  /\breadiness hints\b/i
+const PUBLIC_REVIEW_CONFIG_LEAK_MARKERS = [
+  "review settings preview",
+  "enabled sections",
+  "path instructions",
+  "suggestion behavior",
+  "roadmap only settings",
+  "repo specific instruction",
+  "prompt note",
+  "review risk lens",
+  "proof expectations",
+  "validation hints",
+  "readiness hints"
 ] as const;
 
 export function assertPublicReviewOutputSafe(
@@ -444,7 +444,7 @@ export function assertPublicReviewOutputSafe(
   sharedWordWindow = 0
 ): void {
   const normalized = normalizePublicLeakText(text);
-  if (PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS.some((pattern) => pattern.test(normalized))) {
+  if (PUBLIC_REVIEW_CONFIG_LEAK_MARKERS.some((marker) => containsCanonicalPublicLeakMarker(text, marker))) {
     throw new Error("public_review_config_leak_rejected");
   }
   if (forbiddenFragments.some((fragment) => {
@@ -464,6 +464,22 @@ function normalizePublicLeakText(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function compactPublicLeakText(value: string): string {
+  return normalizePublicLeakText(value).replaceAll(" ", "");
+}
+
+function containsCanonicalPublicLeakMarker(value: string, marker: string): boolean {
+  const tokens = normalizePublicLeakText(value).split(" ").filter(Boolean);
+  const compactMarker = compactPublicLeakText(marker);
+  return tokens.some((_, start) => {
+    let candidate = "";
+    for (let index = start; index < tokens.length && candidate.length < compactMarker.length; index += 1) {
+      candidate += tokens[index];
+    }
+    return candidate === compactMarker;
+  });
 }
 
 function hasSharedForbiddenWordWindow(text: string, forbidden: string, wordCount: number): boolean {
