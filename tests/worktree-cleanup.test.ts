@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
+import { branchWorktreeName } from "../src/git.js";
 import {
   cleanupStaleReviewWorktrees,
   probeOpenReviewWorktreePaths,
@@ -48,10 +49,11 @@ describe("stale review worktree cleanup", () => {
 
   it("removes a stale clean issue-analysis branch worktree through its mirror", () => {
     const fixture = createFixture(roots, 1);
-    const branchPath = join(
-      fixture.worktreesRoot,
-      `${SAFE_REPO}__branch-feature__issue-analysis__${fixture.headShas[0]!.slice(0, 12)}`
-    );
+    const branchPath = join(fixture.worktreesRoot, branchWorktreeName(
+      REPO,
+      "feature__pr-123",
+      fixture.headShas[0]!
+    ));
     execFileSync("git", ["--git-dir", fixture.mirrorPath, "worktree", "add", "--detach", branchPath, fixture.headShas[0]!], { stdio: "ignore" });
     makeStale(branchPath);
 

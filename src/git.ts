@@ -1,4 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { assertPathOutsideProtectedRoot } from "./path-safety.js";
@@ -34,7 +35,6 @@ export interface BranchWorktreeInput {
 
 export function prepareBranchWorktree(input: BranchWorktreeInput): PreparedWorktree {
   const safeRepo = input.repo.replace(/[^A-Za-z0-9_.-]+/g, "__");
-  const safeBranch = input.branch.replace(/[^A-Za-z0-9_.-]+/g, "__");
   const mirrorPath = join(input.workRoot, "mirrors", `${safeRepo}.git`);
   const repoUrl = input.repoUrl ?? `https://github.com/${input.repo}.git`;
   assertPathOutsideProtectedRoot({
@@ -61,7 +61,7 @@ export function prepareBranchWorktree(input: BranchWorktreeInput): PreparedWorkt
     `+refs/heads/${input.branch}:refs/heads/${input.branch}`
   ]);
   const headSha = run("git", ["--git-dir", mirrorPath, "rev-parse", `refs/heads/${input.branch}`]).stdout.trim();
-  const worktreePath = join(input.workRoot, "worktrees", `${safeRepo}__branch-${safeBranch}__${headSha.slice(0, 12)}`);
+  const worktreePath = join(input.workRoot, "worktrees", branchWorktreeName(input.repo, input.branch, headSha));
   assertPathOutsideProtectedRoot({
     path: worktreePath,
     protectedRoot: input.protectedCheckoutRoot,
@@ -81,6 +81,12 @@ export function prepareBranchWorktree(input: BranchWorktreeInput): PreparedWorkt
     throw new Error(`Worktree head mismatch for ${input.repo}@${input.branch}: ${actualHeadSha} !== ${headSha}`);
   }
   return { path: worktreePath, headSha: actualHeadSha };
+}
+
+export function branchWorktreeName(repo: string, branch: string, headSha: string): string {
+  const safeRepo = repo.replace(/[^A-Za-z0-9_.-]+/g, "__");
+  const branchIdentity = createHash("sha256").update(branch).digest("hex").slice(0, 16);
+  return `${safeRepo}__branch-${branchIdentity}__${headSha.slice(0, 12)}`;
 }
 
 export function planPullWorktreePaths(input: PullWorktreeInput): PullWorktreePathPlan {
