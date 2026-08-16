@@ -262,6 +262,7 @@ describe("model-backed issue analysis", () => {
       repoPolicy,
       allowedLabels: ["data-integrity", "needs-repro"],
       allowedOwners: ["Tosko4"],
+      suggestedOwners: ["runtime-owner"],
       postIssueComment: true
     });
 
@@ -284,9 +285,12 @@ describe("model-backed issue analysis", () => {
     expect(comment.body).not.toContain("Context-source taxonomy");
     expect(comment.body).not.toContain("### Suggestions");
     expect(comment.body).not.toContain("Suggested labels:");
+    expect(comment.body).not.toContain("Suggested owners:");
     expect(comment.body).not.toContain("Suggested reviewers:");
     expect(comment.body).not.toContain("needs-repro");
+    expect(comment.body).not.toContain("runtime-owner");
     expect(comment.body).not.toContain("Tosko4");
+    expect(ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION).toBe(2);
 
     const changedPrivateIdentity = buildIssueAnalysisInputHash({
       repo: "electricsheephq/lcm-x",
