@@ -6,19 +6,29 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ReviewStateStore } from "../src/state.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 let testPrivateKeyPem: string | undefined;
+let mockSourceRepositoryRoot: string | undefined;
 
 describe("build-enrichment-comment issue CLI", () => {
   const roots: string[] = [];
 
+  beforeAll(() => {
+    mockSourceRepositoryRoot = createMockSourceRepository();
+  });
+
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  afterAll(() => {
+    if (mockSourceRepositoryRoot) rmSync(mockSourceRepositoryRoot, { recursive: true, force: true });
+    mockSourceRepositoryRoot = undefined;
   });
 
   it("writes JSON and Markdown for open issue dry runs", async () => {
@@ -1346,12 +1356,12 @@ function routeMockGitHub(
     request.method === "GET" &&
     (request.url === "/repos/owner/issue-repo" || request.url === "/repos/owner/second-issue-repo")
   ) {
-    const defaultBranch = execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim();
+    if (!mockSourceRepositoryRoot) throw new Error("mock source repository is not initialized");
     respondJson(response, 200, {
       full_name: request.url.slice("/repos/".length),
       private: false,
-      default_branch: defaultBranch,
-      clone_url: process.cwd()
+      default_branch: "main",
+      clone_url: mockSourceRepositoryRoot
     });
     return;
   }
@@ -1547,4 +1557,18 @@ function routeMockGitHub(
 function respondJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
+}
+
+function createMockSourceRepository(): string {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-issue-source-"));
+  execFileSync("git", ["init", "--initial-branch=main", root]);
+  writeFileSync(join(root, "package.json"), "{\n}\n");
+  execFileSync("git", ["-C", root, "add", "package.json"]);
+  execFileSync("git", [
+    "-c", "user.name=NeonDiff Test",
+    "-c", "user.email=neondiff-test@example.invalid",
+    "-C", root,
+    "commit", "-m", "fixture"
+  ]);
+  return root;
 }
