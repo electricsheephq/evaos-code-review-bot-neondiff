@@ -65,10 +65,11 @@ export async function resolveRuntimeCredentialEnvelope(input: {
 }): Promise<RuntimeGitHubCredentials | undefined> {
   if (input.runtimeCredentialsStdin === undefined) return undefined;
   const supportedCommand = input.command === "review-pr"
+    || input.command === "issue-enrichment-run"
     || (input.command === "daemon" && input.subcommand === undefined);
   if (!supportedCommand) {
     throw new Error(
-      "runtime credential stdin is supported only for review-pr or the raw daemon process"
+      "runtime credential stdin is supported only for review-pr, issue-enrichment-run, or the raw daemon process"
     );
   }
   if (Array.isArray(input.runtimeCredentialsStdin)

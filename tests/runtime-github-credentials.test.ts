@@ -117,6 +117,31 @@ describe("runtime GitHub credentials", () => {
     expect(readRuntimeLicenseMachineId()).toBeUndefined();
   });
 
+  it("accepts the signed-app credential envelope for a selected issue-enrichment run", async () => {
+    const credentials = await resolveRuntimeCredentialEnvelope({
+      command: "issue-enrichment-run",
+      subcommand: undefined,
+      runtimeCredentialsStdin: "true",
+      stdin: Readable.from([JSON.stringify({
+        schemaVersion: 2,
+        githubAppId: "4184532",
+        githubPrivateKey: privateKey,
+        licenseKey: "nd_live_runtime_fixture_1234",
+        licenseMachineId: brokerDeviceId
+      })])
+    });
+
+    await withRuntimeGitHubCredentials(credentials, async () => {
+      const config = loadConfigFromObject({ github: {} });
+      expect(config.github.appId).toBe("4184532");
+      expect(config.github.privateKey).toBe(privateKey.trim());
+      expect(productionLicenseSecretReader.read(config.license!))
+        .toBe("nd_live_runtime_fixture_1234");
+      expect(readRuntimeLicenseMachineId()).toBe(brokerDeviceId);
+    });
+    expect(readRuntimeLicenseMachineId()).toBeUndefined();
+  });
+
   it("preserves runtime App credentials when related-context options are copied", async () => {
     const credentials = await resolveRuntimeCredentialEnvelope({
       command: "review-pr",
