@@ -185,12 +185,36 @@ describe("review and issue-enrichment quality v2", () => {
     expect(() => assertPublicReviewOutputSafe(
       "Check lossless ordering",
       publicReviewForbiddenProfileFragments(profile),
-      3
-    )).toThrow("public_review_config_leak_rejected");
+      8
+    )).not.toThrow();
     expect(() => assertPublicReviewOutputSafe(
       "Check-lossless-ordering",
       publicReviewForbiddenProfileFragments(profile),
-      3
+      8
+    )).not.toThrow();
+    expect(() => assertPublicReviewOutputSafe(
+      "Check lossless ordering provenance and crash safe SQLite",
+      publicReviewForbiddenProfileFragments(profile),
+      8
+    )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertPublicReviewOutputSafe(
+      "Assistant messages with a null tool-call field now serialize without crashing; the diff adds direct regression coverage.",
+      publicReviewForbiddenProfileFragments(profile),
+      8
+    )).not.toThrow();
+    const canaryProfile: ResolvedRepoProfile = {
+      ...profile,
+      reviewRiskLens: "Focus on lossless ordering and provenance; session and profile isolation; source coverage and fresh-tail behavior; tool-call and result grouping; SQLite concurrency, crash recovery, and import idempotency."
+    };
+    expect(() => assertPublicReviewOutputSafe(
+      "Tool-call/result grouping is unchanged for valid non-empty tool_calls lists; the modified branch only normalizes falsy values.",
+      publicReviewForbiddenProfileFragments(canaryProfile),
+      8
+    )).not.toThrow();
+    expect(() => assertPublicReviewOutputSafe(
+      "session and profile isolation source coverage and fresh tail",
+      publicReviewForbiddenProfileFragments(canaryProfile),
+      8
     )).toThrow("public_review_config_leak_rejected");
     expect(() => assertPublicReviewOutputSafe(
       "Do not modify files",

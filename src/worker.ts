@@ -1916,7 +1916,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     const forbiddenPromptFragments = reviewPromptForbiddenFragments();
     const assertReviewOutputSafe = (text: string) => {
       assertPublicReviewOutputSafe(text, forbiddenPromptFragments);
-      assertPublicReviewOutputSafe(text, forbiddenProfileFragments, 3);
+      assertPublicReviewOutputSafe(text, forbiddenProfileFragments, 8);
     };
     writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
