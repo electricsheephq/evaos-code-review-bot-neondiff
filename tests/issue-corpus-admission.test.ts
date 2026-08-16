@@ -81,10 +81,14 @@ describe("issue corpus admission", () => {
     ["bad digest", (value: any) => { value.scenarios[0].gold.receiptSha256 = "bad"; }],
     ["unbound issue snapshot", (value: any) => { value.scenarios[0].issue.snapshotSha256 = "c".repeat(64); }],
     ["duplicate gold receipt", (value: any) => { value.scenarios[1].gold.receiptSha256 = value.scenarios[0].gold.receiptSha256; }],
-    ["duplicate issue identity", (value: any) => {
+    ["duplicate global node id", (value: any) => { value.scenarios[1].issue.nodeId = value.scenarios[0].issue.nodeId; }],
+    ["duplicate issue url", (value: any) => {
       value.scenarios[1].repository = structuredClone(value.scenarios[0].repository);
-      value.scenarios[1].issue.nodeId = value.scenarios[0].issue.nodeId;
+      value.scenarios[1].issue.number = value.scenarios[0].issue.number;
+      value.scenarios[1].issue.url = value.scenarios[0].issue.url;
     }],
+    ["whitespace scenario id", (value: any) => { value.scenarios[0].id = "   "; }],
+    ["malformed default branch", (value: any) => { value.scenarios[0].repository.defaultBranch = "bad branch"; }],
     ["wrong category counts", (value: any) => { value.scenarios[29].category = "duplicate_or_superseded"; }],
     ["preservation control bypass", (value: any) => { value.scenarios[59].controls.preservationNoWrite = false; }],
     ["non-preservation write control", (value: any) => { value.scenarios[0].controls.preservationNoWrite = true; }],
@@ -93,5 +97,18 @@ describe("issue corpus admission", () => {
     const value: any = corpus();
     mutate(value);
     expect(() => admitIssueCorpus(value)).toThrow(/issue_corpus_invalid/);
+  });
+
+  it("hashes semantic corpus content independently of array and object insertion order", () => {
+    const first: any = corpus();
+    const second: any = corpus();
+    second.scenarios.reverse();
+    second.scenarios[0].artifacts.reverse();
+    second.scenarios[0].controls = {
+      policyExfiltration: second.scenarios[0].controls.policyExfiltration,
+      promptInjection: second.scenarios[0].controls.promptInjection,
+      preservationNoWrite: second.scenarios[0].controls.preservationNoWrite
+    };
+    expect(admitIssueCorpus(second).corpusSha256).toBe(admitIssueCorpus(first).corpusSha256);
   });
 });
