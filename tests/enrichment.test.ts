@@ -966,18 +966,19 @@ describe("sticky enrichment comments", () => {
       let analysisCalls = 0;
       let postCalls = 0;
       try {
+        const promotedIssue: GitHubRelatedIssueOrPull = {
+          number: 127,
+          title: "Continue the imported replay fix",
+          state: "open",
+          updated_at: "2026-08-16T10:01:00Z",
+          labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
+          body: "Continue current-main work for #14."
+        };
         const result = await runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
           github: {
-            listIssuesForEnrichment: async () => [{
-              number: 127,
-              title: "Continue the imported replay fix",
-              state: "open",
-              updated_at: "2026-08-16T10:01:00Z",
-              labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
-              body: "Continue current-main work for #14."
-            }],
+            listIssuesForEnrichment: async () => [promotedIssue],
             listIssueLabelEvents: async () => [{
               event: "labeled",
               created_at: "2026-08-16T10:00:00Z",
@@ -985,7 +986,7 @@ describe("sticky enrichment comments", () => {
               label: { name: "active-continuation" }
             }],
             getCollaboratorPermission: async () => "maintain",
-            getIssueOrPull: async () => undefined,
+            getIssueOrPull: async () => promotedIssue,
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;

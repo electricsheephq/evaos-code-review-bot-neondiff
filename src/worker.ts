@@ -124,6 +124,7 @@ import {
   extractZCodeResponse,
   isZCodeSchemaFailureError,
   mergeReviewModelSummaries,
+  reviewPromptForbiddenFragments,
   runZCodeReview,
   type ReviewModelSummary,
   type ZCodeReviewResult
@@ -1911,7 +1912,10 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeRedactedJson(join(evidenceDir, "repo-profile.json"), repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "filter-impact.json"), filterImpact);
     const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
-    const forbiddenPublicReviewFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile);
+    const forbiddenPublicReviewFragments = [
+      ...publicReviewForbiddenProfileFragments(repoPolicy.profile),
+      ...reviewPromptForbiddenFragments()
+    ];
     writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
       writeRedactedJson(join(evidenceDir, "command.json"), commandDecision.command);
@@ -2097,6 +2101,9 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       commandDecision
     });
     assertPublicReviewOutputSafe(summary, forbiddenPublicReviewFragments);
+    for (const comment of comments) {
+      assertPublicReviewOutputSafe(comment.body, forbiddenPublicReviewFragments);
+    }
     const walkthrough = config.walkthrough.enabled && input.dryRun
       ? buildWalkthroughComment({
           repo,

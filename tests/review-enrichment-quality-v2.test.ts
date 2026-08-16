@@ -3,20 +3,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertIssueAnalysisPublicSafe,
   assertIssueAnalysisSourceRefs,
   parseIssueAnalysis,
   type IssueAnalysis
 } from "../src/issue-analysis.js";
 import {
+  assertIssueSnapshotCurrent,
   isTrustedIssuePromotion,
+  shouldDeferPreservationPreviewToPromotion,
   type IssuePromotionEvidence
 } from "../src/issue-enrichment.js";
 import {
   assertPublicReviewOutputSafe,
   buildRepoProfilePromptSection,
+  publicReviewForbiddenProfileFragments,
   type ResolvedRepoProfile
 } from "../src/repo-policy.js";
-import { parseZCodeReviewOutput } from "../src/zcode.js";
+import { parseZCodeReviewOutput, reviewPromptForbiddenFragments } from "../src/zcode.js";
 
 const v2Analysis: IssueAnalysis = {
   classification: "data-integrity",
@@ -114,6 +118,41 @@ describe("review and issue-enrichment quality v2", () => {
     ]) {
       expect(() => assertPublicReviewOutputSafe(leaked)).toThrow("public_review_config_leak_rejected");
     }
+
+    const profile: ResolvedRepoProfile = {
+      repo: "electricsheephq/lcm-x",
+      canonicalRepo: "electricsheephq/lcm-x",
+      source: "explicit",
+      reviewRiskLens: "Check lossless ordering, provenance, and crash-safe SQLite writes."
+    };
+    expect(() => assertPublicReviewOutputSafe(
+      `Inline finding: ${profile.reviewRiskLens}`,
+      publicReviewForbiddenProfileFragments(profile)
+    )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertPublicReviewOutputSafe(
+      "Do not call Bash or shell commands.",
+      reviewPromptForbiddenFragments()
+    )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertIssueAnalysisPublicSafe(
+      "You are producing one strict structured maintainer analysis for a GitHub issue.",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).toThrow("issue_analysis_public_leak_rejected");
+  });
+
+  it("defers preservation promotion to the authenticated cycle and rejects stale issue snapshots", () => {
+    expect(shouldDeferPreservationPreviewToPromotion("preservation_only_upstream_intake")).toBe(true);
+    expect(shouldDeferPreservationPreviewToPromotion("stale_issue_closed")).toBe(false);
+    const original = {
+      number: 127,
+      state: "open",
+      updated_at: "2026-08-16T10:01:00Z",
+      labels: [{ name: "upstream-intake" }, { name: "active-continuation" }]
+    };
+    expect(() => assertIssueSnapshotCurrent(original, { ...original })).not.toThrow();
+    expect(() => assertIssueSnapshotCurrent(original, {
+      ...original,
+      updated_at: "2026-08-16T10:03:00Z"
+    })).toThrow("issue_enrichment_stale_issue_state");
   });
 
   it("requires every verified source fact to resolve to the exact SHA, line, and excerpt", () => {

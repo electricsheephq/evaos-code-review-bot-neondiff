@@ -502,6 +502,29 @@ describe("build-enrichment-comment issue CLI", () => {
     });
   });
 
+  it("lets selected upstream-intake reach authenticated promotion instead of failing preview", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.issueEnrichment.repos["owner/issue-repo"].promotionMaintainers = [{
+        login: "Tosko4",
+        validFrom: "2026-08-01T00:00:00Z",
+        validUntil: "2026-09-01T00:00:00Z"
+      }];
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-run", "--config", configPath,
+        "--repo", "owner/issue-repo", "--issue", "21", "--dry-run", "true"
+      ]);
+
+      expect(JSON.parse(stdout).summary).toMatchObject({ wouldComment: 1, skipped: 0 });
+      expect(requests.some((request) => request.path.endsWith("/issues/21/events?per_page=100&page=1"))).toBe(true);
+      expect(requests.some((request) => request.path.endsWith("/collaborators/Tosko4/permission"))).toBe(true);
+    });
+  });
+
   it("allows selected issue enrichment dry-runs when live comment posting is disabled", async () => {
     await withMockGitHub(async ({ apiBaseUrl, requests }) => {
       const root = createRoot(roots);
@@ -1412,6 +1435,30 @@ function routeMockGitHub(
       body: "Acceptance criteria and owner are present.",
       labels: [{ name: "support" }]
     });
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/issues/21") {
+    respondJson(response, 200, {
+      number: 21,
+      title: "Continue imported work",
+      state: "open",
+      updated_at: "2026-08-16T10:01:00Z",
+      body: "Continue current-main work.",
+      labels: [{ name: "upstream-intake" }, { name: "active-continuation" }]
+    });
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/issues/21/events?per_page=100&page=1") {
+    respondJson(response, 200, [{
+      event: "labeled",
+      created_at: "2026-08-16T10:00:00Z",
+      actor: { login: "Tosko4" },
+      label: { name: "active-continuation" }
+    }]);
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/collaborators/Tosko4/permission") {
+    respondJson(response, 200, { permission: "maintain" });
     return;
   }
   if (request.method === "GET" && request.url === "/repos/owner/issue-repo/issues/17/events?per_page=100&page=1") {

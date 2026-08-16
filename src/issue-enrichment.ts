@@ -326,6 +326,25 @@ export type IssueEnrichmentScanReason =
   | "global_max_comments_per_cycle"
   | "burst_threshold_exceeded";
 
+export function shouldDeferPreservationPreviewToPromotion(reason: IssueEnrichmentScanReason): boolean {
+  return reason === "preservation_only_upstream_intake";
+}
+
+export function assertIssueSnapshotCurrent(
+  original: Pick<GitHubRelatedIssueOrPull, "number" | "state" | "updated_at">,
+  current: Pick<GitHubRelatedIssueOrPull, "number" | "state" | "updated_at" | "pull_request"> | undefined
+): void {
+  if (
+    !current ||
+    current.number !== original.number ||
+    current.state !== "open" ||
+    Boolean(current.pull_request) ||
+    current.updated_at !== original.updated_at
+  ) {
+    throw new Error("issue_enrichment_stale_issue_state");
+  }
+}
+
 export interface IssueEnrichmentScanItem {
   repo: string;
   issueNumber: number;
@@ -1193,6 +1212,13 @@ export async function runIssueEnrichmentCycle(input: {
           timeoutMs: runtime?.timeoutMs ?? 1,
           maxOutputBytes: runtime?.maxOutputBytes ?? 1
         });
+        if (!input.github.getIssueOrPull && input.analyzeIssue === undefined) {
+          throw new Error("issue_enrichment_current_issue_read_required");
+        }
+        if (input.github.getIssueOrPull) {
+          const currentIssue = await input.github.getIssueOrPull(item.repo, item.issueNumber);
+          assertIssueSnapshotCurrent(issue, currentIssue);
+        }
         // #263: attach the mapped lifecycle state (`enriched`) to the marker at post time. This is a
         // renaming of the decision already made (status=posted) and rides the diagnostic state marker
         // only; bodyHash excludes the marker, so idempotency is unaffected.
