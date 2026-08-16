@@ -56,8 +56,6 @@ export function buildWalkthroughComment(input: {
   const omittedFileCount = Math.max(0, files.length - visibleFiles.length);
   const effort = estimateReviewEffort(input.files, input.comments);
   const relatedRefs = extractRelatedRefs(`${input.pull.title}\n${input.pull.body ?? ""}`);
-  const suggestedLabels = suggestLabels(input.files, input.comments);
-  const suggestedReviewers = input.pull.requested_reviewers?.map((reviewer) => reviewer.login).filter(Boolean) ?? [];
   const severityCounts = countSeverities(input.comments);
   const modelSummary = input.modelSummary ?? {
     changedBehavior: [],
@@ -73,8 +71,6 @@ export function buildWalkthroughComment(input: {
     "",
     `PR: ${input.repo}#${input.pull.number} - ${formatInlinePublicText(input.pull.title, input.publicConfidencePolicy)}`,
     `Head: \`${input.pull.head.sha}\` into \`${input.pull.base.ref}\`. Review event: \`${input.event}\`.`,
-    `Provider: ${formatProviderMetadata(input.provider, input.publicConfidencePolicy)}.`,
-    "",
     `Estimated review effort: ${effort.score}/5 (~${effort.minutes} min)`,
     "",
     "### Changed Files",
@@ -118,8 +114,6 @@ export function buildWalkthroughComment(input: {
     "### Related Context",
     "",
     `Related issues/PRs: ${relatedRefs.length > 0 ? relatedRefs.join(", ") : "none detected from PR metadata"}.`,
-    `Suggested labels: ${suggestedLabels.length > 0 ? suggestedLabels.join(", ") : "none"}.`,
-    `Suggested reviewers: ${suggestedReviewers.length > 0 ? suggestedReviewers.join(", ") : "none from current metadata"}.`,
     "",
     "### Pre-merge checklist",
     "",
@@ -129,8 +123,7 @@ export function buildWalkthroughComment(input: {
       input.event !== "REQUEST_CHANGES" || requestChangesEligible > 0,
       "REQUEST_CHANGES is only used when eligible P0/P1 findings survive validation."
     ),
-    checklistItem(proofChecklistPassed(input.validation, input.proof), "Required behavior proof is present or not applicable."),
-    checklistItem(true, "Labels and reviewers are suggestions only; the bot did not auto-apply them.")
+    checklistItem(proofChecklistPassed(input.validation, input.proof), "Required behavior proof is present or not applicable.")
   ].join("\n");
   const redactedBody = redactSecrets(visibleBody);
   assertPublicReviewOutputSafe(redactedBody);
@@ -157,17 +150,6 @@ function formatModelSummaryList(
 ): string[] {
   if (values.length === 0) return [`- ${fallback}`];
   return values.map((value) => `- ${sanitizePublicConfidenceText(value, publicConfidencePolicy)}`);
-}
-
-function formatProviderMetadata(
-  provider: ReviewProviderMetadata | undefined,
-  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
-): string {
-  if (!provider) return "not recorded";
-  const displayName = provider.displayName
-    ? `${formatInlinePublicText(provider.displayName, publicConfidencePolicy)} `
-    : "";
-  return `${displayName}(${formatInlineCodePublicText(provider.providerId, publicConfidencePolicy)}, ${formatInlinePublicText(provider.adapter, publicConfidencePolicy)}, model ${formatInlineCodePublicText(provider.model, publicConfidencePolicy)})`;
 }
 
 function buildWalkthroughStateMarker(input: {
@@ -210,22 +192,6 @@ function formatInlinePublicText(value: string | undefined, publicConfidencePolic
     .trim()
     .replace(/^#{1,6}\s+/, "")
     .slice(0, 200);
-}
-
-function formatInlineCodePublicText(value: string | undefined, publicConfidencePolicy?: PublicConfidenceDisplayPolicy): string {
-  return formatMarkdownCodeSpan(formatInlinePublicText(value, publicConfidencePolicy));
-}
-
-function formatMarkdownCodeSpan(value: string): string {
-  let longestBacktickRun = 0;
-  for (const match of value.matchAll(/`+/g)) {
-    longestBacktickRun = Math.max(longestBacktickRun, match[0].length);
-  }
-  const delimiter = "`".repeat(longestBacktickRun + 1);
-  const padding = value.startsWith("`") || value.endsWith("`")
-    ? " "
-    : "";
-  return `${delimiter}${padding}${value}${padding}${delimiter}`;
 }
 
 function summarizeFile(file: PullFilePatch, comments: ReviewComment[]): {
@@ -286,15 +252,6 @@ function extractRelatedRefs(text: string): string[] {
   const refs = new Set<string>();
   for (const match of text.matchAll(/#(\d+)/g)) refs.add(`#${match[1]}`);
   return [...refs].slice(0, 8);
-}
-
-function suggestLabels(files: PullFilePatch[], comments: ReviewComment[]): string[] {
-  const labels = new Set<string>();
-  if (comments.some((comment) => comment.severity === "P0" || comment.severity === "P1")) labels.add("bug");
-  if (files.some((file) => file.filename.toLowerCase().startsWith("assets/") || file.filename.endsWith(".cs"))) labels.add("unity");
-  if (files.some((file) => file.filename.toLowerCase().startsWith("docs/") || file.filename.endsWith(".md"))) labels.add("docs");
-  if (files.some((file) => file.filename.toLowerCase().includes("/test") || file.filename.includes(".test."))) labels.add("tests");
-  return [...labels].slice(0, 6);
 }
 
 function countSeverities(comments: ReviewComment[]): Record<Severity, number> {
