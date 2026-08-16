@@ -1261,6 +1261,13 @@ const { execFileSync } = require("node:child_process");
 const args = process.argv.slice(2);
 const outputIndex = args.indexOf("--output-last-message");
 if (outputIndex < 0 || !args[outputIndex + 1]) process.exit(2);
+const outputPath = args[outputIndex + 1];
+if (outputPath.includes("fact-adjudication")) {
+  fs.writeFileSync(outputPath, JSON.stringify({
+    facts: [{ index: 0, entailed: true, rationale: "The cited opening brace directly supports the bounded claim." }]
+  }));
+  process.exit(0);
+}
 const result = {
   classification: "needs-repro",
   priority: "P3",
@@ -1269,7 +1276,7 @@ const result = {
   repositoryImpact: "The open issue concerns acceptance criteria and owner evidence on the selected repository path.",
   currentMainApplicability: "Current-main applicability is not established by the supplied issue report.",
   verifiedFacts: [{
-    claim: "The reviewed repository contains a package manifest at the inspected head.",
+    claim: "The inspected package.json begins with an opening brace.",
     sourceRef: {
       kind: "source",
       repo: "owner/issue-repo",
@@ -1287,7 +1294,7 @@ const result = {
   limitations: ["The analysis did not execute repository code or a runtime reproduction."],
   labelProposals: []
 };
-fs.writeFileSync(args[outputIndex + 1], JSON.stringify(result));
+fs.writeFileSync(outputPath, JSON.stringify(result));
 `);
   chmodSync(path, 0o700);
   return path;
