@@ -205,7 +205,7 @@ describe("model-backed issue analysis", () => {
       issue,
       repoPolicy,
       allowedLabels: ["data-integrity", "needs-repro"],
-      allowedOwners: ["Tosko4"],
+      allowedOwners: ["Tosko4", "runtime-owner"],
       suggestedOwners: [],
       publicConfidencePolicy: { mode: "hidden" },
       rendererVersion: ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION,
