@@ -151,10 +151,11 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("## Walkthrough");
     expect(walkthrough.body).toContain("| `Assets/Scripts/SaveGameController.cs` | modified | +44/-8 | Unity/gameplay state | Elevated: validated P1 finding |");
     expect(walkthrough.body).toContain("Estimated review effort: 2/5");
-    expect(walkthrough.body).toContain("Provider: GLM / Z.ai (`zcode-glm`, zcode, model `GLM-5.2`).");
+    expect(walkthrough.body).not.toContain("Provider:");
     expect(walkthrough.body).toContain("Related issues/PRs: #17, #12");
-    expect(walkthrough.body).toContain("Suggested reviewers: reviewer-one");
-    expect(walkthrough.body).toContain("Suggested labels: bug, unity");
+    expect(walkthrough.body).not.toContain("Suggested reviewers:");
+    expect(walkthrough.body).not.toContain("Suggested labels:");
+    expect(walkthrough.body).not.toContain("Labels and reviewers are suggestions only");
     expect(walkthrough.body).toContain("Risk Taxonomy");
     expect(walkthrough.body).toContain("- Data loss: 1");
     expect(walkthrough.body).toContain("Validation and Proof");
@@ -234,7 +235,8 @@ describe("walkthrough comment rendering", () => {
     );
     expect(walkthrough.postIssueComment).toBe(true);
     expect(walkthrough.body).toContain("PR: electricsheephq/evaos-code-review-bot#110 - Review UX fixture");
-    expect(walkthrough.body).toContain("Provider: (`zcode-glm`, zcode, model `GLM-5.2`).");
+    expect(walkthrough.body).not.toContain("Provider:");
+    expect(walkthrough.body).toContain("### Maintainer Analysis");
     expect(walkthrough.body).toContain("| `src/save.ts` | modified | +2/-0 | Runtime code | Elevated: validated P1 finding |");
     expect(walkthrough.body).toContain("Validated inline findings: 1 (P0: 0, P1: 1, P2: 0, P3: 0).");
     expect(walkthrough.body).toContain("Dropped findings before posting: 2.");
@@ -378,8 +380,8 @@ describe("walkthrough comment rendering", () => {
     });
 
     expect(walkthrough.body).not.toContain(secretLikeToken);
-    expect(walkthrough.body).toContain("[redacted-secret]");
-    expect(walkthrough.body).toContain("Provider: Gateway [redacted-secret] (`openai-compatible`, openai-compatible, model `review-[redacted-secret]`).");
+    expect(walkthrough.body).not.toContain("Provider:");
+    expect(walkthrough.body).not.toContain("openai-compatible");
     expect(walkthrough.body).not.toContain("Path instructions:");
     expect(walkthrough.body).not.toContain("Label suggestions:");
     expect(walkthrough.body).not.toContain("Reviewer suggestions:");
@@ -445,8 +447,47 @@ describe("walkthrough comment rendering", () => {
     });
 
     expect(walkthrough.body).not.toContain("### Review Settings Preview");
-    expect(walkthrough.body).toContain("Suggested reviewers: reviewer-one.\n\n### Pre-merge checklist");
-    expect(walkthrough.body).not.toMatch(/Suggested reviewers:[^\n]*\n\n\n### Pre-merge checklist/);
+    expect(walkthrough.body).toContain("Related issues/PRs: #17, #12.\n\n### Pre-merge checklist");
+    expect(walkthrough.body).not.toContain("Suggested reviewers:");
+    expect(walkthrough.body).not.toContain("Suggested labels:");
+  });
+
+  it("keeps provider sessions and label or reviewer suggestion behavior out of public walkthroughs", () => {
+    const walkthrough = buildWalkthroughComment({
+      repo: "electricsheephq/lcm-x",
+      pull: {
+        ...pull,
+        requested_reviewers: [{ login: "Tosko4" }],
+        head: { ...pull.head, repo: { full_name: "electricsheephq/lcm-x" } },
+        base: { ...pull.base, repo: { full_name: "electricsheephq/lcm-x" } }
+      },
+      files: [{ filename: "tests/test_lcm_core.py", status: "modified", additions: 4, deletions: 0 }],
+      comments: [],
+      dropped: [],
+      event: "COMMENT",
+      provider: {
+        providerId: "codex-cli-oauth",
+        adapter: "codex-cli",
+        displayName: "Codex CLI (existing OAuth session)",
+        model: "gpt-5.6-sol"
+      }
+    });
+
+    expect(walkthrough.body).toContain("## Walkthrough");
+    expect(walkthrough.body).toContain("### Maintainer Analysis");
+    for (const forbidden of [
+      "Provider:",
+      "Codex CLI (existing OAuth session)",
+      "codex-cli-oauth",
+      "codex-cli",
+      "gpt-5.6-sol",
+      "Suggested labels:",
+      "Suggested reviewers:",
+      "Tosko4",
+      "Labels and reviewers are suggestions only"
+    ]) {
+      expect(walkthrough.body).not.toContain(forbidden);
+    }
   });
 
   it("uses one sticky walkthrough marker per PR while updating head-specific state metadata", () => {
