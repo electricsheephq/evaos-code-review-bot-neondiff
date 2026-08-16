@@ -359,6 +359,7 @@ describe("model-backed issue analysis", () => {
       const workspacePath = join(root, "workspace");
       mkdirSync(join(workspacePath, "src"), { recursive: true });
       writeFileSync(join(workspacePath, "src/importer.py"), "def replay(message):\n    insert_replay_row(message)\n");
+      const invocations: string[] = [];
       const result = await runIssueAnalysis({
         repo: "electricsheephq/lcm-x",
         issue,
@@ -376,15 +377,68 @@ describe("model-backed issue analysis", () => {
       }, {
         captureWorktreeState: () => "clean",
         runProcess: async (invocation) => {
-          writeFileSync(invocation.outputPath, JSON.stringify(analysis));
+          invocations.push(invocation.outputPath);
+          writeFileSync(invocation.outputPath, JSON.stringify(
+            invocation.outputPath.includes("fact-adjudication")
+              ? { facts: [{ index: 0, entailed: true, rationale: "The cited call directly supports the claim." }] }
+              : analysis
+          ));
           return { stdout: "", stderr: "", status: 0, signal: null };
         }
       });
 
       expect(result.analysis).toEqual(analysis);
       expect(result.scorecard.ok).toBe(true);
+      expect(invocations).toHaveLength(2);
       expect(JSON.parse(readFileSync(join(evidenceDir, "issue-analysis-quality.json"), "utf8")))
         .toMatchObject({ ok: true });
+      expect(JSON.parse(readFileSync(join(evidenceDir, "issue-analysis-fact-entailment.json"), "utf8")))
+        .toMatchObject({ ok: true, facts: [{ index: 0, entailed: true }] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a valid source excerpt that does not entail the claimed verified fact", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-issue-entailment-"));
+    try {
+      const evidenceDir = join(root, "evidence");
+      const workspacePath = join(root, "workspace");
+      mkdirSync(join(workspacePath, "src"), { recursive: true });
+      writeFileSync(join(workspacePath, "src/importer.py"), "def replay(message):\n    insert_replay_row(message)\n");
+      const unsupported = {
+        ...analysis,
+        verifiedFacts: [{
+          claim: "The importer encrypts every replay row before persistence.",
+          sourceRef: analysis.verifiedFacts[0]!.sourceRef
+        }]
+      } satisfies IssueAnalysis;
+
+      await expect(runIssueAnalysis({
+        repo: "electricsheephq/lcm-x",
+        issue,
+        repoPolicy,
+        allowedLabels: ["data-integrity", "needs-repro"],
+        suggestedLabels: ["needs-repro"],
+        workspacePath,
+        headSha: HEAD_SHA,
+        evidenceDir,
+        cliPath: "/Users/test/.local/bin/codex",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        timeoutMs: 30_000,
+        maxOutputBytes: 1024 * 1024
+      }, {
+        captureWorktreeState: () => "clean",
+        runProcess: async (invocation) => {
+          writeFileSync(invocation.outputPath, JSON.stringify(
+            invocation.outputPath.includes("fact-adjudication")
+              ? { facts: [{ index: 0, entailed: false, rationale: "The excerpt contains no encryption behavior." }] }
+              : unsupported
+          ));
+          return { stdout: "", stderr: "", status: 0, signal: null };
+        }
+      })).rejects.toThrow("issue_analysis_fact_not_entailed: verifiedFacts[0]");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
