@@ -186,6 +186,16 @@ describe("issue corpus evaluator", () => {
     expect(() => evaluateIssueCorpusRun(corpus, run)).toThrow(/blind/);
   });
 
+  it("rejects adjudication under a protocol other than the scenario gold protocol", () => {
+    const { corpus, run }: any = packet();
+    const fact = run.results[0].facts[0];
+    fact.adjudications[0].protocolSha256 = "c".repeat(64);
+    const { receiptSha256: _receipt, ...basis } = fact.adjudications[0];
+    fact.adjudications[0].receiptSha256 = hash(basis);
+    sealRun(run);
+    expect(() => evaluateIssueCorpusRun(corpus, run)).toThrow(/protocol mismatch/);
+  });
+
   it("fails the benchmark when an independently scored fact is unsupported", () => {
     const { corpus, run }: any = packet();
     const result = run.results[0];

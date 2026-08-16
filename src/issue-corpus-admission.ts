@@ -130,6 +130,7 @@ export function admitIssueCorpus(value: unknown): {
     id: string;
     category: Category;
     artifactSha256s: string[];
+    goldProtocolSha256: string;
     goldReceiptSha256: string;
   }>;
 } {
@@ -166,6 +167,7 @@ export function admitIssueCorpus(value: unknown): {
       id: scenario.id,
       category: scenario.category,
       artifactSha256s: scenario.artifacts.map((artifact) => artifact.sha256),
+      goldProtocolSha256: scenario.gold.protocolSha256,
       goldReceiptSha256: scenario.gold.receiptSha256
     }))
   };
