@@ -10,8 +10,11 @@ enum FoundationKeychainWorkerDaemonRunner {
         arguments: [String] = Array(CommandLine.arguments.dropFirst()),
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
-        guard arguments.first
-            == DesktopKeychainWorkerLaunchAgentContract.headlessFlag
+        guard let flag = arguments.first,
+              [
+                DesktopKeychainWorkerLaunchAgentContract.headlessFlag,
+                DesktopKeychainWorkerLaunchAgentContract.issueRunFlag
+              ].contains(flag)
         else {
             return
         }
@@ -31,16 +34,20 @@ enum FoundationKeychainWorkerDaemonRunner {
         arguments: [String],
         homeDirectory: URL
     ) throws -> Int32 {
-        guard let request =
-            DesktopKeychainWorkerLaunchAgentContract
-                .parseHeadlessArguments(
-                    arguments,
-                    homeDirectory: homeDirectory
-                ),
+        let daemonRequest = DesktopKeychainWorkerLaunchAgentContract
+            .parseHeadlessArguments(arguments, homeDirectory: homeDirectory)
+        let issueRequest = DesktopKeychainWorkerLaunchAgentContract
+            .parseIssueRunArguments(arguments, homeDirectory: homeDirectory)
+        guard (daemonRequest == nil) != (issueRequest == nil),
+              let appID = daemonRequest?.appID ?? issueRequest?.appID,
+              let licenseMachineID = daemonRequest?.licenseMachineID
+                ?? issueRequest?.licenseMachineID,
+              let configPath = daemonRequest?.configPath
+                ?? issueRequest?.configPath,
               UserDefaults.standard.string(forKey: appIDPreferenceKey)
-                == request.appID,
+                == appID,
               isSafeConfig(
-                URL(filePath: request.configPath),
+                URL(filePath: configPath),
                 homeDirectory: homeDirectory
               ),
               let context =
@@ -57,7 +64,7 @@ enum FoundationKeychainWorkerDaemonRunner {
         let identity = try GitHubBrokerDeviceIdentityStore(
             secretStore: secretStore
         ).loadExisting(allowUserInteraction: false)
-        guard identity.deviceId == request.licenseMachineID else {
+        guard identity.deviceId == licenseMachineID else {
             throw WorkerDaemonRunnerError.invalidInvocation
         }
         guard let stored = try secretStore.readSecret(
@@ -71,10 +78,10 @@ enum FoundationKeychainWorkerDaemonRunner {
             throw WorkerDaemonRunnerError.keychainUnavailable
         }
         var standardInput = try DesktopRuntimeCredentialEnvelope(
-            appID: request.appID,
+            appID: appID,
             privateKey: stored,
             licenseKey: licenseKey,
-            licenseMachineID: request.licenseMachineID
+            licenseMachineID: licenseMachineID
         ).encodedData()
         defer {
             standardInput.resetBytes(in: 0..<standardInput.count)
@@ -97,14 +104,22 @@ enum FoundationKeychainWorkerDaemonRunner {
             terminationSource.cancel()
         }
         process.executableURL = URL(filePath: workerPath)
-        process.arguments =
-            DesktopKeychainWorkerLaunchAgentContract
-                .sealedWorkerDaemonArguments(request: request)
+        if let issueRequest {
+            process.arguments = DesktopKeychainWorkerLaunchAgentContract
+                .sealedWorkerIssueRunArguments(request: issueRequest)
+        } else if let daemonRequest {
+            process.arguments = DesktopKeychainWorkerLaunchAgentContract
+                .sealedWorkerDaemonArguments(request: daemonRequest)
+        } else {
+            throw WorkerDaemonRunnerError.invalidInvocation
+        }
         process.environment = boundedEnvironment(homeDirectory: homeDirectory)
         process.currentDirectoryURL =
-            URL(filePath: request.configPath).deletingLastPathComponent()
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+            URL(filePath: configPath).deletingLastPathComponent()
+        process.standardOutput = issueRequest == nil
+            ? FileHandle.nullDevice : FileHandle.standardOutput
+        process.standardError = issueRequest == nil
+            ? FileHandle.nullDevice : FileHandle.standardError
         let inputPipe = Pipe()
         process.standardInput = inputPipe
         try process.run()

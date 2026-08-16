@@ -77,6 +77,45 @@ package struct DesktopKeychainWorkerLaunchAgentRequest:
     }
 }
 
+package struct DesktopKeychainWorkerIssueRunRequest: Equatable, Sendable {
+    package let appID: String
+    package let licenseMachineID: String
+    package let configPath: String
+    package let repository: String
+    package let issueNumber: Int
+
+    package init(
+        appID: String,
+        licenseMachineID: String,
+        configPath: String,
+        repository: String,
+        issueNumber: Int,
+        homeDirectory: URL
+    ) throws {
+        let validated = try DesktopKeychainWorkerLaunchAgentRequest(
+            appID: appID,
+            licenseMachineID: licenseMachineID,
+            configPath: configPath,
+            launchdLabel: "com.electricsheephq.NeonDiffDesktop.issue-run",
+            homeDirectory: homeDirectory
+        )
+        guard repository.range(
+            of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#,
+            options: .regularExpression
+        ) != nil else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidRepository
+        }
+        guard issueNumber > 0 else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidIssueNumber
+        }
+        self.appID = validated.appID
+        self.licenseMachineID = validated.licenseMachineID
+        self.configPath = validated.configPath
+        self.repository = repository
+        self.issueNumber = issueNumber
+    }
+}
+
 package enum DesktopKeychainWorkerLaunchAgentError:
     Error,
     LocalizedError
@@ -85,6 +124,8 @@ package enum DesktopKeychainWorkerLaunchAgentError:
     case invalidConfigPath
     case invalidLaunchdLabel
     case invalidLicenseMachineID
+    case invalidRepository
+    case invalidIssueNumber
     case invalidAppExecutable
     case serializationFailed
 
@@ -98,6 +139,10 @@ package enum DesktopKeychainWorkerLaunchAgentError:
             "The local worker LaunchAgent label is invalid."
         case .invalidLicenseMachineID:
             "The local worker license device identity is invalid."
+        case .invalidRepository:
+            "The selected issue repository is invalid."
+        case .invalidIssueNumber:
+            "The selected issue number must be positive."
         case .invalidAppExecutable:
             "The signed NeonDiff app executable path is invalid."
         case .serializationFailed:
@@ -114,6 +159,7 @@ package enum DesktopKeychainWorkerLaunchAgentRestartOutcome: Equatable {
 
 package enum DesktopKeychainWorkerLaunchAgentContract {
     package static let headlessFlag = "--neondiff-worker-daemon"
+    package static let issueRunFlag = "--neondiff-worker-issue-run"
     package static let restartObservationAttempts = 120
     package static let restartObservationIntervalMicroseconds: UInt32 = 250_000
 
@@ -163,6 +209,49 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
             "--runtime-credentials-stdin", "true",
             "--dry-run", "false"
         ]
+    }
+
+    package static func sealedWorkerIssueRunArguments(
+        request: DesktopKeychainWorkerIssueRunRequest
+    ) -> [String] {
+        [
+            "issue-enrichment-run",
+            "--config", request.configPath,
+            "--repo", request.repository,
+            "--issue", String(request.issueNumber),
+            "--dry-run", "false",
+            "--confirm", "true",
+            "--runtime-credentials-stdin", "true"
+        ]
+    }
+
+    package static func parseIssueRunArguments(
+        _ arguments: [String],
+        homeDirectory: URL
+    ) -> DesktopKeychainWorkerIssueRunRequest? {
+        guard arguments.count == 15,
+              arguments[0] == issueRunFlag,
+              arguments[1] == "--config",
+              arguments[3] == "--github-app-id",
+              arguments[5] == "--license-machine-id",
+              arguments[7] == "--repo",
+              arguments[9] == "--issue",
+              arguments[11] == "--dry-run",
+              arguments[12] == "false",
+              arguments[13] == "--confirm",
+              arguments[14] == "true",
+              let issueNumber = Int(arguments[10])
+        else {
+            return nil
+        }
+        return try? DesktopKeychainWorkerIssueRunRequest(
+            appID: arguments[4],
+            licenseMachineID: arguments[6],
+            configPath: arguments[2],
+            repository: arguments[8],
+            issueNumber: issueNumber,
+            homeDirectory: homeDirectory
+        )
     }
 
     package static func redactedPreviewText(

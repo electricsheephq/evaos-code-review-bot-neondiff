@@ -130,6 +130,57 @@ import NeonDiffDesktopCore
         #expect(!arguments.contains(licenseMachineID))
     }
 
+    @Test func signedAppIssueRunIsExactLiveAndSecretFree() throws {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        )
+        let publicArguments = [
+            "--neondiff-worker-issue-run",
+            "--config", config.path,
+            "--github-app-id", appID,
+            "--license-machine-id", licenseMachineID,
+            "--repo", "electricsheephq/lcm-x",
+            "--issue", "153",
+            "--dry-run", "false",
+            "--confirm", "true"
+        ]
+        let request = try #require(
+            DesktopKeychainWorkerLaunchAgentContract.parseIssueRunArguments(
+                publicArguments,
+                homeDirectory: home
+            )
+        )
+
+        #expect(DesktopKeychainWorkerLaunchAgentContract
+            .sealedWorkerIssueRunArguments(request: request) == [
+                "issue-enrichment-run",
+                "--config", config.path,
+                "--repo", "electricsheephq/lcm-x",
+                "--issue", "153",
+                "--dry-run", "false",
+                "--confirm", "true",
+                "--runtime-credentials-stdin", "true"
+            ])
+        #expect(!DesktopKeychainWorkerLaunchAgentContract
+            .sealedWorkerIssueRunArguments(request: request).contains(appID))
+        var dryRun = publicArguments
+        dryRun[12] = "true"
+        #expect(DesktopKeychainWorkerLaunchAgentContract.parseIssueRunArguments(
+            dryRun,
+            homeDirectory: home
+        ) == nil)
+        var invalidRepository = publicArguments
+        invalidRepository[8] = "bad repo"
+        #expect(DesktopKeychainWorkerLaunchAgentContract.parseIssueRunArguments(
+            invalidRepository,
+            homeDirectory: home
+        ) == nil)
+        #expect(DesktopKeychainWorkerLaunchAgentContract.parseIssueRunArguments(
+            publicArguments + ["--private-key", "forbidden"],
+            homeDirectory: home
+        ) == nil)
+    }
+
     @Test func previewExposesTheCompleteRedactedMutationPlan() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
