@@ -72,7 +72,7 @@ function sha(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
-function adjudicationPair(value: unknown, targetSha256: string, label: string, allowed: readonly string[]): string {
+function adjudicationPair(value: unknown, targetSha256: string, protocolSha256: string, label: string, allowed: readonly string[]): string {
   if (!Array.isArray(value) || value.length !== 2) return invalid(`${label} requires two adjudications`);
   const parsed = value.map((entry, index) => {
     const item = record(entry, `${label}[${index}]`, [
@@ -84,7 +84,7 @@ function adjudicationPair(value: unknown, targetSha256: string, label: string, a
     if (digest(item.targetSha256, `${label}[${index}].targetSha256`) !== targetSha256) invalid(`${label}[${index}] target mismatch`);
     const decision = string(item.decision, `${label}[${index}].decision`);
     if (!allowed.includes(decision)) invalid(`${label}[${index}] decision`);
-    const protocolSha256 = digest(item.protocolSha256, `${label}[${index}].protocolSha256`);
+    if (digest(item.protocolSha256, `${label}[${index}].protocolSha256`) !== protocolSha256) invalid(`${label}[${index}] protocol mismatch`);
     if (item.blind !== true) invalid(`${label}[${index}] must be blind`);
     if (item.comparatorDerived !== false) invalid(`${label}[${index}] comparator-derived adjudication`);
     const basis = { schemaVersion: item.schemaVersion, adjudicator, targetSha256, decision, protocolSha256, blind: true, comparatorDerived: false };
@@ -157,7 +157,7 @@ export function evaluateIssueCorpusRun(corpus: unknown, value: unknown) {
       if (seenFactIds.has(basis.id)) invalid(`${factLabel} duplicate fact id`);
       seenFactIds.add(basis.id);
       if (!binding.artifactSha256s.includes(basis.sourceArtifactSha256)) invalid(`${factLabel} source reference is unresolved`);
-      const decision = adjudicationPair(fact.adjudications, sha({ scenarioId, fact: basis }), `${factLabel}.adjudications`, ["entailed", "unsupported"]);
+      const decision = adjudicationPair(fact.adjudications, sha({ scenarioId, fact: basis }), binding.goldProtocolSha256, `${factLabel}.adjudications`, ["entailed", "unsupported"]);
       factCount += 1;
       if (decision !== "entailed") unsupportedFactCount += 1;
       if (decision === "entailed" && basis.novel) hasNovelEntailedFact = true;
@@ -181,7 +181,7 @@ export function evaluateIssueCorpusRun(corpus: unknown, value: unknown) {
       };
       if (seenJudgmentIds.has(basis.id)) invalid(`${judgmentLabel} duplicate judgment id`);
       seenJudgmentIds.add(basis.id);
-      if (adjudicationPair(judgment.adjudications, sha({ scenarioId, judgment: basis }), `${judgmentLabel}.adjudications`, ["accepted", "rejected"]) !== "accepted") {
+      if (adjudicationPair(judgment.adjudications, sha({ scenarioId, judgment: basis }), binding.goldProtocolSha256, `${judgmentLabel}.adjudications`, ["accepted", "rejected"]) !== "accepted") {
         invalid(`${judgmentLabel} was not independently accepted`);
       }
       units.get(metric)!.push({ predicted: basis.predictedPositive, gold: basis.goldPositive });
@@ -195,7 +195,7 @@ export function evaluateIssueCorpusRun(corpus: unknown, value: unknown) {
     const { auditReceiptSha256: _auditReceipt, adjudications: auditAdjudications, ...rawAuditBasis } = audit;
     const auditTarget = sha({ scenarioId, goldReceiptSha256: binding.goldReceiptSha256, audit: rawAuditBasis });
     if (digest(audit.auditReceiptSha256, `${label}.audit.auditReceiptSha256`) !== auditTarget) invalid(`${label} audit receipt mismatch`);
-    if (adjudicationPair(auditAdjudications, auditTarget, `${label}.audit.adjudications`, ["accepted", "rejected"]) !== "accepted") {
+    if (adjudicationPair(auditAdjudications, auditTarget, binding.goldProtocolSha256, `${label}.audit.adjudications`, ["accepted", "rejected"]) !== "accepted") {
       invalid(`${label} audit was not independently accepted`);
     }
     if (audit.schemaVersion !== "neondiff-issue-operation-audit/v1") invalid(`${label} audit schemaVersion`);
