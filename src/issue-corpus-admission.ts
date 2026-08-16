@@ -35,6 +35,18 @@ function identifier(value: unknown, label: string, pattern: RegExp): string {
   return result;
 }
 
+function gitBranch(value: unknown, label: string): string {
+  const result = text(value, label);
+  const components = result.split("/");
+  if (result === "@" || result.startsWith("-") || result.startsWith("/") || result.endsWith("/") ||
+      result.endsWith(".") || result.includes("//") || result.includes("..") || result.includes("@{") ||
+      /[\x00-\x20\x7f~^:?*\[\\]/.test(result) ||
+      components.some((component) => component.length === 0 || component.startsWith(".") || component.endsWith(".lock"))) {
+    return invalid(`${label} is not a valid Git branch name`);
+  }
+  return result;
+}
+
 function digest(value: unknown, label: string): string {
   const result = text(value, label);
   if (!SHA256.test(result)) return invalid(`${label} must be lowercase sha256`);
@@ -58,7 +70,7 @@ function parseScenario(value: unknown, index: number) {
   const repository = record(item.repository, `${label}.repository`, ["owner", "name", "defaultBranch", "headSha", "metadataSha256"]);
   const owner = identifier(repository.owner, `${label}.repository.owner`, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/);
   const name = identifier(repository.name, `${label}.repository.name`, /^[A-Za-z0-9._-]{1,100}$/);
-  const defaultBranch = identifier(repository.defaultBranch, `${label}.repository.defaultBranch`, /^(?!\/)(?!.*(?:\/\/|\.\.|@\{))[A-Za-z0-9._\/-]+(?<!\/)$/);
+  const defaultBranch = gitBranch(repository.defaultBranch, `${label}.repository.defaultBranch`);
   const headSha = text(repository.headSha, `${label}.repository.headSha`);
   if (!COMMIT.test(headSha)) invalid(`${label}.repository.headSha must be lowercase commit sha`);
   const issue = record(item.issue, `${label}.issue`, ["number", "nodeId", "url", "snapshotSha256"]);

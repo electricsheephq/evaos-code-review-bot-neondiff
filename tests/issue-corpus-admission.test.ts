@@ -71,6 +71,12 @@ describe("issue corpus admission", () => {
     expect(admitted.corpusSha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("admits valid Git branch names containing plus signs", () => {
+    const value: any = corpus();
+    value.scenarios[0].repository.defaultBranch = "feature/foo+bar";
+    expect(admitIssueCorpus(value).scenarioCount).toBe(60);
+  });
+
   it.each([
     ["unknown top-level field", (value: any) => { value.extra = true; }],
     ["unknown nested field", (value: any) => { value.scenarios[0].issue.extra = true; }],
