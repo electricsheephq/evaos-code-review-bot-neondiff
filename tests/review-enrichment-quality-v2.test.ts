@@ -17,6 +17,7 @@ import {
 import {
   assertPublicReviewOutputSafe,
   buildRepoProfilePromptSection,
+  PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW,
   publicReviewForbiddenProfileFragments,
   type ResolvedRepoProfile
 } from "../src/repo-policy.js";
@@ -185,22 +186,22 @@ describe("review and issue-enrichment quality v2", () => {
     expect(() => assertPublicReviewOutputSafe(
       "Check lossless ordering",
       publicReviewForbiddenProfileFragments(profile),
-      8
+      PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
     )).not.toThrow();
     expect(() => assertPublicReviewOutputSafe(
       "Check-lossless-ordering",
       publicReviewForbiddenProfileFragments(profile),
-      8
+      PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
     )).not.toThrow();
     expect(() => assertPublicReviewOutputSafe(
       "Check lossless ordering provenance and crash safe SQLite",
       publicReviewForbiddenProfileFragments(profile),
-      8
+      PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
     )).toThrow("public_review_config_leak_rejected");
     expect(() => assertPublicReviewOutputSafe(
       "Assistant messages with a null tool-call field now serialize without crashing; the diff adds direct regression coverage.",
       publicReviewForbiddenProfileFragments(profile),
-      8
+      PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
     )).not.toThrow();
     const canaryProfile: ResolvedRepoProfile = {
       ...profile,
@@ -209,12 +210,12 @@ describe("review and issue-enrichment quality v2", () => {
     expect(() => assertPublicReviewOutputSafe(
       "Tool-call/result grouping is unchanged for valid non-empty tool_calls lists; the modified branch only normalizes falsy values.",
       publicReviewForbiddenProfileFragments(canaryProfile),
-      8
+      PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
     )).not.toThrow();
     expect(() => assertPublicReviewOutputSafe(
       "session and profile isolation source coverage and fresh tail",
       publicReviewForbiddenProfileFragments(canaryProfile),
-      8
+      PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
     )).toThrow("public_review_config_leak_rejected");
     expect(() => assertPublicReviewOutputSafe(
       "Do not modify files",
