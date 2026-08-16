@@ -32,3 +32,7 @@ extension CanonicalSensitiveCookieRule {
 enum CanonicalSecretSafeLiterals {
     static let generated = ["NEONDIFF_GITHUB_APP_ID", "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH", "NEONDIFF_PROTECTED_CHECKOUT_ROOT", "NEONDIFF_LICENSE_KEY", "NEONDIFF_PROVIDER_API_KEY", "NEONDIFF_ALLOW_REMOTE_SMOKE", "missing_secret_env", "neondiff-openwiki-context-ab-v0.1", "neondiff-openwiki-docs-drift-v0.1"]
 }
+
+enum CanonicalSecretAlwaysSafeLiterals {
+    static let generated = ["source_token_count"]
+}
