@@ -1879,7 +1879,7 @@ describe("sticky enrichment comments", () => {
     }
   });
 
-  it("derives idempotency from the exact capped body and reposts meaningful cap changes", async () => {
+  it("derives idempotency from public model-backed output and ignores private suggestion cap changes", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-dry-run-to-live-"));
     try {
       const configPath = join(root, "config.json");
@@ -2003,9 +2003,10 @@ describe("sticky enrichment comments", () => {
         });
         expect(live.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
         expect(unchanged.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
-        expect(changedCap.summary).toMatchObject({ posted: 1, alreadyProcessed: 0, failed: 0 });
-        expect(posted.map((entry) => entry.issueNumber)).toEqual([32, 32]);
-        expect(posted[0]?.body).toContain("Suggested reviewers: first-reviewer.");
+        expect(changedCap.summary).toMatchObject({ posted: 0, alreadyProcessed: 1, failed: 0 });
+        expect(posted.map((entry) => entry.issueNumber)).toEqual([32]);
+        expect(posted[0]?.body).not.toContain("Suggested reviewers:");
+        expect(posted[0]?.body).not.toContain("first-reviewer");
         expect(posted[0]?.body).not.toContain("second-reviewer");
         expect(posted[0]?.body).toContain(`hash=${liveRecord?.bodyHash}`);
         expect(liveRecord).toMatchObject({
@@ -2015,9 +2016,7 @@ describe("sticky enrichment comments", () => {
           commentUrl: "https://github.test/owner/issue-repo/issues/32#issuecomment-32"
         });
         expect(liveRecord?.bodyHash).not.toBe(liveRecord?.analysisInputHash);
-        expect(posted[1]?.body).toContain("Suggested reviewers: first-reviewer, second-reviewer.");
-        expect(posted[1]?.body).toContain(`hash=${changedCapRecord?.bodyHash}`);
-        expect(changedCapRecord?.bodyHash).not.toBe(liveRecord?.bodyHash);
+        expect(changedCapRecord?.bodyHash).toBe(liveRecord?.bodyHash);
       } finally {
         state.close();
       }
@@ -2903,9 +2902,10 @@ describe("sticky enrichment comments", () => {
         expect(posts).toHaveLength(2);
         expect(posts[0]!.marker).toContain("issue=41");
         expect(posts[0]!.body).toContain("## evaOS issue enrichment");
-        expect(posts[0]!.body).toContain("Suggested labels: docs.");
-        expect(posts[0]!.body).not.toContain("Suggested labels: docs, security");
-        expect(posts[0]!.body).toContain("Suggested owners: none.");
+        expect(posts[0]!.body).toContain("### Current-main applicability");
+        expect(posts[0]!.body).toContain("### Evidence");
+        expect(posts[0]!.body).not.toContain("Suggested labels:");
+        expect(posts[0]!.body).not.toContain("Suggested owners:");
         expect(posts[0]!.body).not.toContain("issue-owner");
         expect(posts[0]!.body).not.toContain("incident-reviewer");
         expect(firstRecord).toMatchObject({
