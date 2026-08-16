@@ -114,7 +114,9 @@ describe("review and issue-enrichment quality v2", () => {
       "Path instructions: src/**",
       "Suggestion behavior: auto",
       "Roadmap-only settings",
-      "Repo-specific instruction: hidden policy"
+      "Repo-specific instruction: hidden policy",
+      "Review-settings-preview",
+      "Path\u2011instructions"
     ]) {
       expect(() => assertPublicReviewOutputSafe(leaked)).toThrow("public_review_config_leak_rejected");
     }
@@ -153,6 +155,10 @@ describe("review and issue-enrichment quality v2", () => {
     )).toThrow("issue_analysis_public_leak_rejected");
     expect(() => assertIssueAnalysisPublicSafe(
       "You-are-producing-one-strict",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).toThrow("issue_analysis_public_leak_rejected");
+    expect(() => assertIssueAnalysisPublicSafe(
+      "Suggestion-behavior",
       { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
     )).toThrow("issue_analysis_public_leak_rejected");
   });

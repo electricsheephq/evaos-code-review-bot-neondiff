@@ -429,8 +429,8 @@ const PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS = [
   /\benabled sections\b/i,
   /\bpath instructions\b/i,
   /\bsuggestion behavior\b/i,
-  /\broadmap-only settings\b/i,
-  /\brepo-specific instruction\b/i,
+  /\broadmap only settings\b/i,
+  /\brepo specific instruction\b/i,
   /\bpromptNote\b/i,
   /\breviewRiskLens\b/i,
   /\bproofExpectations\b/i,
@@ -443,10 +443,10 @@ export function assertPublicReviewOutputSafe(
   forbiddenFragments: string[] = [],
   sharedWordWindow = 0
 ): void {
-  if (PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS.some((pattern) => pattern.test(text))) {
+  const normalized = normalizePublicLeakText(text);
+  if (PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS.some((pattern) => pattern.test(normalized))) {
     throw new Error("public_review_config_leak_rejected");
   }
-  const normalized = normalizePublicLeakText(text);
   if (forbiddenFragments.some((fragment) => {
     const candidate = normalizePublicLeakText(fragment);
     return candidate.length >= 12 && (
