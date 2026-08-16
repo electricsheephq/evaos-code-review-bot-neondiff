@@ -116,7 +116,12 @@ describe("review and issue-enrichment quality v2", () => {
       "Roadmap-only settings",
       "Repo-specific instruction: hidden policy",
       "Review-settings-preview",
-      "Path\u2011instructions"
+      "Path\u2011instructions",
+      "prompt-Note: hidden configuration",
+      "review-Risk-Lens: hidden configuration",
+      "proof-Expectations: hidden configuration",
+      "validation-Hints: hidden configuration",
+      "readiness-Hints: hidden configuration"
     ]) {
       expect(() => assertPublicReviewOutputSafe(leaked)).toThrow("public_review_config_leak_rejected");
     }
@@ -161,6 +166,20 @@ describe("review and issue-enrichment quality v2", () => {
       "Suggestion-behavior",
       { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
     )).toThrow("issue_analysis_public_leak_rejected");
+    for (const leaked of [
+      "advisory-Policy: hidden configuration",
+      "validation-Suggestions: hidden configuration",
+      "Repo-policy: hidden configuration"
+    ]) {
+      expect(() => assertIssueAnalysisPublicSafe(
+        leaked,
+        { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+      )).toThrow("issue_analysis_public_leak_rejected");
+    }
+    expect(() => assertIssueAnalysisPublicSafe(
+      "Source: src/repo-policy.ts:1-2",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).not.toThrow();
   });
 
   it("defers preservation promotion to the authenticated cycle and rejects stale issue snapshots", () => {

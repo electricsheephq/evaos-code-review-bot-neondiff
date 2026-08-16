@@ -285,10 +285,9 @@ const ISSUE_ANALYSIS_TEXT_KEYS = [
 ] as const;
 const GENERIC_NEXT_GATE_PATTERN = /^(investigate|investigate further|review|review further|needs review|needs investigation|todo|tbd)[.!]?$/i;
 const PUBLIC_CONFIG_LEAK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
-  { label: "repo_policy_heading", pattern: /\brepo policy\b/i },
   { label: "review_settings_preview", pattern: /review settings preview/i },
-  { label: "advisory_policy_key", pattern: /\badvisoryPolicy\b/i },
-  { label: "validation_suggestions_key", pattern: /\bvalidationSuggestions\b/i },
+  { label: "advisory_policy_key", pattern: /\badvisory policy\b/i },
+  { label: "validation_suggestions_key", pattern: /\bvalidation suggestions\b/i },
   { label: "enabled_sections", pattern: /\benabled sections\b/i },
   { label: "path_instructions", pattern: /\bpath instructions\b/i },
   { label: "suggestion_behavior", pattern: /\bsuggestion behavior\b/i },
@@ -688,9 +687,10 @@ export function findIssueAnalysisPublicLeaks(
   repoPolicy: IssueAnalysisPolicyContext
 ): string[] {
   const normalizedMarkerText = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  const leaks = PUBLIC_CONFIG_LEAK_PATTERNS
+  const leaks = hasRepoPolicyHeading(text) ? ["repo_policy_heading"] : [];
+  leaks.push(...PUBLIC_CONFIG_LEAK_PATTERNS
     .filter((entry) => entry.pattern.test(normalizedMarkerText))
-    .map((entry) => entry.label);
+    .map((entry) => entry.label));
   const normalizedText = normalizeComparableText(text);
   const policySources = [
     repoPolicy.advisoryPolicy ?? "",
@@ -707,6 +707,10 @@ export function findIssueAnalysisPublicLeaks(
     }
   }
   return [...new Set(leaks)];
+}
+
+function hasRepoPolicyHeading(text: string): boolean {
+  return /^\s*(?:#{1,6}\s*)?repo[^a-z0-9\r\n]+policy(?:\s*:\s*.*)?\s*$/imu.test(text);
 }
 
 function hasSharedPolicyFragment(text: string, policy: string, wordCount: number): boolean {

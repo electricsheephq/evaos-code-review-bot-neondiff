@@ -431,11 +431,11 @@ const PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS = [
   /\bsuggestion behavior\b/i,
   /\broadmap only settings\b/i,
   /\brepo specific instruction\b/i,
-  /\bpromptNote\b/i,
-  /\breviewRiskLens\b/i,
-  /\bproofExpectations\b/i,
-  /\bvalidationHints\b/i,
-  /\breadinessHints\b/i
+  /\bprompt note\b/i,
+  /\breview risk lens\b/i,
+  /\bproof expectations\b/i,
+  /\bvalidation hints\b/i,
+  /\breadiness hints\b/i
 ] as const;
 
 export function assertPublicReviewOutputSafe(
