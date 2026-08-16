@@ -477,10 +477,13 @@ describe("walkthrough comment rendering", () => {
     expect(walkthrough.body).toContain("### Maintainer Analysis");
     for (const forbidden of [
       "Provider:",
+      "Codex CLI (existing OAuth session)",
       "codex-cli-oauth",
+      "codex-cli",
       "gpt-5.6-sol",
       "Suggested labels:",
       "Suggested reviewers:",
+      "Tosko4",
       "Labels and reviewers are suggestions only"
     ]) {
       expect(walkthrough.body).not.toContain(forbidden);
