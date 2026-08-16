@@ -58,7 +58,9 @@ const REVIEW_INTERNAL_PUBLIC_FRAGMENTS = [
   "Do not call Bash or shell commands",
   "Only inspect the checkout and the diff",
   "Return JSON only",
+  "If you include category, use one of",
   "The deterministic wrapper treats category as a hint only",
+  "Use P0/P1 only for validated correctness",
   "Every finding must point at a RIGHT-side line"
 ] as const;
 
@@ -205,16 +207,15 @@ export function buildReviewPrompt(input: {
     })
     .join("\n\n");
 
-  return [
+  const promptPrefix = [
     ...REVIEW_INTERNAL_PROMPT_LINES,
     "",
     `Repository: ${input.repo}`,
     `Pull request: #${input.pull.number} ${input.pull.title}`,
     `Head SHA: ${input.pull.head.sha}`,
-    "",
-    ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile, {
-      nonProfileTokenEstimate: estimateReviewPromptNonProfileTokens(input)
-    }), ""] : []),
+    ""
+  ];
+  const promptSuffix = [
     ...(input.skillPackContextPacket ? [buildSkillPackContextPromptSection(input.skillPackContextPacket), ""] : []),
     ...(input.reviewLensPacket ? [buildReviewLensPromptSection(input.reviewLensPacket), ""] : []),
     ...(input.repoMemoryPacket ? [buildRepoMemoryPromptSection(input.repoMemoryPacket), ""] : []),
@@ -226,6 +227,15 @@ export function buildReviewPrompt(input: {
     "",
     "Diff:",
     patches
+  ];
+  const nonProfileTokenEstimate = Math.max(
+    1,
+    Math.ceil(Buffer.byteLength([...promptPrefix, ...promptSuffix].join("\n"), "utf8") / 4)
+  );
+  return [
+    ...promptPrefix,
+    ...(input.repoProfile ? [buildRepoProfilePromptSection(input.repoProfile, { nonProfileTokenEstimate }), ""] : []),
+    ...promptSuffix
   ].join("\n");
 }
 
@@ -454,22 +464,6 @@ function boundedSummaryText(value: unknown, label: string): string {
   const text = redactSecrets(value.trim());
   if (text.length > 1_000) throw new Error(`review_summary_schema_invalid: ${label} exceeds 1000 characters`);
   return text;
-}
-
-function estimateReviewPromptNonProfileTokens(input: Parameters<typeof buildReviewPrompt>[0]): number {
-  const content = [
-    input.repo,
-    input.pull.title,
-    input.pull.body ?? "",
-    ...input.files.flatMap((file) => [file.filename, file.patch ?? ""]),
-    input.repoMemoryPacket?.markdown ?? "",
-    input.repoWikiContextPacket?.markdown ?? "",
-    input.gitnexusContextPacket?.markdown ?? "",
-    input.githubRelatedContextPacket?.markdown ?? "",
-    input.skillPackContextPacket?.markdown ?? "",
-    input.reviewLensPacket?.markdown ?? ""
-  ].join("\n");
-  return Math.max(1, Math.ceil(Buffer.byteLength(content, "utf8") / 4));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

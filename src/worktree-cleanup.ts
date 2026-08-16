@@ -222,15 +222,28 @@ export function cleanupStaleReviewWorktrees(input: CleanupStaleReviewWorktreesIn
 
 function parseOwnedWorktreeName(name: string): { safeRepo: string; headSha: string } | undefined {
   const pullSeparator = name.lastIndexOf("__pr-");
-  if (pullSeparator <= 0) return undefined;
-  const safeRepo = name.slice(0, pullSeparator);
-  const pullAndHead = name.slice(pullSeparator + "__pr-".length);
-  const headSeparator = pullAndHead.indexOf("__");
-  if (headSeparator <= 0 || pullAndHead.indexOf("__", headSeparator + 2) !== -1) return undefined;
-  const pullNumber = pullAndHead.slice(0, headSeparator);
-  const headSha = pullAndHead.slice(headSeparator + 2);
-  if (!/^[A-Za-z0-9_.-]+$/.test(safeRepo)) return undefined;
-  if (!/^[1-9][0-9]*$/.test(pullNumber)) return undefined;
+  if (pullSeparator > 0) {
+    const safeRepo = name.slice(0, pullSeparator);
+    const pullAndHead = name.slice(pullSeparator + "__pr-".length);
+    const headSeparator = pullAndHead.indexOf("__");
+    if (headSeparator > 0 && pullAndHead.indexOf("__", headSeparator + 2) === -1) {
+      const pullNumber = pullAndHead.slice(0, headSeparator);
+      const headSha = pullAndHead.slice(headSeparator + 2);
+      if (/^[A-Za-z0-9_.-]+$/.test(safeRepo) && /^[1-9][0-9]*$/.test(pullNumber) &&
+        /^[0-9a-fA-F]{12}$/.test(headSha)) {
+        return { safeRepo, headSha };
+      }
+    }
+  }
+  const branchSeparator = name.lastIndexOf("__branch-");
+  if (branchSeparator <= 0) return undefined;
+  const safeRepo = name.slice(0, branchSeparator);
+  const branchAndHead = name.slice(branchSeparator + "__branch-".length);
+  const headSeparator = branchAndHead.lastIndexOf("__");
+  if (headSeparator <= 0) return undefined;
+  const safeBranch = branchAndHead.slice(0, headSeparator);
+  const headSha = branchAndHead.slice(headSeparator + 2);
+  if (!/^[A-Za-z0-9_.-]+$/.test(safeRepo) || !/^[A-Za-z0-9_.-]+$/.test(safeBranch)) return undefined;
   if (!/^[0-9a-fA-F]{12}$/.test(headSha)) return undefined;
   return { safeRepo, headSha };
 }

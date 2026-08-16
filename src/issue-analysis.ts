@@ -432,6 +432,10 @@ const ISSUE_ANALYSIS_INTERNAL_PROMPT_LINES = [
   "Return only the JSON object required by the supplied schema."
 ] as const;
 
+const ISSUE_ANALYSIS_INTERNAL_PUBLIC_FRAGMENTS = [
+  "You are producing one strict"
+] as const;
+
 export function buildIssueAnalysisPrompt(input: {
   repo: string;
   issue: GitHubRelatedIssueOrPull;
@@ -791,17 +795,19 @@ export function findIssueAnalysisPublicLeaks(
     .filter((entry) => containsCanonicalPublicConfigMarker(text, entry.marker))
     .map((entry) => entry.label));
   const normalizedText = normalizeComparableText(text);
-  const policySources = [
-    repoPolicy.advisoryPolicy ?? "",
-    ...repoPolicy.validationSuggestions,
-    ...ISSUE_ANALYSIS_INTERNAL_PROMPT_LINES
+  const policySources: Array<{ source: string; sharedWordWindow: number }> = [
+    { source: repoPolicy.advisoryPolicy ?? "", sharedWordWindow: 4 },
+    ...repoPolicy.validationSuggestions.map((source) => ({ source, sharedWordWindow: 4 })),
+    ...ISSUE_ANALYSIS_INTERNAL_PUBLIC_FRAGMENTS.map((source) => ({ source, sharedWordWindow: 4 })),
+    ...ISSUE_ANALYSIS_INTERNAL_PROMPT_LINES.map((source) => ({ source, sharedWordWindow: 8 }))
   ];
-  for (const [index, source] of policySources.entries()) {
+  for (const [index, entry] of policySources.entries()) {
+    const { source, sharedWordWindow } = entry;
     const normalizedSource = normalizeComparableText(source);
     if (normalizedSource.length >= 20 && normalizedText.includes(normalizedSource)) {
       leaks.push(`verbatim_policy_${index}`);
     }
-    if (hasSharedPolicyFragment(text, source, 4)) {
+    if (hasSharedPolicyFragment(text, source, sharedWordWindow)) {
       leaks.push(`policy_fragment_${index}`);
     }
   }

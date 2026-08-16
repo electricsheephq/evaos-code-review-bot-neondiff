@@ -4,6 +4,7 @@ import {
   buildIssueAnalysisEnrichmentComment,
   buildIssueEnrichmentComment,
   buildIssueEnrichmentDryRunOutput,
+  ENRICHMENT_MARKER_PREFIX,
   ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION,
   postEnrichmentComment,
   type EnrichmentComment,
@@ -438,6 +439,9 @@ async function buildIssueEvidenceContext(input: {
   const rawComments = input.github.listIssueComments
     ? await input.github.listIssueComments(input.repo, input.issue.number)
     : [];
+  const externalComments = rawComments.filter((comment) =>
+    !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
+  );
   const rawTimeline = input.github.listIssueLabelEvents
     ? await input.github.listIssueLabelEvents(input.repo, input.issue.number)
     : [];
@@ -460,7 +464,7 @@ async function buildIssueEvidenceContext(input: {
   }
   return {
     repository: { defaultBranch: input.defaultBranch, headSha: input.headSha },
-    comments: rawComments.slice(0, 50).map((comment) => ({
+    comments: externalComments.slice(0, 50).map((comment) => ({
       id: comment.id,
       url: boundedIssueContext(redactSecrets(comment.html_url ?? ""), 1_000),
       author: boundedIssueContext(redactSecrets(comment.user?.login ?? ""), 200),
@@ -476,7 +480,7 @@ async function buildIssueEvidenceContext(input: {
     })),
     linkedItems,
     truncation: {
-      comments: rawComments.length > 50,
+      comments: externalComments.length > 50,
       timeline: rawTimeline.length > 200,
       linkedItems: linkedNumbers.length > 20
     }

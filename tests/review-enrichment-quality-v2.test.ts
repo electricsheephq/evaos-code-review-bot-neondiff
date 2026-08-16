@@ -20,7 +20,7 @@ import {
   publicReviewForbiddenProfileFragments,
   type ResolvedRepoProfile
 } from "../src/repo-policy.js";
-import { parseZCodeReviewOutput, reviewPromptForbiddenFragments } from "../src/zcode.js";
+import { buildReviewPrompt, parseZCodeReviewOutput, reviewPromptForbiddenFragments } from "../src/zcode.js";
 
 const v2Analysis: IssueAnalysis = {
   classification: "data-integrity",
@@ -89,6 +89,27 @@ describe("review and issue-enrichment quality v2", () => {
       { ...profile, reviewRiskLens: "x".repeat(240) },
       { nonProfileTokenEstimate: 100 }
     )).toThrow("review_risk_lens_budget_exceeded");
+  });
+
+  it("budgets a risk lens against the exact rendered non-profile prompt", () => {
+    expect(() => buildReviewPrompt({
+      repo: "owner/repo",
+      pull: {
+        number: 1,
+        title: "x",
+        draft: false,
+        head: { sha: "a".repeat(40), ref: "feature/x", repo: { full_name: "owner/repo" } },
+        base: { sha: "b".repeat(40), ref: "main", repo: { full_name: "owner/repo" } },
+        html_url: "https://github.test/owner/repo/pull/1"
+      },
+      files: [],
+      repoProfile: {
+        repo: "owner/repo",
+        canonicalRepo: "owner/repo",
+        source: "explicit",
+        reviewRiskLens: "x"
+      }
+    })).not.toThrow();
   });
 
   it("preserves a strict structured model summary", () => {
@@ -179,6 +200,14 @@ describe("review and issue-enrichment quality v2", () => {
       "Do-not-modify-files",
       reviewPromptForbiddenFragments()
     )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertPublicReviewOutputSafe(
+      "Use P0/P1 only for validated correctness",
+      reviewPromptForbiddenFragments()
+    )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertIssueAnalysisPublicSafe(
+      "No reproduction or invariant evidence exists at the inspected main SHA.",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).not.toThrow();
     expect(() => assertIssueAnalysisPublicSafe(
       "You are producing one strict",
       { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }

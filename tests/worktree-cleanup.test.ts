@@ -46,6 +46,23 @@ describe("stale review worktree cleanup", () => {
     expect(existsSync(fixture.mirrorPath)).toBe(true);
   });
 
+  it("removes a stale clean issue-analysis branch worktree through its mirror", () => {
+    const fixture = createFixture(roots, 1);
+    const branchPath = join(
+      fixture.worktreesRoot,
+      `${SAFE_REPO}__branch-feature__issue-analysis__${fixture.headShas[0]!.slice(0, 12)}`
+    );
+    execFileSync("git", ["--git-dir", fixture.mirrorPath, "worktree", "add", "--detach", branchPath, fixture.headShas[0]!], { stdio: "ignore" });
+    makeStale(branchPath);
+
+    const result = cleanupStaleReviewWorktrees(baseInput(fixture));
+
+    expect(result.outcomes).toContainEqual(
+      expect.objectContaining({ path: branchPath, status: "deleted", reason: "stale_clean_owned" })
+    );
+    expect(existsSync(branchPath)).toBe(false);
+  });
+
   it("preserves recent and dirty worktrees", () => {
     const fixture = createFixture(roots, 2);
     makeStale(fixture.paths[1]);
