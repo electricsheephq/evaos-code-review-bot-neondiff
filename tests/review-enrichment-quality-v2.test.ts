@@ -121,7 +121,18 @@ describe("review and issue-enrichment quality v2", () => {
       "review-Risk-Lens: hidden configuration",
       "proof-Expectations: hidden configuration",
       "validation-Hints: hidden configuration",
-      "readiness-Hints: hidden configuration"
+      "readiness-Hints: hidden configuration",
+      "promptNote: hidden configuration",
+      "reviewRiskLens: hidden configuration",
+      "proofExpectations: hidden configuration",
+      "validationHints: hidden configuration",
+      "readinessHints: hidden configuration",
+      "reviewSettingsPreview: hidden configuration",
+      "enabledSections: hidden configuration",
+      "pathInstructions: hidden configuration",
+      "suggestionBehavior: hidden configuration",
+      "roadmapOnlySettings: hidden configuration",
+      "repoSpecificInstruction: hidden configuration"
     ]) {
       expect(() => assertPublicReviewOutputSafe(leaked)).toThrow("public_review_config_leak_rejected");
     }
@@ -169,7 +180,18 @@ describe("review and issue-enrichment quality v2", () => {
     for (const leaked of [
       "advisory-Policy: hidden configuration",
       "validation-Suggestions: hidden configuration",
-      "Repo-policy: hidden configuration"
+      "Repo-policy: hidden configuration",
+      "repoPolicy: hidden configuration",
+      "advisoryPolicy: hidden configuration",
+      "validationSuggestions: hidden configuration",
+      "reviewSettingsPreview: hidden configuration",
+      "enabledSections: hidden configuration",
+      "pathInstructions: hidden configuration",
+      "suggestionBehavior: hidden configuration",
+      "roadmapOnlySettings: hidden configuration",
+      "agentStartPacket: hidden configuration",
+      "buildBorrowBuyScan: hidden configuration",
+      "contextSourceTaxonomy: hidden configuration"
     ]) {
       expect(() => assertIssueAnalysisPublicSafe(
         leaked,

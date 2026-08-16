@@ -459,7 +459,11 @@ export function assertPublicReviewOutputSafe(
 }
 
 function normalizePublicLeakText(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function hasSharedForbiddenWordWindow(text: string, forbidden: string, wordCount: number): boolean {

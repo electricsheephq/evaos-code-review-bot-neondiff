@@ -686,7 +686,11 @@ export function findIssueAnalysisPublicLeaks(
   text: string,
   repoPolicy: IssueAnalysisPolicyContext
 ): string[] {
-  const normalizedMarkerText = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const normalizedMarkerText = text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
   const leaks = hasRepoPolicyHeading(text) ? ["repo_policy_heading"] : [];
   leaks.push(...PUBLIC_CONFIG_LEAK_PATTERNS
     .filter((entry) => entry.pattern.test(normalizedMarkerText))
@@ -710,7 +714,8 @@ export function findIssueAnalysisPublicLeaks(
 }
 
 function hasRepoPolicyHeading(text: string): boolean {
-  return /^\s*(?:#{1,6}\s*)?repo[^a-z0-9\r\n]+policy(?:\s*:\s*.*)?\s*$/imu.test(text);
+  return /^\s*(?:#{1,6}\s*)?repo[^a-z0-9\r\n]+policy(?:\s*:\s*.*)?\s*$/imu.test(text) ||
+    /^\s*(?:#{1,6}\s*)?[rR]epoPolicy(?:\s*:\s*.*)?\s*$/mu.test(text);
 }
 
 function hasSharedPolicyFragment(text: string, policy: string, wordCount: number): boolean {
