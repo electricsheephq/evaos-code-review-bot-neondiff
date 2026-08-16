@@ -5,7 +5,7 @@ import { REVIEW_FINDINGS_JSON_SCHEMA } from "./findings-schema.js";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
-import type { ZCodeReviewResult } from "./zcode.js";
+import { parseReviewModelSummary, type ZCodeReviewResult } from "./zcode.js";
 
 export type CodexReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -53,6 +53,7 @@ const CODEX_ENV_ALLOWLIST = [
 
 export const CODEX_REVIEW_FINDINGS_JSON_SCHEMA = {
   ...REVIEW_FINDINGS_JSON_SCHEMA,
+  required: ["findings", "summary"],
   properties: {
     findings: {
       ...REVIEW_FINDINGS_JSON_SCHEMA.properties.findings,
@@ -76,6 +77,18 @@ export const CODEX_REVIEW_FINDINGS_JSON_SCHEMA = {
           },
           why_this_matters: { type: ["string", "null"] }
         }
+      }
+    },
+    summary: {
+      type: "object",
+      additionalProperties: false,
+      required: ["changedBehavior", "invariants", "evidence", "limitations", "noFindingRationale"],
+      properties: {
+        changedBehavior: { type: "array", maxItems: 12, items: { type: "string", minLength: 1, maxLength: 1_000 } },
+        invariants: { type: "array", maxItems: 12, items: { type: "string", minLength: 1, maxLength: 1_000 } },
+        evidence: { type: "array", maxItems: 12, items: { type: "string", minLength: 1, maxLength: 1_000 } },
+        limitations: { type: "array", minItems: 1, maxItems: 12, items: { type: "string", minLength: 1, maxLength: 1_000 } },
+        noFindingRationale: { type: "string", minLength: 1, maxLength: 1_000 }
       }
     }
   }
@@ -144,11 +157,12 @@ export async function runCodexReview(input: {
       if (dropped.length > 0) {
         throw new Error(`${dropped.length} finding(s) failed NeonDiff validation`);
       }
-      return findings;
+      return { findings, summary: parseReviewModelSummary(parsed, findings.length) };
     }
   }, dependencies);
   return {
-    findings: result.value,
+    findings: result.value.findings,
+    summary: result.value.summary,
     droppedFromSchema: [],
     rawResponse: result.rawResponse,
     attempts: 1,

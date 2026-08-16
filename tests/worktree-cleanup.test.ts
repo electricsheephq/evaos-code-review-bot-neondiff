@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfigFromObject } from "../src/config.js";
+import { branchWorktreeName } from "../src/git.js";
 import {
   cleanupStaleReviewWorktrees,
   probeOpenReviewWorktreePaths,
@@ -44,6 +45,24 @@ describe("stale review worktree cleanup", () => {
     ]);
     expect(existsSync(fixture.paths[0])).toBe(false);
     expect(existsSync(fixture.mirrorPath)).toBe(true);
+  });
+
+  it("removes a stale clean issue-analysis branch worktree through its mirror", () => {
+    const fixture = createFixture(roots, 1);
+    const branchPath = join(fixture.worktreesRoot, branchWorktreeName(
+      REPO,
+      "feature__pr-123",
+      fixture.headShas[0]!
+    ));
+    execFileSync("git", ["--git-dir", fixture.mirrorPath, "worktree", "add", "--detach", branchPath, fixture.headShas[0]!], { stdio: "ignore" });
+    makeStale(branchPath);
+
+    const result = cleanupStaleReviewWorktrees(baseInput(fixture));
+
+    expect(result.outcomes).toContainEqual(
+      expect.objectContaining({ path: branchPath, status: "deleted", reason: "stale_clean_owned" })
+    );
+    expect(existsSync(branchPath)).toBe(false);
   });
 
   it("preserves recent and dirty worktrees", () => {

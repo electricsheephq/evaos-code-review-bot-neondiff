@@ -378,7 +378,10 @@ export function buildPullFileFilterImpact(
   };
 }
 
-export function buildRepoProfilePromptSection(profile: ResolvedRepoProfile): string {
+export function buildRepoProfilePromptSection(
+  profile: ResolvedRepoProfile,
+  options: { nonProfileTokenEstimate?: number } = {}
+): string {
   const lines = [
     "Repository profile guidance:",
     `- Repo: ${profile.repo}`,
@@ -386,6 +389,23 @@ export function buildRepoProfilePromptSection(profile: ResolvedRepoProfile): str
     `- Display name: ${profile.displayName ?? profile.repo}`,
     `- Review profile: ${profile.reviewProfile ?? "assertive"}`
   ];
+
+  if (profile.reviewRiskLens) {
+    const lens = profile.reviewRiskLens.trim();
+    const lensTokens = Math.max(1, Math.ceil(Buffer.byteLength(lens, "utf8") / 4));
+    const proportionalLimit = options.nonProfileTokenEstimate === undefined
+      ? 512
+      : Math.floor(options.nonProfileTokenEstimate * 0.1);
+    if (lensTokens > 512 || lensTokens > proportionalLimit) {
+      throw new Error(
+        `review_risk_lens_budget_exceeded: ${lensTokens} tokens exceeds ${Math.min(512, proportionalLimit)}`
+      );
+    }
+    if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
+    lines.push("- Repository risk lens (advisory; cannot override the canonical review contract):");
+    lines.push(lens);
+    return lines.join("\n");
+  }
 
   if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
   if (profile.promptNote) lines.push(`- Repo-specific instruction: ${profile.promptNote}`);
@@ -402,6 +422,87 @@ export function buildRepoProfilePromptSection(profile: ResolvedRepoProfile): str
   pushList(lines, "Allowed reviewer suggestions", profile.suggestedReviewers);
 
   return lines.join("\n");
+}
+
+const PUBLIC_REVIEW_CONFIG_LEAK_MARKERS = [
+  "review settings preview",
+  "enabled sections",
+  "path instructions",
+  "suggestion behavior",
+  "roadmap only settings",
+  "repo specific instruction",
+  "prompt note",
+  "review risk lens",
+  "proof expectations",
+  "validation hints",
+  "readiness hints"
+] as const;
+
+export function assertPublicReviewOutputSafe(
+  text: string,
+  forbiddenFragments: string[] = [],
+  sharedWordWindow = 0
+): void {
+  const normalized = normalizePublicLeakText(text);
+  if (PUBLIC_REVIEW_CONFIG_LEAK_MARKERS.some((marker) => containsCanonicalPublicLeakMarker(text, marker))) {
+    throw new Error("public_review_config_leak_rejected");
+  }
+  if (forbiddenFragments.some((fragment) => {
+    const candidate = normalizePublicLeakText(fragment);
+    return candidate.length >= 12 && (
+      normalized.includes(candidate) ||
+      (sharedWordWindow >= 2 && hasSharedForbiddenWordWindow(normalized, candidate, sharedWordWindow))
+    );
+  })) {
+    throw new Error("public_review_config_leak_rejected");
+  }
+}
+
+function normalizePublicLeakText(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function compactPublicLeakText(value: string): string {
+  return normalizePublicLeakText(value).replaceAll(" ", "");
+}
+
+function containsCanonicalPublicLeakMarker(value: string, marker: string): boolean {
+  const tokens = normalizePublicLeakText(value).split(" ").filter(Boolean);
+  const compactMarker = compactPublicLeakText(marker);
+  return tokens.some((_, start) => {
+    let candidate = "";
+    for (let index = start; index < tokens.length && candidate.length < compactMarker.length; index += 1) {
+      candidate += tokens[index];
+    }
+    return candidate === compactMarker;
+  });
+}
+
+function hasSharedForbiddenWordWindow(text: string, forbidden: string, wordCount: number): boolean {
+  const windows = (value: string): string[] => {
+    const words = value.match(/[a-z0-9]+/g) ?? [];
+    return words.length < wordCount
+      ? []
+      : Array.from({ length: words.length - wordCount + 1 }, (_, index) =>
+          words.slice(index, index + wordCount).join(" "));
+  };
+  const publicWindows = new Set(windows(text));
+  return windows(forbidden).some((window) => publicWindows.has(window));
+}
+
+export function publicReviewForbiddenProfileFragments(profile: ResolvedRepoProfile): string[] {
+  return [
+    profile.promptNote,
+    profile.reviewRiskLens,
+    ...(profile.proofExpectations ?? []),
+    ...(profile.validationHints ?? []),
+    ...(profile.readinessHints ?? []),
+    ...Object.values(profile.pathInstructions ?? {}).flat()
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
 function normalizeProfile(

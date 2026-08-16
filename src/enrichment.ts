@@ -41,7 +41,7 @@ export interface EnrichmentConfig {
 
 export type EnrichmentComment = PlanEnrichmentComment;
 export type EnrichmentCommentPostResult = PlanEnrichmentCommentPostResult;
-export const ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION = 2;
+export const ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION = 3;
 type IssueEnrichmentSkipReason =
   | "stale_issue_closed"
   | "issue_is_pull_request"
@@ -333,6 +333,19 @@ export function buildIssueAnalysisEnrichmentComment(input: {
   const impactHeading = input.repo.toLowerCase() === "electricsheephq/lcm-x"
     ? "### LCM-X impact"
     : "### Repository impact";
+  const verifiedFacts = input.analysis.verifiedFacts.flatMap((fact) => [
+    `- ${formatPublicText(fact.claim, input.publicConfidencePolicy)}`,
+    `  - Source: \`${formatInlinePublicText(fact.sourceRef.path, input.publicConfidencePolicy)}:${fact.sourceRef.startLine}-${fact.sourceRef.endLine}\` at \`${fact.sourceRef.sha.slice(0, 12)}\``
+  ]);
+  const relatedWork = input.analysis.relatedWork.length > 0
+    ? input.analysis.relatedWork.map((item) => `- ${formatPublicText(item, input.publicConfidencePolicy)}`)
+    : ["- No verified duplicate or related work identified."];
+  const limitations = input.analysis.limitations.map((item) =>
+    `- ${formatPublicText(item, input.publicConfidencePolicy)}`
+  );
+  const labelProposals = input.analysis.labelProposals.length > 0
+    ? input.analysis.labelProposals.map((item) => `- \`${formatInlinePublicText(item, input.publicConfidencePolicy)}\``)
+    : ["- None."];
   const visibleBody = [
     "## evaOS issue enrichment",
     "",
@@ -348,9 +361,9 @@ export function buildIssueAnalysisEnrichmentComment(input: {
     "",
     formatPublicText(input.analysis.currentMainApplicability, input.publicConfidencePolicy),
     "",
-    "### Evidence",
+    "### Verified facts",
     "",
-    formatPublicText(input.analysis.evidence, input.publicConfidencePolicy),
+    ...verifiedFacts,
     "",
     "### Reproduction or invariant gap",
     "",
@@ -358,7 +371,7 @@ export function buildIssueAnalysisEnrichmentComment(input: {
     "",
     "### Duplicate or related work",
     "",
-    formatPublicText(input.analysis.relatedWork, input.publicConfidencePolicy),
+    ...relatedWork,
     "",
     "### Migration disposition",
     "",
@@ -367,6 +380,14 @@ export function buildIssueAnalysisEnrichmentComment(input: {
     "### Next gate",
     "",
     formatPublicText(input.analysis.nextGate, input.publicConfidencePolicy),
+    "",
+    "### Limitations",
+    "",
+    ...limitations,
+    "",
+    "### Proposed labels",
+    "",
+    ...labelProposals,
     "",
     "Suggestions only. No labels, owners, reviewers, approvals, merges, or roadmap fields were changed by this bot."
   ].join("\n");

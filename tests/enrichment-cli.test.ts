@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -6,19 +6,29 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ReviewStateStore } from "../src/state.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 let testPrivateKeyPem: string | undefined;
+let mockSourceRepositoryRoot: string | undefined;
 
 describe("build-enrichment-comment issue CLI", () => {
   const roots: string[] = [];
 
+  beforeAll(() => {
+    mockSourceRepositoryRoot = createMockSourceRepository();
+  });
+
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  afterAll(() => {
+    if (mockSourceRepositoryRoot) rmSync(mockSourceRepositoryRoot, { recursive: true, force: true });
+    mockSourceRepositoryRoot = undefined;
   });
 
   it("writes JSON and Markdown for open issue dry runs", async () => {
@@ -489,6 +499,29 @@ describe("build-enrichment-comment issue CLI", () => {
       }));
       expect(requests.some((request) => request.path === "/app/installations/123/access_tokens")).toBe(false);
       expect(requests.some((request) => request.method === "POST" && request.path.includes("/comments"))).toBe(false);
+    });
+  });
+
+  it("lets selected upstream-intake reach authenticated promotion instead of failing preview", async () => {
+    await withMockGitHub(async ({ apiBaseUrl, requests }) => {
+      const root = createRoot(roots);
+      const configPath = writeIssueRunConfig(root, apiBaseUrl);
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      config.issueEnrichment.repos["owner/issue-repo"].promotionMaintainers = [{
+        login: "Tosko4",
+        validFrom: "2026-08-01T00:00:00Z",
+        validUntil: "2026-09-01T00:00:00Z"
+      }];
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+      const { stdout } = await runCli([
+        "issue-enrichment-run", "--config", configPath,
+        "--repo", "owner/issue-repo", "--issue", "21", "--dry-run", "true"
+      ]);
+
+      expect(JSON.parse(stdout).summary).toMatchObject({ wouldComment: 1, skipped: 0 });
+      expect(requests.some((request) => request.path.endsWith("/issues/21/events?per_page=100&page=1"))).toBe(true);
+      expect(requests.some((request) => request.path.endsWith("/collaborators/Tosko4/permission"))).toBe(true);
     });
   });
 
@@ -1005,7 +1038,9 @@ describe("build-enrichment-comment issue CLI", () => {
       const commentGets = requests.filter((request) => request.method === "GET" && request.path === "/repos/owner/issue-repo/issues/17/comments?per_page=100&page=1");
       expect(commentPosts).toHaveLength(1);
       expect(commentPatches).toHaveLength(1);
-      expect(commentGets).toHaveLength(2);
+      // Each live analysis reads issue comments for evidence, while the first and
+      // forced runs also read comments again to upsert the sticky bot comment.
+      expect(commentGets).toHaveLength(5);
       const state = new ReviewStateStore(join(root, "state.sqlite"));
       try {
         expect(state.getIssueEnrichmentRecord("owner/issue-repo", 17)).toMatchObject({
@@ -1222,9 +1257,17 @@ function writeFixtureCodexCli(root: string): string {
   const path = join(root, "fixture-codex.cjs");
   writeFileSync(path, `#!/usr/bin/env node
 const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
 const args = process.argv.slice(2);
 const outputIndex = args.indexOf("--output-last-message");
 if (outputIndex < 0 || !args[outputIndex + 1]) process.exit(2);
+const outputPath = args[outputIndex + 1];
+if (outputPath.includes("fact-adjudication")) {
+  fs.writeFileSync(outputPath, JSON.stringify({
+    facts: [{ index: 0, entailed: true, rationale: "The cited opening brace directly supports the bounded claim." }]
+  }));
+  process.exit(0);
+}
 const result = {
   classification: "needs-repro",
   priority: "P3",
@@ -1232,13 +1275,26 @@ const result = {
   confidence: "needs-repro",
   repositoryImpact: "The open issue concerns acceptance criteria and owner evidence on the selected repository path.",
   currentMainApplicability: "Current-main applicability is not established by the supplied issue report.",
-  evidence: "The selected open issue records acceptance criteria and an owner but no execution result.",
+  verifiedFacts: [{
+    claim: "The inspected package.json begins with an opening brace.",
+    sourceRef: {
+      kind: "source",
+      repo: "owner/issue-repo",
+      sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      path: "package.json",
+      startLine: 1,
+      endLine: 1,
+      excerpt: "{"
+    }
+  }],
   reproductionOrInvariantGap: "Attach a focused current-main reproduction or name the mandatory invariant.",
-  relatedWork: "Inspect only issue links explicitly present in the selected report.",
+  relatedWork: ["Inspect only issue links explicitly present in the selected report."],
   migrationDisposition: "needs-repro",
-  nextGate: "Run the smallest supported-path reproduction and record its result on the issue."
+  nextGate: "Run the smallest supported-path reproduction and record its result on the issue.",
+  limitations: ["The analysis did not execute repository code or a runtime reproduction."],
+  labelProposals: []
 };
-fs.writeFileSync(args[outputIndex + 1], JSON.stringify(result));
+fs.writeFileSync(outputPath, JSON.stringify(result));
 `);
   chmodSync(path, 0o700);
   return path;
@@ -1328,6 +1384,19 @@ function routeMockGitHub(
 ): void {
   if (
     request.method === "GET" &&
+    (request.url === "/repos/owner/issue-repo" || request.url === "/repos/owner/second-issue-repo")
+  ) {
+    if (!mockSourceRepositoryRoot) throw new Error("mock source repository is not initialized");
+    respondJson(response, 200, {
+      full_name: request.url.slice("/repos/".length),
+      private: false,
+      default_branch: "main",
+      clone_url: mockSourceRepositoryRoot
+    });
+    return;
+  }
+  if (
+    request.method === "GET" &&
     (request.url === "/repos/owner/issue-repo/installation" ||
       request.url === "/repos/owner/second-issue-repo/installation")
   ) {
@@ -1372,6 +1441,45 @@ function routeMockGitHub(
       html_url: "https://github.test/owner/issue-repo/issues/17",
       body: "Acceptance criteria and owner are present.",
       labels: [{ name: "support" }]
+    });
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/issues/21") {
+    respondJson(response, 200, {
+      number: 21,
+      title: "Continue imported work",
+      state: "open",
+      updated_at: "2026-08-16T10:01:00Z",
+      body: "Continue current-main work.",
+      labels: [{ name: "upstream-intake" }, { name: "active-continuation" }]
+    });
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/issues/21/events?per_page=100&page=1") {
+    respondJson(response, 200, [{
+      event: "labeled",
+      created_at: "2026-08-16T10:00:00Z",
+      actor: { login: "Tosko4" },
+      label: { name: "active-continuation" }
+    }]);
+    return;
+  }
+  if (request.url === "/repos/owner/issue-repo/collaborators/Tosko4/permission") {
+    respondJson(response, 200, { permission: "maintain" });
+    return;
+  }
+  if (request.method === "GET" && request.url === "/repos/owner/issue-repo/issues/17/events?per_page=100&page=1") {
+    respondJson(response, 200, []);
+    return;
+  }
+  if (request.method === "GET" && /^\/repos\/owner\/issue-repo\/issues\/(11|12|13)$/.test(request.url ?? "")) {
+    const number = Number((request.url ?? "").split("/").at(-1));
+    respondJson(response, 200, {
+      number,
+      title: `Linked issue ${number}`,
+      state: "open",
+      html_url: `https://github.test/owner/issue-repo/issues/${number}`,
+      body: "Linked fixture issue."
     });
     return;
   }
@@ -1503,4 +1611,18 @@ function routeMockGitHub(
 function respondJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json" });
   response.end(JSON.stringify(body));
+}
+
+function createMockSourceRepository(): string {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-issue-source-"));
+  execFileSync("git", ["init", "--initial-branch=main", root]);
+  writeFileSync(join(root, "package.json"), "{\n}\n");
+  execFileSync("git", ["-C", root, "add", "package.json"]);
+  execFileSync("git", [
+    "-c", "user.name=NeonDiff Test",
+    "-c", "user.email=neondiff-test@example.invalid",
+    "-C", root,
+    "commit", "-m", "fixture"
+  ]);
+  return root;
 }

@@ -1,8 +1,10 @@
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   buildIssueAnalysisEnrichmentComment,
   buildIssueEnrichmentComment,
   buildIssueEnrichmentDryRunOutput,
+  ENRICHMENT_MARKER_PREFIX,
   ISSUE_ANALYSIS_PUBLIC_RENDERER_VERSION,
   postEnrichmentComment,
   type EnrichmentComment,
@@ -12,9 +14,9 @@ import {
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import {
   buildIssueAnalysisInputHash,
-  ensureIssueAnalysisWorkspace,
   runIssueAnalysis,
   type IssueAnalysis,
+  type IssueAnalysisEvidenceContext,
   type IssueAnalysisPolicyContext
 } from "./issue-analysis.js";
 import type { CodexReasoningEffort } from "./codex-runtime.js";
@@ -27,6 +29,9 @@ import type { PublicConfidenceDisplayPolicy } from "./public-confidence.js";
 import { redactSecrets } from "./secrets.js";
 import type { IssueEnrichmentRecord, IssueEnrichmentRecordStatus, ReviewStateStore } from "./state.js";
 import { isAuthenticProductionLicenseAdmission, type ProductionLicenseAdmission } from "./license-admission.js";
+import { prepareBranchWorktree, type PreparedWorktree } from "./git.js";
+import { getProtectedCheckoutRoots } from "./path-safety.js";
+import { writeSecureFileSync } from "./temp-files.js";
 
 export interface IssueEnrichmentConfig {
   enabled: boolean;
@@ -77,6 +82,7 @@ export interface IssueEnrichmentRepoOverride {
   suggestedLabels?: string[];
   suggestedReviewers?: string[];
   labelAliases?: Record<string, string>;
+  promotionMaintainers?: Array<{ login: string; validFrom: string; validUntil?: string }>;
   maxIssuesPerCycle?: number;
   maxCommentsPerCycle?: number;
   cooldownMs?: number;
@@ -92,6 +98,38 @@ export interface IssueEnrichmentRepoPolicy {
   suggestedLabels: string[];
   suggestedReviewers: string[];
   labelAliases: Record<string, string>;
+}
+
+export type IssuePromotionPermission = "read" | "triage" | "write" | "maintain" | "admin" | "none";
+
+export interface IssuePromotionEvidence {
+  upstreamIntake: boolean;
+  activeContinuation: boolean;
+  labelEvent: {
+    actor: string;
+    createdAt: string;
+  };
+  allowlist: Array<{
+    login: string;
+    validFrom: string;
+    validUntil?: string;
+  }>;
+  currentPermission: IssuePromotionPermission;
+}
+
+export function isTrustedIssuePromotion(evidence: IssuePromotionEvidence): boolean {
+  if (!evidence.upstreamIntake || !evidence.activeContinuation) return false;
+  if (!["write", "maintain", "admin"].includes(evidence.currentPermission.toLowerCase())) return false;
+  const eventTime = Date.parse(evidence.labelEvent.createdAt);
+  if (!Number.isFinite(eventTime)) return false;
+  const actor = evidence.labelEvent.actor.trim().toLowerCase();
+  if (!actor) return false;
+  return evidence.allowlist.some((entry) => {
+    if (entry.login.trim().toLowerCase() !== actor) return false;
+    const validFrom = Date.parse(entry.validFrom);
+    const validUntil = entry.validUntil ? Date.parse(entry.validUntil) : Number.POSITIVE_INFINITY;
+    return Number.isFinite(validFrom) && !Number.isNaN(validUntil) && eventTime >= validFrom && eventTime <= validUntil;
+  });
 }
 
 export interface IssueEnrichmentStatus {
@@ -162,6 +200,8 @@ export interface IssueAnalysisRunnerInput {
   allowedLabels: string[];
   suggestedLabels: string[];
   workspacePath: string;
+  headSha: string;
+  evidenceContext: IssueAnalysisEvidenceContext;
   evidenceDir: string;
   cliPath: string;
   model: string;
@@ -234,7 +274,25 @@ export interface IssueEnrichmentCycleResult extends Omit<IssueEnrichmentScanResu
   }>;
 }
 
-export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub;
+export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
+  getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
+  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<Array<{
+    event?: string;
+    created_at?: string;
+    actor?: { login?: string | null } | null;
+    label?: { name?: string | null } | null;
+  }>>;
+  getCollaboratorPermission?(repo: string, login: string): Promise<IssuePromotionPermission>;
+  listIssueComments?(repo: string, issueNumber: number): Promise<Array<{
+    id: number;
+    html_url?: string | null;
+    body?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    user?: { login?: string | null } | null;
+  }>>;
+  getIssueOrPull?(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull | undefined>;
+};
 
 export interface IssueEnrichmentRepoScan {
   repo: string;
@@ -269,6 +327,25 @@ export type IssueEnrichmentScanReason =
   | "global_max_comments_per_cycle"
   | "burst_threshold_exceeded";
 
+export function shouldDeferPreservationPreviewToPromotion(reason: IssueEnrichmentScanReason): boolean {
+  return reason === "preservation_only_upstream_intake";
+}
+
+export function assertIssueSnapshotCurrent(
+  original: Pick<GitHubRelatedIssueOrPull, "number" | "state" | "updated_at">,
+  current: Pick<GitHubRelatedIssueOrPull, "number" | "state" | "updated_at" | "pull_request"> | undefined
+): void {
+  if (
+    !current ||
+    current.number !== original.number ||
+    current.state !== "open" ||
+    Boolean(current.pull_request) ||
+    current.updated_at !== original.updated_at
+  ) {
+    throw new Error("issue_enrichment_stale_issue_state");
+  }
+}
+
 export interface IssueEnrichmentScanItem {
   repo: string;
   issueNumber: number;
@@ -293,6 +370,131 @@ function issueSuggestionAllowlists(policy: IssueEnrichmentSuggestionPolicy): {
     allowedLabels: policy.allowedLabels,
     allowedOwners: policy.allowedReviewers
   };
+}
+
+async function evaluateIssuePromotion(input: {
+  repo: string;
+  issue: GitHubRelatedIssueOrPull;
+  override?: IssueEnrichmentRepoOverride;
+  github: IssueEnrichmentCycleGithub;
+}): Promise<{ issue: GitHubRelatedIssueOrPull; evidence?: IssuePromotionEvidence }> {
+  const labels = (input.issue.labels ?? [])
+    .map((label) => typeof label === "string" ? label : label.name ?? "")
+    .map((label) => label.trim().toLowerCase())
+    .filter(Boolean);
+  if (!labels.includes("upstream-intake") || !labels.includes("active-continuation")) {
+    return { issue: input.issue };
+  }
+  const allowlist = input.override?.promotionMaintainers ?? [];
+  if (allowlist.length === 0 || !input.github.listIssueLabelEvents || !input.github.getCollaboratorPermission) {
+    return { issue: input.issue };
+  }
+  try {
+    const events = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
+    const labelEvent = events
+      .filter((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation")
+      .filter((event) => Boolean(event.actor?.login && event.created_at))
+      .sort((a, b) => Date.parse(b.created_at!) - Date.parse(a.created_at!))[0];
+    if (!labelEvent?.actor?.login || !labelEvent.created_at) return { issue: input.issue };
+    const currentPermission = await input.github.getCollaboratorPermission(input.repo, labelEvent.actor.login);
+    const evidence: IssuePromotionEvidence = {
+      upstreamIntake: true,
+      activeContinuation: true,
+      labelEvent: { actor: labelEvent.actor.login, createdAt: labelEvent.created_at },
+      allowlist,
+      currentPermission
+    };
+    if (!isTrustedIssuePromotion(evidence)) return { issue: input.issue };
+    return {
+      issue: {
+        ...input.issue,
+        labels: (input.issue.labels ?? []).filter((label) =>
+          (typeof label === "string" ? label : label.name ?? "").trim().toLowerCase() !== "upstream-intake"
+        )
+      },
+      evidence
+    };
+  } catch {
+    return { issue: input.issue };
+  }
+}
+
+function emptyIssueEvidenceContext(headSha: string): IssueAnalysisEvidenceContext {
+  return {
+    repository: { defaultBranch: "unknown", headSha },
+    comments: [],
+    timeline: [],
+    linkedItems: [],
+    truncation: { comments: false, timeline: false, linkedItems: false }
+  };
+}
+
+async function buildIssueEvidenceContext(input: {
+  repo: string;
+  issue: GitHubRelatedIssueOrPull;
+  github: IssueEnrichmentCycleGithub;
+  defaultBranch: string;
+  headSha: string;
+}): Promise<IssueAnalysisEvidenceContext> {
+  const rawComments = input.github.listIssueComments
+    ? await input.github.listIssueComments(input.repo, input.issue.number)
+    : [];
+  const externalComments = rawComments.filter((comment) =>
+    !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
+  );
+  const rawTimeline = input.github.listIssueLabelEvents
+    ? await input.github.listIssueLabelEvents(input.repo, input.issue.number)
+    : [];
+  const linkedNumbers = extractIssueReferenceNumbers(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`, input.issue.number);
+  const linkedItems: IssueAnalysisEvidenceContext["linkedItems"] = [];
+  if (input.github.getIssueOrPull) {
+    for (const number of linkedNumbers.slice(0, 20)) {
+      const linked = await input.github.getIssueOrPull(input.repo, number);
+      if (!linked) continue;
+      linkedItems.push({
+        number: linked.number,
+        url: boundedIssueContext(redactSecrets(linked.html_url ?? ""), 1_000),
+        state: boundedIssueContext(redactSecrets(linked.state ?? "unknown"), 100),
+        title: boundedIssueContext(redactSecrets(linked.title ?? "(untitled)"), 1_000),
+        labels: (linked.labels ?? []).map((label) =>
+          boundedIssueContext(redactSecrets(typeof label === "string" ? label : label.name ?? ""), 200)
+        ).filter(Boolean).slice(0, 50)
+      });
+    }
+  }
+  return {
+    repository: { defaultBranch: input.defaultBranch, headSha: input.headSha },
+    comments: externalComments.slice(0, 50).map((comment) => ({
+      id: comment.id,
+      url: boundedIssueContext(redactSecrets(comment.html_url ?? ""), 1_000),
+      author: boundedIssueContext(redactSecrets(comment.user?.login ?? ""), 200),
+      createdAt: boundedIssueContext(redactSecrets(comment.created_at ?? ""), 100),
+      updatedAt: boundedIssueContext(redactSecrets(comment.updated_at ?? ""), 100),
+      body: boundedIssueContext(redactSecrets(comment.body ?? ""), 8_000)
+    })),
+    timeline: rawTimeline.slice(0, 200).map((event) => ({
+      event: boundedIssueContext(redactSecrets(event.event ?? ""), 100),
+      actor: boundedIssueContext(redactSecrets(event.actor?.login ?? ""), 200),
+      createdAt: boundedIssueContext(redactSecrets(event.created_at ?? ""), 100),
+      label: boundedIssueContext(redactSecrets(event.label?.name ?? ""), 200)
+    })),
+    linkedItems,
+    truncation: {
+      comments: externalComments.length > 50,
+      timeline: rawTimeline.length > 200,
+      linkedItems: linkedNumbers.length > 20
+    }
+  };
+}
+
+function extractIssueReferenceNumbers(text: string, ownIssueNumber: number): number[] {
+  const matches = text.matchAll(/(?:^|[^A-Za-z0-9_])#([1-9]\d*)\b/g);
+  return [...new Set([...matches].map((match) => Number(match[1])).filter((number) => number !== ownIssueNumber))];
+}
+
+function boundedIssueContext(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 16)).trimEnd()} [truncated]`;
 }
 
 export function buildIssueEnrichmentStatus(input: {
@@ -593,6 +795,7 @@ export async function runIssueEnrichmentCycle(input: {
   }
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const shouldCollectModelEvidence = !input.dryRun && config.postIssueComment && input.analyzeIssue === undefined;
   const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const releasePreacquiredLeaseBeforeRun = () => {
     if (!input.dryRun && input.preacquiredLease) {
@@ -710,7 +913,31 @@ export async function runIssueEnrichmentCycle(input: {
       });
     }
 
+    const sourceSnapshots = new Map<string, PreparedWorktree>();
+    const defaultBranches = new Map<string, string>();
+    if (shouldCollectModelEvidence) {
+      if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
+      if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
+      for (const repo of reposToScan) {
+        const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
+        if (!policy.allowed) continue;
+        const metadata = await input.github.getRepo(repo);
+        const defaultBranch = metadata.default_branch?.trim();
+        if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${repo}`);
+        sourceSnapshots.set(repo.toLowerCase(), prepareBranchWorktree({
+          repo,
+          branch: defaultBranch,
+          ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}),
+          workRoot: input.config.workRoot,
+          protectedCheckoutRoots: getProtectedCheckoutRoots()
+        }));
+        defaultBranches.set(repo.toLowerCase(), defaultBranch);
+      }
+    }
+
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
+    const issueEvidenceContextByIssue = new Map<string, IssueAnalysisEvidenceContext>();
+    const promotionEvidenceByIssue = new Map<string, IssuePromotionEvidence>();
     const plannedEnrichmentByIssue = new Map<string, EnrichmentComment>();
     const plannedAnalysisInputHashByIssue = new Map<string, string | undefined>();
     const analysisIdentityHash = (repo: string, issue: GitHubRelatedIssueOrPull): string => {
@@ -718,6 +945,8 @@ export async function runIssueEnrichmentCycle(input: {
       const allowlists = issueSuggestionAllowlists(policy.suggestions);
       return buildIssueAnalysisInputHash({
         repo,
+        headSha: sourceSnapshots.get(repo.toLowerCase())?.headSha ?? "0".repeat(40),
+        evidenceContext: issueEvidenceContextByIssue.get(issueKey(repo, issue.number)),
         issue,
         repoPolicy: policy.repoPolicy,
         allowedLabels: allowlists.allowedLabels,
@@ -775,8 +1004,30 @@ export async function runIssueEnrichmentCycle(input: {
           reader: {
             listIssuesForEnrichment: async (repo, options) => {
               const issues = await input.github.listIssuesForEnrichment(repo, options);
-              for (const issue of issues) issuesByKey.set(issueKey(repo, issue.number), issue);
-              return issues;
+              const prepared: GitHubRelatedIssueOrPull[] = [];
+              for (const issue of issues) {
+                const promotion = await evaluateIssuePromotion({
+                  repo,
+                  issue,
+                  override: config.repos?.[repo],
+                  github: input.github
+                });
+                prepared.push(promotion.issue);
+                issuesByKey.set(issueKey(repo, issue.number), promotion.issue);
+                if (shouldCollectModelEvidence) {
+                  issueEvidenceContextByIssue.set(issueKey(repo, issue.number), await buildIssueEvidenceContext({
+                    repo,
+                    issue: promotion.issue,
+                    github: input.github,
+                    defaultBranch: defaultBranches.get(repo.toLowerCase()) ?? "unknown",
+                    headSha: sourceSnapshots.get(repo.toLowerCase())?.headSha ?? "0".repeat(40)
+                  }));
+                }
+                if (promotion.evidence) {
+                  promotionEvidenceByIssue.set(issueKey(repo, issue.number), promotion.evidence);
+                }
+              }
+              return Object.assign(prepared, { scanCompletion: issues.scanCompletion });
             }
           },
           dryRun: input.dryRun,
@@ -915,6 +1166,7 @@ export async function runIssueEnrichmentCycle(input: {
         const identityHash = plannedAnalysisInputHashForItem(item);
         if (!identityHash) throw new Error(`Issue analysis identity missing for ${item.repo}#${item.issueNumber}`);
         let workspacePath = "";
+        let headSha = "0".repeat(40);
         let analysisEvidenceDir = "";
         if (input.analyzeIssue === undefined) {
           if (!input.config.codexRuntime?.enabled) {
@@ -923,7 +1175,10 @@ export async function runIssueEnrichmentCycle(input: {
           if (!input.config.workRoot || !input.config.evidenceDir) {
             throw new Error("issue_enrichment_model_runtime_paths_required");
           }
-          workspacePath = ensureIssueAnalysisWorkspace(input.config.workRoot);
+          const sourceSnapshot = sourceSnapshots.get(item.repo.toLowerCase());
+          if (!sourceSnapshot) throw new Error(`issue_enrichment_source_snapshot_missing: ${item.repo}`);
+          workspacePath = sourceSnapshot.path;
+          headSha = sourceSnapshot.headSha;
           analysisEvidenceDir = join(
             input.config.evidenceDir,
             checkedAt.slice(0, 10),
@@ -931,6 +1186,14 @@ export async function runIssueEnrichmentCycle(input: {
             `issue-${item.issueNumber}`,
             `analysis-${identityHash.slice(0, 16)}`
           );
+          const promotionEvidence = promotionEvidenceByIssue.get(issueKey(item.repo, item.issueNumber));
+          if (promotionEvidence) {
+            mkdirSync(analysisEvidenceDir, { recursive: true });
+            writeSecureFileSync(
+              join(analysisEvidenceDir, "active-continuation-authorization.json"),
+              `${JSON.stringify(promotionEvidence, null, 2)}\n`
+            );
+          }
         }
         const analyzer: IssueAnalysisRunner = input.analyzeIssue ?? (async (analysisInput) => {
           const result = await runIssueAnalysis(analysisInput);
@@ -944,6 +1207,8 @@ export async function runIssueEnrichmentCycle(input: {
           allowedLabels: allowlists.allowedLabels,
           suggestedLabels: policy.repoPolicy.suggestedLabels,
           workspacePath,
+          headSha,
+          evidenceContext: issueEvidenceContextByIssue.get(issueKey(item.repo, item.issueNumber)) ?? emptyIssueEvidenceContext(headSha),
           evidenceDir: analysisEvidenceDir,
           cliPath: runtime?.cliPath ?? "",
           model: runtime?.model ?? "injected-issue-analysis",
@@ -951,6 +1216,13 @@ export async function runIssueEnrichmentCycle(input: {
           timeoutMs: runtime?.timeoutMs ?? 1,
           maxOutputBytes: runtime?.maxOutputBytes ?? 1
         });
+        if (!input.github.getIssueOrPull && input.analyzeIssue === undefined) {
+          throw new Error("issue_enrichment_current_issue_read_required");
+        }
+        if (input.github.getIssueOrPull) {
+          const currentIssue = await input.github.getIssueOrPull(item.repo, item.issueNumber);
+          assertIssueSnapshotCurrent(issue, currentIssue);
+        }
         // #263: attach the mapped lifecycle state (`enriched`) to the marker at post time. This is a
         // renaming of the decision already made (status=posted) and rides the diagnostic state marker
         // only; bodyHash excludes the marker, so idempotency is unaffected.

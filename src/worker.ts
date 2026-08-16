@@ -43,10 +43,12 @@ import {
   type RedactedLicenseDecision
 } from "./license-admission.js";
 import {
+  assertPublicReviewOutputSafe,
   buildPullFileFilterImpact,
   buildReviewSettingsPreview,
   filterPullFilesForProfile,
   listReposToScan,
+  publicReviewForbiddenProfileFragments,
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
@@ -115,7 +117,18 @@ import {
 import { buildChangedSurfaceValidationReport, evaluateProofRequirements } from "./validation-selector.js";
 import { buildWalkthroughComment } from "./walkthrough.js";
 import { postWalkthroughComment, reviewBodyAfterWalkthroughPost } from "./walkthrough-post.js";
-import { buildReviewPrompt, extractJsonObject, extractZCodeResponse, isZCodeSchemaFailureError, runZCodeReview, type ZCodeReviewResult } from "./zcode.js";
+import {
+  buildReviewPrompt,
+  emptyReviewModelSummary,
+  extractJsonObject,
+  extractZCodeResponse,
+  isZCodeSchemaFailureError,
+  mergeReviewModelSummaries,
+  reviewPromptForbiddenFragments,
+  runZCodeReview,
+  type ReviewModelSummary,
+  type ZCodeReviewResult
+} from "./zcode.js";
 import { runCodexReview } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
@@ -1899,6 +1912,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeRedactedJson(join(evidenceDir, "repo-profile.json"), repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "filter-impact.json"), filterImpact);
     const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
+    const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile);
+    const forbiddenPromptFragments = reviewPromptForbiddenFragments();
+    const assertReviewOutputSafe = (text: string) => {
+      assertPublicReviewOutputSafe(text, forbiddenPromptFragments);
+      assertPublicReviewOutputSafe(text, forbiddenProfileFragments, 3);
+    };
     writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
       writeRedactedJson(join(evidenceDir, "command.json"), commandDecision.command);
@@ -2079,9 +2098,14 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       pull,
       comments,
       dropped,
+      modelSummary: zcodeResult.summary,
       dryRun: input.dryRun,
       commandDecision
     });
+    assertReviewOutputSafe(summary);
+    for (const comment of comments) {
+      assertReviewOutputSafe(comment.body);
+    }
     const walkthrough = config.walkthrough.enabled && input.dryRun
       ? buildWalkthroughComment({
           repo,
@@ -2092,11 +2116,13 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
           event: selectedEvent,
           validation,
           proof,
+          modelSummary: zcodeResult.summary,
           provider: buildReviewProviderMetadata(config),
           postIssueComment: config.walkthrough.postIssueComment,
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         })
       : undefined;
+    if (walkthrough) assertReviewOutputSafe(walkthrough.body);
     const enrichment = config.enrichment?.enabled
       ? buildEnrichmentComment({
           repo,
@@ -2342,10 +2368,12 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
         event: plan.event,
         validation,
         proof,
+        modelSummary: zcodeResult.summary,
         provider: buildReviewProviderMetadata(config),
         postIssueComment: config.walkthrough.postIssueComment,
         publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
       });
+      assertReviewOutputSafe(plan.walkthrough.body);
     }
     if (plan.walkthrough) writeRedactedText(join(evidenceDir, "walkthrough.md"), plan.walkthrough.body);
     if (plan.enrichment) writeRedactedText(join(evidenceDir, "enrichment.md"), plan.enrichment.body);
@@ -4169,6 +4197,7 @@ async function runChunkedZCodeReview(input: {
   const findings: ZCodeReviewResult["findings"] = [];
   const droppedFromSchema: ZCodeReviewResult["droppedFromSchema"] = [];
   const rawResponses: Array<{ index: number; rawResponse: string }> = [];
+  const modelSummaries: ReviewModelSummary[] = [];
   const runtimeNotes: string[] = [`Context budget chunked review executed in ${input.contextBudget.chunks.length} chunks.`];
   let attempts = 0;
   let degradedRecovery = false;
@@ -4239,6 +4268,7 @@ async function runChunkedZCodeReview(input: {
     findings.push(...chunkFindings);
     droppedFromSchema.push(...result.droppedFromSchema, ...droppedCrossChunkFindings);
     rawResponses.push({ index: chunk.index, rawResponse: result.rawResponse });
+    if (result.summary) modelSummaries.push(result.summary);
     attempts += result.attempts;
     degradedRecovery = degradedRecovery || result.degradedRecovery;
     providerAttempts += result.runtime.providerAttempts ?? 0;
@@ -4255,6 +4285,7 @@ async function runChunkedZCodeReview(input: {
     status: "reviewed",
     result: {
       findings,
+      summary: mergeReviewModelSummaries(modelSummaries),
       droppedFromSchema,
       rawResponse: JSON.stringify({ findings, chunks: rawResponses }),
       attempts,
@@ -4276,6 +4307,7 @@ function disabledZCodeReviewResult(config: BotConfig): ZCodeReviewResult & { run
   const codexRuntime = config.codexRuntime?.enabled ? config.codexRuntime : undefined;
   return {
     findings: [],
+    summary: emptyReviewModelSummary("Configured review execution was disabled for this dry run."),
     droppedFromSchema: [],
     rawResponse: "{\"findings\":[]}",
     attempts: 0,
@@ -4839,14 +4871,21 @@ function buildSummary(input: {
   pull: PullRequestSummary;
   comments: { severity: string }[];
   dropped: { reason: string }[];
+  modelSummary?: ReviewModelSummary;
   dryRun: boolean;
   commandDecision?: CommandDecision;
 }): string {
   const p0p1 = input.comments.filter((comment) => comment.severity === "P0" || comment.severity === "P1").length;
+  const modelSummary = input.modelSummary ?? emptyReviewModelSummary("No structured provider summary was available.");
   const lines = [
     `evaOS ZCode review ${input.dryRun ? "dry run" : "result"} for ${input.repo}#${input.pull.number} at ${input.pull.head.sha}.`,
     `Inline comments: ${input.comments.length}. High-severity comments: ${p0p1}. Dropped findings: ${input.dropped.length}.`,
-    "Pilot policy: this bot never approves PRs; it requests changes only for validated P0/P1 findings."
+    "Pilot policy: this bot never approves PRs; it requests changes only for validated P0/P1 findings.",
+    "Changed behavior:\n" + formatModelSummaryList(modelSummary.changedBehavior, "No changed behavior was established."),
+    "Affected invariants:\n" + formatModelSummaryList(modelSummary.invariants, "No affected invariant was established."),
+    "Evidence:\n" + formatModelSummaryList(modelSummary.evidence, "No additional provider evidence was established."),
+    "Limitations:\n" + formatModelSummaryList(modelSummary.limitations, "No limitations were supplied."),
+    `No-finding rationale: ${sanitizePublicConfidenceText(redactSecrets(modelSummary.noFindingRationale))}`
   ];
   if (input.commandDecision && input.commandDecision.action !== "none") {
     lines.push(
@@ -4854,4 +4893,9 @@ function buildSummary(input: {
     );
   }
   return lines.join("\n\n");
+}
+
+function formatModelSummaryList(values: string[], fallback: string): string {
+  if (values.length === 0) return `- ${fallback}`;
+  return values.map((value) => `- ${sanitizePublicConfidenceText(redactSecrets(value))}`).join("\n");
 }

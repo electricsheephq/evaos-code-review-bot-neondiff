@@ -53,6 +53,7 @@ import {
   DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS,
   resolveIssueEnrichmentRepoPolicy,
   runIssueEnrichmentCycle,
+  shouldDeferPreservationPreviewToPromotion,
   type IssueEnrichmentCycleGithub,
   type IssueEnrichmentCycleResult,
   type IssueEnrichmentConfig,
@@ -1406,11 +1407,11 @@ async function main(): Promise<void> {
           maxSuggestions: config.enrichment?.maxSuggestions,
           publicConfidencePolicy: config.confidenceCalibration?.publicDisplay
         });
-        if (preview.skipped) {
+        if (preview.skipped && !shouldDeferPreservationPreviewToPromotion(preview.reason)) {
           throw new Error(`Issue ${repo}#${issueNumber} is not eligible for issue enrichment: ${preview.reason}`);
         }
         issues.push(issue);
-        previewOutputs.push(preview);
+        if (!preview.skipped) previewOutputs.push(preview);
       }
       selectedIssuesLoaded = true;
       return issues;
@@ -1432,6 +1433,12 @@ async function main(): Promise<void> {
           }
           return loadSelectedIssues();
         },
+        getRepo: (requestedRepo) => github.getRepo(requestedRepo),
+        listIssueLabelEvents: (requestedRepo, issueNumber) => github.listIssueLabelEvents(requestedRepo, issueNumber),
+        getCollaboratorPermission: (requestedRepo, login) => github.getCollaboratorPermission(requestedRepo, login),
+        listIssueComments: (requestedRepo, issueNumber) => github.listIssueComments(requestedRepo, issueNumber),
+        getIssueOrPull: (requestedRepo, issueNumber) =>
+          github.getIssueOrPull(requestedRepo, issueNumber, { tolerateUnreadable: true }),
         canPostAsApp: () => github.canPostAsApp(),
         upsertIssueComment: (input) => github.upsertIssueComment(input)
       };

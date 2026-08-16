@@ -100,6 +100,8 @@ export interface RepositorySummary {
   full_name: string;
   private: boolean;
   visibility?: "public" | "private" | "internal";
+  default_branch?: string;
+  clone_url?: string;
 }
 
 export interface ReviewComment {

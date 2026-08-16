@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import { categoryLabel, isRequestChangesEligible } from "./regression-taxonomy.js";
 import { sanitizePublicConfidenceText, type PublicConfidenceDisplayPolicy } from "./public-confidence.js";
-import type { ReviewSettingsPreview } from "./repo-policy.js";
+import { assertPublicReviewOutputSafe } from "./repo-policy.js";
+import type { ReviewModelSummary } from "./zcode.js";
 import type {
   ChangedSurfaceValidationReport,
   DroppedFinding,
@@ -41,7 +42,7 @@ export function buildWalkthroughComment(input: {
   event: ReviewEvent;
   validation?: ChangedSurfaceValidationReport;
   proof?: ProofRequirementReport;
-  settingsPreview?: ReviewSettingsPreview;
+  modelSummary?: ReviewModelSummary;
   provider?: ReviewProviderMetadata;
   postIssueComment?: boolean;
   publicConfidencePolicy?: PublicConfidenceDisplayPolicy;
@@ -58,6 +59,13 @@ export function buildWalkthroughComment(input: {
   const suggestedLabels = suggestLabels(input.files, input.comments);
   const suggestedReviewers = input.pull.requested_reviewers?.map((reviewer) => reviewer.login).filter(Boolean) ?? [];
   const severityCounts = countSeverities(input.comments);
+  const modelSummary = input.modelSummary ?? {
+    changedBehavior: [],
+    invariants: [],
+    evidence: [],
+    limitations: ["No structured provider summary was available."],
+    noFindingRationale: "No structured provider summary was available."
+  };
   const highSeverity = severityCounts.P0 + severityCounts.P1;
   const requestChangesEligible = input.comments.filter((comment) => isRequestChangesEligible(comment)).length;
   const visibleBody = [
@@ -82,6 +90,22 @@ export function buildWalkthroughComment(input: {
       ? "No validated inline findings."
       : `Validated inline findings: ${input.comments.length} (${formatSeverityCounts(severityCounts)}).`,
     `Dropped findings before posting: ${input.dropped.length}. High-severity findings: ${highSeverity}.`,
+    "",
+    "### Maintainer Analysis",
+    "",
+    "Changed behavior:",
+    ...formatModelSummaryList(modelSummary.changedBehavior, "No changed behavior was established.", input.publicConfidencePolicy),
+    "",
+    "Affected invariants:",
+    ...formatModelSummaryList(modelSummary.invariants, "No affected invariant was established.", input.publicConfidencePolicy),
+    "",
+    "Evidence:",
+    ...formatModelSummaryList(modelSummary.evidence, "No additional provider evidence was established.", input.publicConfidencePolicy),
+    "",
+    "Limitations:",
+    ...formatModelSummaryList(modelSummary.limitations, "No limitations were supplied.", input.publicConfidencePolicy),
+    "",
+    `No-finding rationale: ${sanitizePublicConfidenceText(modelSummary.noFindingRationale, input.publicConfidencePolicy)}`,
     "",
     "### Risk Taxonomy",
     "",
@@ -109,6 +133,7 @@ export function buildWalkthroughComment(input: {
     checklistItem(true, "Labels and reviewers are suggestions only; the bot did not auto-apply them.")
   ].join("\n");
   const redactedBody = redactSecrets(visibleBody);
+  assertPublicReviewOutputSafe(redactedBody);
   const walkthroughHash = hashWalkthrough(redactedBody);
   const stateMarker = buildWalkthroughStateMarker({
     repo: input.repo,
@@ -123,6 +148,15 @@ export function buildWalkthroughComment(input: {
     body: [marker, stateMarker, redactedBody].join("\n"),
     postIssueComment: input.postIssueComment ?? false
   };
+}
+
+function formatModelSummaryList(
+  values: string[],
+  fallback: string,
+  publicConfidencePolicy?: PublicConfidenceDisplayPolicy
+): string[] {
+  if (values.length === 0) return [`- ${fallback}`];
+  return values.map((value) => `- ${sanitizePublicConfidenceText(value, publicConfidencePolicy)}`);
 }
 
 function formatProviderMetadata(

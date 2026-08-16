@@ -131,7 +131,14 @@ describe("Codex CLI review runtime", () => {
             title: "Fixture finding",
             body: "The fixture proves schema parsing.",
             confidence: 0.99
-          }]
+          }],
+          summary: {
+            changedBehavior: ["The fixture changes schema parsing."],
+            invariants: ["Structured review output remains valid."],
+            evidence: ["src/example.ts:12"],
+            limitations: ["This is a deterministic fixture."],
+            noFindingRationale: "A validated fixture finding was returned."
+          }
         }));
         return { stdout: "", stderr: "", status: 0, signal: null };
       }
