@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -1005,7 +1005,9 @@ describe("build-enrichment-comment issue CLI", () => {
       const commentGets = requests.filter((request) => request.method === "GET" && request.path === "/repos/owner/issue-repo/issues/17/comments?per_page=100&page=1");
       expect(commentPosts).toHaveLength(1);
       expect(commentPatches).toHaveLength(1);
-      expect(commentGets).toHaveLength(2);
+      // Each live analysis reads issue comments for evidence, while the first and
+      // forced runs also read comments again to upsert the sticky bot comment.
+      expect(commentGets).toHaveLength(5);
       const state = new ReviewStateStore(join(root, "state.sqlite"));
       try {
         expect(state.getIssueEnrichmentRecord("owner/issue-repo", 17)).toMatchObject({
@@ -1222,6 +1224,7 @@ function writeFixtureCodexCli(root: string): string {
   const path = join(root, "fixture-codex.cjs");
   writeFileSync(path, `#!/usr/bin/env node
 const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
 const args = process.argv.slice(2);
 const outputIndex = args.indexOf("--output-last-message");
 if (outputIndex < 0 || !args[outputIndex + 1]) process.exit(2);
@@ -1232,11 +1235,24 @@ const result = {
   confidence: "needs-repro",
   repositoryImpact: "The open issue concerns acceptance criteria and owner evidence on the selected repository path.",
   currentMainApplicability: "Current-main applicability is not established by the supplied issue report.",
-  evidence: "The selected open issue records acceptance criteria and an owner but no execution result.",
+  verifiedFacts: [{
+    claim: "The reviewed repository contains a package manifest at the inspected head.",
+    sourceRef: {
+      kind: "source",
+      repo: "owner/issue-repo",
+      sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      path: "package.json",
+      startLine: 1,
+      endLine: 1,
+      excerpt: "{"
+    }
+  }],
   reproductionOrInvariantGap: "Attach a focused current-main reproduction or name the mandatory invariant.",
-  relatedWork: "Inspect only issue links explicitly present in the selected report.",
+  relatedWork: ["Inspect only issue links explicitly present in the selected report."],
   migrationDisposition: "needs-repro",
-  nextGate: "Run the smallest supported-path reproduction and record its result on the issue."
+  nextGate: "Run the smallest supported-path reproduction and record its result on the issue.",
+  limitations: ["The analysis did not execute repository code or a runtime reproduction."],
+  labelProposals: []
 };
 fs.writeFileSync(args[outputIndex + 1], JSON.stringify(result));
 `);
@@ -1328,6 +1344,19 @@ function routeMockGitHub(
 ): void {
   if (
     request.method === "GET" &&
+    (request.url === "/repos/owner/issue-repo" || request.url === "/repos/owner/second-issue-repo")
+  ) {
+    const defaultBranch = execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim();
+    respondJson(response, 200, {
+      full_name: request.url.slice("/repos/".length),
+      private: false,
+      default_branch: defaultBranch,
+      clone_url: process.cwd()
+    });
+    return;
+  }
+  if (
+    request.method === "GET" &&
     (request.url === "/repos/owner/issue-repo/installation" ||
       request.url === "/repos/owner/second-issue-repo/installation")
   ) {
@@ -1372,6 +1401,21 @@ function routeMockGitHub(
       html_url: "https://github.test/owner/issue-repo/issues/17",
       body: "Acceptance criteria and owner are present.",
       labels: [{ name: "support" }]
+    });
+    return;
+  }
+  if (request.method === "GET" && request.url === "/repos/owner/issue-repo/issues/17/events?per_page=100&page=1") {
+    respondJson(response, 200, []);
+    return;
+  }
+  if (request.method === "GET" && /^\/repos\/owner\/issue-repo\/issues\/(11|12|13)$/.test(request.url ?? "")) {
+    const number = Number((request.url ?? "").split("/").at(-1));
+    respondJson(response, 200, {
+      number,
+      title: `Linked issue ${number}`,
+      state: "open",
+      html_url: `https://github.test/owner/issue-repo/issues/${number}`,
+      body: "Linked fixture issue."
     });
     return;
   }

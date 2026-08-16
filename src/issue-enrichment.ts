@@ -274,7 +274,7 @@ export interface IssueEnrichmentCycleResult extends Omit<IssueEnrichmentScanResu
 }
 
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
-  getRepo?(repo: string): Promise<{ default_branch?: string }>;
+  getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
   listIssueLabelEvents?(repo: string, issueNumber: number): Promise<Array<{
     event?: string;
     created_at?: string;
@@ -772,6 +772,7 @@ export async function runIssueEnrichmentCycle(input: {
   }
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const shouldCollectModelEvidence = !input.dryRun && config.postIssueComment && input.analyzeIssue === undefined;
   const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const releasePreacquiredLeaseBeforeRun = () => {
     if (!input.dryRun && input.preacquiredLease) {
@@ -891,7 +892,7 @@ export async function runIssueEnrichmentCycle(input: {
 
     const sourceSnapshots = new Map<string, PreparedWorktree>();
     const defaultBranches = new Map<string, string>();
-    if (!input.dryRun && config.postIssueComment && input.analyzeIssue === undefined) {
+    if (shouldCollectModelEvidence) {
       if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
       if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
       for (const repo of reposToScan) {
@@ -903,6 +904,7 @@ export async function runIssueEnrichmentCycle(input: {
         sourceSnapshots.set(repo.toLowerCase(), prepareBranchWorktree({
           repo,
           branch: defaultBranch,
+          ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}),
           workRoot: input.config.workRoot,
           protectedCheckoutRoots: getProtectedCheckoutRoots()
         }));
@@ -989,13 +991,15 @@ export async function runIssueEnrichmentCycle(input: {
                 });
                 prepared.push(promotion.issue);
                 issuesByKey.set(issueKey(repo, issue.number), promotion.issue);
-                issueEvidenceContextByIssue.set(issueKey(repo, issue.number), await buildIssueEvidenceContext({
-                  repo,
-                  issue: promotion.issue,
-                  github: input.github,
-                  defaultBranch: defaultBranches.get(repo.toLowerCase()) ?? "unknown",
-                  headSha: sourceSnapshots.get(repo.toLowerCase())?.headSha ?? "0".repeat(40)
-                }));
+                if (shouldCollectModelEvidence) {
+                  issueEvidenceContextByIssue.set(issueKey(repo, issue.number), await buildIssueEvidenceContext({
+                    repo,
+                    issue: promotion.issue,
+                    github: input.github,
+                    defaultBranch: defaultBranches.get(repo.toLowerCase()) ?? "unknown",
+                    headSha: sourceSnapshots.get(repo.toLowerCase())?.headSha ?? "0".repeat(40)
+                  }));
+                }
                 if (promotion.evidence) {
                   promotionEvidenceByIssue.set(issueKey(repo, issue.number), promotion.evidence);
                 }

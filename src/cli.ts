@@ -1432,6 +1432,11 @@ async function main(): Promise<void> {
           }
           return loadSelectedIssues();
         },
+        getRepo: (requestedRepo) => github.getRepo(requestedRepo),
+        listIssueLabelEvents: (requestedRepo, issueNumber) => github.listIssueLabelEvents(requestedRepo, issueNumber),
+        getCollaboratorPermission: (requestedRepo, login) => github.getCollaboratorPermission(requestedRepo, login),
+        listIssueComments: (requestedRepo, issueNumber) => github.listIssueComments(requestedRepo, issueNumber),
+        getIssueOrPull: (requestedRepo, issueNumber) => github.getIssueOrPull(requestedRepo, issueNumber),
         canPostAsApp: () => github.canPostAsApp(),
         upsertIssueComment: (input) => github.upsertIssueComment(input)
       };

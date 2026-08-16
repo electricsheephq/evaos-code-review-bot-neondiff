@@ -26,6 +26,7 @@ export interface PullWorktreeInput {
 export interface BranchWorktreeInput {
   repo: string;
   branch: string;
+  repoUrl?: string;
   workRoot: string;
   protectedCheckoutRoot?: string;
   protectedCheckoutRoots?: string[];
@@ -35,7 +36,7 @@ export function prepareBranchWorktree(input: BranchWorktreeInput): PreparedWorkt
   const safeRepo = input.repo.replace(/[^A-Za-z0-9_.-]+/g, "__");
   const safeBranch = input.branch.replace(/[^A-Za-z0-9_.-]+/g, "__");
   const mirrorPath = join(input.workRoot, "mirrors", `${safeRepo}.git`);
-  const repoUrl = `https://github.com/${input.repo}.git`;
+  const repoUrl = input.repoUrl ?? `https://github.com/${input.repo}.git`;
   assertPathOutsideProtectedRoot({
     path: input.workRoot,
     protectedRoot: input.protectedCheckoutRoot,
