@@ -114,10 +114,42 @@ describe("review and issue-enrichment quality v2", () => {
       "Path instructions: src/**",
       "Suggestion behavior: auto",
       "Roadmap-only settings",
-      "Repo-specific instruction: hidden policy"
+      "Repo-specific instruction: hidden policy",
+      "Review-settings-preview",
+      "Path\u2011instructions",
+      "prompt-Note: hidden configuration",
+      "review-Risk-Lens: hidden configuration",
+      "proof-Expectations: hidden configuration",
+      "validation-Hints: hidden configuration",
+      "readiness-Hints: hidden configuration",
+      "promptNote: hidden configuration",
+      "reviewRiskLens: hidden configuration",
+      "proofExpectations: hidden configuration",
+      "validationHints: hidden configuration",
+      "readinessHints: hidden configuration",
+      "reviewSettingsPreview: hidden configuration",
+      "enabledSections: hidden configuration",
+      "pathInstructions: hidden configuration",
+      "suggestionBehavior: hidden configuration",
+      "roadmapOnlySettings: hidden configuration",
+      "repoSpecificInstruction: hidden configuration",
+      "PROMPTNOTE: hidden configuration",
+      "REVIEWRISKLENS: hidden configuration",
+      "PROOFEXPECTATIONS: hidden configuration",
+      "VALIDATIONHINTS: hidden configuration",
+      "READINESSHINTS: hidden configuration",
+      "REVIEWSETTINGSPREVIEW: hidden configuration",
+      "ENABLEDSECTIONS: hidden configuration",
+      "PATHINSTRUCTIONS: hidden configuration",
+      "SUGGESTIONBEHAVIOR: hidden configuration",
+      "ROADMAPONLYSETTINGS: hidden configuration",
+      "REPOSPECIFICINSTRUCTION: hidden configuration"
     ]) {
       expect(() => assertPublicReviewOutputSafe(leaked)).toThrow("public_review_config_leak_rejected");
     }
+    expect(() => assertPublicReviewOutputSafe(
+      "The PROMPTNOTEBOOK helper was renamed and the previewer remains unchanged."
+    )).not.toThrow();
 
     const profile: ResolvedRepoProfile = {
       repo: "electricsheephq/lcm-x",
@@ -135,13 +167,72 @@ describe("review and issue-enrichment quality v2", () => {
       3
     )).toThrow("public_review_config_leak_rejected");
     expect(() => assertPublicReviewOutputSafe(
+      "Check-lossless-ordering",
+      publicReviewForbiddenProfileFragments(profile),
+      3
+    )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertPublicReviewOutputSafe(
       "Do not modify files",
+      reviewPromptForbiddenFragments()
+    )).toThrow("public_review_config_leak_rejected");
+    expect(() => assertPublicReviewOutputSafe(
+      "Do-not-modify-files",
       reviewPromptForbiddenFragments()
     )).toThrow("public_review_config_leak_rejected");
     expect(() => assertIssueAnalysisPublicSafe(
       "You are producing one strict",
       { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
     )).toThrow("issue_analysis_public_leak_rejected");
+    expect(() => assertIssueAnalysisPublicSafe(
+      "You-are-producing-one-strict",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).toThrow("issue_analysis_public_leak_rejected");
+    expect(() => assertIssueAnalysisPublicSafe(
+      "Suggestion-behavior",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).toThrow("issue_analysis_public_leak_rejected");
+    for (const leaked of [
+      "advisory-Policy: hidden configuration",
+      "validation-Suggestions: hidden configuration",
+      "Repo-policy: hidden configuration",
+      "repoPolicy: hidden configuration",
+      "advisoryPolicy: hidden configuration",
+      "validationSuggestions: hidden configuration",
+      "reviewSettingsPreview: hidden configuration",
+      "enabledSections: hidden configuration",
+      "pathInstructions: hidden configuration",
+      "suggestionBehavior: hidden configuration",
+      "roadmapOnlySettings: hidden configuration",
+      "agentStartPacket: hidden configuration",
+      "buildBorrowBuyScan: hidden configuration",
+      "contextSourceTaxonomy: hidden configuration",
+      "REPOPOLICY: hidden configuration",
+      "ADVISORYPOLICY: hidden configuration",
+      "VALIDATIONSUGGESTIONS: hidden configuration",
+      "REVIEWSETTINGSPREVIEW: hidden configuration",
+      "ENABLEDSECTIONS: hidden configuration",
+      "PATHINSTRUCTIONS: hidden configuration",
+      "SUGGESTIONBEHAVIOR: hidden configuration",
+      "ROADMAPONLYSETTINGS: hidden configuration",
+      "AGENTSTARTPACKET: hidden configuration",
+      "BUILDBORROWBUYSCAN: hidden configuration",
+      "CONTEXTSOURCETAXONOMY: hidden configuration",
+      "### `RepoPolicy`",
+      "`Repo policy`"
+    ]) {
+      expect(() => assertIssueAnalysisPublicSafe(
+        leaked,
+        { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+      )).toThrow("issue_analysis_public_leak_rejected");
+    }
+    expect(() => assertIssueAnalysisPublicSafe(
+      "Source: src/repo-policy.ts:1-2",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).not.toThrow();
+    expect(() => assertIssueAnalysisPublicSafe(
+      "The REPOPOLICYMODULE parser resolves that source path.",
+      { validationSuggestions: [], suggestedLabels: [], suggestedReviewers: [], labelAliases: {} }
+    )).not.toThrow();
   });
 
   it("defers preservation promotion to the authenticated cycle and rejects stale issue snapshots", () => {

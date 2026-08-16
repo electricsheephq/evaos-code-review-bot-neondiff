@@ -424,18 +424,18 @@ export function buildRepoProfilePromptSection(
   return lines.join("\n");
 }
 
-const PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS = [
-  /review settings preview/i,
-  /\benabled sections\b/i,
-  /\bpath instructions\b/i,
-  /\bsuggestion behavior\b/i,
-  /\broadmap-only settings\b/i,
-  /\brepo-specific instruction\b/i,
-  /\bpromptNote\b/i,
-  /\breviewRiskLens\b/i,
-  /\bproofExpectations\b/i,
-  /\bvalidationHints\b/i,
-  /\breadinessHints\b/i
+const PUBLIC_REVIEW_CONFIG_LEAK_MARKERS = [
+  "review settings preview",
+  "enabled sections",
+  "path instructions",
+  "suggestion behavior",
+  "roadmap only settings",
+  "repo specific instruction",
+  "prompt note",
+  "review risk lens",
+  "proof expectations",
+  "validation hints",
+  "readiness hints"
 ] as const;
 
 export function assertPublicReviewOutputSafe(
@@ -443,12 +443,12 @@ export function assertPublicReviewOutputSafe(
   forbiddenFragments: string[] = [],
   sharedWordWindow = 0
 ): void {
-  if (PUBLIC_REVIEW_CONFIG_LEAK_PATTERNS.some((pattern) => pattern.test(text))) {
+  const normalized = normalizePublicLeakText(text);
+  if (PUBLIC_REVIEW_CONFIG_LEAK_MARKERS.some((marker) => containsCanonicalPublicLeakMarker(text, marker))) {
     throw new Error("public_review_config_leak_rejected");
   }
-  const normalized = text.toLowerCase().replace(/\s+/g, " ");
   if (forbiddenFragments.some((fragment) => {
-    const candidate = fragment.trim().toLowerCase().replace(/\s+/g, " ");
+    const candidate = normalizePublicLeakText(fragment);
     return candidate.length >= 12 && (
       normalized.includes(candidate) ||
       (sharedWordWindow >= 2 && hasSharedForbiddenWordWindow(normalized, candidate, sharedWordWindow))
@@ -458,9 +458,33 @@ export function assertPublicReviewOutputSafe(
   }
 }
 
+function normalizePublicLeakText(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function compactPublicLeakText(value: string): string {
+  return normalizePublicLeakText(value).replaceAll(" ", "");
+}
+
+function containsCanonicalPublicLeakMarker(value: string, marker: string): boolean {
+  const tokens = normalizePublicLeakText(value).split(" ").filter(Boolean);
+  const compactMarker = compactPublicLeakText(marker);
+  return tokens.some((_, start) => {
+    let candidate = "";
+    for (let index = start; index < tokens.length && candidate.length < compactMarker.length; index += 1) {
+      candidate += tokens[index];
+    }
+    return candidate === compactMarker;
+  });
+}
+
 function hasSharedForbiddenWordWindow(text: string, forbidden: string, wordCount: number): boolean {
   const windows = (value: string): string[] => {
-    const words = value.match(/[a-z0-9][a-z0-9_-]*/g) ?? [];
+    const words = value.match(/[a-z0-9]+/g) ?? [];
     return words.length < wordCount
       ? []
       : Array.from({ length: words.length - wordCount + 1 }, (_, index) =>
