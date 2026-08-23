@@ -43,6 +43,10 @@ re-update, immutable release assets, and live customer evidence.
 
 ## Durable Plan Contract
 
+Evidence paths in this plan are portable operator inputs. Set
+`NEONDIFF_EVIDENCE_ROOT` to an external directory outside the source checkout;
+never commit private keys, credentials, or customer data there or in the repo.
+
 - Goal: define the desktop auto-update channel contract for NeonDiff Desktop so
   future implementation can choose Sparkle, Tauri updater, or an equivalent
   signed updater without weakening release governance or license boundaries.
@@ -95,10 +99,10 @@ re-update, immutable release assets, and live customer evidence.
     valid entitlement when policy requires one; rollback target resolves to a
     signed last-known-good release.
   - Runner/CI location: future GitHub Actions plus local evidence packet under
-    `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/`.
+    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/`.
   - Failure owner: desktop/update implementation owner for future PRs.
   - Eval evidence path:
-    `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/`.
+    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/`.
   - Trace feedback target: issue #116, the implementation PR, release notes,
     and the public release manifest.
   - Eval proof boundary: proves only planning readiness until implementation
@@ -115,7 +119,7 @@ re-update, immutable release assets, and live customer evidence.
   rollback; update status cannot distinguish license, network, and signature
   failures; docs or release notes claim shipped updater before fixture evidence.
 - Evidence path / packet:
-  `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/` plus
+  `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/` plus
   linked GitHub issue, PR, release, workflow run, and artifact identities.
 
 ## Channel Model
@@ -192,7 +196,7 @@ channel, the release lane must provide evidence for:
 - rollback manifest fixture resolving to a signed last-known-good artifact
 - release notes naming source commit, version, artifact identity, and rollback
   target
-- public-safe evidence packet under `/Volumes/LEXAR/Codex/evidence/`
+- public-safe evidence packet under `$NEONDIFF_EVIDENCE_ROOT/`
 
 Until those gates exist, `docs/public-release-manifest.json` should keep desktop
 updates non-required and explicitly linked to issue #116.

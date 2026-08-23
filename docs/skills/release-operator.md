@@ -32,9 +32,14 @@ exception in the tracker issue and open a backfill issue before ending.
 
 ## Required Commands
 
+The signed Desktop app owns account-scoped config under
+`$HOME/Library/Application Support/NeonDiffDesktop/Accounts/` and reads GitHub
+App credentials from the macOS Keychain. Set `NEONDIFF_ACCOUNT_ID`; never export
+app IDs or private-key paths.
+
 ```bash
-export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
-export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+: "${NEONDIFF_ACCOUNT_ID:?set the selected Desktop account id}"
+export NEONDIFF_CONFIG="${NEONDIFF_CONFIG:-$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT_ID/config/active-installed-live.json}"
 
 git fetch origin main --tags
 git checkout main
@@ -50,7 +55,7 @@ gh release create <tag> \
 
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG" \
   --expected-head <source-sha> \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```

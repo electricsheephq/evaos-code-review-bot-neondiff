@@ -16,11 +16,16 @@ It does not prove hosted feeds, notarized artifacts, or real EdDSA signing.
 Generate a local appcast from a committed fixture:
 
 ```sh
+: "${NEONDIFF_EVIDENCE_ROOT:?set an external evidence root outside this checkout}"
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture fixtures/appcast/beta.json \
-  --output /Volumes/LEXAR/Codex/evidence/neondiff-desktop/neondiff-beta-appcast.xml \
+  --output "$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/neondiff-beta-appcast.xml" \
   --dry-run
 ```
+
+Keep generated evidence under that external root, never in the checkout. The
+signed Desktop app owns account-scoped configuration and Keychain credentials;
+this fixture command takes no credential or private-key paths.
 
 Dry-run mode never signs, uploads, notarizes, or fabricates a real signature.
 The `sparkle:edSignature` attribute appears only when the manifest explicitly
