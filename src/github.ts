@@ -17,6 +17,7 @@ export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
  * is found well within this window; exceeding it truncates rather than paging forever.
  */
 const MAX_REVIEW_COMMENT_PAGES = 5;
+export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface GitHubApiOptions {
   appId?: string;
@@ -79,13 +80,26 @@ export class GitHubApiRequestError extends Error {
   }
 }
 
+export class GitHubApiTimeoutError extends Error {
+  readonly failureKind = "timeout" as const;
+  readonly path: string;
+  readonly timeoutMs: number;
+
+  constructor(input: { path: string; timeoutMs: number }) {
+    super(`GitHub API request timed out after ${input.timeoutMs}ms for ${input.path}`);
+    this.name = "GitHubApiTimeoutError";
+    this.path = input.path;
+    this.timeoutMs = input.timeoutMs;
+  }
+}
+
 export class GitHubApi {
   private readonly appId?: string;
   private readonly privateKey?: string;
   private readonly token?: string;
   private readonly apiBaseUrl: URL;
   private readonly botLogin: string;
-  private readonly requestTimeoutMs?: number;
+  private readonly requestTimeoutMs: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
 
@@ -98,7 +112,7 @@ export class GitHubApi {
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
     this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;
-    this.requestTimeoutMs = options.requestTimeoutMs;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
   }
 
   canPostAsApp(): boolean {
@@ -515,16 +529,13 @@ export class GitHubApi {
     options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
-    let response: Response;
-    const controller = this.requestTimeoutMs ? new AbortController() : undefined;
-    const timeout = controller
-      ? setTimeout(() => controller.abort(new Error(`GitHub API request timed out after ${this.requestTimeoutMs}ms for ${path}`)), this.requestTimeoutMs)
-      : undefined;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
     try {
-      response = await fetch(buildApiUrl(this.apiBaseUrl, path, "GitHub API request path"), {
+      const response = await fetch(buildApiUrl(this.apiBaseUrl, path, "GitHub API request path"), {
         method: options.method ?? "GET",
         ...(options.followRedirects === false ? { redirect: "manual" } : {}),
-        signal: controller?.signal,
+        signal: controller.signal,
         headers: {
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
@@ -533,23 +544,25 @@ export class GitHubApi {
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body)
       });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new GitHubApiRequestError({
+          status: response.status,
+          statusText: response.statusText,
+          path,
+          responseText: text
+        });
+      }
+      return (await response.json()) as T;
     } catch (error) {
+      if (error instanceof GitHubApiRequestError) throw error;
+      if (controller.signal.aborted) {
+        throw new GitHubApiTimeoutError({ path, timeoutMs: this.requestTimeoutMs });
+      }
       throw new Error(`GitHub API fetch failed for ${path}: ${describeFetchError(error)}`);
     } finally {
-      if (timeout) clearTimeout(timeout);
+      clearTimeout(timeout);
     }
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new GitHubApiRequestError({
-        status: response.status,
-        statusText: response.statusText,
-        path,
-        responseText: text
-      });
-    }
-
-    return (await response.json()) as T;
   }
 }
 

@@ -924,7 +924,7 @@ export async function runIssueEnrichmentCycle(input: {
         const metadata = await input.github.getRepo(repo);
         const defaultBranch = metadata.default_branch?.trim();
         if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${repo}`);
-        sourceSnapshots.set(repo.toLowerCase(), prepareBranchWorktree({
+        sourceSnapshots.set(repo.toLowerCase(), await prepareBranchWorktree({
           repo,
           branch: defaultBranch,
           ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}),

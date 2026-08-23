@@ -46,6 +46,32 @@ describe("GitHub App read authentication", () => {
     expect(readCall?.authorization).not.toBe("Bearer fallback-token");
   });
 
+  it("applies a finite default request timeout", async () => {
+    let signal: AbortSignal | null | undefined;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      signal = init?.signal;
+      return jsonResponse({ full_name: "owner/repo", private: false });
+    }) as typeof fetch;
+
+    await new GitHubApi({ token: "fallback-token" }).getRepo("owner/repo");
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("classifies a bounded GitHub timeout", async () => {
+    globalThis.fetch = vi.fn((_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    })) as typeof fetch;
+
+    const request = new GitHubApi({ token: "fallback-token", requestTimeoutMs: 10 }).getRepo("owner/repo");
+
+    await expect(request).rejects.toMatchObject({
+      name: "GitHubApiTimeoutError",
+      failureKind: "timeout",
+      timeoutMs: 10
+    });
+  });
+
   it("binds a created review to the validated expected commit", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-create-review-head-"));
     roots.push(root);

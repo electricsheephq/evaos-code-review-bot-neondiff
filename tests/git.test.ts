@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { planPullWorktreePaths, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
+import { planPullWorktreePaths, prepareBranchWorktree, repairExistingReviewWorktreePathForCheckout } from "../src/git.js";
 
 describe("pull worktree path planning", () => {
   const roots: string[] = [];
@@ -23,6 +23,40 @@ describe("pull worktree path planning", () => {
       workRoot: join(liveCheckout, "runtime"),
       protectedCheckoutRoot: liveCheckout
     })).toThrow(/workRoot must be outside the protected live checkout/);
+  });
+
+  it("bounds slow git without blocking the event loop", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-slow-git-"));
+    roots.push(root);
+    const binDir = join(root, "bin");
+    mkdirSync(binDir);
+    const gitPath = join(binDir, "git");
+    writeFileSync(gitPath, "#!/bin/sh\nsleep 1\nexit 1\n");
+    chmodSync(gitPath, 0o755);
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+    try {
+      const preparation = Promise.resolve().then(() => prepareBranchWorktree({
+        repo: "owner/repo",
+        branch: "main",
+        workRoot: join(root, "runtime"),
+        gitCommandTimeoutMs: 25
+      }));
+      const winner = await Promise.race([
+        preparation.then(() => "git", () => "git"),
+        new Promise<string>((resolve) => setTimeout(() => resolve("timer"), 0))
+      ]);
+
+      expect(winner).toBe("timer");
+      await expect(preparation).rejects.toMatchObject({
+        name: "GitCommandError",
+        failureKind: "timeout",
+        timeoutMs: 25
+      });
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 
   it("keeps self-repo review paths outside the protected live checkout", () => {
@@ -121,7 +155,7 @@ describe("pull worktree path planning", () => {
     })).toThrow(/mirrorPath must be outside the protected live checkout/);
   });
 
-  it("repairs an empty existing non-git worktree directory before checkout", () => {
+  it("repairs an empty existing non-git worktree directory before checkout", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     roots.push(root);
     const mirrorPath = join(root, "mirror.git");
@@ -129,7 +163,7 @@ describe("pull worktree path planning", () => {
     execFileSync("git", ["init", "--bare", mirrorPath], { stdio: "ignore" });
     mkdirSync(worktreePath);
 
-    repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath });
+    await repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath });
 
     expect(existsSync(worktreePath)).toBe(false);
     const worktrees = execFileSync("git", ["--git-dir", mirrorPath, "worktree", "list", "--porcelain"], {
@@ -138,7 +172,7 @@ describe("pull worktree path planning", () => {
     expect(worktrees).not.toContain(`worktree ${worktreePath}`);
   });
 
-  it("repairs an existing git worktree directory before checkout", () => {
+  it("repairs an existing git worktree directory before checkout", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     roots.push(root);
     const sourcePath = join(root, "source");
@@ -153,12 +187,12 @@ describe("pull worktree path planning", () => {
     execFileSync("git", ["clone", "--mirror", sourcePath, mirrorPath], { stdio: "ignore" });
     execFileSync("git", ["--git-dir", mirrorPath, "worktree", "add", "--detach", worktreePath, "HEAD"], { stdio: "ignore" });
 
-    repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath });
+    await repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath });
 
     expect(existsSync(worktreePath)).toBe(false);
   });
 
-  it("prunes stale mirror worktree metadata when the worktree path is absent", () => {
+  it("prunes stale mirror worktree metadata when the worktree path is absent", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     roots.push(root);
     const sourcePath = join(root, "source");
@@ -174,7 +208,7 @@ describe("pull worktree path planning", () => {
     execFileSync("git", ["--git-dir", mirrorPath, "worktree", "add", "--detach", worktreePath, "HEAD"], { stdio: "ignore" });
     rmSync(worktreePath, { recursive: true, force: true });
 
-    repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath });
+    await repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath });
 
     const worktrees = execFileSync("git", ["--git-dir", mirrorPath, "worktree", "list", "--porcelain"], {
       encoding: "utf8"
@@ -182,7 +216,7 @@ describe("pull worktree path planning", () => {
     expect(worktrees).not.toContain(`worktree ${worktreePath}`);
   });
 
-  it("rejects an existing git checkout not owned by the mirror", () => {
+  it("rejects an existing git checkout not owned by the mirror", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     roots.push(root);
     const mirrorPath = join(root, "mirror.git");
@@ -195,13 +229,13 @@ describe("pull worktree path planning", () => {
     execFileSync("git", ["-C", worktreePath, "add", "README.md"], { stdio: "ignore" });
     execFileSync("git", ["-C", worktreePath, "commit", "-m", "initial"], { stdio: "ignore" });
 
-    expect(() => repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath })).toThrow(
+    await expect(repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath })).rejects.toThrow(
       /existing_git_worktree_not_owned/
     );
     expect(existsSync(join(worktreePath, "README.md"))).toBe(true);
   });
 
-  it("rejects a symlink repair target before git-worktree deletion", () => {
+  it("rejects a symlink repair target before git-worktree deletion", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     roots.push(root);
     const mirrorPath = join(root, "mirror.git");
@@ -211,11 +245,11 @@ describe("pull worktree path planning", () => {
     execFileSync("git", ["init", gitTarget], { stdio: "ignore" });
     symlinkSync(gitTarget, worktreePath, "dir");
 
-    expect(() => repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath })).toThrow(/existing_symlink/);
+    await expect(repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath })).rejects.toThrow(/existing_symlink/);
     expect(existsSync(gitTarget)).toBe(true);
   });
 
-  it("repairs a non-git worktree directory containing only ignorable macOS metadata", () => {
+  it("repairs a non-git worktree directory containing only ignorable macOS metadata", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     roots.push(root);
     const mirrorPath = join(root, "mirror.git");
@@ -224,12 +258,12 @@ describe("pull worktree path planning", () => {
     mkdirSync(worktreePath);
     writeFileSync(join(worktreePath, ".DS_Store"), "metadata");
 
-    repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath });
+    await repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath });
 
     expect(existsSync(worktreePath)).toBe(false);
   });
 
-  it("fails closed for a non-empty existing non-git worktree directory", () => {
+  it("fails closed for a non-empty existing non-git worktree directory", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     roots.push(root);
     const mirrorPath = join(root, "mirror.git");
@@ -238,13 +272,13 @@ describe("pull worktree path planning", () => {
     mkdirSync(worktreePath);
     writeFileSync(join(worktreePath, "leftover.txt"), "not a git checkout");
 
-    expect(() => repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath })).toThrow(
+    await expect(repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath })).rejects.toThrow(
       /checkout preparation failed.*existing_non_git_non_empty/
     );
     expect(existsSync(join(worktreePath, "leftover.txt"))).toBe(true);
   });
 
-  it("fails closed for an existing regular file at the worktree path", () => {
+  it("fails closed for an existing regular file at the worktree path", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     roots.push(root);
     const mirrorPath = join(root, "mirror.git");
@@ -252,13 +286,13 @@ describe("pull worktree path planning", () => {
     execFileSync("git", ["init", "--bare", mirrorPath], { stdio: "ignore" });
     writeFileSync(worktreePath, "do not delete");
 
-    expect(() => repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath })).toThrow(
+    await expect(repairExistingReviewWorktreePathForCheckout({ mirrorPath, worktreePath })).rejects.toThrow(
       /existing_non_directory/
     );
     expect(existsSync(worktreePath)).toBe(true);
   });
 
-  it("rejects a repair target symlinked into the protected live checkout", () => {
+  it("rejects a repair target symlinked into the protected live checkout", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-runtime-"));
     const liveCheckout = mkdtempSync(join(tmpdir(), "evaos-live-checkout-"));
     roots.push(root, liveCheckout);
@@ -267,13 +301,13 @@ describe("pull worktree path planning", () => {
     execFileSync("git", ["init", "--bare", mirrorPath], { stdio: "ignore" });
     symlinkSync(liveCheckout, worktreePath, "dir");
 
-    expect(() =>
+    await expect(
       repairExistingReviewWorktreePathForCheckout({
         mirrorPath,
         worktreePath,
         protectedCheckoutRoot: liveCheckout
       })
-    ).toThrow(/worktreePath must be outside the protected live checkout/);
+    ).rejects.toThrow(/worktreePath must be outside the protected live checkout/);
     expect(existsSync(liveCheckout)).toBe(true);
   });
 });
