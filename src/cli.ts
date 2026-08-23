@@ -1444,6 +1444,7 @@ async function main(): Promise<void> {
         listIssueLabelEvents: (requestedRepo, issueNumber) => github.listIssueLabelEvents(requestedRepo, issueNumber),
         getCollaboratorPermission: (requestedRepo, login) => github.getCollaboratorPermission(requestedRepo, login),
         listIssueComments: (requestedRepo, issueNumber) => github.listIssueComments(requestedRepo, issueNumber),
+        listIssueCommentsForEnrichment: (requestedRepo, issueNumber) => github.listIssueCommentsForEnrichment(requestedRepo, issueNumber),
         getIssueOrPull: (requestedRepo, issueNumber) =>
           github.getIssueOrPull(requestedRepo, issueNumber, { tolerateUnreadable: true }),
         canPostAsApp: () => github.canPostAsApp(),

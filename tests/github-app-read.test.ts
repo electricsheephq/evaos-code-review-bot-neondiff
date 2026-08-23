@@ -732,12 +732,19 @@ describe("GitHub App read authentication", () => {
     expect(comments).toHaveLength(500);
   });
 
-  it("listIssueComments returns raw-count metadata when its bounded read truncates", async () => {
+  it("listIssueComments keeps command reads complete beyond the evidence cap", async () => {
     const pagesRequested: number[] = [];
     globalThis.fetch = vi.fn(async (url) => {
       const match = /\/repos\/owner\/repo\/issues\/853\/comments\?per_page=100&page=(\d+)$/.exec(String(url));
       if (match) {
         pagesRequested.push(Number(match[1]));
+        if (Number(match[1]) === 6) {
+          return jsonResponse([{
+            id: 6001,
+            body: "@evaos-code-review-bot stop",
+            user: { login: "100yenadmin" }
+          }]);
+        }
         return jsonResponse(Array.from({ length: 100 }, (_unused, index) => ({ id: Number(match[1]) * 1000 + index })));
       }
       return jsonResponse({ message: "unexpected" }, 404);
@@ -745,11 +752,27 @@ describe("GitHub App read authentication", () => {
 
     const result = await new GitHubApi({ token: "fixture" }).listIssueComments("owner/repo", 853);
 
+    expect(result).toHaveLength(501);
+    expect(result.find((comment) => comment.id === 6001)).toMatchObject({
+      body: "@evaos-code-review-bot stop"
+    });
+    expect(pagesRequested).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("listIssueCommentsForEnrichment returns raw-count metadata when its bounded read truncates", async () => {
+    globalThis.fetch = vi.fn(async (url) => {
+      const match = /\/repos\/owner\/repo\/issues\/853\/comments\?per_page=100&page=(\d+)$/.exec(String(url));
+      if (match) return jsonResponse(Array.from({ length: 100 }, (_unused, index) => ({ id: Number(match[1]) * 1000 + index })));
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const result = await new GitHubApi({ token: "fixture" }).listIssueCommentsForEnrichment("owner/repo", 853);
+
     expect(result).toHaveLength(500);
     expect(result.items).toHaveLength(500);
     expect(result.rawCount).toBe(500);
     expect(result.truncated).toBe(true);
-    expect(pagesRequested).toEqual([1, 2, 3, 4, 5]);
+    expect(result.overflow).toBe(true);
   });
 });
 

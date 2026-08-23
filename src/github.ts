@@ -291,7 +291,22 @@ export class GitHubApi {
     return chunk.map(normalizePullRequestSummary).filter((pull) => Boolean(pull.merged_at)).slice(0, limit);
   }
 
-  async listIssueComments(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueCommentCommandSource>> {
+  async listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]> {
+    const comments: IssueCommentCommandSource[] = [];
+    for (let page = 1; ; page += 1) {
+      const chunk = await this.request<IssueCommentCommandSource[]>(
+        `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
+        { token: await this.getReadToken(repo) }
+      );
+      comments.push(...chunk);
+      if (chunk.length < 100) return comments;
+    }
+  }
+
+  async listIssueCommentsForEnrichment(
+    repo: string,
+    issueNumber: number
+  ): Promise<BoundedGithubList<IssueCommentCommandSource>> {
     const comments: IssueCommentCommandSource[] = [];
     for (let page = 1; page <= MAX_ISSUE_COMMENT_PAGES; page += 1) {
       const chunk = await this.request<IssueCommentCommandSource[]>(
