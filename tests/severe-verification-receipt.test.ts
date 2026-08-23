@@ -31,6 +31,7 @@ describe("severe verification receipt parser", () => {
     expect(isSevereVerificationReceipt(receipt({ evidence: { files: [], omitted: [], complete: false } }))).toBe(false);
     expect(isSevereVerificationReceipt(receipt({ state: "refuted", disposition: "suppress" }), { expectedPath: path })).toBe(true);
     expect(isSevereVerificationReceipt(receipt({ evidence: { files: [{ path, kind: "module", sha256: "c".repeat(64), bytes: 1, complete: false }], omitted: [{ path, code: "incomplete" }], complete: false } }))).toBe(false);
+    expect(isSevereVerificationReceipt(receipt({ state: "incomplete", disposition: "suppress", evidence: { files: [], omitted: [{ path: "other.ts", code: "incomplete" }], complete: false } }), { expectedPath: path })).toBe(false);
     expect(isSevereVerificationReceipt(receipt({ reasonCode: "free-form prose" }))).toBe(false);
   });
 

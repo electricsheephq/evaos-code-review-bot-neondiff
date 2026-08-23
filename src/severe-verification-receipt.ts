@@ -96,7 +96,7 @@ function validateEvidence(value: unknown, state: unknown, expectedPath: string |
   const completeFiles = value.files.length > 0 && value.omitted.length === 0 && value.files.every((file) => record(file) && file.complete === true);
   if (value.complete !== completeFiles) errors.push("evidence completeness is inconsistent");
   if ((state === "confirmed" || state === "refuted") && (!value.complete || !completeFiles)) errors.push("confirmed or refuted evidence must be complete");
-  if (expectedPath !== undefined && (!safePath(expectedPath) || (value.files.length > 0 && !value.files.some((file) => record(file) && file.path === expectedPath)))) errors.push("evidence does not cover expected path");
+  if (expectedPath !== undefined && (!safePath(expectedPath) || ![...value.files, ...value.omitted].some((entry) => record(entry) && entry.path === expectedPath))) errors.push("evidence does not cover expected path");
   if (state === "incomplete" && value.complete) errors.push("incomplete state requires incomplete evidence");
 }
 
