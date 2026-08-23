@@ -29,7 +29,7 @@ export function planDesktopUpdate({ action, declaration, declarationBytes, packe
   exact(packet.release, ["version", "tag", "channel", "build", "artifactName", "artifactSHA256", "treeSHA256"], "release receipt");
   exact(packet.sparkle, ["publicKey", "edSignature", "feedURL", "entrySHA256"], "Sparkle receipt");
   exact(packet.apple, ["teamID", "notarized", "stapled", "gatekeeper"], "Apple receipt");
-  exact(packet.prestate, ["appSHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "plistSHA256", "label", "wrapperPID", "wrapperPath", "helperPID", "helperPath"], "prestate receipt");
+  exact(packet.prestate, ["appSHA256", "accountIdentitySHA256", "botIdentitySHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "keychainIdentitySHA256", "plistSHA256", "label", "wrapperPID", "wrapperPath", "helperPID", "helperPath"], "prestate receipt");
   const release = packet.release, expected = [declaration.version, declaration.tag, declaration.channel, declaration.build, declaration.distribution?.artifactName];
   if (JSON.stringify([release.version, release.tag, release.channel, release.build, release.artifactName]) !== JSON.stringify(expected)) fail("accepted packet disagrees with declaration identity");
   hashes(release, ["artifactSHA256", "treeSHA256"], "release receipt");
@@ -42,7 +42,7 @@ export function planDesktopUpdate({ action, declaration, declarationBytes, packe
   if (!verified) fail("Sparkle signature verification failed");
   if (!/^[A-Z0-9]{10}$/.test(expectedTeamID ?? "") || packet.apple.teamID !== expectedTeamID) fail("approved Team ID mismatch");
   if (packet.apple.notarized !== true || packet.apple.stapled !== true || packet.apple.gatekeeper !== true) fail("Apple notarization, staple, and Gatekeeper proof are required");
-  hashes(packet.prestate, ["appSHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "plistSHA256"], "prestate receipt");
+  hashes(packet.prestate, ["appSHA256", "accountIdentitySHA256", "botIdentitySHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "keychainIdentitySHA256", "plistSHA256"], "prestate receipt");
   if (!LABEL.test(packet.prestate.label) || !Number.isInteger(packet.prestate.wrapperPID) || packet.prestate.wrapperPID < 1 || !Number.isInteger(packet.prestate.helperPID) || packet.prestate.helperPID < 1 || packet.prestate.wrapperPath !== "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop" || packet.prestate.helperPath !== "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker") fail("prestate worker identity is invalid");
   return {
     schemaVersion: 1, dryRun: true, action, packetSHA256,

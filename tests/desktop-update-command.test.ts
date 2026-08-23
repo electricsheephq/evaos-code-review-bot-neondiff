@@ -11,7 +11,7 @@ function fixture() {
     release: { version: declaration.version, tag: declaration.tag, channel: declaration.channel, build: declaration.build, artifactName: declaration.distribution.artifactName, artifactSHA256: hex(artifact), treeSHA256: "b".repeat(64) },
     sparkle: { publicKey: publicKey.export({ type: "spki", format: "der" }).toString("base64"), edSignature: sign(null, artifact, privateKey).toString("base64"), feedURL: declaration.distribution.origins.feed, entrySHA256: "c".repeat(64) },
     apple: { teamID: "TEAM123456", notarized: true, stapled: true, gatekeeper: true },
-    prestate: { appSHA256: "d".repeat(64), configSHA256: "e".repeat(64), databaseSHA256: "f".repeat(64), allowlistSHA256: "1".repeat(64), plistSHA256: "2".repeat(64), label: "com.electricsheephq.neondiff", wrapperPID: 101, wrapperPath: "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop", helperPID: 102, helperPath: "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker" }
+    prestate: { appSHA256: "d".repeat(64), accountIdentitySHA256: "3".repeat(64), botIdentitySHA256: "4".repeat(64), configSHA256: "e".repeat(64), databaseSHA256: "f".repeat(64), allowlistSHA256: "1".repeat(64), keychainIdentitySHA256: "5".repeat(64), plistSHA256: "2".repeat(64), label: "com.electricsheephq.neondiff", wrapperPID: 101, wrapperPath: "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop", helperPID: 102, helperPath: "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker" }
   };
   const packetBytes = Buffer.from(JSON.stringify(packet));
   return { artifact, declaration, packet, packetBytes, input: { action: "update", declaration, declarationBytes, packet, packetBytes, packetSHA256: hex(packetBytes), artifactBytes: artifact, expectedTeamID: "TEAM123456" } };
