@@ -26,7 +26,9 @@ import type { PullFilePatch, PullRequestSummary } from "../../src/types.js";
 import { QA_LAB_SCENARIOS } from "./scenarios.js";
 import { percentile } from "./stats.js";
 
-const EVIDENCE_DIR = "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/2026-07-06/polished-config-lab/risk-queue";
+const evidenceRoot = process.env.NEONDIFF_EVIDENCE_ROOT?.trim();
+if (!evidenceRoot) throw new Error("NEONDIFF_EVIDENCE_ROOT is required for QA-lab evidence output");
+const EVIDENCE_DIR = join(evidenceRoot, "neondiff-qa-lab", "risk-queue");
 const BASELINE = 50;
 const MAX_WAIT_MINUTES = 60;
 const TICK_MS = 60_000; // one minute per service interval

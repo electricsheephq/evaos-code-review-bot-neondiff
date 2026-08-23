@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_CONTEXT_BUDGET_CONFIG, type ContextBudgetConfig } from "./context-budget.js";
 import type { EnrichmentConfig } from "./enrichment.js";
@@ -43,6 +44,8 @@ const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
 const MAX_ISSUE_POLICY_TEXT_LENGTH = 4_000;
 const MAX_ISSUE_POLICY_ITEMS = 20;
 const MAX_ISSUE_POLICY_ALIASES = 50;
+const DEFAULT_SKILL_ROOT = join(homedir(), ".config", "neondiff", "skills");
+const DEFAULT_ZCODE_APP_CONFIG_PATH = join(homedir(), ".config", "zcode", "config.json");
 
 export interface BotConfig {
   pilotRepos: string[];
@@ -441,7 +444,7 @@ const DEFAULT_CONFIG: BotConfig = {
   skillPacks: {
     enabled: false,
     packetVersion: "skill-pack-context-packet-v0.1",
-    skillRoot: "/Volumes/LEXAR/Codex/evaos-code-review-bot/skills",
+    skillRoot: DEFAULT_SKILL_ROOT,
     allowlist: [],
     maxSkillBytes: 8_000,
     maxPacketBytes: 16_000
@@ -590,7 +593,7 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   zcode: {
     cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
-    appConfigPath: "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+    appConfigPath: DEFAULT_ZCODE_APP_CONFIG_PATH,
     model: "GLM-5.2",
     timeoutMs: 180_000,
     maxPatchBytes: 80_000,
@@ -609,7 +612,13 @@ const DEFAULT_CONFIG: BotConfig = {
 };
 
 export function loadConfig(configPath?: string): BotConfig {
-  const fromFile = configPath && existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {};
+  let fromFile: unknown = {};
+  if (configPath !== undefined) {
+    const requestedPath = configPath.trim();
+    if (!requestedPath || requestedPath === "true") throw new Error("config path is required");
+    if (!existsSync(requestedPath)) throw new Error(`config file not found: ${requestedPath}`);
+    fromFile = JSON.parse(readFileSync(requestedPath, "utf8"));
+  }
   return loadConfigFromObject(fromFile);
 }
 

@@ -1489,9 +1489,17 @@ function buildLabelEvidence(finding: Finding | EvalLabelInput): Record<string, s
   return Object.keys(evidence).length > 0 ? evidence : undefined;
 }
 
+export function resolveEvalOutputRoot(): string {
+  const configuredRoot = process.env.NEONDIFF_EVAL_ROOT?.trim();
+  if (!configuredRoot) {
+    throw new Error("NEONDIFF_EVAL_ROOT is required for default eval output; set an external root outside this checkout");
+  }
+  return resolve(configuredRoot);
+}
+
 function defaultEvalOutputDir(input: Pick<EvalScenarioInput, "runId">, now: Date): string {
   const date = now.toISOString().slice(0, 10);
-  return join("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review", date, sanitizePathSegment(input.runId));
+  return join(resolveEvalOutputRoot(), date, sanitizePathSegment(input.runId));
 }
 
 function sanitizePathSegment(value: string): string {
@@ -1526,7 +1534,7 @@ export function assertEvalOutputDirSafe(outputDir: string): string {
   const realGitRoot = realpathSync(gitRoot);
   const relation = relative(realGitRoot, realOutput);
   if (relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))) {
-    throw new Error("outputDir must not be inside the current git checkout; write eval packets under /Volumes/LEXAR/Codex/evals or a temp directory");
+    throw new Error("outputDir must not be inside the current git checkout; use NEONDIFF_EVAL_ROOT or a temp directory");
   }
   return resolvedOutput;
 }
@@ -1602,7 +1610,7 @@ function roundMetric(value: number): number {
 
 function defaultStickyVsColdOutputRoot(input: Pick<StickyVsColdScenarioInput, "runId">, now: Date): string {
   const date = now.toISOString().slice(0, 10);
-  return join("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review", date, sanitizePathSegment(input.runId));
+  return join(resolveEvalOutputRoot(), date, sanitizePathSegment(input.runId));
 }
 
 function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {

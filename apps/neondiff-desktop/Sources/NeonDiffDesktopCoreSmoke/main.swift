@@ -107,7 +107,7 @@ do {
         },
         "zcode": {
           "cliPath": "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
-          "appConfigPath": "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+          "appConfigPath": "~/.config/zcode/config.json",
           "model": "GLM-5.2"
         },
         "desktop": {
