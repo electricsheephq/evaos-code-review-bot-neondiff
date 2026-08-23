@@ -3,6 +3,11 @@ import { readFileSync } from "node:fs";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import type { IssueEnrichmentIssueList } from "./issue-enrichment.js";
+import {
+  deriveCanonicalBotLogin,
+  isBotAuthoredComment,
+  normalizeBotLogin
+} from "./runtime-bot-identity.js";
 import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
@@ -152,10 +157,12 @@ export class GitHubApi {
   private readonly privateKey?: string;
   private readonly token?: string;
   private readonly apiBaseUrl: URL;
-  private readonly botLogin: string;
+  private readonly configuredBotLogin?: string;
   private readonly requestTimeoutMs: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
+  private verifiedInstallations = new Map<string, GitHubInstallationIdentity>();
+  private verifiedBotLogins = new Map<string, string>();
 
   constructor(options: GitHubApiOptions) {
     if (options.privateKey && options.privateKeyPath) {
@@ -165,12 +172,32 @@ export class GitHubApi {
     this.privateKey = options.privateKey ?? (options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined);
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
-    this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;
+    this.configuredBotLogin = options.botLogin;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
   }
 
   canPostAsApp(): boolean {
     return Boolean(this.appId && this.privateKey);
+  }
+
+  /** Resolve the one runtime owner from the verified installation App slug. */
+  async getCanonicalBotLogin(repo: string): Promise<string | undefined> {
+    const cached = this.verifiedBotLogins.get(repo);
+    if (cached) return cached;
+    if (!this.canPostAsApp()) return undefined;
+
+    let installation: GitHubInstallationIdentity;
+    try {
+      installation = parseGitHubInstallationIdentity(await this.getInstallation(repo, { followRedirects: false }));
+    } catch {
+      return undefined;
+    }
+    const botLogin = deriveCanonicalBotLogin({ appSlug: installation.app_slug });
+    const configuredBotLogin = normalizeBotLogin(this.configuredBotLogin);
+    if (!botLogin || (this.configuredBotLogin !== undefined && configuredBotLogin !== botLogin)) return undefined;
+    this.verifiedInstallations.set(repo, installation);
+    this.verifiedBotLogins.set(repo, botLogin);
+    return botLogin;
   }
 
   async listOpenPulls(repo: string): Promise<PullRequestSummary[]> {
@@ -491,8 +518,10 @@ export class GitHubApi {
     if (!this.canPostAsApp()) {
       throw new Error("GitHub App credentials are required before posting comments.");
     }
+    const botLogin = await this.getCanonicalBotLogin(input.repo);
+    if (!botLogin) throw new Error("GitHub App installation proof does not identify the runtime bot.");
     const token = await this.getInstallationToken(input.repo);
-    const existing = await this.findIssueCommentByMarker(input.repo, input.issueNumber, input.marker, token);
+    const existing = await this.findIssueCommentByMarker(input.repo, input.issueNumber, input.marker, token, botLogin);
     if (existing) {
       const updated = await this.request<{ html_url?: string; id: number }>(
         `/repos/${input.repo}/issues/comments/${existing.id}`,
@@ -512,21 +541,18 @@ export class GitHubApi {
     repo: string,
     issueNumber: number,
     marker: string,
-    token: string
+    token: string,
+    botLogin: string
   ): Promise<IssueCommentSummary | undefined> {
     for (let page = 1; ; page += 1) {
       const comments = await this.request<IssueCommentSummary[]>(
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token }
       );
-      const existing = comments.find((comment) => comment.body?.includes(marker) && this.isBotAuthoredComment(comment));
+      const existing = comments.find((comment) => comment.body?.includes(marker) && isBotAuthoredComment(comment, botLogin));
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }
-  }
-
-  private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
-    return comment.user?.type === "Bot" && comment.user.login === this.botLogin;
   }
 
   private async getInstallationToken(repo: string): Promise<string> {
@@ -534,7 +560,7 @@ export class GitHubApi {
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
 
-    const installation = await this.getInstallation(repo);
+    const installation = this.verifiedInstallations.get(repo) ?? await this.getInstallation(repo);
     return this.getInstallationTokenForId(repo, installation.id);
   }
 

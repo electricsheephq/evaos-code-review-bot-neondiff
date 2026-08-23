@@ -5222,6 +5222,7 @@ function githubFromMap(
       return pull;
     },
     listIssueComments: async (repo, issueNumber) => commentsByPull.get(`${repo}#${issueNumber}`) ?? [],
+    getCanonicalBotLogin: async () => "evaos-code-review-bot[bot]",
     ...(statusCalls
       ? {
           canPostAsApp: () => true,

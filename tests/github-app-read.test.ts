@@ -672,7 +672,7 @@ describe("GitHub App read authentication", () => {
         body: init?.body ? JSON.parse(String(init.body)) : undefined
       });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123 });
+        return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -683,7 +683,7 @@ describe("GitHub App read authentication", () => {
             id: 99,
             html_url: "https://github.test/comment/99",
             body: `${marker}\nold`,
-            user: { login: "evaos-code-review-bot[bot]", type: "Bot" }
+            user: { login: "CUSTOMER-REVIEW-APP[BOT]", type: "Bot" }
           }
         ]);
       }
@@ -693,7 +693,7 @@ describe("GitHub App read authentication", () => {
       return jsonResponse({ message: "unexpected" }, 404);
     }) as typeof fetch;
 
-    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, botLogin: "CUSTOMER-REVIEW-APP[BOT]" });
     const result = await github.upsertIssueComment({
       repo: "owner/repo",
       issueNumber: 42,
@@ -729,7 +729,7 @@ describe("GitHub App read authentication", () => {
         body: init?.body ? JSON.parse(String(init.body)) : undefined
       });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123 });
+        return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -762,6 +762,36 @@ describe("GitHub App read authentication", () => {
     expect(postCall?.authorization).toBe("Bearer installation-token");
     expect(postCall?.body).toEqual({ body: `${marker}\nnew` });
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
+  it("fails closed before posting when installation identity is missing or mismatched", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-comment-identity-fail-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const valid = { id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" };
+    const scenarios = [
+      { name: "missing App slug", installation: { ...valid, app_slug: undefined }, botLogin: "customer-review-app[bot]" },
+      { name: "mismatched explicit bot login", installation: valid, botLogin: "other-review-app[bot]" }
+    ];
+
+    for (const scenario of scenarios) {
+      const calls: string[] = [];
+      globalThis.fetch = vi.fn(async (url) => {
+        calls.push(String(url));
+        if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(scenario.installation);
+        return jsonResponse({ message: "must not continue without verified identity" }, 500);
+      }) as typeof fetch;
+      const github = new GitHubApi({ appId: "4184532", privateKeyPath, botLogin: scenario.botLogin });
+      await expect(github.upsertIssueComment({
+        repo: "owner/repo",
+        issueNumber: 42,
+        marker: "<!-- marker -->",
+        body: "<!-- marker -->\nnew"
+      }), scenario.name).rejects.toThrow(/installation proof does not identify the runtime bot/);
+      expect(calls, scenario.name).toHaveLength(1);
+    }
   });
 
   it("listPullReviewComments is hard-capped: it stops paging after the cap even if pages stay full (#371 bounded read)", async () => {

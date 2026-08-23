@@ -64,6 +64,7 @@ import {
   type ObservedSubsequentPull,
   type ScheduledObserveTarget
 } from "./outcome-observer.js";
+import { isBotAuthoredComment } from "./runtime-bot-identity.js";
 import {
   activateRepoForNewOnlyReview,
   isCanaryAllowed,
@@ -112,12 +113,20 @@ export interface SchedulerGitHubApi {
   listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
   canPostAsApp?: ReviewStatusCommentGithub["canPostAsApp"];
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
+  getCanonicalBotLogin?(repo: string): Promise<string | undefined>;
   // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
   listPullFiles?(repo: string, pullNumber: number): Promise<PullFilePatch[]>;
   // Optional deeper-observation reads (#371): only invoked by the scheduled outcome observer to enrich
   // a merged PR's outcome (revert/hotfix/human-thread). All read-only; absent ⇒ merge-state-only cut.
   listRecentMergedPulls?(repo: string, limit: number): Promise<PullRequestSummary[]>;
   listPullReviewComments?(repo: string, pullNumber: number): Promise<PullReviewComment[]>;
+}
+
+async function resolveSchedulerBotLogin(
+  input: { config: BotConfig; github: SchedulerGitHubApi },
+  repo: string
+): Promise<string | undefined> {
+  return input.github.getCanonicalBotLogin?.(repo);
 }
 
 export async function runScheduledCycle(options: RunOnceOptions): Promise<ScheduledRunResult> {
@@ -416,6 +425,7 @@ export async function observeScheduledOutcomes(input: {
       const reviewComments = input.github.listPullReviewComments
         ? await input.github.listPullReviewComments(target.repo, target.pullNumber)
         : [];
+      const botLogin = await resolveSchedulerBotLogin(input, target.repo);
       return buildObservedPullOutcome({
         merged,
         mergedAt: pull.merged_at,
@@ -425,7 +435,7 @@ export async function observeScheduledOutcomes(input: {
         findings: target.findings,
         subsequentPulls,
         reviewComments,
-        ...(input.config.github.botLogin ? { botLogin: input.config.github.botLogin } : {})
+        ...(botLogin ? { botLogin } : {})
       });
     } catch (error) {
       // Fail-open per target: a deeper-read error degrades to the merge-state cut, never throwing into
@@ -1675,23 +1685,24 @@ async function repairProcessedHeadStatusCommentIfNeeded(input: {
   if (!reviewUrl) return;
 
   let comments: IssueCommentCommandSource[];
+  let botLogin: string | undefined;
   try {
+    botLogin = await resolveSchedulerBotLogin(input, input.repo);
     comments = await input.github.listIssueComments(input.repo, input.pull.number);
   } catch {
     input.onStatusCommentFailure?.();
     return;
   }
+  if (!botLogin) return;
 
   const marker = buildReviewStatusMarker({
     repo: input.repo,
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha
   });
-  const botLogin = input.config.github.botLogin ?? DEFAULT_BOT_LOGIN;
   const existing = comments.find((comment) =>
     comment.body?.includes(marker) &&
-    comment.user?.type === "Bot" &&
-    comment.user.login === botLogin
+    isBotAuthoredComment(comment, botLogin)
   );
   if (!isRepairableReviewStatusCommentState(parseReviewStatusCommentState(existing?.body))) return;
 

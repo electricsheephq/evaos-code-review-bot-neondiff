@@ -8,6 +8,7 @@ import {
   parseFinishingTouchCommand,
   type FinishingTouchAction
 } from "./finishing-touches.js";
+import { normalizeBotLogin } from "./runtime-bot-identity.js";
 
 export type ReviewCommandAction = "review" | "re-review" | "request-changes" | "explain" | "stop" | FinishingTouchAction;
 
@@ -242,7 +243,7 @@ export function classifyCommandAuthorization(
  * path must never let ANY automated actor (dependabot, another app, or ourselves) spin up reviews,
  * so we reject on user.type === "Bot" OR login === botLogin.
  *
- * This is intentionally DIFFERENT from GitHubApi.isBotAuthoredComment, which is the NARROWER
+ * This is intentionally DIFFERENT from the shared isBotAuthoredComment predicate, which is the NARROWER
  * app-own-comment check (type === "Bot" AND login === botLogin) used to detect the bot's OWN status
  * comments for marker matching. Different questions ("is this any bot?" vs "is this MY comment?"), so
  * they are not unified; both derive the identity from the same botLogin config value. Trusted-author
@@ -250,7 +251,7 @@ export function classifyCommandAuthorization(
  */
 export function isBotCommandComment(user: { login: string; type?: string } | null | undefined, botLogin: string): boolean {
   if (!user) return false;
-  return user.type === "Bot" || user.login === botLogin;
+  return user.type === "Bot" || normalizeBotLogin(user.login) === normalizeBotLogin(botLogin);
 }
 
 export function isReviewCommandAction(action: ReviewCommandAction): boolean {
