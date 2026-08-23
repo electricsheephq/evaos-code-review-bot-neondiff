@@ -295,12 +295,12 @@ the app rejects it if any authorized bot now owns the same config identity.
 Choosing another account or explicitly choosing an existing bot ends the
 pending setup.
 
-For that promoted GA journey, the LaunchAgent `Program` is the signed
-`/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop` wrapper. It dispatches
-`--neondiff-worker-daemon` to the sealed helper
-`/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`; it is not a direct
-helper LaunchAgent. Legacy recovery below is operator-only, not native first-run
-setup.
+For that promoted GA journey, the LaunchAgent `ProgramArguments` begins with the
+signed `/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop` wrapper and
+`--neondiff-worker-daemon`. The wrapper dispatches the request to the sealed helper
+`/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`; the plist does not
+directly invoke the helper. Legacy recovery below is operator-only, not native
+first-run setup.
 
 This first-run step proves only current App installation and repository access.
 Provider verification, activation, dry run, and live review remain separate
