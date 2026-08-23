@@ -714,6 +714,7 @@ async function main(): Promise<void> {
     const github = new GitHubApi(config.github);
     const status = buildOperatorStatus({
       release,
+      ...(args.repo ? { repo: args.repo } : {}),
       coverage,
       agents,
       providerCooldowns,

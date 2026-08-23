@@ -398,6 +398,7 @@ export interface PullStatusExplanation {
 export function buildOperatorStatus(input: {
   release: ReleaseStatus;
   coverage?: CoverageAuditReport;
+  repo?: string;
   agents: OperatorAgentInventory;
   providerCooldowns?: ProviderCooldownReviewRecord[];
   durableQueue?: OperatorDurableQueueSnapshot;
@@ -416,12 +417,14 @@ export function buildOperatorStatus(input: {
   const readFailures = queue?.summary.readFailures ?? 0;
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const failedRows = input.release.database.errorCount;
-  const queueFailures = operatorQueueFailureCounts(input.release, durableQueue);
+  const recoveredQueueFailures = recoveredQueueFailureTimes(input.coverage);
+  const queueFailures = operatorQueueFailureCounts(input.release, durableQueue, Boolean(input.repo), recoveredQueueFailures);
   const failedQueueJobs = queueFailures.total;
   const activeFailedQueueJobs = queueFailures.active;
   const recentUnrecoveredReviewErrors = input.release.database.recentUnrecoveredErrorCount ?? failedRows;
-  const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
-  const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
+  const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue, Boolean(input.repo), recoveredQueueFailures);
+  const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue)
+    .map(sanitizeOperatorAction);
   const budget = input.release.budget;
   const retryableProviderDeferredJobs = actionableProviderDeferredJobs(
     budget,
@@ -1711,7 +1714,7 @@ function providerDeferredQueueEntry(entry: CoverageProviderDeferredEntry): Opera
     url: entry.url,
     status: entry.status,
     reason: entry.reason ?? entry.error ?? "provider cooldown",
-    nextAction: "wait for cooldown expiry or run retry-provider-cooldowns when expired"
+    nextAction: "inspect provider-deferred recovery rows before any action"
   };
 }
 
@@ -1775,7 +1778,8 @@ function sanitizeOperatorRelease(release: ReleaseStatus): ReleaseStatus {
   return {
     ...release,
     recommendedActions: release.recommendedActions.map(sanitizeOperatorAction),
-    gates: release.gates.map((gate) => ({ ...gate, detail: sanitizeOperatorAction(gate.detail) }))
+    gates: release.gates.map((gate) => ({ ...gate, detail: sanitizeOperatorAction(gate.detail) })),
+    rollback: { restartCommand: "inspect operator recovery rows before any action", unloadCommand: "inspect operator recovery rows before any action" }
   };
 }
 
@@ -1785,22 +1789,39 @@ function sanitizeOperatorAction(action: string): string {
     : action;
 }
 
+function recoveredQueueFailureTimes(report?: CoverageAuditReport): Map<string, string> {
+  return new Map((report?.processed ?? []).filter((entry) => entry.status === "posted").map((entry) => [`${entry.repo}\u0000${entry.pullNumber}`, entry.createdAt]));
+}
+
+function isRecoveredQueueFailure(job: ReviewQueueJobRecord, postedAtByPull: Map<string, string>): boolean {
+  const postedAt = Date.parse(postedAtByPull.get(`${job.repo}\u0000${job.pullNumber}`) ?? ""), failedAt = Date.parse(job.updatedAt);
+  return Number.isFinite(postedAt) && Number.isFinite(failedAt) && postedAt > failedAt;
+}
+
 function operatorQueueFailureCounts(
   release: ReleaseStatus,
-  durableQueue?: OperatorDurableQueueSnapshot
+  durableQueue?: OperatorDurableQueueSnapshot,
+  repoScoped = false,
+  postedAtByPull = new Map<string, string>()
 ): { total: number; active: number } {
   const total = durableQueue?.summary.failed ?? release.database.failedReviewQueueJobCount ?? 0;
+  if (repoScoped && durableQueue) {
+    return { total, active: durableQueue.jobs.filter((job) => job.state === "failed" && !isRecoveredQueueFailure(job, postedAtByPull)).length };
+  }
   const active = release.database.activeFailedReviewQueueJobCount ?? total;
   return { total, active: durableQueue ? Math.min(active, total) : active };
 }
 
 function zcodeTimeoutQueueCounts(
   release: ReleaseStatus,
-  durableQueue?: OperatorDurableQueueSnapshot
+  durableQueue?: OperatorDurableQueueSnapshot,
+  repoScoped = false,
+  postedAtByPull = new Map<string, string>()
 ): { total: number; activeTotal: number; retryable: number; exhausted: number } {
   const failedJobs = durableQueue?.jobs.filter((job) => job.state === "failed") ?? [];
   if (durableQueue && (durableQueue.summary.failed === 0 || failedJobs.length === durableQueue.summary.failed)) {
     const counts = summarizeZCodeTimeoutErrors(failedJobs.map((job) => job.lastError));
+    if (repoScoped) return { ...counts, activeTotal: summarizeZCodeTimeoutErrors(failedJobs.filter((job) => !isRecoveredQueueFailure(job, postedAtByPull)).map((job) => job.lastError)).total };
     const activeTotal = Math.min(
       release.database.activeZCodeTimeoutFailedReviewQueueJobCount ?? counts.total,
       counts.total

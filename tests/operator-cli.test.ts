@@ -127,12 +127,20 @@ describe("operator CLI summaries", () => {
         ok: false,
         recommendedActions: ["inspect ghp_fake_token", "npx tsx src/cli.ts retry-provider-cooldowns --dry-run false"]
       }),
-      coverage: coverageReport({ ok: true }),
+      coverage: coverageReport({ ok: true, providerDeferred: [providerDeferredEntry(2, "deferred")] }),
       agents: agentInventory({}),
       durableQueue: durableQueueSnapshot({ summary: cleanDurableQueueSummary() })
     });
     expect(formatOperatorStatusHuman(status)).not.toContain("ghp_fake_token");
-    expect(JSON.stringify(status)).not.toMatch(/retry-provider-cooldowns|retry-failed|--dry-run false/);
+    expect(JSON.stringify(status)).not.toMatch(/retry-provider-cooldowns|retry-failed|kickstart|bootout|--dry-run false/);
+  });
+
+  it("scopes status active failures and sanitizes generated timeout recovery", () => {
+    const release = releaseStatus({ ok: true, database: { activeFailedReviewQueueJobCount: 2, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: 1 } });
+    const job = durableJob({ repo: "owner/repo", pullNumber: 1, headSha: "failed", state: "failed", lastError: "zcode_timeout_retryable", updatedAt: "2026-07-01T00:00:00.000Z" });
+    const status = buildOperatorStatus({ release, repo: "owner/repo", coverage: coverageReport({ ok: true, processed: [{ ...processedEntry(1, "failed", "posted"), createdAt: "2026-07-01T00:30:00.000Z" }] }), agents: agentInventory({ ok: true }), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 1 }, jobs: [job] }) });
+    expect(status).toMatchObject({ ok: true, summary: { activeFailedQueueJobs: 0 } });
+    expect(JSON.stringify(status)).not.toMatch(/retry-failed|retry-provider-cooldowns|--dry-run false/);
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
@@ -1462,9 +1470,7 @@ describe("operator CLI summaries", () => {
       ok: false,
       detail: "1 ZCode timeout failed durable queue job(s); retryable=1 exhausted=0"
     });
-    expect(status.recommendedActions).toContain(
-      "npx tsx src/cli.ts retry-failed --config /config/live.json --repo electricsheephq/evaos-code-review-bot-neondiff --pr 216 --head-sha head-timeout --dry-run false --zcode true"
-    );
+    expect(status.recommendedActions).toContain("inspect operator recovery rows before any action");
   });
 
   it("surfaces exhausted ZCode timeout failed queue jobs through durable queue fallback counts", () => {

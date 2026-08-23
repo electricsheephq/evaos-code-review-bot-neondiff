@@ -22,10 +22,7 @@ evaos-review-bot status --config config.local.json
 
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
-  durable queue counts, and recommended actions. JSON is the default; use
-  `--human` for a compact explanation. Active blockers and recent unrecovered
-  failures (within the 24-hour health window) gate `ok`; retained historical
-  counts remain visible and recovered failures do not create retry actions.
+  durable queue counts, and recommended actions.
 - `runtime-inventory`: read-only runtime classifier for release operators. It
   includes release status, coverage, durable queue work, provider cooldowns,
   budget status, leases, heartbeat, and bot-owned process rows. It can classify
