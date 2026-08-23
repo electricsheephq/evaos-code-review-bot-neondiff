@@ -106,7 +106,7 @@ describe("operator CLI summaries", () => {
     const active = durableJob({ repo: "owner/repo", pullNumber: 7, headSha: "active", state: "leased", leaseId: "live", leaseExpiresAt: "2026-07-01T00:45:00.000Z" });
     const stale = durableJob({ repo: "owner/repo", pullNumber: 8, headSha: "stale", state: "running", leaseId: "dead", leaseExpiresAt: "2026-07-01T00:45:00.000Z" });
     const expired = durableJob({ repo: "owner/repo", pullNumber: 9, headSha: "expired", state: "leased", leaseExpiresAt: "2026-07-01T00:15:00.000Z" });
-    const timeout = durableJob({ repo: "owner/repo", pullNumber: 10, headSha: "owner/retry", state: "failed", lastError: "zcode_timeout_retryable; diagnostic retry owner/retry" });
+    const timeout = durableJob({ repo: "owner/repo", pullNumber: 10, headSha: "owner/retry", state: "failed", lastError: "zcode_timeout_retryable; retry_attempt=1; diagnostic retry owner/retry" });
     const queue = durableQueueSnapshot({ summary: cleanDurableQueueSummary(), jobs: [] });
     Object.defineProperties(queue, { completeJobs: { value: [active, stale, expired, timeout], enumerable: false }, staleRunLeaseIds: { value: ["dead"], enumerable: false } });
     const release = releaseStatus({ ok: true, database: {
@@ -114,9 +114,12 @@ describe("operator CLI summaries", () => {
       reviewQueueJobsByRepo: [{ repo: "owner/repo", total: 4, queued: 0, leased: 2, running: 1, providerDeferred: 0, retryableProviderDeferred: 0, failed: 2, activeFailed: 1, zcodeTimeoutFailed: 1, activeZCodeTimeoutFailed: 1 }, { repo: "owner/other", total: 9, queued: 0, leased: 0, running: 0, providerDeferred: 8, retryableProviderDeferred: 8, failed: 8, activeFailed: 8 }],
       reviewerSessionsByRepo: [{ repo: "owner/repo", total: 1, active: 1, expired: 0 }]
     }});
+    release.gates.push({ name: "diagnostic", ok: true, detail: "diagnostic retry owner/retry" });
     const cooldown = { ...processedRecord(7, "active", "skipped"), cooldownUntil: "2026-06-30T23:00:00.000Z", reason: "provider_request_rate_limit", expired: true };
     const status = buildOperatorStatus({ release, repo: "owner/repo", providerCooldowns: [cooldown], durableQueue: queue, agents: agentInventory({}), checkedAt: "2026-07-01T00:30:00.000Z" });
     expect(status.summary).toMatchObject({ failedQueueJobs: 2, activeFailedQueueJobs: 1, recentUnrecoveredReviewErrors: 0, retryableZCodeTimeoutFailedQueueJobs: 1, staleLeases: 2 });
+    expect(status.agents.activeLeases).toHaveLength(1);
+    expect(status.agents.staleLeases).toHaveLength(2);
     expect(status.release.summary.providerDeferredQueueJobs).toBe(0);
     expect(status.release.database.reviewerSessionCount).toBe(1);
     expect(status.gates).toContainEqual(expect.objectContaining({ name: "repo_no_expired_provider_cooldowns", ok: true }));
@@ -2418,6 +2421,8 @@ function durableJob(input: Partial<OperatorDurableQueueSnapshot["jobs"][number]>
     ...(input.nextEligibleAt ? { nextEligibleAt: input.nextEligibleAt } : {}),
     ...(input.reviewUrl ? { reviewUrl: input.reviewUrl } : {}),
     ...(input.lastError ? { lastError: input.lastError } : {}),
+    ...(input.leaseId ? { leaseId: input.leaseId } : {}),
+    ...(input.leaseExpiresAt ? { leaseExpiresAt: input.leaseExpiresAt } : {}),
     createdAt: input.createdAt ?? "2026-07-01T00:00:00.000Z",
     updatedAt: input.updatedAt ?? "2026-07-01T00:00:00.000Z"
   };

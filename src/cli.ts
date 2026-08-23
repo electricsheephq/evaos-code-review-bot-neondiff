@@ -701,7 +701,8 @@ async function main(): Promise<void> {
     });
     const providerCooldowns = collectOperatorProviderCooldowns(args["state-path"] ?? config.statePath, {
       repo: args.repo,
-      expiredOnly: false
+      expiredOnly: false,
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
     });
     const durableQueue = collectOperatorReviewQueue(args["state-path"] ?? config.statePath, {
       repo: args.repo,

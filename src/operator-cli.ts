@@ -444,7 +444,8 @@ export function buildOperatorStatus(input: {
   const retryableProviderDeferredJobs = input.repo ? release.database.retryableProviderDeferredReviewQueueJobCount ?? 0 : actionableProviderDeferredJobs(budget, durableQueue?.summary.retryableProviderDeferred ?? 0);
   const staleQueueLeases = (release.database.staleReviewRunLeaseCount ?? 0) + (release.database.staleActiveReviewQueueJobCount ?? 0);
   const activeLeases = input.repo ? Math.max(0, (release.database.leasedReviewQueueJobCount ?? 0) + (release.database.runningReviewQueueJobCount ?? 0) - staleQueueLeases) : input.agents.summary.activeLeases;
-  const agents = input.repo ? { ...input.agents, summary: { totalLeases: activeLeases + staleQueueLeases, activeLeases, staleLeases: staleQueueLeases }, activeLeases: [], staleLeases: [] } : input.agents;
+  const scopedLeases = input.repo ? scopedLeasesForJobs((durableQueue?.completeJobs ?? durableQueue?.jobs ?? []).filter((job) => job.repo === input.repo), checkedAt, durableQueue?.staleRunLeaseIds, durableQueue?.leaseTtlMs) : { active: [], stale: [] };
+  const agents = input.repo ? { ...input.agents, summary: { totalLeases: activeLeases + staleQueueLeases, activeLeases, staleLeases: staleQueueLeases }, activeLeases: scopedLeases.active, staleLeases: scopedLeases.stale } : input.agents;
   const issueEnrichment = input.repo ? undefined : input.issueEnrichment;
   const issueEnrichmentRuntime = input.repo ? undefined : input.issueEnrichmentRuntime;
   const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
@@ -913,10 +914,10 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
   return lines.join("\n");
 }
 
-const OPERATOR_ACTION_FIELDS = new Set(["action", "command", "commandAction", "nextAction", "recommendedActions", "restartCommand", "unloadCommand"]);
+const OPERATOR_ACTION_FIELDS = new Set(["action", "command", "commandAction", "nextAction", "recommendedActions", "restartCommand", "unloadCommand", "rollback"]);
 
 function sanitizeOperatorAction(action: string): string {
-  return /\b(?:retry|requeue|restart|kickstart|bootout|clear|retire)\b|--dry-run\s+false/i.test(action)
+  return /\b(?:retry|requeue|restart|kickstart|bootout|clear|retire)\b|--dry-run\s+false|(?:\bnpx\s+tsx\b|\blaunchctl\b)/i.test(action)
     ? "inspect operator recovery rows before any action"
     : action;
 }
@@ -1892,6 +1893,17 @@ function isStaleQueueLease(job: ReviewQueueJobRecord, now: Date, staleRunLeaseId
   return job.leaseExpiresAt
     ? !Number.isFinite(leaseExpiresAtMs) || leaseExpiresAtMs <= now.getTime()
     : !Number.isFinite(updatedAtMs) || updatedAtMs <= now.getTime() - leaseTtlMs;
+}
+
+function scopedLeasesForJobs(jobs: ReviewQueueJobRecord[], checkedAt: string, staleRunLeaseIds?: string[], leaseTtlMs = DEFAULT_QUEUE_LEASE_TTL_MS): { active: OperatorLeaseWithState[]; stale: OperatorLeaseWithState[] } {
+  const result: { active: OperatorLeaseWithState[]; stale: OperatorLeaseWithState[] } = { active: [], stale: [] };
+  const now = new Date(checkedAt);
+  for (const job of jobs.filter((candidate) => candidate.state === "leased" || candidate.state === "running")) {
+    const stale = isStaleQueueLease(job, now, staleRunLeaseIds, leaseTtlMs);
+    const lease: OperatorLeaseWithState = { leaseId: job.leaseId ?? job.jobId, startedAt: job.startedAt ?? job.updatedAt, expiresAt: job.leaseExpiresAt ?? (stale ? job.updatedAt : new Date(now.getTime() + leaseTtlMs).toISOString()), ...(stale ? { staleReason: job.leaseId && staleRunLeaseIds?.includes(job.leaseId) ? "owner_not_running" as const : "expired" as const } : {}) };
+    (stale ? result.stale : result.active).push(lease);
+  }
+  return result;
 }
 
 function isActiveQueueRetry(job: ReviewQueueJobRecord, now: Date, staleRunLeaseIds?: string[], leaseTtlMs?: number): boolean {
