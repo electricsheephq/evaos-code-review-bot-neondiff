@@ -266,7 +266,7 @@ describe("review and issue-enrichment quality v2", () => {
     )).not.toThrow();
 
     const includedPrompt = buildRepoProfilePromptSection(profile, { nonProfileTokenEstimate: 4_000 });
-    const includedFragments = publicReviewForbiddenProfileFragments(profile, { reviewPrompt: includedPrompt });
+    const includedFragments = publicReviewForbiddenProfileFragments(profile, { reviewPrompts: [omittedPrompt, includedPrompt] });
     expect(includedFragments).toContain(profile.reviewRiskLens);
     expect(() => assertPublicReviewOutputSafe(
       `Provider echo: ${profile.reviewRiskLens}`,

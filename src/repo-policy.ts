@@ -501,11 +501,14 @@ const RENDERED_REVIEW_RISK_LENS_PREFIX =
 
 export function publicReviewForbiddenProfileFragments(
   profile: ResolvedRepoProfile,
-  options: { reviewPrompt?: string } = {}
+  options: { reviewPrompt?: string; reviewPrompts?: string[] } = {}
 ): string[] {
   const renderedLens = typeof profile.reviewRiskLens === "string" ? profile.reviewRiskLens.trim() : "";
-  const reviewRiskLensWasIncluded = options.reviewPrompt === undefined ||
-    (renderedLens.length > 0 && options.reviewPrompt.includes(`${RENDERED_REVIEW_RISK_LENS_PREFIX}${renderedLens}`));
+  const renderedPrompts = options.reviewPrompts ??
+    (options.reviewPrompt === undefined ? undefined : [options.reviewPrompt]);
+  const reviewRiskLensWasIncluded = renderedPrompts === undefined ||
+    (renderedLens.length > 0 && renderedPrompts.some((prompt) =>
+      prompt.includes(`${RENDERED_REVIEW_RISK_LENS_PREFIX}${renderedLens}`)));
   return [
     profile.promptNote,
     ...(reviewRiskLensWasIncluded ? [profile.reviewRiskLens] : []),
