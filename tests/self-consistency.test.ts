@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parseSevereVerifierOutput, runSelfConsistencyRecheck, type SevereVerificationReceipt } from "../src/self-consistency.js";
+import { parseSevereVerifierOutput, runSelfConsistencyRecheck as rawSelfConsistencyRecheck, type SevereVerificationReceipt } from "../src/self-consistency.js";
 import type { PullFilePatch, ReviewComment } from "../src/types.js";
 
 function comment(overrides: Partial<ReviewComment> & Pick<ReviewComment, "severity" | "line" | "title" | "confidence">): ReviewComment {
@@ -17,9 +17,10 @@ const files: PullFilePatch[] = [
   { filename: "src/save.ts", patch: "@@ -1,2 +1,3 @@\n export function save() {\n+  overwriteAllData();\n }" }
 ];
 
-function receipt(state: SevereVerificationReceipt["state"], complete = state === "confirmed", confidence = 0.8): { receipt: SevereVerificationReceipt } {
-  return { receipt: { schemaVersion: "severe-verifier-v1", repo: "owner/repo", pullNumber: 1, baseSha: "b".repeat(40), findingFingerprint: `finding:${"0".repeat(64)}`, headSha: "a".repeat(40), state,
-    disposition: state === "confirmed" && complete ? "retain" : "suppress", confidence, evidence: { files: [], omitted: complete ? [] : [{ path: "src/save.ts", reason: "not_read" }], complete } } };
+const reviewContext = { repo: "owner/repo", pullNumber: 1, baseSha: "b".repeat(40), headSha: "a".repeat(40), findingFingerprint: `finding:${"0".repeat(64)}` }; const runSelfConsistencyRecheck = (input: Parameters<typeof rawSelfConsistencyRecheck>[0]) => rawSelfConsistencyRecheck({ ...input, reviewContext: input.reviewContext ?? reviewContext });
+
+function receipt(state: SevereVerificationReceipt["state"], complete = state === "confirmed", confidence = 0.8, withFiles = complete): { receipt: SevereVerificationReceipt } {
+  return { receipt: { schemaVersion: "severe-verifier-v1", ...reviewContext, findingFingerprint: `finding:${"0".repeat(64)}`, state, disposition: state === "confirmed" && complete ? "retain" : "suppress", confidence, evidence: { files: withFiles ? [{ path: "src/save.ts", kind: "whole_file", sha256: "f".repeat(64), bytes: 1, complete: true }] : [], omitted: complete ? [] : [{ path: "src/save.ts", reason: "not_read" }], complete } } };
 }
 
 describe("self-consistency re-check (#303)", () => {
@@ -126,7 +127,7 @@ describe("self-consistency re-check (#303)", () => {
 
     expect(result.comments).toHaveLength(0);
     expect(result.event).toBe("COMMENT");
-    expect(result.verdicts).toEqual([expect.objectContaining({ error: expect.stringContaining("provider exploded") })]);
+    expect(result.verdicts).toEqual([expect.objectContaining({ error: "severe_verifier_unavailable" })]);
   });
 
   it("awaits asynchronous second draws sequentially in ranked order", async () => {
@@ -154,24 +155,19 @@ describe("self-consistency re-check (#303)", () => {
   });
 
   it("suppresses every non-confirmed receipt, including incomplete evidence", async () => {
-    const states: Array<SevereVerificationReceipt["state"]> = ["refuted", "malformed", "timeout", "unavailable", "stale_head", "incomplete"]; for (const state of states) {
-      const result = await runSelfConsistencyRecheck({
-        comments: [comment({ severity: "P1", line: 2, title: state, confidence: 0.9 })],
-        files,
-        config: { enabled: true },
-        secondDraw: () => receipt(state, false)
-      });
-      expect(result.comments, state).toEqual([]); expect(result.event, state).toBe("COMMENT");
-    }
+    for (const state of ["refuted", "malformed", "timeout", "unavailable", "stale_head", "incomplete"] as const) { const result = await runSelfConsistencyRecheck({ comments: [comment({ severity: "P1", line: 2, title: state, confidence: 0.9 })], files, config: { enabled: true }, secondDraw: () => receipt(state, false) }); expect(result.comments, state).toEqual([]); expect(result.event, state).toBe("COMMENT"); }
   });
   it("strictly parses the dedicated verifier result", () => {
     expect(parseSevereVerifierOutput({ verdict: "confirm", confidence: 0.7 })).toEqual({ verdict: "confirm", confidence: 0.7 });
-    for (const invalid of [
-      { verdict: "confirm" },
-      { verdict: "confirm", confidence: 0.7, extra: true },
-      { verdict: "confirm", confidence: Number.NaN },
-      { verdict: "confirm", confidence: 1.1 },
-      { verdict: "maybe", confidence: 0.7 }
-    ]) expect(() => parseSevereVerifierOutput(invalid)).toThrow("severe_verifier_schema_invalid");
+    for (const invalid of [{ verdict: "confirm" }, { verdict: "confirm", confidence: 0.7, extra: true }, { verdict: "confirm", confidence: Number.NaN }, { verdict: "confirm", confidence: 1.1 }, { verdict: "maybe", confidence: 0.7 }]) expect(() => parseSevereVerifierOutput(invalid)).toThrow("severe_verifier_schema_invalid");
+  });
+
+  it("suppresses empty evidence, identity mismatches, and free-form reason metadata", async () => {
+    const base = { comments: [comment({ severity: "P1", line: 2, title: "bound", confidence: 0.9 })], files, config: { enabled: true } };
+    const empty = await runSelfConsistencyRecheck({ ...base, secondDraw: () => receipt("confirmed", true, 0.8, false) });
+    const mismatch = await runSelfConsistencyRecheck({ ...base, reviewContext: { ...reviewContext, headSha: "c".repeat(40) }, secondDraw: () => receipt("confirmed") });
+    const prose = await runSelfConsistencyRecheck({ ...base, secondDraw: () => ({ receipt: { ...receipt("confirmed").receipt, reasonCode: "provider said keep this" } }) }); expect([empty.comments, mismatch.comments, prose.comments]).toEqual([[], [], []]);
+    const legacy = await runSelfConsistencyRecheck({ ...base, secondDraw: () => ({ verified: true, confidence: 1 }) });
+    const nil = await runSelfConsistencyRecheck({ ...base, secondDraw: () => null }); expect([legacy.comments, nil.comments]).toEqual([[], []]);
   });
 });

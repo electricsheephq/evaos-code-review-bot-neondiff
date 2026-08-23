@@ -34,9 +34,7 @@ export interface SevereVerificationReceipt {
   };
 }
 
-export type SelfConsistencySecondDrawResult =
-  | { receipt: SevereVerificationReceipt }
-  | { verified: boolean; confidence: number };
+export type SelfConsistencySecondDrawResult = unknown;
 
 export interface SelfConsistencyVerdict {
   path: string;
@@ -80,22 +78,20 @@ function exactKeys(value: object, expected: string[], optional: string[] = []): 
   return expected.every((key) => keys.includes(key)) && keys.every((key) => expected.includes(key) || optional.includes(key));
 }
 
-function metadataString(value: unknown, max = 256): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= max && !/[\r\n]/.test(value);
-}
+const SEVERE_REASON_CODES = new Set(["not_read", "refuted", "malformed", "timeout", "unavailable", "stale_head", "incomplete", "schema_invalid", "identity_mismatch", "evidence_incomplete", "provider_unavailable", "cap_exceeded", "receipt_invalid"]);
 
 export function isSevereVerificationReceipt(value: unknown): value is SevereVerificationReceipt {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const receipt = value as Record<string, unknown>;
   if (!exactKeys(receipt, ["baseSha", "disposition", "evidence", "findingFingerprint", "headSha", "pullNumber", "repo", "schemaVersion", "state"], ["confidence", "reasonCode"])) return false;
-  if (receipt.schemaVersion !== "severe-verifier-v1" || !metadataString(receipt.repo) ||
+  if (receipt.schemaVersion !== "severe-verifier-v1" || typeof receipt.repo !== "string" || receipt.repo.length === 0 || receipt.repo.length > 256 || /[\r\n]/.test(receipt.repo) || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(receipt.repo) ||
       typeof receipt.pullNumber !== "number" || !Number.isSafeInteger(receipt.pullNumber) || receipt.pullNumber < 1 ||
       !/^[a-f0-9]{40}$/.test(String(receipt.baseSha)) || !/^[a-f0-9]{40}$/.test(String(receipt.headSha)) ||
       !/^finding:[a-f0-9]{64}$/.test(String(receipt.findingFingerprint)) ||
       !["confirmed", "refuted", "malformed", "timeout", "unavailable", "stale_head", "incomplete"].includes(String(receipt.state)) ||
       !["retain", "suppress"].includes(String(receipt.disposition))) return false;
   if (receipt.confidence !== undefined && (typeof receipt.confidence !== "number" || !Number.isFinite(receipt.confidence) || receipt.confidence < 0 || receipt.confidence > 1)) return false;
-  if (receipt.reasonCode !== undefined && (!metadataString(receipt.reasonCode, 64) || !/^[a-z0-9_.-]+$/.test(receipt.reasonCode))) return false;
+  if (receipt.reasonCode !== undefined && (typeof receipt.reasonCode !== "string" || !SEVERE_REASON_CODES.has(receipt.reasonCode))) return false;
   const evidence = receipt.evidence;
   if (typeof evidence !== "object" || evidence === null || Array.isArray(evidence)) return false;
   const evidenceRecord = evidence as Record<string, unknown>;
@@ -104,23 +100,23 @@ export function isSevereVerificationReceipt(value: unknown): value is SevereVeri
   if (!evidenceRecord.files.every((file) => {
     if (typeof file !== "object" || file === null || Array.isArray(file)) return false;
     const entry = file as Record<string, unknown>;
-    return exactKeys(entry, ["bytes", "complete", "kind", "path", "sha256"]) && metadataString(entry.path) &&
+    return exactKeys(entry, ["bytes", "complete", "kind", "path", "sha256"]) && typeof entry.path === "string" && entry.path.length > 0 && entry.path.length <= 256 && !/[\r\n]/.test(entry.path) && !/[^A-Za-z0-9_./@~-]/.test(entry.path) &&
       ["whole_file", "module"].includes(String(entry.kind)) && /^[a-f0-9]{64}$/.test(String(entry.sha256)) &&
       typeof entry.bytes === "number" && Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 && typeof entry.complete === "boolean";
   })) return false;
   return evidenceRecord.omitted.every((entry) => {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return false;
     const omitted = entry as Record<string, unknown>;
-    return exactKeys(omitted, ["path", "reason"]) && metadataString(omitted.path) && metadataString(omitted.reason, 64) && /^[a-z0-9_.-]+$/.test(omitted.reason);
+    return exactKeys(omitted, ["path", "reason"]) && typeof omitted.path === "string" && omitted.path.length > 0 && omitted.path.length <= 256 && !/[\r\n]/.test(omitted.path) && !/[^A-Za-z0-9_./@~-]/.test(omitted.path) && typeof omitted.reason === "string" && SEVERE_REASON_CODES.has(omitted.reason);
   });
 }
 
-function hasCompleteEvidence(receipt: SevereVerificationReceipt): boolean {
-  return receipt.evidence.complete && receipt.evidence.omitted.length === 0 && receipt.evidence.files.every((file) => file.complete);
+function hasCompleteEvidence(receipt: SevereVerificationReceipt, path: string): boolean {
+  return receipt.evidence.complete && receipt.evidence.omitted.length === 0 && receipt.evidence.files.length > 0 && receipt.evidence.files.every((file) => file.complete) && receipt.evidence.files.some((file) => file.path === path && file.complete);
 }
 
-function retainsSevereFinding(receipt: SevereVerificationReceipt): boolean {
-  return receipt.state === "confirmed" && receipt.disposition === "retain" && hasCompleteEvidence(receipt) && receipt.confidence !== undefined;
+function retainsSevereFinding(receipt: SevereVerificationReceipt, comment: ReviewComment, context: { repo: string; pullNumber: number; baseSha: string; headSha: string; findingFingerprint: string } | undefined): boolean {
+  return context !== undefined && receipt.state === "confirmed" && receipt.disposition === "retain" && hasCompleteEvidence(receipt, comment.path) && receipt.confidence !== undefined && receipt.findingFingerprint === comment.fingerprint && receipt.findingFingerprint === context.findingFingerprint && receipt.repo === context.repo && receipt.pullNumber === context.pullNumber && receipt.baseSha === context.baseSha && receipt.headSha === context.headSha;
 }
 
 /**
@@ -133,6 +129,7 @@ export async function runSelfConsistencyRecheck(input: {
   comments: ReviewComment[];
   files: PullFilePatch[];
   config: SelfConsistencyRecheckConfig;
+  reviewContext?: { repo: string; pullNumber: number; baseSha: string; headSha: string; findingFingerprint: string };
   requestChangesConfidenceFloors?: RequestChangesConfidenceFloors;
   categoryPrecisionFloors?: CategoryPrecisionFloors;
   secondDraw: (input: SelfConsistencySecondDrawInput) => SelfConsistencySecondDrawResult | Promise<SelfConsistencySecondDrawResult>;
@@ -176,7 +173,7 @@ export async function runSelfConsistencyRecheck(input: {
     try {
       draw = await input.secondDraw({ comment, hunk: extractHunk(comment, input.files) });
     } catch (error) {
-      verdicts.push({ ...base, error: error instanceof Error ? error.message : String(error) });
+      verdicts.push({ ...base, error: "severe_verifier_unavailable" });
       continue;
     }
 
@@ -185,7 +182,7 @@ export async function runSelfConsistencyRecheck(input: {
       continue;
     }
 
-    if (retainsSevereFinding(draw.receipt)) {
+    if (retainsSevereFinding(draw.receipt, comment, input.reviewContext)) {
       verdicts.push({ ...base, secondConfidence: draw.receipt.confidence, agreed: true, refuted: false, receipt: draw.receipt });
       comments.push(comment);
       continue;
