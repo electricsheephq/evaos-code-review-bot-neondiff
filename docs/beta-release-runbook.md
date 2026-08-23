@@ -9,18 +9,27 @@ Set the operator-owned coordinates once, before any command in this runbook:
 
 ```bash
 : "${HOME:?HOME is required}"
-: "${NEONDIFF_ACCOUNT:?NEONDIFF_ACCOUNT is required}"
-: "${NEONDIFF_BOT:?NEONDIFF_BOT is required}"
 : "${NEONDIFF_RELEASE_CHECKOUT:?set an absolute release checkout}"
 : "${NEONDIFF_EVIDENCE_ROOT:?set an absolute evidence root outside the checkout}"
-NEONDIFF_BOT_ROOT="$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT/Bots/$NEONDIFF_BOT"
-NEONDIFF_CONFIG_PATH="$NEONDIFF_BOT_ROOT/config.local.json"
-NEONDIFF_STATE_DB="$NEONDIFF_BOT_ROOT/state/reviews.sqlite"
-export NEONDIFF_BOT_ROOT NEONDIFF_CONFIG_PATH NEONDIFF_STATE_DB
+: "${NEONDIFF_CONFIG_PATH:?copy the absolute --config operand from the verified plist}"
+: "${NEONDIFF_STATE_DB:?copy the absolute statePath from that config}"
+for path in "$NEONDIFF_RELEASE_CHECKOUT" "$NEONDIFF_EVIDENCE_ROOT" "$NEONDIFF_CONFIG_PATH" "$NEONDIFF_STATE_DB"; do
+  case "$path" in /*) ;; *) echo "operator paths must be absolute" >&2; exit 1;; esac
+done
+test -d "$NEONDIFF_RELEASE_CHECKOUT" && test -d "$NEONDIFF_EVIDENCE_ROOT"
+NEONDIFF_RELEASE_CHECKOUT="$(cd "$NEONDIFF_RELEASE_CHECKOUT" && pwd -P)"
+NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"
+CHECKOUT_TOP="$(cd "$(git -C "$NEONDIFF_RELEASE_CHECKOUT" rev-parse --show-toplevel)" && pwd -P)"
+test "$CHECKOUT_TOP" = "$NEONDIFF_RELEASE_CHECKOUT" || { echo "release checkout root mismatch" >&2; exit 1; }
+case "$NEONDIFF_EVIDENCE_ROOT/" in "$NEONDIFF_RELEASE_CHECKOUT/"*) echo "evidence root must be outside the checkout" >&2; exit 1;; esac
+case "$(git -C "$NEONDIFF_RELEASE_CHECKOUT" remote get-url origin)" in https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git|git@github.com:electricsheephq/evaos-code-review-bot-neondiff.git) ;; *) echo "release checkout origin mismatch" >&2; exit 1;; esac
+export NEONDIFF_RELEASE_CHECKOUT NEONDIFF_EVIDENCE_ROOT NEONDIFF_CONFIG_PATH NEONDIFF_STATE_DB
 ```
 
-All named paths must be absolute. The evidence root must be outside the release
-checkout. The beta release unit is:
+The config coordinate is the legacy LaunchAgent's verified absolute `--config`
+operand; it need not be under Desktop's account/bot tree. The native path is
+documented separately in `apps/neondiff-desktop/docs/customer-adoption.md`.
+The beta release unit is:
 
 - source checkout: `$NEONDIFF_RELEASE_CHECKOUT`
 - launchd job: `com.electricsheephq.evaos-code-review-bot`
@@ -47,8 +56,8 @@ Use `install-b0-worker-candidate.mjs update` or `rollback` first with
 `--dry-run true`, then with `--dry-run false --confirm true`, supplying the
 absolute manifest and tarball paths, manifest SHA-256, and existing launchd
 label. The installer must preserve the original label, config,
-`WorkingDirectory`, environment, worker loaded/stopped state, account/bot state,
-`state/reviews.sqlite`, allowlist, and exactly one installed worker. Rollback
+`WorkingDirectory`, environment, worker loaded/stopped state, config `statePath`,
+allowlist, and exactly one installed worker. Rollback
 uses the recorded prior candidate; it never substitutes source checkout bytes.
 
 The beta release unit does not include expanding monitored repos, GitHub App
@@ -587,8 +596,10 @@ that the retry recorded `skipped_closed` or `skipped_stale_head`.
 
 ## Rollback
 
-Default rollback is to restart the existing launchd job after checking out the
-last known-good merge commit:
+For a managed candidate whose plist executes `Workers/.../current`, use the
+candidate installer's recorded-prior `rollback` flow above; a source reset does
+not change that worker. Only a source-managed plist may use the source rollback
+below to restart after checking out the last known-good merge commit:
 
 ```bash
 cd "$NEONDIFF_RELEASE_CHECKOUT"

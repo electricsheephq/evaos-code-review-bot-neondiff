@@ -34,11 +34,13 @@ exception in the tracker issue and open a backfill issue before ending.
 
 ```bash
 : "${HOME:?HOME is required}"
-: "${NEONDIFF_ACCOUNT:?NEONDIFF_ACCOUNT is required}"
-: "${NEONDIFF_BOT:?NEONDIFF_BOT is required}"
 : "${NEONDIFF_RELEASE_CHECKOUT:?set an absolute release checkout}"
-NEONDIFF_CONFIG_PATH="$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT/Bots/$NEONDIFF_BOT/config.local.json"
-export NEONDIFF_CONFIG_PATH
+: "${NEONDIFF_CONFIG_PATH:?copy the absolute --config operand from the verified plist}"
+case "$NEONDIFF_RELEASE_CHECKOUT" in /*) ;; *) echo "release checkout must be absolute" >&2; exit 1;; esac
+NEONDIFF_RELEASE_CHECKOUT="$(cd "$NEONDIFF_RELEASE_CHECKOUT" && pwd -P)"
+cd "$NEONDIFF_RELEASE_CHECKOUT"
+test "$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" = "$NEONDIFF_RELEASE_CHECKOUT" || exit 1
+case "$(git remote get-url origin)" in https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git|git@github.com:electricsheephq/evaos-code-review-bot-neondiff.git) ;; *) echo "release checkout origin mismatch" >&2; exit 1;; esac
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 

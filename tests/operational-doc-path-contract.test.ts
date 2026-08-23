@@ -32,13 +32,17 @@ describe("operational documentation path contract", () => {
     const profiles = read("docs/repo-profiles.md");
     const legacy = [runbook, governance, operator, profiles].join("\n");
 
-    expect(runbook).toContain("Accounts/$NEONDIFF_ACCOUNT/Bots/$NEONDIFF_BOT");
-    expect(runbook).toContain("state/reviews.sqlite");
+    expect(runbook).toContain("copy the absolute --config operand from the verified plist");
+    expect(runbook).toContain("copy the absolute statePath from that config");
+    expect(runbook).toContain('in "$NEONDIFF_RELEASE_CHECKOUT/"*)');
+    expect(runbook).toContain("release checkout origin mismatch");
     expect(runbook).toContain("absolute `WorkingDirectory`");
     expect(runbook).toContain("`EnvironmentVariables`");
     expect(runbook).toContain("absolute private-key file path");
     expect(runbook).toContain("exactly one installed worker");
     expect(operator).toContain("${HOME:?HOME is required}");
+    expect(operator).toContain('cd "$NEONDIFF_RELEASE_CHECKOUT"');
+    expect(governance).toContain("source reset below cannot roll it back");
     expect(legacy).not.toContain("/Volumes/LEXAR");
   });
 });

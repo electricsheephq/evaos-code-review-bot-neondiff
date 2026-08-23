@@ -226,10 +226,10 @@ Use this path for each new repo from #14 or future allowlists:
 7. Promote through `docs/beta-release-runbook.md` and verify
    `npm run release:status` plus fresh launchd heartbeats.
 
-Do not treat `config.example.json` as live config. The active launchd config is
-the account/bot-scoped
-`~/Library/Application Support/NeonDiffDesktop/Accounts/<account>/Bots/<bot>/config.local.json`;
-operators must guard `HOME`, account, and bot before deriving that path.
+Do not treat `config.example.json` as live config. A legacy LaunchAgent may keep
+any verified absolute `--config` path, and release operations must reuse that
+exact plist operand. Native Desktop instead owns the account/bot-scoped
+`~/Library/Application Support/NeonDiffDesktop/Accounts/<account>/Bots/<bot>/config.local.json`.
 Do not add repos whose GitHub App installation cannot be verified; public
 visibility or an admin user's `gh repo view` is not enough because reviews must
 be authored by `evaos-code-review-bot`.

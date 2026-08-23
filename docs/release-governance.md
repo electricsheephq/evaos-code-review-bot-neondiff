@@ -459,7 +459,10 @@ before calling the release green.
 
 ## Rollback
 
-Rollback is tag-first:
+For a managed candidate whose plist executes `Workers/.../current`, use
+`install-b0-worker-candidate.mjs rollback` with its recorded prior candidate;
+the source reset below cannot roll it back. Only a source-managed plist uses
+this tag-first flow:
 
 ```bash
 cd "$NEONDIFF_RELEASE_CHECKOUT"
