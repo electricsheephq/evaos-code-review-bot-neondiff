@@ -662,6 +662,7 @@ describe("GitHub App read authentication", () => {
 
     const marker = "<!-- evaos-code-review-bot:walkthrough repo=owner/repo pr=42 -->";
     const calls: Array<{ url: string; method: string; authorization?: string; body?: unknown }> = [];
+    let installationCalls = 0;
     globalThis.fetch = vi.fn(async (url, init) => {
       const method = init?.method ?? "GET";
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
@@ -672,10 +673,11 @@ describe("GitHub App read authentication", () => {
         body: init?.body ? JSON.parse(String(init.body)) : undefined
       });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
+        installationCalls += 1;
+        return jsonResponse({ id: installationCalls === 1 ? 123 : 456, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
       }
-      if (String(url).endsWith("/app/installations/123/access_tokens")) {
-        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      if (/\/app\/installations\/(123|456)\/access_tokens$/.test(String(url))) {
+        return jsonResponse({ token: "installation-token", expires_at: installationCalls === 1 ? "2000-01-01T00:00:00Z" : "2999-01-01T00:00:00Z" });
       }
       if (String(url).endsWith("/repos/owner/repo/issues/42/comments?per_page=100&page=1")) {
         return jsonResponse([
@@ -708,6 +710,9 @@ describe("GitHub App read authentication", () => {
     expect(
       calls.some((call) => call.method === "POST" && call.url.endsWith("/repos/owner/repo/issues/42/comments"))
     ).toBe(false);
+    await github.upsertIssueComment({ repo: "owner/repo", issueNumber: 42, marker, body: `${marker}\nnew` });
+    expect(installationCalls).toBe(2);
+    expect(calls.some((call) => call.url.endsWith("/app/installations/456/access_tokens"))).toBe(true);
   });
 
   it("creates a marked PR walkthrough comment when only user-authored marker comments exist", async () => {

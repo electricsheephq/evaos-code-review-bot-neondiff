@@ -182,6 +182,11 @@ export class GitHubApi {
 
   /** Resolve the one runtime owner from the verified installation App slug. */
   async getCanonicalBotLogin(repo: string): Promise<string | undefined> {
+    const repoToken = this.repoInstallationTokens.get(repo);
+    if (repoToken && repoToken.expiresAt <= Date.now() + 60_000) {
+      this.verifiedInstallations.delete(repo);
+      this.verifiedBotLogins.delete(repo);
+    }
     const cached = this.verifiedBotLogins.get(repo);
     if (cached) return cached;
     if (!this.canPostAsApp()) return undefined;
@@ -560,6 +565,10 @@ export class GitHubApi {
     const cached = this.repoInstallationTokens.get(repo);
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
+    if (cached && cached.expiresAt <= Date.now() + 60_000 && this.verifiedInstallations.get(repo)?.id === cached.installationId) {
+      this.verifiedInstallations.delete(repo);
+      this.verifiedBotLogins.delete(repo);
+    }
 
     const installation = this.verifiedInstallations.get(repo) ?? await this.getInstallation(repo);
     return this.getInstallationTokenForId(repo, installation.id);

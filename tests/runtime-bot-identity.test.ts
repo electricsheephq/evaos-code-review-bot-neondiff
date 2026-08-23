@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  deriveCanonicalBotLogin,
-  isBotAuthoredComment
-} from "../src/runtime-bot-identity.js";
+import { deriveCanonicalBotLogin, isBotAuthoredComment } from "../src/runtime-bot-identity.js";
 
 describe("runtime bot identity", () => {
   it("derives a case-normalized login from an authoritative App slug", () => {
@@ -11,14 +8,8 @@ describe("runtime bot identity", () => {
   });
 
   it("accepts an explicit verified login only when it agrees with the App slug", () => {
-    expect(deriveCanonicalBotLogin({
-      appSlug: "customer-review-app",
-      verifiedBotLogin: "CUSTOMER-REVIEW-APP[BOT]"
-    })).toBe("customer-review-app[bot]");
-    expect(deriveCanonicalBotLogin({
-      appSlug: "customer-review-app",
-      verifiedBotLogin: "other-review-app[bot]"
-    })).toBeUndefined();
+    expect(deriveCanonicalBotLogin({ appSlug: "customer-review-app", verifiedBotLogin: "CUSTOMER-REVIEW-APP[BOT]" })).toBe("customer-review-app[bot]");
+    expect(deriveCanonicalBotLogin({ appSlug: "customer-review-app", verifiedBotLogin: "other-review-app[bot]" })).toBeUndefined();
   });
 
   it("fails closed for missing or malformed proof and non-bot authors", () => {

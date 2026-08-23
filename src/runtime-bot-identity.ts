@@ -7,10 +7,7 @@ export function normalizeBotLogin(value: unknown): string | undefined {
   return BOT_LOGIN_PATTERN.test(normalized) ? normalized : undefined;
 }
 
-export function deriveCanonicalBotLogin(input: {
-  appSlug?: unknown;
-  verifiedBotLogin?: unknown;
-}): string | undefined {
+export function deriveCanonicalBotLogin(input: { appSlug?: unknown; verifiedBotLogin?: unknown }): string | undefined {
   const appSlug = typeof input.appSlug === "string" ? input.appSlug.trim().toLowerCase() : undefined;
   const fromAppSlug = appSlug && APP_SLUG_PATTERN.test(appSlug) ? `${appSlug}[bot]` : undefined;
   const explicit = normalizeBotLogin(input.verifiedBotLogin);
@@ -18,10 +15,7 @@ export function deriveCanonicalBotLogin(input: {
   return fromAppSlug ?? explicit;
 }
 
-export function isBotAuthoredComment(
-  comment: { user?: { login?: unknown; type?: unknown } | null } | null | undefined,
-  botLogin: string | undefined
-): boolean {
+export function isBotAuthoredComment(comment: { user?: { login?: unknown; type?: unknown } | null } | null | undefined, botLogin: string | undefined): boolean {
   const canonicalBotLogin = normalizeBotLogin(botLogin);
   return Boolean(
     canonicalBotLogin &&
