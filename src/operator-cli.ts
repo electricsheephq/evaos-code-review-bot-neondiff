@@ -53,6 +53,8 @@ export interface OperatorStatus {
     runningJobs: number;
     providerDeferredJobs: number;
     failedQueueJobs: number;
+    activeFailedQueueJobs: number;
+    recentUnrecoveredReviewErrors: number;
     zcodeTimeoutFailedQueueJobs: number;
     retryableZCodeTimeoutFailedQueueJobs: number;
     exhaustedZCodeTimeoutFailedQueueJobs: number;
@@ -357,6 +359,9 @@ export interface OperatorDurableQueueSnapshot {
     oldestWaitingAtMalformed?: boolean;
   };
   jobs: ReviewQueueJobRecord[];
+  completeJobs?: ReviewQueueJobRecord[];
+  staleRunLeaseIds?: string[];
+  leaseTtlMs?: number;
   byRepo: Array<{
     repo: string;
     total: number;
@@ -395,6 +400,7 @@ export interface PullStatusExplanation {
 
 export function buildOperatorStatus(input: {
   release: ReleaseStatus;
+  repo?: string;
   coverage?: CoverageAuditReport;
   agents: OperatorAgentInventory;
   providerCooldowns?: ProviderCooldownReviewRecord[];
@@ -403,26 +409,35 @@ export function buildOperatorStatus(input: {
   issueEnrichmentRuntime?: OperatorIssueEnrichmentRuntime;
   checkedAt?: string;
 }): OperatorStatus {
+  const checkedAt = input.checkedAt ?? input.release.checkedAt;
   const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
-  const providerCooldowns = input.providerCooldowns ?? [];
+  const durableQueue = input.durableQueue;
+  const providerCooldowns = (input.providerCooldowns ?? []).filter((row) => !input.repo || row.repo === input.repo);
+  const release = scopeReleaseForRepo(input.release, input.repo, {
+    jobs: durableQueue?.completeJobs ?? durableQueue?.jobs ?? [],
+    staleRunLeaseIds: durableQueue?.staleRunLeaseIds,
+    leaseTtlMs: durableQueue?.leaseTtlMs,
+    providerCooldowns,
+    checkedAt
+  });
   const expiredProviderCooldowns = providerCooldowns.filter((cooldown) => cooldown.expired).length;
   const activeProviderCooldowns = providerCooldowns.length - expiredProviderCooldowns;
-  const durableQueue = input.durableQueue;
   const pendingHeads = queue?.summary.pending ?? 0;
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
   const readFailures = queue?.summary.readFailures ?? 0;
   const staleHeads = queue?.summary.staleHeads ?? 0;
-  const failedRows = input.release.database.errorCount;
-  const failedQueueJobs = durableQueue?.summary.failed ?? 0;
-  const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
-  const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
-  const budget = input.release.budget;
-  const retryableProviderDeferredJobs = actionableProviderDeferredJobs(
-    budget,
-    durableQueue?.summary.retryableProviderDeferred ?? 0
-  );
-  const issueEnrichment = input.issueEnrichment;
-  const issueEnrichmentRuntime = input.issueEnrichmentRuntime;
+  const failedRows = release.database.errorCount;
+  const failedQueueJobs = input.repo ? release.database.failedReviewQueueJobCount ?? 0 : durableQueue?.summary.failed ?? release.database.failedReviewQueueJobCount ?? 0;
+  const activeFailedQueueJobs = input.repo ? release.database.activeFailedReviewQueueJobCount ?? 0 : release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
+  const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(release, durableQueue);
+  const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(release, durableQueue);
+  const budget = input.repo ? undefined : release.budget;
+  const retryableProviderDeferredJobs = input.repo ? release.database.retryableProviderDeferredReviewQueueJobCount ?? 0 : actionableProviderDeferredJobs(budget, durableQueue?.summary.retryableProviderDeferred ?? 0);
+  const staleQueueLeases = (release.database.staleReviewRunLeaseCount ?? 0) + (release.database.staleActiveReviewQueueJobCount ?? 0);
+  const activeLeases = input.repo ? 0 : input.agents.summary.activeLeases;
+  const agents = input.repo ? { ...input.agents, summary: { totalLeases: 0, activeLeases: 0, staleLeases: 0 }, activeLeases: [], staleLeases: [] } : input.agents;
+  const issueEnrichment = input.repo ? undefined : input.issueEnrichment;
+  const issueEnrichmentRuntime = input.repo ? undefined : input.issueEnrichmentRuntime;
   const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
   const issueEnrichmentRuntimeFailed = issueEnrichmentRuntime?.summary.failed ?? 0;
   const issueEnrichmentRuntimeRetryableDeferred = issueEnrichmentRuntime?.summary.retryableDeferred ?? 0;
@@ -430,7 +445,10 @@ export function buildOperatorStatus(input: {
     describeIssueEnrichmentRuntimeRetryableDeferred(issueEnrichmentRuntimeRetryableDeferred);
 
   const gates = [
-    ...input.release.gates,
+    ...release.gates,
+    ...(input.repo ? [{ name: "repo_no_recent_unrecovered_errors", ok: release.database.recentUnrecoveredErrorCount === 0, detail: `${release.database.recentUnrecoveredErrorCount ?? 0} recent unrecovered error(s)` }] : []),
+    ...(input.repo ? [{ name: "repo_no_stale_queue_leases", ok: staleQueueLeases === 0, detail: `${staleQueueLeases} stale queue/run lease(s)` }] : []),
+    ...(input.repo ? [{ name: "repo_no_expired_provider_cooldowns", ok: release.database.retryableExpiredProviderCooldownCount === 0, detail: `${release.database.retryableExpiredProviderCooldownCount ?? 0} retryable expired provider cooldown(s)` }] : []),
     {
       name: "queue_no_pending_heads",
       ok: pendingHeads === 0,
@@ -448,19 +466,19 @@ export function buildOperatorStatus(input: {
     },
     {
       name: "agents_no_stale_leases",
-      ok: input.agents.summary.staleLeases === 0,
-      detail: input.agents.summary.staleLeases === 0
+      ok: agents.summary.staleLeases === 0,
+      detail: agents.summary.staleLeases === 0
         ? "0 stale lease(s)"
-        : `${input.agents.summary.staleLeases} stale lease(s)`
+        : `${agents.summary.staleLeases} stale lease(s)`
     },
     {
       name: "durable_queue_no_failed_jobs",
-      ok: failedQueueJobs === 0,
-      detail: `${failedQueueJobs} failed durable queue job(s)`
+      ok: activeFailedQueueJobs === 0,
+      detail: activeFailedQueueJobs === failedQueueJobs ? `${failedQueueJobs} failed durable queue job(s)` : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "durable_queue_no_zcode_timeout_failed_jobs",
-      ok: zcodeTimeoutQueue.total === 0,
+      ok: (release.database.activeZCodeTimeoutFailedReviewQueueJobCount ?? zcodeTimeoutQueue.total) === 0,
       detail:
         `${zcodeTimeoutQueue.total} ZCode timeout failed durable queue job(s); ` +
         `retryable=${zcodeTimeoutQueue.retryable} exhausted=${zcodeTimeoutQueue.exhausted}`
@@ -503,8 +521,8 @@ export function buildOperatorStatus(input: {
     ...(pendingHeads > 0 ? ["wait for daemon cycle or run scoped run-once"] : []),
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : []),
-    ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : []),
-    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(agents.summary.staleLeases > 0 || staleQueueLeases > 0 ? ["inspect stale leases before restarting or retiring stale work"] : []),
+    ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(zcodeTimeoutQueue.total > 0
       ? zcodeTimeoutRetryActions
       : []),
@@ -516,12 +534,12 @@ export function buildOperatorStatus(input: {
 
   return {
     ok: gates.every((gate) => gate.ok),
-    checkedAt: input.checkedAt ?? input.release.checkedAt,
+    checkedAt,
     summary: {
       launchdState: input.release.launchd.state,
       heartbeatStatus: input.release.heartbeat.status,
-      activeLeases: input.agents.summary.activeLeases,
-      staleLeases: input.agents.summary.staleLeases,
+      activeLeases,
+      staleLeases: input.repo ? staleQueueLeases : agents.summary.staleLeases,
       pendingHeads,
       providerDeferredHeads,
       skippedHeads: queue?.summary.skipped ?? 0,
@@ -534,6 +552,8 @@ export function buildOperatorStatus(input: {
       runningJobs: durableQueue?.summary.running ?? 0,
       providerDeferredJobs: durableQueue?.summary.providerDeferred ?? 0,
       failedQueueJobs,
+      activeFailedQueueJobs,
+      recentUnrecoveredReviewErrors: release.database.recentUnrecoveredErrorCount ?? failedRows,
       zcodeTimeoutFailedQueueJobs: zcodeTimeoutQueue.total,
       retryableZCodeTimeoutFailedQueueJobs: zcodeTimeoutQueue.retryable,
       exhaustedZCodeTimeoutFailedQueueJobs: zcodeTimeoutQueue.exhausted,
@@ -545,10 +565,10 @@ export function buildOperatorStatus(input: {
     gates,
     failedGates: gates.filter((gate) => !gate.ok),
     recommendedActions,
-    release: input.release,
+    release,
     ...(budget ? { budget } : {}),
     ...(queue ? { coverage: queue } : {}),
-    agents: input.agents,
+    agents,
     providerCooldowns,
     ...(durableQueue ? { durableQueue } : {}),
     ...(issueEnrichment ? { issueEnrichment } : {}),
@@ -1113,7 +1133,7 @@ export function collectOperatorRepoProviderCooldowns(
 
 export function collectOperatorReviewQueue(
   statePath: string,
-  input: { repo?: string; state?: ReviewQueueJobState; now?: Date; limit?: number } = {}
+  input: { repo?: string; state?: ReviewQueueJobState; now?: Date; limit?: number; leaseTtlMs?: number } = {}
 ): OperatorDurableQueueSnapshot {
   const now = input.now ?? new Date();
   if (!existsSync(statePath)) return emptyDurableQueue(now);
@@ -1140,7 +1160,13 @@ export function collectOperatorReviewQueue(
     const jobs = rows
       .map(mapReviewQueueJobRow)
       .filter((job) => !input.state || job.state === input.state);
-    return buildDurableQueueSnapshot(jobs, now, input.limit ? jobs.slice(0, input.limit) : jobs);
+    return buildDurableQueueSnapshot(
+      jobs,
+      now,
+      input.limit ? jobs.slice(0, input.limit) : jobs,
+      readStaleRunLeaseIds(db, now),
+      input.leaseTtlMs
+    );
   } finally {
     db.close();
   }
@@ -1735,6 +1761,87 @@ function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
+const SCOPED_RELEASE_GATES = new Set(["live_db_no_errors", "provider_cooldown_backlog", "queue_no_failed_jobs", "queue_no_zcode_timeout_failed_jobs", "queue_no_stale_review_leases", "queue_no_retryable_provider_deferred_jobs"]);
+const DEFAULT_QUEUE_LEASE_TTL_MS = 15 * 60_000;
+
+function scopeReleaseForRepo(
+  release: ReleaseStatus,
+  repo: string | undefined,
+  input: { jobs: ReviewQueueJobRecord[]; staleRunLeaseIds?: string[]; leaseTtlMs?: number; providerCooldowns: ProviderCooldownReviewRecord[]; checkedAt: string }
+): ReleaseStatus {
+  if (!repo) return release;
+  const source = release.database;
+  const jobs = input.jobs.filter((job) => job.repo === repo);
+  const queue = source.reviewQueueJobsByRepo?.find((row) => row.repo === repo);
+  const errors = source.reviewErrorsByRepo?.find((row) => row.repo === repo)?.recentUnrecovered ?? 0;
+  const sessions = source.reviewerSessionsByRepo?.find((row) => row.repo === repo);
+  const now = new Date(input.checkedAt);
+  const staleQueue = jobs.filter((job) => isStaleQueueLease(job, now, input.staleRunLeaseIds, input.leaseTtlMs));
+  const timeout = summarizeZCodeTimeoutErrors(jobs.filter((job) => job.state === "failed").map((job) => job.lastError));
+  const expired = input.providerCooldowns.filter((row) => row.expired);
+  const activeGlobal = source.activeGlobalProviderCooldownCount ?? 0;
+  const covered = activeGlobal > 0
+    ? expired.length
+    : expired.filter((cooldown) => jobs.some((job) =>
+        job.repo === cooldown.repo && job.pullNumber === cooldown.pullNumber && job.headSha === cooldown.headSha &&
+        isActiveQueueRetry(job, now, input.staleRunLeaseIds, input.leaseTtlMs))).length;
+  const retryableExpired = expired.length - covered;
+  const staleRunLeases = new Set(input.staleRunLeaseIds ?? []);
+  const staleRunLeaseCount = staleQueue.filter((job) => Boolean(job.leaseId && staleRunLeases.has(job.leaseId))).length;
+  const staleActiveQueueJobCount = staleQueue.length - staleRunLeaseCount;
+  const failedQueueJobs = queue?.failed ?? 0;
+  const activeFailedQueueJobs = queue?.activeFailed ?? 0;
+  const staleReviewLeases = staleRunLeaseCount + staleActiveQueueJobCount;
+  const database: ReleaseStatus["database"] = {
+    rowCount: 0, errorCount: errors, recentUnrecoveredErrorCount: errors,
+    ...(sessions ? { reviewerSessionCount: sessions.total, activeReviewerSessionCount: sessions.active, expiredReviewerSessionCount: sessions.expired, reviewerSessionsByRepo: [sessions] } : {}),
+    providerCooldownCount: input.providerCooldowns.length, activeProviderCooldownCount: input.providerCooldowns.length - expired.length, expiredProviderCooldownCount: expired.length,
+    activeGlobalProviderCooldownCount: activeGlobal, coveredExpiredProviderCooldownCount: covered, coveredByActiveQueueRetryProviderCooldownCount: activeGlobal > 0 ? 0 : covered, retryableExpiredProviderCooldownCount: retryableExpired,
+    reviewQueueJobCount: queue?.total ?? 0, queuedReviewQueueJobCount: queue?.queued ?? 0, leasedReviewQueueJobCount: queue?.leased ?? 0, runningReviewQueueJobCount: queue?.running ?? 0,
+    providerDeferredReviewQueueJobCount: queue?.providerDeferred ?? 0, retryableProviderDeferredReviewQueueJobCount: queue?.retryableProviderDeferred ?? 0,
+    failedReviewQueueJobCount: failedQueueJobs, activeFailedReviewQueueJobCount: activeFailedQueueJobs,
+    zcodeTimeoutFailedReviewQueueJobCount: queue?.zcodeTimeoutFailed ?? timeout.total, activeZCodeTimeoutFailedReviewQueueJobCount: queue?.activeZCodeTimeoutFailed ?? timeout.total,
+    retryableZCodeTimeoutFailedReviewQueueJobCount: timeout.retryable, exhaustedZCodeTimeoutFailedReviewQueueJobCount: timeout.exhausted,
+    staleReviewRunLeaseCount: staleRunLeaseCount, staleActiveReviewQueueJobCount: staleActiveQueueJobCount,
+    ...(queue ? { reviewQueueJobsByRepo: [queue] } : {})
+  };
+  const gates = release.gates.filter((gate) => !SCOPED_RELEASE_GATES.has(gate.name));
+  const failedGates = gates.filter((gate) => !gate.ok).map((gate) => gate.name);
+  const healthState = failedGates.length > 0 ? "red" : errors > 0 || failedQueueJobs > 0 ? "amber" : "green";
+  return {
+    ...release,
+    ok: gates.every((gate) => gate.ok),
+    gates,
+    recommendedActions: [],
+    budget: undefined,
+    publicRelease: undefined,
+    database,
+    summary: { blockingErrorRows: errors, failedQueueJobs, staleReviewLeases, providerDeferredQueueJobs: queue?.providerDeferred ?? 0, retryableProviderDeferredQueueJobs: queue?.retryableProviderDeferred ?? 0, readyToRetryProviderDeferredJobs: queue?.retryableProviderDeferred ?? 0, zcodeTimeoutFailedQueueJobs: queue?.zcodeTimeoutFailed ?? timeout.total, retryableZCodeTimeoutFailedQueueJobs: timeout.retryable, exhaustedZCodeTimeoutFailedQueueJobs: timeout.exhausted, expiredProviderCooldowns: expired.length, retryableExpiredProviderCooldowns: retryableExpired, activeProviderCooldowns: input.providerCooldowns.length - expired.length },
+    health: {
+      state: healthState,
+      reason: failedGates.length > 0 ? `retained runtime gate(s) failed: ${failedGates.join(", ")}` : `selected repository ${repo} gates pass`,
+      active: { failedQueueJobs: activeFailedQueueJobs, staleReviewLeases },
+      recent: { unrecoveredReviewErrors: errors },
+      history: { reviewErrors: errors, failedQueueJobs }
+    },
+    rollback: { restartCommand: release.rollback.restartCommand, unloadCommand: release.rollback.unloadCommand }
+  };
+}
+
+function isStaleQueueLease(job: ReviewQueueJobRecord, now: Date, staleRunLeaseIds?: string[], leaseTtlMs = DEFAULT_QUEUE_LEASE_TTL_MS): boolean {
+  if (job.state !== "leased" && job.state !== "running") return false;
+  if (job.leaseId && (staleRunLeaseIds ?? []).includes(job.leaseId)) return true;
+  const leaseExpiresAtMs = Date.parse(job.leaseExpiresAt ?? "");
+  const updatedAtMs = Date.parse(job.updatedAt);
+  return job.leaseExpiresAt
+    ? !Number.isFinite(leaseExpiresAtMs) || leaseExpiresAtMs <= now.getTime()
+    : !Number.isFinite(updatedAtMs) || updatedAtMs <= now.getTime() - leaseTtlMs;
+}
+
+function isActiveQueueRetry(job: ReviewQueueJobRecord, now: Date, staleRunLeaseIds?: string[], leaseTtlMs?: number): boolean {
+  return (job.state === "leased" || job.state === "running") && !isStaleQueueLease(job, now, staleRunLeaseIds, leaseTtlMs);
+}
+
 function zcodeTimeoutQueueCounts(
   release: ReleaseStatus,
   durableQueue?: OperatorDurableQueueSnapshot
@@ -1773,11 +1880,13 @@ function emptyDurableQueue(now: Date): OperatorDurableQueueSnapshot {
 function buildDurableQueueSnapshot(
   jobs: ReviewQueueJobRecord[],
   now: Date,
-  visibleJobs: ReviewQueueJobRecord[] = jobs
+  visibleJobs: ReviewQueueJobRecord[] = jobs,
+  staleRunLeaseIds: string[] = [],
+  leaseTtlMs = DEFAULT_QUEUE_LEASE_TTL_MS
 ): OperatorDurableQueueSnapshot {
   const summary = summarizeDurableQueueJobs(jobs, now);
   const repos = [...new Set(jobs.map((job) => job.repo))].sort();
-  return {
+  const snapshot: OperatorDurableQueueSnapshot = {
     ok: summary.failed === 0 && summary.retryableProviderDeferred === 0,
     checkedAt: now.toISOString(),
     summary,
@@ -1787,6 +1896,12 @@ function buildDurableQueueSnapshot(
       ...summarizeDurableQueueJobs(jobs.filter((job) => job.repo === repo), now)
     }))
   };
+  Object.defineProperties(snapshot, {
+    completeJobs: { value: jobs, enumerable: false },
+    staleRunLeaseIds: { value: staleRunLeaseIds, enumerable: false },
+    leaseTtlMs: { value: leaseTtlMs, enumerable: false }
+  });
+  return snapshot;
 }
 
 function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): OperatorDurableQueueSnapshot["summary"] {
@@ -2246,6 +2361,20 @@ function hasTable(db: DatabaseSync, tableName: string): boolean {
 function hasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
   const columns = db.prepare(`pragma table_info(${tableName})`).all() as unknown as Array<{ name: string }>;
   return columns.some((column) => column.name === columnName);
+}
+
+function readStaleRunLeaseIds(db: DatabaseSync, now: Date): string[] {
+  if (!hasTable(db, "review_run_leases")) return [];
+  const hasOwnerPid = hasColumn(db, "review_run_leases", "owner_pid");
+  const rows = db.prepare(
+    hasOwnerPid
+      ? "select lease_id, expires_at, owner_pid from review_run_leases"
+      : "select lease_id, expires_at, null as owner_pid from review_run_leases"
+  ).all() as unknown as Array<{ lease_id: string; expires_at: string; owner_pid: number | null }>;
+  return rows.filter((row) => {
+    const expiresAtMs = Date.parse(row.expires_at);
+    return !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime() || row.owner_pid === null || !isProcessAlive(row.owner_pid);
+  }).map((row) => row.lease_id);
 }
 
 function reviewQueueSelectColumns(db: DatabaseSync): string {
