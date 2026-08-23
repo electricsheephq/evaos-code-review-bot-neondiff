@@ -4,7 +4,23 @@ This bot is a live beta agent. A live promotion is not complete until the
 source SHA is tied to an immutable Git tag, a GitHub Release, runtime evidence,
 and a rollback path.
 
+The CLI/dashboard and native Desktop are separate release lanes. The published
+CLI contract is `neondiff@1.0.4`; native Desktop candidates use the `1.1.0`
+line and the [Mac GA release contract](architecture/mac-ga-release-contract.md).
+The CLI `docs/public-release-manifest.json` remains unchanged when recording a
+Desktop candidate.
+
 ## Release Levels
+
+Set these operator-owned paths before using a command in this runbook. They
+replace historical machine-specific paths; release packets retain their own
+recorded paths as historical evidence only.
+
+```bash
+export NEONDIFF_RELEASE_CHECKOUT="${NEONDIFF_RELEASE_CHECKOUT:?absolute clean release checkout}"
+export NEONDIFF_RUNTIME_CONFIG="${NEONDIFF_RUNTIME_CONFIG:?absolute active config path}"
+export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/Codex/evidence/neondiff}"
+```
 
 - `beta`: local launchd worker on the operator Mac, posting as the GitHub App
   on the active allowlist. Beta releases are prereleases.
@@ -110,6 +126,16 @@ This section intentionally does not invent new promotion gates beyond the
 existing release-status/public-release-manifest machinery; it only names the
 version string and dist-tag step that make a promotion a GA promotion instead
 of another beta promotion.
+
+### Native Desktop GA lane
+
+The `v1.0.0` semver policy above governs the CLI/dashboard lane. It does not
+rename or publish a native Desktop candidate. A native candidate must carry a
+versioned Desktop manifest with source, app, signing, notarization, Sparkle
+feed, site, billing, customer, runtime, and rollback identities. Native GA
+remains blocked until #116 and #524 evidence is complete and #449 distribution
+is aligned. A source build, CLI manifest, appcast fixture, or green CI run is
+not native release proof.
 
 ## Cadence
 
@@ -342,7 +368,7 @@ unchanged and treat the package as quarantined.
 Create an annotated tag from the merged source SHA:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
 git pull --ff-only origin main
@@ -377,13 +403,13 @@ pass that file as `--notes-file` and include the tag name at the top.
 After the GitHub Release exists:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
 git pull --ff-only origin main
 test "$(git rev-parse HEAD)" = "<source-sha>"
-launchctl bootout gui/$(id -u) /Users/lume/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) /Users/lume/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
+launchctl bootout gui/$(id -u) "${NEONDIFF_LAUNCH_AGENT_PATH:?absolute LaunchAgent plist path}" 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) "${NEONDIFF_LAUNCH_AGENT_PATH:?absolute LaunchAgent plist path}"
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 ```
 
@@ -395,7 +421,7 @@ Run the status gate with App credentials set in the shell:
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head <source-sha> \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
@@ -406,7 +432,7 @@ For public source-beta or public beta releases, include the public manifest gate
 SOURCE_SHA=replace-with-release-source-sha
 PUBLIC_BETA_TAG=vX.Y.Z-beta.N
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$SOURCE_SHA" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -424,9 +450,9 @@ Also run:
 
 ```bash
 npx tsx src/cli.ts coverage-audit \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+  --config "$NEONDIFF_RUNTIME_CONFIG"
 npx tsx src/cli.ts provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expired-only true
 ```
 
@@ -458,13 +484,13 @@ before calling the release green.
 Rollback is tag-first:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin --tags
 git checkout main
 git reset --hard <previous-release-tag>
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```

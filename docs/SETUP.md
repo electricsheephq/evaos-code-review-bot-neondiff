@@ -204,11 +204,13 @@ For `review-pr` license blocks, the gate writes its local proof under the
 configured `evidenceDir` as
 `<date>/<owner__repo>/pr-<number>/<head-sha>/license-gate.json`.
 
-The `keychain` backend remains reserved for a separately proven native broker.
-Headless CLI activation currently rejects Keychain writes rather than passing
-license keys through process arguments. v1.0.4 supports the approved file
-backend; the Desktop app remains blocked from useful actions until native
-broker/launchd access is proven.
+The `keychain` backend remains reserved for the separately proven native
+Desktop boundary. Headless CLI activation currently rejects Keychain writes
+rather than passing license keys through process arguments. `v1.0.4` supports
+the approved file backend; the native `1.1.0` candidate has its own BYO and
+managed release contracts and must not be treated as a CLI activation wrapper.
+An unsigned/debug bundle or a bundle with missing/mixed markers remains
+quarantined and cannot be used as release or customer proof.
 The local `machineId` sent to the license API is advisory beta metadata derived
 from host name and platform, not hardware attestation or a durable seat-binding
 primitive.
