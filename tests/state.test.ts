@@ -1260,6 +1260,59 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("atomically quarantines incomplete evidence without leaking expired or unrelated jobs", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-evidence-quarantine-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const repo = "org/repo-a";
+    const current = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-b", now: new Date("2026-07-01T00:00:00Z") }).job;
+    const expired = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-b", source: "manual_command", commentId: 2, now: new Date("2026-07-01T00:00:00Z") }).job;
+    const expiryRace = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-b", source: "manual_command", commentId: 3, now: new Date("2026-07-01T00:00:00Z") }).job;
+    const superseded = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-a", now: new Date("2026-07-01T00:00:00Z") }).job;
+    const unrelated = store.enqueueReviewQueueJob({ repo, pullNumber: 2, headSha: "head-c", now: new Date("2026-07-01T00:00:00Z") }).job;
+    store.updateReviewQueueJobState({ jobId: expired.jobId, state: "leased", leaseId: "expired", leaseExpiresAt: "2026-07-01T00:00:01Z" });
+    store.updateReviewQueueJobState({ jobId: expiryRace.jobId, state: "leased", leaseId: "race", leaseExpiresAt: "2026-07-01T00:00:04.500Z" });
+    store.recordReviewReadiness({ repo, pullNumber: 1, headSha: "head-a", state: "queued", reason: "automatic_enqueue" });
+
+    const quarantine = { repo, pullNumber: 1, headSha: "head-b", reason: "required_evidence_incomplete token=ghp_fake_token" };
+    expect(store.quarantineIncompleteReviewEvidence({ ...quarantine, now: new Date("2026-07-01T00:00:02Z") })).toEqual({
+      failedQueueJobs: 2,
+      retiredQueueJobs: 1
+    });
+    expect(store.quarantineIncompleteReviewEvidence({ ...quarantine, now: new Date("2026-07-01T00:00:03Z") })).toEqual({
+      failedQueueJobs: 0,
+      retiredQueueJobs: 0
+    });
+    expect(store.getReviewQueueJob(current.jobId)).toMatchObject({ state: "failed", lastError: expect.not.stringContaining("ghp_fake_token") });
+    expect(store.getReviewQueueJob(expired.jobId)).toMatchObject({ state: "failed" });
+    expect(store.getReviewQueueJob(expired.jobId)).not.toHaveProperty("leaseId");
+    expect(store.getReviewQueueJob(expiryRace.jobId)).toMatchObject({ state: "leased", leaseId: "race" });
+    expect(store.getReviewQueueJob(superseded.jobId)).toMatchObject({ state: "stale_retired", lastError: "superseded_by_head=head-b" });
+    expect(store.getReviewReadiness(repo, 1, "head-a")).toMatchObject({ state: "stale", reason: "superseded_by_head=head-b" });
+    expect(store.getReviewReadiness(repo, 1, "head-b")).toMatchObject({ state: "failed", reason: expect.not.stringContaining("ghp_fake_token") });
+
+    const noJob = { repo, pullNumber: 3, headSha: "head-no-job", reason: "required_evidence_incomplete" };
+    store.assignReviewerSessionJob({ ...noJob, ttlMs: 60_000, headCountLimit: 2, now: new Date("2026-07-01T00:00:03Z") });
+    expect(store.quarantineIncompleteReviewEvidence({ ...noJob, now: new Date("2026-07-01T00:00:03Z") })).toEqual({
+      failedQueueJobs: 0,
+      retiredQueueJobs: 0
+    });
+    expect(store.getReviewReadiness(repo, 3, "head-no-job")).toMatchObject({ state: "failed", reason: "required_evidence_incomplete" });
+    expect(store.getReviewerSessionJob(repo, 3, "head-no-job")).toMatchObject({ jobState: "failed", processedReviewStatus: "failed" });
+
+    expect(store.leaseNextReviewQueueJobs({
+      maxProviderActive: 2,
+      maxOrgActive: 2,
+      maxRepoActive: 2,
+      quarantines: [quarantine],
+      now: new Date("2026-07-01T00:00:05Z")
+    }).map((job) => job.jobId)).toEqual([unrelated.jobId]);
+    expect(store.getReviewQueueJob(expiryRace.jobId)).toMatchObject({ state: "failed" });
+    expect(store.getReviewQueueJob(expiryRace.jobId)).not.toHaveProperty("leaseId");
+    expect(store.listReviewQueueJobsForPull({ repo, pullNumber: 1 }).some((job) => job.state === "queued" || job.state === "leased" || job.state === "running")).toBe(false);
+    store.close();
+  });
+
   it("dry-runs and clears expired review queue leases without manual SQL", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-lease-clear-"));
     roots.push(root);
