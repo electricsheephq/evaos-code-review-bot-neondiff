@@ -1,9 +1,12 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 
 const SPKI_ED25519_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+const OFFICIAL_ARTIFACT_PREFIX = "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/download/";
 const ENCLOSURE_FIELDS = ["url", "version", "build", "shortVersionString", "channel", "artifactName", "artifactSHA256", "edSignature"];
-const PROOF_FIELDS = ["schemaVersion", "kind", "verified", "channel", "url", "artifactName", "artifactSHA256", "version", "build", "shortVersionString", "edSignature", "signedContentSHA256"];
+const PROOF_FIELDS = ["schemaVersion", "kind", "verified", "signatureScope", "channel", "url", "artifactName", "artifactSHA256", "version", "build", "shortVersionString", "edSignature", "publicKeyFingerprint", "signedContentSHA256"];
 const KIND = "neondiff.desktop.feed-enclosure-proof-v1";
+const SIGNATURE_SCOPE = "sparkle-artifact-bytes";
+const verifiedProofs = new WeakSet();
 const fail = (message) => { throw new Error(message); };
 
 function exactObject(value, fields, label) {
@@ -28,22 +31,25 @@ function canonicalBytes(value) {
 function validateEnclosure(enclosure) {
   const value = exactObject(enclosure, ENCLOSURE_FIELDS, "enclosure");
   const url = new URL(text(value.url, "enclosure.url"));
-  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) fail("enclosure.url must be a public HTTPS artifact URL");
+  if (url.toString() !== value.url || url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !value.url.startsWith(OFFICIAL_ARTIFACT_PREFIX)) fail("enclosure.url must be the canonical official artifact URL");
   const version = text(value.version, "enclosure.version"), build = text(value.build, "enclosure.build");
   if (!/^\d+\.\d+\.\d+(?:-(?:beta|rc)\.[1-9]\d{0,15})?$/.test(version) || !/^\d+$/.test(build)) fail("enclosure version/build is malformed");
   const prerelease = version.match(/-(beta|rc)\./)?.[1] ?? null;
   if (value.shortVersionString !== version || !["beta", "rc", "stable"].includes(value.channel) || (prerelease ?? "stable") !== value.channel) fail("enclosure identity is malformed");
   const artifactName = `NeonDiff-${version}-build${build}-macOS.zip`;
-  if (value.artifactName !== artifactName || !url.pathname.endsWith(`/${artifactName}`)) fail("enclosure artifact identity is not canonical");
+  if (value.artifactName !== artifactName) fail("enclosure artifact name is not canonical");
+  const path = url.pathname;
+  const pathMatch = path.match(/^\/electricsheephq\/evaos-code-review-bot-neondiff\/releases\/download\/([^/]+)\/([^/]+)$/);
+  if (!pathMatch || pathMatch[1] !== `v${version}` || pathMatch[2] !== artifactName) fail("enclosure artifact identity is not canonical");
   if (!/^[a-f0-9]{64}$/.test(value.artifactSHA256)) fail("enclosure artifact SHA-256 is malformed");
   base64(value.edSignature, 64, "enclosure.edSignature");
   return value;
 }
 function validateProof(proof) {
   const value = exactObject(proof, PROOF_FIELDS, "proof");
-  if (value.schemaVersion !== 1 || value.kind !== KIND || value.verified !== true) fail("proof is not verified");
+  if (!verifiedProofs.has(proof) || value.schemaVersion !== 1 || value.kind !== KIND || value.verified !== true || value.signatureScope !== SIGNATURE_SCOPE) fail("proof is not verified");
   validateEnclosure({ url: value.url, version: value.version, build: value.build, shortVersionString: value.shortVersionString, channel: value.channel, artifactName: value.artifactName, artifactSHA256: value.artifactSHA256, edSignature: value.edSignature });
-  if (value.signedContentSHA256 !== value.artifactSHA256) fail("proof content digest is not bound to the artifact");
+  if (value.signedContentSHA256 !== value.artifactSHA256 || !/^sha256:[a-f0-9]{64}$/.test(value.publicKeyFingerprint)) fail("proof content or key identity is malformed");
   return value;
 }
 
@@ -53,7 +59,9 @@ export function buildFeedEnclosureProof(enclosure, { acceptedPublicKey, signedCo
   const publicKey = base64(acceptedPublicKey, 32, "acceptedPublicKey"), signature = base64(value.edSignature, 64, "enclosure.edSignature");
   const key = createPublicKey({ key: Buffer.concat([SPKI_ED25519_PREFIX, publicKey]), format: "der", type: "spki" });
   if (!verify(null, bytes, key, signature)) fail("Sparkle EdDSA signature verification failed");
-  return { schemaVersion: 1, kind: KIND, verified: true, channel: value.channel, url: value.url, artifactName: value.artifactName, artifactSHA256: value.artifactSHA256, version: value.version, build: value.build, shortVersionString: value.shortVersionString, edSignature: value.edSignature, signedContentSHA256: sha256(bytes) };
+  const proof = Object.freeze({ schemaVersion: 1, kind: KIND, verified: true, signatureScope: SIGNATURE_SCOPE, channel: value.channel, url: value.url, artifactName: value.artifactName, artifactSHA256: value.artifactSHA256, version: value.version, build: value.build, shortVersionString: value.shortVersionString, edSignature: value.edSignature, publicKeyFingerprint: `sha256:${sha256(publicKey)}`, signedContentSHA256: sha256(bytes) });
+  verifiedProofs.add(proof);
+  return proof;
 }
 export function serializeFeedEnclosureProof(proof) {
   const value = validateProof(proof);
