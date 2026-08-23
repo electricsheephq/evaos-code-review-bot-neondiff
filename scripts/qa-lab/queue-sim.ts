@@ -45,6 +45,13 @@ assertPathOutsideProtectedRoot({
   protectedRootLabel: "a protected checkout root"
 });
 const EVIDENCE_DIR = join(resolvedEvidenceRoot, "neondiff-qa-lab", "risk-queue");
+assertPathOutsideProtectedRoot({
+  path: resolvePathFollowingExistingSymlinks(EVIDENCE_DIR),
+  protectedRoot: undefined,
+  protectedRoots: getProtectedCheckoutRoots(),
+  pathLabel: "NEONDIFF_EVIDENCE_ROOT",
+  protectedRootLabel: "a protected checkout root"
+});
 const BASELINE = 50;
 const MAX_WAIT_MINUTES = 60;
 const TICK_MS = 60_000; // one minute per service interval
