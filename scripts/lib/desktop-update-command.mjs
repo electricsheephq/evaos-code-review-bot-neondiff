@@ -1,7 +1,9 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 const SHA = /^[0-9a-f]{64}$/;
-const LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const LABEL = /^[A-Za-z0-9][A-Za-z0-9.-]{2,127}$/;
+const ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
 const ACTIONS = new Set(["update", "rollback", "reupdate"]);
 function fail(message) { throw new Error(message); }
 function exact(value, keys, label) {
@@ -36,14 +38,14 @@ export function planDesktopUpdate({ action, declaration, declarationBytes, packe
   if (hash(artifactBytes) !== release.artifactSHA256) fail("artifact digest mismatch");
   hashes(packet.sparkle, ["entrySHA256"], "Sparkle receipt");
   if (packet.sparkle.feedURL !== declaration.distribution?.origins?.feed) fail("Sparkle feed disagrees with declaration");
-  const signature = base64(packet.sparkle.edSignature, 64, "Sparkle signature"), keyBytes = base64(packet.sparkle.publicKey, 44, "Sparkle public key");
+  const signature = base64(packet.sparkle.edSignature, 64, "Sparkle signature"), rawKey = base64(packet.sparkle.publicKey, 32, "Sparkle public key");
   let verified = false;
-  try { verified = verify(null, artifactBytes, createPublicKey({ key: keyBytes, format: "der", type: "spki" }), signature); } catch { verified = false; }
+  try { verified = verify(null, artifactBytes, createPublicKey({ key: Buffer.concat([ED25519_SPKI, rawKey]), format: "der", type: "spki" }), signature); } catch { verified = false; }
   if (!verified) fail("Sparkle signature verification failed");
   if (!/^[A-Z0-9]{10}$/.test(expectedTeamID ?? "") || packet.apple.teamID !== expectedTeamID) fail("approved Team ID mismatch");
   if (packet.apple.notarized !== true || packet.apple.stapled !== true || packet.apple.gatekeeper !== true) fail("Apple notarization, staple, and Gatekeeper proof are required");
   hashes(packet.prestate, ["appSHA256", "accountIdentitySHA256", "botIdentitySHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "keychainIdentitySHA256", "plistSHA256"], "prestate receipt");
-  if (!LABEL.test(packet.prestate.label) || !Number.isInteger(packet.prestate.wrapperPID) || packet.prestate.wrapperPID < 1 || !Number.isInteger(packet.prestate.helperPID) || packet.prestate.helperPID < 1 || packet.prestate.wrapperPath !== "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop" || packet.prestate.helperPath !== "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker") fail("prestate worker identity is invalid");
+  if (typeof packet.prestate.label !== "string" || !LABEL.test(packet.prestate.label) || !Number.isInteger(packet.prestate.wrapperPID) || packet.prestate.wrapperPID < 1 || !Number.isInteger(packet.prestate.helperPID) || packet.prestate.helperPID < 1 || packet.prestate.wrapperPath !== "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop" || packet.prestate.helperPath !== "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker") fail("prestate worker identity is invalid");
   return {
     schemaVersion: 1, dryRun: true, action, packetSHA256,
     candidate: { version: release.version, build: release.build, channel: release.channel, declarationSHA256: packet.declarationSHA256, artifactSHA256: release.artifactSHA256, treeSHA256: release.treeSHA256, feedEntrySHA256: packet.sparkle.entrySHA256 },
@@ -51,3 +53,11 @@ export function planDesktopUpdate({ action, declaration, declarationBytes, packe
     steps: ["wait-for-zero-lease-cycle", "stage-and-verify", "swap-and-restart-exact-service", "verify-poststate"]
   };
 }
+
+export function selectDesktopDeclarationPath(action, index, packet) {
+  const target = `${packet?.release?.tag}.json`;
+  if (index?.status !== "retained" || !Array.isArray(index.declarationPaths) || !index.declarationPaths.includes(target)) fail("accepted packet declaration is not retained");
+  if (action !== "rollback" && index.currentPath !== target) fail("update packet declaration is not current");
+  return action === "rollback" ? target : index.currentPath;
+}
+export function desktopValidatorPath(baseURL) { return fileURLToPath(new URL("../validate-desktop-release-declaration.mjs", baseURL)); }
