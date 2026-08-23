@@ -4798,7 +4798,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var activationPresentation: ActivationStatePresentation {
-        ActivationStateMachine.presentation(for: activationState, redactedKeyPrefix: activationKeyRedactedPrefix)
+        let authority = byoGitHubAccessAuthority
+        return ActivationStateMachine.presentation(
+            for: activationState,
+            redactedKeyPrefix: activationKeyRedactedPrefix,
+            context: ActivationPresentationContext(
+                isBYO: byoGitHubCredentialOnboardingAvailable,
+                selectedRepository: selectedReviewRepository,
+                selectedRepositoryVisibility: byoVerifiedVisibility,
+                selectedRepositoryVisibilityIsAuthoritative:
+                    authority?.generation == byoAuthorityGeneration,
+                selectedRepositoryIsAuthoritative: currentRepositoryActivationReady
+            )
+        )
     }
 
     private var activationLicenseClient: (any ActivationLicenseClienting)? {
@@ -5162,7 +5174,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             let scope = summary.repoVisibilityScope
             let plan = summary.plan.map { " · \($0)" } ?? ""
             license.entitlement = "active (\(scope)\(plan))"
-            logText = activeLogMessage
+            logText = authority.map {
+                "\(ActivationTerminology.activationKey) is active for BYO repository \($0.repository) (\($0.visibility)). Only this selected repository is in scope."
+            } ?? activeLogMessage
                 ?? "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
             activationVerifiedRepositoryThisLaunch = repository
             if let repository {
@@ -5174,7 +5188,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil
             byoRepositoryAuthority = nil
-            lastError = "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
+            lastError = activationPresentation.cause
         case .expired, .revoked, .invalid:
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil

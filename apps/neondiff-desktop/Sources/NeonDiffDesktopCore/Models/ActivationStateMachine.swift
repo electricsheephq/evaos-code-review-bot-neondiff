@@ -105,7 +105,57 @@ public struct ActivationStatePresentation: Equatable, Sendable {
     public let showsNotifyOption: Bool
 }
 
+/// Read-only projection input; it never grants activation authority.
+public struct ActivationPresentationContext: Equatable, Sendable {
+    public let isBYO: Bool
+    public let selectedRepository: String?
+    public let selectedRepositoryVisibility: String?
+    public let selectedRepositoryVisibilityIsAuthoritative: Bool
+    public let selectedRepositoryIsAuthoritative: Bool
+
+    public init(
+        isBYO: Bool = false,
+        selectedRepository: String? = nil,
+        selectedRepositoryVisibility: String? = nil,
+        selectedRepositoryVisibilityIsAuthoritative: Bool = false,
+        selectedRepositoryIsAuthoritative: Bool = false
+    ) {
+        self.isBYO = isBYO
+        self.selectedRepository = selectedRepository
+        self.selectedRepositoryVisibility = selectedRepositoryVisibility
+        self.selectedRepositoryVisibilityIsAuthoritative = selectedRepositoryVisibilityIsAuthoritative
+        self.selectedRepositoryIsAuthoritative = selectedRepositoryIsAuthoritative
+    }
+
+    public static let managed = ActivationPresentationContext()
+}
+
 public enum ActivationStateMachine {
+    private struct ScopeCopy {
+        let isBYO: Bool
+        let targetWithVisibility: String
+        let authorityVerified: Bool
+
+        init(context: ActivationPresentationContext) {
+            isBYO = context.isBYO
+            authorityVerified = context.selectedRepositoryIsAuthoritative
+            let repository = context.selectedRepository?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let visibility = context.selectedRepositoryVisibility?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let knownVisibility = context.selectedRepositoryVisibilityIsAuthoritative
+                && ["public", "private", "internal"].contains(visibility ?? "")
+            if let repository, !repository.isEmpty {
+                targetWithVisibility = knownVisibility
+                    ? "BYO repository \(repository) (\(visibility!))"
+                    : "BYO repository \(repository) (visibility unverified)"
+            } else {
+                targetWithVisibility = "the selected BYO repository (visibility unverified)"
+            }
+        }
+    }
+
     /// The private branch is entered at `purchase_required`; the public branch is
     /// entered directly at `public_free_skip` by the onboarding flow.
     public static let initialState: ActivationState = .purchaseRequired
@@ -180,9 +230,13 @@ public enum ActivationStateMachine {
 
     public static func presentation(
         for state: ActivationState,
-        redactedKeyPrefix: String? = nil
+        redactedKeyPrefix: String? = nil,
+        publicBYO: Bool = false,
+        context: ActivationPresentationContext? = nil
     ) -> ActivationStatePresentation {
+        let context = context ?? ActivationPresentationContext(isBYO: publicBYO)
         let keyTerm = ActivationTerminology.activationKey
+        let scope = ScopeCopy(context: context)
         switch state {
         case .publicFreeSkip:
             return ActivationStatePresentation(
@@ -200,7 +254,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Private repositories need activation",
-                cause: "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued.",
+                cause: scope.isBYO
+                    ? "\(scope.targetWithVisibility) requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued."
+                    : "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued.",
                 recovery: ActivationRecovery(
                     label: "Continue with this key",
                     event: .provideExistingKey,
@@ -216,7 +272,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Checkout is paused",
-                cause: "New checkout is paused right now. Existing keys still activate — paste your \(keyTerm) below, or ask to be notified when checkout reopens.",
+                cause: scope.isBYO
+                    ? "New checkout is paused right now for \(scope.targetWithVisibility). Existing keys still activate — paste your \(keyTerm) below, or ask to be notified when checkout reopens."
+                    : "New checkout is paused right now. Existing keys still activate — paste your \(keyTerm) below, or ask to be notified when checkout reopens.",
                 recovery: ActivationRecovery(
                     label: "Paste your \(keyTerm)",
                     event: .provideExistingKey,
@@ -232,7 +290,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Finishing checkout",
-                cause: "Complete checkout in your browser. When it finishes you'll receive a \(keyTerm) to activate here.",
+                cause: scope.isBYO
+                    ? "Complete checkout in your browser. When it finishes you'll receive a \(keyTerm) to activate for \(scope.targetWithVisibility)."
+                    : "Complete checkout in your browser. When it finishes you'll receive a \(keyTerm) to activate here.",
                 recovery: ActivationRecovery(
                     label: "Cancel checkout",
                     event: .checkoutCancelled,
@@ -249,7 +309,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Activate your \(keyTerm)",
-                cause: "Your \(keyTerm)\(prefixNote) is ready. Activate it to unlock private repository review.",
+                cause: scope.isBYO
+                    ? "Your \(keyTerm)\(prefixNote) is ready. Activate it to review \(scope.targetWithVisibility)."
+                    : "Your \(keyTerm)\(prefixNote) is ready. Activate it to unlock private repository review.",
                 recovery: ActivationRecovery(
                     label: "Activate",
                     event: .submitActivation,
@@ -265,7 +327,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Activating",
-                cause: "Checking your \(keyTerm) with the activation service. This only takes a moment.",
+                cause: scope.isBYO
+                    ? "Checking your \(keyTerm) with the activation service for \(scope.targetWithVisibility). This only takes a moment."
+                    : "Checking your \(keyTerm) with the activation service. This only takes a moment.",
                 recovery: ActivationRecovery(
                     label: "Cancel",
                     event: .checkoutCancelled,
@@ -278,10 +342,28 @@ public enum ActivationStateMachine {
             )
 
         case .active:
+            if scope.isBYO && !scope.authorityVerified {
+                return ActivationStatePresentation(
+                    state: state,
+                    title: "Activation needs verification",
+                    cause: "Activation is not confirmed for \(scope.targetWithVisibility). Verify the exact GitHub App, repository, and visibility before starting review.",
+                    recovery: ActivationRecovery(
+                        label: "Verify access",
+                        event: .verifyExistingEntitlement,
+                        accessibilityLabel: "Verify activation access for \(scope.targetWithVisibility)"
+                    ),
+                    accessibilityLabel: "Activation is not confirmed for \(scope.targetWithVisibility).",
+                    isSuccess: false,
+                    requiresKeyEntry: false,
+                    showsNotifyOption: false
+                )
+            }
             return ActivationStatePresentation(
                 state: state,
                 title: "Activated",
-                cause: "Your \(keyTerm) is active. Private repository review is unlocked.",
+                cause: scope.isBYO
+                    ? "Your \(keyTerm) is active for \(scope.targetWithVisibility). Only this selected BYO repository is in scope."
+                    : "Your \(keyTerm) is active. Private repository review is unlocked.",
                 recovery: nil,
                 accessibilityLabel: "\(keyTerm) is active. Private repositories unlocked.",
                 isSuccess: true,
@@ -293,7 +375,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "That key didn't work",
-                cause: "This \(keyTerm) wasn't recognized for this machine. Check for a typo and enter it again, or use a different key.",
+                cause: scope.isBYO
+                    ? "This \(keyTerm) was not accepted for \(scope.targetWithVisibility). Check the key and exact repository selection, then enter it again."
+                    : "This \(keyTerm) wasn't recognized for this machine. Check for a typo and enter it again, or use a different key.",
                 recovery: ActivationRecovery(
                     label: "Enter a \(keyTerm)",
                     event: .reenterKey,
@@ -309,7 +393,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Your entitlement expired",
-                cause: "This \(keyTerm) has expired. Renew to keep reviewing private repositories, or paste a renewed key.",
+                cause: scope.isBYO
+                    ? "This \(keyTerm) has expired for \(scope.targetWithVisibility). Renew it to keep reviewing this selected BYO repository, or paste a renewed key."
+                    : "This \(keyTerm) has expired. Renew to keep reviewing private repositories, or paste a renewed key.",
                 recovery: ActivationRecovery(
                     label: "Renew",
                     event: .renew,
@@ -325,7 +411,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "This key was revoked",
-                cause: "This \(keyTerm) was revoked. Get a new one to continue, or contact support if this is unexpected.",
+                cause: scope.isBYO
+                    ? "This \(keyTerm) was revoked for \(scope.targetWithVisibility). Get a new one to continue, or contact support if this is unexpected."
+                    : "This \(keyTerm) was revoked. Get a new one to continue, or contact support if this is unexpected.",
                 recovery: ActivationRecovery(
                     label: "Get a new \(keyTerm)",
                     event: .renew,
@@ -341,7 +429,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Couldn't reach activation",
-                cause: "We couldn't reach the activation service — it looks like you're offline. Check your connection and try again.",
+                cause: scope.isBYO
+                    ? "We couldn't verify activation for \(scope.targetWithVisibility) because the activation service could not be reached. Check your connection and try again."
+                    : "We couldn't reach the activation service — it looks like you're offline. Check your connection and try again.",
                 recovery: ActivationRecovery(
                     label: "Try again",
                     event: .retry,
@@ -357,7 +447,9 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Activation service hiccup",
-                cause: "The activation service returned a temporary error. Nothing is wrong with your \(keyTerm) — try again in a moment.",
+                cause: scope.isBYO
+                    ? "The activation service returned a temporary error while checking \(scope.targetWithVisibility). Nothing is confirmed yet — try again in a moment."
+                    : "The activation service returned a temporary error. Nothing is wrong with your \(keyTerm) — try again in a moment.",
                 recovery: ActivationRecovery(
                     label: "Try again",
                     event: .retry,

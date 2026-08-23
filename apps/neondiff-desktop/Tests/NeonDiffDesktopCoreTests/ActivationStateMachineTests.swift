@@ -180,4 +180,65 @@ import Testing
         #expect(!p.requiresKeyEntry, "public_free_skip must never ask for an activation key")
         #expect(p.recovery == nil, "public_free_skip is a clean skip, not a gated wall")
     }
+
+    @Test func authoritativeBYOPresentationNamesExactRepositoryAndVisibility() {
+        let context = ActivationPresentationContext(
+            isBYO: true,
+            selectedRepository: "acme/demo",
+            selectedRepositoryVisibility: "private",
+            selectedRepositoryVisibilityIsAuthoritative: true,
+            selectedRepositoryIsAuthoritative: true
+        )
+        for state in [ActivationState.purchaseRequired, .checkoutPaused, .checkoutPending,
+                      .keyReady, .activationPending, .active, .invalid, .expired,
+                      .revoked, .offline, .serviceError] {
+            let presentation = ActivationStateMachine.presentation(for: state, context: context)
+            let copy = [
+                presentation.title,
+                presentation.cause,
+                presentation.accessibilityLabel,
+                presentation.recovery?.label ?? "",
+                presentation.recovery?.accessibilityLabel ?? ""
+            ].joined(separator: " ")
+            #expect(copy.contains("acme/demo"), "\(state.rawValue) omitted exact repository")
+            #expect(copy.contains("(private)"), "\(state.rawValue) omitted authoritative visibility")
+            #expect(!copy.localizedCaseInsensitiveContains("every repository"))
+        }
+    }
+
+    @Test func partialBYOContextFailsClosedForActiveState() {
+        let context = ActivationPresentationContext(
+            isBYO: true,
+            selectedRepository: "acme/demo",
+            selectedRepositoryVisibility: "private",
+            selectedRepositoryVisibilityIsAuthoritative: false,
+            selectedRepositoryIsAuthoritative: false
+        )
+        let presentation = ActivationStateMachine.presentation(for: .active, context: context)
+        #expect(!presentation.isSuccess)
+        #expect(presentation.recovery?.event == .verifyExistingEntitlement)
+        #expect(presentation.cause.contains("not confirmed"))
+        #expect(presentation.cause.contains("visibility unverified"))
+        #expect(!presentation.cause.localizedCaseInsensitiveContains("is unlocked"))
+    }
+
+    @Test func unknownOrMissingBYOContextNeverOverclaimsActivation() {
+        for context in [
+            ActivationPresentationContext(isBYO: true),
+            ActivationPresentationContext(
+                isBYO: true,
+                selectedRepository: "acme/demo",
+                selectedRepositoryVisibility: "unknown",
+                selectedRepositoryVisibilityIsAuthoritative: true,
+                selectedRepositoryIsAuthoritative: false
+            )
+        ] {
+            let presentation = ActivationStateMachine.presentation(for: .active, context: context)
+            #expect(!presentation.isSuccess)
+            #expect(presentation.recovery?.event == .verifyExistingEntitlement)
+            #expect(!presentation.cause.localizedCaseInsensitiveContains("unlocked"))
+            #expect(!presentation.accessibilityLabel.localizedCaseInsensitiveContains("active for"))
+        }
+    }
+
 }
