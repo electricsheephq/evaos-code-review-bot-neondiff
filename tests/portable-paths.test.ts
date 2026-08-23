@@ -57,6 +57,20 @@ describe("portable output roots", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("must be outside a protected checkout root");
     expect(existsSync(join(hostileRoot, "neondiff-qa-lab"))).toBe(false);
+
+    const externalRoot = mkdtempSync(join(tmpdir(), "neondiff-qa-symlink-"));
+    roots.push(externalRoot);
+    symlinkSync(repoRoot, join(externalRoot, "neondiff-qa-lab"), "dir");
+    const nestedAlias = spawnSync(tsxCommand, [join(repoRoot, "scripts/qa-lab/queue-sim.ts")], {
+      cwd: join(repoRoot, "tests"),
+      env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: externalRoot },
+      encoding: "utf8",
+      timeout: 10_000
+    });
+    expect(nestedAlias.status).toBe(1);
+    expect(nestedAlias.stdout).toBe("");
+    expect(nestedAlias.stderr).toContain("must be outside a protected checkout root");
+    expect(existsSync(join(repoRoot, "risk-queue"))).toBe(false);
   });
 
   it("accepts an external QA root", () => {
