@@ -149,6 +149,22 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).not.toContain(expect.stringContaining("retry-failed"));
   });
 
+  it("keeps runtime inventory non-red for retained failed queue history", () => {
+    const queue = durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), total: 1, failed: 1 }, jobs: [durableJob({ repo: "owner/repo", pullNumber: 7, headSha: "historical-timeout", state: "failed", lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1" })] });
+    const release = (activeFailed: number) => releaseStatus({ ok: true, database: { failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: activeFailed, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: activeFailed } });
+    const historical = buildRuntimeInventory({ release: release(0), agents: agentInventory({}), durableQueue: queue });
+    const active = buildRuntimeInventory({ release: release(1), agents: agentInventory({}), durableQueue: queue });
+
+    expect(historical.ok).toBe(true);
+    expect(historical.runtimeState).toBe("healthy_idle");
+    expect(historical.summary.failedQueueJobs).toBe(1);
+    expect(historical.gates).toContainEqual(expect.objectContaining({ name: "runtime_no_failed_queue_jobs", ok: true }));
+    expect(historical.recommendedActions).not.toContain("inspect operator queue failed jobs before promotion");
+    expect(active.ok).toBe(false);
+    expect(active.runtimeState).toBe("blocked");
+    expect(active.gates).toContainEqual(expect.objectContaining({ name: "runtime_no_failed_queue_jobs", ok: false }));
+  });
+
   it("passes required release monitoring coverage when all coverage gates are green", () => {
     const coverage = buildReleaseMonitoringCoverage({
       required: true,

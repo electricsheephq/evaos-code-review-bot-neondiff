@@ -616,6 +616,7 @@ export function buildRuntimeInventory(input: {
     Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
   const retryCoveredReviewerSessions = input.release.database.retryCoveredReviewerSessionCount ?? 0;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
+  const activeFailedQueueJobs = input.release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
   const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
@@ -644,8 +645,10 @@ export function buildRuntimeInventory(input: {
     },
     {
       name: "runtime_no_failed_queue_jobs",
-      ok: failedQueueJobs === 0,
-      detail: `${failedQueueJobs} failed durable queue job(s)`
+      ok: activeFailedQueueJobs === 0,
+      detail: activeFailedQueueJobs === failedQueueJobs
+        ? `${failedQueueJobs} failed durable queue job(s)`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "runtime_no_zcode_timeout_failed_queue_jobs",
@@ -744,7 +747,7 @@ export function buildRuntimeInventory(input: {
     ...(uncoveredPendingHeads.length > 0 ? ["wait for daemon cycle or run scoped run-once for uncovered pending heads"] : []),
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect stale leases before restarting launchd"] : []),
-    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(zcodeTimeoutQueue.activeTotal > 0
       ? zcodeTimeoutRetryActions
       : []),
