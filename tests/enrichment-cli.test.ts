@@ -1400,7 +1400,7 @@ function routeMockGitHub(
     (request.url === "/repos/owner/issue-repo/installation" ||
       request.url === "/repos/owner/second-issue-repo/installation")
   ) {
-    respondJson(response, 200, { id: 123 });
+    respondJson(response, 200, { id: 123, app_id: 4184532, app_slug: "customer-review-app", account: { id: 7, login: "owner", type: "User" } });
     return;
   }
   if (request.method === "POST" && request.url === "/app/installations/123/access_tokens") {
