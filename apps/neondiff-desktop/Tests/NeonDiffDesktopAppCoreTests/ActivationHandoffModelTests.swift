@@ -128,12 +128,44 @@ import NeonDiffDesktopCore
         #expect(model.activationState == .keyReady)
     }
 
+    @Test func legacyPublicFreeSkipMigratesToPaidBYOEntry() {
+        let prefs = MemoryPreferences()
+        prefs.set(ActivationState.publicFreeSkip.rawValue, forKey: activationStateKey)
+        let model = makeModel(
+            preferences: prefs,
+            productionBoundary: .testAccountLink
+        )
+
+        #expect(model.activationState == .purchaseRequired)
+        #expect(prefs.string(forKey: activationStateKey) == ActivationState.purchaseRequired.rawValue)
+    }
+
     @Test func publicPathSkipsWithoutLicenseUI() {
-        let model = makeModel()
+        let model = makeModel(productionBoundary: .testManaged)
         model.enterActivation(for: .publicReposOnly)
         #expect(model.activationState == .publicFreeSkip)
         #expect(model.activationPresentation.requiresKeyEntry == false)
         #expect(model.activationPresentation.recovery == nil)
+    }
+
+    @Test func publicBYOPathRequiresActivationAndExplainsEveryRepository() {
+        let model = makeModel(productionBoundary: .testAccountLink)
+        model.onboardingFlow.mode = .publicReposOnly
+        model.enterActivation(for: .publicReposOnly)
+
+        #expect(model.activationState == .purchaseRequired)
+        #expect(model.activationPresentation.title == "Every repository requires activation")
+        #expect(model.activationPresentation.cause.contains("Every BYO repository"))
+    }
+
+    @Test func legacyPublicFreeSkipSyncReturnsToPaidBYOEntry() {
+        let model = makeModel(productionBoundary: .testAccountLink)
+        model.activationState = .publicFreeSkip
+        model.onboardingFlow.mode = .publicReposOnly
+        model.syncActivationEntryFromOnboardingMode()
+
+        #expect(model.activationState == .purchaseRequired)
+        #expect(model.activationPresentation.requiresKeyEntry)
     }
 
     @Test func privatePathBeginsCheckoutPausedWhenCheckoutDisabled() {
@@ -357,7 +389,7 @@ import NeonDiffDesktopCore
     /// Thread 2: choosing Public Repos must skip the license wall, not sit at
     /// purchase_required.
     @Test func publicModeSyncSkipsLicenseWall() {
-        let model = makeModel()
+        let model = makeModel(productionBoundary: .testManaged)
         model.onboardingFlow.mode = .publicReposOnly
         #expect(model.activationState == .purchaseRequired)
         model.syncActivationEntryFromOnboardingMode()

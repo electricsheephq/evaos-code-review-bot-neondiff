@@ -227,6 +227,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
     }
 
+    private var managedPublicFreeDistribution: Bool {
+        dependencies.productionBoundary.managedGitHubBrokerOrigin != nil
+            && !dependencies.productionBoundary.byoGitHubEnabled
+    }
+
     package var customerRuntimeBoundaryMessage: String {
         if byoGitHubCredentialOnboardingAvailable,
            repos.filter(\.enabled).count > 1,
@@ -846,7 +851,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
         // touching the Keychain on the launch path (v1.0.3 startup-stability rule).
         if let rawActivationState = dependencies.preferences.string(forKey: activationStateKey),
            let restored = ActivationState(rawValue: rawActivationState) {
-            self.activationState = restored
+            let migrated = restored == .publicFreeSkip && !managedPublicFreeDistribution
+                ? .purchaseRequired
+                : restored
+            self.activationState = migrated
+            if migrated != restored {
+                dependencies.preferences.set(migrated.rawValue, forKey: activationStateKey)
+            }
         } else {
             self.activationState = ActivationStateMachine.initialState
         }
@@ -4714,7 +4725,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var activationPresentation: ActivationStatePresentation {
-        ActivationStateMachine.presentation(for: activationState, redactedKeyPrefix: activationKeyRedactedPrefix)
+        ActivationStateMachine.presentation(
+            for: activationState,
+            redactedKeyPrefix: activationKeyRedactedPrefix,
+            publicBYO: onboardingFlow.mode == .publicReposOnly
+                && dependencies.productionBoundary.byoGitHubEnabled
+        )
     }
 
     private var activationLicenseClient: (any ActivationLicenseClienting)? {
@@ -4781,10 +4797,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.preferences.set(next.rawValue, forKey: activationStateKey)
     }
 
-    /// Enter the activation branch from the chosen onboarding path. The public
-    /// path skips straight to a free, license-free state.
+    /// Enter the activation branch from the chosen onboarding path. Only the
+    /// managed broker path may skip activation for public repositories.
     package func enterActivation(for mode: OnboardingMode) {
-        applyActivationEvent(mode == .publicReposOnly ? .choosePublicPath : .choosePrivatePath)
+        let publicFree = mode == .publicReposOnly && managedPublicFreeDistribution
+        applyActivationEvent(publicFree ? .choosePublicPath : .choosePrivatePath)
     }
 
     /// Align the activation entry state with the onboarding mode when the flow
@@ -4794,7 +4811,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func syncActivationEntryFromOnboardingMode() {
         switch activationState {
         case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
-            applyActivationEvent(.choosePublicPath)
+            enterActivation(for: .publicReposOnly)
+        case .publicFreeSkip where !managedPublicFreeDistribution:
+            enterActivation(for: onboardingFlow.mode)
         case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
             applyActivationEvent(.choosePrivatePath)
         default:

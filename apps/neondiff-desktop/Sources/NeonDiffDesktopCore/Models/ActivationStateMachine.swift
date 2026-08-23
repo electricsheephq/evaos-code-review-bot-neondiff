@@ -180,7 +180,8 @@ public enum ActivationStateMachine {
 
     public static func presentation(
         for state: ActivationState,
-        redactedKeyPrefix: String? = nil
+        redactedKeyPrefix: String? = nil,
+        publicBYO: Bool = false
     ) -> ActivationStatePresentation {
         let keyTerm = ActivationTerminology.activationKey
         switch state {
@@ -199,14 +200,18 @@ public enum ActivationStateMachine {
         case .purchaseRequired:
             return ActivationStatePresentation(
                 state: state,
-                title: "Private repositories need activation",
-                cause: "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued.",
+                title: publicBYO ? "Every repository requires activation" : "Private repositories need activation",
+                cause: publicBYO
+                    ? "Every BYO repository requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued."
+                    : "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued.",
                 recovery: ActivationRecovery(
                     label: "Continue with this key",
                     event: .provideExistingKey,
                     accessibilityLabel: "Store the existing \(keyTerm) securely and continue"
                 ),
-                accessibilityLabel: "Private repositories require an active \(keyTerm).",
+                accessibilityLabel: publicBYO
+                    ? "Every BYO repository requires an active \(keyTerm)."
+                    : "Private repositories require an active \(keyTerm).",
                 isSuccess: false,
                 requiresKeyEntry: true,
                 showsNotifyOption: false
