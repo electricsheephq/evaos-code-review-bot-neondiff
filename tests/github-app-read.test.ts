@@ -261,7 +261,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "evaos-code-review-bot" });
+        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "customer-neondiff-review-app" });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -288,7 +288,7 @@ describe("GitHub App read authentication", () => {
       installation_account: "owner",
       app_id: "4184532",
       verified_app_id: 4184532,
-      bot_login: "evaos-code-review-bot[bot]",
+      bot_login: "customer-neondiff-review-app[bot]",
       repository_identity_verified: true,
       installation_account_verified: true,
       app_identity_verified: true,
@@ -309,9 +309,9 @@ describe("GitHub App read authentication", () => {
     const privateKeyPath = join(root, "app.pem");
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
     const cases = [
-      { name: "missing installation account", installation: { id: 123, app_id: 4184532, app_slug: "evaos-code-review-bot" }, metadata: "owner/repo", failed: "installation_account_verified" },
+      { name: "missing installation account", installation: { id: 123, app_id: 4184532 }, metadata: "owner/repo", failed: "installation_account_verified" },
       { name: "mismatched installation account", installation: { id: 123, account: { login: "other" }, app_id: 4184532, app_slug: "evaos-code-review-bot" }, metadata: "owner/repo", failed: "installation_account_verified" },
-      { name: "mismatched repository metadata", installation: { id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "evaos-code-review-bot" }, metadata: "other/repo", failed: "repository_identity_verified" },
+      { name: "mismatched repository metadata", installation: { id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "customer-neondiff-review-app" }, metadata: "other/repo", failed: "repository_identity_verified" },
       { name: "mismatched App identity", installation: { id: 123, account: { login: "owner" }, app_id: 999, app_slug: "evaos-code-review-bot" }, metadata: "owner/repo", failed: "app_identity_verified" },
       { name: "mismatched bot identity", installation: { id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "other-app" }, metadata: "owner/repo", failed: "bot_identity_verified" }
     ] as const;
@@ -330,12 +330,15 @@ describe("GitHub App read authentication", () => {
         return jsonResponse({ message: `unexpected ${scenario.name}` }, 404);
       }) as typeof fetch;
 
-      const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+      const github = new GitHubApi({ appId: "4184532", privateKeyPath,
+        ...(scenario.name === "mismatched repository metadata" || scenario.name === "mismatched bot identity"
+          ? { botLogin: "customer-neondiff-review-app[bot]" } : {}) });
       const proof = await github.probeRepositoryAccess("owner/repo");
       expect(proof).toMatchObject({
         app_can_read_metadata: true,
         app_can_read_pull_requests: true,
-        [scenario.failed]: false
+        [scenario.failed]: false,
+        bot_identity_verified: scenario.name !== "mismatched bot identity" && scenario.name !== "missing installation account"
       });
     }
   });

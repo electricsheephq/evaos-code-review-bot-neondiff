@@ -143,6 +143,7 @@ export class GitHubApi {
   private readonly privateKey?: string;
   private readonly token?: string;
   private readonly apiBaseUrl: URL;
+  private readonly configuredBotLogin?: string;
   private readonly botLogin: string;
   private readonly requestTimeoutMs: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
@@ -156,7 +157,8 @@ export class GitHubApi {
     this.privateKey = options.privateKey ?? (options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined);
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
-    this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;
+    this.configuredBotLogin = options.botLogin?.trim() || undefined;
+    this.botLogin = this.configuredBotLogin ?? DEFAULT_BOT_LOGIN;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
   }
 
@@ -240,8 +242,8 @@ export class GitHubApi {
           && String(installation.app_id) === this.appId.trim()
       ),
       bot_identity_verified: Boolean(
-        botLogin && this.botLogin
-          && botLogin.trim().toLowerCase() === this.botLogin.trim().toLowerCase()
+        botLogin && (!this.configuredBotLogin
+          || botLogin.trim().toLowerCase() === this.configuredBotLogin.toLowerCase())
       )
     });
 
