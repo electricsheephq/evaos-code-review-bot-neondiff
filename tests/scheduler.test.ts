@@ -3517,6 +3517,46 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("blocks automatic enqueue when bounded command evidence is truncated", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-truncated-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const reviewed: string[] = [];
+    const truncated = Object.assign([], { items: [], truncated: true, overflow: true });
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: {
+        ...githubFromMap(new Map([
+          ["org/repo-a", [pull("org/repo-a", 1, "a1")]],
+          ["org/repo-b", [pull("org/repo-b", 1, "b1")]]
+        ])),
+        listIssueComments: async (repo) => repo === "org/repo-a" ? truncated : []
+      },
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewed.push(`${repo}#${reviewPull.number}`);
+        reviewState.recordProcessed({ repo, pullNumber: reviewPull.number, headSha: reviewPull.head.sha, status: "posted", event: "COMMENT" });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.commandFetchErrors).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(reviewed).toEqual(["org/repo-b#1"]);
+    expect(state.getReviewReadiness("org/repo-a", 1, "a1")).toBeUndefined();
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toHaveLength(0);
+    state.close();
+  });
+
   it("assigns scheduler jobs to reusable repo-sticky reviewer sessions when enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-"));
     roots.push(root);

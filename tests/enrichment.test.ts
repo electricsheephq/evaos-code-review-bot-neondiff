@@ -979,7 +979,7 @@ describe("sticky enrichment comments", () => {
           state,
           github: {
             listIssuesForEnrichment: async () => [promotedIssue],
-            listIssueLabelEvents: async () => overflow ? Promise.reject(new Error("issue label event evidence overflow")) : [{
+            listIssueLabelEvents: async () => overflow ? Object.assign([], { items: [], truncated: true, overflow: true }) : [{
               event: "labeled",
               created_at: "2026-08-16T10:00:00Z",
               actor: { login: "Tosko4" },

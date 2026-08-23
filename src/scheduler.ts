@@ -503,6 +503,7 @@ async function collectSubsequentMergedPulls(input: {
 type EnqueueStatus =
   | "enqueued"
   | "already_queued"
+  | "command_fetch_failed"
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_processed"
@@ -532,7 +533,6 @@ async function enqueuePullIfEligible(input: {
     await retireQueuedJobsForClosedPull(input);
     return "closed_retired";
   }
-  markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
   if (input.config.skipDrafts && input.pull.draft) {
     recordReadinessTransition({
       state: input.state,
@@ -579,6 +579,8 @@ async function enqueuePullIfEligible(input: {
   }
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
+  if ("blocked" in commandDecision) return "command_fetch_failed";
+  markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
   if (commandDecision.action !== "none") {
     if (commandDecision.shouldReview) {
       await retireSupersededQueueJobsForPull(input);
@@ -1155,7 +1157,7 @@ async function resolveSchedulerCommandDecision(input: {
   repo: string;
   pull: PullRequestSummary;
   onCommandFetchError?: () => void;
-}): Promise<CommandDecision> {
+}): Promise<CommandDecision | { action: "none"; shouldReview: false; blocked: "command_evidence_truncated" }> {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
   try {
@@ -1163,7 +1165,7 @@ async function resolveSchedulerCommandDecision(input: {
     const bounded = unpackBoundedGithubList(result);
     if (bounded.truncated || bounded.overflow) {
       input.onCommandFetchError?.();
-      return { action: "none", shouldReview: false };
+      return { action: "none", shouldReview: false, blocked: "command_evidence_truncated" };
     }
     comments = bounded.items;
   } catch {
@@ -2604,6 +2606,9 @@ function nextLicenseGateRetryAt(now = new Date()): string {
 
 function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): void {
   switch (status) {
+    case "command_fetch_failed":
+      result.failed += 1;
+      break;
     case "enqueued":
       result.queue.enqueued += 1;
       break;

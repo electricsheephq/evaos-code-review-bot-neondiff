@@ -12,7 +12,12 @@ import {
   type IssueEnrichmentLifecycleInput
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
-import { unpackBoundedGithubList, type BoundedGithubList, type GithubIssueLabelEvent } from "./github.js";
+import {
+  GithubIssueLabelEventOverflowError,
+  unpackBoundedGithubList,
+  type BoundedGithubList,
+  type GithubIssueLabelEvent
+} from "./github.js";
 import {
   buildIssueAnalysisInputHash,
   runIssueAnalysis,
@@ -395,7 +400,7 @@ async function evaluateIssuePromotion(input: {
   try {
     const eventResult = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
     const { items: events, overflow } = unpackBoundedGithubList(eventResult);
-    if (overflow) throw new Error("GitHub issue label event evidence overflow");
+    if (overflow) throw new GithubIssueLabelEventOverflowError();
     const labelEvent = events
       .filter((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation")
       .filter((event) => Boolean(event.actor?.login && event.created_at))
@@ -420,7 +425,7 @@ async function evaluateIssuePromotion(input: {
       evidence
     };
   } catch (error) {
-    if (error instanceof Error && error.message === "issue label event evidence overflow") throw error;
+    if (error instanceof GithubIssueLabelEventOverflowError) throw error;
     return { issue: input.issue };
   }
 }
