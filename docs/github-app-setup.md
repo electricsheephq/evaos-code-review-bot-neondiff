@@ -208,7 +208,7 @@ confirmed rollback; neither path reads or copies key bytes. When a stable
 Homebrew Node command resolves to the same binary as `process.execPath`, the
 installer keeps the stable command instead of pinning a versioned Cellar path.
 
-The public paid customer-owned BYO/GA shell recovery below is CLI/operator-only;
+No invitation is required for the public paid customer-owned BYO/GA path; its shell PEM recovery is CLI/operator-only;
 signed Desktop 1.1.0 uses Keychain, not this PEM path. Keep the private key and
 local config out of git. A typical shell setup is:
 
