@@ -220,6 +220,55 @@ describe("beta release status", () => {
     expect(JSON.stringify(status)).not.toMatch(/PRIVATE KEY|ghp_|BEGIN RSA|BEGIN OPENSSH/);
   });
 
+  it("keeps recovered review and queue failures visible without making health red", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-active-health-recovered-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    store.recordProcessed({ repo: "owner/repo", pullNumber: 7, headSha: "failed-head", status: "failed", error: "provider timeout" });
+    store.recordProcessed({ repo: "owner/repo", pullNumber: 7, headSha: "posted-head", status: "posted" });
+    store.close();
+    const db = new DatabaseSync(dbPath);
+    db.exec(`update processed_reviews set created_at='2026-08-22T12:00:00.100Z' where head_sha='failed-head';
+      update processed_reviews set created_at='2026-08-22T12:00:00.900Z' where head_sha='posted-head';`);
+    insertQueueJob(db, "failed", "owner/repo", "failed-head", undefined, { pullNumber: 7 });
+    db.prepare("update review_queue_jobs set updated_at='2026-08-22T12:00:00.100Z' where head_sha='failed-head'").run();
+    db.close();
+
+    const status = collectReleaseStatus({
+      cwd: repoRoot,
+      configPath: join(root, "missing-config.json"),
+      statePath: dbPath,
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-08-23T00:00:00.000Z")
+    });
+
+    expect(status.database).toMatchObject({ errorCount: 1, recentUnrecoveredErrorCount: 0, failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: 0 });
+    const healthy = buildReleaseStatus({
+      repo: { branch: "main", head: "head", dirtyFiles: [] }, expectedHead: "head", configPath: "/config/live.json",
+      launchd: { label: "com.electricsheephq.evaos-code-review-bot", state: "running", configPath: "/config/live.json", usesSystemCa: true },
+      database: status.database, heartbeat: freshHeartbeat(), now: new Date("2026-08-23T00:00:00.000Z")
+    });
+    expect(healthy.ok).toBe(true);
+    expect(healthy.health).toMatchObject({ state: "amber", active: { failedQueueJobs: 0, staleReviewLeases: 0 }, recent: { unrecoveredReviewErrors: 0 }, history: { reviewErrors: 1, failedQueueJobs: 1 } });
+  });
+
+  it("keeps a recent unrecovered failure red", () => {
+    const status = buildReleaseStatus({
+      repo: { branch: "main", head: "head", dirtyFiles: [] },
+      expectedHead: "head",
+      configPath: "/config/live.json",
+      launchd: { label: "com.electricsheephq.evaos-code-review-bot", state: "running", configPath: "/config/live.json", usesSystemCa: true },
+      database: { rowCount: 1, errorCount: 1, recentUnrecoveredErrorCount: 1, lastErrorAt: "2026-08-22T23:30:00.000Z", failedReviewQueueJobCount: 0 },
+      heartbeat: freshHeartbeat(),
+      now: new Date("2026-08-23T00:00:00.000Z")
+    });
+
+    expect(status.ok).toBe(false);
+    expect(status.health).toMatchObject({ state: "red", recent: { unrecoveredReviewErrors: 1 }, history: { reviewErrors: 1 } });
+    expect(status.health?.reason).toContain("live_db_no_errors");
+  });
+
   it("adds public release manifest gates while allowing an explicit source beta license API deferral", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-green-"));
     roots.push(root);

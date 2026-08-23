@@ -98,6 +98,7 @@ import {
   collectOperatorReviewQueue,
   explainPullStatus,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorDurableQueueSnapshot,
@@ -724,7 +725,7 @@ async function main(): Promise<void> {
       }),
       issueEnrichmentRuntime
     });
-    console.log(stringifyRedactedJson(status));
+    console.log(args.human === "true" ? formatOperatorStatusHuman(status) : stringifyRedactedJson(status));
     if (!status.ok) process.exitCode = 1;
     return;
   }

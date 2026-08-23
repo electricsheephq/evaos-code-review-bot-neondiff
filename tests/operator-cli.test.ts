@@ -19,6 +19,7 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorAgentInventory,
@@ -123,6 +124,19 @@ describe("operator CLI summaries", () => {
       ok: false,
       detail: "coverage was required but no coverage report was supplied"
     });
+  });
+
+  it("uses active queue failures for status while human output preserves history and cause", () => {
+    const release = releaseStatus({ ok: true, database: { errorCount: 1, recentUnrecoveredErrorCount: 0, failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: 0 } });
+    release.health = { state: "amber", reason: "current gates pass; retained history", active: { failedQueueJobs: 0, staleReviewLeases: 0 }, recent: { unrecoveredReviewErrors: 0 }, history: { reviewErrors: 1, failedQueueJobs: 1 } };
+    const status = buildOperatorStatus({ release, agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), total: 1, failed: 1 }, jobs: [] }) });
+
+    expect(status.ok).toBe(true);
+    expect(status.release.health?.state).toBe("amber");
+    const human = formatOperatorStatusHuman(status);
+    expect(human).toContain("status: amber");
+    expect(human).toContain("history: reviewErrors=1 failedQueueJobs=1");
+    expect(human).toContain("actionable: none");
   });
 
   it("passes required release monitoring coverage when all coverage gates are green", () => {

@@ -32,6 +32,8 @@ export interface ReleaseLaunchdStatus {
 export interface ReleaseDatabaseStatus {
   rowCount: number;
   errorCount: number;
+  recentUnrecoveredErrorCount?: number;
+  lastErrorAt?: string;
   skippedCount?: number;
   reviewerSessionCount?: number;
   activeReviewerSessionCount?: number;
@@ -53,6 +55,7 @@ export interface ReleaseDatabaseStatus {
   providerDeferredReviewQueueJobCount?: number;
   retryableProviderDeferredReviewQueueJobCount?: number;
   failedReviewQueueJobCount?: number;
+  activeFailedReviewQueueJobCount?: number;
   zcodeTimeoutFailedReviewQueueJobCount?: number;
   retryableZCodeTimeoutFailedReviewQueueJobCount?: number;
   exhaustedZCodeTimeoutFailedReviewQueueJobCount?: number;
@@ -60,6 +63,14 @@ export interface ReleaseDatabaseStatus {
   staleReviewRunLeaseCount?: number;
   staleActiveReviewQueueJobCount?: number;
   reviewQueueJobsByRepo?: ReviewQueueRepoStatus[];
+}
+
+export interface ReleaseHealthStatus {
+  state: "green" | "amber" | "red";
+  reason: string;
+  active: { failedQueueJobs: number; staleReviewLeases: number };
+  recent: { unrecoveredReviewErrors: number };
+  history: { reviewErrors: number; failedQueueJobs: number };
 }
 
 export interface ReviewerSessionRepoStatus {
@@ -166,6 +177,7 @@ export interface PublicReleaseChannelStatus {
 export interface ReleaseStatus {
   ok: boolean;
   checkedAt: string;
+  health?: ReleaseHealthStatus;
   summary: {
     blockingErrorRows: number;
     failedQueueJobs: number;
@@ -246,6 +258,8 @@ const OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATE_OVERRIDES = new Map([
   ["website", new Set([...GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES, "pending-site-sync"])],
   ["desktop", new Set([...GENERAL_OPTIONAL_PUBLIC_UPDATE_CHANNEL_STATES, "post_1_0"])]
 ]);
+const FAILURE_HEALTH_WINDOW_HOURS = 24;
+const FAILURE_HEALTH_WINDOW_MS = FAILURE_HEALTH_WINDOW_HOURS * 60 * 60 * 1_000;
 
 export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const expectedHeadOk = !input.expectedHead || input.repo.head === input.expectedHead;
@@ -255,7 +269,9 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
   const launchdConfigOk = input.launchd.configPath === input.configPath;
   const launchdSystemCaOk =
     input.launchd.sealedDesktopWorker === true || input.launchd.usesSystemCa === true;
-  const dbOk = input.database.errorCount === 0;
+  const failureWindowHours = FAILURE_HEALTH_WINDOW_HOURS;
+  const recentUnrecoveredErrorCount = input.database.recentUnrecoveredErrorCount ?? input.database.errorCount;
+  const dbOk = recentUnrecoveredErrorCount === 0;
   const providerThrottleState = input.database.providerThrottleState ?? inferProviderThrottleState(input.database);
   const retryableExpiredProviderCooldownCount =
     input.database.retryableExpiredProviderCooldownCount ??
@@ -264,11 +280,13 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       (input.database.expiredProviderCooldownCount ?? 0) - (input.database.coveredExpiredProviderCooldownCount ?? 0)
     );
   const expiredProviderCooldownOk = retryableExpiredProviderCooldownCount === 0;
-  const failedQueueJobsOk = (input.database.failedReviewQueueJobCount ?? 0) === 0;
+  const failedQueueJobs = input.database.failedReviewQueueJobCount ?? 0;
+  const activeFailedQueueJobs = input.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
+  const failedQueueJobsOk = activeFailedQueueJobs === 0;
   const zcodeTimeoutFailedQueueJobCount = input.database.zcodeTimeoutFailedReviewQueueJobCount ?? 0;
   const retryableZCodeTimeoutFailedQueueJobCount = input.database.retryableZCodeTimeoutFailedReviewQueueJobCount ?? 0;
   const exhaustedZCodeTimeoutFailedQueueJobCount = input.database.exhaustedZCodeTimeoutFailedReviewQueueJobCount ?? 0;
-  const zcodeTimeoutFailedQueueJobsOk = zcodeTimeoutFailedQueueJobCount === 0;
+  const zcodeTimeoutFailedQueueJobsOk = activeFailedQueueJobs === 0;
   const staleReviewLeaseCount = (input.database.staleReviewRunLeaseCount ?? 0) +
     (input.database.staleActiveReviewQueueJobCount ?? 0);
   const staleReviewLeasesOk = staleReviewLeaseCount === 0;
@@ -322,7 +340,10 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       name: "live_db_no_errors",
       ok: dbOk,
       detail:
-        `${input.database.errorCount} blocking error row(s)` +
+        (input.database.recentUnrecoveredErrorCount === undefined
+          ? `${input.database.errorCount} blocking error row(s)`
+          : `${recentUnrecoveredErrorCount} recent unrecovered blocking error row(s) in ${failureWindowHours}h; ` +
+            `${input.database.errorCount} retained history; last failure ${input.database.lastErrorAt ?? "unknown"}`) +
         describeProviderCooldownCounts(input.database)
     },
     {
@@ -335,14 +356,19 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     {
       name: "queue_no_failed_jobs",
       ok: failedQueueJobsOk,
-      detail: `${input.database.failedReviewQueueJobCount ?? 0} failed durable queue job(s)`
+      detail: activeFailedQueueJobs === failedQueueJobs
+        ? `${failedQueueJobs} failed durable queue job(s)`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "queue_no_zcode_timeout_failed_jobs",
       ok: zcodeTimeoutFailedQueueJobsOk,
-      detail:
-        `${zcodeTimeoutFailedQueueJobCount} ZCode timeout failed durable queue job(s); ` +
-        `retryable=${retryableZCodeTimeoutFailedQueueJobCount} exhausted=${exhaustedZCodeTimeoutFailedQueueJobCount}`
+      detail: activeFailedQueueJobs === failedQueueJobs
+        ? `${zcodeTimeoutFailedQueueJobCount} ZCode timeout failed durable queue job(s); ` +
+          `retryable=${retryableZCodeTimeoutFailedQueueJobCount} exhausted=${exhaustedZCodeTimeoutFailedQueueJobCount}`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); retained ZCode timeout history=${zcodeTimeoutFailedQueueJobCount}; ` +
+          `retained=${zcodeTimeoutFailedQueueJobCount}; retryable=${retryableZCodeTimeoutFailedQueueJobCount} ` +
+          `exhausted=${exhaustedZCodeTimeoutFailedQueueJobCount}`
     },
     {
       name: "queue_no_stale_review_leases",
@@ -390,13 +416,21 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     ...runtimeGates,
     ...publicReleaseGates
   ];
+  const health = classifyReleaseHealth({
+    gates,
+    database: input.database,
+    recentUnrecoveredErrorCount,
+    activeFailedQueueJobs,
+    staleReviewLeaseCount
+  });
 
   return {
     ok: gates.every((gate) => gate.ok),
     checkedAt: (input.now ?? new Date()).toISOString(),
+    health,
     summary: {
       blockingErrorRows: input.database.errorCount,
-      failedQueueJobs: input.database.failedReviewQueueJobCount ?? 0,
+      failedQueueJobs,
       staleReviewLeases: staleReviewLeaseCount,
       providerDeferredQueueJobs: input.database.providerDeferredReviewQueueJobCount ?? 0,
       retryableProviderDeferredQueueJobs: input.database.retryableProviderDeferredReviewQueueJobCount ?? 0,
@@ -444,6 +478,30 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       restartCommand: `launchctl kickstart -k gui/$(id -u)/${input.launchd.label}`,
       unloadCommand: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/${input.launchd.label}.plist`
     }
+  };
+}
+
+function classifyReleaseHealth(input: {
+  gates: Array<{ name: string; ok: boolean }>;
+  database: ReleaseDatabaseStatus;
+  recentUnrecoveredErrorCount: number;
+  activeFailedQueueJobs: number;
+  staleReviewLeaseCount: number;
+}): ReleaseHealthStatus {
+  const failedGates = input.gates.filter((gate) => !gate.ok).map((gate) => gate.name);
+  const state: ReleaseHealthStatus["state"] = failedGates.length ? "red" :
+    input.database.errorCount || input.database.failedReviewQueueJobCount ? "amber" : "green";
+  const reason = state === "red"
+    ? `current or recent actionable gate(s) failed: ${failedGates.join(", ")}`
+    : state === "amber"
+      ? `current gates pass; retained history has ${input.database.errorCount} review error(s) and ${input.database.failedReviewQueueJobCount ?? 0} failed queue job(s)`
+      : "current gates pass with no recorded review or queue failure history";
+  return {
+    state,
+    reason,
+    active: { failedQueueJobs: input.activeFailedQueueJobs, staleReviewLeases: input.staleReviewLeaseCount },
+    recent: { unrecoveredReviewErrors: input.recentUnrecoveredErrorCount },
+    history: { reviewErrors: input.database.errorCount, failedQueueJobs: input.database.failedReviewQueueJobCount ?? 0 }
   };
 }
 
@@ -2292,6 +2350,17 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
         providerCooldownCount?: number | null;
         errorCount?: number | null;
       };
+    const errorRows = db.prepare(`select repo,pull_number,status,error,created_at from processed_reviews where status='failed' or status='posted' or (status!='skipped' and error is not null and error!='')`).all() as unknown as Array<{ repo: string; pull_number: number; status: string; error: string | null; created_at: string }>;
+    const recentUnrecoveredErrorCount = errorRows.filter((errorRow) => {
+      const recovered = errorRows.some((row) => row.status === "posted" && row.repo === errorRow.repo && row.pull_number === errorRow.pull_number && Date.parse(row.created_at) > Date.parse(errorRow.created_at));
+      return (errorRow.status === "failed" || (errorRow.status !== "skipped" && errorRow.error !== null && errorRow.error !== "")) && !recovered && (!Number.isFinite(Date.parse(errorRow.created_at)) || Date.parse(errorRow.created_at) >= now.getTime() - FAILURE_HEALTH_WINDOW_MS);
+    }).length;
+    const lastErrorRow = db.prepare(
+      `select created_at from processed_reviews
+       where status = 'failed' or (status != 'skipped' and error is not null and error != '')
+       order by (julianday(created_at) is not null) desc, julianday(created_at) desc, rowid desc limit 1`
+    ).get() as { created_at?: string } | undefined;
+    const lastErrorAt = lastErrorRow?.created_at;
     const providerCooldownRows = db
       .prepare(
         `select repo, pull_number, head_sha, error
@@ -2363,6 +2432,7 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       providerDeferredReviewQueueJobCount: reviewQueue.providerDeferred,
       retryableProviderDeferredReviewQueueJobCount: reviewQueue.retryableProviderDeferred,
       failedReviewQueueJobCount: reviewQueue.failed,
+      activeFailedReviewQueueJobCount: reviewQueue.activeFailed,
       zcodeTimeoutFailedReviewQueueJobCount: reviewQueue.zcodeTimeoutFailed,
       retryableZCodeTimeoutFailedReviewQueueJobCount: reviewQueue.retryableZCodeTimeoutFailed,
       exhaustedZCodeTimeoutFailedReviewQueueJobCount: reviewQueue.exhaustedZCodeTimeoutFailed,
@@ -2370,7 +2440,9 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       staleReviewRunLeaseCount: reviewRunLeases.stale,
       staleActiveReviewQueueJobCount,
       reviewQueueJobsByRepo: reviewQueue.byRepo,
-      errorCount: row.errorCount ?? 0
+      errorCount: row.errorCount ?? 0,
+      recentUnrecoveredErrorCount,
+      ...(lastErrorAt ? { lastErrorAt } : {})
     };
   } finally {
     db.close();
@@ -2388,6 +2460,7 @@ function readReviewQueueCounts(
   providerDeferred: number;
   retryableProviderDeferred: number;
   failed: number;
+  activeFailed: number;
   zcodeTimeoutFailed: number;
   retryableZCodeTimeoutFailed: number;
   exhaustedZCodeTimeoutFailed: number;
@@ -2405,6 +2478,7 @@ function readReviewQueueCounts(
       providerDeferred: 0,
       retryableProviderDeferred: 0,
       failed: 0,
+      activeFailed: 0,
       zcodeTimeoutFailed: 0,
       retryableZCodeTimeoutFailed: 0,
       exhaustedZCodeTimeoutFailed: 0,
@@ -2441,14 +2515,9 @@ function readReviewQueueCounts(
        order by repo`
     )
     .all(nowIso) as unknown as Array<QueueCountRow & { repo: string }>;
-  const timeoutRows = db
-    .prepare(
-      `select last_error
-       from review_queue_jobs
-       where state = 'failed' and last_error like ?`
-    )
-    .all(`${ZCODE_TIMEOUT_ERROR_PREFIX}%`) as unknown as Array<{ last_error: string | null }>;
-  const timeoutCounts = summarizeZCodeTimeoutErrors(timeoutRows.map((timeoutRow) => timeoutRow.last_error));
+  const failedRows = db.prepare(`select q.last_error,q.updated_at,exists(select 1 from processed_reviews p where p.repo=q.repo and p.pull_number=q.pull_number and p.status='posted' and (p.error is null or p.error='') and julianday(p.created_at)>julianday(q.updated_at)) as recovered from review_queue_jobs q where q.state='failed'`).all() as unknown as Array<{ last_error: string | null; updated_at: string; recovered: number }>;
+  const activeFailedRows = failedRows.filter((row) => row.recovered !== 1);
+  const timeoutCounts = summarizeZCodeTimeoutErrors(failedRows.map((row) => row.last_error));
   return {
     total: row.total ?? 0,
     queued: row.queued ?? 0,
@@ -2457,6 +2526,7 @@ function readReviewQueueCounts(
     providerDeferred: row.providerDeferred ?? 0,
     retryableProviderDeferred: row.retryableProviderDeferred ?? 0,
     failed: row.failed ?? 0,
+    activeFailed: activeFailedRows.length,
     zcodeTimeoutFailed: timeoutCounts.total,
     retryableZCodeTimeoutFailed: timeoutCounts.retryable,
     exhaustedZCodeTimeoutFailed: timeoutCounts.exhausted,

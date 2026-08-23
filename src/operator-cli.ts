@@ -414,6 +414,7 @@ export function buildOperatorStatus(input: {
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const failedRows = input.release.database.errorCount;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
+  const activeFailedQueueJobs = input.release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
   const budget = input.release.budget;
@@ -455,8 +456,10 @@ export function buildOperatorStatus(input: {
     },
     {
       name: "durable_queue_no_failed_jobs",
-      ok: failedQueueJobs === 0,
-      detail: `${failedQueueJobs} failed durable queue job(s)`
+      ok: activeFailedQueueJobs === 0,
+      detail: activeFailedQueueJobs === failedQueueJobs
+        ? `${failedQueueJobs} failed durable queue job(s)`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "durable_queue_no_zcode_timeout_failed_jobs",
@@ -504,7 +507,7 @@ export function buildOperatorStatus(input: {
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : []),
-    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
     ...(zcodeTimeoutQueue.total > 0
       ? zcodeTimeoutRetryActions
       : []),
@@ -554,6 +557,21 @@ export function buildOperatorStatus(input: {
     ...(issueEnrichment ? { issueEnrichment } : {}),
     ...(issueEnrichmentRuntime ? { issueEnrichmentRuntime } : {})
   };
+}
+
+export function formatOperatorStatusHuman(status: OperatorStatus): string {
+  const health = status.release.health;
+  const failedGates = status.gates.filter((gate) => !gate.ok);
+  return [
+    `status: ${health?.state ?? (status.ok ? "green" : "red")} - ${health?.reason ?? (status.ok ? "current gates pass" : "current gates failed")}`,
+    `current: activeFailedQueueJobs=${status.release.health?.active.failedQueueJobs ?? "unknown"} ` +
+      `recentUnrecoveredReviewErrors=${status.release.health?.recent.unrecoveredReviewErrors ?? "unknown"}`,
+    `history: reviewErrors=${status.summary.failedRows} failedQueueJobs=${status.summary.failedQueueJobs}`,
+    ...(failedGates.length > 0
+      ? failedGates.map((gate) => `actionable: ${gate.name} - ${gate.detail}`)
+      : ["actionable: none"]),
+    ...status.recommendedActions.map((action) => `next: ${action}`)
+  ].join("\n");
 }
 
 export function buildRuntimeInventory(input: {
