@@ -19,6 +19,7 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorAgentInventory,
@@ -123,6 +124,45 @@ describe("operator CLI summaries", () => {
       ok: false,
       detail: "coverage was required but no coverage report was supplied"
     });
+  });
+
+  it("uses active queue failures for status while human output preserves history and cause", () => {
+    const release = releaseStatus({ ok: true, database: { errorCount: 1, recentUnrecoveredErrorCount: 0, failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: 0 } });
+    release.health = { state: "amber", reason: "current gates pass; retained history", active: { failedQueueJobs: 0, staleReviewLeases: 0 }, recent: { unrecoveredReviewErrors: 0 }, history: { reviewErrors: 1, failedQueueJobs: 1 } };
+    const status = buildOperatorStatus({ release, agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), total: 1, failed: 1 }, jobs: [] }) });
+
+    expect(status.ok).toBe(true);
+    expect(status.release.health?.state).toBe("amber");
+    const human = formatOperatorStatusHuman(status);
+    expect(human).toContain("status: amber");
+    expect(human).toContain("history: reviewErrors=1 failedQueueJobs=1");
+    expect(human).toContain("actionable: none");
+  });
+
+  it("does not block on retained ZCode timeout history", () => {
+    const release = releaseStatus({ ok: true, database: { failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: 0, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: 0, retryableZCodeTimeoutFailedReviewQueueJobCount: 1 } });
+    const status = buildOperatorStatus({ release, agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), total: 1, failed: 1 }, jobs: [durableJob({ repo: "owner/repo", pullNumber: 7, headSha: "historical-timeout", state: "failed", lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1" })] }) });
+
+    expect(status.ok).toBe(true);
+    expect(status.summary.zcodeTimeoutFailedQueueJobs).toBe(1);
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "durable_queue_no_zcode_timeout_failed_jobs", ok: true }));
+    expect(status.recommendedActions).not.toContain(expect.stringContaining("retry-failed"));
+  });
+
+  it("keeps runtime inventory non-red for retained failed queue history", () => {
+    const queue = durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), total: 1, failed: 1 }, jobs: [durableJob({ repo: "owner/repo", pullNumber: 7, headSha: "historical-timeout", state: "failed", lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1" })] });
+    const release = (activeFailed: number) => releaseStatus({ ok: true, database: { failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: activeFailed, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: activeFailed } });
+    const historical = buildRuntimeInventory({ release: release(0), agents: agentInventory({}), durableQueue: queue });
+    const active = buildRuntimeInventory({ release: release(1), agents: agentInventory({}), durableQueue: queue });
+
+    expect(historical.ok).toBe(true);
+    expect(historical.runtimeState).toBe("healthy_idle");
+    expect(historical.summary.failedQueueJobs).toBe(1);
+    expect(historical.gates).toContainEqual(expect.objectContaining({ name: "runtime_no_failed_queue_jobs", ok: true }));
+    expect(historical.recommendedActions).not.toContain("inspect operator queue failed jobs before promotion");
+    expect(active.ok).toBe(false);
+    expect(active.runtimeState).toBe("blocked");
+    expect(active.gates).toContainEqual(expect.objectContaining({ name: "runtime_no_failed_queue_jobs", ok: false }));
   });
 
   it("passes required release monitoring coverage when all coverage gates are green", () => {

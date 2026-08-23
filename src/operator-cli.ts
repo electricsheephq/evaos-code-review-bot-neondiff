@@ -414,6 +414,7 @@ export function buildOperatorStatus(input: {
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const failedRows = input.release.database.errorCount;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
+  const activeFailedQueueJobs = input.release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
   const budget = input.release.budget;
@@ -455,15 +456,20 @@ export function buildOperatorStatus(input: {
     },
     {
       name: "durable_queue_no_failed_jobs",
-      ok: failedQueueJobs === 0,
-      detail: `${failedQueueJobs} failed durable queue job(s)`
+      ok: activeFailedQueueJobs === 0,
+      detail: activeFailedQueueJobs === failedQueueJobs
+        ? `${failedQueueJobs} failed durable queue job(s)`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "durable_queue_no_zcode_timeout_failed_jobs",
-      ok: zcodeTimeoutQueue.total === 0,
-      detail:
-        `${zcodeTimeoutQueue.total} ZCode timeout failed durable queue job(s); ` +
-        `retryable=${zcodeTimeoutQueue.retryable} exhausted=${zcodeTimeoutQueue.exhausted}`
+      ok: zcodeTimeoutQueue.activeTotal === 0,
+      detail: zcodeTimeoutQueue.activeTotal === zcodeTimeoutQueue.total
+        ? `${zcodeTimeoutQueue.total} ZCode timeout failed durable queue job(s); ` +
+          `retryable=${zcodeTimeoutQueue.retryable} exhausted=${zcodeTimeoutQueue.exhausted}`
+        : `${zcodeTimeoutQueue.activeTotal} active ZCode timeout failed durable queue job(s); ` +
+          `retained=${zcodeTimeoutQueue.total}; retryable=${zcodeTimeoutQueue.retryable} ` +
+          `exhausted=${zcodeTimeoutQueue.exhausted}`
     },
     {
       name: "durable_queue_no_retryable_provider_deferred_jobs",
@@ -504,8 +510,8 @@ export function buildOperatorStatus(input: {
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect agents output before restarting or retiring stale work"] : []),
-    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
-    ...(zcodeTimeoutQueue.total > 0
+    ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(zcodeTimeoutQueue.activeTotal > 0
       ? zcodeTimeoutRetryActions
       : []),
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
@@ -556,6 +562,21 @@ export function buildOperatorStatus(input: {
   };
 }
 
+export function formatOperatorStatusHuman(status: OperatorStatus): string {
+  const health = status.release.health;
+  const failedGates = status.gates.filter((gate) => !gate.ok);
+  return [
+    `status: ${health?.state ?? (status.ok ? "green" : "red")} - ${health?.reason ?? (status.ok ? "current gates pass" : "current gates failed")}`,
+    `current: activeFailedQueueJobs=${status.release.health?.active.failedQueueJobs ?? "unknown"} ` +
+      `recentUnrecoveredReviewErrors=${status.release.health?.recent.unrecoveredReviewErrors ?? "unknown"}`,
+    `history: reviewErrors=${status.summary.failedRows} failedQueueJobs=${status.summary.failedQueueJobs}`,
+    ...(failedGates.length > 0
+      ? failedGates.map((gate) => `actionable: ${gate.name} - ${gate.detail}`)
+      : ["actionable: none"]),
+    ...status.recommendedActions.map((action) => `next: ${action}`)
+  ].join("\n");
+}
+
 export function buildRuntimeInventory(input: {
   release: ReleaseStatus;
   coverage?: CoverageAuditReport;
@@ -595,6 +616,7 @@ export function buildRuntimeInventory(input: {
     Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
   const retryCoveredReviewerSessions = input.release.database.retryCoveredReviewerSessionCount ?? 0;
   const failedQueueJobs = durableQueue?.summary.failed ?? 0;
+  const activeFailedQueueJobs = input.release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
   const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
@@ -623,15 +645,20 @@ export function buildRuntimeInventory(input: {
     },
     {
       name: "runtime_no_failed_queue_jobs",
-      ok: failedQueueJobs === 0,
-      detail: `${failedQueueJobs} failed durable queue job(s)`
+      ok: activeFailedQueueJobs === 0,
+      detail: activeFailedQueueJobs === failedQueueJobs
+        ? `${failedQueueJobs} failed durable queue job(s)`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "runtime_no_zcode_timeout_failed_queue_jobs",
-      ok: zcodeTimeoutQueue.total === 0,
-      detail:
-        `${zcodeTimeoutQueue.total} ZCode timeout failed durable queue job(s); ` +
-        `retryable=${zcodeTimeoutQueue.retryable} exhausted=${zcodeTimeoutQueue.exhausted}`
+      ok: zcodeTimeoutQueue.activeTotal === 0,
+      detail: zcodeTimeoutQueue.activeTotal === zcodeTimeoutQueue.total
+        ? `${zcodeTimeoutQueue.total} ZCode timeout failed durable queue job(s); ` +
+          `retryable=${zcodeTimeoutQueue.retryable} exhausted=${zcodeTimeoutQueue.exhausted}`
+        : `${zcodeTimeoutQueue.activeTotal} active ZCode timeout failed durable queue job(s); ` +
+          `retained=${zcodeTimeoutQueue.total}; retryable=${zcodeTimeoutQueue.retryable} ` +
+          `exhausted=${zcodeTimeoutQueue.exhausted}`
     },
     {
       name: "runtime_no_retryable_provider_deferred_jobs",
@@ -720,8 +747,8 @@ export function buildRuntimeInventory(input: {
     ...(uncoveredPendingHeads.length > 0 ? ["wait for daemon cycle or run scoped run-once for uncovered pending heads"] : []),
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect stale leases before restarting launchd"] : []),
-    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
-    ...(zcodeTimeoutQueue.total > 0
+    ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(zcodeTimeoutQueue.activeTotal > 0
       ? zcodeTimeoutRetryActions
       : []),
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
@@ -1738,19 +1765,21 @@ function uniqueStrings(values: string[]): string[] {
 function zcodeTimeoutQueueCounts(
   release: ReleaseStatus,
   durableQueue?: OperatorDurableQueueSnapshot
-): { total: number; retryable: number; exhausted: number } {
+): { total: number; activeTotal: number; retryable: number; exhausted: number } {
   if (release.database.zcodeTimeoutFailedReviewQueueJobCount !== undefined) {
     return {
       total: release.database.zcodeTimeoutFailedReviewQueueJobCount,
+      activeTotal: release.database.activeZCodeTimeoutFailedReviewQueueJobCount ?? release.database.zcodeTimeoutFailedReviewQueueJobCount,
       retryable: release.database.retryableZCodeTimeoutFailedReviewQueueJobCount ?? 0,
       exhausted: release.database.exhaustedZCodeTimeoutFailedReviewQueueJobCount ?? 0
     };
   }
-  return summarizeZCodeTimeoutErrors(
+  const counts = summarizeZCodeTimeoutErrors(
     (durableQueue?.jobs ?? [])
       .filter((job) => job.state === "failed")
       .map((job) => job.lastError)
   );
+  return { ...counts, activeTotal: counts.total };
 }
 
 function zcodeTimeoutRecommendedActions(
