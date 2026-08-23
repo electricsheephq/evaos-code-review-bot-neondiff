@@ -40,6 +40,46 @@ remain honored for existing holders but are no longer sold. Provider/model costs
 remain external through your own provider key or local model; NeonDiff does not
 include hosted model credits, unlimited SaaS inference, or bundled provider tokens.
 
+## Native Desktop adoption
+
+This is the customer path for an accepted signed and notarized NeonDiff Desktop
+release. The npm package contains this guide and the CLI; it does not contain
+Desktop app bytes, and native setup must not require a source checkout. Use the
+CLI commands below only after `npm install -g neondiff` when the signed app
+explicitly hands off to the operator path.
+
+1. Download only the immutable Desktop artifact named by its release evidence.
+   Verify its archive, bundle version/build, codesign, notarization, Gatekeeper,
+   manifest, feed, and worker identities before opening it.
+2. Link the account and select a bot in the app. Native state is account-scoped:
+   `~/Library/Application Support/NeonDiffDesktop/Accounts/<account>/Bots/<bot>/config.local.json`,
+   with the review database at `state/reviews.sqlite` beside that config. Keep
+   both outside a release checkout and keep credentials in Keychain.
+3. Use **Preview Start**, then **Install & Start** (or **Start/Restart**) and
+   verify the displayed account, bot, config, launchd label, and worker status.
+   Use **Check for Updates** only for a signed release whose accepted bytes and
+   feed identity match the same evidence packet.
+4. Update access is a separate authority. A fresh account catalog can authorize
+   signed update access even when `bots: []`; that does not select a bot or prove
+   GitHub installation, repository access, provider readiness, or current work.
+   Useful current-launch work requires the exact account/bot, GitHub App and
+   selected `owner/repo`, provider readiness, and a live API entitlement covering
+   that repository visibility. Missing, stale, unknown, or revoked proof fails
+   closed.
+
+The native account-scoped path is separate from the legacy CLI/operator path.
+Legacy CLI setup accepts a caller-selected config path such as
+`config.local.json` and an operator-owned LaunchAgent coordinate; it may be an
+arbitrary absolute path and is not evidence of native account or bot authority.
+Do not copy a legacy config, DB, allowlist, Keychain item, or credential path
+into `Accounts/<account>/Bots/<bot>/`, and do not treat native state as a legacy
+worker migration.
+
+The current Sparkle appcast does not provide a supported downgrade. Do not use
+**Check for Updates**, a source reset, or a manually edited feed as rollback;
+rollback requires a separately accepted immutable signed/notarized prior
+artifact and a tested state-preserving recovery path.
+
 ## 1. Install NeonDiff
 
 Recommended package install after v1.0.4 is published and verified:

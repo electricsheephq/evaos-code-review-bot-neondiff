@@ -144,7 +144,10 @@ checksum-bound prerelease bundle.
 
 Follow [docs/SETUP.md](docs/SETUP.md) for the CLI-first setup path (the
 first-run path on non-Mac platforms and the operator/advanced path on Mac). The
-short version is:
+signed Desktop customer path starts at
+[Native Desktop adoption](docs/SETUP.md#native-desktop-adoption); the npm
+package ships this guide and the CLI, not signed Desktop app bytes or a source
+checkout. The short CLI version is:
 
 ```bash
 neondiff init --config config.local.json
@@ -164,6 +167,11 @@ surface for CLI-first and non-Mac setups, not the product UI. It shows license
 status, GitHub App status, daemon status, and provider readiness, and its
 provider card includes a `Verify API Key` control that reports redacted
 pass/fail output.
+An account can have current update access even when its server catalog reports
+`bots: []`; update access is not proof of a selected bot, GitHub installation,
+repository access, provider readiness, or useful work. Before a current launch
+can review, the native app must verify the exact account/bot, GitHub-selected
+repository, and API-backed entitlement for that repository and visibility.
 The managed native path binds activation and private-repository token issuance
 to the same Keychain-backed broker device identity and exact GitHub-selected
 repository. The raw Activation Key remains Keychain-owned: it crosses bounded
