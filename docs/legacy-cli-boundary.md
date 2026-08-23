@@ -23,10 +23,9 @@ reproducible operator capture:
 : "${NEONDIFF_OPERATOR_CHECKOUT:?set the absolute operator checkout}"
 : "${NEONDIFF_OPERATOR_EVIDENCE_ROOT:?set an absolute evidence root}"
 : "${NEONDIFF_LEGACY_CONFIG_PATH:?copy the absolute --config operand from the verified plist}"
-: "${NEONDIFF_LEGACY_STATE_DB:?copy statePath from that config}"
 : "${NEONDIFF_LAUNCHD_LABEL:?set the exact plist Label}"
 for path in "$NEONDIFF_OPERATOR_CHECKOUT" "$NEONDIFF_OPERATOR_EVIDENCE_ROOT" \
-  "$NEONDIFF_LEGACY_CONFIG_PATH" "$NEONDIFF_LEGACY_STATE_DB"; do
+  "$NEONDIFF_LEGACY_CONFIG_PATH"; do
   case "$path" in /*) ;; *) echo "operator paths must be absolute" >&2; exit 1 ;; esac
 done
 test -f "$NEONDIFF_LEGACY_CONFIG_PATH"
@@ -36,6 +35,9 @@ CHECKOUT_TOP="$(git -C "$NEONDIFF_OPERATOR_CHECKOUT" rev-parse --show-toplevel)"
 test "$CHECKOUT_TOP" = "$NEONDIFF_OPERATOR_CHECKOUT"
 case "$NEONDIFF_OPERATOR_EVIDENCE_ROOT/" in
   "$NEONDIFF_OPERATOR_CHECKOUT/"*) echo "evidence must be outside checkout" >&2; exit 1 ;;
+esac
+case "$NEONDIFF_OPERATOR_CHECKOUT/" in
+  "$NEONDIFF_OPERATOR_EVIDENCE_ROOT/"*) echo "evidence must not contain checkout" >&2; exit 1 ;;
 esac
 cd "$NEONDIFF_OPERATOR_CHECKOUT"
 export NEONDIFF_OPERATOR_CHECKOUT NEONDIFF_OPERATOR_EVIDENCE_ROOT \
@@ -49,10 +51,13 @@ its filesystem location.
 
 ## Legacy CLI commands
 
-Run read-only checks against the exact legacy config:
+Inspect the effective config first so an omitted `statePath` resolves through
+the supported defaults, then run read-only checks against that exact state:
 
 ```bash
-npx tsx src/cli.ts config inspect --config "$NEONDIFF_LEGACY_CONFIG_PATH"
+INSPECT_JSON="$(npx tsx src/cli.ts config inspect --config "$NEONDIFF_LEGACY_CONFIG_PATH")"
+NEONDIFF_LEGACY_STATE_DB="$(printf '%s' "$INSPECT_JSON" | jq -er '.config.statePath')"
+case "$NEONDIFF_LEGACY_STATE_DB" in /*) ;; *) echo "effective statePath must be absolute" >&2; exit 1 ;; esac
 npx tsx src/cli.ts status --config "$NEONDIFF_LEGACY_CONFIG_PATH" --launchd-label "$NEONDIFF_LAUNCHD_LABEL"
 npx tsx src/cli.ts runtime-inventory --json --config "$NEONDIFF_LEGACY_CONFIG_PATH" --launchd-label "$NEONDIFF_LAUNCHD_LABEL"
 npx tsx src/cli.ts daemon status --config "$NEONDIFF_LEGACY_CONFIG_PATH" --launchd-label "$NEONDIFF_LAUNCHD_LABEL" --state-path "$NEONDIFF_LEGACY_STATE_DB"
@@ -63,8 +68,10 @@ dry-run; confirmed mutation requires `--dry-run false --confirm true`. When the
 verified plist is outside the package root, confirmed `--plist` use also needs
 `--allow-external-plist true`. The CLI checks the plist label before planning
 and fails closed on an ambiguous launchd state. Runtime credentials are
-accepted only through the existing bounded stdin contract for the raw daemon;
-never add them to config, argv, notes, or evidence.
+accepted only through the bounded stdin contract for the raw daemon's GitHub
+App/license envelope. An `api-key-env` provider instead reads its process
+environment; redact every credential-valued environment entry from notes and
+evidence, and never copy it into config or argv.
 
 ## Native Desktop is a different coordinate system
 
@@ -89,25 +96,27 @@ Classify the verified plist before changing bytes:
 
 - A managed candidate has an absolute Node executable and an argument prefix
   ending in `Workers/<label>/current/node_modules/neondiff/dist/src/cli.js`.
+- A package-installed legacy worker starts with a `neondiff` executable and is
+  eligible for its first checksum-managed migration through `update`.
 - A source-managed worker points at a source checkout (`dist/src/cli.js` or
   `src/cli.ts`) and is not updated by the candidate installer.
 
-For a managed candidate, use the existing installer with immutable absolute
-manifest and tarball paths. Preview first, then repeat the exact command only
-after its digest and state plan are approved:
+For a managed candidate or first package-installed migration, use the installer
+from the checksum-verified extracted bundle with its immutable manifest and
+tarball. Preview first, then repeat only after its state plan is approved:
 
 ```bash
-for path in "$NEONDIFF_CANDIDATE_MANIFEST" "$NEONDIFF_CANDIDATE_TARBALL"; do
+for path in "$NEONDIFF_CANDIDATE_INSTALLER" "$NEONDIFF_CANDIDATE_MANIFEST" "$NEONDIFF_CANDIDATE_TARBALL"; do
   case "$path" in /*) ;; *) echo "candidate artifacts must be absolute" >&2; exit 1 ;; esac
 done
-test -f "$NEONDIFF_CANDIDATE_MANIFEST" && test -f "$NEONDIFF_CANDIDATE_TARBALL"
-node scripts/install-b0-worker-candidate.mjs update \
+test -f "$NEONDIFF_CANDIDATE_INSTALLER" && test -f "$NEONDIFF_CANDIDATE_MANIFEST" && test -f "$NEONDIFF_CANDIDATE_TARBALL"
+node "$NEONDIFF_CANDIDATE_INSTALLER" update \
   --manifest "$NEONDIFF_CANDIDATE_MANIFEST" \
   --manifest-sha256 <manifest-sha256> \
   --tarball "$NEONDIFF_CANDIDATE_TARBALL" \
   --launchd-label "$NEONDIFF_LAUNCHD_LABEL" \
   --dry-run true
-node scripts/install-b0-worker-candidate.mjs update \
+node "$NEONDIFF_CANDIDATE_INSTALLER" update \
   --manifest "$NEONDIFF_CANDIDATE_MANIFEST" \
   --manifest-sha256 <manifest-sha256> \
   --tarball "$NEONDIFF_CANDIDATE_TARBALL" \
@@ -115,21 +124,21 @@ node scripts/install-b0-worker-candidate.mjs update \
   --dry-run false --confirm true
 ```
 
-Rollback uses the recorded prior manifest and tarball through the same
-preview-then-confirm contract; re-update repeats `update` with the retained
-current candidate after rollback:
+Rollback uses the recorded prior bundle through the same preview-then-confirm
+contract; re-update toggles back through `rollback` with the retained current
+candidate after rollback:
 
 ```bash
-for path in "$NEONDIFF_PRIOR_MANIFEST" "$NEONDIFF_PRIOR_TARBALL"; do
+for path in "$NEONDIFF_PRIOR_INSTALLER" "$NEONDIFF_PRIOR_MANIFEST" "$NEONDIFF_PRIOR_TARBALL"; do
   case "$path" in /*) ;; *) echo "prior artifacts must be absolute" >&2; exit 1 ;; esac
   test -f "$path" || exit 1
 done
-node scripts/install-b0-worker-candidate.mjs rollback \
+node "$NEONDIFF_PRIOR_INSTALLER" rollback \
   --manifest "$NEONDIFF_PRIOR_MANIFEST" --manifest-sha256 <prior-manifest-sha256> \
   --tarball "$NEONDIFF_PRIOR_TARBALL" --launchd-label "$NEONDIFF_LAUNCHD_LABEL" \
   --dry-run true
 # After approving the preview, repeat it with --dry-run false --confirm true.
-node scripts/install-b0-worker-candidate.mjs update \
+node "$NEONDIFF_CANDIDATE_INSTALLER" rollback \
   --manifest "$NEONDIFF_CANDIDATE_MANIFEST" --manifest-sha256 <current-manifest-sha256> \
   --tarball "$NEONDIFF_CANDIDATE_TARBALL" --launchd-label "$NEONDIFF_LAUNCHD_LABEL" \
   --dry-run true
