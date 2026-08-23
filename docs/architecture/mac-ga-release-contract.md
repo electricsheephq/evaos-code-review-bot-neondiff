@@ -10,9 +10,9 @@ CLI/dashboard `neondiff@1.0.4` and native Desktop `1.1.0` share security and rev
 | Lane | Supported surface | Must not claim |
 | --- | --- | --- |
 | CLI/dashboard | npm package, local HTML dashboard, API-backed activation, local worker | native Swift maturity, signed distribution, Sparkle, or Desktop GA |
-| Native Desktop | signed macOS app, native onboarding, sealed worker, paid BYO (managed later), Sparkle channel | that source, an unsigned bundle, or the CLI manifest is a native release |
+| Native Desktop GA | signed macOS app, native onboarding, sealed worker, paid BYO (managed later), Sparkle channel | that source, an unsigned bundle, or the CLI manifest is a native release |
 
-`docs/public-release-manifest.json` remains the CLI record. Desktop candidates use a versioned manifest/schema; do not merge or rewrite these records.
+`docs/public-release-manifest.json` remains the CLI record. Desktop GA uses the shared repository tag/release `v1.1.0`, not an npm publish; npm stays `1.0.4` unless CLI bytes change. Pre-GA fixtures may use `v1.1.0-beta.N`, but never create a second Desktop tag/release.
 
 ## Native production contract
 

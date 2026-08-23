@@ -206,7 +206,7 @@ configured `evidenceDir` as
 
 The `keychain` backend is reserved for the native sealed-worker boundary.
 Headless CLI activation rejects Keychain writes; `v1.0.4` uses the approved
-file backend. The native `1.1.0` BYO candidate has a separate
+file backend. The native `1.1.0` BYO GA has a separate
 [Mac GA architecture contract](architecture/mac-ga-release-contract.md), and
 unsigned or mixed-marker bundles remain quarantined.
 The local `machineId` sent to the license API is advisory beta metadata derived

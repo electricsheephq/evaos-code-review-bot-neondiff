@@ -98,7 +98,7 @@ tagged version.
 Run from a clean release checkout on `main`:
 
 ```bash
-neondiff_release_preflight || exit $?
+set -euo pipefail; neondiff_release_preflight || exit $?
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git status --short
 git pull --ff-only
@@ -106,13 +106,13 @@ npm test
 npm run build
 npm run release:status -- \
   --config "$NEONDIFF_RUNTIME_CONFIG" \
-  --expected-head "$(git rev-parse HEAD)" \
+  --expected-head "$NEONDIFF_EXPECTED_HEAD" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 sleep 5
 npm run release:status -- \
   --config "$NEONDIFF_RUNTIME_CONFIG" \
-  --expected-head "$(git rev-parse HEAD)" \
+  --expected-head "$NEONDIFF_EXPECTED_HEAD" \
   --launchd-label com.electricsheephq.evaos-code-review-bot \
   --require-coverage true
 ```
@@ -570,7 +570,7 @@ Default rollback is to restart the existing launchd job after checking out the
 last known-good merge commit:
 
 ```bash
-neondiff_release_preflight || exit $?
+set -euo pipefail; neondiff_release_preflight || exit $?
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin
 git checkout main

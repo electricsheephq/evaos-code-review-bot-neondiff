@@ -6,7 +6,7 @@ experience is specified in
 and tracked by issue #514. Evaluation and layout stability land before broad
 visual redesign.
 
-NeonDiff Desktop is the native macOS surface for the separate `1.1.0` candidate
+NeonDiff Desktop is the native macOS surface for the shared `1.1.0` GA release
 line, not the `neondiff@1.0.4` package or its release manifest. See the
 [Mac GA architecture contract](architecture/mac-ga-release-contract.md) for
 the paid-BYO/managed, sealed-worker, and GA claim boundaries.

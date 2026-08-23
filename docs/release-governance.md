@@ -11,18 +11,18 @@ config/evidence. This block is executable; the final `exit` prevents a failed
 helper return from reaching a release command.
 
 ```bash
-export NEONDIFF_RELEASE_CHECKOUT="${NEONDIFF_RELEASE_CHECKOUT:-/Users/m1/repos/evaos-code-review-bot-neondiff}" NEONDIFF_RUNTIME_CONFIG="${NEONDIFF_RUNTIME_CONFIG:-/Users/m1/Codex/evaos-code-review-bot-neondiff/config/active-installed-live.json}"
+export NEONDIFF_RELEASE_CHECKOUT="${NEONDIFF_RELEASE_CHECKOUT:-/Users/m1/repos/evaos-code-review-bot-neondiff}" NEONDIFF_RUNTIME_CONFIG="${NEONDIFF_RUNTIME_CONFIG:-/Users/m1/Codex/evaos-code-review-bot-neondiff/config/active-installed-live.json}" NEONDIFF_EXPECTED_HEAD="${NEONDIFF_EXPECTED_HEAD:?operator-approved 40-character candidate head}" NEONDIFF_RELEASE_BRANCH="${NEONDIFF_RELEASE_BRANCH:?intended release branch (main)}"
 export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-/Users/m1/Codex/evidence/neondiff}" NEONDIFF_LAUNCH_AGENT_PATH="${NEONDIFF_LAUNCH_AGENT_PATH:-$HOME/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist}"
 
 neondiff_release_preflight() {
-  local path origin
+  local path origin label branch head
   for path in "$NEONDIFF_RELEASE_CHECKOUT" "$NEONDIFF_RUNTIME_CONFIG" "$NEONDIFF_EVIDENCE_ROOT" "$NEONDIFF_LAUNCH_AGENT_PATH"; do case "$path" in /*) ;; *) echo "release paths must be absolute" >&2; return 2;; esac; done
   [ -d "$NEONDIFF_RELEASE_CHECKOUT" ] || { echo "release checkout is missing" >&2; return 2; }
   git -C "$NEONDIFF_RELEASE_CHECKOUT" rev-parse --show-toplevel >/dev/null 2>&1 || { echo "release checkout is not a Git repository" >&2; return 2; }
   origin="$(git -C "$NEONDIFF_RELEASE_CHECKOUT" remote get-url origin 2>/dev/null)" || origin=
   case "$origin" in https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git|git@github.com:electricsheephq/evaos-code-review-bot-neondiff.git) ;; *) echo "release checkout origin is not NeonDiff" >&2; return 2;; esac
-  [ -f "$NEONDIFF_RUNTIME_CONFIG" ] && [ -d "$NEONDIFF_EVIDENCE_ROOT" ] && [ -f "$NEONDIFF_LAUNCH_AGENT_PATH" ] || { echo "runtime, evidence, or LaunchAgent path is missing" >&2; return 2; }
-  [ -z "$(git -C "$NEONDIFF_RELEASE_CHECKOUT" status --porcelain)" ] || { echo "release checkout is dirty" >&2; return 2; }
+  [ -f "$NEONDIFF_RUNTIME_CONFIG" ] && [ -d "$NEONDIFF_EVIDENCE_ROOT" ] && [ -f "$NEONDIFF_LAUNCH_AGENT_PATH" ] || { echo "runtime, evidence, or LaunchAgent path is missing" >&2; return 2; }; label="$(/usr/bin/plutil -extract Label raw "$NEONDIFF_LAUNCH_AGENT_PATH" 2>/dev/null)" || label=; [ "$label" = "com.electricsheephq.evaos-code-review-bot" ] || { echo "LaunchAgent Label is not NeonDiff" >&2; return 2; }
+  [ -z "$(git -C "$NEONDIFF_RELEASE_CHECKOUT" status --porcelain)" ] || { echo "release checkout is dirty" >&2; return 2; }; [[ "$NEONDIFF_EXPECTED_HEAD" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "approved head must be a 40-character SHA" >&2; return 2; }; branch="$(git -C "$NEONDIFF_RELEASE_CHECKOUT" branch --show-current)"; [ "$NEONDIFF_RELEASE_BRANCH" = main ] && [ "$branch" = "$NEONDIFF_RELEASE_BRANCH" ] || { echo "release checkout branch is not intended main" >&2; return 2; }; head="$(git -C "$NEONDIFF_RELEASE_CHECKOUT" rev-parse HEAD)"; [ "$head" = "$NEONDIFF_EXPECTED_HEAD" ] || { echo "release checkout head is not operator-approved" >&2; return 2; }
 }
 
 # First executable boundary: invalid input terminates before release commands.
@@ -371,7 +371,7 @@ unchanged and treat the package as quarantined.
 Create an annotated tag from the merged source SHA:
 
 ```bash
-neondiff_release_preflight || exit $?
+set -euo pipefail; neondiff_release_preflight || exit $?
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
@@ -408,7 +408,7 @@ pass that file as `--notes-file` and include the tag name at the top.
 After the GitHub Release exists:
 
 ```bash
-neondiff_release_preflight || exit $?
+set -euo pipefail; neondiff_release_preflight || exit $?
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
@@ -493,7 +493,7 @@ before calling the release green.
 Rollback is tag-first:
 
 ```bash
-neondiff_release_preflight || exit $?
+set -euo pipefail; neondiff_release_preflight || exit $?
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin --tags
 git checkout main
