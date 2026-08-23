@@ -15,6 +15,8 @@ export interface IssueCommentCommandSource {
   id: number;
   body?: string | null;
   html_url?: string;
+  created_at?: string;
+  updated_at?: string;
   user?: {
     login: string;
     type?: string;
