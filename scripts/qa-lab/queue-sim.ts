@@ -12,7 +12,7 @@
  * Proof boundary: simulation + a default-off capability. It changes no live config or launchd; the
  * recommended config here is a LAB recommendation, not an applied setting.
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, mkdtempSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { loadConfigFromObject, type BotConfig } from "../../src/config.js";
@@ -255,9 +255,13 @@ function main(): void {
   };
 
   mkdirSync(EVIDENCE_DIR, { recursive: true });
-  writeFileSync(join(EVIDENCE_DIR, "queue-sim.json"), `${stringifyRedactedJson(payload)}\n`);
-  writeFileSync(join(EVIDENCE_DIR, "queue-sim.md"), markdownTable(results));
+  writeNoFollow(join(EVIDENCE_DIR, "queue-sim.json"), `${stringifyRedactedJson(payload)}\n`);
+  writeNoFollow(join(EVIDENCE_DIR, "queue-sim.md"), markdownTable(results));
   console.log(stringifyRedactedJson({ ok: true, evidenceDir: EVIDENCE_DIR, results }));
+}
+
+function writeNoFollow(path: string, content: string): void {
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o666); try { writeFileSync(fd, content); } finally { closeSync(fd); }
 }
 
 main();
