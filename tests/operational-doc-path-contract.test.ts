@@ -24,4 +24,21 @@ describe("operational documentation path contract", () => {
     expect(guide).toContain('in "$CHECKOUT_ROOT/"*)');
     expect(guide).not.toContain("/Volumes/LEXAR");
   });
+
+  it("keeps legacy release operation portable and credential-file based", () => {
+    const runbook = read("docs/beta-release-runbook.md");
+    const governance = read("docs/release-governance.md");
+    const operator = read("docs/skills/release-operator.md");
+    const profiles = read("docs/repo-profiles.md");
+    const legacy = [runbook, governance, operator, profiles].join("\n");
+
+    expect(runbook).toContain("Accounts/$NEONDIFF_ACCOUNT/Bots/$NEONDIFF_BOT");
+    expect(runbook).toContain("state/reviews.sqlite");
+    expect(runbook).toContain("absolute `WorkingDirectory`");
+    expect(runbook).toContain("`EnvironmentVariables`");
+    expect(runbook).toContain("absolute private-key file path");
+    expect(runbook).toContain("exactly one installed worker");
+    expect(operator).toContain("${HOME:?HOME is required}");
+    expect(legacy).not.toContain("/Volumes/LEXAR");
+  });
 });
