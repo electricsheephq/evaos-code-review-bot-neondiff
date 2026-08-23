@@ -964,7 +964,7 @@ describe("sticky enrichment comments", () => {
       })}\n`);
       const state = new ReviewStateStore(statePath);
       let analysisCalls = 0;
-      let postCalls = 0;
+      let postCalls = 0, overflow = false;
       try {
         const promotedIssue: GitHubRelatedIssueOrPull = {
           number: 127,
@@ -974,12 +974,12 @@ describe("sticky enrichment comments", () => {
           labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
           body: "Continue current-main work for #14."
         };
-        const result = await runIssueEnrichmentCycle({
+        const runCycle = (checkedAt: string, force = false) => runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
           github: {
             listIssuesForEnrichment: async () => [promotedIssue],
-            listIssueLabelEvents: async () => [{
+            listIssueLabelEvents: async () => overflow ? Promise.reject(new Error("issue label event evidence overflow")) : [{
               event: "labeled",
               created_at: "2026-08-16T10:00:00Z",
               actor: { login: "Tosko4" },
@@ -990,21 +990,26 @@ describe("sticky enrichment comments", () => {
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;
-              return { action: "created" as const, comment: { html_url: "https://github.test/comment/127" } };
+              return { action: "created" as const, id: 127, comment: { html_url: "https://github.test/comment/127" } };
             }
           },
           dryRun: false,
           includeExisting: true,
-          checkedAt: "2026-08-16T10:02:00.000Z",
+          checkedAt,
+          force,
           analyzeIssue: async ({ issue }) => {
             analysisCalls += 1;
             return fixtureIssueAnalysis(issue);
           }
         });
+        const result = await runCycle("2026-08-16T10:02:00.000Z");
 
         expect(result.summary).toMatchObject({ posted: 1, failed: 0 });
         expect(analysisCalls).toBe(1);
         expect(postCalls).toBe(1);
+        const watermark = state.getIssueEnrichmentRepoWatermark("electricsheephq/lcm-x")?.lastCheckedAt; overflow = true; const blocked = await runCycle("2026-08-16T10:03:00.000Z", true);
+        expect(blocked.summary).toMatchObject({ readFailures: 1, posted: 0, failed: 0 }); expect(blocked.items).toHaveLength(0); expect(postCalls).toBe(1);
+        expect(state.getIssueEnrichmentRepoWatermark("electricsheephq/lcm-x")?.lastCheckedAt).toBe(watermark);
       } finally {
         state.close();
       }

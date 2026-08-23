@@ -12,6 +12,7 @@ import {
   type IssueEnrichmentLifecycleInput
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import { unpackBoundedGithubList, type BoundedGithubList, type GithubIssueLabelEvent } from "./github.js";
 import {
   buildIssueAnalysisInputHash,
   runIssueAnalysis,
@@ -276,14 +277,16 @@ export interface IssueEnrichmentCycleResult extends Omit<IssueEnrichmentScanResu
 
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
   getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
-  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>>;
+  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<GithubIssueLabelEvent[] | BoundedGithubList<GithubIssueLabelEvent>>;
   getCollaboratorPermission?(repo: string, login: string): Promise<IssuePromotionPermission>;
   listIssueComments?(repo: string, issueNumber: number): Promise<Array<{
+    id: number;
+    html_url?: string | null;
+    body?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    user?: { login?: string | null } | null;
+  }> | BoundedGithubList<{
     id: number;
     html_url?: string | null;
     body?: string | null;
@@ -390,7 +393,9 @@ async function evaluateIssuePromotion(input: {
     return { issue: input.issue };
   }
   try {
-    const events = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
+    const eventResult = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
+    const { items: events, overflow } = unpackBoundedGithubList(eventResult);
+    if (overflow) throw new Error("GitHub issue label event evidence overflow");
     const labelEvent = events
       .filter((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation")
       .filter((event) => Boolean(event.actor?.login && event.created_at))
@@ -414,7 +419,8 @@ async function evaluateIssuePromotion(input: {
       },
       evidence
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "issue label event evidence overflow") throw error;
     return { issue: input.issue };
   }
 }
@@ -436,15 +442,17 @@ async function buildIssueEvidenceContext(input: {
   defaultBranch: string;
   headSha: string;
 }): Promise<IssueAnalysisEvidenceContext> {
-  const rawComments = input.github.listIssueComments
+  const commentResult = input.github.listIssueComments
     ? await input.github.listIssueComments(input.repo, input.issue.number)
     : [];
+  const { items: rawComments, truncated: commentsTruncated } = unpackBoundedGithubList(commentResult);
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
-  const rawTimeline = input.github.listIssueLabelEvents
+  const timelineResult = input.github.listIssueLabelEvents
     ? await input.github.listIssueLabelEvents(input.repo, input.issue.number)
     : [];
+  const { items: rawTimeline, truncated: timelineTruncated } = unpackBoundedGithubList(timelineResult);
   const linkedNumbers = extractIssueReferenceNumbers(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`, input.issue.number);
   const linkedItems: IssueAnalysisEvidenceContext["linkedItems"] = [];
   if (input.github.getIssueOrPull) {
@@ -480,8 +488,8 @@ async function buildIssueEvidenceContext(input: {
     })),
     linkedItems,
     truncation: {
-      comments: externalComments.length > 50,
-      timeline: rawTimeline.length > 200,
+      comments: commentsTruncated || externalComments.length > 50,
+      timeline: timelineTruncated || rawTimeline.length > 200,
       linkedItems: linkedNumbers.length > 20
     }
   };

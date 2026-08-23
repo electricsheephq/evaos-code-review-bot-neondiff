@@ -32,7 +32,7 @@ import {
   validateFinishingTouchRequest,
   type FinishingTouchAction
 } from "./finishing-touches.js";
-import { GitHubApi } from "./github.js";
+import { GitHubApi, unpackBoundedGithubList } from "./github.js";
 import { getProtectedCheckoutRoots } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
@@ -4767,7 +4767,12 @@ async function resolvePullCommandDecision(input: {
 }): Promise<CommandDecision> {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
 
-  const comments = await input.github.listIssueComments(input.repo, input.pull.number);
+  const commentResult = await input.github.listIssueComments(input.repo, input.pull.number);
+  const boundedComments = unpackBoundedGithubList(commentResult);
+  if (boundedComments.truncated || boundedComments.overflow) {
+    throw new Error("GitHub issue comment command evidence overflow");
+  }
+  const comments = boundedComments.items;
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
   const repoProfile = resolveRepoProfile(input.config, input.repo);
   // A public command (#345) reaching this re-resolution path was already authorized (bot + cooldown
