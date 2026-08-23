@@ -1539,7 +1539,7 @@ export function assertEvalOutputDirSafe(outputDir: string): string {
       protectedRootLabel: "a protected checkout root"
     });
   } catch {
-    throw new Error("outputDir must not be inside the current git checkout; use NEONDIFF_EVAL_ROOT or a temp directory");
+    throw new Error("outputDir must not be inside the current git checkout; outside every git checkout; use NEONDIFF_EVAL_ROOT or a temp directory");
   }
   return resolvedOutput;
 }

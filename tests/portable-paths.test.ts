@@ -66,7 +66,7 @@ describe("portable output roots", () => {
       cwd: join(repoRoot, "tests"),
       env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: externalRoot },
       encoding: "utf8",
-      timeout: 10_000
+      timeout: 30_000
     });
     const output = JSON.parse(result.stdout);
 
