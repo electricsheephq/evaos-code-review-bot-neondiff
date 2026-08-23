@@ -35,6 +35,8 @@ describe("packaged customer setup surface", () => {
       expect(guide).toContain("REFRESH ACCOUNTS");
       expect(guide).toContain("pending local bot");
     }
+    expect(githubSetup).toContain("NeonDiffDesktop/Accounts/");
+    expect(githubSetup).not.toContain("NeonDiffDesktop/config.local.json");
     expect(setup).not.toContain("apps/neondiff-desktop/docs/customer-adoption.md");
   });
 });

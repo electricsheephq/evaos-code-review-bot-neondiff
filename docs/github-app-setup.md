@@ -269,7 +269,13 @@ app, use the config created in the app's user-writable Application Support
 directory:
 
 ```bash
-NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.json"
+: "${HOME:?HOME is required}"
+: "${NATIVE_CONFIG:?copy the exact selected bot config path shown by NeonDiff}"
+case "$NATIVE_CONFIG" in
+  "$HOME/Library/Application Support/NeonDiffDesktop/Accounts/"*/Bots/*/config.local.json) ;;
+  *) echo "native config must identify the selected account/bot" >&2; exit 1 ;;
+esac
+test -f "$NATIVE_CONFIG"
 neondiff doctor github --config "$NATIVE_CONFIG" --repo owner/repo --json
 ```
 
