@@ -98,6 +98,8 @@ import {
   collectOperatorReviewQueue,
   explainPullStatus,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
+  formatOperatorStatusJson,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorDurableQueueSnapshot,
@@ -699,12 +701,12 @@ async function main(): Promise<void> {
     });
     const providerCooldowns = collectOperatorProviderCooldowns(args["state-path"] ?? config.statePath, {
       repo: args.repo,
-      expiredOnly: false,
-      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+      expiredOnly: false
     });
     const durableQueue = collectOperatorReviewQueue(args["state-path"] ?? config.statePath, {
       repo: args.repo,
-      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined,
+      leaseTtlMs: config.reviewConcurrency.leaseTtlMs
     });
     const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(args["state-path"] ?? config.statePath, {
       repo: args.repo,
@@ -713,6 +715,7 @@ async function main(): Promise<void> {
     const github = new GitHubApi(config.github);
     const status = buildOperatorStatus({
       release,
+      repo: args.repo,
       coverage,
       agents,
       providerCooldowns,
@@ -724,7 +727,7 @@ async function main(): Promise<void> {
       }),
       issueEnrichmentRuntime
     });
-    console.log(stringifyRedactedJson(status));
+    console.log(args.human === "true" ? formatOperatorStatusHuman(status) : formatOperatorStatusJson(status));
     if (!status.ok) process.exitCode = 1;
     return;
   }
@@ -3614,7 +3617,8 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--limit", description: "Cap the number of provider-cooldown/durable-queue rows returned." },
       { name: "--expected-head", description: "Expected release head SHA to verify against." },
       { name: "--launchd-label", description: "launchd label to inspect for daemon liveness." },
-      { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." }
+      { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." },
+      { name: "--human", description: "Print compact scoped operator status; exit status still follows the status gate." }
     ]
   },
   "release-status": {

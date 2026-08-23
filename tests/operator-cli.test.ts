@@ -19,6 +19,8 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
+  formatOperatorStatusJson,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorAgentInventory,
@@ -98,6 +100,47 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("projects complete scoped recovery truth beyond display limits", () => {
+    const active = durableJob({ repo: "owner/repo", pullNumber: 7, headSha: "active", state: "leased", leaseId: "live", leaseExpiresAt: "2026-07-01T00:45:00.000Z" });
+    const stale = durableJob({ repo: "owner/repo", pullNumber: 8, headSha: "stale", state: "running", leaseId: "dead", leaseExpiresAt: "2026-07-01T00:45:00.000Z" });
+    const expired = durableJob({ repo: "owner/repo", pullNumber: 9, headSha: "expired", state: "leased", leaseExpiresAt: "2026-07-01T00:15:00.000Z" });
+    const timeout = durableJob({ repo: "owner/repo", pullNumber: 10, headSha: "owner/retry", state: "failed", lastError: "zcode_timeout_retryable; diagnostic retry owner/retry" });
+    const queue = durableQueueSnapshot({ summary: cleanDurableQueueSummary(), jobs: [] });
+    Object.defineProperties(queue, { completeJobs: { value: [active, stale, expired, timeout], enumerable: false }, staleRunLeaseIds: { value: ["dead"], enumerable: false } });
+    const release = releaseStatus({ ok: true, database: {
+      reviewErrorsByRepo: [{ repo: "owner/repo", recentUnrecovered: 0 }, { repo: "owner/other", recentUnrecovered: 4 }],
+      reviewQueueJobsByRepo: [{ repo: "owner/repo", total: 4, queued: 0, leased: 2, running: 1, providerDeferred: 0, retryableProviderDeferred: 0, failed: 2, activeFailed: 1, zcodeTimeoutFailed: 1, activeZCodeTimeoutFailed: 1 }, { repo: "owner/other", total: 9, queued: 0, leased: 0, running: 0, providerDeferred: 8, retryableProviderDeferred: 8, failed: 8, activeFailed: 8 }],
+      reviewerSessionsByRepo: [{ repo: "owner/repo", total: 1, active: 1, expired: 0 }]
+    }});
+    const cooldown = { ...processedRecord(7, "active", "skipped"), cooldownUntil: "2026-06-30T23:00:00.000Z", reason: "provider_request_rate_limit", expired: true };
+    const status = buildOperatorStatus({ release, repo: "owner/repo", providerCooldowns: [cooldown], durableQueue: queue, agents: agentInventory({}), checkedAt: "2026-07-01T00:30:00.000Z" });
+    expect(status.summary).toMatchObject({ failedQueueJobs: 2, activeFailedQueueJobs: 1, recentUnrecoveredReviewErrors: 0, retryableZCodeTimeoutFailedQueueJobs: 1, staleLeases: 2 });
+    expect(status.release.summary.providerDeferredQueueJobs).toBe(0);
+    expect(status.release.database.reviewerSessionCount).toBe(1);
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "repo_no_expired_provider_cooldowns", ok: true }));
+    const json = formatOperatorStatusJson(status);
+    expect(json).toContain("owner/retry");
+    expect(json).not.toMatch(/launchctl kickstart|--dry-run false|retry-provider-cooldowns/);
+    expect(formatOperatorStatusHuman(JSON.parse(json))).toContain("status: blocked (operator)");
+  });
+
+  it("retains runtime gate health while scoping nested counts", () => {
+    const release = releaseStatus({ ok: true, database: { reviewQueueJobsByRepo: [{ repo: "owner/repo", total: 0, queued: 0, leased: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 0, activeFailed: 0 }] } });
+    release.gates.push({ name: "launchd_running", ok: false, detail: "not_running" });
+    const status = buildOperatorStatus({ release, repo: "owner/repo", durableQueue: durableQueueSnapshot({ summary: cleanDurableQueueSummary(), jobs: [] }), agents: agentInventory({}) });
+    expect(status.release.health).toMatchObject({ state: "red" });
+    expect(status.release.summary).toMatchObject({ providerDeferredQueueJobs: 0, retryableProviderDeferredQueueJobs: 0, activeProviderCooldowns: 0 });
+    expect(status.ok).toBe(false);
+  });
+
+  it("treats active global cooldown coverage as non-retryable scoped history", () => {
+    const release = releaseStatus({ ok: true, database: { activeGlobalProviderCooldownCount: 1, reviewQueueJobsByRepo: [{ repo: "owner/repo", total: 0, queued: 0, leased: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 0, activeFailed: 0 }] } });
+    const cooldown = { ...processedRecord(1, "expired", "skipped"), cooldownUntil: "2026-06-30T23:00:00.000Z", reason: "provider_request_rate_limit", expired: true };
+    const status = buildOperatorStatus({ release, repo: "owner/repo", providerCooldowns: [cooldown], durableQueue: durableQueueSnapshot({ summary: cleanDurableQueueSummary(), jobs: [] }), agents: agentInventory({}) });
+    expect(status.release.database.retryableExpiredProviderCooldownCount).toBe(0);
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "repo_no_expired_provider_cooldowns", ok: true }));
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {

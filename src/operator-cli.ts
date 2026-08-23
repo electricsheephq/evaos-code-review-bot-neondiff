@@ -14,7 +14,7 @@ import type {
 import type { IssueEnrichmentStatus } from "./issue-enrichment.js";
 import type { ReviewBudgetStatus } from "./review-budget.js";
 import type { ReleaseHeartbeatStatus, ReleaseLaunchdStatus, ReleaseStatus } from "./release-status.js";
-import { redactSecrets } from "./secrets.js";
+import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
 import {
   parseProviderCooldownError,
   PROVIDER_COOLDOWN_ERROR_PREFIX,
@@ -902,6 +902,42 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
     for (const action of inventory.recommendedActions) lines.push(`- ${action}`);
   }
   return lines.join("\n");
+}
+
+const OPERATOR_ACTION_FIELDS = new Set(["action", "command", "commandAction", "nextAction", "recommendedActions", "restartCommand", "unloadCommand"]);
+
+function sanitizeOperatorAction(action: string): string {
+  return /\b(?:retry|requeue|restart|kickstart|bootout|clear|retire)\b|--dry-run\s+false/i.test(action)
+    ? "inspect operator recovery rows before any action"
+    : action;
+}
+
+function sanitizeOperatorProjection(value: unknown, key?: string): unknown {
+  if (typeof value === "string") {
+    if (key && OPERATOR_ACTION_FIELDS.has(key)) return sanitizeOperatorAction(value);
+    return /(?:\bnpx\s+tsx\b|\blaunchctl\b|--dry-run\s+false)/i.test(value) ? "inspect operator recovery rows before any action" : value;
+  }
+  if (Array.isArray(value)) return value.map((item) => sanitizeOperatorProjection(item, key));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([childKey, item]) => [childKey, sanitizeOperatorProjection(item, childKey)]));
+  return value;
+}
+
+export function formatOperatorStatusHuman(status: OperatorStatus): string {
+  const failed = status.gates.filter((gate) => !gate.ok);
+  return redactSecrets([
+    `status: ${status.ok ? "ok" : "blocked"} (operator)`,
+    `releaseHealth: ${status.release.health?.state ?? "unknown"}`,
+    `current: activeFailedQueueJobs=${status.summary.activeFailedQueueJobs} recentUnrecoveredReviewErrors=${status.summary.recentUnrecoveredReviewErrors} staleLeases=${status.summary.staleLeases}`,
+    `history: reviewErrors=${status.summary.failedRows} failedQueueJobs=${status.summary.failedQueueJobs}`,
+    "gates:",
+    ...(failed.length ? failed.map((gate) => `- ${gate.name}: ${sanitizeOperatorProjection(gate.detail, "detail")}`) : ["- none"]),
+    "next:",
+    ...(status.recommendedActions.length ? status.recommendedActions.map(sanitizeOperatorAction) : ["inspect current operator status before any action"])
+  ].join("\n"));
+}
+
+export function formatOperatorStatusJson(status: OperatorStatus): string {
+  return stringifyRedactedJson(sanitizeOperatorProjection(status));
 }
 
 export function summarizeAgentInventory(input: {
