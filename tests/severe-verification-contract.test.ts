@@ -152,6 +152,25 @@ describe("severe verifier v2 contract", () => {
     expect(isSevereVerificationReceipt(hiddenConfidence, subject)).toBe(false);
   });
 
+  it("rejects Unicode line separators and paths over the UTF-8 byte cap", () => {
+    for (const separator of ["\u2028", "\u2029"]) {
+      const badPath = "src/" + separator + "record.ts";
+      const badSubject = { ...subject, path: badPath };
+      expect(isSevereVerificationReceipt(receipt({ subject: badSubject, evidence: evidence({ files: [file({ path: badPath })] }) }), badSubject)).toBe(false);
+    }
+    const oversizedPath = Array.from({ length: 17 }, () => "é".repeat(127)).join("/");
+    expect(oversizedPath.length).toBeLessThan(4096);
+    expect(Buffer.byteLength(oversizedPath, "utf8")).toBeGreaterThan(4096);
+    const badSubject = { ...subject, path: oversizedPath };
+    expect(isSevereVerificationReceipt(receipt({ subject: badSubject, evidence: evidence({ files: [file({ path: oversizedPath })] }) }), badSubject)).toBe(false);
+  });
+
+  it("rejects oversized evidence arrays before traversing their entries", () => {
+    const files = new Array(65) as Array<unknown>;
+    Object.defineProperty(files, 0, { enumerable: true, get: () => { throw new Error("entry traversed"); } });
+    expect(isSevereVerificationReceipt(receipt({ evidence: evidence({ files }) }), subject)).toBe(false);
+  });
+
   it("binds the original finding fingerprint and every host coordinate", () => {
     for (const key of ["repo", "pull", "base", "head", "fingerprint", "path", "line", "side", "lineSha256", "hunkSha256"] as const) {
       const altered = { ...subject, [key]: key === "pull" || key === "line" ? (subject[key] as number) + 1 : `${subject[key]}x` } as SevereHostSubject;
