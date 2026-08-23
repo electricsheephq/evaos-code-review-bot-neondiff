@@ -12,6 +12,7 @@ import {
   type IssueEnrichmentLifecycleInput
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import { unpackBoundedGithubList, type BoundedGithubList } from "./github.js";
 import {
   buildIssueAnalysisInputHash,
   runIssueAnalysis,
@@ -274,6 +275,15 @@ export interface IssueEnrichmentCycleResult extends Omit<IssueEnrichmentScanResu
   }>;
 }
 
+type IssueEnrichmentComment = {
+  id: number;
+  html_url?: string | null;
+  body?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  user?: { login?: string | null } | null;
+};
+
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
   getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
   listIssueLabelEvents?(repo: string, issueNumber: number): Promise<Array<{
@@ -283,14 +293,8 @@ export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentComme
     label?: { name?: string | null } | null;
   }>>;
   getCollaboratorPermission?(repo: string, login: string): Promise<IssuePromotionPermission>;
-  listIssueComments?(repo: string, issueNumber: number): Promise<Array<{
-    id: number;
-    html_url?: string | null;
-    body?: string | null;
-    created_at?: string | null;
-    updated_at?: string | null;
-    user?: { login?: string | null } | null;
-  }>>;
+  listIssueComments?(repo: string, issueNumber: number): Promise<IssueEnrichmentComment[] | BoundedGithubList<IssueEnrichmentComment>>;
+  listIssueCommentsForEnrichment?(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueEnrichmentComment>>;
   getIssueOrPull?(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull | undefined>;
 };
 
@@ -429,16 +433,19 @@ function emptyIssueEvidenceContext(headSha: string): IssueAnalysisEvidenceContex
   };
 }
 
-async function buildIssueEvidenceContext(input: {
+export async function buildIssueEvidenceContext(input: {
   repo: string;
   issue: GitHubRelatedIssueOrPull;
   github: IssueEnrichmentCycleGithub;
   defaultBranch: string;
   headSha: string;
 }): Promise<IssueAnalysisEvidenceContext> {
-  const rawComments = input.github.listIssueComments
-    ? await input.github.listIssueComments(input.repo, input.issue.number)
-    : [];
+  const commentResult = input.github.listIssueCommentsForEnrichment
+    ? await input.github.listIssueCommentsForEnrichment(input.repo, input.issue.number)
+    : input.github.listIssueComments
+      ? await input.github.listIssueComments(input.repo, input.issue.number)
+      : [];
+  const { items: rawComments, rawCount: rawCommentCount, truncated: commentsTruncated } = unpackBoundedGithubList(commentResult);
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
@@ -480,7 +487,7 @@ async function buildIssueEvidenceContext(input: {
     })),
     linkedItems,
     truncation: {
-      comments: externalComments.length > 50,
+      comments: commentsTruncated || rawCommentCount > rawComments.length || externalComments.length > 50,
       timeline: rawTimeline.length > 200,
       linkedItems: linkedNumbers.length > 20
     }
