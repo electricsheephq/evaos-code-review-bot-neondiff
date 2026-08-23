@@ -13,12 +13,17 @@
  * recommended config here is a LAB recommendation, not an applied setting.
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import { loadConfigFromObject, type BotConfig } from "../../src/config.js";
 import { ReviewStateStore } from "../../src/state.js";
 import { riskWeightedQueuePriority } from "../../src/scheduler.js";
 import { buildChangedSurfaceValidationReport } from "../../src/validation-selector.js";
+import {
+  assertPathOutsideProtectedRoot,
+  getProtectedCheckoutRoots,
+  resolvePathFollowingExistingSymlinks
+} from "../../src/path-safety.js";
 import { stringifyRedactedJson } from "../../src/secrets.js";
 import type { PullFilePatch, PullRequestSummary } from "../../src/types.js";
 // Reuse the merged QA-lab harness (#341/#358): scenario file-sets drive the REAL tier, and the
@@ -26,7 +31,20 @@ import type { PullFilePatch, PullRequestSummary } from "../../src/types.js";
 import { QA_LAB_SCENARIOS } from "./scenarios.js";
 import { percentile } from "./stats.js";
 
-const EVIDENCE_DIR = "/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/2026-07-06/polished-config-lab/risk-queue";
+const configuredEvidenceRoot = process.env.NEONDIFF_EVIDENCE_ROOT?.trim();
+const evidenceRoot = configuredEvidenceRoot
+  ? configuredEvidenceRoot
+  : join(homedir(), ".local", "share", "neondiff", "evidence");
+if (!isAbsolute(evidenceRoot)) throw new Error("NEONDIFF_EVIDENCE_ROOT must be absolute");
+const resolvedEvidenceRoot = resolvePathFollowingExistingSymlinks(resolve(evidenceRoot));
+assertPathOutsideProtectedRoot({
+  path: resolvedEvidenceRoot,
+  protectedRoot: undefined,
+  protectedRoots: getProtectedCheckoutRoots(),
+  pathLabel: "NEONDIFF_EVIDENCE_ROOT",
+  protectedRootLabel: "a protected checkout root"
+});
+const EVIDENCE_DIR = join(resolvedEvidenceRoot, "neondiff-qa-lab", "risk-queue");
 const BASELINE = 50;
 const MAX_WAIT_MINUTES = 60;
 const TICK_MS = 60_000; // one minute per service interval
