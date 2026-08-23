@@ -13,7 +13,8 @@ release truth. Its supported service boundaries are:
 - Desktop UI and its local status/configuration surface.
 - The authoritative account and current-launch entitlement service. A stale
   checkout, cached license, or generic process health signal is not entitlement.
-- Keychain-only provider, license, GitHub user-token, and activation secrets.
+- Keychain-only provider, license, GitHub user-token, activation, and
+  customer-owned GitHub App private-key secrets.
 - The existing local review agent and customer-owned (BYO) GitHub App path,
   kept separate from any managed account path.
 - Codex runtime integration, issue enrichment, billing, and activation, each
@@ -23,8 +24,11 @@ release truth. Its supported service boundaries are:
 
 The native Desktop version line is `1.1.0`; the npm CLI remains `1.0.4` unless
 its bytes change. For the final Desktop `1.1.0` tag, the npm publication is a
-no-op while the CLI bytes remain unchanged. This Desktop-only npm policy from
-merged PR #831 is a dependency and does not by itself prove a Desktop artifact,
+no-op only when the packet contains an unchanged-CLI-byte receipt: a byte-level
+comparison of the candidate CLI/package file manifest and tarball digest with
+the published `neondiff@1.0.4`. Any changed CLI- or worker-owned byte requires a
+new CLI version and publication. The Desktop-only classifier from merged PR
+#831 is not that receipt and does not by itself prove a Desktop artifact,
 publication, or customer readiness.
 
 ## Runtime identities and authorities
@@ -38,10 +42,28 @@ identity and digest are separate required facts.
 The local worker LaunchAgent identity is the configured, selected `launchdLabel`
 for that bot. Every packet, runtime receipt, containment action, and rollback
 receipt binds to that selected label; no hard-coded global label is authority.
-Its complete parsed contract, including program, arguments, account/device
-placeholders, and absence of environment variables or unexpected keys, is
-release evidence. Operator account-scoped config and device values remain
-private and are never copied into public evidence.
+There are two supported plist states: a new secret-free install has the
+complete parsed program, arguments, account/device placeholders, and no
+`EnvironmentVariables` or unexpected keys; no new install may introduce
+credential environment variables. A supported existing-bot migration may
+initially retain only the parser-accepted legacy credential environment (the
+App-ID key or legacy alias, private-key-path key or legacy alias, and optional
+`NODE_OPTIONS=--use-system-ca`). Its packet records `legacy-environment` mode
+and a redacted key-set receipt, never values. Migration must remove that
+environment and re-prove the secret-free contract before GA promotion.
+Operator account-scoped config, device values, and legacy credential values
+remain private and never enter public evidence.
+
+The signed release bundle exposes exactly one authorization contract in its
+`Info.plist`; missing, mixed, or `none` markers fail closed: BYO is
+`NeonDiffPaidBetaContract=paid-mac-beta-byo-v1` plus
+`NeonDiffBYOGitHubEnabled=true`, with no managed marker/origin; managed is
+`NeonDiffPaidBetaContract=paid-mac-beta-v1` plus
+`NeonDiffManagedGitHubBrokerEnabled=true` and the approved origin
+`https://neondiff-license.fly.dev`, with no BYO marker. The packet records the
+extracted contract, exclusive marker set, and managed origin. Markers select
+composition only; Keychain, GitHub visibility, and current entitlement remain
+authoritative.
 
 Authority is layered:
 
@@ -60,33 +82,49 @@ the current launch entitlement or installed release identity.
 
 Every candidate and promotion decision names one immutable packet containing:
 
-- source commit SHA and immutable Git tag;
-- candidate artifact ZIP SHA-256, separately from the staged app
-  `sha256-tree-v1` tree digest;
-- codesigning Team ID, bundle identifier, version, and build;
-- notarization receipt, stapling receipt, and Gatekeeper assessment;
-- Sparkle `edSignature` on the download enclosure, separately from appcast
-  identity and digest and the channel manifest identity;
-- review receipt, CI receipt, and exact accepted-head relationship;
-- account-scoped config path, state DB identity, and monitored-repository
-  allowlist identity;
-- selected LaunchAgent label and complete parsed identity, plus wrapper and
-  sealed-helper identities and their digests;
-- clean-Mac install evidence and rollback/re-update evidence proving compatible
-  DB/state identity and migration behavior.
+- source SHA, immutable tag object, protected/signed-tag verification, and
+  provenance binding exact artifact/tree digests to that source/build;
+- packet-named ZIP SHA-256 and the exact extraction used for
+  `sha256-tree-v1`, including security-relevant regular-file mode bits;
+- Team ID, bundle ID, version/build, approved wrapper/helper/framework
+  entitlements, hardened-runtime/CodeDirectory flags, timestamp, notarization,
+  stapling, and Gatekeeper receipts;
+- exact `SUFeedURL`, `SUPublicEDKey` fingerprint, approved channel, appcast
+  identity/digest, and verified Sparkle `edSignature` on the download enclosure
+  (feed metadata is not an enclosure signature);
+- `LSMinimumSystemVersion`, candidate-bound startup and worker receipts on
+  every supported macOS target; current-head P0-P2 thread dispositions, the
+  successful `Build, test, and package` job, and accepted-head relationship;
+- config path, normalized config revision digest, DB identity, and allowlist
+  identity, revalidated before mutation and after launch;
+- service-attributed current-launch entitlement receipt (account, launch,
+  verification time, validity window) and provider/model verification receipt
+  bound to the account/config revision and its time window;
+- selected label and parsed plist, wrapper/helper identities and digests, and
+  the persisted recovery descriptor used for containment;
+- clean-Mac download/quarantine/install/startup/worker evidence, compatible
+  rollback/re-update evidence, candidate-bound beta outcome receipt, observation
+  window/threshold result, last-known-good packet, verified rollback-feed
+  publication, and a predecessor update check proving monotonic build order.
 
-The packet is redacted, account-bound, and immutable. It contains references to
-secrets rather than secret values. ZIP identity and staged-tree identity must
-both match the accepted packet; one is not a substitute for the other.
+The packet is redacted, account-bound, content-addressed, and retained in an
+immutable evidence location. Immediately before staging, promotion re-resolves
+the tag and packet digest, fetches the packet-named ZIP by SHA-256, extracts
+that archive into fresh staging, computes the tree identity, and rejects any
+mismatch, unavailable/changed reference, untrusted location, or changed config.
+It contains references to secrets rather than secret values.
 
 ## Gates and single implementation path
 
-Mac promotion requires one tested implementation path that owns preflight,
+Mac promotion requires one tested implementation path owning preflight,
 accepted-byte staging, complete LaunchAgent validation, natural-cycle-boundary
-transition, post-launch identity verification, emergency containment, and
-rollback. A future implementation must make every unapproved pre-launch
-failure stop before service mutation and must have fixture and CI coverage for
-those stops.
+transition, post-launch identity, emergency containment, and rollback. Every
+unapproved pre-launch failure must stop before service mutation and have fixture
+and CI coverage. Staging derives bytes only from the packet-named archive and
+validates provenance, release contract, updater values, signatures, entitlements,
+config revision, entitlement/provider receipts, and exact LaunchAgent mode;
+source checkout, local build, mutable feed, or generic workflow cannot supply
+accepted runtime bytes.
 
 This contract must not duplicate that path with copy-paste shell, pseudo-command
 blocks, or alternate checkout instructions. Advisory review and exact-head
@@ -107,12 +145,21 @@ launch entitlement remain distinct evidence domains. Issue enrichment is
 reported separately from review execution and Desktop health. Codex runtime
 state is reported separately from customer outcome.
 
-Distribution and updater evidence must identify the signed artifact, enclosure
-signature, appcast identity and digest, ring, entitlement requirement, and
-rollback target. `beta` is a
-rollback-capable canary ring; `stable` is promoted only after the required
-artifact, entitlement, updater, and rollback evidence is accepted. Neither ring
-may infer readiness from a branch name or mutable feed state.
+Distribution/updater evidence identifies the signed artifact, enclosure
+signature, exact feed/key identity, appcast digest, ring, entitlement, and
+rollback target. `beta` is rollback-capable. Before `stable`, the packet must
+show at least three independent beta accounts, one successful
+startup/update/review session for each on every supported target, a seven-day
+window from last install, 100% candidate-bound startup/update success, zero
+P0/P1 regressions or state-loss/credential-exposure outcomes, and zero
+unresolved P2 threads; unknown denominators or missing outcomes block stable.
+These are candidate-bound observations, not fleet/customer authority: they may
+not be inferred from process health, ring names, dashboards, or an operator
+install, and the authoritative fleet/customer decision remains separate.
+
+Rollback publication or an equivalent updater block must be verified before
+restoring an older app so enabled clients cannot select the superseded
+candidate; the packet records its exact feed/reference and verification result.
 
 ## Rollback and containment invariants
 
@@ -123,13 +170,14 @@ drain and natural-cycle transition are preferred; if that boundary is unavailabl
 the tested implementation must provide an independently reachable emergency
 containment and rollback path.
 
-Rollback preserves customer state, database identity, allowlists, and Keychain
-secrets. Clean-Mac installation and rollback followed by re-update must prove
-that the accepted DB/state identity remains compatible. It does not widen
-permissions, replace BYO credentials, or reset state as a shortcut. Emergency
-containment is limited to the configured selected LaunchAgent path and label
-and remains available when checkout, config, or evidence collection is
-unhealthy.
+Rollback preserves customer state, DB identity, allowlists, and Keychain
+secrets; clean-Mac rollback/re-update proves compatibility. It does not widen
+permissions, replace BYO credentials, or reset state. Emergency containment is
+limited to an integrity-checked recovery descriptor persisted in the accepted
+packet or installed recovery state, containing the exact plist path, selected
+label, owner, and executable identity. The tested path resolves only that
+descriptor, never checkout/config/evidence or a guessed global label; missing,
+changed, or unauthenticated data fails closed.
 
 ## Dependencies and proof boundary
 
