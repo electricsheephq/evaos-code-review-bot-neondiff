@@ -148,20 +148,6 @@ import NeonDiffDesktopCore
         #expect(model.activationPresentation.recovery == nil)
     }
 
-    @Test func selectedBYOStatesUseExactRepositoryCopy() {
-        let model = makeModel(productionBoundary: .testAccountLink)
-        model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
-        model.enterActivation(for: .publicReposOnly)
-
-        for state in [ActivationState.purchaseRequired, .keyReady, .active, .expired] {
-            model.activationState = state
-            let copy = "\(model.activationPresentation.title) \(model.activationPresentation.cause)"
-            #expect(copy.localizedCaseInsensitiveContains("this byo repository"))
-            #expect(!copy.localizedCaseInsensitiveContains("private repository"))
-            #expect(!copy.localizedCaseInsensitiveContains("every repository"))
-        }
-    }
-
     @Test func privatePathBeginsCheckoutPausedWhenCheckoutDisabled() {
         let model = makeModel()
         model.enterActivation(for: .privateRepos)

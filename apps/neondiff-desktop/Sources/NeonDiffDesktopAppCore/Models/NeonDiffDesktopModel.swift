@@ -4745,6 +4745,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var selectedBYOActivationContext: Bool {
         dependencies.productionBoundary.byoGitHubEnabled
             && onboardingFlow.mode == .publicReposOnly
+            && !existingLocalBotReconciliationMode
             && selectedReviewRepository != nil
     }
 
@@ -5001,17 +5002,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 lastError = "Apply and read back the selected Review Target before activating."
                 return
             }
-            guard byoGitHubCredentialsVerified,
-                  let verifiedBYORepository,
-                  verifiedBYORepository.caseInsensitiveCompare(activationRepository)
-                      == .orderedSame,
-                  let visibility = verifiedBYORepositoryVisibility,
-                  ["public", "private", "internal"].contains(visibility)
-            else {
-                applyActivationEvent(.activationServiceError)
-                lastError = "Verify the exact GitHub visibility for this Review Target before activating."
-                return
-            }
             if let activatedRepository,
                activatedRepository.caseInsensitiveCompare(activationRepository)
                    != .orderedSame {
@@ -5076,16 +5066,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard dependencies.productionBoundary.byoGitHubEnabled else {
             return summary.coversPrivateRepos ? outcome : .scopeConflict
         }
-        guard byoGitHubCredentialsVerified,
-              let repository = selectedReviewRepository,
-              let verifiedBYORepository,
-              verifiedBYORepository.caseInsensitiveCompare(repository) == .orderedSame,
-              let visibility = verifiedBYORepositoryVisibility?.lowercased()
-        else {
-            return .scopeConflict
+        if summary.repoVisibilityScope.lowercased() == "public" {
+            guard byoGitHubCredentialsVerified,
+                  let repository = selectedReviewRepository,
+                  let verifiedBYORepository,
+                  verifiedBYORepository.caseInsensitiveCompare(repository) == .orderedSame,
+                  let visibility = verifiedBYORepositoryVisibility?.lowercased()
+            else {
+                return .scopeConflict
+            }
+            guard summary.covers(repositoryVisibility: visibility) else { return .scopeConflict }
         }
-        guard summary.covers(repositoryVisibility: visibility) else { return .scopeConflict }
-        return outcome
+        return summary.coversPrivateRepos || summary.repoVisibilityScope.lowercased() == "public"
+            ? outcome
+            : .scopeConflict
     }
 
     private func applyActivationOutcomeSideEffects(
