@@ -1779,6 +1779,36 @@ describe("operator CLI summaries", () => {
       expect.objectContaining({ repo: "owner/other", total: 2, failed: 1 }),
       expect.objectContaining({ repo: "owner/repo", total: 3, queued: 1 })
     ]);
+    expect(limited.completeJobs).toHaveLength(5);
+    expect(limited.completeness).toMatchObject({ processedReviews: { state: "unavailable", visible: 0 }, runLeases: { state: "unavailable", visible: 0 } });
+  });
+
+  it("keeps cooldowns and exact selected-repo lease/session rows complete beyond limits", () => {
+    const statePath = createTempDatabase(tempDirs);
+    const db = new DatabaseSync(statePath);
+    try {
+      db.exec("create table processed_reviews (repo text, pull_number integer, head_sha text, status text, event text, review_url text, error text, created_at text)");
+      db.exec("create table review_queue_jobs (job_id text primary key, attempt_id text not null unique, source text not null, lane text not null, repo text not null, org text not null, pull_number integer not null, head_sha text not null, base_sha text, provider_id text, priority integer not null, state text not null, next_eligible_at text, lease_id text, session_id text, comment_id integer, review_url text, last_error text, created_at text not null, updated_at text not null, started_at text, finished_at text)");
+      db.exec("create table review_run_leases (lease_id text primary key, started_at text, expires_at text, owner_pid integer)");
+      const error = "provider_rate_limit_cooldown_until=2026-07-01T00:10:00.000Z; reason=provider_request_rate_limit";
+      for (const [pull, head] of [[1, "cooldown-1"], [2, "cooldown-2"]] as const) db.prepare("insert into processed_reviews values ('owner/repo', ?, ?, 'skipped', null, null, ?, '2026-07-01T00:00:00.000Z')").run(pull, head, error);
+      insertQueueJob(db, "running", "owner/repo", 3, "active-head");
+      insertQueueJob(db, "running", "owner/other", 4, "other-head");
+      db.prepare("update review_queue_jobs set lease_id = ?, session_id = ? where repo = ?").run("selected-lease", "selected-session", "owner/repo");
+      db.prepare("insert into review_run_leases values (?, ?, ?, ?)").run("selected-lease", "2026-07-01T00:00:00.000Z", "2026-07-01T00:30:00.000Z", process.pid);
+      db.prepare("insert into review_run_leases values (?, ?, ?, ?)").run("other-lease", "2026-07-01T00:00:00.000Z", "2026-07-01T00:30:00.000Z", process.pid);
+    } finally { db.close(); }
+
+    const cooldowns = collectOperatorProviderCooldowns(statePath, { repo: "owner/repo", now: new Date("2026-07-01T00:05:00.000Z"), limit: 1 });
+    expect(cooldowns).toHaveLength(1);
+    expect(cooldowns.completeRows).toHaveLength(2);
+    expect(cooldowns.completeness).toMatchObject({ state: "complete", total: 2, visible: 1 });
+    const queue = collectOperatorReviewQueue(statePath, { repo: "owner/repo", now: new Date("2026-07-01T00:05:00.000Z"), limit: 1, leaseTtlMs: 60_000 });
+    expect(queue.jobs).toHaveLength(1);
+    expect(queue.completeJobs?.[0]).toMatchObject({ repo: "owner/repo", leaseId: "selected-lease", sessionId: "selected-session" });
+    expect(queue.staleRunLeaseIds).toEqual([]);
+    expect(queue.leaseTtlMs).toBe(60_000);
+    expect(queue.completeness).toMatchObject({ queue: { state: "complete", total: 1, visible: 1 }, runLeases: { state: "complete", total: 1 } });
   });
 
   it("omits oldest waiting age when durable queue timestamps are malformed", () => {

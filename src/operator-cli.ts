@@ -375,6 +375,22 @@ export interface OperatorDurableQueueSnapshot {
   }>;
 }
 
+export interface OperatorCollectionCompleteness {
+  state: "complete" | "unavailable";
+  total?: number;
+  visible: number;
+  reason?: "missing_database" | "missing_table";
+}
+
+export interface OperatorDurableQueueSnapshot {
+  completeness?: { queue: OperatorCollectionCompleteness; processedReviews: OperatorCollectionCompleteness; runLeases: OperatorCollectionCompleteness };
+  completeJobs?: ReviewQueueJobRecord[];
+  staleRunLeaseIds?: string[];
+  leaseTtlMs?: number;
+}
+
+type ProviderCooldownRows = ProviderCooldownReviewRecord[] & { completeRows?: ProviderCooldownReviewRecord[]; completeness?: OperatorCollectionCompleteness };
+
 export interface PullStatusExplanation {
   repo: string;
   pullNumber: number;
@@ -958,14 +974,14 @@ export function collectOperatorLeases(statePath: string): OperatorLease[] {
 export function collectOperatorProviderCooldowns(
   statePath: string,
   input: { repo?: string; now?: Date; expiredOnly?: boolean; limit?: number } = {}
-): ProviderCooldownReviewRecord[] {
+): ProviderCooldownRows {
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
     throw new Error("limit must be a positive integer");
   }
-  if (!existsSync(statePath)) return [];
+  if (!existsSync(statePath)) return withProviderCooldownCompleteness([], { state: "unavailable", visible: 0, reason: "missing_database" });
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
-    if (!hasTable(db, "processed_reviews")) return [];
+    if (!hasTable(db, "processed_reviews")) return withProviderCooldownCompleteness([], { state: "unavailable", visible: 0, reason: "missing_table" });
     const rows = (input.repo
       ? db
           .prepare(
@@ -1005,7 +1021,8 @@ export function collectOperatorProviderCooldowns(
         };
       if (!input.expiredOnly || record.expired) mapped.push(record);
     }
-    return input.limit ? mapped.slice(0, input.limit) : mapped;
+    const visible = input.limit ? mapped.slice(0, input.limit) : mapped;
+    return withProviderCooldownCompleteness(visible, { state: "complete", total: mapped.length, visible: visible.length }, mapped);
   } finally {
     db.close();
   }
@@ -1113,13 +1130,14 @@ export function collectOperatorRepoProviderCooldowns(
 
 export function collectOperatorReviewQueue(
   statePath: string,
-  input: { repo?: string; state?: ReviewQueueJobState; now?: Date; limit?: number } = {}
+  input: { repo?: string; state?: ReviewQueueJobState; now?: Date; limit?: number; leaseTtlMs?: number } = {}
 ): OperatorDurableQueueSnapshot {
   const now = input.now ?? new Date();
-  if (!existsSync(statePath)) return emptyDurableQueue(now);
+  if (!existsSync(statePath)) return emptyDurableQueue(now, "missing_database");
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
-    if (!hasTable(db, "review_queue_jobs")) return emptyDurableQueue(now);
+    const processed = readProcessedReviewCompleteness(db, input.repo);
+    if (!hasTable(db, "review_queue_jobs")) return emptyDurableQueue(now, "missing_table", processed);
     const selectColumns = reviewQueueSelectColumns(db);
     const rows = (input.repo
       ? db
@@ -1140,7 +1158,11 @@ export function collectOperatorReviewQueue(
     const jobs = rows
       .map(mapReviewQueueJobRow)
       .filter((job) => !input.state || job.state === input.state);
-    return buildDurableQueueSnapshot(jobs, now, input.limit ? jobs.slice(0, input.limit) : jobs);
+    const visibleJobs = input.limit ? jobs.slice(0, input.limit) : jobs;
+    const runLeases = readRunLeaseCompleteness(db, jobs);
+    return buildDurableQueueSnapshot(jobs, now, visibleJobs, readStaleRunLeaseIds(db, now, jobs), input.leaseTtlMs, {
+      queue: { state: "complete", total: jobs.length, visible: visibleJobs.length }, processedReviews: processed, runLeases
+    });
   } finally {
     db.close();
   }
@@ -1766,18 +1788,28 @@ function zcodeTimeoutRecommendedActions(
     : [buildZCodeTimeoutInspectCommand(release.releaseUnit.configPath)];
 }
 
-function emptyDurableQueue(now: Date): OperatorDurableQueueSnapshot {
-  return buildDurableQueueSnapshot([], now);
+const DEFAULT_QUEUE_LEASE_TTL_MS = 15 * 60_000;
+
+function withProviderCooldownCompleteness(visible: ProviderCooldownReviewRecord[], completeness: OperatorCollectionCompleteness, completeRows = visible): ProviderCooldownRows {
+  const result = visible as ProviderCooldownRows;
+  Object.defineProperties(result, { completeRows: { value: completeRows, enumerable: false }, completeness: { value: completeness, enumerable: false } });
+  return result;
+}
+
+function emptyDurableQueue(now: Date, reason?: OperatorCollectionCompleteness["reason"], processedReviews: OperatorCollectionCompleteness = { state: "unavailable", visible: 0, reason }, runLeases: OperatorCollectionCompleteness = { state: "unavailable", visible: 0, reason }): OperatorDurableQueueSnapshot {
+  return buildDurableQueueSnapshot([], now, [], [], DEFAULT_QUEUE_LEASE_TTL_MS, { queue: { state: "unavailable", visible: 0, reason }, processedReviews, runLeases });
 }
 
 function buildDurableQueueSnapshot(
   jobs: ReviewQueueJobRecord[],
   now: Date,
-  visibleJobs: ReviewQueueJobRecord[] = jobs
+  visibleJobs: ReviewQueueJobRecord[] = jobs,
+  staleRunLeaseIds: string[] = [], leaseTtlMs = DEFAULT_QUEUE_LEASE_TTL_MS,
+  completeness?: OperatorDurableQueueSnapshot["completeness"]
 ): OperatorDurableQueueSnapshot {
   const summary = summarizeDurableQueueJobs(jobs, now);
   const repos = [...new Set(jobs.map((job) => job.repo))].sort();
-  return {
+  const snapshot: OperatorDurableQueueSnapshot = {
     ok: summary.failed === 0 && summary.retryableProviderDeferred === 0,
     checkedAt: now.toISOString(),
     summary,
@@ -1787,6 +1819,9 @@ function buildDurableQueueSnapshot(
       ...summarizeDurableQueueJobs(jobs.filter((job) => job.repo === repo), now)
     }))
   };
+  Object.defineProperties(snapshot, { completeJobs: { value: jobs, enumerable: false }, staleRunLeaseIds: { value: staleRunLeaseIds, enumerable: false }, leaseTtlMs: { value: leaseTtlMs, enumerable: false } });
+  snapshot.completeness = completeness ?? { queue: { state: "complete", total: jobs.length, visible: visibleJobs.length }, processedReviews: { state: "unavailable", visible: 0 }, runLeases: { state: "unavailable", visible: 0 } };
+  return snapshot;
 }
 
 function summarizeDurableQueueJobs(jobs: ReviewQueueJobRecord[], now: Date): OperatorDurableQueueSnapshot["summary"] {
@@ -2246,6 +2281,32 @@ function hasTable(db: DatabaseSync, tableName: string): boolean {
 function hasColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
   const columns = db.prepare(`pragma table_info(${tableName})`).all() as unknown as Array<{ name: string }>;
   return columns.some((column) => column.name === columnName);
+}
+
+function readProcessedReviewCompleteness(db: DatabaseSync, repo?: string): OperatorCollectionCompleteness {
+  if (!hasTable(db, "processed_reviews")) return { state: "unavailable", visible: 0, reason: "missing_table" };
+  const query = "select count(*) as total from processed_reviews";
+  const row = (repo ? db.prepare(`${query} where repo = ?`).get(repo) : db.prepare(query).get()) as { total?: number };
+  return { state: "complete", total: row.total ?? 0, visible: row.total ?? 0 };
+}
+
+function readRunLeaseCompleteness(db: DatabaseSync, jobs: ReviewQueueJobRecord[]): OperatorCollectionCompleteness {
+  if (!hasTable(db, "review_run_leases")) return { state: "unavailable", visible: 0, reason: "missing_table" };
+  const leaseIds = new Set(jobs.flatMap((job) => job.leaseId ? [job.leaseId] : []));
+  const rows = db.prepare("select lease_id from review_run_leases").all() as unknown as Array<{ lease_id: string }>;
+  const total = rows.filter((row) => leaseIds.has(row.lease_id)).length;
+  return { state: "complete", total, visible: total };
+}
+
+function readStaleRunLeaseIds(db: DatabaseSync, now: Date, jobs: ReviewQueueJobRecord[]): string[] {
+  if (!hasTable(db, "review_run_leases")) return [];
+  const owner = hasColumn(db, "review_run_leases", "owner_pid") ? "owner_pid" : "null as owner_pid";
+  const leaseIds = new Set(jobs.flatMap((job) => job.leaseId ? [job.leaseId] : []));
+  const rows = db.prepare(`select lease_id, expires_at, ${owner} from review_run_leases`).all() as unknown as Array<{ lease_id: string; expires_at: string; owner_pid: number | null }>;
+  return rows.filter((row) => leaseIds.has(row.lease_id)).filter((row) => {
+    const expiresAt = Date.parse(row.expires_at);
+    return !Number.isFinite(expiresAt) || expiresAt <= now.getTime() || (row.owner_pid !== null && !isProcessAlive(row.owner_pid));
+  }).map((row) => row.lease_id);
 }
 
 function reviewQueueSelectColumns(db: DatabaseSync): string {

@@ -704,7 +704,8 @@ async function main(): Promise<void> {
     });
     const durableQueue = collectOperatorReviewQueue(args["state-path"] ?? config.statePath, {
       repo: args.repo,
-      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined,
+      leaseTtlMs: config.reviewConcurrency.leaseTtlMs
     });
     const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(args["state-path"] ?? config.statePath, {
       repo: args.repo,
@@ -759,7 +760,8 @@ async function main(): Promise<void> {
     });
     const durableQueue = collectOperatorReviewQueue(statePath, {
       repo: args.repo,
-      now
+      now,
+      leaseTtlMs: config.reviewConcurrency.leaseTtlMs
     });
     const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(statePath, {
       repo: args.repo,
@@ -821,13 +823,15 @@ async function main(): Promise<void> {
 	    const durableQueue = collectOperatorReviewQueue(statePath, {
 	      repo: args.repo,
 	      state: queueState,
-	      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined
+	      limit: args.limit ? parsePositiveInteger(args.limit, "--limit") : undefined,
+	      leaseTtlMs: config.reviewConcurrency.leaseTtlMs
 	    });
 	    const budgetQueue = collectOperatorReviewQueue(statePath, {
 	      repo: args.repo,
-	      state: queueState
+	      state: queueState,
+	      leaseTtlMs: config.reviewConcurrency.leaseTtlMs
 	    });
-	    const budgetOutput = collectQueueBudget(config, collectBudgetJobsForSelection(statePath, budgetQueue.jobs));
+	    const budgetOutput = collectQueueBudget(config, collectBudgetJobsForSelection(statePath, budgetQueue.jobs, undefined, config.reviewConcurrency.leaseTtlMs));
     const gates = queueHealthGates(queue, durableQueue, budgetOutput.budget);
     const ok = gates.every((gate) => gate.ok);
     const output = {
@@ -858,7 +862,8 @@ async function main(): Promise<void> {
         coverage: report,
         durableQueue: collectOperatorReviewQueue(statePath, {
           repo: args.repo,
-          limit: args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : undefined
+          limit: args["job-limit"] ? parsePositiveInteger(args["job-limit"], "--job-limit") : undefined,
+          leaseTtlMs: config.reviewConcurrency.leaseTtlMs
         }),
         readiness: collectOperatorReviewReadiness(statePath, {
           repo: args.repo,
@@ -2293,7 +2298,8 @@ async function main(): Promise<void> {
       const expiredCount = rows.filter((row) => row.expired).length;
       const durableQueue = collectOperatorReviewQueue(statePath, {
         repo: args.repo,
-        now: checkedAt
+        now: checkedAt,
+        leaseTtlMs: config.reviewConcurrency.leaseTtlMs
       });
       const activeProviderCooldowns = state.listRepoProviderCooldowns({ activeOnly: true, now: checkedAt });
       const budget = buildReviewBudgetStatus({
@@ -3046,10 +3052,11 @@ function collectQueueBudget(config: ReturnType<typeof loadConfig>, jobs: ReviewQ
 function collectBudgetJobsForSelection(
   statePath: string,
   selectedJobs: ReviewQueueJobRecord[],
-  now?: Date
+  now?: Date,
+  leaseTtlMs?: number
 ): ReviewQueueJobRecord[] {
   const jobsById = new Map<string, ReviewQueueJobRecord>();
-  for (const job of collectOperatorReviewQueue(statePath, { now }).jobs) {
+  for (const job of collectOperatorReviewQueue(statePath, { now, leaseTtlMs }).jobs) {
     if (job.state === "leased" || job.state === "running") jobsById.set(job.jobId, job);
   }
   for (const job of selectedJobs) {
