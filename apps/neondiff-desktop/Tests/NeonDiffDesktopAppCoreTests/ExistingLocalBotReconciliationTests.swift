@@ -14,7 +14,8 @@ import NeonDiffDesktopCore
                 "neondiff.accountWorkspaceID": "account-electric-sheep",
                 "neondiff.accountBotID": "bot-evaos-code-review-bot",
                 "neondiff.configPath": configPath,
-                "neondiff.activationState.v1": ActivationState.checkoutPaused.rawValue
+                "neondiff.activationState.v1": ActivationState.activationPending.rawValue,
+                "neondiff.activationRepository.v1": "electricsheephq/WorldOS"
             ],
             productionBoundary: .testAccountLink
         )
@@ -24,7 +25,10 @@ import NeonDiffDesktopCore
         ]))
         #expect(await reachesCallCount(fixture, 2))
 
-        #expect(fixture.model.activationState == .checkoutPaused)
+        #expect(fixture.model.activationState == .activationPending)
+        #expect(fixture.preferences.string(
+            forKey: "neondiff.activationRepository.v1"
+        ) == "electricsheephq/WorldOS")
         #expect(!fixture.model.currentRepositoryActivationReady)
         #expect(fixture.cli.calls.filter {
             $0.arguments.prefix(2) == ["config", "inspect"]
@@ -41,6 +45,32 @@ import NeonDiffDesktopCore
     }
 
     @MainActor
+    @Test func automaticRestoreRequiresTwoPresentLocalConfigPaths() async {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            preferenceStrings: [
+                "neondiff.accountWorkspaceID": "account-electric-sheep",
+                "neondiff.accountBotID": "bot-evaos-code-review-bot",
+                "neondiff.activationState.v1": ActivationState.checkoutPaused.rawValue
+            ],
+            productionBoundary: .testAccountLink
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(
+                entitlement: .internalAdmin,
+                localConfigPath: nil
+            )
+        ]))
+
+        #expect(fixture.model.activationState == .purchaseRequired)
+        #expect(!fixture.cli.calls.contains {
+            $0.arguments.prefix(2) == ["daemon", "status"]
+        })
+        #expect(fixture.model.configPath != configPath)
+    }
+
+    @MainActor
     @Test func automaticRestoreConfigMismatchFullyResetsAndSkipsDaemonStatus() async {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -48,7 +78,8 @@ import NeonDiffDesktopCore
                 "neondiff.accountWorkspaceID": "account-electric-sheep",
                 "neondiff.accountBotID": "bot-evaos-code-review-bot",
                 "neondiff.configPath": "/fixture/different/config.local.json",
-                "neondiff.activationState.v1": ActivationState.checkoutPaused.rawValue
+                "neondiff.activationState.v1": ActivationState.checkoutPaused.rawValue,
+                "neondiff.activationRepository.v1": "electricsheephq/WorldOS"
             ],
             productionBoundary: .testAccountLink
         )
@@ -59,6 +90,9 @@ import NeonDiffDesktopCore
         await fixture.cli.waitUntilCallCount(1)
 
         #expect(fixture.model.activationState == .purchaseRequired)
+        #expect(fixture.preferences.string(
+            forKey: "neondiff.activationRepository.v1"
+        )?.isEmpty == true)
         #expect(!fixture.cli.calls.contains {
             $0.arguments.prefix(2) == ["daemon", "status"]
         })
@@ -2255,6 +2289,13 @@ import NeonDiffDesktopCore
     private func workspace(
         entitlement: DesktopAccountEntitlement
     ) -> DesktopAccountWorkspace {
+        workspace(entitlement: entitlement, localConfigPath: configPath)
+    }
+
+    private func workspace(
+        entitlement: DesktopAccountEntitlement,
+        localConfigPath: String?
+    ) -> DesktopAccountWorkspace {
         DesktopAccountWorkspace(
             id: "account-electric-sheep",
             kind: .organization,
@@ -2270,7 +2311,7 @@ import NeonDiffDesktopCore
                     githubInstallationID: 72_001,
                     githubAccountLogin: "electricsheephq",
                     status: .verified,
-                    localConfigPath: configPath
+                    localConfigPath: localConfigPath
                 )
             ]
         )

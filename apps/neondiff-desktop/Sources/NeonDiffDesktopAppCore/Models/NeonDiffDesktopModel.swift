@@ -1636,9 +1636,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let restoresExactMatch = hasPersistedActivationJourney
             && initial.id == saved
             && initial.bots.contains(where: {
-                $0.id == savedBotID
-                    && $0.status == .verified
-                    && $0.localConfigPath.map(normalizedPath) == savedConfigPath.map(normalizedPath)
+                guard $0.id == savedBotID,
+                      $0.status == .verified,
+                      let localConfigPath = $0.localConfigPath,
+                      let savedConfigPath
+                else {
+                    return false
+                }
+                return normalizedPath(localConfigPath)
+                    == normalizedPath(savedConfigPath)
             })
         selectAccountWorkspace(
             initial.id,
@@ -1926,7 +1932,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         providerVerificationStatus = "Verify the selected account's provider credential when ready."
         activationVerifiedThisLaunch = false
         activationVerifiedRepositoryThisLaunch = nil
-        dependencies.preferences.set("", forKey: activationRepositoryKey)
+        if !preservingActivationJourney {
+            dependencies.preferences.set("", forKey: activationRepositoryKey)
+        }
         activationState = preservedActivationState
             ?? ActivationStateMachine.initialState
         dependencies.preferences.set(activationState.rawValue, forKey: activationStateKey)
