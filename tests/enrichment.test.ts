@@ -17,7 +17,7 @@ import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js"
 import type { BoundedGithubList } from "../src/github.js";
 import type { IssueAnalysis } from "../src/issue-analysis.js";
 import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
-import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
+import { buildIssueEnrichmentStatus, buildIssueEvidenceContext, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 import { createTestLicenseAdmission } from "./helpers/license-admission.js";
@@ -3372,7 +3372,7 @@ describe("issue-enrichment pagination overflow", () => {
     try {
       const configPath = join(root, "config.json");
       const statePath = join(root, "state.sqlite");
-      const config = { statePath, issueEnrichment: { enabled: true, postIssueComment: true, allowlist: ["owner/issue-repo"], maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, processExistingOpenIssuesOnActivation: true, repos: { "owner/issue-repo": { maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 10, lookbackMs: 600_000, promotionMaintainers: [{ login: "trusted-maintainer", validFrom: "2026-08-01T00:00:00Z", validUntil: "2026-09-01T00:00:00Z" }] } } } };
+      const config = { statePath, issueEnrichment: { enabled: true, postIssueComment: true, allowlist: ["owner/issue-repo"], maxIssuesPerCycle: 2, maxCommentsPerCycle: 2, processExistingOpenIssuesOnActivation: true, repos: { "owner/issue-repo": { maxIssuesPerCycle: 2, maxCommentsPerCycle: 2, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 10, lookbackMs: 600_000, promotionMaintainers: [{ login: "trusted-maintainer", validFrom: "2026-08-01T00:00:00Z", validUntil: "2026-09-01T00:00:00Z" }] } } } };
       writeFileSync(configPath, `${JSON.stringify(config)}\n`);
       const state = new ReviewStateStore(statePath);
       state.recordIssueEnrichmentRepoWatermark({
@@ -3399,12 +3399,13 @@ describe("issue-enrichment pagination overflow", () => {
           overflow: true
         }
       ) as BoundedGithubList<{ event?: string }>;
+      const evidence = await buildIssueEvidenceContext({ repo: "owner/issue-repo", issue, github: { listIssuesForEnrichment: async () => [], listIssueLabelEvents: async () => overflowEvents, canPostAsApp: () => true, upsertIssueComment: async () => ({ action: "created" as const, id: 0 }) }, defaultBranch: "main", headSha: "0".repeat(40) });
       try {
         const result = await runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
           github: {
-            listIssuesForEnrichment: async () => [issue],
+            listIssuesForEnrichment: async () => [issue, { ...issue, number: 739, labels: [] }],
             listIssueLabelEvents: async () => overflowEvents,
             getCollaboratorPermission: async () => "maintain",
             canPostAsApp: () => true,
@@ -3418,10 +3419,10 @@ describe("issue-enrichment pagination overflow", () => {
           checkedAt: "2026-08-23T00:02:00.000Z"
         });
 
-        expect(result.ok).toBe(false);
-        expect(result.summary).toMatchObject({ readFailures: 1, posted: 0, failed: 0 });
-        expect(result.items).toHaveLength(0);
-        expect(postCalls).toBe(0);
+        expect(result.ok).toBe(true);
+        expect(result.summary).toMatchObject({ readFailures: 0, posted: 1, failed: 0, deferredRecorded: 1 });
+        expect(result.items[0]).toMatchObject({ reason: "issue_label_event_overflow", recordStatus: "deferred" }); expect(evidence.timeline).toHaveLength(200); expect(evidence.truncation.timeline).toBe(true);
+        expect(postCalls).toBe(1);
         expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toMatchObject({
           lastCheckedAt: "2026-08-23T00:00:00.000Z"
         });

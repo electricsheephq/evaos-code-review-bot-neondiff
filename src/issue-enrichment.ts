@@ -284,12 +284,7 @@ type IssueEnrichmentComment = {
   user?: { login?: string | null } | null;
 };
 
-type IssueEnrichmentLabelEvent = {
-  event?: string;
-  created_at?: string;
-  actor?: { login?: string | null } | null;
-  label?: { name?: string | null } | null;
-};
+type IssueEnrichmentLabelEvent = { event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null };
 
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
   getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
@@ -332,6 +327,7 @@ export type IssueEnrichmentScanReason =
   | "global_max_issues_per_cycle"
   | "global_max_comments_per_cycle"
   | "burst_threshold_exceeded"
+  | "issue_label_event_overflow"
   | "issue_comment_marker_overflow";
 
 export function shouldDeferPreservationPreviewToPromotion(reason: IssueEnrichmentScanReason): boolean {
@@ -384,7 +380,7 @@ async function evaluateIssuePromotion(input: {
   issue: GitHubRelatedIssueOrPull;
   override?: IssueEnrichmentRepoOverride;
   github: IssueEnrichmentCycleGithub;
-}): Promise<{ issue: GitHubRelatedIssueOrPull; evidence?: IssuePromotionEvidence }> {
+}): Promise<{ issue: GitHubRelatedIssueOrPull; evidence?: IssuePromotionEvidence; promotionOverflow?: boolean }> {
   const labels = (input.issue.labels ?? [])
     .map((label) => typeof label === "string" ? label : label.name ?? "")
     .map((label) => label.trim().toLowerCase())
@@ -397,9 +393,8 @@ async function evaluateIssuePromotion(input: {
     return { issue: input.issue };
   }
   try {
-    const eventResult = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
-    const { items: events, overflow } = unpackBoundedGithubList(eventResult);
-    if (overflow) throw new GithubPaginationOverflowError("issue_label_events");
+    const { items: events, overflow } = unpackBoundedGithubList(await input.github.listIssueLabelEvents(input.repo, input.issue.number));
+    if (overflow) return { issue: input.issue, promotionOverflow: true };
     const labelEvent = events
       .filter((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation")
       .filter((event) => Boolean(event.actor?.login && event.created_at))
@@ -423,8 +418,7 @@ async function evaluateIssuePromotion(input: {
       },
       evidence
     };
-  } catch (error) {
-    if (error instanceof GithubPaginationOverflowError && error.kind === "issue_label_events") throw error;
+  } catch {
     return { issue: input.issue };
   }
 }
@@ -455,11 +449,9 @@ export async function buildIssueEvidenceContext(input: {
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
-  const timelineResult = input.github.listIssueLabelEvents
+  const { items: rawTimeline, overflow: timelineOverflow } = unpackBoundedGithubList(input.github.listIssueLabelEvents
     ? await input.github.listIssueLabelEvents(input.repo, input.issue.number)
-    : [];
-  const { items: rawTimeline, overflow: timelineOverflow } = unpackBoundedGithubList(timelineResult);
-  if (timelineOverflow) throw new GithubPaginationOverflowError("issue_label_events");
+    : []);
   const linkedNumbers = extractIssueReferenceNumbers(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`, input.issue.number);
   const linkedItems: IssueAnalysisEvidenceContext["linkedItems"] = [];
   if (input.github.getIssueOrPull) {
@@ -496,7 +488,7 @@ export async function buildIssueEvidenceContext(input: {
     linkedItems,
     truncation: {
       comments: commentsTruncated || rawCommentCount > rawComments.length || externalComments.length > 50,
-      timeline: rawTimeline.length > 200,
+      timeline: timelineOverflow || rawTimeline.length > 200,
       linkedItems: linkedNumbers.length > 20
     }
   };
@@ -1038,9 +1030,8 @@ export async function runIssueEnrichmentCycle(input: {
                     headSha: sourceSnapshots.get(repo.toLowerCase())?.headSha ?? "0".repeat(40)
                   }));
                 }
-                if (promotion.evidence) {
-                  promotionEvidenceByIssue.set(issueKey(repo, issue.number), promotion.evidence);
-                }
+                if (promotion.promotionOverflow) promotionEvidenceByIssue.set(issueKey(repo, issue.number), undefined as never);
+                else if (promotion.evidence) promotionEvidenceByIssue.set(issueKey(repo, issue.number), promotion.evidence);
               }
               return Object.assign(prepared, { scanCompletion: issues.scanCompletion });
             }
@@ -1092,6 +1083,7 @@ export async function runIssueEnrichmentCycle(input: {
     const items: IssueEnrichmentCycleResult["items"] = [];
 
     for (const item of scan.items) {
+      if (promotionEvidenceByIssue.has(issueKey(item.repo, item.issueNumber)) && !promotionEvidenceByIssue.get(issueKey(item.repo, item.issueNumber))) Object.assign(item, { action: "deferred", reason: "issue_label_event_overflow" });
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);

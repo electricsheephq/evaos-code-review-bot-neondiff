@@ -21,18 +21,16 @@ const MAX_ISSUE_COMMENT_PAGES = 5;
 const MAX_ISSUE_LABEL_EVENT_PAGES = 5;
 export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
-export type GithubPaginationOverflowKind = "issue_comment_marker" | "issue_label_events";
+export type GithubPaginationOverflowKind = "issue_comment_marker";
 
 /** A bounded read must fail closed when the caller needs complete results to make a decision. */
 export class GithubPaginationOverflowError extends Error {
   readonly kind: GithubPaginationOverflowKind;
 
-  constructor(kind: GithubPaginationOverflowKind) {
-    super(kind === "issue_label_events"
-      ? "GitHub issue label event scan exceeded page limit"
-      : "GitHub issue comment marker scan exceeded page limit");
+  constructor() {
+    super("GitHub issue comment marker scan exceeded page limit");
     this.name = "GithubPaginationOverflowError";
-    this.kind = kind;
+    this.kind = "issue_comment_marker";
   }
 }
 
@@ -382,7 +380,7 @@ export class GitHubApi {
       );
       events.push(...chunk);
       if (chunk.length < 100) return boundedGithubList(events, false);
-      if (page === MAX_ISSUE_LABEL_EVENT_PAGES) throw new GithubPaginationOverflowError("issue_label_events");
+      if (page === MAX_ISSUE_LABEL_EVENT_PAGES) return boundedGithubList(events, true);
     }
     return boundedGithubList(events, true);
   }
@@ -541,7 +539,7 @@ export class GitHubApi {
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }
-    throw new GithubPaginationOverflowError("issue_comment_marker");
+    throw new GithubPaginationOverflowError();
   }
 
   private isBotAuthoredComment(comment: IssueCommentSummary): boolean {

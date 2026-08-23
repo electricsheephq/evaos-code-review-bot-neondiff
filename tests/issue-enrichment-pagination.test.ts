@@ -34,9 +34,10 @@ describe("issue-enrichment GitHub pagination", () => {
     expect(calls).toHaveLength(5);
   });
 
-  it("fails closed on permanently full label events", async () => {
-    const { calls, error } = await fullStream("events");
-    expect(error).toMatchObject({ message: "GitHub issue label event scan exceeded page limit" });
+  it("bounds permanently full label events for evidence", async () => {
+    const { rows, calls } = await fullStream("events");
+    expect(rows).toHaveLength(500);
+    expect((rows as { overflow?: boolean }).overflow).toBe(true);
     expect(calls).toHaveLength(5);
   });
 
