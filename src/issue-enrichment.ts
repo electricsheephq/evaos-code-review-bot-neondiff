@@ -12,6 +12,7 @@ import {
   type IssueEnrichmentLifecycleInput
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
+import { unpackBoundedGithubList, type BoundedGithubList } from "./github.js";
 import {
   buildIssueAnalysisInputHash,
   runIssueAnalysis,
@@ -290,6 +291,13 @@ export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentComme
     created_at?: string | null;
     updated_at?: string | null;
     user?: { login?: string | null } | null;
+  }> | BoundedGithubList<{
+    id: number;
+    html_url?: string | null;
+    body?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    user?: { login?: string | null } | null;
   }>>;
   getIssueOrPull?(repo: string, issueNumber: number): Promise<GitHubRelatedIssueOrPull | undefined>;
 };
@@ -429,16 +437,17 @@ function emptyIssueEvidenceContext(headSha: string): IssueAnalysisEvidenceContex
   };
 }
 
-async function buildIssueEvidenceContext(input: {
+export async function buildIssueEvidenceContext(input: {
   repo: string;
   issue: GitHubRelatedIssueOrPull;
   github: IssueEnrichmentCycleGithub;
   defaultBranch: string;
   headSha: string;
 }): Promise<IssueAnalysisEvidenceContext> {
-  const rawComments = input.github.listIssueComments
+  const commentResult = input.github.listIssueComments
     ? await input.github.listIssueComments(input.repo, input.issue.number)
     : [];
+  const { items: rawComments, rawCount: rawCommentCount, truncated: commentsTruncated } = unpackBoundedGithubList(commentResult);
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
@@ -480,7 +489,7 @@ async function buildIssueEvidenceContext(input: {
     })),
     linkedItems,
     truncation: {
-      comments: externalComments.length > 50,
+      comments: commentsTruncated || rawCommentCount > rawComments.length || externalComments.length > 50,
       timeline: rawTimeline.length > 200,
       linkedItems: linkedNumbers.length > 20
     }

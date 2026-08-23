@@ -731,6 +731,26 @@ describe("GitHub App read authentication", () => {
     expect(pagesRequested).toEqual([1, 2, 3, 4, 5]);
     expect(comments).toHaveLength(500);
   });
+
+  it("listIssueComments returns raw-count metadata when its bounded read truncates", async () => {
+    const pagesRequested: number[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      const match = /\/repos\/owner\/repo\/issues\/853\/comments\?per_page=100&page=(\d+)$/.exec(String(url));
+      if (match) {
+        pagesRequested.push(Number(match[1]));
+        return jsonResponse(Array.from({ length: 100 }, (_unused, index) => ({ id: Number(match[1]) * 1000 + index })));
+      }
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const result = await new GitHubApi({ token: "fixture" }).listIssueComments("owner/repo", 853);
+
+    expect(result).toHaveLength(500);
+    expect(result.items).toHaveLength(500);
+    expect(result.rawCount).toBe(500);
+    expect(result.truncated).toBe(true);
+    expect(pagesRequested).toEqual([1, 2, 3, 4, 5]);
+  });
 });
 
 function jsonResponse(body: unknown, status = 200, statusText = ""): Response {

@@ -17,7 +17,43 @@ export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
  * is found well within this window; exceeding it truncates rather than paging forever.
  */
 const MAX_REVIEW_COMMENT_PAGES = 5;
+const MAX_ISSUE_COMMENT_PAGES = 5;
 export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
+
+/** Array-compatible metadata for bounded GitHub reads. `rawCount` is the count before downstream filters. */
+export type BoundedGithubList<T> = T[] & {
+  items: T[];
+  rawCount: number;
+  truncated: boolean;
+  overflow: boolean;
+};
+
+function boundedGithubList<T>(items: T[], truncated: boolean): BoundedGithubList<T> {
+  const result = items as BoundedGithubList<T>;
+  result.items = items.slice();
+  result.rawCount = items.length;
+  result.truncated = truncated;
+  result.overflow = truncated;
+  return result;
+}
+
+export function unpackBoundedGithubList<T>(result: T[] | BoundedGithubList<T>): {
+  items: T[];
+  rawCount: number;
+  truncated: boolean;
+  overflow: boolean;
+} {
+  const bounded = result as Partial<BoundedGithubList<T>>;
+  if (Array.isArray(bounded.items) && typeof bounded.truncated === "boolean") {
+    return {
+      items: bounded.items,
+      rawCount: bounded.rawCount ?? bounded.items.length,
+      truncated: bounded.truncated,
+      overflow: bounded.overflow ?? bounded.truncated
+    };
+  }
+  return { items: result, rawCount: result.length, truncated: false, overflow: false };
+}
 
 export interface GitHubApiOptions {
   appId?: string;
@@ -255,16 +291,18 @@ export class GitHubApi {
     return chunk.map(normalizePullRequestSummary).filter((pull) => Boolean(pull.merged_at)).slice(0, limit);
   }
 
-  async listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]> {
+  async listIssueComments(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueCommentCommandSource>> {
     const comments: IssueCommentCommandSource[] = [];
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_ISSUE_COMMENT_PAGES; page += 1) {
       const chunk = await this.request<IssueCommentCommandSource[]>(
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token: await this.getReadToken(repo) }
       );
       comments.push(...chunk);
-      if (chunk.length < 100) return comments;
+      if (chunk.length < 100) return boundedGithubList(comments, false);
+      if (page === MAX_ISSUE_COMMENT_PAGES) return boundedGithubList(comments, true);
     }
+    return boundedGithubList(comments, true);
   }
 
   async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
