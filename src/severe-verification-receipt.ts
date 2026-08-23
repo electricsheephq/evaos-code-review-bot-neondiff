@@ -1,5 +1,5 @@
 export const SEVERE_VERIFICATION_STATES = [
-  "confirmed", "refuted", "malformed", "timeout", "unavailable", "stale_head", "incomplete"
+  "confirmed", "refuted", "failed", "malformed", "timeout", "unavailable", "stale_head", "incomplete"
 ] as const;
 export type SevereVerificationState = typeof SEVERE_VERIFICATION_STATES[number];
 export type SevereVerificationDisposition = "retain" | "suppress";
@@ -49,6 +49,10 @@ const KINDS = new Set(["whole_file", "module"]);
 const STATES = new Set<string>(SEVERE_VERIFICATION_STATES);
 const SHA40 = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+export const MAX_SEVERE_EVIDENCE_FILE_BYTES = 64 * 1024;
+const MAX_SEVERE_EVIDENCE_ENTRIES = 64;
+const MAX_SEVERE_EVIDENCE_TOTAL_BYTES = 256 * 1024;
+const MAX_SEVERE_EVIDENCE_PATH_BYTES = 64 * 1024;
 
 export function validateSevereVerificationReceipt(value: unknown, options: SevereReceiptValidationOptions = {}): SevereReceiptValidation {
   const errors: string[] = [];
@@ -67,6 +71,7 @@ export function validateSevereVerificationReceipt(value: unknown, options: Sever
   if (receipt.reasonCode !== undefined && (!string(receipt.reasonCode) || !CODES.has(receipt.reasonCode))) errors.push("reasonCode is invalid");
   if (receipt.state === "confirmed" && receipt.disposition !== "retain") errors.push("confirmed receipts must retain");
   if (receipt.state !== "confirmed" && receipt.disposition === "retain") errors.push("non-confirmed receipts must suppress");
+  if (!validStateReason(receipt.state, receipt.reasonCode)) errors.push("state and reasonCode are inconsistent");
   validateEvidence(receipt.evidence, receipt.state, options.expectedPath, errors);
   return errors.length ? { ok: false, errors } : { ok: true, value: receipt as unknown as SevereVerificationReceipt };
 }
@@ -84,20 +89,32 @@ export function isSevereVerificationReceipt(value: unknown, options: SevereRecei
 function validateEvidence(value: unknown, state: unknown, expectedPath: string | undefined, errors: string[]): void {
   if (!record(value) || !exact(value, ["files", "omitted", "complete"])) { errors.push("evidence shape is invalid"); return; }
   if (!Array.isArray(value.files) || !Array.isArray(value.omitted) || typeof value.complete !== "boolean") { errors.push("evidence types are invalid"); return; }
+  if (value.files.length + value.omitted.length > MAX_SEVERE_EVIDENCE_ENTRIES) { errors.push("evidence has too many entries"); return; }
   if (value.files.length + value.omitted.length === 0) errors.push("evidence must be nonempty");
   for (const item of value.files) {
     const file = record(item) ? item : undefined;
-    if (!file || !exact(file, ["path", "kind", "sha256", "bytes", "complete"]) || !safePath(file.path) || !string(file.kind) || !KINDS.has(file.kind) || !string(file.sha256) || !SHA256.test(file.sha256) || typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > 2 ** 32 || typeof file.complete !== "boolean") errors.push("evidence file is invalid");
+    if (!file || !exact(file, ["path", "kind", "sha256", "bytes", "complete"]) || !safePath(file.path) || !string(file.kind) || !KINDS.has(file.kind) || !string(file.sha256) || !SHA256.test(file.sha256) || typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > MAX_SEVERE_EVIDENCE_FILE_BYTES || typeof file.complete !== "boolean") errors.push("evidence file is invalid");
   }
   for (const item of value.omitted) {
     const omission = record(item) ? item : undefined;
     if (!omission || !exact(omission, ["path", "code"]) || !safePath(omission.path) || !string(omission.code) || !CODES.has(omission.code)) errors.push("evidence omission is invalid");
   }
   const completeFiles = value.files.length > 0 && value.omitted.length === 0 && value.files.every((file) => record(file) && file.complete === true);
+  const totalBytes = value.files.reduce((sum, file) => sum + (record(file) && typeof file.bytes === "number" && Number.isSafeInteger(file.bytes) && file.bytes >= 0 ? file.bytes : 0), 0);
+  const pathBytes = [...value.files, ...value.omitted].reduce((sum, entry) => sum + (record(entry) && string(entry.path) ? byteLength(entry.path) : 0), 0);
+  if (totalBytes > MAX_SEVERE_EVIDENCE_TOTAL_BYTES || pathBytes > MAX_SEVERE_EVIDENCE_PATH_BYTES) errors.push("evidence exceeds aggregate limits");
   if (value.complete !== completeFiles) errors.push("evidence completeness is inconsistent");
   if ((state === "confirmed" || state === "refuted") && (!value.complete || !completeFiles)) errors.push("confirmed or refuted evidence must be complete");
   if (expectedPath !== undefined && (!safePath(expectedPath) || ![...value.files, ...value.omitted].some((entry) => record(entry) && entry.path === expectedPath))) errors.push("evidence does not cover expected path");
   if (state === "incomplete" && value.complete) errors.push("incomplete state requires incomplete evidence");
+}
+
+function validStateReason(state: unknown, reason: unknown): boolean {
+  if (!string(state) || !STATES.has(state) || (reason !== undefined && !string(reason))) return false;
+  if (state === "confirmed") return reason === undefined;
+  if (state === "refuted") return reason === undefined || reason === "refuted";
+  const allowed: Record<string, string[]> = { failed: ["provider_unavailable", "receipt_invalid"], malformed: ["malformed", "schema_invalid", "receipt_invalid"], timeout: ["timeout"], unavailable: ["unavailable", "provider_unavailable"], stale_head: ["stale_head", "identity_mismatch"], incomplete: ["incomplete", "not_read", "evidence_incomplete", "cap_exceeded"] };
+  return reason !== undefined && (allowed[state]?.includes(reason) ?? false);
 }
 
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
