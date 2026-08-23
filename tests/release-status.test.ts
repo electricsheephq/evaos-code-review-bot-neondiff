@@ -220,6 +220,64 @@ describe("beta release status", () => {
     expect(JSON.stringify(status)).not.toMatch(/PRIVATE KEY|ghp_|BEGIN RSA|BEGIN OPENSSH/);
   });
 
+  it("separates recovered history including preserved authorized posts from active work", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-active-health-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`create table processed_reviews (repo text, pull_number integer, head_sha text, status text, event text, error text, created_at text, primary key (repo, pull_number, head_sha));
+      create table review_queue_jobs (job_id text primary key, attempt_id text, source text, lane text, repo text, org text, pull_number integer, head_sha text, priority integer, state text, next_eligible_at text, lease_expires_at text, last_error text, created_at text, updated_at text);
+      create table review_event_authorization_consumptions (repo text, pull_number integer, posted_event text, posted_at text);`);
+    const processed = db.prepare("insert into processed_reviews (repo,pull_number,head_sha,status,error,created_at) values (?,?,?,?,?,?)");
+    processed.run("owner/repo", 7, "old-failure", "failed", "provider timeout", "2026-08-21T23:30:00+07:00");
+    processed.run("owner/repo", 7, "old-posted", "posted", null, "2026-08-22T12:00:00Z");
+    processed.run("owner/repo", 8, "recent-failure", "failed", "provider timeout", "2026-08-22 23:30:00");
+    processed.run("owner/repo", 8, "recent-posted-before", "posted", null, "2026-08-22T22:00:00Z");
+    processed.run("owner/repo", 9, "millisecond-failure", "failed", "provider timeout", "2026-08-22T23:45:00.100Z");
+    processed.run("owner/repo", 9, "millisecond-posted", "posted", null, "2026-08-22T23:45:00.900Z");
+    processed.run("owner/repo", 13, "preserved-failure", "failed", "provider timeout", "2026-08-22T23:30:00.100Z");
+    processed.run("owner/repo", 13, "preserved-blocking", "posted", null, "2026-08-22T23:00:00Z");
+    processed.run("owner/repo", 14, "receipt-before-failure", "failed", "provider timeout", "2026-08-22T23:30:00.900Z");
+    processed.run("owner/repo", 14, "prior-blocking", "posted", null, "2026-08-22T23:00:00Z");
+    db.exec(`update processed_reviews set event = 'REQUEST_CHANGES' where pull_number in (13,14) and status = 'posted';
+      insert into review_event_authorization_consumptions values ('owner/repo',13,'COMMENT','2026-08-22T23:30:00.900Z'),('owner/repo',14,'COMMENT','2026-08-22T23:30:00.100Z');`);
+    db.exec(`with recursive n(x) as (values(1) union all select x+1 from n where x<10000) insert into processed_reviews (repo,pull_number,head_sha,status,error,created_at) select 'history/repo',x,'history-'||x,'posted',null,'2026-01-01T00:00:00Z' from n;
+      with recursive n(x) as (values(1) union all select x+1 from n where x<100) insert into processed_reviews (repo,pull_number,head_sha,status,error,created_at) select 'error/repo',x,'error-'||x,'failed','provider timeout','2026-08-22T23:00:00Z' from n;`);
+    db.exec("insert into processed_reviews (repo,pull_number,head_sha,status,error,created_at) values ('owner/repo',10,'outside-cutoff','failed','provider timeout','2026-08-22T00:00:00.100Z'),('owner/repo',11,'exact-cutoff','failed','provider timeout','2026-08-22T07:00:00.500+07:00'),('owner/repo',12,'inside-cutoff','failed','provider timeout','2026-08-22T00:00:00.900Z')");
+    const queue = db.prepare("insert into review_queue_jobs (job_id,attempt_id,source,lane,repo,org,pull_number,head_sha,priority,state,last_error,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    queue.run("zcode", "zcode", "automatic", "background", "owner/repo", "owner", 7, "old-failure", 1, "failed", "zcode_timeout_retryable; retry_attempt=1; reason=timeout", "2026-08-21T23:30:00+07:00", "2026-08-21T23:30:00+07:00");
+    queue.run("recent", "recent", "automatic", "background", "owner/repo", "owner", 8, "recent-failure", 1, "failed", "ordinary failure", "2026-08-22T23:30:00Z", "2026-08-22T23:30:00Z");
+    queue.run("millisecond", "millisecond", "automatic", "background", "owner/repo", "owner", 9, "millisecond-failure", 1, "failed", "ordinary failure", "2026-08-22T23:45:00.100Z", "2026-08-22T23:45:00.100Z");
+    queue.run("preserved", "preserved", "automatic", "background", "owner/repo", "owner", 13, "preserved-failure", 1, "failed", "ordinary failure", "2026-08-22T23:30:00.100Z", "2026-08-22T23:30:00.100Z");
+    queue.run("prior-receipt", "prior-receipt", "automatic", "background", "owner/repo", "owner", 14, "receipt-before-failure", 1, "failed", "ordinary failure", "2026-08-22T23:30:00.900Z", "2026-08-22T23:30:00.900Z");
+    db.close();
+    const status = collectReleaseStatus({
+      cwd: repoRoot,
+      statePath: dbPath,
+      configPath: join(root, "missing-config.json"),
+      launchdLabel: "com.electricsheephq.evaos-code-review-bot",
+      now: new Date("2026-08-23T00:00:00.500Z")
+    });
+
+    expect(status.database).toMatchObject({
+      errorCount: 108,
+      recentUnrecoveredErrorCount: 104,
+      lastErrorAt: "2026-08-22T23:45:00.100Z",
+      failedReviewQueueJobCount: 5,
+      activeFailedReviewQueueJobCount: 2,
+      zcodeTimeoutFailedReviewQueueJobCount: 1,
+      activeZCodeTimeoutFailedReviewQueueJobCount: 0
+    });
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "live_db_no_errors", ok: false }));
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "queue_no_failed_jobs", ok: false }));
+  });
+
+  it("keeps recovered historical failures amber rather than red", () => {
+    const status = buildReleaseStatus({ repo: { branch: "main", head: "head", dirtyFiles: [] }, expectedHead: "head", configPath: "/config/live.json", launchd: { label: "worker", state: "running", configPath: "/config/live.json", usesSystemCa: true }, database: { rowCount: 2, errorCount: 1, recentUnrecoveredErrorCount: 0, lastErrorAt: "2026-08-21T00:00:00Z", failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: 0, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: 0 }, heartbeat: freshHeartbeat(), now: new Date("2026-08-23T00:00:00Z") });
+    expect(status.ok).toBe(true);
+    expect(status.health).toMatchObject({ state: "amber", active: { failedQueueJobs: 0 }, recent: { unrecoveredReviewErrors: 0 }, history: { reviewErrors: 1, failedQueueJobs: 1 } });
+  });
+
   it("adds public release manifest gates while allowing an explicit source beta license API deferral", () => {
     const root = mkdtempSync(join(tmpdir(), "public-release-manifest-green-"));
     roots.push(root);

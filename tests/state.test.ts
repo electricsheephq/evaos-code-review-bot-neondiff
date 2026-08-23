@@ -2,17 +2,19 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseProviderCooldownError, ReviewStateStore } from "../src/state.js";
 
 describe("review state store", () => {
   const roots: string[] = [];
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
   it("deduplicates one review per repo, PR, and head SHA", () => {
+    vi.useFakeTimers({ now: new Date("2026-08-23T00:00:00.900Z") });
     const root = mkdtempSync(join(tmpdir(), "evaos-review-state-"));
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
@@ -22,11 +24,12 @@ describe("review state store", () => {
       repo: "electricsheephq/WorldOS",
       pullNumber: 1205,
       headSha: "abc123",
-      status: "dry_run",
+      status: "posted",
       event: "COMMENT"
     });
 
     expect(store.hasProcessed("electricsheephq/WorldOS", 1205, "abc123")).toBe(true);
+    expect(store.getProcessedReview("electricsheephq/WorldOS", 1205, "abc123")?.createdAt).toBe("2026-08-23T00:00:00.900Z");
     expect(store.hasProcessed("electricsheephq/WorldOS", 1205, "def456")).toBe(false);
     store.close();
   });
@@ -1801,7 +1804,7 @@ describe("review state store", () => {
       ...authorization,
       event: "REQUEST_CHANGES",
       reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-1",
-      now: new Date("2026-07-13T00:01:00.000Z")
+      now: new Date("2026-07-13T00:01:00.900Z")
     });
     expect(store.getReviewEventAuthorizationConsumption("owner/repo", 7, "A".repeat(40))).toEqual({
       repo: "owner/repo",
@@ -1812,12 +1815,13 @@ describe("review state store", () => {
       consumedAt: "2026-07-13T00:00:00.000Z",
       postedEvent: "REQUEST_CHANGES",
       reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-1",
-      postedAt: "2026-07-13T00:01:00.000Z"
+      postedAt: "2026-07-13T00:01:00.900Z"
     });
     expect(store.getProcessedReview("owner/repo", 7, "A".repeat(40))).toMatchObject({
       status: "posted",
       event: "REQUEST_CHANGES",
-      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-1"
+      reviewUrl: "https://github.com/owner/repo/pull/7#pullrequestreview-1",
+      createdAt: "2026-07-13T00:01:00.900Z"
     });
     expect(store.recordReviewEventAuthorizationIncident({
       repo: "owner/repo",
