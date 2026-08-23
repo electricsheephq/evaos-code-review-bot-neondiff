@@ -13,7 +13,7 @@ const V104_PROVENANCE_RECOVERY = Object.freeze({
   commit: "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
   predecessor: "1.0.3"
 });
-const DESKTOP_ONLY_RC_TAG = /^v\d+\.\d+\.\d+-rc\.\d+$/;
+const DESKTOP_ONLY_RC_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-rc\.(?:[1-9]\d*)$/;
 const DESKTOP_ONLY_TAG_ANNOTATION = "NeonDiff-Release-Class: desktop-only";
 
 function fail(message) {
