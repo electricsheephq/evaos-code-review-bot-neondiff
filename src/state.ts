@@ -287,11 +287,7 @@ export interface ReviewQueueJobRecord {
 }
 
 export interface ReviewQueuePostClaim {
-  jobId: string;
-  postKey: string;
-  leaseId: string;
-  reconcileRequired: boolean;
-  receipt?: string;
+  jobId: string; postKey: string; leaseId: string; reconcileRequired: boolean; receipt?: string;
 }
 export interface ReviewReadinessRecord {
   repo: string;
@@ -750,7 +746,6 @@ export class ReviewStateStore {
         repo text not null, pull_number integer not null, head_sha text not null,
         reason text not null, created_at text not null, primary key (repo, pull_number, head_sha)
       );
-
       create table if not exists review_queue_post_claims (
         job_id text not null, post_key text not null, lease_id text not null, claimed_at text not null,
         reconcile_required integer not null default 0, receipt text, receipt_at text,
@@ -2339,16 +2334,19 @@ export class ReviewStateStore {
           const result = this.db
             .prepare(
               `update review_queue_jobs
-               set state = 'queued',
+               set state = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then 'stale_retired' else 'queued' end,
                    lease_id = null,
                    lease_expires_at = null,
-                   last_error = ?,
-                   updated_at = ?
+                   next_eligible_at = null,
+                   last_error = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then 'queue_quarantine_operator_retired' else ? end,
+                   updated_at = ?,
+                   finished_at = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then coalesce(finished_at, ?) else finished_at end
                where job_id = ?
                  and state in ('leased', 'running')`
             )
             .run(
               `queue_lease_operator_requeued:${job.staleReason ?? "matched"}`,
+              checkedAt,
               checkedAt,
               job.jobId
             );
@@ -4367,11 +4365,7 @@ interface ReviewQueueJobRow {
 }
 
 interface ReviewQueuePostClaimRow {
-  job_id: string;
-  post_key: string;
-  lease_id: string;
-  reconcile_required: number;
-  receipt: string | null;
+  job_id: string; post_key: string; lease_id: string; reconcile_required: number; receipt: string | null;
 }
 
 interface ReviewReadinessRow {

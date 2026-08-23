@@ -1656,7 +1656,7 @@ describe("review state store", () => {
     store.quarantineReviewQueueHead({ repo: blocked.repo, pullNumber: 8, headSha: "blocked", reason: "required ghp_fake_token", now });
     expect(() => store.enqueueReviewQueueJob({ repo: blocked.repo, pullNumber: 8, headSha: "blocked", now })).toThrow("review_queue_head_quarantined");
     expect(() => store.claimReviewQueuePost({ jobId: blocked.jobId, repo: blocked.repo, pullNumber: 8, headSha: "blocked", leaseId: lease!.leaseId!, postKey: "review", now })).toThrow("review_queue_post_fenced");
-    const leased = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, now: new Date("2026-08-24T00:00:00.002Z") });
+    store.clearReviewQueueLeases({ dryRun: false, expiredOnly: true, now: new Date("2026-08-24T00:00:00.002Z") }); const leased = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, now: new Date("2026-08-24T00:00:00.002Z") });
     expect(leased.map((job) => job.jobId)).toEqual([other.jobId]);
     expect(store.getReviewQueueJob(blocked.jobId)).toMatchObject({ state: "stale_retired", finishedAt: "2026-08-24T00:00:00.002Z" });
     expect(store.getReviewQueueJob(blocked.jobId)?.nextEligibleAt).toBeUndefined();
