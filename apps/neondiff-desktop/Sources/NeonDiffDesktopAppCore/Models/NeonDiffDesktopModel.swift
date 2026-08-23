@@ -385,17 +385,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         if dependencies.productionBoundary.byoGitHubEnabled {
             let byoProof = DesktopBYOActivationProof(
-                currentAccountBound: currentAccountBindingVerified,
-                githubAppVerified: byoGitHubCredentialsVerified,
+                currentAccountBound: currentAccountBindingVerified, githubAppVerified: byoGitHubCredentialsVerified,
                 repositoryBound: repositoryConfigurationReady && scopedReviewTargetReady,
                 apiEntitlementActive: currentRepositoryActivationReady
             )
             guard dependencies.productionBoundary.distributionPolicy == .byo,
-                  DesktopDistributionPolicyBoundary.evaluate(
-                      policy: .byo,
-                      visibility: byoGitHubRepositoryVisibility,
-                      proof: byoProof
-                  ) == .allowed
+                  DesktopDistributionPolicyBoundary.evaluate(policy: .byo, visibility: byoGitHubRepositoryVisibility, proof: byoProof) == .allowed
             else {
                 return false
             }
@@ -862,10 +857,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         // touching the Keychain on the launch path (v1.0.3 startup-stability rule).
         if let rawActivationState = dependencies.preferences.string(forKey: activationStateKey),
            let restored = ActivationState(rawValue: rawActivationState) {
-            let migrated = DesktopDistributionPolicyBoundary.migrateRestoredActivationState(
-                restored,
-                policy: dependencies.productionBoundary.distributionPolicy
-            )
+            let migrated = DesktopDistributionPolicyBoundary.migrateRestoredActivationState(restored, policy: dependencies.productionBoundary.distributionPolicy)
             self.activationState = migrated
             if migrated != restored {
                 dependencies.preferences.set(migrated.rawValue, forKey: activationStateKey)
@@ -881,13 +873,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return accountWorkspaceCatalog.accounts.first { $0.id == accountID }
     }
 
-    private var currentAccountBindingVerified: Bool {
-        selectedAccountWorkspace != nil
-            && DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
-                verifiedAt: accountWorkspaceCatalogVerifiedAt,
-                now: dependencies.clock.now
-            )
-    }
+    private var currentAccountBindingVerified: Bool { selectedAccountWorkspace != nil && DesktopUpdateAccessPolicy.accountCatalogIsCurrent(verifiedAt: accountWorkspaceCatalogVerifiedAt, now: dependencies.clock.now) }
 
     package var selectedBotInstallation: DesktopBotInstallation? {
         guard let botID = accountWorkspaceSelection.botID else { return nil }
@@ -4221,16 +4207,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }.joined(separator: ", ")
         let selectedReadCheck = report.github.readChecks.first { check in
-            guard let selectedReviewRepository else { return false }
-            return check.repo.caseInsensitiveCompare(selectedReviewRepository)
-                == .orderedSame
+            selectedReviewRepository.map { check.repo.caseInsensitiveCompare($0) == .orderedSame } ?? false
         } ?? report.github.readChecks.first
-        if let visibility = selectedReadCheck?.visibilityResult?.lowercased(),
-           let resolvedVisibility = GitHubBrokerRepositoryVisibility(rawValue: visibility) {
-            byoGitHubRepositoryVisibility = resolvedVisibility
-        } else {
-            byoGitHubRepositoryVisibility = .unknown
-        }
+        byoGitHubRepositoryVisibility = selectedReadCheck?.visibilityResult
+            .flatMap { GitHubBrokerRepositoryVisibility(rawValue: $0.lowercased()) } ?? .unknown
         byoGitHubCredentialsVerified = true
         lastError = nil
         switch expectedContext.source {
@@ -4760,12 +4740,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var activationPresentation: ActivationStatePresentation {
-        ActivationStateMachine.presentation(
-            for: activationState,
-            redactedKeyPrefix: activationKeyRedactedPrefix,
-            publicBYO: onboardingFlow.mode == .publicReposOnly
-                && dependencies.productionBoundary.distributionPolicy == .byo
-        )
+        ActivationStateMachine.presentation(for: activationState, redactedKeyPrefix: activationKeyRedactedPrefix, publicBYO: onboardingFlow.mode == .publicReposOnly && dependencies.productionBoundary.distributionPolicy == .byo)
     }
 
     private var activationLicenseClient: (any ActivationLicenseClienting)? {
@@ -4847,9 +4822,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         switch activationState {
         case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
             enterActivation(for: .publicReposOnly)
-        case .publicFreeSkip
-            where dependencies.productionBoundary.distributionPolicy != .managed:
-            enterActivation(for: onboardingFlow.mode)
+        case .publicFreeSkip where dependencies.productionBoundary.distributionPolicy != .managed: enterActivation(for: onboardingFlow.mode)
         case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
             applyActivationEvent(.choosePrivatePath)
         default:

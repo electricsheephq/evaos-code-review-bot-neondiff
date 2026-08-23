@@ -198,25 +198,16 @@ public enum ActivationStateMachine {
             )
 
         case .purchaseRequired:
-            let title = publicBYO
-                ? "Every repository requires activation"
-                : "Private repositories need activation"
-            let cause = publicBYO
-                ? "Every BYO repository requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued."
-                : "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued."
-            let accessibilityLabel = publicBYO
-                ? "Every BYO repository requires an active \(keyTerm)."
-                : "Private repositories require an active \(keyTerm)."
             return ActivationStatePresentation(
                 state: state,
-                title: title,
-                cause: cause,
+                title: publicBYO ? "Every repository requires activation" : "Private repositories need activation",
+                cause: publicBYO ? "Every BYO repository requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued." : "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued.",
                 recovery: ActivationRecovery(
                     label: "Continue with this key",
                     event: .provideExistingKey,
                     accessibilityLabel: "Store the existing \(keyTerm) securely and continue"
                 ),
-                accessibilityLabel: accessibilityLabel,
+                accessibilityLabel: publicBYO ? "Every BYO repository requires an active \(keyTerm)." : "Private repositories require an active \(keyTerm).",
                 isSuccess: false,
                 requiresKeyEntry: true,
                 showsNotifyOption: false

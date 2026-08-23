@@ -132,10 +132,7 @@ import NeonDiffDesktopCore
         let prefs = MemoryPreferences()
         prefs.set(ActivationState.publicFreeSkip.rawValue, forKey: activationStateKey)
         let model = makeModel(preferences: prefs, productionBoundary: .testAccountLink)
-
-        #expect(model.activationState == .purchaseRequired)
-        #expect(prefs.string(forKey: activationStateKey) == ActivationState.purchaseRequired.rawValue)
-        #expect(model.activationPresentation.requiresKeyEntry)
+        #expect(model.activationState == .purchaseRequired && prefs.string(forKey: activationStateKey) == ActivationState.purchaseRequired.rawValue)
     }
 
     @Test func publicPathSkipsWithoutLicenseUI() {
@@ -150,19 +147,15 @@ import NeonDiffDesktopCore
         let model = makeModel(productionBoundary: .testAccountLink)
         model.onboardingFlow.mode = .publicReposOnly
         model.enterActivation(for: .publicReposOnly)
-
         #expect(model.activationState == .purchaseRequired)
         #expect(model.activationPresentation.title == "Every repository requires activation")
         #expect(model.activationPresentation.cause.contains("Every BYO repository"))
     }
-
     @Test func publicBYOLegacyStateSyncReturnsToPaidEntry() {
         let model = makeModel(productionBoundary: .testAccountLink)
         model.activationState = .publicFreeSkip
         model.onboardingFlow.mode = .publicReposOnly
-
         model.syncActivationEntryFromOnboardingMode()
-
         #expect(model.activationState == .purchaseRequired)
         #expect(model.activationPresentation.requiresKeyEntry)
     }

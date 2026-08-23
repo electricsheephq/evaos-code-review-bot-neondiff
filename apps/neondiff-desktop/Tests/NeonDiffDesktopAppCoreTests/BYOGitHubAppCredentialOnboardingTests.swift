@@ -531,36 +531,15 @@ struct BYOGitHubAppCredentialOnboardingTests {
     }
 
     @Test func unknownRepositoryVisibilityCannotUnlockBYOUsefulWork() async {
-        let fixture = ModelDependencyFixture(
-            cliOutcomes: [
-                .success(doctorResult(
-                    readChecks: doctorReadCheck(repo: "acme/demo", visibility: "unknown")
-                )),
-                .success(CLIRunResult(
-                    exitCode: 0,
-                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
-                    stderr: ""
-                ))
-            ],
-            activationLicenseClient: ActiveBYOActivationClient(),
-            preferenceStrings: availableCLIPreference,
-            productionBoundary: exactB0Boundary
-        )
+        let fixture = ModelDependencyFixture(cliOutcomes: [.success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo", visibility: "unknown"))), .success(CLIRunResult(exitCode: 0, stdout: byoRepoPatchJSON(repository: "acme/demo"), stderr: ""))], activationLicenseClient: ActiveBYOActivationClient(), preferenceStrings: availableCLIPreference, productionBoundary: exactB0Boundary)
         fixture.model.applyAccountWorkspaceCatalog(.loaded([fixtureWorkspace(id: "account-a")]))
-        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
-        fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
-        fixture.model.pendingBYOGitHubAppId = "123456"
-        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
-        fixture.model.storeBYOGitHubAppCredentials()
-        fixture.model.verifyBYOGitHubAppCredentials()
-        await waitForBYOVerification(fixture)
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]; fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+        fixture.model.pendingBYOGitHubAppId = "123456"; fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials(); fixture.model.verifyBYOGitHubAppCredentials(); await waitForBYOVerification(fixture)
         fixture.model.applyRepoAllowlistPatch()
         await fixture.waitForConfigPatchToFinish()
-
-        fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
-        fixture.model.provideExistingActivationKey()
+        fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"; fixture.model.provideExistingActivationKey()
         await fixture.model.submitActivation()
-
         #expect(fixture.model.byoGitHubCredentialsVerified)
         #expect(fixture.model.currentRepositoryActivationReady)
         #expect(!fixture.model.productionUsefulWorkAvailable)
