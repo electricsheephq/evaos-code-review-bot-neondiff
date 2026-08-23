@@ -339,10 +339,14 @@ unchanged and treat the package as quarantined.
 
 ## Tag And Release
 
+Before any command below, run the guarded coordinate block in
+`docs/beta-release-runbook.md`. It defines the absolute
+`NEONDIFF_RELEASE_CHECKOUT` and account/bot-scoped `NEONDIFF_CONFIG_PATH`.
+
 Create an annotated tag from the merged source SHA:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
 git pull --ff-only origin main
@@ -377,13 +381,13 @@ pass that file as `--notes-file` and include the tag name at the top.
 After the GitHub Release exists:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
 git pull --ff-only origin main
 test "$(git rev-parse HEAD)" = "<source-sha>"
-launchctl bootout gui/$(id -u) /Users/lume/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) /Users/lume/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
+launchctl bootout gui/$(id -u) "$HOME/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist" 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist"
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 ```
 
@@ -395,7 +399,7 @@ Run the status gate with App credentials set in the shell:
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expected-head <source-sha> \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
@@ -406,7 +410,7 @@ For public source-beta or public beta releases, include the public manifest gate
 SOURCE_SHA=replace-with-release-source-sha
 PUBLIC_BETA_TAG=vX.Y.Z-beta.N
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expected-head "$SOURCE_SHA" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -424,9 +428,9 @@ Also run:
 
 ```bash
 npx tsx src/cli.ts coverage-audit \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+  --config "$NEONDIFF_CONFIG_PATH"
 npx tsx src/cli.ts provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expired-only true
 ```
 
@@ -458,13 +462,13 @@ before calling the release green.
 Rollback is tag-first:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin --tags
 git checkout main
 git reset --hard <previous-release-tag>
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```

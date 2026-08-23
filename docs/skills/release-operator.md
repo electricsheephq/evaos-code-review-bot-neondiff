@@ -33,6 +33,12 @@ exception in the tracker issue and open a backfill issue before ending.
 ## Required Commands
 
 ```bash
+: "${HOME:?HOME is required}"
+: "${NEONDIFF_ACCOUNT:?NEONDIFF_ACCOUNT is required}"
+: "${NEONDIFF_BOT:?NEONDIFF_BOT is required}"
+: "${NEONDIFF_RELEASE_CHECKOUT:?set an absolute release checkout}"
+NEONDIFF_CONFIG_PATH="$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT/Bots/$NEONDIFF_BOT/config.local.json"
+export NEONDIFF_CONFIG_PATH
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 
@@ -50,7 +56,7 @@ gh release create <tag> \
 
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expected-head <source-sha> \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```

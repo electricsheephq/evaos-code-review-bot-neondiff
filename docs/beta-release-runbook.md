@@ -5,17 +5,51 @@ update as a named beta release, not as an informal pull from `main`.
 
 ## Release Boundary
 
-The beta release unit is:
+Set the operator-owned coordinates once, before any command in this runbook:
 
-- source checkout: `/Volumes/LEXAR/repos/evaos-code-review-bot`
+```bash
+: "${HOME:?HOME is required}"
+: "${NEONDIFF_ACCOUNT:?NEONDIFF_ACCOUNT is required}"
+: "${NEONDIFF_BOT:?NEONDIFF_BOT is required}"
+: "${NEONDIFF_RELEASE_CHECKOUT:?set an absolute release checkout}"
+: "${NEONDIFF_EVIDENCE_ROOT:?set an absolute evidence root outside the checkout}"
+NEONDIFF_BOT_ROOT="$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT/Bots/$NEONDIFF_BOT"
+NEONDIFF_CONFIG_PATH="$NEONDIFF_BOT_ROOT/config.local.json"
+NEONDIFF_STATE_DB="$NEONDIFF_BOT_ROOT/state/reviews.sqlite"
+export NEONDIFF_BOT_ROOT NEONDIFF_CONFIG_PATH NEONDIFF_STATE_DB
+```
+
+All named paths must be absolute. The evidence root must be outside the release
+checkout. The beta release unit is:
+
+- source checkout: `$NEONDIFF_RELEASE_CHECKOUT`
 - launchd job: `com.electricsheephq.evaos-code-review-bot`
-- launchd config: `/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json`
-- state DB: `/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews-live.sqlite`
-- evidence root: `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
+- launchd config: `$NEONDIFF_CONFIG_PATH`
+- state DB: `$NEONDIFF_STATE_DB`
+- evidence root: `$NEONDIFF_EVIDENCE_ROOT`
 
 Packaged or non-source deployments must set
 `NEONDIFF_PROTECTED_CHECKOUT_ROOT` to the live operator checkout so
 review mirrors and worktrees cannot be planned inside or above that checkout.
+
+### Legacy CLI worker candidate
+
+This operator-only path is separate from native Desktop adoption. Before an
+update or rollback, verify the immutable candidate manifest digest and tarball
+digest from the GitHub prerelease. The existing LaunchAgent must have its exact
+label, an absolute `WorkingDirectory`, non-empty `ProgramArguments` containing
+exactly one absolute `--config "$NEONDIFF_CONFIG_PATH"`, and
+`EnvironmentVariables` with the App ID plus an absolute private-key file path.
+The private-key file remains the legacy credential contract; never copy its
+bytes into the manifest, plist, logs, or evidence.
+
+Use `install-b0-worker-candidate.mjs update` or `rollback` first with
+`--dry-run true`, then with `--dry-run false --confirm true`, supplying the
+absolute manifest and tarball paths, manifest SHA-256, and existing launchd
+label. The installer must preserve the original label, config,
+`WorkingDirectory`, environment, worker loaded/stopped state, account/bot state,
+`state/reviews.sqlite`, allowlist, and exactly one installed worker. Rollback
+uses the recorded prior candidate; it never substitutes source checkout bytes.
 
 The beta release unit does not include expanding monitored repos, GitHub App
 permissions, ZCode tools, auto-merge, approvals, or repair behavior. Those need
@@ -92,19 +126,19 @@ tagged version.
 Run from a clean release checkout on `main`:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git status --short
 git pull --ff-only
 npm test
 npm run build
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 sleep 5
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot \
   --require-coverage true
@@ -115,7 +149,7 @@ For public source-beta releases, run the same gate with manifest checks:
 ```bash
 PUBLIC_BETA_TAG=v0.4.24-beta.1
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -138,7 +172,7 @@ fetched:
 ```bash
 git fetch origin --tags
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -470,7 +504,7 @@ from the eligible open-head set. Retire only the exact failed head:
 
 ```bash
 npx tsx src/cli.ts retire-failed \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --repo owner/repo \
   --pr 123 \
   --head-sha <failed-head-sha> \
@@ -540,7 +574,7 @@ Expired cooldown rows are actionable backlog. Run:
 
 ```bash
 npx tsx src/cli.ts retry-provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG_PATH" \
   --expired-only true \
   --dry-run false \
   --zcode true
@@ -557,7 +591,7 @@ Default rollback is to restart the existing launchd job after checking out the
 last known-good merge commit:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin
 git checkout main
 git reset --hard <last-known-good-merge-sha>
@@ -601,7 +635,7 @@ For each beta promotion, record:
   tracking issue or `not in this release`.
 - next monitoring action or heartbeat.
 
-Keep raw evidence under `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
+Keep raw evidence under `$NEONDIFF_EVIDENCE_ROOT`
 or session notes. Do not paste secrets, private keys, tokens, cookies, raw
 customer data, or long logs into GitHub comments.
 
