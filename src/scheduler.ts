@@ -569,19 +569,24 @@ async function enqueuePullIfEligible(input: {
       pull: input.pull
     })
   ) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     await retireSupersededQueueJobsForPull(input);
     recordActivationBaselineExistingHead(input.state, input.repo, input.pull);
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }
   if (!input.allowActivationBaselineCommandLookup && isActivationBaselineProcessedReview(processed)) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     await retireSupersededQueueJobsForPull(input);
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
-  if ("blocked" in commandDecision) return "command_fetch_failed";
+  if ("blocked" in commandDecision) {
+    quarantineQueueJobsForTruncatedCommandEvidence(input);
+    return "command_fetch_failed";
+  }
   markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
   if (commandDecision.action !== "none") {
     if (commandDecision.shouldReview) {
@@ -1101,6 +1106,27 @@ async function retireSupersededQueueJobsForPull(input: {
       state: "stale_head",
       details: "Superseded by a newer PR head.",
       onStatusCommentFailure: input.onStatusCommentFailure,
+      now: input.now
+    });
+  }
+}
+
+function quarantineQueueJobsForTruncatedCommandEvidence(input: {
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  now: Date;
+}): void {
+  const jobs = input.state.listReviewQueueJobsForPull({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    states: ["queued", "provider_deferred", "blocked_on_proof"]
+  }).filter((job) => job.headSha === input.pull.head.sha);
+  for (const job of jobs) {
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "failed",
+      lastError: "command_evidence_truncated",
       now: input.now
     });
   }

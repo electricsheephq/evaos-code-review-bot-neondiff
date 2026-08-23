@@ -3205,6 +3205,23 @@ describe("provider-aware review scheduler", () => {
       acknowledge: false
     };
     const state = new ReviewStateStore(config.statePath);
+    for (const [pullNumber, headSha] of [[1, "historical-a-old"], [2, "historical-b"]] as const) {
+      state.recordReviewReadiness({
+        repo: "org/repo-a",
+        pullNumber,
+        headSha,
+        state: "ready_for_human",
+        reason: "comment_review_posted",
+        now: new Date("2026-06-30T00:00:00.000Z")
+      });
+    }
+    state.recordProcessed({
+      repo: "org/repo-a",
+      pullNumber: 2,
+      headSha: "historical-b-current",
+      status: "skipped",
+      error: "activation_baseline_existing_head"
+    });
     let issueCommentReads = 0;
 
     const result = await runScheduledCycleWithDeps({
@@ -3212,7 +3229,7 @@ describe("provider-aware review scheduler", () => {
       github: {
         ...githubFromMap(new Map([[
           "org/repo-a",
-          [pull("org/repo-a", 1, "historical-a"), pull("org/repo-a", 2, "historical-b")]
+          [pull("org/repo-a", 1, "historical-a"), pull("org/repo-a", 2, "historical-b-current")]
         ]])),
         listIssueComments: async () => {
           issueCommentReads += 1;
@@ -3227,7 +3244,7 @@ describe("provider-aware review scheduler", () => {
       now: new Date("2026-07-01T00:00:00.000Z")
     });
 
-    expect(result.baselinedExisting).toBe(2);
+    expect(result.baselinedExisting).toBe(1);
     expect(result.skippedProcessed).toBe(2);
     expect(result.commandFetchErrors).toBe(0);
     expect(result.queue.enqueued).toBe(0);
@@ -3237,6 +3254,8 @@ describe("provider-aware review scheduler", () => {
       status: "skipped",
       error: "activation_baseline_existing_head"
     });
+    expect(state.getReviewReadiness("org/repo-a", 1, "historical-a-old")).toMatchObject({ state: "stale" });
+    expect(state.getReviewReadiness("org/repo-a", 2, "historical-b")).toMatchObject({ state: "stale" });
     state.close();
   });
 
@@ -3569,6 +3588,12 @@ describe("provider-aware review scheduler", () => {
       acknowledge: false
     };
     const state = new ReviewStateStore(config.statePath);
+    const queued = state.enqueueReviewQueueJob({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "a1",
+      baseSha: "base"
+    }).job;
     state.recordReviewReadiness({
       repo: "org/repo-a",
       pullNumber: 1,
@@ -3608,7 +3633,11 @@ describe("provider-aware review scheduler", () => {
       reason: "comment_review_posted"
     });
     expect(state.getReviewReadiness("org/repo-a", 1, "a1")).toBeUndefined();
-    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toHaveLength(0);
+    expect(state.getReviewQueueJob(queued.jobId)).toMatchObject({
+      state: "failed",
+      lastError: "command_evidence_truncated"
+    });
+    expect(result.queue.leased).toBe(1);
     state.close();
   });
 
