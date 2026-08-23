@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
   buildCommandStatusBody,
@@ -33,7 +33,7 @@ import {
   type FinishingTouchAction
 } from "./finishing-touches.js";
 import { GitHubApi } from "./github.js";
-import { getProtectedCheckoutRoots } from "./path-safety.js";
+import { getProtectedCheckoutRoots, resolvePathFollowingExistingSymlinks } from "./path-safety.js";
 import { evaluateLicenseReviewGate, type LicenseReviewGateResult } from "./license.js";
 import {
   authorizeAdmissionForVisibility,
@@ -133,6 +133,12 @@ import {
 import { runCodexReview } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
+import {
+  MAX_SEVERE_EVIDENCE_FILE_BYTES,
+  parseSevereVerificationReceipt,
+  type SevereVerificationCode,
+  type SevereVerificationReceipt
+} from "./severe-verification-receipt.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
 import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
 import { applyRuntimeGitHubCredentials } from "./runtime-github-credentials.js";
@@ -3990,6 +3996,76 @@ export function resolveSelfConsistencyBackend(
     useCodex,
     providerId: useCodex ? "codex-cli-oauth" : (selfConsistencyConfig.provider ?? config.zcode.providerId)
   };
+}
+
+export interface SevereVerificationReviewContext { repo: string; pullNumber: number; baseSha: string; headSha: string; }
+export type SevereVerificationEvidenceInput = { content: string; receipt: SevereVerificationReceipt["evidence"]; };
+export const MAX_SEVERE_CONTEXT_BYTES = MAX_SEVERE_EVIDENCE_FILE_BYTES;
+
+export function readSevereVerificationEvidence(worktreePath: string, requestedPath: string): SevereVerificationEvidenceInput {
+  if (!safeSevereRelativePath(requestedPath)) throw new Error("severe_verifier_incomplete");
+  const root = resolvePathFollowingExistingSymlinks(worktreePath);
+  const realPath = resolvePathFollowingExistingSymlinks(resolve(worktreePath, requestedPath));
+  const relativePath = relative(root, realPath);
+  const info = existsSync(realPath) ? statSync(realPath) : undefined;
+  if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath) || !info?.isFile()) throw new Error("severe_verifier_incomplete");
+  if (info.size > MAX_SEVERE_CONTEXT_BYTES) throw new Error("severe_verifier_cap_exceeded");
+  const bytes = readFileSync(realPath);
+  return {
+    content: bytes.toString("utf8"),
+    receipt: { files: [{ path: requestedPath, kind: "whole_file", sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.byteLength, complete: true }], omitted: [], complete: true }
+  };
+}
+
+export function buildSevereVerificationPrompt(comment: DeterministicReviewGateResult["comments"][number], hunk: string, content: string, context: SevereVerificationReviewContext): string {
+  const fence = String.fromCharCode(96).repeat(3);
+  return [
+    "You are re-checking a SINGLE prior code-review finding for self-consistency.",
+    "Do not modify files, run commands, or inspect anything beyond the finding, diff hunk, and exact-head file below.",
+    "Decide independently whether the finding is a genuine, actionable issue on the current diff.",
+    "Return JSON ONLY: {\"verdict\":\"confirm\"|\"refute\",\"confidence\":0.0}. No prose, no code fences.",
+    "confirm means you AGREE the finding is real; refute means you REFUTE it.",
+    "", "Review identity: " + context.repo + "#" + context.pullNumber + " base=" + context.baseSha + " head=" + context.headSha,
+    "Finding fingerprint: " + comment.fingerprint, "Finding severity: " + comment.severity,
+    "Finding file: " + comment.path + " (line " + comment.line + ")", "Finding title: " + comment.title, "Finding detail: " + comment.body,
+    "", "Relevant diff hunk:", fence + "diff", hunk, fence, "", "Exact-head whole-file context (" + comment.path + "):", fence + "text", content, fence
+  ].join("\n");
+}
+
+export function parseSevereVerificationVerdict(rawResponse: string, context: SevereVerificationReviewContext, comment: DeterministicReviewGateResult["comments"][number], evidence: SevereVerificationReceipt["evidence"]): SevereVerificationReceipt {
+  let parsed: unknown;
+  try { parsed = JSON.parse(extractZCodeResponse(rawResponse).trim()); } catch { throw new Error("severe_verifier_malformed"); }
+  if (!recordSevereValue(parsed) || Object.keys(parsed).length !== 2 || (parsed.verdict !== "confirm" && parsed.verdict !== "refute") || typeof parsed.confidence !== "number" || !Number.isFinite(parsed.confidence) || parsed.confidence < 0 || parsed.confidence > 1) throw new Error("severe_verifier_malformed");
+  return parseSevereVerificationReceipt({
+    schemaVersion: "severe-verifier-v1", ...context, findingFingerprint: comment.fingerprint,
+    state: parsed.verdict === "confirm" ? "confirmed" : "refuted", disposition: parsed.verdict === "confirm" ? "retain" : "suppress", confidence: parsed.confidence, evidence
+  }, { expectedPath: comment.path });
+}
+
+export function buildSevereFailureReceipt(context: SevereVerificationReviewContext, comment: DeterministicReviewGateResult["comments"][number], evidence: SevereVerificationReceipt["evidence"] | undefined, code: SevereVerificationCode): SevereVerificationReceipt {
+  const state = code === "timeout" ? "timeout" : code === "stale_head" ? "stale_head" : code === "unavailable" ? "unavailable" : code === "provider_unavailable" || code === "receipt_invalid" ? "failed" : code === "refuted" ? "refuted" : code === "malformed" || code === "schema_invalid" ? "malformed" : "incomplete";
+  const path = safeSevereRelativePath(comment.path) ? comment.path : "unknown.ts";
+  return parseSevereVerificationReceipt({
+    schemaVersion: "severe-verifier-v1", ...context, findingFingerprint: comment.fingerprint, state, disposition: "suppress", reasonCode: code,
+    evidence: evidence ?? { files: [], omitted: [{ path, code }], complete: false }
+  });
+}
+
+export function severeVerificationFailureCode(error: unknown): SevereVerificationCode {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("timeout")) return "timeout";
+  if (message.startsWith("severe_verifier_malformed")) return "malformed";
+  if (message.includes("stale")) return "stale_head";
+  if (message.includes("cap_exceeded")) return "cap_exceeded";
+  if (message.includes("incomplete")) return "incomplete";
+  return "provider_unavailable";
+}
+
+function safeSevereRelativePath(value: string): boolean {
+  return value.length > 0 && !value.startsWith("/") && !/^[A-Za-z]:/.test(value) && !/[\\\0\r\n]/.test(value) && value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..");
+}
+function recordSevereValue(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function buildSelfConsistencyPrompt(comment: DeterministicReviewGateResult["comments"][number], hunk: string): string {
