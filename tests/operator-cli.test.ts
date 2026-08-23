@@ -865,6 +865,12 @@ describe("operator CLI summaries", () => {
     expect(JSON.stringify(inventory)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
 
+  it("uses scoped recovered queue/session truth and excludes expired leases", () => {
+    const release = releaseStatus({ ok: false, database: { reviewQueueJobsByRepo: [{ repo: "owner/repo", total: 2, queued: 0, leased: 1, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 1, activeFailed: 0 }], reviewerSessionsByRepo: [{ repo: "owner/repo", total: 1, active: 1, expired: 0, retryCovered: 1 }] } });
+    const inventory = buildRuntimeInventory({ release, repo: "owner/repo", coverage: coverageReport({ ok: true }), agents: agentInventory({ ok: true }), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), total: 2, running: 1, failed: 1 }, jobs: [{ ...durableJob({ repo: "owner/repo", state: "running" }), leaseExpiresAt: "2026-07-01T00:01:00.000Z" }] }), providerCooldowns: [], repoProviderCooldowns: [], checkedAt: "2026-07-01T00:05:00.000Z" });
+    expect(inventory).toMatchObject({ summary: { activeQueueJobs: 0, retryCoveredReviewerSessions: 1 }, gates: expect.arrayContaining([expect.objectContaining({ name: "runtime_no_failed_queue_jobs", ok: true })]) }); expect(inventory.release.gates).not.toContainEqual(expect.objectContaining({ name: "live_db_no_errors" }));
+  });
+
   it("surfaces reviewer sessions covered by active queue retries in runtime inventory", () => {
     const inventory = buildRuntimeInventory({
       release: releaseStatus({
