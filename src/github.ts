@@ -28,6 +28,22 @@ export type BoundedGithubList<T> = T[] & {
   overflow: boolean;
 };
 
+/**
+ * Additive P1a issue-comment pagination receipt (#738). This reader is intentionally not used by
+ * command acknowledgement, marker lookup, or issue enrichment until their consumers are updated in
+ * separate slices.
+ */
+export interface BoundedIssueCommentRead {
+  items: IssueCommentCommandSource[];
+  pagesRead: number;
+  rawCount: number;
+  uniqueCount: number;
+  duplicateCount: number;
+  terminal: "short_page" | "page_cap";
+  truncated: boolean;
+  overflow: boolean;
+}
+
 function boundedGithubList<T>(items: T[], truncated: boolean): BoundedGithubList<T> {
   const result = items as BoundedGithubList<T>;
   result.items = items.slice();
@@ -35,6 +51,19 @@ function boundedGithubList<T>(items: T[], truncated: boolean): BoundedGithubList
   result.truncated = truncated;
   result.overflow = truncated;
   return result;
+}
+
+function boundedIssueCommentRead(
+  items: IssueCommentCommandSource[],
+  metadata: Pick<BoundedIssueCommentRead, "pagesRead" | "rawCount" | "duplicateCount" | "terminal">
+): BoundedIssueCommentRead {
+  return {
+    items: items.slice(),
+    ...metadata,
+    uniqueCount: items.length,
+    truncated: metadata.terminal === "page_cap",
+    overflow: metadata.terminal === "page_cap"
+  };
 }
 
 export function unpackBoundedGithubList<T>(result: T[] | BoundedGithubList<T>): {
@@ -345,6 +374,47 @@ export class GitHubApi {
       if (page === MAX_ISSUE_COMMENT_PAGES) return boundedGithubList(comments, true);
     }
     return boundedGithubList(comments, true);
+  }
+
+  /**
+   * Read issue comments with a deterministic five-page/500-row bound (#738 P1a). GitHub's page order
+   * is preserved and duplicate IDs keep their first occurrence. The receipt is additive and this
+   * primitive is deliberately unused by existing command, marker, and enrichment callers.
+   */
+  async listIssueCommentsBounded(repo: string, issueNumber: number): Promise<BoundedIssueCommentRead> {
+    const comments: IssueCommentCommandSource[] = [];
+    const seen = new Set<number>();
+    let rawCount = 0;
+    let duplicateCount = 0;
+    for (let page = 1; page <= MAX_ISSUE_COMMENT_PAGES; page += 1) {
+      const chunk = await this.request<IssueCommentCommandSource[]>(
+        `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
+        { token: await this.getReadToken(repo) }
+      );
+      rawCount += chunk.length;
+      for (const comment of chunk) {
+        if (seen.has(comment.id)) {
+          duplicateCount += 1;
+          continue;
+        }
+        seen.add(comment.id);
+        comments.push(comment);
+      }
+      if (chunk.length < 100) {
+        return boundedIssueCommentRead(comments, {
+          pagesRead: page,
+          rawCount,
+          duplicateCount,
+          terminal: "short_page"
+        });
+      }
+    }
+    return boundedIssueCommentRead(comments, {
+      pagesRead: MAX_ISSUE_COMMENT_PAGES,
+      rawCount,
+      duplicateCount,
+      terminal: "page_cap"
+    });
   }
 
   async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
