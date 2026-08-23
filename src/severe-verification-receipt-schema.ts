@@ -1,3 +1,5 @@
+import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
+
 export const SEVERE_VERIFICATION_STATES = [
   "confirmed", "refuted", "failed", "malformed", "timeout", "unavailable", "stale_head", "incomplete"
 ] as const;
@@ -38,7 +40,7 @@ export const SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA = {
   $id: "https://neondiff.com/schema/severe-verification-receipt-v1.json", type: "object", additionalProperties: false,
   required: ["schemaVersion", "repo", "pullNumber", "baseSha", "headSha", "findingFingerprint", "state", "disposition", "evidence"],
   properties: {
-    schemaVersion: { const: "severe-verifier-v1" }, repo: { type: "string", minLength: 3, maxLength: 256, pattern: "^(?!\\.{1,2}/)(?![^/]+/\\.{1,2}$)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    schemaVersion: { const: "severe-verifier-v1" }, repo: { type: "string", minLength: 3, maxLength: 140, pattern: "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}$" },
     pullNumber: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER }, baseSha: { type: "string", pattern: SHA40 },
     headSha: { type: "string", pattern: SHA40 }, findingFingerprint: { type: "string", pattern: "^finding:[a-f0-9]{64}$" },
     state: { enum: SEVERE_VERIFICATION_STATES }, disposition: { enum: ["retain", "suppress"] },
@@ -46,7 +48,7 @@ export const SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA = {
     evidence: {
       type: "object", additionalProperties: false, required: ["files", "omitted", "complete"],
       properties: {
-        files: { type: "array", maxItems: 64, items: {
+        files: { type: "array", maxItems: 64, uniqueItems: true, uniqueWholeFilePaths: true, items: {
           type: "object", additionalProperties: false, required: ["path", "kind", "sha256", "bytes", "complete"],
           properties: { path, kind: { enum: ["whole_file", "module"] }, sha256: { type: "string", pattern: SHA256 }, bytes: { type: "integer", minimum: 0, maximum: 65_536 }, complete: { type: "boolean" } }
         } },
@@ -72,3 +74,16 @@ export const SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA = {
     }
   }))
 } as const;
+
+export function compileSevereVerificationReceiptSchema(): ValidateFunction<SevereVerificationReceipt> {
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  ajv.addKeyword({ keyword: "uniqueWholeFilePaths", type: "array", schemaType: "boolean", validate: (_schema: boolean, files: unknown[]) => {
+    const seen = new Set<string>();
+    for (const file of files) if (file && typeof file === "object" && !Array.isArray(file)) {
+      const { kind, path } = file as { kind?: unknown; path?: unknown };
+      if (kind === "whole_file" && typeof path === "string") { if (seen.has(path)) return false; seen.add(path); }
+    }
+    return true;
+  } });
+  return ajv.compile<SevereVerificationReceipt>(SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA);
+}

@@ -1,7 +1,6 @@
-import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import {
-  SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA,
+  compileSevereVerificationReceiptSchema,
   type SevereVerificationReceipt
 } from "../src/severe-verification-receipt-schema.js";
 
@@ -21,7 +20,7 @@ const receipt = (): SevereVerificationReceipt => ({
     complete: true
   }
 });
-const validate = new Ajv2020({ allErrors: true, strict: true }).compile(SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA);
+const validate = compileSevereVerificationReceiptSchema();
 
 describe("strict severe verification receipt schema", () => {
   it("accepts exact versioned identity and bounded whole-file/module evidence", () => {
@@ -30,9 +29,14 @@ describe("strict severe verification receipt schema", () => {
   });
 
   it("rejects extra fields, invalid identities, hashes, and evidence bounds", () => {
+    expect(validate({ ...receipt(), repo: "Electric-Sheep/.github" })).toBe(true);
     for (const invalid of [
       { ...receipt(), extra: true },
       { ...receipt(), repo: "owner" },
+      { ...receipt(), repo: "_owner/repo" },
+      { ...receipt(), repo: "owner-/repo" },
+      { ...receipt(), repo: `${"o".repeat(40)}/repo` },
+      { ...receipt(), repo: `owner/${"r".repeat(101)}` },
       { ...receipt(), pullNumber: 0 },
       { ...receipt(), headSha: "A".repeat(40) },
       { ...receipt(), findingFingerprint: "f".repeat(64) },
@@ -41,6 +45,14 @@ describe("strict severe verification receipt schema", () => {
       { ...receipt(), evidence: { files: receipt().evidence.files, omitted: [{ path: "src/missing.ts", code: "not_read" }], complete: true } },
       { ...receipt(), evidence: { files: [{ ...receipt().evidence.files[0], bytes: 65_537 }], omitted: [], complete: true } }
     ]) expect(validate(invalid)).toBe(false);
+  });
+
+  it("rejects duplicate and conflicting whole-file identities for one path", () => {
+    const file = receipt().evidence.files[0];
+    for (const duplicate of [{ ...file }, { ...file, sha256: "d".repeat(64), bytes: 43 }]) {
+      const invalid = receipt(); invalid.evidence.files.push(duplicate);
+      expect(validate(invalid)).toBe(false);
+    }
   });
 
   it("rejects C0/C1, absolute, traversal, and backslash paths while accepting Unicode", () => {
