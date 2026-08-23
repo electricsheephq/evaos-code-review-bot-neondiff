@@ -81,16 +81,34 @@ export type GitHubRepositoryAccessErrorClass =
 
 export interface GitHubRepositoryAccessProof {
   repo_full_name: string;
+  app_id?: number;
   readMode: "app_installation" | "fallback_token" | "unconfigured";
   visibility_result: GitHubRepositoryVisibility;
   visibility_source: GitHubRepositoryVisibilitySource;
   installation_id_present: boolean;
+  installation_id?: number;
+  installation_account?: string;
+  app_slug?: string;
   app_can_read_metadata: boolean;
   app_can_read_pull_requests: boolean;
   openPullCount?: number;
   github_api_status?: number;
   github_api_error_class?: GitHubRepositoryAccessErrorClass;
   github_api_error?: string;
+}
+
+interface GitHubInstallationIdentity {
+  id: number;
+  app_id: number;
+  account_login: string;
+  app_slug: string;
+}
+
+interface GitHubInstallationResponse {
+  id: number;
+  app_id?: number;
+  account?: { login?: string };
+  app_slug?: string;
 }
 
 export class GitHubApiRequestError extends Error {
@@ -198,25 +216,34 @@ export class GitHubApi {
       };
     }
 
-    let installationId: number;
+    let installation: GitHubInstallationIdentity;
     try {
-      installationId = await this.getInstallationId(repo, { followRedirects: false });
+      installation = parseGitHubInstallationIdentity(
+        await this.getInstallation(repo, { followRedirects: false })
+      );
     } catch (error) {
       return { ...base, ...describeGitHubAccessError(error) };
     }
+    const installationProof = {
+      installation_id_present: true,
+      installation_id: installation.id,
+      installation_account: installation.account_login,
+      app_id: installation.app_id,
+      app_slug: installation.app_slug
+    };
 
     let token: string;
     try {
-      token = await this.getInstallationTokenForId(repo, installationId);
+      token = await this.getInstallationTokenForId(repo, installation.id);
     } catch (error) {
-      return { ...base, installation_id_present: true, ...describeGitHubAccessError(error) };
+      return { ...base, ...installationProof, ...describeGitHubAccessError(error) };
     }
 
     let metadata: RepositorySummary;
     try {
       metadata = await this.request<RepositorySummary>(`/repos/${repo}`, { token, followRedirects: false });
     } catch (error) {
-      return { ...base, installation_id_present: true, ...describeGitHubAccessError(error) };
+      return { ...base, ...installationProof, ...describeGitHubAccessError(error) };
     }
 
     const visibility = visibilityFromRepositorySummary(metadata);
@@ -227,7 +254,7 @@ export class GitHubApi {
         readMode,
         visibility_result: visibility.result,
         visibility_source: visibility.source,
-        installation_id_present: true,
+        ...installationProof,
         app_can_read_metadata: true,
         app_can_read_pull_requests: true,
         openPullCount: pulls.length
@@ -238,7 +265,7 @@ export class GitHubApi {
         readMode,
         visibility_result: visibility.result,
         visibility_source: visibility.source,
-        installation_id_present: true,
+        ...installationProof,
         app_can_read_metadata: true,
         app_can_read_pull_requests: false,
         ...describeGitHubAccessError(error)
@@ -507,18 +534,20 @@ export class GitHubApi {
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
 
-    const installationId = await this.getInstallationId(repo);
-    return this.getInstallationTokenForId(repo, installationId);
+    const installation = await this.getInstallation(repo);
+    return this.getInstallationTokenForId(repo, installation.id);
   }
 
-  private async getInstallationId(repo: string, options: { followRedirects?: boolean } = {}): Promise<number> {
+  private async getInstallation(
+    repo: string,
+    options: { followRedirects?: boolean } = {}
+  ): Promise<GitHubInstallationResponse> {
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
     const jwt = createAppJwt(this.appId, this.privateKey);
-    const installation = await this.request<{ id: number }>(`/repos/${repo}/installation`, {
+    return this.request<GitHubInstallationResponse>(`/repos/${repo}/installation`, {
       token: jwt,
       followRedirects: options.followRedirects
     });
-    return installation.id;
   }
 
   private async getInstallationTokenForId(repo: string, installationId: number): Promise<string> {
@@ -651,6 +680,28 @@ function visibilityFromRepositorySummary(repository: RepositorySummary): {
   if (repository.private === true) return { result: "private", source: "private_flag" };
   if (repository.private === false) return { result: "public", source: "private_flag" };
   return { result: "unknown", source: "unavailable" };
+}
+
+function parseGitHubInstallationIdentity(value: unknown): GitHubInstallationIdentity {
+  const installation = value as {
+    id?: unknown;
+    app_id?: unknown;
+    account?: { login?: unknown } | null;
+    app_slug?: unknown;
+  } | null;
+  const positiveInteger = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0;
+  const accountLogin = installation?.account?.login;
+  const appSlug = installation?.app_slug;
+  const accountLoginValid = typeof accountLogin === "string"
+    && /^(?!-)(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(accountLogin);
+  const appSlugValid = typeof appSlug === "string"
+    && /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(appSlug);
+  if (!positiveInteger(installation?.id) || !positiveInteger(installation?.app_id)
+      || !accountLoginValid || !appSlugValid) {
+    throw new Error("GitHub installation response is missing canonical identity fields.");
+  }
+  return { id: installation.id, app_id: installation.app_id, account_login: accountLogin, app_slug: appSlug };
 }
 
 function describeGitHubAccessError(error: unknown): Pick<
