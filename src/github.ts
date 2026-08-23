@@ -27,6 +27,26 @@ export type BoundedGithubList<T> = T[] & {
   overflow: boolean;
 };
 
+export const GITHUB_ISSUE_LABEL_EVENT_EVIDENCE_OVERFLOW = "GitHub issue label event evidence overflow";
+export class GithubIssueLabelEventOverflowError extends Error {
+  readonly code = "github_issue_label_event_evidence_overflow" as const;
+
+  constructor() {
+    super(GITHUB_ISSUE_LABEL_EVENT_EVIDENCE_OVERFLOW);
+    this.name = "GithubIssueLabelEventOverflowError";
+  }
+}
+
+export function unpackBoundedGithubList<T>(result: T[] | BoundedGithubList<T>): {
+  items: T[];
+  truncated: boolean;
+  overflow: boolean;
+} {
+  return "items" in result
+    ? result
+    : { items: result, truncated: false, overflow: false };
+}
+
 export interface GithubIssueLabelEvent {
   event?: string;
   created_at?: string;
