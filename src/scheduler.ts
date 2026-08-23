@@ -584,7 +584,7 @@ async function enqueuePullIfEligible(input: {
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
   if ("blocked" in commandDecision) {
-    quarantineQueueJobsForTruncatedCommandEvidence(input);
+    await retireSupersededQueueJobsForPull(input, input.pull.head.sha);
     return "command_fetch_failed";
   }
   markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
@@ -1074,59 +1074,54 @@ async function retireSupersededQueueJobsForPull(input: {
   dryRun: boolean;
   now: Date;
   onStatusCommentFailure?: () => void;
-}): Promise<void> {
+}, quarantineHeadSha?: string): Promise<void> {
+  const quarantine = quarantineHeadSha !== undefined;
   const jobs = input.state.listReviewQueueJobsForPull({
     repo: input.repo,
     pullNumber: input.pull.number,
-    states: ["queued", "provider_deferred", "blocked_on_proof"]
-  }).filter((job) => job.headSha !== input.pull.head.sha);
+    states: quarantine
+      ? ["queued", "provider_deferred", "blocked_on_proof", "leased", "running"]
+      : ["queued", "provider_deferred", "blocked_on_proof"]
+  }).filter((job) => quarantine
+    ? job.headSha === quarantineHeadSha && (
+      job.state !== "leased" && job.state !== "running" ||
+      (job.leaseExpiresAt
+        ? Date.parse(job.leaseExpiresAt) <= input.now.getTime()
+        : Date.parse(job.updatedAt) <= input.now.getTime() - input.config.reviewConcurrency.leaseTtlMs)
+    )
+    : job.headSha !== input.pull.head.sha);
 
   for (const job of jobs) {
+    const nextState = quarantine ? "failed" : "stale_retired";
+    const reason = quarantine ? "command_evidence_truncated" : `superseded_by_head=${input.pull.head.sha}`;
     input.state.updateReviewQueueJobState({
       jobId: job.jobId,
-      state: "stale_retired",
-      lastError: `superseded_by_head=${input.pull.head.sha}`,
+      state: nextState,
+      lastError: reason,
       now: input.now
     });
     recordReadinessTransition({
       state: input.state,
       repo: input.repo,
       pull: pullForQueueJob(job, input.pull),
-      readinessState: "stale",
-      reason: `superseded_by_head=${input.pull.head.sha}`,
+      readinessState: quarantine ? "failed" : "stale",
+      reason,
       now: input.now
     });
-    updateReviewerSessionJobFromQueueStatus({ state: input.state, job }, "skipped", "skipped");
+    updateReviewerSessionJobFromQueueStatus(
+      { state: input.state, job },
+      quarantine ? "failed" : "skipped",
+      quarantine ? "failed" : "skipped"
+    );
     await syncReviewStatusComment({
       config: input.config,
       github: input.github,
       dryRun: input.dryRun,
       repo: input.repo,
       pull: pullForQueueJob(job, input.pull),
-      state: "stale_head",
-      details: "Superseded by a newer PR head.",
+      state: quarantine ? "failed" : "stale_head",
+      details: quarantine ? "Command evidence was truncated; review was blocked." : "Superseded by a newer PR head.",
       onStatusCommentFailure: input.onStatusCommentFailure,
-      now: input.now
-    });
-  }
-}
-
-function quarantineQueueJobsForTruncatedCommandEvidence(input: {
-  state: ReviewStateStore;
-  repo: string;
-  pull: PullRequestSummary;
-  now: Date;
-}): void {
-  const jobs = input.state.listReviewQueueJobsForPull({
-    repo: input.repo,
-    pullNumber: input.pull.number,
-    states: ["queued", "provider_deferred", "blocked_on_proof"]
-  }).filter((job) => job.headSha === input.pull.head.sha);
-  for (const job of jobs) {
-    input.state.updateReviewQueueJobState({
-      jobId: job.jobId,
-      state: "failed",
-      lastError: "command_evidence_truncated",
       now: input.now
     });
   }

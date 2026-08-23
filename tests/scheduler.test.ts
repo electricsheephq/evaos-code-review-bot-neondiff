@@ -3580,64 +3580,58 @@ describe("provider-aware review scheduler", () => {
   it("blocks automatic enqueue when bounded command evidence is truncated", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-truncated-"));
     roots.push(root);
-    const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]);
+    const config = schedulerConfig(root, ["org/repo-a"]);
     config.commands = {
       enabled: true,
       botMentions: ["@evaos-code-review-bot"],
       trustedAuthors: ["100yenadmin"],
       acknowledge: false
     };
+    config.reviewStatusComment!.enabled = true;
+    config.reviewerSessions = { enabled: true, ttlMs: 8 * 60 * 60_000, headCountLimit: 10 };
     const state = new ReviewStateStore(config.statePath);
-    const queued = state.enqueueReviewQueueJob({
-      repo: "org/repo-a",
-      pullNumber: 1,
-      headSha: "a1",
-      baseSha: "base"
-    }).job;
-    state.recordReviewReadiness({
-      repo: "org/repo-a",
-      pullNumber: 1,
-      headSha: "old-head",
-      state: "ready_for_human",
-      reason: "comment_review_posted",
-      event: "COMMENT",
-      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old",
-      now: new Date("2026-06-30T00:00:00.000Z")
-    });
+    const statusCalls: StatusCommentCall[] = [];
+    let truncated = false;
     const reviewed: string[] = [];
-    const truncated = Object.assign([], { items: [], truncated: true, overflow: true });
-    const result = await runScheduledCycleWithDeps({
+    const boundedTruncated = Object.assign([], { items: [], truncated: true, overflow: true });
+    const github = {
+      ...githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), new Map(), statusCalls),
+      listIssueComments: async () => truncated ? boundedTruncated : []
+    };
+    const reviewPullImpl = async ({ repo }: { repo: string }) => {
+      reviewed.push(repo);
+      return "skipped_capacity" as const;
+    };
+    const first = await runScheduledCycleWithDeps({
       config,
-      github: {
-        ...githubFromMap(new Map([
-          ["org/repo-a", [pull("org/repo-a", 1, "a1")]],
-          ["org/repo-b", [pull("org/repo-b", 1, "b1")]]
-        ])),
-        listIssueComments: async (repo) => repo === "org/repo-a" ? truncated : []
-      },
+      github,
       state,
       options: { dryRun: false, useZCode: false },
-      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
-        reviewed.push(`${repo}#${reviewPull.number}`);
-        reviewState.recordProcessed({ repo, pullNumber: reviewPull.number, headSha: reviewPull.head.sha, status: "posted", event: "COMMENT" });
-        return "reviewed";
-      },
+      reviewPullImpl,
       now: new Date("2026-07-01T00:00:00.000Z")
     });
-
-    expect(result.commandFetchErrors).toBe(1);
-    expect(result.failed).toBe(1);
-    expect(reviewed).toEqual(["org/repo-b#1"]);
-    expect(state.getReviewReadiness("org/repo-a", 1, "old-head")).toMatchObject({
-      state: "ready_for_human",
-      reason: "comment_review_posted"
+    const queued = state.listReviewQueueJobsForPull({ repo: "org/repo-a", pullNumber: 1 })[0]!;
+    expect(first.queue.enqueued).toBe(1);
+    expect(state.getReviewerSessionJob("org/repo-a", 1, HEAD_A)).toMatchObject({ jobState: "assigned" });
+    state.updateReviewQueueJobState({
+      jobId: queued.jobId,
+      state: "leased",
+      leaseId: "expired-lease",
+      leaseExpiresAt: "2026-06-30T00:00:00.000Z",
+      now: new Date("2026-07-01T00:00:00.000Z")
     });
-    expect(state.getReviewReadiness("org/repo-a", 1, "a1")).toBeUndefined();
-    expect(state.getReviewQueueJob(queued.jobId)).toMatchObject({
-      state: "failed",
-      lastError: "command_evidence_truncated"
+    truncated = true;
+    const second = await runScheduledCycleWithDeps({
+      config, github, state, options: { dryRun: false, useZCode: false }, reviewPullImpl,
+      now: new Date("2026-07-01T00:05:00.000Z")
     });
-    expect(result.queue.leased).toBe(1);
+    expect(second.commandFetchErrors).toBe(1);
+    expect(second.queue.leased).toBe(0);
+    expect(reviewed).toHaveLength(1);
+    expect(state.getReviewQueueJob(queued.jobId)).toMatchObject({ state: "failed", lastError: "command_evidence_truncated" });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({ state: "failed", reason: "command_evidence_truncated" });
+    expect(state.getReviewerSessionJob("org/repo-a", 1, HEAD_A)).toMatchObject({ jobState: "failed", processedReviewStatus: "failed" });
+    expect(statusCalls.map(statusFromBody)).toContain("failed");
     state.close();
   });
 
