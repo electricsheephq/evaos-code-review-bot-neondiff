@@ -218,6 +218,7 @@ export interface ClearReviewQueueLeasesResult {
   expiredMatched: number;
   activeMatched: number;
   requeued: number;
+  retired: number;
   deletedRunLeases: number;
   jobs: ReviewQueueLeaseClearCandidate[];
   runLeases: ReviewRunLeaseClearCandidate[];
@@ -755,7 +756,13 @@ export class ReviewStateStore {
       create trigger if not exists reject_quarantined_review_queue_job
       before insert on review_queue_jobs
       when exists (select 1 from review_queue_quarantines
-        where repo = new.repo and pull_number = new.pull_number and head_sha = new.head_sha)
+        where lower(repo) = lower(new.repo) and pull_number = new.pull_number and lower(head_sha) = lower(new.head_sha))
+      begin select raise(abort, 'review_queue_head_quarantined'); end;
+
+      create trigger if not exists reject_case_variant_quarantined_review_queue_job
+      before insert on review_queue_jobs
+      when exists (select 1 from review_queue_quarantines
+        where lower(repo) = lower(new.repo) and pull_number = new.pull_number and lower(head_sha) = lower(new.head_sha))
       begin select raise(abort, 'review_queue_head_quarantined'); end;
 
       create index if not exists idx_review_queue_jobs_state_priority
@@ -2318,20 +2325,24 @@ export class ReviewStateStore {
 	        runLeases.length;
       const activeMatched = matched - expiredMatched;
       let requeued = 0;
+      let retired = 0;
       let deletedRunLeases = 0;
 
       if (!dryRun) {
         for (const job of jobs) {
+          const quarantined = Boolean(this.db.prepare(`select 1 from review_queue_quarantines q
+            where lower(q.repo) = lower(?) and q.pull_number = ? and lower(q.head_sha) = lower(?)`)
+            .get(job.repo, job.pullNumber, job.headSha));
           const result = this.db
             .prepare(
               `update review_queue_jobs
-               set state = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then 'stale_retired' else 'queued' end,
+               set state = case when exists (select 1 from review_queue_quarantines q where lower(q.repo) = lower(review_queue_jobs.repo) and q.pull_number = review_queue_jobs.pull_number and lower(q.head_sha) = lower(review_queue_jobs.head_sha)) then 'stale_retired' else 'queued' end,
                    lease_id = null,
                    lease_expires_at = null,
                    next_eligible_at = null,
-                   last_error = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then 'queue_quarantine_operator_retired' else ? end,
+                   last_error = case when exists (select 1 from review_queue_quarantines q where lower(q.repo) = lower(review_queue_jobs.repo) and q.pull_number = review_queue_jobs.pull_number and lower(q.head_sha) = lower(review_queue_jobs.head_sha)) then 'queue_quarantine_operator_retired' else ? end,
                    updated_at = ?,
-                   finished_at = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then coalesce(finished_at, ?) else finished_at end
+                   finished_at = case when exists (select 1 from review_queue_quarantines q where lower(q.repo) = lower(review_queue_jobs.repo) and q.pull_number = review_queue_jobs.pull_number and lower(q.head_sha) = lower(review_queue_jobs.head_sha)) then coalesce(finished_at, ?) else finished_at end
                where job_id = ?
                  and state in ('leased', 'running')`
             )
@@ -2341,7 +2352,8 @@ export class ReviewStateStore {
               checkedAt,
               job.jobId
             );
-          requeued += Number(result.changes);
+          if (quarantined) retired += Number(result.changes);
+          else requeued += Number(result.changes);
         }
         for (const lease of runLeases) {
           deletedRunLeases += Number(
@@ -2364,6 +2376,7 @@ export class ReviewStateStore {
         expiredMatched,
         activeMatched,
         requeued,
+        retired,
         deletedRunLeases,
         jobs,
         runLeases
@@ -2598,7 +2611,7 @@ export class ReviewStateStore {
     now?: Date;
   }): ReviewQueueEnqueueResult {
     validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, input.priority, input.commentId);
-    if (this.db.prepare("select 1 from review_queue_quarantines where repo = ? and pull_number = ? and head_sha = ?").get(input.repo, input.pullNumber, input.headSha)) throw new Error("review_queue_head_quarantined");
+    if (this.db.prepare("select 1 from review_queue_quarantines where lower(repo) = lower(?) and pull_number = ? and lower(head_sha) = lower(?)").get(input.repo, input.pullNumber, input.headSha)) throw new Error("review_queue_head_quarantined");
     const nowIso = (input.now ?? new Date()).toISOString();
     const source = input.source ?? "automatic";
     const lane = input.lane ?? (source === "manual_command" ? "manual" : "background");
@@ -2696,13 +2709,13 @@ export class ReviewStateStore {
       this.db
         .prepare(
           `update review_queue_jobs
-           set state = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then 'stale_retired' else 'queued' end,
+           set state = case when exists (select 1 from review_queue_quarantines q where lower(q.repo) = lower(review_queue_jobs.repo) and q.pull_number = review_queue_jobs.pull_number and lower(q.head_sha) = lower(review_queue_jobs.head_sha)) then 'stale_retired' else 'queued' end,
                lease_id = null,
                lease_expires_at = null,
                next_eligible_at = null,
-               last_error = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then 'queue_quarantine_expired_retired' else 'queue_lease_expired_requeued' end,
+               last_error = case when exists (select 1 from review_queue_quarantines q where lower(q.repo) = lower(review_queue_jobs.repo) and q.pull_number = review_queue_jobs.pull_number and lower(q.head_sha) = lower(review_queue_jobs.head_sha)) then 'queue_quarantine_expired_retired' else 'queue_lease_expired_requeued' end,
                updated_at = ?,
-               finished_at = case when exists (select 1 from review_queue_quarantines q where q.repo = review_queue_jobs.repo and q.pull_number = review_queue_jobs.pull_number and q.head_sha = review_queue_jobs.head_sha) then coalesce(finished_at, ?) else finished_at end
+               finished_at = case when exists (select 1 from review_queue_quarantines q where lower(q.repo) = lower(review_queue_jobs.repo) and q.pull_number = review_queue_jobs.pull_number and lower(q.head_sha) = lower(review_queue_jobs.head_sha)) then coalesce(finished_at, ?) else finished_at end
            where state in ('leased', 'running')
              and (lease_expires_at is not null and lease_expires_at <= ? or lease_expires_at is null and updated_at <= ?)
              `
@@ -2711,7 +2724,7 @@ export class ReviewStateStore {
       const jobs = this.listReviewQueueJobs();
       const eligible = jobs
         .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso) &&
-          !this.db.prepare("select 1 from review_queue_quarantines where repo = ? and pull_number = ? and head_sha = ?").get(job.repo, job.pullNumber, job.headSha))
+          !this.db.prepare("select 1 from review_queue_quarantines where lower(repo) = lower(?) and pull_number = ? and lower(head_sha) = lower(?)").get(job.repo, job.pullNumber, job.headSha))
         .sort(buildLeaseComparator(input.aging, nowIso));
       const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
       const active = [
@@ -2791,12 +2804,11 @@ export class ReviewStateStore {
     const nowIso = (input.now ?? new Date()).toISOString();
     this.db.exec("begin immediate");
     try {
-    const quarantined = ["queued", "provider_deferred", "blocked_on_proof"].includes(input.state) &&
-      this.db.prepare(`select 1 from review_queue_quarantines q join review_queue_jobs j on j.repo = q.repo
-        and j.pull_number = q.pull_number and j.head_sha = q.head_sha where j.job_id = ?`).get(input.jobId);
+    const quarantined = Boolean(this.db.prepare(`select 1 from review_queue_quarantines q join review_queue_jobs j on lower(j.repo) = lower(q.repo)
+        and j.pull_number = q.pull_number and lower(j.head_sha) = lower(q.head_sha) where j.job_id = ?`).get(input.jobId));
     const targetState = quarantined ? "stale_retired" : input.state;
     const terminal = isTerminalQueueState(targetState);
-    const clearLease = input.clearLease ?? (
+    const clearLease = quarantined ? true : input.clearLease ?? (
       terminal ||
       input.state === "queued" ||
       input.state === "provider_deferred" ||
@@ -2851,9 +2863,9 @@ export class ReviewStateStore {
     const row = this.db.prepare(
       `insert into review_queue_post_claims (job_id, post_key, lease_id, claimed_at, reconcile_required)
        select ?, ?, ?, ?, 0 from review_queue_jobs j
-       where j.job_id = ? and j.repo = ? and j.pull_number = ? and j.head_sha = ?
+       where j.job_id = ? and lower(j.repo) = lower(?) and j.pull_number = ? and lower(j.head_sha) = lower(?)
          and j.lease_id = ? and j.state in ('leased', 'running') and j.lease_expires_at > ?
-         and not exists (select 1 from review_queue_quarantines q where q.repo = j.repo and q.pull_number = j.pull_number and q.head_sha = j.head_sha)
+         and not exists (select 1 from review_queue_quarantines q where lower(q.repo) = lower(j.repo) and q.pull_number = j.pull_number and lower(q.head_sha) = lower(j.head_sha))
        on conflict(job_id, post_key) do update set
          lease_id = case when receipt is null then excluded.lease_id else lease_id end,
          reconcile_required = 1
@@ -2874,10 +2886,10 @@ export class ReviewStateStore {
     const row = this.db.prepare(
       `update review_queue_post_claims as c set receipt = coalesce(receipt, ?), receipt_at = coalesce(receipt_at, ?)
        where c.job_id = ? and c.post_key = ? and c.lease_id = ? and (c.receipt is null or c.receipt = ?)
-         and exists (select 1 from review_queue_jobs j where j.job_id = c.job_id and j.repo = ?
-           and j.pull_number = ? and j.head_sha = ? and j.lease_id = ? and j.state in ('leased', 'running')
+         and exists (select 1 from review_queue_jobs j where j.job_id = c.job_id and lower(j.repo) = lower(?)
+           and j.pull_number = ? and lower(j.head_sha) = lower(?) and j.lease_id = ? and j.state in ('leased', 'running')
            and j.lease_expires_at > ? and not exists (select 1 from review_queue_quarantines q
-             where q.repo = j.repo and q.pull_number = j.pull_number and q.head_sha = j.head_sha))
+             where lower(q.repo) = lower(j.repo) and q.pull_number = j.pull_number and lower(q.head_sha) = lower(j.head_sha)))
        returning job_id, post_key, lease_id, reconcile_required, receipt`
     ).get(receipt, nowIso, input.jobId, input.postKey, input.leaseId, receipt, input.repo,
       input.pullNumber, input.headSha, input.leaseId, nowIso) as ReviewQueuePostClaimRow | undefined;
@@ -2892,15 +2904,17 @@ export class ReviewStateStore {
     const nowIso = (input.now ?? new Date()).toISOString();
     const reason = redactSecrets(input.reason).trim().slice(0, 500);
     if (!reason) throw new Error("reason must be non-empty");
+    const repo = input.repo.toLowerCase();
+    const headSha = input.headSha.toLowerCase();
     this.db.exec("begin immediate");
     try {
       this.db.prepare(`insert or ignore into review_queue_quarantines
         (repo, pull_number, head_sha, reason, created_at) values (?, ?, ?, ?, ?)`).run(
-          input.repo, input.pullNumber, input.headSha, reason, nowIso);
+          repo, input.pullNumber, headSha, reason, nowIso);
       this.db.prepare(`update review_queue_jobs set state = 'stale_retired', next_eligible_at = null,
         lease_id = null, lease_expires_at = null, last_error = 'required_evidence_quarantined',
         updated_at = ?, finished_at = coalesce(finished_at, ?)
-        where repo = ? and pull_number = ? and head_sha = ? and
+        where lower(repo) = lower(?) and pull_number = ? and lower(head_sha) = lower(?) and
           (state in ('queued', 'provider_deferred', 'blocked_on_proof') or
            (state in ('leased', 'running') and lease_expires_at is not null and lease_expires_at <= ?))`).run(
              nowIso, nowIso, input.repo, input.pullNumber, input.headSha, nowIso);
@@ -3168,7 +3182,7 @@ export class ReviewStateStore {
     jobId?: string;
   }): ReviewQueueLeaseClearCandidate[] {
     return this.listReviewQueueJobs({ states: ["leased", "running"] })
-      .filter((job) => !input.repo || job.repo === input.repo)
+      .filter((job) => !input.repo || job.repo.toLowerCase() === input.repo.toLowerCase())
       .filter((job) => input.pullNumber === undefined || job.pullNumber === input.pullNumber)
       .filter((job) => !input.jobId || job.jobId === input.jobId)
       .map((job) => {

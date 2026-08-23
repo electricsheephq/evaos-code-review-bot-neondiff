@@ -1290,6 +1290,40 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("case-folds quarantine coordinates and fences every direct queue transition", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-quarantine-casefold-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-08-24T00:00:00.000Z");
+    const job = store.enqueueReviewQueueJob({ repo: "Owner/Repo", pullNumber: 10, headSha: "AbCd", now }).job;
+    const leased = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, leaseTtlMs: 60_000, now })[0]!;
+    const claim = { jobId: job.jobId, repo: "owner/repo", pullNumber: 10, headSha: "abcd", leaseId: leased.leaseId!, postKey: "review" };
+    expect(store.claimReviewQueuePost({ ...claim, now })).toMatchObject({ reconcileRequired: false });
+
+    store.quarantineReviewQueueHead({ repo: "OWNER/REPO", pullNumber: 10, headSha: "ABCD", reason: "required evidence", now });
+    expect(() => store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 10, headSha: "abcd", now })).toThrow("review_queue_head_quarantined");
+    expect(() => store.claimReviewQueuePost({ ...claim, now })).toThrow("review_queue_post_fenced");
+    expect(() => store.recordReviewQueuePostReceipt({ ...claim, receipt: "https://github.test/review/10", now })).toThrow("review_queue_post_receipt_conflict");
+    expect(store.updateReviewQueueJobState({ jobId: job.jobId, state: "posted", leaseId: leased.leaseId, reviewUrl: "https://github.test/review/10", now })).toMatchObject({
+      state: "stale_retired",
+      leaseId: undefined
+    });
+    store.close();
+  });
+
+  it("reports quarantined lease cleanup as retirement instead of requeue", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-quarantine-retirement-count-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-08-24T00:00:00.000Z");
+    const job = store.enqueueReviewQueueJob({ repo: "Owner/Repo", pullNumber: 11, headSha: "AbCd", now }).job;
+    store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, leaseTtlMs: 1, now });
+    store.quarantineReviewQueueHead({ repo: "owner/repo", pullNumber: 11, headSha: "abcd", reason: "required evidence", now });
+
+    const cleared = store.clearReviewQueueLeases({ dryRun: false, expiredOnly: true, now: new Date("2026-08-24T00:00:00.002Z") });
+    expect(cleared).toMatchObject({ matched: 1, requeued: 0, retired: 1 });
+    expect(store.getReviewQueueJob(job.jobId)).toMatchObject({ state: "stale_retired", lastError: "queue_quarantine_operator_retired" });
+    store.close();
+  });
+
   it("dry-runs and clears expired review queue leases without manual SQL", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-lease-clear-"));
     roots.push(root);
