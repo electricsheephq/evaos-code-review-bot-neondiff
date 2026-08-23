@@ -293,7 +293,8 @@ export class GitHubApi {
         { token: await this.getReadToken(repo) }
       );
       events.push(...chunk);
-      if (chunk.length < 100 || page === MAX_ISSUE_LABEL_EVENT_PAGES) return events;
+      if (chunk.length < 100) return events;
+      if (page === MAX_ISSUE_LABEL_EVENT_PAGES) throw new Error("GitHub issue label event scan exceeded page limit");
     }
     return events;
   }

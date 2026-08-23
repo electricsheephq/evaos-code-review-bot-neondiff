@@ -429,7 +429,8 @@ async function evaluateIssuePromotion(input: {
       },
       evidence
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "GitHub issue label event scan exceeded page limit") throw error;
     return { issue: input.issue };
   }
 }
