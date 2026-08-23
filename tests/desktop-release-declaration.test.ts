@@ -15,7 +15,7 @@ function run(items: Item[], alter: (root: string, paths: string[]) => void = () 
     const channel = item.channel ?? "beta", seq = item.seq ?? index + 1, build = item.build ?? index + 100;
     const version = channel === "stable" ? "1.1.0" : `1.1.0-${channel}.${seq}`, path = `v${version}.json`;
     const predecessor = item.predecessor === undefined ? (index ? `v1.1.0-beta.${seq - 1}.json` : null) : item.predecessor;
-    writeFileSync(join(directory, path), JSON.stringify({ schemaVersion: 1, product: "neondiff-desktop", version, tag: `v${version}`, channel, sequence: seq, build, predecessor, contract: "paid-mac-beta-byo-v1", distribution: { bundleId: "com.neondiff.desktop", appPath: "NeonDiff.app", artifactName: `NeonDiff-${version}-build${build}-macOS.zip`, releaseClass: "paid-beta", origins: { github: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff", site: "https://www.neondiff.com", feed: item.feed ?? feed } } }));
+    writeFileSync(join(directory, path), JSON.stringify({ schemaVersion: 1, product: "neondiff-desktop", version, tag: `v${version}`, channel, sequence: seq, build, predecessor, contract: "paid-mac-beta-byo-v1", distribution: { bundleId: "com.electricsheephq.NeonDiffDesktop", appPath: "NeonDiff.app", artifactName: `NeonDiff-${version}-build${build}-macOS.zip`, releaseClass: "paid-beta", origins: { github: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff", site: "https://www.neondiff.com", feed: item.feed ?? feed } } }));
     return path;
   });
   if (!items.length) writeFileSync(join(directory, ".gitkeep"), "");
