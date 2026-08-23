@@ -51,6 +51,10 @@ describe("strict severe verification receipt schema", () => {
   it("rejects C0/C1, absolute, traversal, and backslash paths while accepting Unicode", () => {
     const astral = receipt(); astral.evidence.files[0].path = "src/🧪.ts";
     expect(validate(astral)).toBe(true);
+    for (const scalar of ["src/line\u2028separator.ts", "src/paragraph\u2029separator.ts"]) {
+      const valid = receipt(); valid.evidence.files[0].path = scalar;
+      expect(validate(valid), scalar).toBe(true);
+    }
     for (const unsafe of ["/src/x.ts", "../x.ts", "src/../x.ts", "C:/x.ts", "src\\x.ts", "src/\u0001x.ts", "src/\u0085x.ts"]) {
       const invalid = receipt(); invalid.evidence.files[0].path = unsafe;
       expect(validate(invalid), unsafe).toBe(false);
