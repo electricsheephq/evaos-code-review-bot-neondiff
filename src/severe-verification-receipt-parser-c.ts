@@ -16,31 +16,31 @@ const reject = (): never => { throw new TypeError("severe_receipt_schema_invalid
 
 /** Parser C: validate Parser B data and return an isolated plain-data receipt. */
 export function parseSevereVerificationReceipt(input: unknown): SevereVerificationReceipt {
-  const value = copyPlainData(input);
+  const value = copyPlainData(input, new Set<object>());
   if (!validate(value)) reject();
   return value as SevereVerificationReceipt;
 }
 
-function copyPlainData(input: unknown): unknown {
+function copyPlainData(input: unknown, seen: Set<object>): unknown {
   if (input === null) return null;
   const kind = typeof input;
   if (kind === "string" || kind === "boolean") return input;
   if (kind === "number") return Number.isFinite(input) ? input : reject();
   if (kind !== "object") reject();
   if (isProxy(input)) reject();
-
-  let array: boolean;
-  let prototype: object | null;
+  const object = input as object;
+  if (seen.has(object)) reject();
+  seen.add(object);
   try {
-    array = Array.isArray(input);
-    prototype = getPrototypeOf(input);
-  } catch { return reject(); }
-  if (array) return copyArray(input as unknown[], prototype);
-  if (prototype !== Object.prototype) reject();
-  return copyObject(input as Record<string, unknown>);
+    const array = Array.isArray(input);
+    const prototype = getPrototypeOf(object);
+    if (array) return copyArray(object as unknown[], prototype, seen);
+    if (prototype !== Object.prototype) reject();
+    return copyObject(object as Record<string, unknown>, seen);
+  } catch { return reject(); } finally { seen.delete(object); }
 }
 
-function copyObject(input: Record<string, unknown>): Record<string, unknown> {
+function copyObject(input: Record<string, unknown>, seen: Set<object>): Record<string, unknown> {
   let keys: (string | symbol)[];
   try { keys = ownKeys(input); } catch { return reject(); }
   if (keys.length > MAX_OBJECT_KEYS) reject();
@@ -48,12 +48,12 @@ function copyObject(input: Record<string, unknown>): Record<string, unknown> {
   for (const key of keys) {
     if (typeof key !== "string") return reject();
     const value = dataProperty(input, key, true);
-    defineProperty(output, key, { value: copyPlainData(value), enumerable: true, writable: true, configurable: true });
+    defineProperty(output, key, { value: copyPlainData(value, seen), enumerable: true, writable: true, configurable: true });
   }
   return output;
 }
 
-function copyArray(input: unknown[], prototype: object | null): unknown[] {
+function copyArray(input: unknown[], prototype: object | null, seen: Set<object>): unknown[] {
   if (prototype !== Array.prototype) reject();
   const lengthValue = dataProperty(input, "length", false);
   if (typeof lengthValue !== "number" || !Number.isSafeInteger(lengthValue) || lengthValue < 0 || lengthValue > MAX_ARRAY_ITEMS) return reject();
@@ -66,7 +66,7 @@ function copyArray(input: unknown[], prototype: object | null): unknown[] {
   defineProperty(output, "length", { value: length, writable: true, enumerable: false, configurable: false });
   for (let index = 0; index < length; index += 1) {
     const key = String(index);
-    defineProperty(output, key, { value: copyPlainData(dataProperty(input, key, true)), enumerable: true, writable: true, configurable: true });
+    defineProperty(output, key, { value: copyPlainData(dataProperty(input, key, true), seen), enumerable: true, writable: true, configurable: true });
   }
   return output;
 }

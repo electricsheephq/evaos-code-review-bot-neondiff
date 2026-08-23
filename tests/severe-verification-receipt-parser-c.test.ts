@@ -66,4 +66,13 @@ describe("severe receipt Parser C schema/copy boundary", () => {
     expect(() => parseSevereVerificationReceipt(nested)).toThrow("schema_invalid");
     expect(touched).toBe(false);
   });
+
+  it("rejects outer and nested cycles without exhausting the stack", () => {
+    const outer = receipt() as SevereVerificationReceipt & { cycle?: unknown };
+    outer.cycle = outer;
+    expect(() => parseSevereVerificationReceipt(outer)).toThrow("schema_invalid");
+    const nested = receipt();
+    (nested.evidence.files[0] as unknown as { cycle?: unknown }).cycle = nested.evidence.files[0];
+    expect(() => parseSevereVerificationReceipt(nested)).toThrow("schema_invalid");
+  });
 });
