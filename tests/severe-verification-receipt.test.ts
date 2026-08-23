@@ -14,6 +14,7 @@ describe("serialized severe verification receipt", () => {
   });
   it("caps bytes before decode/parse and rejects malformed UTF-8, proxies, and hostile subclasses", () => {
     expect(() => parseSerializedSevereVerificationReceipt("x".repeat(MAX_SEVERE_VERIFICATION_RECEIPT_BYTES + 1))).toThrow("cap");
+    expect(() => parseSerializedSevereVerificationReceipt(new Uint8Array(MAX_SEVERE_VERIFICATION_RECEIPT_BYTES + 1))).toThrow("cap");
     expect(() => parseSerializedSevereVerificationReceipt(Uint8Array.from([0xff]))).toThrow("UTF-8");
     let touched = false; const proxy = new Proxy(new Uint8Array(), { get() { touched = true; throw new Error("trap"); } });
     expect(() => parseSerializedSevereVerificationReceipt(proxy)).toThrow("serialized_input"); expect(touched).toBe(false);
