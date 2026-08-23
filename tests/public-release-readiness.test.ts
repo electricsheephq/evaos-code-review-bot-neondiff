@@ -79,6 +79,7 @@ describe("NeonDiff public release readiness", () => {
       "CODE_OF_CONDUCT.md",
       "config.example.json",
       "docs/SETUP.md",
+      "docs/operator-cli.md",
       "docs/ci-runner.md",
       "docs/docker.md",
       "docs/github-app-setup.md",
