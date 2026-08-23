@@ -1310,7 +1310,7 @@ export async function runIssueEnrichmentCycle(input: {
           error: message,
           now: new Date(checkedAt)
         });
-        summary[markerOverflow ? "deferred" : "failed"] += 1;
+        summary[markerOverflow ? "deferredRecorded" : "failed"] += 1;
         items.push({ ...item, recordStatus: markerOverflow ? "deferred" : "failed", error: message });
       }
     }
