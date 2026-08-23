@@ -33,6 +33,7 @@ export function validateDesktopCandidateManifest(manifest, schema = JSON.parse(r
   if (level === "beta" || level === "stable") for (const gate of gates) if (m[gate].state !== "proven") add(errors, `/${gate}/state`, "released beta and stable manifests require proven gates");
   if (m.channel !== m.feed.channel) add(errors, "/feed/channel", "must equal the top-level channel");
   if (m.artifact.version !== m.version) add(errors, "/artifact/version", "must equal the manifest version");
+  if (m.source.commit !== m.source.ref) add(errors, "/source/commit", "must equal the exact source ref");
   if (m.artifact.archiveName !== `NeonDiff-${m.version}-build${m.artifact.build}-macOS.zip`) add(errors, "/artifact/archiveName", "must bind the archive to version and build");
   if (m.source.workflowRunRef !== m.artifact.workflowRunRef || m.source.artifactRef !== m.artifact.artifactRef) add(errors, "/artifact", "source and artifact workflow/artifact provenance must agree");
   for (const [name, value] of Object.entries(m)) if (name === "references") for (const [key, url] of Object.entries(value)) if (!https(url)) add(errors, `/references/${key}`, "must be a valid HTTPS URL");
