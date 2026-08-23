@@ -57,7 +57,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(job?.["runs-on"]).toBe("${{ matrix.runner }}");
 
     for (const command of [
-      "releases/download",
+      "releases/tags",
       "curl --fail",
       "shasum -a 256",
       "com.apple.quarantine",
@@ -69,7 +69,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
       "spctl --assess --type execute",
       "/Applications/NeonDiff.app",
       'test "$(uname -m)" = "arm64"',
-      'test "$release_beta" = "$artifact_beta"'
+      'test "$release_channel" = "$artifact_channel"'
     ]) {
       expect(workflow).toContain(command);
     }
