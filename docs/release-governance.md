@@ -35,7 +35,7 @@ workflow changes.
 The native Desktop GA is `v1.1.0`; it is an application bundle release, not an
 npm package release. The npm CLI lane remains `1.0.4` until its own bytes and
 release packet change. Do not use a repository-global `v1.1.0` tag for the CLI,
-or describe npm `latest` as Desktop evidence.
+or describe an npm registry channel as Desktop evidence.
 
 ### Semver and channel policy
 
@@ -324,18 +324,12 @@ pass that file as `--notes-file` and include the tag name at the top.
 
 ## Promote Live
 
-After the GitHub Release exists:
-
-```bash
-cd /Users/m1/repos/evaos-code-review-bot
-git fetch origin main --tags
-git checkout main
-git pull --ff-only origin main
-test "$(git rev-parse HEAD)" = "<source-sha>"
-launchctl bootout gui/$(id -u) /Users/m1/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) /Users/m1/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
-```
+For native Desktop, use the fail-fast accepted-packet flow in
+`docs/beta-release-runbook.md`. It validates the signed/notarized/stapled
+bundle, complete LaunchAgent contract, config/label/worker identity, and
+digest before staging bytes or the single natural-boundary service mutation.
+Git checkout, local build, and source SHA are release evidence only; they are
+never installed-runtime proof. The CLI lane has its own npm gates below.
 
 ## Post-Release Gate
 
@@ -405,19 +399,14 @@ before calling the release green.
 
 ## Rollback
 
-Rollback is tag-first:
-
-```bash
-cd /Users/m1/repos/evaos-code-review-bot
-git fetch origin --tags
-git checkout main
-git reset --hard <previous-release-tag>
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
-npm run release:status -- \
-  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
-  --expected-head "$(git rev-parse HEAD)" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot
-```
+Native Desktop rollback is packet-first: capture current status as advisory,
+validate the last-known-good immutable signed/notarized/stapled bundle and
+complete LaunchAgent contract, then stage and transition only at a natural
+cycle boundary. Missing or mismatched packet, digest, signing, notary,
+Gatekeeper, config, label, or worker identity fails closed before `launchctl`.
+The procedure does not require current runtime health and never resets a
+checkout. See the independent stop and rollback blocks in
+`docs/beta-release-runbook.md`.
 
 Record the rollback in the GitHub Release, the tracker issue, and any active
 incident issue.

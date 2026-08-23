@@ -5,13 +5,14 @@ update as a named beta release, not as an informal pull from `main`.
 
 ## Release Boundary
 
-The beta release unit is:
+The operator beta release unit is an accepted immutable Desktop bundle packet,
+not a source checkout:
 
-- source checkout: `/Volumes/LEXAR/repos/evaos-code-review-bot`
+- candidate checkout (read-only evidence): `/Users/m1/repos/evaos-code-review-bot`
 - launchd job: `com.electricsheephq.evaos-code-review-bot`
-- launchd config: `/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json`
-- state DB: `/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews-live.sqlite`
-- evidence root: `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
+- launchd config: operator-supplied account-scoped path under `/Users/m1/Codex`
+- state DB: operator-supplied account-scoped path under `/Users/m1/Codex`
+- evidence root: `/Users/m1/Codex/evidence/neondiff/`
 
 Packaged or non-source deployments must set
 `NEONDIFF_PROTECTED_CHECKOUT_ROOT` to the live operator checkout so
@@ -26,16 +27,15 @@ Public source-beta releases also include a compact manifest at
 for docs version alignment, license API readiness or explicit deferral, and
 update-channel readiness for CLI, daemon, website, and desktop surfaces.
 
-The 1.0 cut line is intentionally narrower than full desktop maturity:
-`1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not
-full signed desktop maturity.` Keep release notes aligned to these public
-surface stages:
+The native Desktop GA is `v1.1.0` and consumes the signed/notarized/stapled
+packet in `docs/architecture/mac-ga-release-contract.md`. The npm CLI remains
+`1.0.4`; its package gates are separate and do not prove Desktop readiness.
+Keep release notes aligned to these public surface stages:
 
 | Stage | Required For 1.0 | Allowed Claims | Forbidden Claims |
 | --- | --- | --- | --- |
-| CLI/dashboard GA | Yes | `npm install -g neondiff`; `neondiff dashboard` starts and opens a local HTML dashboard; dashboard supports first-run setup/status and redacted provider API-key verification. | Signed desktop artifacts, Sparkle appcast/auto-update readiness, native Swift desktop maturity. |
-| Minimal Mac launcher GA | Yes | A minimal Mac icon/app launcher opens the same local HTML dashboard. | Full native app maturity, signing/notarization, appcast, auto-update, or TCC readiness. |
-| Signed/appcast desktop | Post-launch unless owner-promoted | Signed/notarized desktop, Sparkle/appcast, updater, and native Swift polish only after #449/#116 proof. | Treating browser preview or unsigned launcher smoke as signed desktop release proof. |
+| CLI/dashboard | npm lane | `neondiff@1.0.4` package evidence only. | Native Desktop claims. |
+| Native Desktop GA | `v1.1.0` | Accepted signed/notarized/stapled bundle and worker evidence. | Browser preview or source build as installed-byte proof. |
 
 Represent browser dashboard readiness separately from desktop readiness in
 `docs/public-release-manifest.json` when the distinction matters. The dashboard
@@ -89,33 +89,62 @@ to its `docs/releases/<version>.md` packet the same way existing entries do.
 Commit this alongside the release packet PR so `CHANGELOG.md` never lags the
 tagged version.
 
-Run from a clean release checkout on `main`:
+Promotion consumes an operator-approved packet binding the ZIP SHA-256 to the
+staged app's `sha256-tree-v1` digest; it never syncs or builds a checkout on
+the operations Mac. The packet is JSON with `bundle`, `digest`, `source`,
+`config`, `signing`, `notary`, `gatekeeper`, `label`, and `worker` fields. Run
+this whole block with `set -euo pipefail`:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
-git status --short
-git pull --ff-only
-npm test
-npm run build
-npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
-  --expected-head "$(git rev-parse HEAD)" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
-sleep 5
-npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
-  --expected-head "$(git rev-parse HEAD)" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot \
-  --require-coverage true
+set -euo pipefail
+: "${NEONDIFF_ACCEPTED_PACKET:?packet path}" "${NEONDIFF_ACCEPTED_BUNDLE:?bundle path}"
+: "${NEONDIFF_ACCEPTED_BUNDLE_SHA256:?accepted digest}" "${NEONDIFF_APPROVED_SOURCE_SHA:?approved source}"
+: "${NEONDIFF_ACCEPTED_WORKER_SHA256:?accepted worker digest}" "${NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH:?accepted code hash}" "${NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256:?sha256-tree-v1 digest}"
+: "${NEONDIFF_INTENDED_BRANCH:?operator decision}" "${NEONDIFF_RUNTIME_CONFIG:?config path}"
+: "${NEONDIFF_EXPECTED_APP_ID:?stored App value}" "${NEONDIFF_EXPECTED_DEVICE_ID:?stored device value}"
+: "${NEONDIFF_PACKET_SOURCE_SHA:?packet source}" "${NEONDIFF_ACCEPTED_CONFIG_PATH:?packet config}"
+: "${NEONDIFF_ACCEPTED_SIGNING_RECEIPT:?signing receipt}" "${NEONDIFF_ACCEPTED_NOTARY_RECEIPT:?notary receipt}" "${NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT:?Gatekeeper receipt}"
+: "${NEONDIFF_STAGE_ROOT:?staging root}" "${NEONDIFF_STAGE_PATH:?staged app}" "${NEONDIFF_INSTALLED_APP_PATH:?installed app}" "${NEONDIFF_STAGED_WORKER_PATH:?staged worker}" "${NEONDIFF_LAUNCH_AGENT_PATH:?plist path}" "${NEONDIFF_LAUNCHD_LABEL:?label}" "${NEONDIFF_WORKER_EXECUTABLE:?wrapper path}" "${NEONDIFF_TREE_HASH_TOOL:?pinned tree verifier}" "${NEONDIFF_EVIDENCE_ROOT:?evidence root}"
+test "$NEONDIFF_INTENDED_BRANCH" = main
+export NEONDIFF_ACCEPTED_BUNDLE NEONDIFF_ACCEPTED_BUNDLE_SHA256 NEONDIFF_APPROVED_SOURCE_SHA NEONDIFF_ACCEPTED_CONFIG_PATH NEONDIFF_ACCEPTED_SIGNING_RECEIPT NEONDIFF_ACCEPTED_NOTARY_RECEIPT NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT NEONDIFF_LAUNCHD_LABEL NEONDIFF_WORKER_EXECUTABLE
+/usr/bin/env node -e 'const fs=require("node:fs"),p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for(const [k,v] of Object.entries({bundle:process.env.NEONDIFF_ACCEPTED_BUNDLE,digest:process.env.NEONDIFF_ACCEPTED_BUNDLE_SHA256,source:process.env.NEONDIFF_APPROVED_SOURCE_SHA,config:process.env.NEONDIFF_ACCEPTED_CONFIG_PATH,signing:process.env.NEONDIFF_ACCEPTED_SIGNING_RECEIPT,notary:process.env.NEONDIFF_ACCEPTED_NOTARY_RECEIPT,gatekeeper:process.env.NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT,label:process.env.NEONDIFF_LAUNCHD_LABEL,worker:process.env.NEONDIFF_WORKER_EXECUTABLE})) if(p[k]!==v)process.exit(1);' "$NEONDIFF_ACCEPTED_PACKET"
+test "$NEONDIFF_PACKET_SOURCE_SHA" = "$NEONDIFF_APPROVED_SOURCE_SHA"
+test "$NEONDIFF_RUNTIME_CONFIG" = "$NEONDIFF_ACCEPTED_CONFIG_PATH"
+test -s "$NEONDIFF_ACCEPTED_SIGNING_RECEIPT" -a -s "$NEONDIFF_ACCEPTED_NOTARY_RECEIPT" -a -s "$NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT"
+test "$(shasum -a 256 "$NEONDIFF_ACCEPTED_BUNDLE" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_BUNDLE_SHA256"
+test ! -e "$NEONDIFF_STAGE_ROOT"
+ditto -x -k "$NEONDIFF_ACCEPTED_BUNDLE" "$NEONDIFF_STAGE_ROOT" && ditto "$NEONDIFF_STAGE_PATH" "$NEONDIFF_INSTALLED_APP_PATH"
+test -d "$NEONDIFF_STAGE_PATH"
+test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_STAGE_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256"
+codesign --verify --deep --strict "$NEONDIFF_STAGE_PATH"
+xcrun stapler validate "$NEONDIFF_STAGE_PATH"
+spctl --assess --type execute "$NEONDIFF_STAGE_PATH"
+test "$NEONDIFF_LAUNCHD_LABEL" = com.electricsheephq.evaos-code-review-bot -a "$NEONDIFF_INSTALLED_APP_PATH" = /Applications/NeonDiff.app -a "$NEONDIFF_WORKER_EXECUTABLE" = /Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop -a "$NEONDIFF_STAGED_WORKER_PATH" = "$NEONDIFF_STAGE_PATH/Contents/Helpers/NeonDiffWorker"
+export NEONDIFF_LAUNCHD_LABEL NEONDIFF_WORKER_EXECUTABLE NEONDIFF_RUNTIME_CONFIG NEONDIFF_EXPECTED_APP_ID NEONDIFF_EXPECTED_DEVICE_ID
+/usr/bin/plutil -convert json -o - "$NEONDIFF_LAUNCH_AGENT_PATH" | /usr/bin/env node -e '
+const fs=require("node:fs"),p=JSON.parse(fs.readFileSync(0,"utf8")),a=p.ProgramArguments;
+const keys=["Label","ProgramArguments","RunAtLoad","KeepAlive","LimitLoadToSessionType","ProcessType","StandardOutPath","StandardErrorPath","ThrottleInterval"].sort();
+if (Object.keys(p).sort().join()!=keys.join() || p.Label!==process.env.NEONDIFF_LAUNCHD_LABEL || p.RunAtLoad!==true || p.KeepAlive!==true || p.LimitLoadToSessionType!=="Aqua" || p.ProcessType!=="Background" || p.StandardOutPath!=="/dev/null" || p.StandardErrorPath!=="/dev/null" || p.ThrottleInterval!==10 || !Array.isArray(a)||a.length!==10 || a[0]!==process.env.NEONDIFF_WORKER_EXECUTABLE || a[1]!=="--neondiff-worker-daemon" || a[2]!=="--config" || a[3]!==process.env.NEONDIFF_RUNTIME_CONFIG || a[4]!=="--launchd-label" || a[5]!==process.env.NEONDIFF_LAUNCHD_LABEL || a[6]!=="--github-app-id" || a[7]!==process.env.NEONDIFF_EXPECTED_APP_ID || a[8]!=="--license-machine-id" || a[9]!==process.env.NEONDIFF_EXPECTED_DEVICE_ID) process.exit(1);'
+NEONDIFF_PACKET_DIR="$NEONDIFF_EVIDENCE_ROOT/$NEONDIFF_ACCEPTED_BUNDLE_SHA256"
+test ! -e "$NEONDIFF_PACKET_DIR" && mkdir "$NEONDIFF_PACKET_DIR"
+# Stop admissions and wait for the active cycle/lease receipt before this sole mutation.
+NEONDIFF_DRAIN_DEADLINE=$((SECONDS+NEONDIFF_DRAIN_TIMEOUT_SECONDS)); while [[ ! -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT" && $SECONDS -lt $NEONDIFF_DRAIN_DEADLINE ]]; do sleep 1; done
+test -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT"
+launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
+test "$NEONDIFF_INSTALLED_APP_PATH" = /Applications/NeonDiff.app -a "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_STAGE_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256"
+test "$(codesign --display --verbose=4 "$NEONDIFF_INSTALLED_APP_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_INSTALLED_APP_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256" && test "$(shasum -a 256 "$NEONDIFF_INSTALLED_APP_PATH/Contents/Helpers/NeonDiffWorker" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_WORKER_SHA256" && printf '{"bundleTree":"%s","workerSha256":"%s","label":"%s"}\n' "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256" "$NEONDIFF_ACCEPTED_WORKER_SHA256" "$NEONDIFF_LAUNCHD_LABEL" > "$NEONDIFF_PACKET_DIR/verification.json"
 ```
+
+Any failed prelaunch command exits the block, so no later `launchctl` command
+is reached. The post-launch digest and worker identity are recorded in the
+unique packet; checkout/build output is never substituted for those bytes.
 
 For public source-beta releases, run the same gate with manifest checks:
 
 ```bash
 PUBLIC_BETA_TAG=v0.4.24-beta.1
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -138,7 +167,7 @@ fetched:
 ```bash
 git fetch origin --tags
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -470,7 +499,7 @@ from the eligible open-head set. Retire only the exact failed head:
 
 ```bash
 npx tsx src/cli.ts retire-failed \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --repo owner/repo \
   --pr 123 \
   --head-sha <failed-head-sha> \
@@ -511,7 +540,7 @@ The effective batch size is the lower of the review and provider caps, reduced
 by durable active leases.
 
 For a direct-to-three local canary, wait for existing review and issue leases to
-drain, promote the exact reviewed merge through the normal clean-checkout and
+drain, promote the exact accepted bundle through the normal artifact and
 launchd gates, then require all of the following before retaining three:
 
 - `daemon_cycle_complete.result.queue.execution` reports
@@ -528,9 +557,8 @@ launchd gates, then require all of the following before retaining three:
 Reduce the configured PR cap to two for provider throttling or severe latency
 without a correctness failure. Stop the daemon for duplicate/stale posting,
 persistent database locking, orphan children, lease corruption, or repeated
-cycle failures; source rollback remains a reviewed revert followed by a
-fast-forward promotion. Never infer concurrency from queue admission timestamps
-alone.
+cycle failures; artifact rollback remains available without checkout health.
+Never infer concurrency from queue admission timestamps alone.
 
 A release may be green with provider
 cooldown rows only when all provider cooldown rows are still active and the
@@ -540,7 +568,7 @@ Expired cooldown rows are actionable backlog. Run:
 
 ```bash
 npx tsx src/cli.ts retry-provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expired-only true \
   --dry-run false \
   --zcode true
@@ -551,29 +579,52 @@ Then re-run `release:status`, `provider-cooldowns --expired-only true`, and
 new expiry and keep monitoring; if the PR closed or the head is stale, confirm
 that the retry recorded `skipped_closed` or `skipped_stale_head`.
 
+## Emergency stop
+
+Containment is deliberately independent of checkout, config, evidence, and
+runtime-health gates. Resolve only the exact operator-supplied plist path and
+label, then stop that job; do not invoke the full promotion preflight first:
+
+```bash
+set -euo pipefail
+: "${NEONDIFF_LAUNCH_AGENT_PATH:?exact plist path}"
+test -f "$NEONDIFF_LAUNCH_AGENT_PATH"
+test "$(plutil -extract Label raw -o - "$NEONDIFF_LAUNCH_AGENT_PATH")" = com.electricsheephq.evaos-code-review-bot
+test "$(plutil -extract ProgramArguments.5 raw -o - "$NEONDIFF_LAUNCH_AGENT_PATH")" = com.electricsheephq.evaos-code-review-bot
+launchctl bootout "gui/$(id -u)" "$NEONDIFF_LAUNCH_AGENT_PATH"
+```
+
 ## Rollback
 
-Default rollback is to restart the existing launchd job after checking out the
-last known-good merge commit:
+Capture current status as advisory; its failure must not prevent rollback. Then
+validate the last-known-good immutable packet without checkout or current-worker
+health, stage exact bytes, and mutate only at a natural cycle boundary:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
-git fetch origin
-git checkout main
-git reset --hard <last-known-good-merge-sha>
-npm run build
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
+set -euo pipefail
+: "${NEONDIFF_EVIDENCE_ROOT:?evidence root}" "${NEONDIFF_LAST_KNOWN_GOOD_PACKET:?packet}"
+: "${NEONDIFF_LAST_KNOWN_GOOD_BUNDLE:?bundle}" "${NEONDIFF_LAST_KNOWN_GOOD_SHA256:?digest}"
+: "${NEONDIFF_ROLLBACK_STAGE_ROOT:?staging root}" "${NEONDIFF_ROLLBACK_STAGE_PATH:?staged app}" "${NEONDIFF_INSTALLED_APP_PATH:?installed app}" "${NEONDIFF_ROLLBACK_WORKER_PATH:?rollback worker}" "${NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256:?worker digest}" "${NEONDIFF_DRAIN_TIMEOUT_SECONDS:?bounded drain seconds}" "${NEONDIFF_NATURAL_CYCLE_RECEIPT:?cycle receipt}" "${NEONDIFF_LAUNCH_AGENT_PATH:?exact plist path}" "${NEONDIFF_LAUNCHD_LABEL:?exact label}" "${NEONDIFF_EXPECTED_APP_ID:?stored App value}" "${NEONDIFF_EXPECTED_DEVICE_ID:?stored device value}" "${NEONDIFF_WORKER_EXECUTABLE:?wrapper path}" "${NEONDIFF_RUNTIME_CONFIG:?packet config}"
+NEONDIFF_ROLLBACK_DIR="$NEONDIFF_EVIDENCE_ROOT/rollback-$NEONDIFF_LAST_KNOWN_GOOD_SHA256-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+test ! -e "$NEONDIFF_ROLLBACK_DIR" && mkdir "$NEONDIFF_ROLLBACK_DIR"
+if [[ -n "${NEONDIFF_RUNTIME_CONFIG:-}" ]]; then set +e; npm run release:status -- --config "$NEONDIFF_RUNTIME_CONFIG" >"$NEONDIFF_ROLLBACK_DIR/current-status-advisory.json" 2>&1; set -e; else : >"$NEONDIFF_ROLLBACK_DIR/current-status-advisory.json"; fi
+test -s "$NEONDIFF_LAST_KNOWN_GOOD_PACKET" \
+  && test "$(shasum -a 256 "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" | awk '{print $1}')" = "$NEONDIFF_LAST_KNOWN_GOOD_SHA256"
+test ! -e "$NEONDIFF_ROLLBACK_STAGE_ROOT"
+ditto -x -k "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" "$NEONDIFF_ROLLBACK_STAGE_ROOT" && ditto "$NEONDIFF_ROLLBACK_STAGE_PATH" "$NEONDIFF_INSTALLED_APP_PATH"
+test -d "$NEONDIFF_ROLLBACK_STAGE_PATH" -a "$NEONDIFF_INSTALLED_APP_PATH" = /Applications/NeonDiff.app
+codesign --verify --deep --strict "$NEONDIFF_ROLLBACK_STAGE_PATH"
+xcrun stapler validate "$NEONDIFF_ROLLBACK_STAGE_PATH"
+spctl --assess --type execute "$NEONDIFF_ROLLBACK_STAGE_PATH"
+export NEONDIFF_LAUNCHD_LABEL NEONDIFF_EXPECTED_APP_ID NEONDIFF_EXPECTED_DEVICE_ID NEONDIFF_WORKER_EXECUTABLE NEONDIFF_RUNTIME_CONFIG; /usr/bin/plutil -convert json -o - "$NEONDIFF_LAUNCH_AGENT_PATH" | node -e 'const fs=require("node:fs"),p=JSON.parse(fs.readFileSync(0,"utf8")),a=p.ProgramArguments,k=["Label","ProgramArguments","RunAtLoad","KeepAlive","LimitLoadToSessionType","ProcessType","StandardOutPath","StandardErrorPath","ThrottleInterval"].sort(); if(Object.keys(p).sort().join()!=k.join()||p.Label!==process.env.NEONDIFF_LAUNCHD_LABEL||p.RunAtLoad!==true||p.KeepAlive!==true||p.LimitLoadToSessionType!=="Aqua"||p.ProcessType!=="Background"||!Array.isArray(a)||a.length!==10||a[0]!==process.env.NEONDIFF_WORKER_EXECUTABLE||a[1]!=="--neondiff-worker-daemon"||a[2]!=="--config"||a[3]!==process.env.NEONDIFF_RUNTIME_CONFIG||a[4]!=="--launchd-label"||a[5]!==process.env.NEONDIFF_LAUNCHD_LABEL||a[6]!=="--github-app-id"||a[8]!=="--license-machine-id")process.exit(1);'
+NEONDIFF_DRAIN_DEADLINE=$((SECONDS+NEONDIFF_DRAIN_TIMEOUT_SECONDS)); while [[ ! -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT" && $SECONDS -lt $NEONDIFF_DRAIN_DEADLINE ]]; do sleep 1; done
+if [[ ! -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT" ]]; then test "$(plutil -extract Label raw -o - "$NEONDIFF_LAUNCH_AGENT_PATH")" = "$NEONDIFF_LAUNCHD_LABEL"; test "$(plutil -extract ProgramArguments.5 raw -o - "$NEONDIFF_LAUNCH_AGENT_PATH")" = "$NEONDIFF_LAUNCHD_LABEL"; launchctl bootout "gui/$(id -u)" "$NEONDIFF_LAUNCH_AGENT_PATH"; launchctl bootstrap "gui/$(id -u)" "$NEONDIFF_LAUNCH_AGENT_PATH"; fi
+launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
+test "$(shasum -a 256 "$NEONDIFF_INSTALLED_APP_PATH/Contents/Helpers/NeonDiffWorker" | awk '{print $1}')" = "$NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256" && printf '{"rollbackWorkerSha256":"%s","label":"%s"}\n' "$NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256" "$NEONDIFF_LAUNCHD_LABEL" > "$NEONDIFF_ROLLBACK_DIR/verification.json"
 ```
 
-Use `git reset --hard` only as an explicit rollback operation with the target
-SHA recorded in GitHub. Do not use rollback to bypass code review or to erase
-unrelated dirty work.
-
-To stop the live beta worker entirely:
-
-```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
-```
+Missing, unsigned, mismatched, or unapproved rollback inputs exit before
+`launchctl`; no current-runtime health result is treated as a prerequisite.
 
 ## Evidence Packet
 
@@ -601,8 +652,8 @@ For each beta promotion, record:
   tracking issue or `not in this release`.
 - next monitoring action or heartbeat.
 
-Keep raw evidence under `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
-or session notes. Do not paste secrets, private keys, tokens, cookies, raw
+Keep redacted evidence under `/Users/m1/Codex/evidence/neondiff/` in the unique
+packet directory. Do not paste secrets, private keys, tokens, cookies, raw
 customer data, or long logs into GitHub comments.
 
 ## Release Packet Template
