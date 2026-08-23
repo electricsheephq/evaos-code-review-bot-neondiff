@@ -20,6 +20,7 @@ describe("versioned desktop declaration index", () => {
     expect(run([{ build: "100" }], (root, paths) => { const renamed = "v1.1.0-beta.2.json"; renameSync(join(root, "declarations", paths[0]), join(root, "declarations", renamed)); const path = join(root, "index.json"), index = JSON.parse(readFileSync(path, "utf8")); index.declarationPaths = [renamed]; index.currentPath = renamed; writeFileSync(path, JSON.stringify(index)); }).status).not.toBe(0);
     expect(run([{ build: "100" }], (root) => { const path = join(root, "declarations", "v1.1.0-beta.1.json"), raw = readFileSync(path, "utf8").replace('"sequence":"1"', '"sequence":1.00000000000000001'); writeFileSync(path, raw); }).status).not.toBe(0);
     expect(run([{ build: "100" }], (root) => { const path = join(root, "declarations", "v1.1.0-beta.1.json"), raw = readFileSync(path, "utf8").replace('"build":"100"', '"build":"100","build":"101"'); writeFileSync(path, raw); }).status).not.toBe(0);
+    expect(run([{ build: "100" }], (root) => { const path = join(root, "declarations", "v1.1.0-beta.1.json"), raw = readFileSync(path, "utf8").replace('"site":"https://www.neondiff.com"', '"site":"https://www.neondiff.com","site":"https://www.neondiff.com"'); writeFileSync(path, raw); }).status).not.toBe(0);
     expect(run([{ build: "100" }], (root, paths) => symlinkSync(join(root, "declarations", paths[0]), join(root, "declarations", "alias.json"))).status).not.toBe(0);
   });
 });

@@ -14,20 +14,29 @@ const indexSchema = json(new URL("../docs/schema/desktop-release-index-v1.schema
 const validateDeclaration = ajv.compile(declarationSchema), validateIndex = ajv.compile(indexSchema);
 
 function fail(message) { throw new Error(message); }
-function rejectDuplicateIdentityKeys(raw) {
-  const seen = new Set(); let inString = false; let escaped = false; let start = 0;
+function decodeJsonKey(raw, start, end) {
+  let key = "";
+  for (let i = start + 1; i < end; i += 1) {
+    if (raw[i] !== "\\") { key += raw[i]; continue; }
+    const escaped = raw[++i];
+    if (escaped === "u") { const code = raw.slice(i + 1, i + 5); if (!/^[0-9a-fA-F]{4}$/.test(code)) return null; key += String.fromCharCode(Number.parseInt(code, 16)); i += 4; continue; }
+    key += ({ '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" })[escaped] ?? escaped;
+  }
+  return key;
+}
+function rejectDuplicateKeys(raw) {
+  const objects = []; let inString = false; let escaped = false; let start = 0;
   for (let i = 0; i < raw.length; i += 1) {
     const char = raw[i];
-    if (!inString) { if (char === '"') { inString = true; start = i; } continue; }
+    if (!inString) { if (char === '"') { inString = true; start = i; } else if (char === "{") objects.push(new Set()); else if (char === "}") objects.pop(); continue; }
     if (escaped) { escaped = false; continue; }
     if (char === "\\") { escaped = true; continue; }
     if (char !== '"') continue;
     inString = false; let next = i + 1;
     while (/\s/.test(raw[next] ?? "")) next += 1;
-    if (raw[next] !== ":") continue;
-    const key = JSON.parse(raw.slice(start, i + 1));
-    if ((key === "build" || key === "sequence") && seen.has(key)) fail(`duplicate identity key: ${key}`);
-    if (key === "build" || key === "sequence") seen.add(key);
+    if (raw[next] !== ":" || !objects.length) continue;
+    const key = decodeJsonKey(raw, start, i); if (key === null) fail("invalid object key");
+    const keys = objects.at(-1); if (keys.has(key)) fail(`duplicate object key: ${key}`); keys.add(key);
   }
 }
 function readRegular(path) {
@@ -37,7 +46,7 @@ function readRegular(path) {
     if (!fstatSync(fd).isFile()) fail(`non-regular file: ${path}`);
     const raw = readFileSync(fd, "utf8");
     if (/(?:"build"|"sequence")\s*:\s*(?!"[0-9]+")/.test(raw)) fail("identity fields must be quoted decimal text");
-    rejectDuplicateIdentityKeys(raw);
+    rejectDuplicateKeys(raw);
     return JSON.parse(raw);
   } catch (error) { if (error?.code === "ELOOP") fail(`symlink or non-regular file: ${path}`); throw error; }
   finally { if (fd !== undefined) closeSync(fd); }
