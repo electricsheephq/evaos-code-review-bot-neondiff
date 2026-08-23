@@ -883,8 +883,7 @@ describe("sticky enrichment comments", () => {
       let analysisCalls = 0;
       let postCalls = 0;
       try {
-        let overflow = false;
-        const runCycle = (checkedAt: string, force = false) => runIssueEnrichmentCycle({
+        const result = await runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
           github: {
@@ -967,6 +966,7 @@ describe("sticky enrichment comments", () => {
       let analysisCalls = 0;
       let postCalls = 0;
       try {
+        let overflow = false;
         const promotedIssue: GitHubRelatedIssueOrPull = {
           number: 127,
           title: "Continue the imported replay fix",
@@ -975,7 +975,7 @@ describe("sticky enrichment comments", () => {
           labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
           body: "Continue current-main work for #14."
         };
-        const result = await runIssueEnrichmentCycle({
+        const runCycle = (checkedAt: string, force = false) => runIssueEnrichmentCycle({
           config: loadConfig(configPath),
           state,
           github: {
