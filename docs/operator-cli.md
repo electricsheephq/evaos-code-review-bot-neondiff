@@ -311,6 +311,16 @@ Check whether the live bot is healthy:
 npx tsx src/cli.ts status --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
+Add `--repo owner/name` for repository-scoped status, or `--human` for a
+compact terminal summary. JSON is the default; both presentations redact
+secret-looking values and recovery commands. Presentation flags do not mutate
+runtime state, and the command exits nonzero when the combined status gate is
+blocked:
+
+```bash
+npx tsx src/cli.ts status --human --repo owner/name --config config.local.json
+```
+
 Classify whether the bot is idle, healthy-active, or blocked:
 
 ```bash
