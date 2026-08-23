@@ -52,8 +52,7 @@ describe("serialized severe receipt parser", () => {
     expect(touched).toBe(false);
     const accessor = new Uint8Array(); Object.defineProperty(accessor, "byteLength", { get() { throw new Error("trap"); } });
     expect(() => parseSerializedSevereVerificationReceipt(accessor)).toThrow("serialized_input");
-    const iterator = new Uint8Array(); Object.defineProperty(iterator, Symbol.iterator, { value() { throw new Error("trap"); } });
-    expect(() => parseSerializedSevereVerificationReceipt(iterator)).toThrow("serialized_input");
+    const iterator = new Uint8Array(); Object.defineProperty(iterator, Symbol.iterator, { value() { throw new Error("trap"); } }); expect(() => parseSerializedSevereVerificationReceipt(iterator)).toThrow("serialized_input"); const evilAccessor = new Uint8Array(); Object.defineProperty(evilAccessor, "evil", { get() { throw new Error("trap"); } }); expect(() => parseSerializedSevereVerificationReceipt(evilAccessor)).toThrow("serialized_input"); const evilFunction = new Uint8Array(); Object.defineProperty(evilFunction, "evil", { value() { throw new Error("trap"); } }); expect(() => parseSerializedSevereVerificationReceipt(evilFunction)).toThrow("serialized_input"); const spoofedInt8 = new Int8Array(); Object.setPrototypeOf(spoofedInt8, Uint8Array.prototype); expect(() => parseSerializedSevereVerificationReceipt(spoofedInt8)).toThrow("serialized_input"); const spoofedClamped = new Uint8ClampedArray(); Object.setPrototypeOf(spoofedClamped, Uint8Array.prototype); expect(() => parseSerializedSevereVerificationReceipt(spoofedClamped)).toThrow("serialized_input");
   });
 
   it("rejects excessive nesting, trailing content, and oversized strings", () => {

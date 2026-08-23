@@ -9,7 +9,7 @@ const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const intrinsicByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength")!.get!;
 const intrinsicByteOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset")!.get!;
 const intrinsicBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")!.get!;
-const intrinsicSet = Uint8Array.prototype.set;
+const intrinsicSet = Uint8Array.prototype.set, intrinsicTag = Object.getOwnPropertyDescriptor(typedArrayPrototype, Symbol.toStringTag)!.get!;
 const reject = (code: string): never => { throw new Error(`severe_receipt_${code}`); };
 
 export function parseSerializedSevereVerificationReceipt(input: unknown): SevereVerificationReceipt {
@@ -50,12 +50,12 @@ function isIntrinsicByteArray(input: unknown): input is Uint8Array {
   if (!ArrayBuffer.isView(input)) return false;
   try {
     const prototype = Object.getPrototypeOf(input);
-    return prototype === Uint8Array.prototype || prototype === Buffer.prototype;
+    return intrinsicTag.call(input) === "Uint8Array" && (prototype === Uint8Array.prototype || prototype === Buffer.prototype);
   } catch { return false; }
 }
 function hostileOwnProperties(input: Uint8Array): boolean {
-  const keys: (string | symbol)[] = ["byteLength", "byteOffset", "buffer", "length", "constructor", "set", "subarray", "slice", "valueOf", "toString", ...Object.getOwnPropertySymbols(input)];
-  return keys.some((key) => {
+  return Reflect.ownKeys(input).some((key) => {
+    if (typeof key === "string" && /^\d+$/.test(key)) return false;
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
     return Boolean(descriptor && (descriptor.get || descriptor.set || typeof descriptor.value === "function"));
   });
