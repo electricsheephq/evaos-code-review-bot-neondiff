@@ -81,12 +81,19 @@ export type GitHubRepositoryAccessErrorClass =
 
 export interface GitHubRepositoryAccessProof {
   repo_full_name: string;
+  app_id?: string;
+  verified_app_id?: number;
+  bot_login?: string;
   readMode: "app_installation" | "fallback_token" | "unconfigured";
   visibility_result: GitHubRepositoryVisibility;
   visibility_source: GitHubRepositoryVisibilitySource;
   installation_id_present: boolean;
   installation_id?: number;
   installation_account?: string;
+  repository_identity_verified: boolean;
+  installation_account_verified: boolean;
+  app_identity_verified: boolean;
+  bot_identity_verified: boolean;
   app_can_read_metadata: boolean;
   app_can_read_pull_requests: boolean;
   openPullCount?: number;
@@ -185,10 +192,15 @@ export class GitHubApi {
     const readMode = this.canPostAsApp() ? "app_installation" : this.token ? "fallback_token" : "unconfigured";
     const base: GitHubRepositoryAccessProof = {
       repo_full_name: repo,
+      app_id: this.appId,
       readMode,
       visibility_result: "unknown",
       visibility_source: "unavailable",
       installation_id_present: false,
+      repository_identity_verified: false,
+      installation_account_verified: false,
+      app_identity_verified: false,
+      bot_identity_verified: false,
       app_can_read_metadata: false,
       app_can_read_pull_requests: false
     };
@@ -200,12 +212,38 @@ export class GitHubApi {
       };
     }
 
-    let installation: { id: number; account_login?: string };
+    let installation: { id: number; account_login?: string; app_id?: number; app_slug?: string };
     try {
       installation = await this.getInstallation(repo, { followRedirects: false });
     } catch (error) {
       return { ...base, ...describeGitHubAccessError(error) };
     }
+
+    const requestedRepo = canonicalGitHubRepo(repo);
+    const requestedOwner = requestedRepo.split("/")[0] ?? "";
+    const botLogin = installation.app_slug
+      ? `${installation.app_slug.replace(/\[bot\]$/i, "")}[bot]`
+      : undefined;
+    const identity = (metadata?: RepositorySummary) => ({
+      app_id: this.appId,
+      ...(installation.app_id === undefined ? {} : { verified_app_id: installation.app_id }),
+      ...(botLogin ? { bot_login: botLogin } : {}),
+      repository_identity_verified: Boolean(
+        requestedRepo && metadata?.full_name && canonicalGitHubRepo(metadata.full_name) === requestedRepo
+      ),
+      installation_account_verified: Boolean(
+        requestedOwner && installation.account_login
+          && installation.account_login.trim().toLowerCase() === requestedOwner
+      ),
+      app_identity_verified: Boolean(
+        this.appId && installation.app_id !== undefined
+          && String(installation.app_id) === this.appId.trim()
+      ),
+      bot_identity_verified: Boolean(
+        botLogin && this.botLogin
+          && botLogin.trim().toLowerCase() === this.botLogin.trim().toLowerCase()
+      )
+    });
 
     let token: string;
     try {
@@ -216,6 +254,7 @@ export class GitHubApi {
         installation_id_present: true,
         installation_id: installation.id,
         ...(installation.account_login ? { installation_account: installation.account_login } : {}),
+        ...identity(),
         ...describeGitHubAccessError(error)
       };
     }
@@ -229,6 +268,7 @@ export class GitHubApi {
         installation_id_present: true,
         installation_id: installation.id,
         ...(installation.account_login ? { installation_account: installation.account_login } : {}),
+        ...identity(),
         ...describeGitHubAccessError(error)
       };
     }
@@ -238,6 +278,7 @@ export class GitHubApi {
       const pulls = await this.listOpenPullsWithToken(repo, token, { followRedirects: false });
       return {
         repo_full_name: metadata.full_name || repo,
+        ...identity(metadata),
         readMode,
         visibility_result: visibility.result,
         visibility_source: visibility.source,
@@ -251,6 +292,7 @@ export class GitHubApi {
     } catch (error) {
       return {
         repo_full_name: metadata.full_name || repo,
+        ...identity(metadata),
         readMode,
         visibility_result: visibility.result,
         visibility_source: visibility.source,
@@ -532,16 +574,23 @@ export class GitHubApi {
   private async getInstallation(
     repo: string,
     options: { followRedirects?: boolean } = {}
-  ): Promise<{ id: number; account_login?: string }> {
+  ): Promise<{ id: number; account_login?: string; app_id?: number; app_slug?: string }> {
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
     const jwt = createAppJwt(this.appId, this.privateKey);
-    const installation = await this.request<{ id: number; account?: { login?: string } }>(`/repos/${repo}/installation`, {
+    const installation = await this.request<{
+      id: number;
+      account?: { login?: string };
+      app_id?: number;
+      app_slug?: string;
+    }>(`/repos/${repo}/installation`, {
       token: jwt,
       followRedirects: options.followRedirects
     });
     return {
       id: installation.id,
-      ...(installation.account?.login ? { account_login: installation.account.login } : {})
+      ...(installation.account?.login ? { account_login: installation.account.login } : {}),
+      ...(installation.app_id === undefined ? {} : { app_id: installation.app_id }),
+      ...(installation.app_slug ? { app_slug: installation.app_slug } : {})
     };
   }
 
@@ -663,6 +712,12 @@ function normalizePullRepoSummary<T extends PullRequestSummary["base"]["repo"]>(
     ...repo,
     ...(visibility ? { visibility } : {})
   };
+}
+
+function canonicalGitHubRepo(repo: string): string {
+  const [owner, name, extra] = repo.trim().split("/");
+  if (extra !== undefined || !owner || !name) return "";
+  return `${owner.toLowerCase()}/${name.toLowerCase()}`;
 }
 
 function visibilityFromRepositorySummary(repository: RepositorySummary): {

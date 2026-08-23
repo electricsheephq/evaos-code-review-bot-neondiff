@@ -3253,7 +3253,12 @@ async function buildDoctorGithubReport(
       const gatePreview = buildDoctorGithubLicenseGatePreview(config, proof);
       readChecks.push({
         repo,
-        ok: proof.app_can_read_metadata && proof.app_can_read_pull_requests,
+        ok: proof.app_can_read_metadata
+          && proof.app_can_read_pull_requests
+          && proof.repository_identity_verified
+          && proof.installation_account_verified
+          && proof.app_identity_verified
+          && proof.bot_identity_verified,
         policy,
         ...proof,
         ...gatePreview

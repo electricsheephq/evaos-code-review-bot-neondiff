@@ -27,7 +27,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, account: { login: "owner" } });
+        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "evaos-code-review-bot" });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -261,7 +261,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, account: { login: "owner" } });
+        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "evaos-code-review-bot" });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -286,6 +286,13 @@ describe("GitHub App read authentication", () => {
       installation_id_present: true,
       installation_id: 123,
       installation_account: "owner",
+      app_id: "4184532",
+      verified_app_id: 4184532,
+      bot_login: "evaos-code-review-bot[bot]",
+      repository_identity_verified: true,
+      installation_account_verified: true,
+      app_identity_verified: true,
+      bot_identity_verified: true,
       app_can_read_metadata: true,
       app_can_read_pull_requests: true,
       openPullCount: 1
@@ -293,6 +300,44 @@ describe("GitHub App read authentication", () => {
     expect(calls.find((call) => call.url.endsWith("/repos/owner/repo"))?.authorization).toBe("Bearer installation-token");
     expect(calls.find((call) => call.url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1"))?.authorization)
       .toBe("Bearer installation-token");
+  });
+
+  it("fails closed when repository, installation, App, or bot identity mismatches", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-identity-boundary-"));
+    roots.push(root);
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const privateKeyPath = join(root, "app.pem");
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const cases = [
+      { name: "missing installation account", installation: { id: 123, app_id: 4184532, app_slug: "evaos-code-review-bot" }, metadata: "owner/repo", failed: "installation_account_verified" },
+      { name: "mismatched installation account", installation: { id: 123, account: { login: "other" }, app_id: 4184532, app_slug: "evaos-code-review-bot" }, metadata: "owner/repo", failed: "installation_account_verified" },
+      { name: "mismatched repository metadata", installation: { id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "evaos-code-review-bot" }, metadata: "other/repo", failed: "repository_identity_verified" },
+      { name: "mismatched App identity", installation: { id: 123, account: { login: "owner" }, app_id: 999, app_slug: "evaos-code-review-bot" }, metadata: "owner/repo", failed: "app_identity_verified" },
+      { name: "mismatched bot identity", installation: { id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "other-app" }, metadata: "owner/repo", failed: "bot_identity_verified" }
+    ] as const;
+
+    for (const scenario of cases) {
+      globalThis.fetch = vi.fn(async (url) => {
+        const requestUrl = String(url);
+        if (requestUrl.endsWith("/repos/owner/repo/installation")) return jsonResponse(scenario.installation);
+        if (requestUrl.endsWith("/app/installations/123/access_tokens")) {
+          return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+        }
+        if (requestUrl.endsWith("/repos/owner/repo")) {
+          return jsonResponse({ full_name: scenario.metadata, private: false, visibility: "public" });
+        }
+        if (requestUrl.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1")) return jsonResponse([]);
+        return jsonResponse({ message: `unexpected ${scenario.name}` }, 404);
+      }) as typeof fetch;
+
+      const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+      const proof = await github.probeRepositoryAccess("owner/repo");
+      expect(proof).toMatchObject({
+        app_can_read_metadata: true,
+        app_can_read_pull_requests: true,
+        [scenario.failed]: false
+      });
+    }
   });
 
   it("classifies App install-scope and visibility lookup failures without treating them as public", async () => {
@@ -429,7 +474,7 @@ describe("GitHub App read authentication", () => {
       const redirect = init?.redirect;
       calls.push({ url: requestUrl, method, redirect });
       if (requestUrl.endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123 });
+        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "evaos-code-review-bot" });
       }
       if (requestUrl.endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -788,7 +833,9 @@ function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
 
 function installThenTokenThen(handler: (url: string) => Response): (url: string) => Response {
   return (url: string) => {
-    if (url.endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+    if (url.endsWith("/repos/owner/repo/installation")) {
+      return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 4184532, app_slug: "evaos-code-review-bot" });
+    }
     if (url.endsWith("/app/installations/123/access_tokens")) {
       return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
     }
