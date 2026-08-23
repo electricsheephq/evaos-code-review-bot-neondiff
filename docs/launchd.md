@@ -1,6 +1,28 @@
-# Launchd Pilot
+# macOS LaunchAgent boundary
 
-Launchd should stay disabled until GitHub App installation is complete and a real ZCode dry-run succeeds without rate limiting.
+Signed Desktop `1.1.0` owns Mac first run. After App/provider/activation/App
+access verification, it validates the signed app and sealed worker, then
+installs a secret-free LaunchAgent. Keychain secrets cross bounded stdin only;
+new plists contain public coordinates and the signed app path, never key values,
+key paths, or `EnvironmentVariables`. Enabled Codex uses the existing CLI session
+without NeonDiff reading OAuth material. Managed App/broker is post-GA/outside BYO.
+See the [Mac GA architecture contract](architecture/mac-ga-release-contract.md)
+and [Desktop Mac release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
+This page does not claim Mac GA completion.
+
+## Native Desktop path
+
+Use the Desktop UI for first-run setup, dry-run approval, and **Install & Start**.
+Do not hand-edit the plist, export credentials, or replace the sealed worker
+with a global or customer-writable executable. A signed app, Keychain identity,
+worker identity, config revision, and selected LaunchAgent label must all match;
+ambiguous or missing evidence fails closed.
+
+## Legacy CLI/operator path
+
+The following environment-backed examples are retained only for existing CLI or
+operator workers, including legacy Mac installations. They are not instructions
+for the native Desktop customer journey.
 
 Recommended first live command:
 
@@ -19,7 +41,9 @@ export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-
 npm run daemon -- --config /absolute/path/to/config.local.json --dry-run true
 ```
 
-When installed as a LaunchAgent, write stdout/stderr to `~/Library/Logs/evaos-code-review-bot/`. On this Mac, launchd failed with `EX_CONFIG` when those paths pointed directly at the Lexar volume; copy the local launch logs into the Lexar evidence packet after each proof window.
+When installed as a LaunchAgent, write stdout/stderr to a user-owned local log
+directory such as `~/Library/Logs/neondiff/`. Keep operator logs outside the
+repository and redact them before sharing.
 
 Set `NODE_OPTIONS=--use-system-ca` in the LaunchAgent environment. Without this
 flag, launchd-started Node processes may fail GitHub App installation reads with
@@ -27,7 +51,7 @@ flag, launchd-started Node processes may fail GitHub App installation reads with
 from an interactive shell. `release:status` reports the loaded launchd
 environment and fails when launchd explicitly omits this option.
 
-Minimum LaunchAgent environment block:
+Minimum legacy LaunchAgent environment block:
 
 ```xml
 <key>EnvironmentVariables</key>
@@ -56,7 +80,7 @@ Use the JSON-first CLI instead of choosing `bootstrap` or `kickstart` from
 plist existence alone. The executable stop/start sequence and confirmation
 requirements live in [the operator CLI guide](operator-cli.md#common-operator-flows).
 
-For a public paid B0 BYO Mac worker update, do not edit `ProgramArguments`,
+For a legacy customer-owned worker update, do not edit `ProgramArguments`,
 `WorkingDirectory`, or credential environment entries by hand. Use the
 checksum-bound worker bundle from the same immutable GitHub prerelease as the
 app, as described in

@@ -1,10 +1,12 @@
 # NeonDiff Setup
 
-This guide is the CLI-first setup path for the current source-available release,
-and the first-run path on non-Mac platforms. On macOS the native app
-(`apps/neondiff-desktop`) is the human first-run surface; until the native
-broker/launchd proof lands (see the native-broker note below) it hands off to
-this operator/advanced path for setup actions it cannot yet complete natively.
+This guide covers two bounded paths. On macOS, signed Desktop `1.1.0` is the
+authoritative first-run surface: Keychain owns credentials, the sealed worker
+performs review, and enabled `codexRuntime` uses the existing Codex CLI. The
+CLI-first path below is non-Mac or legacy/operator Mac; env-backed LaunchAgents
+are not native. Managed App/broker is post-GA/outside BYO. See the [Mac GA
+architecture contract](architecture/mac-ga-release-contract.md) and [Desktop
+Mac release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
 The recommended path installs the `neondiff` npm package; source checkout remains
 a fallback for contributors and reviewers who want to inspect or build locally. See
 [LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
@@ -29,7 +31,7 @@ for the support-tier pricing contract.
 The current CLI (v1.0.x) requires API-backed activation for every repository
 (public, private, internal, and unknown); unknown visibility fails closed, and
 GitHub-authoritative visibility (public, private, internal, and unknown) decides
-the tier. Coming with the native app: public open-source repositories will be
+the tier. The future post-GA managed path may make public open-source repositories
 free with no NeonDiff Activation Key, while private, internal, and commercial
 repositories will require an active entitlement (managed GitHub App broker #614;
 not enforced by the current CLI). Support
@@ -40,7 +42,13 @@ remain honored for existing holders but are no longer sold. Provider/model costs
 remain external through your own provider key or local model; NeonDiff does not
 include hosted model credits, unlimited SaaS inference, or bundled provider tokens.
 
-## 1. Install NeonDiff
+## CLI/operator path (non-Mac or legacy Mac)
+
+The following npm, config, and environment-variable commands are CLI/operator
+only. Signed Desktop first run needs no global CLI, manual config edit, or
+exported GitHub private-key path.
+
+### 1. Install NeonDiff
 
 Recommended package install after v1.0.4 is published and verified:
 
@@ -80,7 +88,7 @@ npm run build
 If you intentionally use the source checkout without the global package,
 substitute `./dist/src/cli.js` for `neondiff`.
 
-## 2. Create And Install A Customer-Owned GitHub App
+### 2. Create And Install A Customer-Owned GitHub App
 
 For the public paid B0 BYO beta, create a customer-owned GitHub App in your
 GitHub account or organization and use that App's install URL. The public
@@ -114,7 +122,7 @@ export NEONDIFF_GITHUB_APP_CLIENT_ID="<github-app-client-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 ```
 
-For legacy/direct Mac desktop builds, copy the GitHub App client ID into
+For legacy/direct Mac operator builds only, copy the GitHub App client ID into
 `github.clientId` or `NEONDIFF_GITHUB_APP_CLIENT_ID`. A verified managed beta
 build instead carries the official App's public client ID in its production
 boundary, so first-run does not depend on loading CLI config. Enable Device Flow
@@ -125,7 +133,7 @@ so a fresh-install callback wins without a second authorization. If Device Flow
 is disabled, GitHub returns `device_flow_disabled` and the existing-install path
 fails closed.
 
-## 3. Configure Provider And License
+### 3. Configure Provider And License
 
 Create a local config from the example, then edit it for your local repo
 allowlist, provider path, state path, and evidence path:
@@ -204,11 +212,10 @@ For `review-pr` license blocks, the gate writes its local proof under the
 configured `evidenceDir` as
 `<date>/<owner__repo>/pr-<number>/<head-sha>/license-gate.json`.
 
-The `keychain` backend remains reserved for a separately proven native broker.
-Headless CLI activation currently rejects Keychain writes rather than passing
-license keys through process arguments. v1.0.4 supports the approved file
-backend; the Desktop app remains blocked from useful actions until native
-broker/launchd access is proven.
+The `keychain` backend is reserved for the native sealed-worker boundary.
+Headless CLI activation rejects Keychain writes; `v1.0.4` uses the approved file
+backend. The signed Desktop `1.1.0` BYO path is separate and does not inherit
+these CLI credential rules; unsigned or mixed-marker bundles remain quarantined.
 The local `machineId` sent to the license API is advisory beta metadata derived
 from host name and platform, not hardware attestation or a durable seat-binding
 primitive.
@@ -262,41 +269,26 @@ manual UserDefaults rollout mutation. It does not make the managed App path
 available and is not proof that GitHub private-key custody, the compatible CLI
 package, billing, signing, or customer canaries have passed.
 
-For a B0 customer, the native first-run path is:
+## Native Mac 1.1.0 first run (signed Desktop)
+
+Use the signed Desktop app from the accepted B0/BYO artifact. Keychain owns the
+GitHub App, provider, and activation secrets; its sealed worker performs
+credential-bearing work; and enabled `codexRuntime` uses the existing Codex CLI
+without NeonDiff reading OAuth material. This section does not claim Mac GA
+completion. Managed App/broker is post-GA/non-goal.
+
+The native first-run path is:
 
 1. Create and install a customer-owned GitHub App with the permissions in
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
 2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
    PEM, then choose **Store in Keychain**.
-3. On a clean install, if NeonDiff reports that the local worker command is
-   unavailable, choose **Install / Update Local Worker** before **Initialize
-   Local Config**. From the verified extracted bundle, use Node.js 26 or newer
-   through the approved stable path `/opt/homebrew/bin/node` or
-   `/usr/local/bin/node`, then preview the credential-free install:
-
-   ```bash
-   BUNDLE_DIR="$(pwd -P)"
-   node install-b0-worker-candidate.mjs first-install \
-     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
-     --manifest-sha256 <manifest-sha256-from-release> \
-     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
-     --launchd-label com.electricsheephq.evaos-code-review-bot \
-     --dry-run true
-   ```
-
-   Inspect the public-safe preview, then repeat it with
-   `--dry-run false --confirm true`. It installs only the exact verified CLI
-   into a private versioned current-user directory and writes a 0600
-   credential-free marker. It creates or loads no LaunchAgent, starts no
-   daemon, and never reads or writes GitHub, provider, or license credentials.
-   It refuses an existing LaunchAgent or worker state; use the existing-worker
-   update flow below for those machines. Return to NeonDiff and choose
-   **Install / Update Local Worker** once more to refresh discovery; when the
-   worker is available, choose **Initialize Local Config**. Initialization
-   invokes the non-destructive `neondiff init` path without `--force`, never
-   overwrites an existing config, and keeps bot-isolated runtime, state,
-   evidence, and license paths beside the config. Review and daemon readiness
-   remain separate gates.
+3. On a clean install, continue with the sealed worker bundled inside the
+   signed app. Do not install a global npm CLI, export a GitHub private-key path,
+   or use the checksum-managed worker installer for native first run. Choose
+   **Initialize Local Config**; initialization is non-destructive, never uses
+   `--force`, and keeps bot-isolated runtime, state, evidence, and license paths
+   beside the config. Review and daemon readiness remain separate gates.
 4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
    Repository**. The app writes the allowlist through the typed local `config
    patch` command and ensures every selected repository has an enabled local
@@ -683,10 +675,14 @@ closed, logs `daemon_worktree_cleanup_failed`, and removes nothing. Set
 review workers under the same dedicated account that owns `workRoot`; cleanup
 does not claim visibility into handles owned by unrelated host users.
 
-Launchd and live beta promotion are advanced operator tasks. Use
+The CLI launchd controls and live beta promotion are advanced operator tasks.
+The signed Desktop owns the customer first-run LaunchAgent path. Use
 [docs/launchd.md](launchd.md), [docs/operator-cli.md](operator-cli.md), and
-[docs/beta-release-runbook.md](beta-release-runbook.md) only after dry-run proof
-passes.
+[docs/beta-release-runbook.md](beta-release-runbook.md) only for the explicitly
+scoped CLI/operator path after dry-run proof passes. Use the [Mac GA architecture
+contract](architecture/mac-ga-release-contract.md) and [Desktop Mac release
+runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md) for the native
+release boundary.
 
 On Linux, `neondiff daemon start|stop|status` intentionally does not call
 `launchctl`. It returns JSON with `serviceManager: "systemd"` and points to the
@@ -698,7 +694,7 @@ Platform support at this beta stage:
 
 | Platform | Supervision path | Launch-readiness truth |
 | --- | --- | --- |
-| macOS | launchd | Tested live beta operator path |
+| macOS | signed Desktop 1.1.0; launchd | Native first-run; CLI launchd is legacy/operator only |
 | Linux | systemd or Docker | Packaged and guarded by Ubuntu smoke tests; provider setup still varies by host |
 | CI runners | One-shot dry-run/review commands | Documented for Ubuntu-style runners |
 | Windows | CLI-only | Untested; no supervised daemon claim |
@@ -710,12 +706,14 @@ API state, and update-channel readiness. A local source beta may explicitly
 defer license API, website, or desktop channels only when the manifest marks
 that channel as `requiredForThisRelease: false`.
 
-## Environment Variables
+## Environment Variables (CLI/operator only)
 
 Commands such as `doctor` read these ambient environment variables in
 addition to `config.local.json`. None of them are printed by `--json` output.
 Environment values override the matching config-file value where both are
-set.
+set. This section applies only to non-Mac CLI use and legacy/operator Mac
+workers. The signed Desktop first-run path does not place credentials in
+environment variables or new LaunchAgent plists.
 
 | Variable | Read by | Overrides config value | Notes |
 | --- | --- | --- | --- |

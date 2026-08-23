@@ -11,13 +11,16 @@ Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
-The current npm CLI (v1.0.x) requires API-backed activation for every repository
-(public, private, internal, and unknown); unknown visibility fails closed, and
-provider verification is required for all tiers.
+The npm CLI remains `neondiff@1.0.4` and requires API-backed activation for every
+repository (public, private, internal, and unknown); unknown visibility fails
+closed, and provider verification is required for all tiers. The native Mac
+Desktop release line is `1.1.0`; it is a separate signed Desktop artifact and
+does not silently change the npm CLI version.
 
+The later managed-app path is post-GA and is not the Mac 1.1.0 first-run path.
 Coming with the native app: public open-source repositories will be free with no
 NeonDiff Activation Key, while private, internal, and commercial repositories
-will require an active entitlement. This managed public-free/private-paid model
+will require an active entitlement. That future managed public-free/private-paid model
 ships with the native NeonDiff app and the managed GitHub App broker (#614) and
 is not enforced by the current CLI. NeonDiff
 support licenses cost $1/month or $10/year for individuals,
@@ -142,9 +145,17 @@ checksum-bound prerelease bundle.
 
 ## Set Up
 
-Follow [docs/SETUP.md](docs/SETUP.md) for the CLI-first setup path (the
-first-run path on non-Mac platforms and the operator/advanced path on Mac). The
-short version is:
+On Mac, start with the signed NeonDiff Desktop `1.1.0` app. It is the
+authoritative first-run surface: App, provider, and activation secrets stay in
+Keychain; review work runs through the sealed worker in the app; and an enabled
+`codexRuntime` uses the existing authenticated Codex CLI without NeonDiff
+reading its OAuth material. The local dashboard and npm CLI are diagnostic or
+legacy operator surfaces on Mac. The managed GitHub App/broker remains
+post-GA/non-goal for this BYO path.
+
+Follow [docs/SETUP.md](docs/SETUP.md) for the native Mac flow and for the
+CLI-first path on non-Mac platforms or legacy operator installs. The CLI short
+version is:
 
 ```bash
 neondiff init --config config.local.json
@@ -223,8 +234,8 @@ commands always use the sealed worker; the app never sends Keychain material to
 a global, customer-writable, or checksum-marker-only executable. A verified
 legacy LaunchAgent remains supported without migrating or exporting its
 existing credential environment.
-This
-source path does not prove customer-safe private-key custody, a compatible
+This source path does not claim Mac GA completion. It does not prove
+customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.
 After Checkout displays a one-shot NeonDiff Activation Key, return to the
 native **License** pane and paste it there. **Buy an Activation Key** opens the
@@ -303,7 +314,7 @@ Platform operator paths:
 
 | Platform | Daemon path | Status |
 | --- | --- | --- |
-| macOS | launchd with [docs/launchd.md](docs/launchd.md) | Tested beta operator path |
+| macOS | signed Desktop 1.1.0 with [docs/launchd.md](docs/launchd.md) | Native first-run; CLI launchd is legacy/operator only |
 | Linux | systemd with [docs/systemd.md](docs/systemd.md) | Packaged and covered by Ubuntu smoke tests |
 | Docker | Compose recipe with [docs/docker.md](docs/docker.md) | Packaged for local/self-hosted workers |
 | CI runners | One-shot review or dry-run with [docs/ci-runner.md](docs/ci-runner.md) | Documented for Ubuntu-style runners |
@@ -466,7 +477,9 @@ Use [LICENSE.md](LICENSE.md) and [docs/license-boundary.md](docs/license-boundar
 as the canonical public license language. Do not copy older issue comments
 or release notes into public product surfaces when these files are more recent.
 
-For live release operation, use [docs/beta-release-runbook.md](docs/beta-release-runbook.md)
+For Mac GA boundaries, use the [Mac GA architecture contract](docs/architecture/mac-ga-release-contract.md)
+and the [Desktop Mac release runbook](apps/neondiff-desktop/docs/mac-release-runbook.md).
+For live beta operation, use [docs/beta-release-runbook.md](docs/beta-release-runbook.md)
 and [docs/release-governance.md](docs/release-governance.md). Documentation-only
 changes do not restart launchd or promote a release by themselves.
 

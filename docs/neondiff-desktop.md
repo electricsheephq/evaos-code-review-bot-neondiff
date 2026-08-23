@@ -1,20 +1,22 @@
-# NeonDiff Desktop Dev MVP
+# NeonDiff Desktop architecture and local development
 
-The evaluation-first path from this development shell to a GA-quality native
-experience is specified in
-[NeonDiff Desktop GA UX Evaluation And Modernization](superpowers/specs/2026-07-10-neondiff-desktop-ga-ux-evaluation.md)
-and tracked by issue #514. Evaluation and layout stability land before broad
-visual redesign.
-
-NeonDiff Desktop is a SwiftPM macOS app scaffold for issue #115. It is a thin local control panel over the NeonDiff CLI and daemon contracts.
-For the 1.0 launch bar, the Mac app is intentionally a minimal launcher:
-opening the app shows local controls that can start `neondiff dashboard` or open
-the same local HTML dashboard used by the CLI.
+NeonDiff Desktop is the native macOS surface for the Desktop `1.1.0` release
+line, separate from the npm CLI `1.0.4`. The signed app owns Mac first run,
+including Keychain-backed App/provider/activation secrets, its sealed worker,
+and the configured Codex runtime when `codexRuntime` is enabled. The local HTML
+dashboard and npm CLI remain diagnostic or legacy operator surfaces. The managed
+GitHub App/broker is post-GA and outside the BYO path. See the [Mac GA
+architecture contract](architecture/mac-ga-release-contract.md) and [Desktop Mac
+release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md) for the
+canonical boundaries; this page does not claim Mac GA completion.
 
 ## Boundaries
 
 - No review engine runs in the desktop app.
 - No UI path posts GitHub reviews directly.
+- Native first run routes credential-bearing work through the sealed worker in
+  the signed app; new LaunchAgents are secret-free. Codex OAuth material remains
+  owned by the existing Codex CLI session.
 - The native Mac app is the product surface for the Mac customer journey and
   implements native setup/status controls that write through existing CLI
   contracts. The local HTML dashboard is a diagnostic/operator surface for
@@ -47,7 +49,8 @@ lands and a launched-app smoke proves it.
 
 ## CLI Contract
 
-The desktop uses these JSON-first CLI surfaces:
+The desktop uses these JSON-first CLI surfaces through its sealed worker. Manual
+invocation is a CLI/operator diagnostic path, not the native Mac first-run path:
 
 ```bash
 neondiff config inspect --config config.local.json
@@ -202,7 +205,7 @@ proof for the exact configured repository. Changing the App credentials,
 CLI/config path, or allowlist invalidates that proof. This step does not run a
 provider, execute a review, or post to GitHub.
 
-## Local Dashboard Launcher
+## Local Dashboard Launcher (operator/diagnostic)
 
 The dev app no longer opens a browser tab automatically. It exposes explicit
 controls to start the same local dashboard server without opening a browser, or
