@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { resolveEvalOutputRoot } from "../src/eval-harness.js";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const tsxCommand = process.env.NEONDIFF_TEST_TSX ?? join(repoRoot, "node_modules", ".bin", "tsx");
+const runQa = (root: string, timeout = 10_000) => spawnSync(tsxCommand, [join(repoRoot, "scripts/qa-lab/queue-sim.ts")], { cwd: join(repoRoot, "tests"), env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: root }, encoding: "utf8", timeout });
 
 describe("portable output roots", () => {
   const roots: string[] = [];
@@ -41,17 +42,16 @@ describe("portable output roots", () => {
     symlinkSync(repoRoot, alias, "dir");
     process.env.NEONDIFF_EVAL_ROOT = alias;
     expect(() => resolveEvalOutputRoot()).toThrow(/must not be inside the current git checkout/);
+
+    const otherRoot = mkdtempSync(join(tmpdir(), "neondiff-other-checkout-")); roots.push(otherRoot); mkdirSync(join(otherRoot, ".git"));
+    process.env.NEONDIFF_EVAL_ROOT = join(otherRoot, "evals"); expect(() => resolveEvalOutputRoot()).toThrow(/must not be inside the current git checkout/);
+    const otherQa = runQa(join(otherRoot, "qa")); expect(otherQa.status).toBe(1); expect(otherQa.stdout).toBe("");
   });
 
   it("rejects hostile QA roots before creating evidence", () => {
     const hostileRoot = mkdtempSync(join(repoRoot, ".portable-qa-hostile-"));
     roots.push(hostileRoot);
-    const result = spawnSync(tsxCommand, [join(repoRoot, "scripts/qa-lab/queue-sim.ts")], {
-      cwd: join(repoRoot, "tests"),
-      env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: hostileRoot },
-      encoding: "utf8",
-      timeout: 10_000
-    });
+    const result = runQa(hostileRoot);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -61,12 +61,7 @@ describe("portable output roots", () => {
     const externalRoot = mkdtempSync(join(tmpdir(), "neondiff-qa-symlink-"));
     roots.push(externalRoot);
     symlinkSync(repoRoot, join(externalRoot, "neondiff-qa-lab"), "dir");
-    const nestedAlias = spawnSync(tsxCommand, [join(repoRoot, "scripts/qa-lab/queue-sim.ts")], {
-      cwd: join(repoRoot, "tests"),
-      env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: externalRoot },
-      encoding: "utf8",
-      timeout: 10_000
-    });
+    const nestedAlias = runQa(externalRoot);
     expect(nestedAlias.status).toBe(1);
     expect(nestedAlias.stdout).toBe("");
     expect(nestedAlias.stderr).toContain("must be outside a protected checkout root");
@@ -74,19 +69,16 @@ describe("portable output roots", () => {
 
     const finalRoot = mkdtempSync(join(tmpdir(), "neondiff-qa-file-")); const finalTarget = join(repoRoot, `.portable-qa-target-${finalRoot.slice(finalRoot.lastIndexOf("/") + 1)}.json`); writeFileSync(finalTarget, "sentinel\n"); roots.push(finalRoot, finalTarget);
     mkdirSync(join(finalRoot, "neondiff-qa-lab", "risk-queue"), { recursive: true }); symlinkSync(finalTarget, join(finalRoot, "neondiff-qa-lab", "risk-queue", "queue-sim.json"));
-    const finalAlias = spawnSync(tsxCommand, [join(repoRoot, "scripts/qa-lab/queue-sim.ts")], { cwd: join(repoRoot, "tests"), env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: finalRoot }, encoding: "utf8", timeout: 30_000 });
+    const finalAlias = runQa(finalRoot, 60_000);
     expect(finalAlias.status).toBe(1); expect(finalAlias.stdout).toBe(""); expect(readFileSync(finalTarget, "utf8")).toBe("sentinel\n");
-  }, 30_000);
+    rmSync(join(finalRoot, "neondiff-qa-lab", "risk-queue", "queue-sim.json")); const hardTarget = join(repoRoot, `.portable-qa-hard-${finalRoot.slice(finalRoot.lastIndexOf("/") + 1)}.md`); writeFileSync(hardTarget, "hard-sentinel\n"); roots.push(hardTarget); writeFileSync(join(finalRoot, "neondiff-qa-lab", "risk-queue", "queue-sim.json"), "fresh\n"); linkSync(hardTarget, join(finalRoot, "neondiff-qa-lab", "risk-queue", "queue-sim.md"));
+    const hardLink = runQa(finalRoot, 60_000); expect(hardLink.status).toBe(1); expect(hardLink.stdout).toBe(""); expect(readFileSync(hardTarget, "utf8")).toBe("hard-sentinel\n");
+  }, 60_000);
 
   it("accepts an external QA root", () => {
     const externalRoot = mkdtempSync(join(tmpdir(), "neondiff-qa-root-"));
     roots.push(externalRoot);
-    const result = spawnSync(tsxCommand, [join(repoRoot, "scripts/qa-lab/queue-sim.ts")], {
-      cwd: join(repoRoot, "tests"),
-      env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: externalRoot },
-      encoding: "utf8",
-      timeout: 30_000
-    });
+    const result = runQa(externalRoot, 30_000);
     const output = JSON.parse(result.stdout);
 
     expect(result.status).toBe(0);

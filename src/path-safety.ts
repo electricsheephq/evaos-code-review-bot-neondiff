@@ -56,7 +56,7 @@ export function findGitCheckoutRoot(startPath: string): string | undefined {
 }
 
 export function assertPathOutsideProtectedRoot(boundary: PathBoundary): void {
-  const roots = uniqueDefinedPaths([boundary.protectedRoot, ...(boundary.protectedRoots ?? [])]);
+  const roots = uniqueDefinedPaths([boundary.protectedRoot, ...(boundary.protectedRoots ?? []), findGitCheckoutRoot(boundary.path)]);
   for (const protectedRoot of roots) {
     assertPathOutsideSingleProtectedRoot({
       path: boundary.path,

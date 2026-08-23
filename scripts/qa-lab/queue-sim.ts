@@ -12,7 +12,7 @@
  * Proof boundary: simulation + a default-off capability. It changes no live config or launchd; the
  * recommended config here is a LAB recommendation, not an applied setting.
  */
-import { closeSync, constants, mkdtempSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { loadConfigFromObject, type BotConfig } from "../../src/config.js";
@@ -261,7 +261,8 @@ function main(): void {
 }
 
 function writeNoFollow(path: string, content: string): void {
-  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o666); try { writeFileSync(fd, content); } finally { closeSync(fd); }
+  const stat = lstatSync(path, { throwIfNoEntry: false }); if (stat?.isSymbolicLink() || (stat && stat.nlink > 1)) throw new Error("refusing linked evidence file");
+  const temp = mkdtempSync(`${path}.tmp-`); try { writeFileSync(join(temp, "content"), content, { flag: "wx", mode: 0o600 }); renameSync(join(temp, "content"), path); } finally { rmSync(temp, { recursive: true, force: true }); }
 }
 
 main();
