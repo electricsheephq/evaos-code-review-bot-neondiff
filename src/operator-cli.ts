@@ -621,14 +621,19 @@ export function buildRuntimeInventory(input: {
       ? buildDurableQueueSnapshot(input.durableQueue.jobs.filter((job) => job.repo === input.repo), now)
       : undefined
     : input.durableQueue;
+  const recoveredQueueFailures = recoveredQueueFailureTimes(input.coverage);
   const providerCooldowns = (input.providerCooldowns ?? []).filter((cooldown) =>
     !input.repo || cooldown.repo === input.repo
   );
   const repoProviderCooldowns = (input.repoProviderCooldowns ?? []).filter((cooldown) =>
     !input.repo || cooldown.repo === input.repo
   );
+  const staleQueueJobs = input.repo
+    ? (durableQueue?.jobs ?? []).filter((job) => isExpiredQueueLease(job, nowMs)).length
+    : 0;
   const activeWork = (durableQueue?.jobs ?? []).filter((job) =>
-    job.state === "queued" || job.state === "leased" || job.state === "running"
+    (job.state === "queued" || job.state === "leased" || job.state === "running") &&
+    !isExpiredQueueLease(job, nowMs)
   );
   const uncoveredPendingHeads = (queue?.pending ?? []).filter((pending) =>
     !activeWork.some((job) => sameHead(job, pending))
@@ -641,25 +646,28 @@ export function buildRuntimeInventory(input: {
     return Number.isFinite(cooldownUntilMs) && cooldownUntilMs > nowMs;
   }).length;
   const coveredExpiredProviderCooldowns = input.repo
-    ? (activeRepoCooldowns > 0 || activeProviderCooldowns > 0 ? expiredProviderCooldowns : 0)
+    ? ((input.release.database.activeGlobalProviderCooldownCount ?? 0) > 0 || activeRepoCooldowns > 0 || activeProviderCooldowns > 0 ? expiredProviderCooldowns : 0)
     : input.release.database.coveredExpiredProviderCooldownCount ??
       (activeRepoCooldowns > 0 || activeProviderCooldowns > 0 ? expiredProviderCooldowns : 0);
   const retryableExpiredProviderCooldowns = input.repo
     ? Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns)
     : input.release.database.retryableExpiredProviderCooldownCount ??
       Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
-  const retryCoveredReviewerSessions = input.repo ? 0 : input.release.database.retryCoveredReviewerSessionCount ?? 0;
-  const queueFailures = operatorQueueFailureCounts(input.release, durableQueue, Boolean(input.repo));
+  const retryCoveredReviewerSessions = input.repo
+    ? input.release.database.reviewerSessionsByRepo?.find((row) => row.repo === input.repo)?.retryCovered ?? 0
+    : input.release.database.retryCoveredReviewerSessionCount ?? 0;
+  const queueFailures = operatorQueueFailureCounts(input.release, durableQueue, Boolean(input.repo), recoveredQueueFailures);
   const failedQueueJobs = queueFailures.total;
   const activeFailedQueueJobs = queueFailures.active;
-  const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue, Boolean(input.repo));
+  const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue, Boolean(input.repo), recoveredQueueFailures);
   const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
   const readFailures = queue?.summary.readFailures ?? 0;
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
+  const processedFailures = input.repo ? queue?.processed.filter((entry) => entry.status === "failed").length ?? 0 : 0;
   const budget = input.release.budget;
   const retryableProviderDeferredJobs = input.repo
-    ? durableQueue?.summary.retryableProviderDeferred ?? 0
+    ? scopedRetryableProviderDeferredJobs(budget, durableQueue, input.repo)
     : actionableProviderDeferredJobs(budget, durableQueue?.summary.retryableProviderDeferred ?? 0);
   const issueEnrichment = input.issueEnrichment;
   const issueEnrichmentRuntime = input.issueEnrichmentRuntime;
@@ -671,6 +679,8 @@ export function buildRuntimeInventory(input: {
 
   const gates = [
     ...runtimeRelease.gates,
+    ...(input.repo ? [{ name: "runtime_no_processed_failures", ok: processedFailures === 0, detail: `${processedFailures} selected-repo processed failure(s)` }] : []),
+    ...(input.repo ? [{ name: "runtime_no_stale_queue_leases", ok: staleQueueJobs === 0, detail: `${staleQueueJobs} expired selected-repo queue lease(s)` }] : []),
     {
       name: "runtime_no_stale_leases",
       ok: input.agents.summary.staleLeases === 0,
@@ -945,7 +955,7 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
     lines.push("recommendedActions:");
     for (const action of inventory.recommendedActions) lines.push(`- ${action}`);
   }
-  return lines.join("\n");
+  return redactSecrets(lines.join("\n"));
 }
 
 export function summarizeAgentInventory(input: {
@@ -1809,10 +1819,12 @@ function scopeRuntimeRelease(release: ReleaseStatus, repo?: string): ReleaseStat
     gates: safeRelease.gates.map((gate) => ({ ...gate, detail: sanitizeRuntimeAction(gate.detail) }))
   };
   if (!repo) return runtimeRelease;
+  const gates = runtimeRelease.gates.filter((gate) => !REPO_GLOBAL_RUNTIME_GATES.has(gate.name));
+  const ok = gates.every((gate) => gate.ok);
   return {
     ...runtimeRelease,
-    gates: runtimeRelease.gates.filter((gate) => !REPO_GLOBAL_RUNTIME_GATES.has(gate.name)),
-    recommendedActions: []
+    ok, gates, recommendedActions: [],
+    ...(runtimeRelease.health ? { health: { ...runtimeRelease.health, state: ok ? "green" : "red", reason: ok ? "selected repository release gates pass" : runtimeRelease.health.reason } } : {})
   };
 }
 
@@ -2005,11 +2017,20 @@ function isRetryableQueueJob(job: ReviewQueueJobRecord, now: Date): boolean {
   return !Number.isFinite(nextEligibleAtMs) || nextEligibleAtMs <= now.getTime();
 }
 
+function isExpiredQueueLease(job: ReviewQueueJobRecord, nowMs: number): boolean {
+  return (job.state === "leased" || job.state === "running") && Number.isFinite(Date.parse(job.leaseExpiresAt ?? "")) && Date.parse(job.leaseExpiresAt!) <= nowMs;
+}
+
 function actionableProviderDeferredJobs(
   budget: ReviewBudgetStatus | undefined,
   fallbackRetryableProviderDeferred: number
 ): number {
   return budget?.providerDeferred.readyToRetry ?? fallbackRetryableProviderDeferred;
+}
+
+function scopedRetryableProviderDeferredJobs(budget: ReviewBudgetStatus | undefined, queue: OperatorDurableQueueSnapshot | undefined, repo: string): number {
+  if (!budget || !budget.details.included) return queue?.summary.retryableProviderDeferred ?? 0;
+  return budget.wouldLease.filter((job) => job.repo === repo && job.state === "provider_deferred").length;
 }
 
 function describeActionableProviderDeferredJobs(

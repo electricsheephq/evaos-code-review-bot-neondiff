@@ -1003,54 +1003,37 @@ describe("operator CLI summaries", () => {
     expect(inventory.recommendedActions).not.toContain("retry expired provider cooldowns or inspect provider health");
   });
 
-  it("keeps repo runtime inventory on selected rows and strips global recovery actions", () => {
-    const release = releaseStatus({
-      ok: false,
-      recommendedActions: [
-        "npx tsx src/cli.ts retry-failed --dry-run false",
-        "retry expired provider cooldowns or inspect provider health"
-      ],
-      database: {
-        errorCount: 3,
-        recentUnrecoveredErrorCount: 2,
-        failedReviewQueueJobCount: 2,
-        activeFailedReviewQueueJobCount: 2,
-        zcodeTimeoutFailedReviewQueueJobCount: 1,
-        activeZCodeTimeoutFailedReviewQueueJobCount: 1,
-        retryableExpiredProviderCooldownCount: 1
-      }
-    });
-    release.gates.push(
-      { name: "live_db_no_errors", ok: false, detail: "2 recent unrecovered blocking error row(s)" },
-      { name: "queue_no_failed_jobs", ok: false, detail: "2 active failed durable queue job(s)" },
-      { name: "queue_no_zcode_timeout_failed_jobs", ok: false, detail: "1 active ZCode timeout failed durable queue job(s)" },
-      { name: "queue_no_retryable_provider_deferred_jobs", ok: false, detail: "1 ready-to-retry provider-deferred durable queue job(s)" }
-    );
-    const selected = buildRuntimeInventory({
-      release,
-      repo: "owner/selected",
-      coverage: coverageReport({ ok: true }),
-      agents: agentInventory({ ok: true }),
-      providerCooldowns: [],
-      repoProviderCooldowns: [],
-      durableQueue: durableQueueSnapshot({
-        ok: true,
-        summary: { ...cleanDurableQueueSummary(), total: 1, posted: 1 },
-        jobs: [durableJob({ repo: "owner/selected", pullNumber: 7, headSha: "recovered", state: "posted" })]
-      }),
-      checkedAt: "2026-07-01T00:30:00.000Z"
-    });
-
-    expect(selected.ok).toBe(true);
-    expect(selected.summary.failedQueueJobs).toBe(0);
-    expect(selected.gates.some((gate) => /^(live_db|provider_cooldown_backlog|queue_no_)/.test(gate.name))).toBe(false);
-    expect(`${selected.recommendedActions.join("\n")}\n${JSON.stringify(selected)}`).not.toMatch(/retry-failed|retry-provider-cooldowns|--dry-run false|retry or requeue/i);
-
+  it("scopes runtime truth and strips recovery commands", () => {
+    const release = releaseStatus({ ok: true, recommendedActions: ["retry-failed --dry-run false"], database: { activeGlobalProviderCooldownCount: 1, reviewerSessionsByRepo: [{ repo: "owner/selected", total: 1, active: 0, expired: 1, retryCovered: 1 }] } });
+    release.ok = false;
+    release.gates.push({ name: "live_db_no_errors", ok: false, detail: "global failure" });
+    release.health = { state: "red", reason: "global failure", active: { failedQueueJobs: 1, staleReviewLeases: 0 }, recent: { unrecoveredReviewErrors: 1 }, history: { reviewErrors: 1, failedQueueJobs: 1 } };
+    const budget = reviewBudgetStatus();
+    budget.wouldLease = [];
+    budget.providerDeferred = { ...budget.providerDeferred, total: 1, retryable: 1, readyToRetry: 1 };
+    release.budget = budget;
+    const inventory = buildRuntimeInventory({ release, repo: "owner/selected", coverage: coverageReport({ processed: [
+      { ...processedEntry(9, "processed-failed", "failed"), repo: "owner/selected" },
+      { ...processedEntry(8, "recovered", "posted"), repo: "owner/selected", createdAt: "2026-07-01T00:30:00.000Z" }
+    ] }), agents: agentInventory({ ok: true }), providerCooldowns: [{ ...processedRecord(7, "cooldown", "skipped"), repo: "owner/selected", expired: true, cooldownUntil: "2026-07-01T00:01:00.000Z", reason: "expired" }], repoProviderCooldowns: [],
+      durableQueue: durableQueueSnapshot({ jobs: [
+        { ...durableJob({ repo: "owner/selected", pullNumber: 6, headSha: "expired", state: "leased" }), leaseExpiresAt: "2026-07-01T00:01:00.000Z" },
+        durableJob({ repo: "owner/selected", pullNumber: 8, headSha: "recovered", state: "failed" }),
+        durableJob({ repo: "owner/selected", pullNumber: 7, headSha: "deferred", state: "provider_deferred", nextEligibleAt: "2026-07-01T00:01:00.000Z" })
+      ] }), checkedAt: "2026-07-01T00:30:00.000Z" });
+    expect(inventory.summary).toMatchObject({ activeQueueJobs: 0, failedQueueJobs: 1, retryableProviderDeferredJobs: 0, retryCoveredReviewerSessions: 1, retryableExpiredProviderCooldowns: 0, coveredExpiredProviderCooldowns: 1 });
+    expect(inventory.gates).toContainEqual(expect.objectContaining({ name: "runtime_no_processed_failures", ok: false }));
+    expect(inventory.gates).toContainEqual(expect.objectContaining({ name: "runtime_no_stale_queue_leases", ok: false }));
+    expect(inventory.gates).toContainEqual(expect.objectContaining({ name: "runtime_no_failed_queue_jobs", ok: true }));
+    expect(inventory.release).toMatchObject({ ok: true, health: { state: "green" } });
+    expect(JSON.stringify(inventory)).not.toMatch(/retry-failed|retry-provider-cooldowns|--dry-run false/);
   });
 
   it("formats a concise human runtime inventory without leaking secrets", () => {
+    const release = releaseStatus({ ok: true, budget: reviewBudgetStatus() });
+    release.releaseUnit.configPath = "/runtime/ghp_dynamic_secret.json";
     const inventory = buildRuntimeInventory({
-      release: releaseStatus({ ok: true, budget: reviewBudgetStatus() }),
+      release,
       coverage: coverageReport({ ok: true }),
       agents: agentInventory({ ok: true }),
       durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
