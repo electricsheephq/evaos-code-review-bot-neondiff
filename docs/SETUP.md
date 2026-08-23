@@ -78,7 +78,8 @@ worker migration.
 The current Sparkle appcast does not provide a supported downgrade. Do not use
 **Check for Updates**, a source reset, or a manually edited feed as rollback;
 rollback requires a separately accepted immutable signed/notarized prior
-artifact and a tested state-preserving recovery path.
+artifact and the tested state-preserving recovery path in
+[Immutable Mac update, rollback, and re-update](mac-update-rollback.md).
 
 ## 1. Install NeonDiff
 

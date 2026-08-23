@@ -13,7 +13,7 @@ describe("packaged customer setup surface", () => {
     ) as Array<{ files?: Array<{ path?: string }> }>;
     const files = new Set(pack[0]?.files?.map((entry) => entry.path));
 
-    for (const path of ["README.md", "docs/SETUP.md", "docs/github-app-setup.md"]) {
+    for (const path of ["README.md", "docs/SETUP.md", "docs/github-app-setup.md", "docs/mac-update-rollback.md"]) {
       expect(existsSync(path), `${path} exists in the repository`).toBe(true);
       expect(files.has(path), `${path} is present in npm pack`).toBe(true);
     }
@@ -26,6 +26,7 @@ describe("packaged customer setup surface", () => {
     expect(setup).toContain("### Update an existing local worker");
     expect(setup).toContain("bots: []");
     expect(setup).toContain("state/reviews.sqlite");
+    expect(setup).toContain("mac-update-rollback.md");
     expect(setup).toContain("Useful current-launch work requires the exact");
     expect(setup).not.toContain("apps/neondiff-desktop/docs/customer-adoption.md");
   });
