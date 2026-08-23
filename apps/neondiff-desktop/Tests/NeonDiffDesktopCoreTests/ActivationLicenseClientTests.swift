@@ -201,6 +201,8 @@ import Testing
         #expect(!summary(scope: "public", privateAllowed: nil).coversPrivateRepos)
         #expect(!summary(scope: "all", privateAllowed: false).coversPrivateRepos)
         #expect(!summary(scope: "private", privateAllowed: false).coversPrivateRepos)
+        #expect(summary(scope: "public", privateAllowed: false).covers(repositoryVisibility: "public"))
+        #expect(!summary(scope: "public", privateAllowed: false).covers(repositoryVisibility: "unknown"))
     }
 
     @Test func keyMaterialNeverExposesRawSecret() {

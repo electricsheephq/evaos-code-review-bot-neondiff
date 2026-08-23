@@ -84,6 +84,7 @@ export interface GitHubRepositoryAccessProof {
   readMode: "app_installation" | "fallback_token" | "unconfigured";
   visibility_result: GitHubRepositoryVisibility;
   visibility_source: GitHubRepositoryVisibilitySource;
+  installation_id?: number;
   installation_id_present: boolean;
   app_can_read_metadata: boolean;
   app_can_read_pull_requests: boolean;
@@ -227,6 +228,7 @@ export class GitHubApi {
         readMode,
         visibility_result: visibility.result,
         visibility_source: visibility.source,
+        installation_id: installationId,
         installation_id_present: true,
         app_can_read_metadata: true,
         app_can_read_pull_requests: true,
@@ -238,6 +240,7 @@ export class GitHubApi {
         readMode,
         visibility_result: visibility.result,
         visibility_source: visibility.source,
+        installation_id: installationId,
         installation_id_present: true,
         app_can_read_metadata: true,
         app_can_read_pull_requests: false,

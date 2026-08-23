@@ -94,7 +94,25 @@ public struct ActivationEntitlementSummary: Sendable, Equatable {
     /// repos even when the response status is `active`.
     public var coversPrivateRepos: Bool {
         if privateRepoAllowed == false { return false }
-        return repoVisibilityScope == "all" || repoVisibilityScope == "private"
+        let scope = repoVisibilityScope.lowercased()
+        return scope == "all" || scope == "private"
+    }
+
+    /// Visibility is GitHub-authoritative. A public target only needs an
+    /// active entitlement scope that names public access; private/internal
+    /// targets retain the stricter private-repository postcondition.
+    public func covers(repositoryVisibility: String) -> Bool {
+        guard status == .active else { return false }
+        switch repositoryVisibility.lowercased() {
+        case "public":
+            return ["public", "private", "all"].contains(
+                repoVisibilityScope.lowercased()
+            )
+        case "private", "internal":
+            return coversPrivateRepos
+        default:
+            return false
+        }
     }
 }
 

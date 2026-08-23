@@ -253,8 +253,21 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return false
         }
-        return selectedReviewRepository.lowercased()
-            == activationVerifiedRepositoryThisLaunch.lowercased()
+        guard selectedReviewRepository.lowercased()
+                == activationVerifiedRepositoryThisLaunch.lowercased()
+        else { return false }
+        if byoGitHubCredentialOnboardingAvailable,
+           let visibility = byoVerifiedVisibility {
+            guard let authority = byoRepositoryAuthority,
+                  authority.generation == byoAuthorityGeneration,
+                  authority.repository.caseInsensitiveCompare(
+                      selectedReviewRepository
+                  ) == .orderedSame,
+                  authority.visibility == visibility,
+                  authority.coversCurrentVisibility
+            else { return false }
+        }
+        return true
     }
 
     /// The repository the native app will activate. Existing BYO workers may
@@ -747,6 +760,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var activeProviderVerificationRequestGeneration: UInt64?
     private var providerKeyRevision: UInt64 = 0
     private var byoGitHubCredentialRevision: UInt64 = 0
+    private var byoAuthorityGeneration: UInt64 = 0
+    private var byoVerifiedVisibility: String?
+    private var byoGitHubAccessAuthority: BYORepositoryAuthority?
+    private var byoRepositoryAuthority: BYORepositoryAuthority?
     private var githubAuthorizationTask: Task<Void, Never>?
     private var githubRepositoryRefreshTask: Task<Void, Never>?
     private var managedGitHubConnectionTask: Task<Void, Never>?
@@ -1929,6 +1946,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubRecovery = nil
         managedGitHubConnectionState = managedGitHubAvailable ? .disconnected : .quarantined
         byoGitHubCredentialsVerified = false
+        byoAuthorityGeneration &+= 1
         providerVerificationStatus = "Verify the selected account's provider credential when ready."
         activationVerifiedThisLaunch = false
         activationVerifiedRepositoryThisLaunch = nil
@@ -3212,6 +3230,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         invalidateScopedReviewApproval()
+        invalidateBYOGitHubVerificationContext()
         invalidateActivationForRepositoryChange(fullReset: true)
         selectedBYOReviewRepository = repository.name
         dependencies.preferences.set(
@@ -3844,6 +3863,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
+        invalidateBYOGitHubVerificationContext()
+
         let privateKey: String
         do {
             guard let stored = try dependencies.secretStore.readSecret(
@@ -3980,6 +4001,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             byoGitHubCredentialStatus = lastError ?? "Review target required"
             return
         }
+        invalidateBYOGitHubVerificationContext()
         let arguments = [
             "doctor", "github",
             "--config", configPath,
@@ -3993,7 +4015,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             cliPath: cliPath,
             configPath: configPath,
             repositories: [targetRepository],
-            workspaceGeneration: workspaceContextGeneration
+            workspaceGeneration: workspaceContextGeneration,
         )
         let executablePath = cliPath
         let cli = dependencies.cli
@@ -4183,6 +4205,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
+        if let targetRepository = selectedReviewRepository,
+           let targetCheck = report.github.readChecks.first(where: {
+               $0.repo.caseInsensitiveCompare(targetRepository) == .orderedSame
+           }) {
+            byoVerifiedVisibility = targetCheck.visibilityResult?.lowercased()
+            byoGitHubAccessAuthority = makeBYOAccessAuthority(
+                expectedContext: expectedContext,
+                targetCheck: targetCheck,
+                botLogin: report.github.botLogin
+            )
+        }
         let repositories = report.github.readChecks.map(\.repo).sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }.joined(separator: ", ")
@@ -4255,6 +4288,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
         activationRequestGeneration &+= 1
         let activationGeneration = activationRequestGeneration
+        let expectedAuthorityGeneration = byoAuthorityGeneration
+        let expectedAccessAuthority = byoGitHubAccessAuthority
         let expectedWorkspaceGeneration = workspaceContextGeneration
         let expectedCLIPath = cliPath
         let expectedConfigPath = configPath
@@ -4393,6 +4428,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 }
                 guard self.workspaceContextGeneration
                         == expectedWorkspaceGeneration,
+                      self.byoAuthorityGeneration
+                        == expectedAuthorityGeneration,
+                      self.byoGitHubAccessAuthority
+                        == expectedAccessAuthority,
                       self.cliPath == expectedCLIPath,
                       self.configPath == expectedConfigPath,
                       self.selectedReviewRepository?
@@ -4440,7 +4479,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
                     resolved,
                     repository: repository,
                     activeLogMessage:
-                        "Current repository entitlement verified through the existing local agent's API-backed credential path."
+                        "Current repository entitlement verified through the existing local agent's API-backed credential path.",
+                    authority: self.byoGitHubAccessAuthority
                 )
                 switch resolved {
                 case .active:
@@ -4477,9 +4517,53 @@ package final class NeonDiffDesktopModel: ObservableObject {
         return outcome
     }
 
+    private func makeBYOAccessAuthority(
+        expectedContext: BYOGitHubVerificationContext,
+        targetCheck: BYOGitHubDoctorReport.ReadCheck,
+        botLogin: String?
+    ) -> BYORepositoryAuthority? {
+        guard let repository = selectedReviewRepository,
+              let owner = repository.split(separator: "/").first,
+              let appID = Int64(expectedContext.appId), appID > 0,
+              let visibility = targetCheck.visibilityResult?.lowercased(),
+              ["public", "private", "internal", "unknown"].contains(visibility)
+        else { return nil }
+        let selectedBot = selectedBotInstallation
+        let normalizedBot = botLogin?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bot = normalizedBot?.isEmpty == false ? normalizedBot : selectedBot?.appSlug
+        let installationID = targetCheck.installationID ?? selectedBot?.githubInstallationID
+        guard let bot,
+              let installationID,
+              installationID > 0
+        else { return nil }
+        if let selectedBot {
+            guard selectedBot.appID == appID,
+                  selectedBot.githubInstallationID == installationID,
+                  selectedBot.githubAccountLogin?.caseInsensitiveCompare(
+                      String(owner)
+                  ) == .orderedSame
+            else { return nil }
+        }
+        return BYORepositoryAuthority(
+            account: String(owner),
+            bot: bot,
+            repository: repository,
+            appID: expectedContext.appId,
+            installationID: installationID,
+            visibility: visibility,
+            entitlementScope: nil,
+            privateRepoAllowed: nil,
+            generation: byoAuthorityGeneration
+        )
+    }
+
     private func invalidateBYOGitHubVerificationContext() {
         invalidateScopedReviewApproval()
         guard byoGitHubCredentialOnboardingAvailable else { return }
+        byoAuthorityGeneration &+= 1
+        byoVerifiedVisibility = nil
+        byoGitHubAccessAuthority = nil
+        byoRepositoryAuthority = nil
         byoGitHubCredentialsVerified = false
         guard !isBYOGitHubVerificationInProgress else { return }
         if byoGitHubCredentialsStored {
@@ -4944,6 +5028,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func performActivation() async {
         activationRequestGeneration &+= 1
         let generation = activationRequestGeneration
+        let expectedAuthorityGeneration = byoAuthorityGeneration
+        let expectedAccessAuthority = byoGitHubAccessAuthority
+        byoRepositoryAuthority = nil
 
         guard !activationTargetSelectionRequired else {
             applyActivationEvent(.activationServiceError)
@@ -5006,11 +5093,23 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         // Drop stale results after a cancellation or a newer activation request.
         guard generation == activationRequestGeneration else { return }
-        let resolved = resolveActivationOutcome(outcome)
+        guard !byoGitHubCredentialOnboardingAvailable
+                || (expectedAuthorityGeneration == self.byoAuthorityGeneration
+                    && expectedAccessAuthority == self.byoGitHubAccessAuthority)
+        else {
+            applyActivationEvent(.activationServiceError)
+            lastError = "GitHub App or Review Target authority changed before activation finished."
+            return
+        }
+        let resolved = resolveActivationOutcome(
+            outcome,
+            visibility: byoVerifiedVisibility
+        )
         applyActivationEvent(ActivationLicenseOutcomeMapping.event(for: resolved))
         applyActivationOutcomeSideEffects(
             resolved,
-            repository: activationRepository
+            repository: activationRepository,
+            authority: expectedAccessAuthority
         )
     }
 
@@ -5018,9 +5117,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// which the server review gate rejects for private repos. Downgrade such a
     /// scope-insufficient success to a scope conflict so the pane never reports
     /// private review as unlocked when it is not.
-    private func resolveActivationOutcome(_ outcome: ActivationClientOutcome) -> ActivationClientOutcome {
-        if case let .active(summary) = outcome, !summary.coversPrivateRepos {
-            return .scopeConflict
+    private func resolveActivationOutcome(
+        _ outcome: ActivationClientOutcome,
+        visibility: String? = nil
+    ) -> ActivationClientOutcome {
+        if case let .active(summary) = outcome {
+            if let visibility {
+                guard summary.covers(repositoryVisibility: visibility) else {
+                    return .scopeConflict
+                }
+            } else if !summary.coversPrivateRepos {
+                return .scopeConflict
+            }
         }
         return outcome
     }
@@ -5028,7 +5136,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private func applyActivationOutcomeSideEffects(
         _ outcome: ActivationClientOutcome,
         repository: String?,
-        activeLogMessage: String? = nil
+        activeLogMessage: String? = nil,
+        authority: BYORepositoryAuthority? = nil
     ) {
         switch outcome {
         case .active(let summary):
@@ -5044,6 +5153,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
             }
             activationUpdateEntitlementThisLaunch = summary.updateEntitlement
             activationVerifiedThisLaunch = true
+            if let authority, let repository,
+               authority.repository.caseInsensitiveCompare(repository)
+                    == .orderedSame {
+                byoRepositoryAuthority = authority.withEntitlement(summary)
+            }
             lastError = nil
             let scope = summary.repoVisibilityScope
             let plan = summary.plan.map { " · \($0)" } ?? ""
@@ -5059,15 +5173,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case .scopeConflict:
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil
+            byoRepositoryAuthority = nil
             lastError = "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
         case .expired, .revoked, .invalid:
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil
+            byoRepositoryAuthority = nil
             dependencies.preferences.set("", forKey: activationRepositoryKey)
             lastError = activationPresentation.cause
         case .offline, .serviceError, .malformed:
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil
+            byoRepositoryAuthority = nil
             // Cause copy comes from the typed state presentation — never a raw
             // error string, and never any key material.
             lastError = activationPresentation.cause
@@ -6833,6 +6950,7 @@ private struct BYOGitHubDoctorReport: Decodable {
     struct GitHub: Decodable {
         let canPostAsApp: Bool
         let readMode: String
+        let botLogin: String?
         let readChecks: [ReadCheck]
     }
 
@@ -6840,6 +6958,7 @@ private struct BYOGitHubDoctorReport: Decodable {
         let repo: String
         let ok: Bool
         let visibilityResult: String?
+        let installationID: Int64?
         let skippedByPolicy: String?
         let installationIdPresent: Bool
         let appCanReadMetadata: Bool
@@ -6849,6 +6968,7 @@ private struct BYOGitHubDoctorReport: Decodable {
             case repo
             case ok
             case visibilityResult = "visibility_result"
+            case installationID = "installation_id"
             case skippedByPolicy
             case installationIdPresent = "installation_id_present"
             case appCanReadMetadata = "app_can_read_metadata"
@@ -6871,6 +6991,34 @@ private struct BYOGitHubVerificationContext: Equatable, Sendable {
     let configPath: String
     let repositories: [String]
     let workspaceGeneration: UInt64
+}
+
+private struct BYORepositoryAuthority: Equatable, Sendable {
+    let account: String
+    let bot: String
+    let repository: String
+    let appID: String
+    let installationID: Int64
+    let visibility: String
+    var entitlementScope: String?
+    var privateRepoAllowed: Bool?
+    let generation: UInt64
+
+    var coversCurrentVisibility: Bool {
+        guard let entitlementScope else { return false }
+        return ActivationEntitlementSummary(
+            status: .active, repoVisibilityScope: entitlementScope,
+            privateRepoAllowed: privateRepoAllowed, updateEntitlement: false,
+            expiresAt: nil, plan: nil, seats: nil
+        ).covers(repositoryVisibility: visibility)
+    }
+
+    func withEntitlement(_ summary: ActivationEntitlementSummary) -> Self {
+        var result = self
+        result.entitlementScope = summary.repoVisibilityScope
+        result.privateRepoAllowed = summary.privateRepoAllowed
+        return result
+    }
 }
 
 private struct ScopedReviewApproval: Equatable, Sendable {
