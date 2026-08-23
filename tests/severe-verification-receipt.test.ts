@@ -39,8 +39,16 @@ describe("severe verification receipt parser", () => {
     const states = ["refuted", "timeout", "unavailable", "malformed", "stale_head", "incomplete"] as const;
     for (const state of states) {
       const evidence = state === "incomplete" ? { files: [{ path, kind: "module", sha256: "c".repeat(64), bytes: 1, complete: false }], omitted: [{ path, code: "incomplete" }], complete: false } : base().evidence;
-      const parsed = parseSevereVerificationReceipt(receipt({ state, disposition: "suppress", evidence }));
+      const parsed = parseSevereVerificationReceipt(receipt({ state, disposition: "suppress", reasonCode: state === "refuted" ? "refuted" : state, evidence }));
       expect(parsed.state).toBe(state);
     }
+    expect(parseSevereVerificationReceipt(receipt({ state: "failed", disposition: "suppress", reasonCode: "provider_unavailable" })).state).toBe("failed");
+    expect(isSevereVerificationReceipt(receipt({ reasonCode: "timeout" }))).toBe(false);
+    expect(isSevereVerificationReceipt(receipt({ state: "refuted", disposition: "suppress", reasonCode: "provider_unavailable" }))).toBe(false);
+  });
+
+  it("bounds evidence cardinality and proof sizes", () => {
+    expect(isSevereVerificationReceipt(receipt({ state: "incomplete", disposition: "suppress", reasonCode: "incomplete", evidence: { files: [], omitted: Array.from({ length: 10_000 }, () => ({ path, code: "incomplete" })), complete: false } }))).toBe(false);
+    expect(isSevereVerificationReceipt(receipt({ evidence: { files: [{ ...base().evidence.files[0], bytes: 2 ** 32 }], omitted: [], complete: true } }))).toBe(false);
   });
 });
