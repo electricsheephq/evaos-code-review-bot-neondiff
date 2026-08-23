@@ -261,7 +261,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123 });
+        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 999, app_slug: "customer-review-app" });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -284,6 +284,10 @@ describe("GitHub App read authentication", () => {
       visibility_result: "public",
       visibility_source: "repository_api",
       installation_id_present: true,
+      installation_id: 123,
+      installation_account: "owner",
+      app_id: 999,
+      app_slug: "customer-review-app",
       app_can_read_metadata: true,
       app_can_read_pull_requests: true,
       openPullCount: 1
@@ -404,12 +408,17 @@ describe("GitHub App read authentication", () => {
       globalThis.fetch = vi.fn(async (url) => scenario.handler(String(url))) as typeof fetch;
       const github = new GitHubApi({ appId: "4184532", privateKeyPath });
 
-      await expect(github.probeRepositoryAccess("owner/repo")).resolves.toMatchObject({
+      const proof = await github.probeRepositoryAccess("owner/repo");
+      expect(proof).toMatchObject({
         repo_full_name: "owner/repo",
         visibility_result: scenario.expected.visibility_result ?? "unknown",
         visibility_source: scenario.expected.visibility_source ?? "unavailable",
         ...scenario.expected
       });
+      if (scenario.name === "metadata resource inaccessible") {
+        expect({ app_id: proof.app_id, app_slug: proof.app_slug, account: proof.installation_account })
+          .toEqual({ app_id: undefined, app_slug: undefined, account: undefined });
+      }
     }
   });
 
