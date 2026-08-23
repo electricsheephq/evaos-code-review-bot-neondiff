@@ -14,6 +14,22 @@ const indexSchema = json(new URL("../docs/schema/desktop-release-index-v1.schema
 const validateDeclaration = ajv.compile(declarationSchema), validateIndex = ajv.compile(indexSchema);
 
 function fail(message) { throw new Error(message); }
+function rejectDuplicateIdentityKeys(raw) {
+  const seen = new Set(); let inString = false; let escaped = false; let start = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    const char = raw[i];
+    if (!inString) { if (char === '"') { inString = true; start = i; } continue; }
+    if (escaped) { escaped = false; continue; }
+    if (char === "\\") { escaped = true; continue; }
+    if (char !== '"') continue;
+    inString = false; let next = i + 1;
+    while (/\s/.test(raw[next] ?? "")) next += 1;
+    if (raw[next] !== ":") continue;
+    const key = JSON.parse(raw.slice(start, i + 1));
+    if ((key === "build" || key === "sequence") && seen.has(key)) fail(`duplicate identity key: ${key}`);
+    if (key === "build" || key === "sequence") seen.add(key);
+  }
+}
 function readRegular(path) {
   let fd;
   try {
@@ -21,6 +37,7 @@ function readRegular(path) {
     if (!fstatSync(fd).isFile()) fail(`non-regular file: ${path}`);
     const raw = readFileSync(fd, "utf8");
     if (/(?:"build"|"sequence")\s*:\s*(?!"[0-9]+")/.test(raw)) fail("identity fields must be quoted decimal text");
+    rejectDuplicateIdentityKeys(raw);
     return JSON.parse(raw);
   } catch (error) { if (error?.code === "ELOOP") fail(`symlink or non-regular file: ${path}`); throw error; }
   finally { if (fd !== undefined) closeSync(fd); }
