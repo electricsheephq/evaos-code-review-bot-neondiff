@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { compareSemver, validateDesktopReleaseManifest, validateManifestIndex } from "../scripts/validate-desktop-candidate-manifest.mjs";
 const commit = "a".repeat(40);
@@ -54,6 +56,7 @@ describe("Desktop release manifest contract", () => {
   });
   it("uses SemVer prerelease precedence and stable GA proof", () => {
     expect(compareSemver("1.1.0-beta.10", "1.1.0-beta.2")).toBeGreaterThan(0);
+    expect(compareSemver("1.0.0-beta.100000000000000000000", "1.0.0-beta.99999999999999999999")).toBeGreaterThan(0);
     expect(compareSemver("1.1.0", "1.1.0-rc.1")).toBeGreaterThan(0);
     expect(validateDesktopReleaseManifest(stable(), { ajv: Ajv2020 })).toEqual({ valid: true, errors: [] });
   });
@@ -69,9 +72,23 @@ describe("Desktop release manifest contract", () => {
     const rollback = stable(); rollback.rollback.targetVersion = "1.1.0";
     expect(validateDesktopReleaseManifest(rollback, { ajv: AcceptingAjv }).valid).toBe(false);
     const boundary = stable(); boundary.proofBoundary.excludes = ["This is not a release candidate."]; expect(validateDesktopReleaseManifest(boundary, { ajv: AcceptingAjv }).valid).toBe(false);
+    const bypasses = [
+      (() => { const m = stable(); Object.assign(m.source, { workflowRunRef: null, artifactRef: null }); Object.assign(m.artifact, { workflowRunRef: null, artifactRef: null }); return m; })(),
+      (() => { const m = stable(), other = "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/124/artifacts/456"; Object.assign(m.source, { artifactRef: other }); Object.assign(m.artifact, { artifactRef: other }); return m; })(),
+      (() => { const m = stable(); m.gatekeeper.assessment = null; return m; })(),
+      (() => { const m = stable(); m.feed.artifactUrl = "https://downloads.neondiff.com/other.zip"; return m; })(),
+      (() => { const m = stable(); m.proofBoundary.excludes = ["Gatekeeper is not proven"]; return m; })()
+    ];
+    for (const manifest of bypasses) expect(validateDesktopReleaseManifest(manifest, { ajv: AcceptingAjv }).valid).toBe(false);
   });
   it("requires the explicit index and fails closed without Ajv", () => {
     expect(validateManifestIndex("docs/release-candidates/desktop-manifests.index.json", { ajv: Ajv2020 })).toEqual({ valid: true, errors: [] });
     expect(validateManifestIndex("docs/release-candidates/desktop-manifests.index.json", { ajv: null })).toEqual({ valid: false, errors: ["schema validator unavailable"] });
+  });
+  it("rejects an unindexed versioned manifest", () => {
+    const dir = mkdtempSync(`${tmpdir()}/desktop-manifest-`), index = `${dir}/desktop-manifests.index.json`;
+    writeFileSync(index, JSON.stringify({ schemaVersion: "desktop-release-manifest-index.v1", status: "no-versioned-manifest", manifestPaths: [], reason: "deferred until frozen source; not a release candidate" }));
+    writeFileSync(`${dir}/v1.1.0-desktop-template.json`, "{}");
+    expect(validateManifestIndex(index, { ajv: Ajv2020 }).valid).toBe(false); rmSync(dir, { recursive: true, force: true });
   });
 });

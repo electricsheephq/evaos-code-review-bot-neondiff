@@ -27,7 +27,7 @@ export function compareSemver(a, b) {
     if (i === left.pre.length) return -1;
     if (i === right.pre.length) return 1;
     const x = left.pre[i], y = right.pre[i], xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
-    if (xn && yn && +x !== +y) return +x - +y;
+    if (xn && yn && x !== y) return compareNumeric(x, y);
     if (xn !== yn) return xn ? -1 : 1;
     if (x !== y) return x < y ? -1 : 1;
   }
@@ -40,7 +40,9 @@ function https(value) {
 function refs(value) { return Array.isArray(value) && value.length > 0 && value.every((ref) => typeof ref === "string" && /\S/.test(ref)); }
 function nonblank(value) { return typeof value === "string" && /\S/.test(value); }
 function immutable(value, kind) { return (kind === "workflow" ? workflowUrl : artifactUrl).test(value); }
+function runId(value) { return /^https:\/\/github\.com\/electricsheephq\/evaos-code-review-bot-neondiff\/actions\/runs\/(\d+)/.exec(value ?? "")?.[1] ?? null; }
 function sameDigest(value, expected) { return typeof value === "string" && digest.test(value) && value === expected; }
+function compareNumeric(a, b) { const left = a.replace(/^0+/, "") || "0", right = b.replace(/^0+/, "") || "0"; return left.length === right.length ? (left === right ? 0 : left < right ? -1 : 1) : left.length - right.length; }
 function checkGate(manifest, name, errors) {
   const value = manifest[name];
   if (value.state === "proven" && (!refs(value.evidenceRefs) || ("artifactSha256" in value && !sameDigest(value.artifactSha256, manifest.artifact.sha256)))) errors.push(`${name}: proven gate lacks artifact and evidence proof`);
@@ -67,7 +69,10 @@ export function validateDesktopReleaseManifest(manifest, options = {}) {
   if (manifest.source.ref !== `sha:${manifest.source.commit}` && manifest.source.ref !== `refs/tags/v${manifest.version}`) errors.push("source: ref must be an exact SHA ref or version-pinned tag");
   if (manifest.artifact.version !== manifest.version || manifest.artifact.archiveName !== `NeonDiff-${manifest.version}-build${manifest.artifact.build}-macOS.zip`) errors.push("artifact: version/build/archive identity mismatch");
   for (const [value, kind] of [[manifest.source.workflowRunRef, "workflow"], [manifest.artifact.workflowRunRef, "workflow"], [manifest.source.artifactRef, "artifact"], [manifest.artifact.artifactRef, "artifact"]]) if (value !== null && !immutable(value, kind)) errors.push("provenance: supported immutable workflow/artifact URL required");
+  const released = ["beta", "stable"].includes(manifest.releaseLevel), provenance = [[manifest.source.workflowRunRef, "workflow"], [manifest.artifact.workflowRunRef, "workflow"], [manifest.source.artifactRef, "artifact"], [manifest.artifact.artifactRef, "artifact"]];
+  if (released && provenance.some(([value, kind]) => value === null || !immutable(value, kind))) errors.push("provenance: released manifest requires non-null immutable workflow and artifact refs");
   if (manifest.source.workflowRunRef !== manifest.artifact.workflowRunRef || manifest.source.artifactRef !== manifest.artifact.artifactRef) errors.push("provenance: source and artifact refs disagree");
+  const runIds = provenance.map(([value]) => runId(value)).filter(Boolean); if (new Set(runIds).size > 1) errors.push("provenance: workflow run and artifact refs identify different runs");
   for (const value of [...Object.values(manifest.references), manifest.site.productUrl, manifest.site.downloadUrl, manifest.site.releaseNotesUrl, manifest.feed.embeddedFeedUrl, manifest.feed.feedUrl, manifest.feed.artifactUrl, manifest.feed.publicKeyRef, manifest.feed.signatureRef, manifest.rollback.targetReleaseRef, manifest.rollback.targetSignatureRef, manifest.rollback.targetPublicKeyRef].filter((x) => x !== null)) if (!https(value)) errors.push("url: credential-free HTTPS URL required");
   for (const name of ["artifact", ...gates]) if (!refs(manifest[name].evidenceRefs)) errors.push(`${name}: evidence references must be nonblank`);
   for (const name of gates) checkGate(manifest, name, errors);
@@ -76,9 +81,10 @@ export function validateDesktopReleaseManifest(manifest, options = {}) {
     for (const name of gates) if (!["pending", "not-performed"].includes(manifest[name].state)) errors.push("template: every gate must remain pending or not-performed");
     if (!manifest.proofBoundary.excludes.some((item) => /not a release candidate/i.test(item))) errors.push("template: proof boundary must exclude release-candidate claims");
   }
-  if (["beta", "stable"].includes(manifest.releaseLevel)) { for (const name of gates) if (manifest[name].state !== "proven") errors.push(`${name}: released manifest requires proof`); if (manifest.proofBoundary.excludes.some((item) => /\b(?:not|no|without|pending|unproven|excluded)\b.*\b(?:candidate|signed|notarized|stapled|gatekeeper|feed|site|billing|customer|runtime|rollback)\b/i.test(item))) errors.push("proof boundary: released proof cannot be excluded"); }
+  if (released) { for (const name of gates) if (manifest[name].state !== "proven") errors.push(`${name}: released manifest requires proof`); if (manifest.proofBoundary.excludes.some((item) => /\b(?:not|no|without|pending|unproven|excluded|never|cannot|doesn?['’]?t|does not)\b/i.test(item) && /\b(?:candidate|artifact|signed|signing|notarized|notarization|stapled|stapling|gatekeeper|feed|site|billing|customer|runtime|rollback)\b/i.test(item))) errors.push("proof boundary: released proof cannot be excluded"); }
   if (manifest.artifact.state === "proven" && (!digest.test(manifest.artifact.sha256 ?? "") || !refs(manifest.artifact.evidenceRefs))) errors.push("artifact: proven artifact requires digest and evidence");
-  if (manifest.feed.state === "proven" && (manifest.feed.channel !== manifest.channel || manifest.feed.embeddedFeedUrl !== manifest.feed.feedUrl || !nonblank(manifest.feed.publicKeyIdentity) || !nonblank(manifest.feed.publicKeyRef) || !nonblank(manifest.feed.signatureRef) || !sameDigest(manifest.feed.artifactSha256, manifest.artifact.sha256))) errors.push("feed: embedded URL, key identity, signature, and artifact binding are incomplete");
+  if (manifest.gatekeeper.state === "proven" && !/^(accepted|passed|pass|success)$/i.test(manifest.gatekeeper.assessment?.trim() ?? "")) errors.push("gatekeeper: proven assessment must be successful");
+  if (manifest.feed.state === "proven" && (manifest.feed.channel !== manifest.channel || manifest.feed.embeddedFeedUrl !== manifest.feed.feedUrl || !nonblank(manifest.feed.publicKeyIdentity) || !nonblank(manifest.feed.publicKeyRef) || !nonblank(manifest.feed.signatureRef) || !https(manifest.feed.artifactUrl) || manifest.feed.artifactUrl !== manifest.site.downloadUrl || !sameDigest(manifest.feed.artifactSha256, manifest.artifact.sha256))) errors.push("feed: embedded URL, key identity, signature, and exact artifact binding are incomplete");
   if (manifest.site.state === "proven" && (!https(manifest.site.downloadUrl) || !https(manifest.site.releaseNotesUrl) || !sameDigest(manifest.site.artifactSha256, manifest.artifact.sha256))) errors.push("site: proven URL and artifact binding are incomplete");
   if (manifest.customer.state === "proven" && !nonblank(manifest.customer.canaryRef)) errors.push("customer: proven canary reference required");
   if (manifest.runtime.state === "proven" && (!nonblank(manifest.runtime.workerVersion) || !sameDigest(manifest.runtime.artifactSha256, manifest.artifact.sha256) || !digest.test(manifest.runtime.configIdentitySha256 ?? ""))) errors.push("runtime: artifact and independent config identity proof required");
