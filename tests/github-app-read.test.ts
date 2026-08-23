@@ -27,7 +27,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123 });
+        return jsonResponse({ id: 123, account: { login: "owner" } });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -261,7 +261,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123 });
+        return jsonResponse({ id: 123, account: { login: "owner" } });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -284,6 +284,8 @@ describe("GitHub App read authentication", () => {
       visibility_result: "public",
       visibility_source: "repository_api",
       installation_id_present: true,
+      installation_id: 123,
+      installation_account: "owner",
       app_can_read_metadata: true,
       app_can_read_pull_requests: true,
       openPullCount: 1

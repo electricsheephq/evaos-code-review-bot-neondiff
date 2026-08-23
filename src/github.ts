@@ -85,6 +85,8 @@ export interface GitHubRepositoryAccessProof {
   visibility_result: GitHubRepositoryVisibility;
   visibility_source: GitHubRepositoryVisibilitySource;
   installation_id_present: boolean;
+  installation_id?: number;
+  installation_account?: string;
   app_can_read_metadata: boolean;
   app_can_read_pull_requests: boolean;
   openPullCount?: number;
@@ -198,25 +200,37 @@ export class GitHubApi {
       };
     }
 
-    let installationId: number;
+    let installation: { id: number; account_login?: string };
     try {
-      installationId = await this.getInstallationId(repo, { followRedirects: false });
+      installation = await this.getInstallation(repo, { followRedirects: false });
     } catch (error) {
       return { ...base, ...describeGitHubAccessError(error) };
     }
 
     let token: string;
     try {
-      token = await this.getInstallationTokenForId(repo, installationId);
+      token = await this.getInstallationTokenForId(repo, installation.id);
     } catch (error) {
-      return { ...base, installation_id_present: true, ...describeGitHubAccessError(error) };
+      return {
+        ...base,
+        installation_id_present: true,
+        installation_id: installation.id,
+        ...(installation.account_login ? { installation_account: installation.account_login } : {}),
+        ...describeGitHubAccessError(error)
+      };
     }
 
     let metadata: RepositorySummary;
     try {
       metadata = await this.request<RepositorySummary>(`/repos/${repo}`, { token, followRedirects: false });
     } catch (error) {
-      return { ...base, installation_id_present: true, ...describeGitHubAccessError(error) };
+      return {
+        ...base,
+        installation_id_present: true,
+        installation_id: installation.id,
+        ...(installation.account_login ? { installation_account: installation.account_login } : {}),
+        ...describeGitHubAccessError(error)
+      };
     }
 
     const visibility = visibilityFromRepositorySummary(metadata);
@@ -228,6 +242,8 @@ export class GitHubApi {
         visibility_result: visibility.result,
         visibility_source: visibility.source,
         installation_id_present: true,
+        installation_id: installation.id,
+        ...(installation.account_login ? { installation_account: installation.account_login } : {}),
         app_can_read_metadata: true,
         app_can_read_pull_requests: true,
         openPullCount: pulls.length
@@ -239,6 +255,8 @@ export class GitHubApi {
         visibility_result: visibility.result,
         visibility_source: visibility.source,
         installation_id_present: true,
+        installation_id: installation.id,
+        ...(installation.account_login ? { installation_account: installation.account_login } : {}),
         app_can_read_metadata: true,
         app_can_read_pull_requests: false,
         ...describeGitHubAccessError(error)
@@ -507,18 +525,24 @@ export class GitHubApi {
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
 
-    const installationId = await this.getInstallationId(repo);
-    return this.getInstallationTokenForId(repo, installationId);
+    const installation = await this.getInstallation(repo);
+    return this.getInstallationTokenForId(repo, installation.id);
   }
 
-  private async getInstallationId(repo: string, options: { followRedirects?: boolean } = {}): Promise<number> {
+  private async getInstallation(
+    repo: string,
+    options: { followRedirects?: boolean } = {}
+  ): Promise<{ id: number; account_login?: string }> {
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
     const jwt = createAppJwt(this.appId, this.privateKey);
-    const installation = await this.request<{ id: number }>(`/repos/${repo}/installation`, {
+    const installation = await this.request<{ id: number; account?: { login?: string } }>(`/repos/${repo}/installation`, {
       token: jwt,
       followRedirects: options.followRedirects
     });
-    return installation.id;
+    return {
+      id: installation.id,
+      ...(installation.account?.login ? { account_login: installation.account.login } : {})
+    };
   }
 
   private async getInstallationTokenForId(repo: string, installationId: number): Promise<string> {

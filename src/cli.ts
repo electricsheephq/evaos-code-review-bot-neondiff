@@ -3313,6 +3313,7 @@ async function buildDoctorGithubReport(
     monitoredRepos,
     activeRepoChecks,
     appCredentials: {
+      appId: credentials?.appId ?? config.github.appId ?? null,
       appIdConfigured: Boolean(credentials?.appId ?? config.github.appId),
       privateKeyConfigured: Boolean(credentials?.privateKey ?? config.github.privateKeyPath),
       fallbackTokenConfigured: Boolean(config.github.token),
