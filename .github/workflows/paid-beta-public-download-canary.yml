@@ -171,8 +171,9 @@ jobs:
           if len(matches) != 1: fail("exactly one matching enclosure required")
           item, enclosure = matches[0]
           channel_key = f"{{{SPARKLE}}}channel"
-          if item.attrib.get(channel_key) != "beta" or any(name == "channel" or (name.endswith("}channel") and name != channel_key) for name in item.attrib):
-              fail("matched item must have one canonical beta channel")
+          channel_children = [child for child in item if child.tag == channel_key or child.tag == "channel" or child.tag.endswith("}channel")]
+          if len(channel_children) != 1 or channel_children[0].tag != channel_key or (channel_children[0].text or "").strip() != "beta":
+              fail("matched item must have one canonical beta channel element")
           if enclosure.attrib.get(f"{{{SPARKLE}}}version") != build: fail("build mismatch")
           if enclosure.attrib.get(f"{{{SPARKLE}}}shortVersionString") != version: fail("version mismatch")
           signature = enclosure.attrib.get(f"{{{SPARKLE}}}edSignature", "")
