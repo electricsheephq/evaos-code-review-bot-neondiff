@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +11,8 @@ let DefaultAjv;
 try { DefaultAjv = (await import("ajv/dist/2020.js")).Ajv2020; } catch {}
 const VERSION = /^1\.1\.0(?:-(beta|rc)\.([1-9][0-9]*))?$/;
 const NAME = /^v1\.1\.0(?:-(?:beta|rc)\.[1-9][0-9]*)?\.json$/;
+const READ_ONLY = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+const DIRECTORY = constants.O_DIRECTORY ?? 0;
 const fail = (...errors) => ({ valid: false, errors });
 function compile(schema, override) {
   const Ajv = override === undefined ? DefaultAjv : override;
@@ -38,30 +40,53 @@ export function validateDesktopReleaseDeclaration(value, options = {}) {
   return errors.length ? fail(...errors) : { valid: true, errors: [] };
 }
 function safeRelative(value) {
-  return typeof value === "string" && value && !value.startsWith("/") && !value.includes("\\") && value === value.split("/").filter(Boolean).join("/") && !value.split("/").includes("..") && value === value.replace(/\/\.\//g, "/");
+  return typeof value === "string" && value && !value.startsWith("/") && !value.includes("\\") && value === value.split("/").filter(Boolean).join("/") && !value.split("/").some((part) => part === "." || part === "..") && value === value.replace(/\/\.\//g, "/");
 }
-function discover(root) {
+function openRead(path, directory = false) {
+  let fd;
+  try {
+    fd = openSync(path, READ_ONLY | (directory ? DIRECTORY : 0));
+    const stat = fstatSync(fd);
+    if (directory ? !stat.isDirectory() : !stat.isFile()) throw Error("unexpected declaration file type");
+    return { fd, stat };
+  } catch (error) {
+    if (fd !== undefined) closeSync(fd);
+    if (error?.code === "ELOOP") throw Error("symlinks are not allowed");
+    throw Error("declaration path unreadable");
+  }
+}
+function discover(root, expectedRoot) {
   const found = [];
-  try { const stat = lstatSync(root); if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error(); } catch { throw Error("declaration directory unreadable or symlinked"); }
-  function visit(directory) {
+  const files = new Map();
+  let entryCount = 0;
+  let canonical;
+  try { canonical = realpathSync(root); } catch { throw Error("declaration directory unreadable or symlinked"); }
+  if (resolve(canonical) !== resolve(expectedRoot)) throw Error("declaration directory symlinked");
+  function visit(directory, expectedDirectory) {
+    let directoryCanonical;
+    try { directoryCanonical = realpathSync(directory); } catch { throw Error("declaration directory unreadable or symlinked"); }
+    if (resolve(directoryCanonical) !== resolve(expectedDirectory)) throw Error("declaration directory symlinked");
     let entries;
     try { entries = readdirSync(directory, { withFileTypes: true }); } catch { throw Error("declaration directory unreadable"); }
+    entryCount += entries.length;
     for (const entry of entries) {
       const path = join(directory, entry.name);
-      let stat;
-      try { stat = lstatSync(path); } catch { throw Error("declaration path unreadable"); }
-      if (stat.isSymbolicLink() || entry.isSymbolicLink()) throw Error("symlinks are not allowed");
-      if (stat.isDirectory()) visit(path);
-      else if (stat.isFile() && entry.name.endsWith(".json")) {
-        const pathName = relative(root, path).split(sep).join("/");
-        if (pathName !== basename(path) || !NAME.test(entry.name)) throw Error("noncanonical declaration filename");
-        try { readFileSync(path, "utf8"); } catch { throw Error("declaration file unreadable"); }
-        found.push(pathName);
-      }
+      if (entry.isDirectory()) { visit(path, resolve(expectedRoot, relative(root, path))); continue; }
+      const child = openRead(path);
+      try {
+        if (entry.name.endsWith(".json")) {
+          const pathName = relative(root, path).split(sep).join("/");
+          if (pathName !== basename(path) || !NAME.test(entry.name)) throw Error("noncanonical declaration filename");
+          let content;
+          try { content = readFileSync(child.fd, "utf8"); } catch { throw Error("declaration file unreadable"); }
+          files.set(pathName, content);
+          found.push(pathName);
+        }
+      } finally { closeSync(child.fd); }
     }
   }
-  visit(root);
-  return found.sort();
+  visit(root, expectedRoot);
+  return { paths: found.sort(), files, entryCount };
 }
 export function validateDesktopReleaseIndex(indexPath, options = {}) {
   const override = Object.hasOwn(options, "ajv") ? options.ajv : undefined;
@@ -72,20 +97,23 @@ export function validateDesktopReleaseIndex(indexPath, options = {}) {
   const indexResult = check(index, indexSchema, override);
   if (!indexResult.valid) return indexResult;
   if (!safeRelative(index.declarationDirectory)) return fail("declaration directory traversal or absolute path");
-  const root = resolve(dirname(indexPath), index.declarationDirectory);
+  const base = resolve(dirname(indexPath));
+  let canonicalBase;
+  try { canonicalBase = realpathSync(base); } catch { return fail("index parent directory unreadable or symlinked"); }
+  const root = resolve(base, index.declarationDirectory);
+  const expectedRoot = resolve(canonicalBase, index.declarationDirectory);
   let discovered;
-  try { discovered = discover(root); } catch (error) { return fail(error.message); }
+  try { discovered = discover(root, expectedRoot); } catch (error) { return fail(error.message); }
   const listed = [...index.declarationPaths].sort();
+  const discoveredPaths = discovered.paths;
   if (listed.some((path) => !safeRelative(path) || !NAME.test(path))) return fail("index contains unsafe or noncanonical path");
-  if (listed.length !== new Set(listed).size || JSON.stringify(discovered) !== JSON.stringify(listed)) return fail("index does not exactly enumerate declarations");
-  let directoryEntries;
-  try { directoryEntries = readdirSync(root); } catch { return fail("declaration directory unreadable"); }
-  if (index.status === "empty" && (discovered.length || directoryEntries.length)) return fail("empty index requires an empty declaration directory");
-  if (index.status === "current" && (!discovered.length || !index.currentPath || !listed.includes(index.currentPath))) return fail("current index requires a listed declaration");
+  if (listed.length !== new Set(listed).size || JSON.stringify(discoveredPaths) !== JSON.stringify(listed)) return fail("index does not exactly enumerate declarations");
+  if (index.status === "empty" && (discoveredPaths.length || discovered.entryCount)) return fail("empty index requires an empty declaration directory");
+  if (index.status === "current" && (!discoveredPaths.length || !index.currentPath || !listed.includes(index.currentPath))) return fail("current index requires a listed declaration");
   if (index.status === "empty" && index.currentPath !== null) return fail("empty index currentPath must be null");
-  for (const path of discovered) {
+  for (const path of discoveredPaths) {
     let declaration;
-    try { declaration = JSON.parse(readFileSync(join(root, path), "utf8")); } catch { return fail(`${path}: unreadable or invalid JSON`); }
+    try { declaration = JSON.parse(discovered.files.get(path)); } catch { return fail(`${path}: unreadable or invalid JSON`); }
     if (path !== `v${declaration.version}.json`) return fail(`${path}: filename does not match version`);
     const result = validateDesktopReleaseDeclaration(declaration, options);
     if (!result.valid) return fail(`${path}: ${result.errors.join("; ")}`);
