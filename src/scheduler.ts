@@ -13,7 +13,7 @@ import {
   type ReviewCommand
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
-import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi, type BoundedGithubList } from "./github.js";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
@@ -49,6 +49,7 @@ import {
   type ReviewReadinessState,
   type ReviewerSessionJobState,
   type ReviewQueueJobRecord,
+  type ReviewEvidenceQuarantine,
   type ReviewQueueJobState,
   type ReviewQueueJobSource
 } from "./state.js";
@@ -110,6 +111,7 @@ export interface SchedulerGitHubApi {
   listOpenPulls(repo: string): Promise<PullRequestSummary[]>;
   getPull(repo: string, pullNumber: number): Promise<PullRequestSummary>;
   listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
+  listIssueCommentsForEnrichment?(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueCommentCommandSource>>;
   canPostAsApp?: ReviewStatusCommentGithub["canPostAsApp"];
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
   // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
@@ -172,6 +174,7 @@ export async function runScheduledCycleWithDeps(input: {
   const result = emptyScheduledRunResult();
   const now = input.now ?? new Date();
   const eventClock = input.clock ?? (() => input.now ?? new Date());
+  const evidenceQuarantines: ReviewEvidenceQuarantine[] = [];
   const repos = input.options.repo ? [input.options.repo] : listReposToScan(config);
   const providerId = config.zcode.providerId ?? config.zcode.model ?? "zcode";
   if (config.reviewerSessions?.enabled) {
@@ -242,6 +245,10 @@ export async function runScheduledCycleWithDeps(input: {
         },
         onCommandFetchError: () => {
           result.commandFetchErrors += 1;
+        },
+        onEvidenceQuarantine: (quarantine, failedQueueJobs) => {
+          evidenceQuarantines.push(quarantine);
+          result.queue.failedQueueJobs += failedQueueJobs;
         }
       });
       applyEnqueueStatus(result, enqueueStatus);
@@ -287,6 +294,7 @@ export async function runScheduledCycleWithDeps(input: {
     manualCommandReserve: Math.min(scheduler.manualCommandReserve, effectiveSlots),
     limit: effectiveSlots,
     leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
+    quarantines: evidenceQuarantines,
     ...(config.riskWeightedQueue?.aging ? { aging: config.riskWeightedQueue.aging } : {}),
     now: eventClock()
   });
@@ -503,6 +511,7 @@ async function collectSubsequentMergedPulls(input: {
 type EnqueueStatus =
   | "enqueued"
   | "already_queued"
+  | "required_evidence_incomplete"
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_processed"
@@ -526,6 +535,7 @@ async function enqueuePullIfEligible(input: {
   allowActivationBaselineCommandLookup?: boolean;
   onStatusCommentFailure?: () => void;
   onCommandFetchError?: () => void;
+  onEvidenceQuarantine?: (quarantine: ReviewEvidenceQuarantine, failedQueueJobs: number) => void;
   automaticPriorityOverride?: number;
 }): Promise<EnqueueStatus> {
   if (isClosedPull(input.pull)) {
@@ -579,6 +589,26 @@ async function enqueuePullIfEligible(input: {
   }
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
+  if ("blocked" in commandDecision) {
+    if (processed || input.state.hasProcessed(input.repo, input.pull.number, input.pull.head.sha)) {
+      backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
+      await repairProcessedHeadStatusCommentIfNeeded({ ...input, processed });
+      return "skipped_processed";
+    }
+    const quarantine = {
+      repo: input.repo,
+      pullNumber: input.pull.number,
+      headSha: input.pull.head.sha,
+      reason: commandDecision.blocked
+    };
+    const applied = input.state.quarantineIncompleteReviewEvidence({
+      ...quarantine,
+      leaseTtlMs: input.config.reviewConcurrency.leaseTtlMs,
+      now: input.now
+    });
+    input.onEvidenceQuarantine?.(quarantine, applied.failedQueueJobs);
+    return "required_evidence_incomplete";
+  }
   if (commandDecision.action !== "none") {
     if (commandDecision.shouldReview) {
       await retireSupersededQueueJobsForPull(input);
@@ -1148,6 +1178,12 @@ async function retireQueuedJobsForClosedPull(input: {
   }
 }
 
+type SchedulerCommandDecision = CommandDecision | {
+  action: "none";
+  shouldReview: false;
+  blocked: "required_evidence_incomplete";
+};
+
 async function resolveSchedulerCommandDecision(input: {
   config: BotConfig;
   github: SchedulerGitHubApi;
@@ -1155,15 +1191,30 @@ async function resolveSchedulerCommandDecision(input: {
   repo: string;
   pull: PullRequestSummary;
   onCommandFetchError?: () => void;
-}): Promise<CommandDecision> {
-  if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
+}): Promise<SchedulerCommandDecision> {
+  let bounded: BoundedGithubList<IssueCommentCommandSource> | undefined;
+  let boundedReadFailed = false;
+  if (input.github.listIssueCommentsForEnrichment) {
+    try {
+      bounded = await input.github.listIssueCommentsForEnrichment(input.repo, input.pull.number);
+    } catch {
+      boundedReadFailed = true;
+    }
+  }
+  const needsCompletenessProof = boundedReadFailed || Boolean(bounded?.truncated || bounded?.overflow);
+  if (!input.config.commands.enabled && !needsCompletenessProof) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
   try {
     comments = await input.github.listIssueComments(input.repo, input.pull.number);
   } catch {
     input.onCommandFetchError?.();
-    return { action: "none", shouldReview: false };
+    return needsCompletenessProof
+      ? { action: "none", shouldReview: false, blocked: "required_evidence_incomplete" }
+      : { action: "none", shouldReview: false };
   }
+  const evidenceIncomplete = boundedReadFailed || Boolean(
+    bounded && (bounded.truncated || bounded.overflow) && comments.length > bounded.rawCount
+  );
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
   const authorizationRequests = collectReviewEventAuthorizationAttempts(comments, input.config.commands, {
     repo: input.repo,
@@ -1217,7 +1268,7 @@ async function resolveSchedulerCommandDecision(input: {
       author: requestChanges.author
     });
   }
-  return decideCommandAction({
+  const decision = decideCommandAction({
     commands: authorizedCommands.filter((command) =>
       !isFinishingTouchCommandAction(command.action) ||
       (repoProfile.allowed && isFinishingTouchActionEnabled(command.action, repoProfile.profile.finishingTouches))
@@ -1228,6 +1279,14 @@ async function resolveSchedulerCommandDecision(input: {
     hasProcessedCommand: (repo, pullNumber, headSha, commentId) =>
       input.state.hasProcessedCommand(repo, pullNumber, headSha, commentId)
   });
+  if (
+    evidenceIncomplete &&
+    (decision.action === "none" || isFinishingTouchCommandAction(decision.action))
+  ) {
+    input.onCommandFetchError?.();
+    return { action: "none", shouldReview: false, blocked: "required_evidence_incomplete" };
+  }
+  return decision;
 }
 
 function latestPendingRequestChanges(input: {
@@ -2592,6 +2651,9 @@ function nextLicenseGateRetryAt(now = new Date()): string {
 
 function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): void {
   switch (status) {
+    case "required_evidence_incomplete":
+      result.failed += 1;
+      break;
     case "enqueued":
       result.queue.enqueued += 1;
       break;
