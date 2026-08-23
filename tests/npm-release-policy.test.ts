@@ -9,10 +9,65 @@ describe("npm release policy", () => {
   const roots: string[] = [];
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const policyScript = join(repoRoot, "scripts", "npm-release-policy.mjs");
+  const desktopOnlyAnnotation = "NeonDiff-Release-Class: desktop-only";
   const releaseCommit = "fc66d27b6ab9f6a1eb8282d289ef63407cd96982";
 
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  function taggedRepo(tag: string, annotation = desktopOnlyAnnotation, annotated = true) {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-desktop-rc-"));
+    roots.push(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "release-policy@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Release Policy Test"], { cwd: root });
+    writeFileSync(join(root, "release.txt"), "release\n");
+    execFileSync("git", ["add", "release.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "release"], { cwd: root, stdio: "ignore" });
+    if (annotated) {
+      const messagePath = join(root, "tag-message.txt");
+      writeFileSync(messagePath, annotation);
+      execFileSync("git", ["tag", "-a", "--cleanup=verbatim", "-F", messagePath, tag], { cwd: root });
+    } else execFileSync("git", ["tag", tag], { cwd: root });
+    return root;
+  }
+
+  function classifyDesktopTag(root: string, tag: string) {
+    return spawnSync(process.execPath, [
+      policyScript, "classify", "--event-name", "release", "--release-prerelease", "true",
+      "--tag", tag, "--package-version", "1.0.4", "--release-level", "stable", "--skipped-versions-json", "[]"
+    ], { cwd: root, encoding: "utf8" });
+  }
+
+  it.each([
+    ["v1.1.0-rc.1", desktopOnlyAnnotation, true], ["v0.0.0-rc.1", desktopOnlyAnnotation, true],
+    ["v1.1.0-rc.01", desktopOnlyAnnotation, false], ["v01.1.0-rc.1", desktopOnlyAnnotation, false],
+    ["v1.01.0-rc.1", desktopOnlyAnnotation, false], ["v1.1.01-rc.1", desktopOnlyAnnotation, false],
+    ["v1.1.0-rc.0", desktopOnlyAnnotation, false], ["v1.1.0-rc.1", ` ${desktopOnlyAnnotation}`, false],
+    ["v1.1.0-rc.1", `${desktopOnlyAnnotation} `, false], ["v1.1.0-rc.1", `${desktopOnlyAnnotation}\n${desktopOnlyAnnotation}`, false],
+    ["v1.1.0-rc.1", "neondiff-release-class: desktop-only", false], ["v1.1.0-rc.1", `${desktopOnlyAnnotation}-x`, false]
+  ])("classifies only exact Desktop-only RC identity: %s", (tag, annotation, desktopOnly) => {
+    const result = classifyDesktopTag(taggedRepo(tag, annotation), tag);
+    if (desktopOnly) {
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ shouldPublish: false, npmTag: "latest", releaseKind: "desktop-only" });
+    } else {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("stable npm packages require a non-prerelease GitHub Release");
+    }
+  });
+
+  it("rejects a lightweight Desktop-only RC tag", () => {
+    const root = taggedRepo("v1.1.0-rc.1", desktopOnlyAnnotation, false);
+    const candidate = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: root });
+    const result = spawnSync(process.execPath, [
+      policyScript, "verify-git", "--tag", "v1.1.0-rc.1", "--candidate-head", candidate,
+      "--main-ref", "refs/remotes/origin/main"
+    ], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("release tag must be annotated");
   });
 
   it("rejects a stable npm package from a prerelease GitHub Release", () => {
