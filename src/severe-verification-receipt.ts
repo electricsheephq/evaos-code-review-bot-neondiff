@@ -35,7 +35,7 @@ export interface SevereVerificationReceipt {
   reasonCode?: SevereVerificationCode;
   evidence: SevereVerificationEvidence;
 }
-export interface SevereReceiptValidationOptions { expectedPath?: string; }
+export interface SevereReceiptValidationOptions { expectedRepo?: string; expectedPullNumber?: number; expectedBaseSha?: string; expectedHeadSha?: string; expectedFindingFingerprint?: string; expectedPath?: string; }
 export type SevereReceiptValidation =
   | { ok: true; value: SevereVerificationReceipt }
   | { ok: false; errors: string[] };
@@ -60,7 +60,8 @@ export function validateSevereVerificationReceipt(value: unknown, options: Sever
   const receipt = value;
   if (!exact(receipt, ["schemaVersion", "repo", "pullNumber", "baseSha", "findingFingerprint", "headSha", "state", "disposition", "evidence"], ["confidence", "reasonCode"])) errors.push("receipt has missing or unknown fields");
   if (receipt.schemaVersion !== "severe-verifier-v1") errors.push("schemaVersion is invalid");
-  if (!string(receipt.repo) || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(receipt.repo) || byteLength(receipt.repo) > 256) errors.push("repo is invalid");
+  const repoParts = string(receipt.repo) ? receipt.repo.split("/") : [];
+  if (!string(receipt.repo) || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(receipt.repo) || repoParts.some((part) => part === "." || part === "..") || byteLength(receipt.repo) > 256) errors.push("repo is invalid");
   if (typeof receipt.pullNumber !== "number" || !Number.isSafeInteger(receipt.pullNumber) || receipt.pullNumber < 1) errors.push("pullNumber is invalid");
   if (!string(receipt.baseSha) || !SHA40.test(receipt.baseSha)) errors.push("baseSha is invalid");
   if (!string(receipt.headSha) || !SHA40.test(receipt.headSha)) errors.push("headSha is invalid");
@@ -69,6 +70,7 @@ export function validateSevereVerificationReceipt(value: unknown, options: Sever
   if (receipt.disposition !== "retain" && receipt.disposition !== "suppress") errors.push("disposition is invalid");
   if (receipt.confidence !== undefined && (!number(receipt.confidence) || receipt.confidence < 0 || receipt.confidence > 1)) errors.push("confidence is invalid");
   if (receipt.reasonCode !== undefined && (!string(receipt.reasonCode) || !CODES.has(receipt.reasonCode))) errors.push("reasonCode is invalid");
+  if ((options.expectedRepo !== undefined && receipt.repo !== options.expectedRepo) || (options.expectedPullNumber !== undefined && receipt.pullNumber !== options.expectedPullNumber) || (options.expectedBaseSha !== undefined && receipt.baseSha !== options.expectedBaseSha) || (options.expectedHeadSha !== undefined && receipt.headSha !== options.expectedHeadSha) || (options.expectedFindingFingerprint !== undefined && receipt.findingFingerprint !== options.expectedFindingFingerprint)) errors.push("receipt identity mismatch");
   if (receipt.state === "confirmed" && receipt.disposition !== "retain") errors.push("confirmed receipts must retain");
   if (receipt.state !== "confirmed" && receipt.disposition === "retain") errors.push("non-confirmed receipts must suppress");
   if (!validStateReason(receipt.state, receipt.reasonCode)) errors.push("state and reasonCode are inconsistent");
