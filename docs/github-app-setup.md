@@ -5,8 +5,8 @@ runs on your own machine or server. The App identity is what authors review
 comments in GitHub; your local worker holds the App ID, private key, provider
 configuration, state database, and evidence files.
 
-On macOS, signed Desktop 1.1.0 owns native first run through its UI. The public
-paid B0 BYO/customer-owned build accepts the customer's own App ID and private key,
+On macOS, signed Desktop 1.1.0 owns native first run through its UI. The public BYO/customer-owned
+paid B0 build accepts the customer's own App ID and private key,
 one selected repository, and runs the explicit installation check from the wizard.
 No invitation is required when the versioned public GitHub prerelease is
 published and the neondiff.com purchase/download path is live. The managed B1 App
