@@ -287,7 +287,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
     @Test func explicitVerificationReadsKeychainAndUsesOnlyBoundedCLIStdin() async throws {
         let doctorResult = CLIRunResult(
             exitCode: 0,
-            stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"acme/demo","ok":true,"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+            stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","botLogin":"fixture-bot","readChecks":[{"repo":"acme/demo","ok":true,"visibility_result":"public","installation_id":42001,"installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
             stderr: ""
         )
         let fixture = ModelDependencyFixture(
@@ -337,6 +337,33 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.canAdvanceOnboarding)
         #expect(!fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.productionDaemonStopAvailable)
+    }
+
+    @Test func verificationRejectsIncompleteAuthorityFromAnOlderWorker() async {
+        for missingField in ["visibility_result", "installation_id"] {
+            let field = missingField == "visibility_result"
+                ? #""visibility_result":"public","#
+                : #""installation_id":42001,"#
+            let readCheck = doctorReadCheck(repo: "acme/demo")
+                .replacingOccurrences(of: field, with: "")
+            let fixture = ModelDependencyFixture(
+                cliOutcomes: [.success(doctorResult(readChecks: readCheck))],
+                preferenceStrings: availableCLIPreference,
+                productionBoundary: exactB0Boundary
+            )
+            fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+            fixture.model.pendingBYOGitHubAppId = "123456"
+            fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+            fixture.model.storeBYOGitHubAppCredentials()
+
+            fixture.model.verifyBYOGitHubAppCredentials()
+            await waitForBYOVerification(fixture)
+
+            #expect(!fixture.model.byoGitHubCredentialsVerified)
+            #expect(fixture.model.lastError?.contains(
+                missingField == "visibility_result" ? "authoritative visibility" : "Update or reinstall"
+            ) == true)
+        }
     }
 
     @Test func byoRepositoryReadinessDoesNotUnlockUnactivatedUsefulWork() async {

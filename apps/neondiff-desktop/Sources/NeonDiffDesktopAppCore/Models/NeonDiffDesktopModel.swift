@@ -4216,6 +4216,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 botLogin: report.github.botLogin
             )
         }
+        if selectedReviewRepository != nil {
+            guard byoVerifiedVisibility != "unknown" else {
+                byoGitHubCredentialsVerified = false
+                lastError = "GitHub did not return authoritative visibility for the selected repository. Restore App access and verify again."
+                byoGitHubCredentialStatus = lastError ?? "Repository visibility unavailable"
+                return
+            }
+            guard byoGitHubAccessAuthority != nil else {
+                byoGitHubCredentialsVerified = false
+                lastError = "The bundled worker did not return exact GitHub App and installation identity. Update or reinstall the worker, then verify again."
+                byoGitHubCredentialStatus = lastError ?? "Worker update required"
+                return
+            }
+        }
         let repositories = report.github.readChecks.map(\.repo).sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }.joined(separator: ", ")
