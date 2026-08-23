@@ -764,7 +764,7 @@ private func doctorResult(
 ) -> CLIRunResult {
     CLIRunResult(
         exitCode: exitCode,
-        stdout: #"{"ok":\#(ok),"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
+        stdout: #"{"ok":\#(ok),"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","botLogin":"fixture-bot","readChecks":[\#(readChecks)]}}"#,
         stderr: ""
     )
 }
@@ -777,7 +777,7 @@ private func doctorReadCheck(
     let skippedField = skippedByPolicy.map {
         #","skippedByPolicy":"\#($0)""#
     } ?? ""
-    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
+    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id":42001,"installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
 }
 
 private let exactB0Boundary = DesktopProductionBoundary.resolve(infoDictionary: [
