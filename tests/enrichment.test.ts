@@ -14,6 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
+import type { BoundedGithubList } from "../src/github.js";
 import type { IssueAnalysis } from "../src/issue-analysis.js";
 import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
@@ -3356,6 +3357,91 @@ describe("sticky enrichment comments", () => {
         });
         expect(result.recommendedActions).toContain("issue enrichment worker is busy; retry after the active lease expires");
         expect(state.listIssueEnrichmentRecords()).toEqual([]);
+      } finally {
+        state.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("issue-enrichment pagination overflow", () => {
+  it("fails closed on label-event overflow without posting or advancing the watermark", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-label-overflow-"));
+    try {
+      const configPath = join(root, "config.json");
+      const statePath = join(root, "state.sqlite");
+      writeFileSync(configPath, `${JSON.stringify({
+        statePath,
+        issueEnrichment: {
+          enabled: true,
+          postIssueComment: true,
+          allowlist: ["owner/issue-repo"],
+          maxIssuesPerCycle: 1,
+          maxCommentsPerCycle: 1,
+          processExistingOpenIssuesOnActivation: true,
+          repos: {
+            "owner/issue-repo": {
+              promotionMaintainers: [{
+                login: "trusted-maintainer",
+                validFrom: "2026-08-01T00:00:00Z",
+                validUntil: "2026-09-01T00:00:00Z"
+              }]
+            }
+          }
+        }
+      })}\n`);
+      const state = new ReviewStateStore(statePath);
+      state.recordIssueEnrichmentRepoWatermark({
+        repo: "owner/issue-repo",
+        activatedAt: "2026-08-23T00:00:00.000Z",
+        lastCheckedAt: "2026-08-23T00:00:00.000Z",
+        now: new Date("2026-08-23T00:00:00.000Z")
+      });
+      let postCalls = 0;
+      const issue: GitHubRelatedIssueOrPull = {
+        number: 738,
+        title: "Bounded issue enrichment",
+        state: "open",
+        updated_at: "2026-08-23T00:01:00.000Z",
+        labels: [{ name: "upstream-intake" }, { name: "active-continuation" }],
+        body: "Acceptance criteria and owner present."
+      };
+      const overflowEvents = Object.assign(
+        Array.from({ length: 500 }, () => ({ event: "labeled" })),
+        {
+          items: Array.from({ length: 500 }, () => ({ event: "labeled" })),
+          rawCount: 500,
+          truncated: true,
+          overflow: true
+        }
+      ) as BoundedGithubList<{ event?: string }>;
+      try {
+        const result = await runIssueEnrichmentCycle({
+          config: loadConfig(configPath),
+          state,
+          github: {
+            listIssuesForEnrichment: async () => [issue],
+            listIssueLabelEvents: async () => overflowEvents,
+            canPostAsApp: () => true,
+            upsertIssueComment: async () => {
+              postCalls += 1;
+              return { action: "created" as const, id: 738, html_url: "https://github.test/comment/738" };
+            }
+          },
+          dryRun: false,
+          includeExisting: true,
+          checkedAt: "2026-08-23T00:02:00.000Z"
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.summary).toMatchObject({ readFailures: 1, posted: 0, failed: 0 });
+        expect(result.items).toHaveLength(0);
+        expect(postCalls).toBe(0);
+        expect(state.getIssueEnrichmentRepoWatermark("owner/issue-repo")).toMatchObject({
+          lastCheckedAt: "2026-08-23T00:00:00.000Z"
+        });
       } finally {
         state.close();
       }

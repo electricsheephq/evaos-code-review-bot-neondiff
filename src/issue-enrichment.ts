@@ -12,7 +12,7 @@ import {
   type IssueEnrichmentLifecycleInput
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
-import { unpackBoundedGithubList, type BoundedGithubList } from "./github.js";
+import { GithubPaginationOverflowError, unpackBoundedGithubList, type BoundedGithubList } from "./github.js";
 import {
   buildIssueAnalysisInputHash,
   runIssueAnalysis,
@@ -284,14 +284,16 @@ type IssueEnrichmentComment = {
   user?: { login?: string | null } | null;
 };
 
+type IssueEnrichmentLabelEvent = {
+  event?: string;
+  created_at?: string;
+  actor?: { login?: string | null } | null;
+  label?: { name?: string | null } | null;
+};
+
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
   getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
-  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>>;
+  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<IssueEnrichmentLabelEvent[] | BoundedGithubList<IssueEnrichmentLabelEvent>>;
   getCollaboratorPermission?(repo: string, login: string): Promise<IssuePromotionPermission>;
   listIssueComments?(repo: string, issueNumber: number): Promise<IssueEnrichmentComment[] | BoundedGithubList<IssueEnrichmentComment>>;
   listIssueCommentsForEnrichment?(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueEnrichmentComment>>;
@@ -394,7 +396,9 @@ async function evaluateIssuePromotion(input: {
     return { issue: input.issue };
   }
   try {
-    const events = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
+    const eventResult = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
+    const { items: events, overflow } = unpackBoundedGithubList(eventResult);
+    if (overflow) throw new GithubPaginationOverflowError("issue_label_events");
     const labelEvent = events
       .filter((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation")
       .filter((event) => Boolean(event.actor?.login && event.created_at))
@@ -418,7 +422,8 @@ async function evaluateIssuePromotion(input: {
       },
       evidence
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof GithubPaginationOverflowError && error.kind === "issue_label_events") throw error;
     return { issue: input.issue };
   }
 }
@@ -449,9 +454,11 @@ export async function buildIssueEvidenceContext(input: {
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
-  const rawTimeline = input.github.listIssueLabelEvents
+  const timelineResult = input.github.listIssueLabelEvents
     ? await input.github.listIssueLabelEvents(input.repo, input.issue.number)
     : [];
+  const { items: rawTimeline, overflow: timelineOverflow } = unpackBoundedGithubList(timelineResult);
+  if (timelineOverflow) throw new GithubPaginationOverflowError("issue_label_events");
   const linkedNumbers = extractIssueReferenceNumbers(`${input.issue.title ?? ""}\n${input.issue.body ?? ""}`, input.issue.number);
   const linkedItems: IssueAnalysisEvidenceContext["linkedItems"] = [];
   if (input.github.getIssueOrPull) {

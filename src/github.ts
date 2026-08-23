@@ -18,7 +18,23 @@ export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
  */
 const MAX_REVIEW_COMMENT_PAGES = 5;
 const MAX_ISSUE_COMMENT_PAGES = 5;
+const MAX_ISSUE_LABEL_EVENT_PAGES = 5;
 export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
+
+export type GithubPaginationOverflowKind = "issue_comment_marker" | "issue_label_events";
+
+/** A bounded read must fail closed when the caller needs complete results to make a decision. */
+export class GithubPaginationOverflowError extends Error {
+  readonly kind: GithubPaginationOverflowKind;
+
+  constructor(kind: GithubPaginationOverflowKind) {
+    super(kind === "issue_label_events"
+      ? "GitHub issue label event scan exceeded page limit"
+      : "GitHub issue comment marker scan exceeded page limit");
+    this.name = "GithubPaginationOverflowError";
+    this.kind = kind;
+  }
+}
 
 /** Array-compatible metadata for bounded GitHub reads. `rawCount` is the count before downstream filters. */
 export type BoundedGithubList<T> = T[] & {
@@ -347,7 +363,7 @@ export class GitHubApi {
     return boundedGithubList(comments, true);
   }
 
-  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
+  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedGithubList<{
     event?: string;
     created_at?: string;
     actor?: { login?: string | null } | null;
@@ -365,8 +381,10 @@ export class GitHubApi {
         { token: await this.getReadToken(repo) }
       );
       events.push(...chunk);
-      if (chunk.length < 100) return events;
+      if (chunk.length < 100) return boundedGithubList(events, false);
+      if (page === MAX_ISSUE_LABEL_EVENT_PAGES) throw new GithubPaginationOverflowError("issue_label_events");
     }
+    return boundedGithubList(events, true);
   }
 
   async getCollaboratorPermission(
@@ -514,7 +532,7 @@ export class GitHubApi {
     marker: string,
     token: string
   ): Promise<IssueCommentSummary | undefined> {
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_ISSUE_COMMENT_PAGES; page += 1) {
       const comments = await this.request<IssueCommentSummary[]>(
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token }
@@ -523,6 +541,7 @@ export class GitHubApi {
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }
+    throw new GithubPaginationOverflowError("issue_comment_marker");
   }
 
   private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
