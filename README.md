@@ -11,15 +11,14 @@ Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
-The current npm CLI (v1.0.x) requires API-backed activation for every repository
+The current npm CLI (v1.0.4) requires API-backed activation for every repository
 (public, private, internal, and unknown); unknown visibility fails closed, and
 provider verification is required for all tiers.
 
-Coming with the native app: public open-source repositories will be free with no
-NeonDiff Activation Key, while private, internal, and commercial repositories
-will require an active entitlement. This managed public-free/private-paid model
-ships with the native NeonDiff app and the managed GitHub App broker (#614) and
-is not enforced by the current CLI. NeonDiff
+The later managed App/broker path targets public open-source repositories will be free
+with no Activation Key and private/commercial access by entitlement after
+GA. It is separate from the current native BYO journey and is not enforced by
+the current CLI. NeonDiff
 support licenses cost $1/month or $10/year for individuals,
 or $100/year for organizations. Individual plans include a 7-day trial,
 organization plans include a 30-day trial, and legacy lifetime licenses remain
@@ -70,13 +69,18 @@ evals prove it.
 
 ## Install
 
-Requirements:
+CLI/operator requirements for npm CLI 1.0.4:
 
 - Node.js 26 or newer
 - npm
 - a GitHub App installed on the repos you want to review
 - a model/provider path configured locally, such as GLM/Z.ai, Ollama, or a
   future OpenAI-compatible provider slot
+
+For macOS native first run, use the signed NeonDiff Desktop 1.1.0 UI. The
+signed artifact and distribution availability remain owner-gated; see the
+[Mac GA architecture and release contract](docs/architecture/mac-ga-release-contract.md)
+and [Desktop Mac release runbook](apps/neondiff-desktop/docs/mac-release-runbook.md).
 
 > **v1.0.4 verification notice:** v1.0.4 is the first package intended to enforce
 > mandatory API-backed activation. Verify `npm view neondiff version` and the
@@ -102,18 +106,20 @@ package. To preview without changing your machine:
 curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
 ```
 
-The public paid B0 Mac beta uses a separate checksum-bound worker bundle from
+**Legacy CLI/operator recovery only — not native Desktop setup:** the checksum-bound
+worker bundle is a separate path from
 the same immutable GitHub prerelease as the app rather than an unpublished npm
 version or an unpinned source checkout. No invitation is required when the
 versioned public GitHub prerelease is published and the neondiff.com
 purchase/download path is live.
 The worker installer requires Node.js 26 or newer resolving through the
 approved stable path `/opt/homebrew/bin/node` or `/usr/local/bin/node`.
-When the app reports **Worker update required**, choose **Install / Update Local
-Worker**. Verify the outer worker bundle ZIP against the prerelease notes, then
+For an existing legacy CLI/LaunchAgent that requires recovery, use **Install /
+Update Local Worker** only after verifying the outer worker bundle ZIP against
+the prerelease notes, then
 verify the extracted release manifest and inner `.tgz` tarball against the
-published SHA-256 values before following the dry-run-first update and rollback
-commands in [docs/SETUP.md](docs/SETUP.md#update-an-existing-local-worker).
+published SHA-256 values before following the legacy `first-install`, update,
+and rollback commands in [docs/SETUP.md](docs/SETUP.md#legacy-clioperator-worker-recovery).
 Retain each verified worker bundle: rollback is available only after a second
 checksum-managed candidate has been installed, and requires the prior
 candidate's exact manifest, published manifest SHA-256, and tarball. The first
@@ -142,9 +148,10 @@ checksum-bound prerelease bundle.
 
 ## Set Up
 
-Follow [docs/SETUP.md](docs/SETUP.md) for the CLI-first setup path (the
-first-run path on non-Mac platforms and the operator/advanced path on Mac). The
-short version is:
+For signed Desktop 1.1.0 native first run, launch the app and follow its UI;
+do not substitute the local dashboard or checksum-worker commands. For npm CLI
+1.0.4 CLI-first, non-Mac, or legacy operator setup, follow
+[docs/SETUP.md](docs/SETUP.md). Its short version is:
 
 ```bash
 neondiff init --config config.local.json
@@ -199,8 +206,8 @@ value or key-file path. The headless app re-derives that device ID from its
 Keychain identity and rejects a mismatched plist before releasing credentials.
 Review and daemon readiness remain separate gates. The
 immutable published prerelease and clean-Mac artifact proof remain distribution
-gates. Unsigned development builds still require an executable global or
-checksum-managed worker before native first run
+gates. Unsigned development builds are not the signed Desktop 1.1.0 customer
+path; use them only for development/operator checks; the signed app
 exposes **Initialize Local Config** (non-destructive; never force-overwrites),
 **Add Repository**, **Apply Repository**, and **Verify App Access** without a
 terminal or operator config edit. **Apply Repository** writes both the selected

@@ -1,10 +1,12 @@
 # NeonDiff Setup
 
-This guide is the CLI-first setup path for the current source-available release,
-and the first-run path on non-Mac platforms. On macOS the native app
-(`apps/neondiff-desktop`) is the human first-run surface; until the native
-broker/launchd proof lands (see the native-broker note below) it hands off to
-this operator/advanced path for setup actions it cannot yet complete natively.
+This guide is the CLI/operator setup path for npm CLI 1.0.4 and the first-run
+path on non-Mac platforms. On macOS, signed NeonDiff Desktop 1.1.0 owns native
+first run through its UI; do not use this guide's CLI, dashboard, or checksum
+worker commands to bootstrap native setup. See the [Mac GA architecture and
+release contract](architecture/mac-ga-release-contract.md) and [Desktop Mac
+release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md) for the
+separate release proof boundary.
 The recommended path installs the `neondiff` npm package; source checkout remains
 a fallback for contributors and reviewers who want to inspect or build locally. See
 [LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
@@ -16,23 +18,20 @@ for the support-tier pricing contract.
 > matching non-prerelease GitHub Release before relying on it; v1.0.3 and
 > earlier do not enforce this boundary.
 
-## Requirements
+## Requirements (CLI/operator path)
 
 - Node.js 26 or newer
 - npm
 - GitHub App credentials for the repos you want to review
 - a provider/model path available on the machine running the worker
-- NeonDiff license key for repository review (the current CLI requires
-  activation for every repository; public open-source review will be free in the
-  native app)
+- NeonDiff license key for repository review (CLI 1.0.4 requires activation for
+  every repository; the later managed path has separate entitlement rules)
 
-The current CLI (v1.0.x) requires API-backed activation for every repository
+The current CLI (v1.0.4) requires API-backed activation for every repository
 (public, private, internal, and unknown); unknown visibility fails closed, and
 GitHub-authoritative visibility (public, private, internal, and unknown) decides
-the tier. Coming with the native app: public open-source repositories will be
-free with no NeonDiff Activation Key, while private, internal, and commercial
-repositories will require an active entitlement (managed GitHub App broker #614;
-not enforced by the current CLI). Support
+the tier. The later managed App/broker targets public-free/private-paid access
+after GA; it is not the current CLI or native BYO setup path. Support
 licenses cost $1/month or $10/year for
 individuals, or $100/year for organizations. Individual plans include a 7-day
 trial, organization plans include a 30-day trial, and legacy lifetime licenses
@@ -262,41 +261,16 @@ manual UserDefaults rollout mutation. It does not make the managed App path
 available and is not proof that GitHub private-key custody, the compatible CLI
 package, billing, signing, or customer canaries have passed.
 
-For a B0 customer, the native first-run path is:
+For a customer using signed Desktop 1.1.0, the native first-run path is:
 
 1. Create and install a customer-owned GitHub App with the permissions in
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
 2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
    PEM, then choose **Store in Keychain**.
-3. On a clean install, if NeonDiff reports that the local worker command is
-   unavailable, choose **Install / Update Local Worker** before **Initialize
-   Local Config**. From the verified extracted bundle, use Node.js 26 or newer
-   through the approved stable path `/opt/homebrew/bin/node` or
-   `/usr/local/bin/node`, then preview the credential-free install:
-
-   ```bash
-   BUNDLE_DIR="$(pwd -P)"
-   node install-b0-worker-candidate.mjs first-install \
-     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
-     --manifest-sha256 <manifest-sha256-from-release> \
-     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
-     --launchd-label com.electricsheephq.evaos-code-review-bot \
-     --dry-run true
-   ```
-
-   Inspect the public-safe preview, then repeat it with
-   `--dry-run false --confirm true`. It installs only the exact verified CLI
-   into a private versioned current-user directory and writes a 0600
-   credential-free marker. It creates or loads no LaunchAgent, starts no
-   daemon, and never reads or writes GitHub, provider, or license credentials.
-   It refuses an existing LaunchAgent or worker state; use the existing-worker
-   update flow below for those machines. Return to NeonDiff and choose
-   **Install / Update Local Worker** once more to refresh discovery; when the
-   worker is available, choose **Initialize Local Config**. Initialization
-   invokes the non-destructive `neondiff init` path without `--force`, never
-   overwrites an existing config, and keeps bot-isolated runtime, state,
-   evidence, and license paths beside the config. Review and daemon readiness
-   remain separate gates.
+3. In the signed Desktop 1.1.0 UI, complete the displayed repository,
+   provider, activation, App-access, and review-readiness steps. The app owns
+   native setup; do not use the CLI, local dashboard, or checksum-managed
+   worker as a prerequisite or fallback for this journey.
 4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
    Repository**. The app writes the allowlist through the typed local `config
    patch` command and ensures every selected repository has an enabled local
@@ -421,23 +395,23 @@ A local config path, launchd label, App ID, or repository name by itself is not
 authority. Suspended, revoked, pending, mismatched, or server-unrecognized bots
 remain in setup/recovery and fail closed.
 
-### Update an existing local worker
+### Legacy CLI/operator worker recovery
 
-The Mac app checks the exact discovered worker's `review-pr` help contract
-before enabling **Run Dry Review**. A package version alone is not sufficient:
-older and compatible technical-beta workers may both report `1.0.4`.
+This legacy operator path is not part of signed Desktop 1.1.0 native first run.
+A package version alone is not sufficient: older and compatible technical-beta
+workers may both report `1.0.4`.
 
-If Overview shows **Worker update required**:
+When an existing legacy worker requires recovery or update:
 
 1. Do not run or retry a live review from another terminal. The dry-to-live
    approval contract is not proven for that worker.
-2. Choose **Install / Update Local Worker**. Use only the outer worker bundle
-   ZIP named in the same immutable GitHub prerelease and release manifest as the
-   installed app. Before extracting it, compare the bundle ZIP SHA-256 with the
-   prerelease notes. After extraction, compare the release manifest SHA-256 with
-   the prerelease notes, then compare the inner `.tgz` tarball SHA-256 with both
-   the release manifest and the prerelease notes. Do not use an unpinned `main`
-   checkout or trust the ambiguous `1.0.4` version string.
+2. Use only the outer worker bundle ZIP named in the same immutable GitHub
+   prerelease and release manifest as the installed app. Before extracting it,
+   compare the bundle ZIP SHA-256 with the prerelease notes. After extraction,
+   compare the release manifest SHA-256 with the prerelease notes, then compare
+   the inner `.tgz` tarball SHA-256 with both the release manifest and the
+   prerelease notes. Do not use an unpinned `main` checkout or trust the
+   ambiguous `1.0.4` version string.
 3. Confirm `node --version` reports Node.js 26 or newer. From the extracted
    directory, preview the checksum-bound migration using the exact LaunchAgent
    label shown in NeonDiff Settings. The installer requires absolute artifact
