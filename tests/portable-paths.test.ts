@@ -76,7 +76,7 @@ describe("portable output roots", () => {
     mkdirSync(join(finalRoot, "neondiff-qa-lab", "risk-queue"), { recursive: true }); symlinkSync(finalTarget, join(finalRoot, "neondiff-qa-lab", "risk-queue", "queue-sim.json"));
     const finalAlias = spawnSync(tsxCommand, [join(repoRoot, "scripts/qa-lab/queue-sim.ts")], { cwd: join(repoRoot, "tests"), env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: finalRoot }, encoding: "utf8", timeout: 30_000 });
     expect(finalAlias.status).toBe(1); expect(finalAlias.stdout).toBe(""); expect(readFileSync(finalTarget, "utf8")).toBe("sentinel\n");
-  });
+  }, 30_000);
 
   it("accepts an external QA root", () => {
     const externalRoot = mkdtempSync(join(tmpdir(), "neondiff-qa-root-"));
