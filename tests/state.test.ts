@@ -34,6 +34,74 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("backfills shadow identity through a lossless rowid fence and tolerates malformed history", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-shadow-v3-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec("create table review_queue_jobs (job_id text primary key, attempt_id text, source text, lane text, repo, org text, pull_number integer, head_sha, base_sha text, provider_id text, priority integer, state text, next_eligible_at text, lease_id text, lease_expires_at text, session_id text, comment_id integer, review_url text, last_error text, created_at text, updated_at text, started_at text, finished_at text)");
+    const insert = legacyDb.prepare("insert into review_queue_jobs (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at) values (?, ?, 'automatic', 'background', ?, 'Owner', ?, ?, 50, 'queued', ?, ?)");
+    const at = "2026-08-24T00:00:00.000Z";
+    const add = (id: string, repo: unknown, pullNumber: number, headSha: unknown) => insert.run(id, id, repo, pullNumber, headSha, at, at);
+    const validRepo = "Owner/Configured-Repo";
+    const validHead = "A".repeat(40);
+    add("valid", validRepo, 1, validHead);
+    add("unrelated", "Other/Repo", 2, "B".repeat(40));
+    add("null", null, 3, validHead);
+    add("blob", Buffer.from("legacy-repo"), 4, validHead);
+    add("numeric", 42, 5, 7);
+    add("newline", "Owner/Bad\nRepo", 6, validHead);
+    legacyDb.close();
+
+    const first = new ReviewStateStore(dbPath);
+    expect(first.getReviewQueueJob("valid")).toMatchObject({
+      repo: validRepo, headSha: validHead, repoKey: validRepo.toLowerCase(), headShaKey: validHead.toLowerCase()
+    });
+    expect(first.getReviewQueueJob("unrelated")).toMatchObject({ repo: "Other/Repo", headSha: "B".repeat(40) });
+    for (const id of ["null", "blob", "numeric", "newline"]) {
+      expect(first.getReviewQueueJob(id)?.repoKey).toBeUndefined();
+      expect(first.getReviewQueueJob(id)?.headShaKey).toBeUndefined();
+    }
+    const marker = new DatabaseSync(dbPath, { readOnly: true });
+    const initialFence = marker.prepare("select completed_at, completed_rowid from review_state_migrations where name = ?")
+      .get("review_queue_jobs_shadow_identity_v1") as { completed_at: string; completed_rowid: number };
+    const maxRow = marker.prepare("select max(rowid) as rowid from review_queue_jobs").get() as { rowid: number };
+    expect(initialFence.completed_rowid).toBe(maxRow.rowid);
+    marker.close();
+    first.close();
+
+    const lateDb = new DatabaseSync(dbPath);
+    lateDb.prepare("insert into review_queue_jobs (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at) values (?, ?, 'automatic', 'background', ?, 'Owner', 7, ?, 50, 'queued', ?, ?)").run("equal-ms", "equal-ms", "Owner/Late-Repo", "C".repeat(40), initialFence.completed_at, initialFence.completed_at);
+    lateDb.close();
+
+    // Two openers observe the same post-fence row; the second is idempotent after the first commits.
+    const openerA = new ReviewStateStore(dbPath);
+    const openerB = new ReviewStateStore(dbPath);
+    expect(openerA.getReviewQueueJob("equal-ms")).toMatchObject({ repoKey: "owner/late-repo", headShaKey: "c".repeat(40) });
+    expect(openerB.getReviewQueueJob("equal-ms")).toMatchObject({ repoKey: "owner/late-repo", headShaKey: "c".repeat(40) });
+    openerA.close();
+    openerB.close();
+
+    const malformedDb = new DatabaseSync(dbPath);
+    malformedDb.prepare("insert into review_queue_jobs (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at) values (?, ?, 'automatic', 'background', ?, 'Owner', 8, ?, 50, 'queued', ?, ?)").run("late-malformed", "late-malformed", null, validHead, initialFence.completed_at, initialFence.completed_at);
+    malformedDb.close();
+    const reopen = new ReviewStateStore(dbPath);
+    expect(reopen.getReviewQueueJob("late-malformed")?.repoKey).toBeUndefined();
+    reopen.close();
+    const stableDb = new DatabaseSync(dbPath, { readOnly: true });
+    const stableFence = stableDb.prepare("select completed_rowid from review_state_migrations where name = ?")
+      .get("review_queue_jobs_shadow_identity_v1") as { completed_rowid: number };
+    expect(stableFence.completed_rowid).toBeGreaterThan(initialFence.completed_rowid);
+    const repeat = new ReviewStateStore(dbPath); repeat.close();
+    const repeatedFence = stableDb.prepare("select completed_rowid from review_state_migrations where name = ?")
+      .get("review_queue_jobs_shadow_identity_v1") as { completed_rowid: number };
+    expect(repeatedFence.completed_rowid).toBe(stableFence.completed_rowid);
+    const raw = stableDb.prepare("select repo, head_sha, repo_key, head_sha_key from review_queue_jobs where job_id = ?")
+      .get("valid") as Record<string, unknown>;
+    expect(raw).toEqual({ repo: validRepo, head_sha: validHead, repo_key: validRepo.toLowerCase(), head_sha_key: validHead.toLowerCase() });
+    stableDb.close();
+  });
+
   it("stores normalized issue enrichment public and private hashes and rejects invalid hashes", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-body-hash-"));
     roots.push(root);
