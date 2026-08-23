@@ -362,6 +362,8 @@ export interface OperatorDurableQueueSnapshot {
   completeJobs?: ReviewQueueJobRecord[];
   staleRunLeaseIds?: string[];
   leaseTtlMs?: number;
+  processedReviewCount?: number;
+  processedErrorCount?: number;
   byRepo: Array<{
     repo: string;
     total: number;
@@ -379,6 +381,8 @@ export interface OperatorDurableQueueSnapshot {
     oldestWaitingAtMalformed?: boolean;
   }>;
 }
+
+type ProviderCooldownRows = ProviderCooldownReviewRecord[] & { completeRows?: ProviderCooldownReviewRecord[] };
 
 export interface PullStatusExplanation {
   repo: string;
@@ -412,16 +416,20 @@ export function buildOperatorStatus(input: {
   const checkedAt = input.checkedAt ?? input.release.checkedAt;
   const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
   const durableQueue = input.durableQueue;
-  const providerCooldowns = (input.providerCooldowns ?? []).filter((row) => !input.repo || row.repo === input.repo);
+  const providerInput = input.providerCooldowns ?? [];
+  const completeProviderCooldowns = (providerInput as ProviderCooldownRows).completeRows ?? providerInput;
+  const providerCooldowns = providerInput.filter((row) => !input.repo || row.repo === input.repo);
   const release = scopeReleaseForRepo(input.release, input.repo, {
     jobs: durableQueue?.completeJobs ?? durableQueue?.jobs ?? [],
     staleRunLeaseIds: durableQueue?.staleRunLeaseIds,
     leaseTtlMs: durableQueue?.leaseTtlMs,
-    providerCooldowns,
+    providerCooldowns: completeProviderCooldowns.filter((row) => !input.repo || row.repo === input.repo),
+    processedReviewCount: durableQueue?.processedReviewCount,
+    processedErrorCount: durableQueue?.processedErrorCount,
     checkedAt
   });
-  const expiredProviderCooldowns = providerCooldowns.filter((cooldown) => cooldown.expired).length;
-  const activeProviderCooldowns = providerCooldowns.length - expiredProviderCooldowns;
+  const expiredProviderCooldowns = release.database.expiredProviderCooldownCount ?? 0;
+  const activeProviderCooldowns = release.database.activeProviderCooldownCount ?? 0;
   const pendingHeads = queue?.summary.pending ?? 0;
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
   const readFailures = queue?.summary.readFailures ?? 0;
@@ -430,12 +438,13 @@ export function buildOperatorStatus(input: {
   const failedQueueJobs = input.repo ? release.database.failedReviewQueueJobCount ?? 0 : durableQueue?.summary.failed ?? release.database.failedReviewQueueJobCount ?? 0;
   const activeFailedQueueJobs = input.repo ? release.database.activeFailedReviewQueueJobCount ?? 0 : release.database.activeFailedReviewQueueJobCount ?? failedQueueJobs;
   const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(release, durableQueue);
+  const activeZCodeTimeoutFailedQueueJobs = release.database.activeZCodeTimeoutFailedReviewQueueJobCount ?? zcodeTimeoutQueue.total;
   const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(release, durableQueue);
   const budget = input.repo ? undefined : release.budget;
   const retryableProviderDeferredJobs = input.repo ? release.database.retryableProviderDeferredReviewQueueJobCount ?? 0 : actionableProviderDeferredJobs(budget, durableQueue?.summary.retryableProviderDeferred ?? 0);
   const staleQueueLeases = (release.database.staleReviewRunLeaseCount ?? 0) + (release.database.staleActiveReviewQueueJobCount ?? 0);
-  const activeLeases = input.repo ? 0 : input.agents.summary.activeLeases;
-  const agents = input.repo ? { ...input.agents, summary: { totalLeases: 0, activeLeases: 0, staleLeases: 0 }, activeLeases: [], staleLeases: [] } : input.agents;
+  const activeLeases = input.repo ? Math.max(0, (release.database.leasedReviewQueueJobCount ?? 0) + (release.database.runningReviewQueueJobCount ?? 0) - staleQueueLeases) : input.agents.summary.activeLeases;
+  const agents = input.repo ? { ...input.agents, summary: { totalLeases: activeLeases + staleQueueLeases, activeLeases, staleLeases: staleQueueLeases }, activeLeases: [], staleLeases: [] } : input.agents;
   const issueEnrichment = input.repo ? undefined : input.issueEnrichment;
   const issueEnrichmentRuntime = input.repo ? undefined : input.issueEnrichmentRuntime;
   const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
@@ -478,7 +487,7 @@ export function buildOperatorStatus(input: {
     },
     {
       name: "durable_queue_no_zcode_timeout_failed_jobs",
-      ok: (release.database.activeZCodeTimeoutFailedReviewQueueJobCount ?? zcodeTimeoutQueue.total) === 0,
+      ok: activeZCodeTimeoutFailedQueueJobs === 0,
       detail:
         `${zcodeTimeoutQueue.total} ZCode timeout failed durable queue job(s); ` +
         `retryable=${zcodeTimeoutQueue.retryable} exhausted=${zcodeTimeoutQueue.exhausted}`
@@ -517,13 +526,13 @@ export function buildOperatorStatus(input: {
   ];
 
   const recommendedActions = uniqueStrings([
-    ...input.release.recommendedActions,
+    ...release.recommendedActions,
     ...(pendingHeads > 0 ? ["wait for daemon cycle or run scoped run-once"] : []),
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(staleHeads > 0 ? ["wait for next daemon cycle or run scoped coverage audit"] : []),
     ...(agents.summary.staleLeases > 0 || staleQueueLeases > 0 ? ["inspect stale leases before restarting or retiring stale work"] : []),
     ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
-    ...(zcodeTimeoutQueue.total > 0
+    ...(activeZCodeTimeoutFailedQueueJobs > 0
       ? zcodeTimeoutRetryActions
       : []),
     ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
@@ -1014,7 +1023,7 @@ export function collectOperatorLeases(statePath: string): OperatorLease[] {
 export function collectOperatorProviderCooldowns(
   statePath: string,
   input: { repo?: string; now?: Date; expiredOnly?: boolean; limit?: number } = {}
-): ProviderCooldownReviewRecord[] {
+): ProviderCooldownRows {
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
     throw new Error("limit must be a positive integer");
   }
@@ -1061,7 +1070,9 @@ export function collectOperatorProviderCooldowns(
         };
       if (!input.expiredOnly || record.expired) mapped.push(record);
     }
-    return input.limit ? mapped.slice(0, input.limit) : mapped;
+    const visible = (input.limit ? mapped.slice(0, input.limit) : mapped) as ProviderCooldownRows;
+    Object.defineProperty(visible, "completeRows", { value: mapped, enumerable: false });
+    return visible;
   } finally {
     db.close();
   }
@@ -1201,7 +1212,8 @@ export function collectOperatorReviewQueue(
       now,
       input.limit ? jobs.slice(0, input.limit) : jobs,
       readStaleRunLeaseIds(db, now),
-      input.leaseTtlMs
+      input.leaseTtlMs,
+      readProcessedReviewCounts(db, input.repo)
     );
   } finally {
     db.close();
@@ -1803,7 +1815,7 @@ const DEFAULT_QUEUE_LEASE_TTL_MS = 15 * 60_000;
 function scopeReleaseForRepo(
   release: ReleaseStatus,
   repo: string | undefined,
-  input: { jobs: ReviewQueueJobRecord[]; staleRunLeaseIds?: string[]; leaseTtlMs?: number; providerCooldowns: ProviderCooldownReviewRecord[]; checkedAt: string }
+  input: { jobs: ReviewQueueJobRecord[]; staleRunLeaseIds?: string[]; leaseTtlMs?: number; providerCooldowns: ProviderCooldownReviewRecord[]; processedReviewCount?: number; processedErrorCount?: number; checkedAt: string }
 ): ReleaseStatus {
   if (!repo) return release;
   const source = release.database;
@@ -1829,7 +1841,7 @@ function scopeReleaseForRepo(
   const activeFailedQueueJobs = queue?.activeFailed ?? 0;
   const staleReviewLeases = staleRunLeaseCount + staleActiveQueueJobCount;
   const database: ReleaseStatus["database"] = {
-    rowCount: 0, errorCount: errors, recentUnrecoveredErrorCount: errors,
+    rowCount: input.processedReviewCount ?? 0, errorCount: input.processedErrorCount ?? 0, recentUnrecoveredErrorCount: errors,
     ...(sessions ? { reviewerSessionCount: sessions.total, activeReviewerSessionCount: sessions.active, expiredReviewerSessionCount: sessions.expired, reviewerSessionsByRepo: [sessions] } : {}),
     providerCooldownCount: input.providerCooldowns.length, activeProviderCooldownCount: input.providerCooldowns.length - expired.length, expiredProviderCooldownCount: expired.length,
     activeGlobalProviderCooldownCount: activeGlobal, coveredExpiredProviderCooldownCount: covered, coveredByActiveQueueRetryProviderCooldownCount: activeGlobal > 0 ? 0 : covered, retryableExpiredProviderCooldownCount: retryableExpired,
@@ -1841,7 +1853,15 @@ function scopeReleaseForRepo(
     staleReviewRunLeaseCount: staleRunLeaseCount, staleActiveReviewQueueJobCount: staleActiveQueueJobCount,
     ...(queue ? { reviewQueueJobsByRepo: [queue] } : {})
   };
-  const gates = release.gates.filter((gate) => !SCOPED_RELEASE_GATES.has(gate.name));
+  const gates = [
+    ...release.gates.filter((gate) => !SCOPED_RELEASE_GATES.has(gate.name)),
+    { name: "repo_no_recent_unrecovered_errors", ok: errors === 0, detail: `${errors} recent unrecovered error(s)` },
+    { name: "repo_no_stale_queue_leases", ok: staleReviewLeases === 0, detail: `${staleReviewLeases} stale queue/run lease(s)` },
+    { name: "repo_no_expired_provider_cooldowns", ok: retryableExpired === 0, detail: `${retryableExpired} retryable expired provider cooldown(s)` },
+    { name: "queue_no_failed_jobs", ok: activeFailedQueueJobs === 0, detail: `${activeFailedQueueJobs} active failed durable queue job(s)` },
+    { name: "queue_no_zcode_timeout_failed_jobs", ok: (queue?.activeZCodeTimeoutFailed ?? timeout.total) === 0, detail: `${queue?.zcodeTimeoutFailed ?? timeout.total} ZCode timeout failed durable queue job(s); retryable=${timeout.retryable} exhausted=${timeout.exhausted}` },
+    { name: "queue_no_retryable_provider_deferred_jobs", ok: (queue?.retryableProviderDeferred ?? 0) === 0, detail: `${queue?.retryableProviderDeferred ?? 0} retryable provider-deferred job(s)` }
+  ];
   const failedGates = gates.filter((gate) => !gate.ok).map((gate) => gate.name);
   const healthState = failedGates.length > 0 ? "red" : errors > 0 || failedQueueJobs > 0 ? "amber" : "green";
   return {
@@ -1918,7 +1938,8 @@ function buildDurableQueueSnapshot(
   now: Date,
   visibleJobs: ReviewQueueJobRecord[] = jobs,
   staleRunLeaseIds: string[] = [],
-  leaseTtlMs = DEFAULT_QUEUE_LEASE_TTL_MS
+  leaseTtlMs = DEFAULT_QUEUE_LEASE_TTL_MS,
+  processedReviewCounts = { total: 0, errors: 0 }
 ): OperatorDurableQueueSnapshot {
   const summary = summarizeDurableQueueJobs(jobs, now);
   const repos = [...new Set(jobs.map((job) => job.repo))].sort();
@@ -1935,7 +1956,9 @@ function buildDurableQueueSnapshot(
   Object.defineProperties(snapshot, {
     completeJobs: { value: jobs, enumerable: false },
     staleRunLeaseIds: { value: staleRunLeaseIds, enumerable: false },
-    leaseTtlMs: { value: leaseTtlMs, enumerable: false }
+    leaseTtlMs: { value: leaseTtlMs, enumerable: false },
+    processedReviewCount: { value: processedReviewCounts.total, enumerable: false },
+    processedErrorCount: { value: processedReviewCounts.errors, enumerable: false }
   });
   return snapshot;
 }
@@ -2411,6 +2434,13 @@ function readStaleRunLeaseIds(db: DatabaseSync, now: Date): string[] {
     const expiresAtMs = Date.parse(row.expires_at);
     return !Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime() || row.owner_pid === null || !isProcessAlive(row.owner_pid);
   }).map((row) => row.lease_id);
+}
+
+function readProcessedReviewCounts(db: DatabaseSync, repo?: string): { total: number; errors: number } {
+  if (!hasTable(db, "processed_reviews")) return { total: 0, errors: 0 };
+  const query = "select count(*) as total, sum(case when status != 'skipped' and error is not null and error != '' then 1 else 0 end) as errors from processed_reviews";
+  const row = (repo ? db.prepare(`${query} where repo = ?`).get(repo) : db.prepare(query).get()) as { total?: number; errors?: number | null };
+  return { total: row.total ?? 0, errors: row.errors ?? 0 };
 }
 
 function reviewQueueSelectColumns(db: DatabaseSync): string {

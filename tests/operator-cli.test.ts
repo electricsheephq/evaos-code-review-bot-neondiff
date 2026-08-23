@@ -131,6 +131,7 @@ describe("operator CLI summaries", () => {
     release.gates.push({ name: "launchd_running", ok: false, detail: "not_running" });
     const status = buildOperatorStatus({ release, repo: "owner/repo", durableQueue: durableQueueSnapshot({ summary: cleanDurableQueueSummary(), jobs: [] }), agents: agentInventory({}) });
     expect(status.release.health).toMatchObject({ state: "red" });
+    expect(status.release.ok).toBe(false);
     expect(status.release.summary).toMatchObject({ providerDeferredQueueJobs: 0, retryableProviderDeferredQueueJobs: 0, activeProviderCooldowns: 0 });
     expect(status.ok).toBe(false);
   });

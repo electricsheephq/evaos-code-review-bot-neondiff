@@ -762,7 +762,8 @@ async function main(): Promise<void> {
     });
     const durableQueue = collectOperatorReviewQueue(statePath, {
       repo: args.repo,
-      now
+      now,
+      leaseTtlMs: config.reviewConcurrency.leaseTtlMs
     });
     const issueEnrichmentRuntime = collectOperatorIssueEnrichmentRuntime(statePath, {
       repo: args.repo,
