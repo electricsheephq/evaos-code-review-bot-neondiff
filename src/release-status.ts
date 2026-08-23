@@ -64,6 +64,7 @@ export interface ReleaseDatabaseStatus {
   staleReviewRunLeaseCount?: number;
   staleActiveReviewQueueJobCount?: number;
   reviewQueueJobsByRepo?: ReviewQueueRepoStatus[];
+  reviewErrorsByRepo?: ReviewErrorRepoStatus[];
 }
 
 export interface ReleaseHealthStatus { state: "green" | "amber" | "red"; reason: string; active: { failedQueueJobs: number; staleReviewLeases: number }; recent: { unrecoveredReviewErrors: number }; history: { reviewErrors: number; failedQueueJobs: number }; }
@@ -76,6 +77,11 @@ export interface ReviewerSessionRepoStatus {
   retryCovered?: number;
 }
 
+export interface ReviewErrorRepoStatus {
+  repo: string;
+  recentUnrecovered: number;
+}
+
 export interface ReviewQueueRepoStatus {
   repo: string;
   total: number;
@@ -85,6 +91,9 @@ export interface ReviewQueueRepoStatus {
   providerDeferred: number;
   retryableProviderDeferred: number;
   failed: number;
+  activeFailed?: number;
+  zcodeTimeoutFailed?: number;
+  activeZCodeTimeoutFailed?: number;
 }
 
 export interface ReleaseHeartbeatStatus {
@@ -2417,6 +2426,7 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       staleReviewRunLeaseCount: reviewRunLeases.stale,
       staleActiveReviewQueueJobCount,
       reviewQueueJobsByRepo: reviewQueue.byRepo,
+      reviewErrorsByRepo: failureHealth.byRepo,
       errorCount: row.errorCount ?? 0,
       recentUnrecoveredErrorCount: failureHealth.recentUnrecoveredErrorCount,
       ...(failureHealth.lastErrorAt ? { lastErrorAt: failureHealth.lastErrorAt } : {})
@@ -2468,6 +2478,7 @@ function readFailureRecoveryIndex(db: DatabaseSync): FailureRecoveryIndex {
 function readProcessedFailureHealth(db: DatabaseSync, now: Date, recovery: FailureRecoveryIndex): {
   recentUnrecoveredErrorCount: number;
   lastErrorAt?: string;
+  byRepo: ReviewErrorRepoStatus[];
 } {
   const errorWhere = "failed.status = 'failed' or (failed.status != 'skipped' and failed.error is not null and failed.error != '')";
   const cutoffMs = now.getTime() - FAILURE_HEALTH_WINDOW_MS;
@@ -2477,14 +2488,18 @@ function readProcessedFailureHealth(db: DatabaseSync, now: Date, recovery: Failu
       where (${errorWhere})
         and (datetime(failed.created_at) is null or datetime(failed.created_at) >= datetime(?, '-1 second'))`
   ).all(cutoff) as unknown as Array<{ repo: string; pull_number: number; created_at: string }>;
-  return {
-    recentUnrecoveredErrorCount: recent.filter((row) => {
+  const unrecovered = recent.filter((row) => {
       const normalized = row.created_at.replace(" ", "T");
       const failedAt = Date.parse(/[zZ]|[+-]\d\d:\d\d$/.test(normalized) ? normalized : `${normalized}Z`);
       if (Number.isFinite(failedAt) && failedAt < cutoffMs) return false;
       const postedAt = recovery.latestPostedAtByPull.get(`${row.repo}\u0000${row.pull_number}`);
       return !Number.isFinite(failedAt) || postedAt === undefined || postedAt <= failedAt / 86_400_000 + 2440587.5;
-    }).length,
+    });
+  const byRepo = new Map<string, number>();
+  for (const row of unrecovered) byRepo.set(row.repo, (byRepo.get(row.repo) ?? 0) + 1);
+  return {
+    recentUnrecoveredErrorCount: unrecovered.length,
+    byRepo: [...byRepo.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([repo, count]) => ({ repo, recentUnrecovered: count })),
     ...(recovery.lastErrorAt ? { lastErrorAt: recovery.lastErrorAt } : {})
   };
 }
@@ -2569,6 +2584,12 @@ function readReviewQueueCounts(
   });
   const timeoutCounts = summarizeZCodeTimeoutErrors(failedRows.map((row) => row.last_error));
   const activeTimeoutCounts = summarizeZCodeTimeoutErrors(activeFailedRows.map((row) => row.last_error));
+  const activeFailedByRepo = new Map<string, FailedQueueRow[]>();
+  for (const row of activeFailedRows) {
+    const rows = activeFailedByRepo.get(row.repo) ?? [];
+    rows.push(row);
+    activeFailedByRepo.set(row.repo, rows);
+  }
   return {
     total: row.total ?? 0,
     queued: row.queued ?? 0,
@@ -2582,16 +2603,25 @@ function readReviewQueueCounts(
     activeZCodeTimeoutFailed: activeTimeoutCounts.total,
     retryableZCodeTimeoutFailed: timeoutCounts.retryable,
     exhaustedZCodeTimeoutFailed: timeoutCounts.exhausted,
-    byRepo: byRepoRows.map((repoRow) => ({
-      repo: repoRow.repo,
-      total: repoRow.total ?? 0,
-      queued: repoRow.queued ?? 0,
-      leased: repoRow.leased ?? 0,
-      running: repoRow.running ?? 0,
-      providerDeferred: repoRow.providerDeferred ?? 0,
-      retryableProviderDeferred: repoRow.retryableProviderDeferred ?? 0,
-      failed: repoRow.failed ?? 0
-    }))
+    byRepo: byRepoRows.map((repoRow) => {
+      const activeRows = activeFailedByRepo.get(repoRow.repo) ?? [];
+      const repoTimeouts = summarizeZCodeTimeoutErrors(
+        failedRows.filter((row) => row.repo === repoRow.repo).map((row) => row.last_error)
+      );
+      return {
+        repo: repoRow.repo,
+        total: repoRow.total ?? 0,
+        queued: repoRow.queued ?? 0,
+        leased: repoRow.leased ?? 0,
+        running: repoRow.running ?? 0,
+        providerDeferred: repoRow.providerDeferred ?? 0,
+        retryableProviderDeferred: repoRow.retryableProviderDeferred ?? 0,
+        failed: repoRow.failed ?? 0,
+        activeFailed: activeRows.length,
+        zcodeTimeoutFailed: repoTimeouts.total,
+        activeZCodeTimeoutFailed: summarizeZCodeTimeoutErrors(activeRows.map((row) => row.last_error)).total
+      };
+    })
   };
 }
 
