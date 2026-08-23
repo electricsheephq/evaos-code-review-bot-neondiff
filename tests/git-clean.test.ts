@@ -12,13 +12,13 @@ describe("assertGitClean", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
-  it("fails on untracked files left by a review run", () => {
+  it("fails on untracked files left by a review run", async () => {
     const root = mkdtempSync(join(tmpdir(), "git-clean-"));
     roots.push(root);
     const init = spawnSync("git", ["init"], { cwd: root, encoding: "utf8" });
     expect(init.status).toBe(0);
     writeFileSync(join(root, "left-behind.txt"), "mutation\n");
 
-    expect(() => assertGitClean(root)).toThrow(/untracked or modified files/);
+    await expect(assertGitClean(root)).rejects.toThrow(/untracked or modified files/);
   });
 });

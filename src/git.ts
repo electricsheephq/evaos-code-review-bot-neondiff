@@ -1,8 +1,28 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { assertPathOutsideProtectedRoot } from "./path-safety.js";
+import { redactSecrets } from "./secrets.js";
+
+export const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 120_000;
+const gitMirrorTails = new Map<string, Promise<void>>();
+
+export class GitCommandError extends Error {
+  readonly failureKind: "timeout" | "spawn_error" | "exit_nonzero";
+  readonly timeoutMs: number;
+
+  constructor(input: {
+    failureKind: "timeout" | "spawn_error" | "exit_nonzero";
+    timeoutMs: number;
+    detail?: string;
+  }) {
+    super(`git command ${input.failureKind}${input.detail ? `: ${redactSecrets(input.detail).slice(0, 400)}` : ""}`);
+    this.name = "GitCommandError";
+    this.failureKind = input.failureKind;
+    this.timeoutMs = input.timeoutMs;
+  }
+}
 
 export interface PreparedWorktree {
   path: string;
@@ -22,6 +42,7 @@ export interface PullWorktreeInput {
   workRoot: string;
   protectedCheckoutRoot?: string;
   protectedCheckoutRoots?: string[];
+  gitCommandTimeoutMs?: number;
 }
 
 export interface BranchWorktreeInput {
@@ -31,9 +52,11 @@ export interface BranchWorktreeInput {
   workRoot: string;
   protectedCheckoutRoot?: string;
   protectedCheckoutRoots?: string[];
+  gitCommandTimeoutMs?: number;
 }
 
-export function prepareBranchWorktree(input: BranchWorktreeInput): PreparedWorktree {
+export async function prepareBranchWorktree(input: BranchWorktreeInput): Promise<PreparedWorktree> {
+  const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
   const safeRepo = input.repo.replace(/[^A-Za-z0-9_.-]+/g, "__");
   const mirrorPath = join(input.workRoot, "mirrors", `${safeRepo}.git`);
   const repoUrl = input.repoUrl ?? `https://github.com/${input.repo}.git`;
@@ -44,23 +67,24 @@ export function prepareBranchWorktree(input: BranchWorktreeInput): PreparedWorkt
     pathLabel: "workRoot",
     protectedRootLabel: "the protected live checkout"
   });
-  run("git", ["check-ref-format", `refs/heads/${input.branch}`]);
+  await run(["check-ref-format", `refs/heads/${input.branch}`], timeoutMs);
+  return withGitMirrorLock(mirrorPath, async () => {
   mkdirSync(join(input.workRoot, "mirrors"), { recursive: true });
   mkdirSync(join(input.workRoot, "worktrees"), { recursive: true });
-  if (!existsAsGitMirror(mirrorPath)) {
-    run("git", ["clone", "--mirror", repoUrl, mirrorPath]);
+  if (!await existsAsGitMirror(mirrorPath, timeoutMs)) {
+    await run(["clone", "--mirror", repoUrl, mirrorPath], timeoutMs);
   } else {
-    run("git", ["--git-dir", mirrorPath, "remote", "set-url", "origin", repoUrl]);
+    await run(["--git-dir", mirrorPath, "remote", "set-url", "origin", repoUrl], timeoutMs);
   }
-  run("git", [
+  await run([
     "--git-dir",
     mirrorPath,
     "fetch",
     "--prune",
     "origin",
     `+refs/heads/${input.branch}:refs/heads/${input.branch}`
-  ]);
-  const headSha = run("git", ["--git-dir", mirrorPath, "rev-parse", `refs/heads/${input.branch}`]).stdout.trim();
+  ], timeoutMs);
+  const headSha = (await run(["--git-dir", mirrorPath, "rev-parse", `refs/heads/${input.branch}`], timeoutMs)).stdout.trim();
   const worktreePath = join(input.workRoot, "worktrees", branchWorktreeName(input.repo, input.branch, headSha));
   assertPathOutsideProtectedRoot({
     path: worktreePath,
@@ -69,18 +93,20 @@ export function prepareBranchWorktree(input: BranchWorktreeInput): PreparedWorkt
     pathLabel: "worktreePath",
     protectedRootLabel: "the protected live checkout"
   });
-  repairExistingReviewWorktreePathForCheckout({
+  await repairExistingReviewWorktreePathForCheckout({
     worktreePath,
     mirrorPath,
     protectedCheckoutRoot: input.protectedCheckoutRoot,
-    protectedCheckoutRoots: input.protectedCheckoutRoots
+    protectedCheckoutRoots: input.protectedCheckoutRoots,
+    gitCommandTimeoutMs: timeoutMs
   });
-  run("git", ["--git-dir", mirrorPath, "worktree", "add", "--detach", worktreePath, headSha]);
-  const actualHeadSha = run("git", ["-C", worktreePath, "rev-parse", "HEAD"]).stdout.trim();
+  await run(["--git-dir", mirrorPath, "worktree", "add", "--detach", worktreePath, headSha], timeoutMs);
+  const actualHeadSha = (await run(["-C", worktreePath, "rev-parse", "HEAD"], timeoutMs)).stdout.trim();
   if (actualHeadSha !== headSha) {
     throw new Error(`Worktree head mismatch for ${input.repo}@${input.branch}: ${actualHeadSha} !== ${headSha}`);
   }
   return { path: worktreePath, headSha: actualHeadSha };
+  });
 }
 
 export function branchWorktreeName(repo: string, branch: string, headSha: string): string {
@@ -101,19 +127,21 @@ export function planPullWorktreePaths(input: PullWorktreeInput): PullWorktreePat
   return { mirrorPath, worktreePath, repoUrl };
 }
 
-export function preparePullWorktree(input: PullWorktreeInput): PreparedWorktree {
+export async function preparePullWorktree(input: PullWorktreeInput): Promise<PreparedWorktree> {
+  const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
   const { mirrorPath, worktreePath, repoUrl } = planPullWorktreePaths(input);
 
+  return withGitMirrorLock(mirrorPath, async () => {
   mkdirSync(join(input.workRoot, "mirrors"), { recursive: true });
   mkdirSync(join(input.workRoot, "worktrees"), { recursive: true });
 
-  if (!existsAsGitMirror(mirrorPath)) {
-    run("git", ["clone", "--mirror", repoUrl, mirrorPath]);
+  if (!await existsAsGitMirror(mirrorPath, timeoutMs)) {
+    await run(["clone", "--mirror", repoUrl, mirrorPath], timeoutMs);
   } else {
-    run("git", ["--git-dir", mirrorPath, "remote", "set-url", "origin", repoUrl]);
+    await run(["--git-dir", mirrorPath, "remote", "set-url", "origin", repoUrl], timeoutMs);
   }
 
-  run("git", [
+  await run([
     "--git-dir",
     mirrorPath,
     "fetch",
@@ -121,15 +149,16 @@ export function preparePullWorktree(input: PullWorktreeInput): PreparedWorktree 
     "origin",
     `+refs/pull/${input.pullNumber}/head:refs/pull/${input.pullNumber}/head`,
     "+refs/heads/*:refs/heads/*"
-  ]);
+  ], timeoutMs);
 
-  repairExistingReviewWorktreePathForCheckout({
+  await repairExistingReviewWorktreePathForCheckout({
     worktreePath,
     mirrorPath,
     protectedCheckoutRoot: input.protectedCheckoutRoot,
-    protectedCheckoutRoots: input.protectedCheckoutRoots
+    protectedCheckoutRoots: input.protectedCheckoutRoots,
+    gitCommandTimeoutMs: timeoutMs
   });
-  run("git", [
+  await run([
     "--git-dir",
     mirrorPath,
     "worktree",
@@ -137,22 +166,25 @@ export function preparePullWorktree(input: PullWorktreeInput): PreparedWorktree 
     "--detach",
     worktreePath,
     `refs/pull/${input.pullNumber}/head`
-  ]);
+  ], timeoutMs);
 
-  const actualHeadSha = run("git", ["-C", worktreePath, "rev-parse", "HEAD"]).stdout.trim();
+  const actualHeadSha = (await run(["-C", worktreePath, "rev-parse", "HEAD"], timeoutMs)).stdout.trim();
   if (actualHeadSha !== input.expectedHeadSha) {
     throw new Error(`Worktree head mismatch for ${input.repo}#${input.pullNumber}: ${actualHeadSha} !== ${input.expectedHeadSha}`);
   }
 
   return { path: worktreePath, headSha: actualHeadSha };
+  });
 }
 
-export function repairExistingReviewWorktreePathForCheckout(input: {
+export async function repairExistingReviewWorktreePathForCheckout(input: {
   worktreePath: string;
   mirrorPath: string;
   protectedCheckoutRoot?: string;
   protectedCheckoutRoots?: string[];
-}): void {
+  gitCommandTimeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = input.gitCommandTimeoutMs ?? DEFAULT_GIT_COMMAND_TIMEOUT_MS;
   assertPathOutsideProtectedRoot({
     path: input.worktreePath,
     protectedRoot: input.protectedCheckoutRoot,
@@ -166,13 +198,13 @@ export function repairExistingReviewWorktreePathForCheckout(input: {
     if (stat.isSymbolicLink()) {
       throw new Error(`checkout preparation failed for ${input.worktreePath}: existing_symlink`);
     }
-    const existingGitWorktree = existsAsGitWorktree(input.worktreePath);
+    const existingGitWorktree = await existsAsGitWorktree(input.worktreePath, timeoutMs);
 
     if (existingGitWorktree) {
-      if (!isGitWorktreeOwnedByMirror(input)) {
+      if (!await isGitWorktreeOwnedByMirror(input, timeoutMs)) {
         throw new Error(`checkout preparation failed for ${input.worktreePath}: existing_git_worktree_not_owned`);
       }
-      run("git", ["--git-dir", input.mirrorPath, "worktree", "remove", "--force", input.worktreePath]);
+      await run(["--git-dir", input.mirrorPath, "worktree", "remove", "--force", input.worktreePath], timeoutMs);
     } else if (stat.isDirectory()) {
       const entries = readdirSync(input.worktreePath);
       const nonIgnorableEntries = entries.filter((entry) => !isIgnorableEmptyWorktreeEntry(entry));
@@ -187,7 +219,7 @@ export function repairExistingReviewWorktreePathForCheckout(input: {
     }
   }
 
-  run("git", ["--git-dir", input.mirrorPath, "worktree", "prune"]);
+  await run(["--git-dir", input.mirrorPath, "worktree", "prune"], timeoutMs);
 }
 
 function assertReviewPathOutsideProtectedCheckout(pathLabel: string, path: string, input: PullWorktreeInput): void {
@@ -200,38 +232,30 @@ function assertReviewPathOutsideProtectedCheckout(pathLabel: string, path: strin
   });
 }
 
-export function assertGitClean(worktreePath: string): void {
-  run("git", ["-C", worktreePath, "diff", "--exit-code"]);
-  run("git", ["-C", worktreePath, "diff", "--cached", "--exit-code"]);
-  const status = run("git", ["-C", worktreePath, "status", "--porcelain=v1", "--untracked-files=all"]).stdout.trim();
+export async function assertGitClean(worktreePath: string): Promise<void> {
+  await run(["-C", worktreePath, "diff", "--exit-code"], DEFAULT_GIT_COMMAND_TIMEOUT_MS);
+  await run(["-C", worktreePath, "diff", "--cached", "--exit-code"], DEFAULT_GIT_COMMAND_TIMEOUT_MS);
+  const status = (await run(["-C", worktreePath, "status", "--porcelain=v1", "--untracked-files=all"], DEFAULT_GIT_COMMAND_TIMEOUT_MS)).stdout.trim();
   if (status) {
     throw new Error(`Worktree has untracked or modified files after review:\n${status}`);
   }
 }
 
-function existsAsGitMirror(path: string): boolean {
-  const result = spawnSync("git", ["--git-dir", path, "rev-parse", "--is-bare-repository"], { encoding: "utf8" });
-  return result.status === 0 && result.stdout.trim() === "true";
+async function existsAsGitMirror(path: string, timeoutMs: number): Promise<boolean> {
+  const result = await probe(["--git-dir", path, "rev-parse", "--is-bare-repository"], timeoutMs);
+  return result?.stdout.trim() === "true";
 }
 
-function existsAsGitWorktree(path: string): boolean {
-  const result = spawnSync("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
-  if (result.status === null) {
-    const message = result.error instanceof Error ? result.error.message : "git failed before returning a status";
-    throw new Error(`checkout preparation failed for ${path}: git_worktree_probe_failed: ${message}`);
-  }
-  return result.status === 0 && result.stdout.trim() === "true";
+async function existsAsGitWorktree(path: string, timeoutMs: number): Promise<boolean> {
+  const result = await probe(["-C", path, "rev-parse", "--is-inside-work-tree"], timeoutMs);
+  return result?.stdout.trim() === "true";
 }
 
-function isGitWorktreeOwnedByMirror(input: { mirrorPath: string; worktreePath: string }): boolean {
-  const result = spawnSync("git", ["--git-dir", input.mirrorPath, "worktree", "list", "--porcelain"], { encoding: "utf8" });
-  if (result.status === null) {
-    const message = result.error instanceof Error ? result.error.message : "git failed before returning a status";
-    throw new Error(`checkout preparation failed for ${input.worktreePath}: git_worktree_list_failed: ${message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(`checkout preparation failed for ${input.worktreePath}: git_worktree_list_failed`);
-  }
+async function isGitWorktreeOwnedByMirror(
+  input: { mirrorPath: string; worktreePath: string },
+  timeoutMs: number
+): Promise<boolean> {
+  const result = await run(["--git-dir", input.mirrorPath, "worktree", "list", "--porcelain"], timeoutMs);
 
   const existingRawPath = resolve(input.worktreePath);
   const existingRealPath = maybeRealpath(input.worktreePath);
@@ -268,13 +292,47 @@ function isIgnorableEmptyWorktreeEntry(entry: string): boolean {
   return entry === ".DS_Store";
 }
 
-function run(command: string, args: string[]): { stdout: string; stderr: string } {
-  const result = spawnSync(command, args, {
-    encoding: "utf8",
-    maxBuffer: 10 * 1024 * 1024
-  });
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed: ${result.stderr || result.stdout}`);
+async function withGitMirrorLock<T>(mirrorPath: string, action: () => Promise<T>): Promise<T> {
+  const predecessor = gitMirrorTails.get(mirrorPath) ?? Promise.resolve();
+  let release!: () => void;
+  const tail = new Promise<void>((resolve) => { release = resolve; });
+  gitMirrorTails.set(mirrorPath, tail);
+  await predecessor;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (gitMirrorTails.get(mirrorPath) === tail) gitMirrorTails.delete(mirrorPath);
   }
-  return { stdout: result.stdout, stderr: result.stderr };
+}
+
+async function probe(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string } | undefined> {
+  try {
+    return await run(args, timeoutMs);
+  } catch (error) {
+    if (error instanceof GitCommandError && error.failureKind === "exit_nonzero") return undefined;
+    throw error;
+  }
+}
+
+function run(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024, timeout: timeoutMs }, (error, stdout, stderr) => {
+      if (!error) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const processError = error as typeof error & { killed?: boolean; code?: string | number };
+      const failureKind = processError.killed
+        ? "timeout"
+        : typeof processError.code === "number"
+          ? "exit_nonzero"
+          : "spawn_error";
+      reject(new GitCommandError({
+        failureKind,
+        timeoutMs,
+        detail: stderr || stdout || error.message
+      }));
+    });
+  });
 }

@@ -1610,7 +1610,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       commentId: finishingTouchDecision.commandId,
       author: finishingTouchDecision.command.author,
       trustedAuthors: config.commands.trustedAuthors,
-      worktreeClean: isExistingPullWorktreeClean(config, repo, pull),
+      worktreeClean: await isExistingPullWorktreeClean(config, repo, pull),
       action: finishingTouchAction,
       proposedOutput: draft
     });
@@ -1836,7 +1836,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       profile: repoPolicy.profile
     });
     const proof = evaluateProofRequirements({ pull, validation });
-    const worktree = preparePullWorktree({
+    const worktree = await preparePullWorktree({
       repo,
       pullNumber: pull.number,
       expectedHeadSha: pull.head.sha,
@@ -2027,7 +2027,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     }
     const zcodeResult = zcodeExecution.result;
 
-    assertGitClean(worktree.path);
+    await assertGitClean(worktree.path);
 
     const liveBeforePlan = await github.getPull(repo, pull.number);
     const staleBeforePlan = detectStalePullHead({ expected: pull, live: liveBeforePlan, phase: "before_plan" });
@@ -3037,7 +3037,7 @@ function recordLicenseAdmissionBlock(input: {
   });
 }
 
-function isExistingPullWorktreeClean(config: BotConfig, repo: string, pull: PullRequestSummary): boolean {
+async function isExistingPullWorktreeClean(config: BotConfig, repo: string, pull: PullRequestSummary): Promise<boolean> {
   const paths = planPullWorktreePaths({
     repo,
     pullNumber: pull.number,
@@ -3047,7 +3047,7 @@ function isExistingPullWorktreeClean(config: BotConfig, repo: string, pull: Pull
   });
   if (!existsSync(paths.worktreePath)) return true;
   try {
-    assertGitClean(paths.worktreePath);
+    await assertGitClean(paths.worktreePath);
     return true;
   } catch {
     return false;
