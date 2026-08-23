@@ -226,8 +226,10 @@ Use this path for each new repo from #14 or future allowlists:
 7. Promote through `docs/beta-release-runbook.md` and verify
    `npm run release:status` plus fresh launchd heartbeats.
 
-Do not treat `config.example.json` as live config. The active launchd config is
-outside the repo under `/Volumes/LEXAR/Codex/evaos-code-review-bot/config/`.
+Do not treat `config.example.json` as live config. The signed Desktop app owns
+the account-scoped config under
+`$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT_ID/config/`
+and reads GitHub App credentials from the macOS Keychain; never export them.
 Do not add repos whose GitHub App installation cannot be verified; public
 visibility or an admin user's `gh repo view` is not enough because reviews must
 be authored by `evaos-code-review-bot`.
@@ -250,9 +252,9 @@ The template intentionally keeps:
 Before copying any part of the template into the active live config, run:
 
 ```sh
-NEONDIFF_GITHUB_APP_ID="<github-app-id>" \
-NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem" \
-npx tsx src/cli.ts doctor --config /path/to/candidate-live-config.json
+: "${NEONDIFF_ACCOUNT_ID:?set the selected Desktop account id}"
+NEONDIFF_CONFIG="${NEONDIFF_CONFIG:-$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT_ID/config/candidate-live-config.json}" \
+npx tsx src/cli.ts doctor --config "$NEONDIFF_CONFIG"
 ```
 
 Then run dry-run review evidence for at least one current PR and one

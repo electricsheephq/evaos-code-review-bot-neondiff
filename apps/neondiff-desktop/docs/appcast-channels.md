@@ -16,9 +16,10 @@ It does not prove hosted feeds, notarized artifacts, or real EdDSA signing.
 Generate a local appcast from a committed fixture:
 
 ```sh
+: "${NEONDIFF_EVIDENCE_ROOT:?set an external evidence root outside this checkout}"
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture fixtures/appcast/beta.json \
-  --output /Volumes/LEXAR/Codex/evidence/neondiff-desktop/neondiff-beta-appcast.xml \
+  --output "$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/neondiff-beta-appcast.xml" \
   --dry-run
 ```
 

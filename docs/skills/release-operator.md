@@ -26,15 +26,16 @@ exception in the tracker issue and open a backfill issue before ending.
 4. Create an annotated tag at the merged SHA.
 5. Push the tag.
 6. Create a GitHub prerelease with the release packet as notes.
-7. Restart launchd.
+7. Install the accepted signed worker bundle from that immutable prerelease;
+   preserve the existing LaunchAgent, config, and worker identity.
 8. Run `release:status`, `coverage-audit`, and expired provider cooldown audit.
 9. Update the tracker issue and PR/release notes with the status result.
 
 ## Required Commands
 
 ```bash
-export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
-export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
+: "${NEONDIFF_ACCOUNT_ID:?set account}"; : "${NEONDIFF_BUNDLE_DIR:?set accepted bundle}"
+export NEONDIFF_CONFIG="${NEONDIFF_CONFIG:-$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT_ID/config/active-installed-live.json}"
 
 git fetch origin main --tags
 git checkout main
@@ -48,9 +49,9 @@ gh release create <tag> \
   --prerelease \
   --target <source-sha>
 
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
+node "$NEONDIFF_BUNDLE_DIR/install-b0-worker-candidate.mjs" update --manifest "$NEONDIFF_BUNDLE_DIR/<accepted-bundle-manifest>.json" --manifest-sha256 <manifest-sha256-from-release> --tarball "$NEONDIFF_BUNDLE_DIR/<accepted-bundle>.tgz" --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG" \
   --expected-head <source-sha> \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```

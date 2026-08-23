@@ -1,17 +1,23 @@
 # evaOS Code Review Bot Beta Release Runbook
 
-This repository runs a live local beta worker through launchd. Treat each live
-update as a named beta release, not as an informal pull from `main`.
+The signed NeonDiff Desktop app runs the local beta worker through launchd.
+Treat each live update as a named beta release, not as an informal pull from
+`main`; a source checkout is release tooling, not the accepted runtime.
 
 ## Release Boundary
 
 The beta release unit is:
 
-- source checkout: `/Volumes/LEXAR/repos/evaos-code-review-bot`
+- source checkout: `$NEONDIFF_REPO_ROOT` (an operator-selected clean checkout)
 - launchd job: `com.electricsheephq.evaos-code-review-bot`
-- launchd config: `/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json`
-- state DB: `/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews-live.sqlite`
-- evidence root: `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
+- signed Desktop config: `$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT_ID/Bots/$NEONDIFF_BOT_ID/config.local.json`
+- state DB: `$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT_ID/Bots/$NEONDIFF_BOT_ID/state/reviews-live.sqlite`
+- evidence root: `$NEONDIFF_EVIDENCE_ROOT` (an external operator-owned directory)
+
+```bash
+: "${NEONDIFF_REPO_ROOT:?set checkout}"; : "${NEONDIFF_ACCOUNT_ID:?set account}"; : "${NEONDIFF_BOT_ID:?set bot}"; : "${NEONDIFF_EVIDENCE_ROOT:?set evidence root}"; : "${NEONDIFF_BUNDLE_DIR:?set accepted bundle}"
+export NEONDIFF_CONFIG="${NEONDIFF_CONFIG:-$HOME/Library/Application Support/NeonDiffDesktop/Accounts/$NEONDIFF_ACCOUNT_ID/Bots/$NEONDIFF_BOT_ID/config.local.json}"
+```
 
 Packaged or non-source deployments must set
 `NEONDIFF_PROTECTED_CHECKOUT_ROOT` to the live operator checkout so
@@ -92,19 +98,19 @@ tagged version.
 Run from a clean release checkout on `main`:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd "$NEONDIFF_REPO_ROOT"
 git status --short
 git pull --ff-only
 npm test
 npm run build
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
+node "$NEONDIFF_BUNDLE_DIR/install-b0-worker-candidate.mjs" update --manifest "$NEONDIFF_BUNDLE_DIR/<accepted-bundle-manifest>.json" --manifest-sha256 <manifest-sha256-from-release> --tarball "$NEONDIFF_BUNDLE_DIR/<accepted-bundle>.tgz" --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
 sleep 5
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot \
   --require-coverage true
@@ -115,7 +121,7 @@ For public source-beta releases, run the same gate with manifest checks:
 ```bash
 PUBLIC_BETA_TAG=v0.4.24-beta.1
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -138,7 +144,7 @@ fetched:
 ```bash
 git fetch origin --tags
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -470,7 +476,7 @@ from the eligible open-head set. Retire only the exact failed head:
 
 ```bash
 npx tsx src/cli.ts retire-failed \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG" \
   --repo owner/repo \
   --pr 123 \
   --head-sha <failed-head-sha> \
@@ -540,7 +546,7 @@ Expired cooldown rows are actionable backlog. Run:
 
 ```bash
 npx tsx src/cli.ts retry-provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_CONFIG" \
   --expired-only true \
   --dry-run false \
   --zcode true
@@ -553,21 +559,16 @@ that the retry recorded `skipped_closed` or `skipped_stale_head`.
 
 ## Rollback
 
-Default rollback is to restart the existing launchd job after checking out the
-last known-good merge commit:
+Rollback uses the prior accepted signed worker bundle and preserves the
+existing LaunchAgent identity:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
-git fetch origin
-git checkout main
-git reset --hard <last-known-good-merge-sha>
-npm run build
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
+node "$NEONDIFF_BUNDLE_DIR/install-b0-worker-candidate.mjs" rollback --manifest "$NEONDIFF_BUNDLE_DIR/<prior-bundle-manifest>.json" --manifest-sha256 <prior-manifest-sha256-from-release> --tarball "$NEONDIFF_BUNDLE_DIR/<prior-bundle>.tgz" --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run false --confirm true
 ```
 
-Use `git reset --hard` only as an explicit rollback operation with the target
-SHA recorded in GitHub. Do not use rollback to bypass code review or to erase
-unrelated dirty work.
+Rollback is bundle-first: verify the prior signed manifest and tarball, then
+switch atomically through the installer. Do not rebuild a source checkout or
+erase unrelated dirty work.
 
 To stop the live beta worker entirely:
 
@@ -601,8 +602,8 @@ For each beta promotion, record:
   tracking issue or `not in this release`.
 - next monitoring action or heartbeat.
 
-Keep raw evidence under `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
-or session notes. Do not paste secrets, private keys, tokens, cookies, raw
+Keep raw evidence under `$NEONDIFF_EVIDENCE_ROOT` or session notes. Do not
+paste secrets, private keys, tokens, cookies, raw
 customer data, or long logs into GitHub comments.
 
 ## Release Packet Template
