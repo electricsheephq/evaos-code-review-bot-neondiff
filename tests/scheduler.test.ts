@@ -3517,6 +3517,84 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("does not mutate a truncated command head before quarantine is needed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-command-truncated-noop-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = { enabled: true, botMentions: ["@evaos-code-review-bot"], trustedAuthors: ["100yenadmin"], acknowledge: false };
+    config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const now = new Date("2026-07-01T00:05:00.000Z");
+    state.recordReviewReadiness({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, state: "ready_for_human", reason: "comment_review_posted", now });
+    const statusCalls: StatusCommentCall[] = [];
+    const truncated = truncatedComments();
+    let reviewCalls = 0;
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: { ...githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_B)]]]), new Map(), statusCalls), listIssueComments: async () => truncated },
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => { reviewCalls += 1; return "reviewed"; },
+      now
+    });
+    expect(result).toMatchObject({ failed: 1, commandFetchErrors: 1 });
+    expect(result.queue).toMatchObject({ enqueued: 0, leased: 0, failedQueueJobs: 0 });
+    expect(reviewCalls).toBe(0);
+    expect(statusCalls).toEqual([]);
+    expect(state.listReviewQueueJobs()).toEqual([]);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({ state: "ready_for_human", reason: "comment_review_posted" });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_B)).toBeUndefined();
+    state.close();
+  });
+
+  it("quarantines every same-head attempt and excludes an expiry crossing into leasing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-command-truncated-quarantine-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = { enabled: true, botMentions: ["@evaos-code-review-bot"], trustedAuthors: ["100yenadmin"], acknowledge: false };
+    config.reviewStatusComment!.enabled = true;
+    config.reviewerSessions = { enabled: true, ttlMs: 8 * 60 * 60_000, headCountLimit: 10 };
+    config.reviewConcurrency.maxActiveRuns = 2;
+    config.reviewScheduler!.maxProviderActive = 2;
+    const state = new ReviewStateStore(config.statePath);
+    const discoveryNow = new Date("2026-07-01T00:00:00.000Z");
+    const leaseExpiry = new Date("2026-07-01T00:00:30.000Z");
+    const leasingNow = new Date("2026-07-01T00:01:00.000Z");
+    const automatic = state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, baseSha: "base", now: discoveryNow }).job;
+    const manual = state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, baseSha: "base", source: "manual_command", commentId: 501, now: discoveryNow }).job;
+    const assignment = state.assignReviewerSessionJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, ttlMs: config.reviewerSessions.ttlMs, headCountLimit: config.reviewerSessions.headCountLimit, now: discoveryNow });
+    if (!assignment.assigned) throw new Error("expected reviewer session assignment");
+    for (const job of [automatic, manual]) {
+      state.updateReviewQueueJobState({ jobId: job.jobId, state: "queued", sessionId: assignment.session.sessionId, now: discoveryNow });
+    }
+    state.recordReviewReadiness({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, state: "queued", reason: "automatic_enqueue", now: discoveryNow });
+    state.updateReviewQueueJobState({ jobId: manual.jobId, state: "leased", leaseId: "lease-crossing-discovery", leaseExpiresAt: leaseExpiry.toISOString(), now: discoveryNow });
+    const statusCalls: StatusCommentCall[] = [];
+    const github = { ...githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), new Map(), statusCalls), listIssueComments: async () => truncatedComments() };
+    let reviewCalls = 0;
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => { reviewCalls += 1; return "reviewed"; },
+      now: discoveryNow,
+      clock: () => leasingNow
+    });
+    expect(result).toMatchObject({ failed: 1, commandFetchErrors: 1 });
+    expect(result.queue).toMatchObject({ leased: 0, failedQueueJobs: 2, remainingQueued: 0 });
+    expect(reviewCalls).toBe(0);
+    expect(state.listReviewQueueJobs({ state: "failed" })).toHaveLength(2);
+    expect(state.listReviewQueueJobs({ state: "failed" })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ jobId: automatic.jobId, lastError: "command_evidence_truncated" }),
+      expect.objectContaining({ jobId: manual.jobId, lastError: "command_evidence_truncated" })
+    ]));
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({ state: "failed", reason: "command_evidence_truncated" });
+    expect(state.getReviewerSessionJob("org/repo-a", 1, HEAD_A)).toMatchObject({ jobState: "failed", processedReviewStatus: "failed" });
+    expect(statusCalls.map(statusFromBody)).toEqual(["failed", "failed"]);
+    state.close();
+  });
+
   it("assigns scheduler jobs to reusable repo-sticky reviewer sessions when enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-"));
     roots.push(root);
@@ -5292,4 +5370,8 @@ function comment(id: number, login: string, body: string) {
       type: login.endsWith("bot") ? "Bot" : "User"
     }
   };
+}
+
+function truncatedComments() {
+  return Object.assign([], { items: [], truncated: true, overflow: true });
 }
