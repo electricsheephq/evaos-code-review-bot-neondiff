@@ -57,7 +57,7 @@ export function validateSevereVerificationReceipt(value: unknown, options: Sever
   if (!exact(receipt, ["schemaVersion", "repo", "pullNumber", "baseSha", "findingFingerprint", "headSha", "state", "disposition", "evidence"], ["confidence", "reasonCode"])) errors.push("receipt has missing or unknown fields");
   if (receipt.schemaVersion !== "severe-verifier-v1") errors.push("schemaVersion is invalid");
   if (!string(receipt.repo) || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(receipt.repo) || byteLength(receipt.repo) > 256) errors.push("repo is invalid");
-  if (!Number.isSafeInteger(receipt.pullNumber) || receipt.pullNumber < 1) errors.push("pullNumber is invalid");
+  if (typeof receipt.pullNumber !== "number" || !Number.isSafeInteger(receipt.pullNumber) || receipt.pullNumber < 1) errors.push("pullNumber is invalid");
   if (!string(receipt.baseSha) || !SHA40.test(receipt.baseSha)) errors.push("baseSha is invalid");
   if (!string(receipt.headSha) || !SHA40.test(receipt.headSha)) errors.push("headSha is invalid");
   if (!string(receipt.findingFingerprint) || !/^finding:[a-f0-9]{64}$/.test(receipt.findingFingerprint)) errors.push("findingFingerprint is invalid");
@@ -68,7 +68,7 @@ export function validateSevereVerificationReceipt(value: unknown, options: Sever
   if (receipt.state === "confirmed" && receipt.disposition !== "retain") errors.push("confirmed receipts must retain");
   if (receipt.state !== "confirmed" && receipt.disposition === "retain") errors.push("non-confirmed receipts must suppress");
   validateEvidence(receipt.evidence, receipt.state, options.expectedPath, errors);
-  return errors.length ? { ok: false, errors } : { ok: true, value: receipt as SevereVerificationReceipt };
+  return errors.length ? { ok: false, errors } : { ok: true, value: receipt as unknown as SevereVerificationReceipt };
 }
 
 export function parseSevereVerificationReceipt(value: unknown, options: SevereReceiptValidationOptions = {}): SevereVerificationReceipt {
@@ -87,7 +87,7 @@ function validateEvidence(value: unknown, state: unknown, expectedPath: string |
   if (value.files.length + value.omitted.length === 0) errors.push("evidence must be nonempty");
   for (const item of value.files) {
     const file = record(item) ? item : undefined;
-    if (!file || !exact(file, ["path", "kind", "sha256", "bytes", "complete"]) || !safePath(file.path) || !string(file.kind) || !KINDS.has(file.kind) || !string(file.sha256) || !SHA256.test(file.sha256) || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > 2 ** 32 || typeof file.complete !== "boolean") errors.push("evidence file is invalid");
+    if (!file || !exact(file, ["path", "kind", "sha256", "bytes", "complete"]) || !safePath(file.path) || !string(file.kind) || !KINDS.has(file.kind) || !string(file.sha256) || !SHA256.test(file.sha256) || typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > 2 ** 32 || typeof file.complete !== "boolean") errors.push("evidence file is invalid");
   }
   for (const item of value.omitted) {
     const omission = record(item) ? item : undefined;
