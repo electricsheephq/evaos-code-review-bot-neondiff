@@ -2381,7 +2381,7 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
         : "none";
     const failureHealth = readProcessedFailureHealth(db, now);
     const reviewerSessions = readReviewerSessionCounts(db, now, leaseTtlMs);
-    const reviewQueue = readReviewQueueCounts(db, now, failureHealth.latestPostedAtByPull);
+    const reviewQueue = readReviewQueueCounts(db, now);
     const reviewRunLeases = readReviewRunLeaseCounts(db, now);
     const staleActiveReviewQueueJobCount = readStaleActiveReviewQueueJobCount(db, now, leaseTtlMs);
     return {
@@ -2425,66 +2425,38 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
   }
 }
 
-type ProcessedFailureRow = { repo: string; pull_number: number; status: string; error: string | null; created_at: string };
-type FailedQueueRow = { repo: string; pull_number: number; last_error: string | null; updated_at: string };
+type FailedQueueRow = { last_error: string | null; active: number };
 
 function readProcessedFailureHealth(db: DatabaseSync, now: Date): {
   recentUnrecoveredErrorCount: number;
   lastErrorAt?: string;
-  latestPostedAtByPull: Map<string, number>;
 } {
-  const rows = db.prepare(
-    `select repo, pull_number, status, error, created_at
-       from processed_reviews
-      where status = 'posted'
-         or status = 'failed'
-         or (status != 'skipped' and error is not null and error != '')`
-  ).all() as unknown as ProcessedFailureRow[];
-  const latestPostedAtByPull = new Map<string, number>();
-  for (const row of rows) {
-    if (row.status !== "posted") continue;
-    const postedAt = parseDatabaseTimestamp(row.created_at);
-    if (!Number.isFinite(postedAt)) continue;
-    const key = `${row.repo}\u0000${row.pull_number}`;
-    if (postedAt > (latestPostedAtByPull.get(key) ?? Number.NEGATIVE_INFINITY)) {
-      latestPostedAtByPull.set(key, postedAt);
-    }
-  }
-  const cutoff = now.getTime() - FAILURE_HEALTH_WINDOW_MS;
-  let recentUnrecoveredErrorCount = 0;
-  let lastErrorAt: { value: string; timestamp: number } | undefined;
-  for (const row of rows) {
-    const isError = row.status === "failed" || (row.status !== "skipped" && Boolean(row.error));
-    if (!isError) continue;
-    const timestamp = parseDatabaseTimestamp(row.created_at);
-    const key = `${row.repo}\u0000${row.pull_number}`;
-    const recoveredAt = latestPostedAtByPull.get(key);
-    if (!(recoveredAt !== undefined && Number.isFinite(timestamp) && recoveredAt > timestamp) &&
-        (!Number.isFinite(timestamp) || timestamp >= cutoff)) {
-      recentUnrecoveredErrorCount += 1;
-    }
-    if (Number.isFinite(timestamp) && (!lastErrorAt || timestamp > lastErrorAt.timestamp)) {
-      lastErrorAt = { value: row.created_at, timestamp };
-    }
-  }
+  const errorWhere = "failed.status = 'failed' or (failed.status != 'skipped' and failed.error is not null and failed.error != '')";
+  const cutoff = new Date(now.getTime() - FAILURE_HEALTH_WINDOW_MS).toISOString();
+  const recent = db.prepare(
+    `select count(*) as count from processed_reviews failed
+      where (${errorWhere})
+        and (datetime(failed.created_at) is null or datetime(failed.created_at) >= datetime(?))
+        and not exists (
+          select 1 from processed_reviews posted
+           where posted.repo = failed.repo and posted.pull_number = failed.pull_number
+             and posted.status = 'posted' and datetime(posted.created_at) > datetime(failed.created_at)
+        )`
+  ).get(cutoff) as { count: number };
+  const last = db.prepare(
+    `select created_at from processed_reviews failed
+      where ${errorWhere}
+      order by datetime(created_at) desc limit 1`
+  ).get() as { created_at?: string } | undefined;
   return {
-    recentUnrecoveredErrorCount,
-    ...(lastErrorAt ? { lastErrorAt: lastErrorAt.value } : {}),
-    latestPostedAtByPull
+    recentUnrecoveredErrorCount: recent.count ?? 0,
+    ...(last?.created_at ? { lastErrorAt: last.created_at } : {})
   };
-}
-
-function parseDatabaseTimestamp(value: string | null | undefined): number {
-  const text = value?.trim();
-  if (!text) return Number.NaN;
-  return Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)
-    ? `${text.replace(" ", "T")}Z` : text);
 }
 
 function readReviewQueueCounts(
   db: DatabaseSync,
-  now: Date,
-  latestPostedAtByPull: Map<string, number>
+  now: Date
 ): {
   total: number;
   queued: number;
@@ -2551,15 +2523,16 @@ function readReviewQueueCounts(
     )
     .all(nowIso) as unknown as Array<QueueCountRow & { repo: string }>;
   const failedRows = db.prepare(
-    `select repo, pull_number, last_error, updated_at
-       from review_queue_jobs
-      where state = 'failed'`
+    `select failed.last_error,
+            not exists (
+              select 1 from processed_reviews posted
+               where posted.repo = failed.repo and posted.pull_number = failed.pull_number
+                 and posted.status = 'posted' and datetime(posted.created_at) > datetime(failed.updated_at)
+            ) as active
+       from review_queue_jobs failed
+      where failed.state = 'failed'`
   ).all() as unknown as FailedQueueRow[];
-  const activeFailedRows = failedRows.filter((row) => {
-    const recoveredAt = latestPostedAtByPull.get(`${row.repo}\u0000${row.pull_number}`);
-    const failedAt = parseDatabaseTimestamp(row.updated_at);
-    return recoveredAt === undefined || !Number.isFinite(failedAt) || recoveredAt <= failedAt;
-  });
+  const activeFailedRows = failedRows.filter((row) => row.active === 1);
   const timeoutCounts = summarizeZCodeTimeoutErrors(failedRows.map((row) => row.last_error));
   const activeTimeoutCounts = summarizeZCodeTimeoutErrors(activeFailedRows.map((row) => row.last_error));
   return {
