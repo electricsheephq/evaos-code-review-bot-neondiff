@@ -1290,6 +1290,7 @@ describe("review state store", () => {
     expect(store.getReviewQueueJob(expired.jobId)).not.toHaveProperty("leaseId");
     expect(store.getReviewQueueJob(expiryRace.jobId)).toMatchObject({ state: "leased", leaseId: "race" });
     expect(store.quarantineIncompleteReviewEvidence({ ...quarantine, now: new Date("2026-07-01T00:00:04.100Z") })).toEqual({ failedQueueJobs: 0, retiredQueueJobs: 0 });
+    expect(store.leaseNextReviewQueueJobs({ maxProviderActive: 2, maxOrgActive: 2, maxRepoActive: 2, quarantines: [quarantine], now: new Date("2026-07-01T00:00:04.100Z") }).map((job) => job.jobId)).toEqual([unrelated.jobId]);
     expect(store.getReviewQueueJob(expiryRace.jobId)).toMatchObject({ state: "leased", leaseId: "race" });
     expect(store.getReviewQueueJob(superseded.jobId)).toMatchObject({ state: "stale_retired", lastError: "superseded_by_head=head-b" });
     expect(store.getReviewReadiness(repo, 1, "head-a")).toMatchObject({ state: "stale", reason: "superseded_by_head=head-b" });
@@ -1312,7 +1313,7 @@ describe("review state store", () => {
       maxRepoActive: 2,
       quarantines: [quarantine],
       now: new Date("2026-07-01T00:00:05Z")
-    }).map((job) => job.jobId)).toEqual([unrelated.jobId]);
+    })).toEqual([]);
     expect(store.getReviewQueueJob(expiryRace.jobId)).toMatchObject({ state: "failed" });
     expect(store.getReviewQueueJob(expiryRace.jobId)).not.toHaveProperty("leaseId");
     expect(store.listReviewQueueJobsForPull({ repo, pullNumber: 1 }).some((job) => job.state === "queued" || job.state === "leased" || job.state === "running")).toBe(false);

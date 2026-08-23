@@ -2700,8 +2700,8 @@ export class ReviewStateStore {
                updated_at = ?
            where state in ('leased', 'running')
              and (
-               (lease_expires_at is not null and datetime(lease_expires_at) <= datetime(?))
-               or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
+               (lease_expires_at is not null and lease_expires_at <= ?)
+               or (lease_expires_at is null and updated_at <= ?)
              )`
         )
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
