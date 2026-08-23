@@ -336,7 +336,7 @@ export interface ProviderCooldownReviewRecord extends StoredProcessedReviewRecor
   expired: boolean;
 }
 
-export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_complete" | "daemon_cycle_failed";
+export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete" | "daemon_cycle_failed";
 
 export interface DaemonHeartbeatRecord {
   cycle: number;

@@ -3010,11 +3010,12 @@ function readHeartbeatStatus(
     const activeStartedTime = row.started_at ? Date.parse(row.started_at) : NaN;
     const hasActiveCycle =
       Number.isFinite(activeStartedTime) &&
-      (!Number.isFinite(latestTime) || activeStartedTime > latestTime);
+      (row.event === "daemon_cycle_progress" || !Number.isFinite(latestTime) || activeStartedTime > latestTime);
     if (hasActiveCycle) {
       const activeAgeMs = Math.max(0, now.getTime() - activeStartedTime);
+      const livenessAgeMs = Math.max(0, now.getTime() - Math.max(activeStartedTime, row.event === "daemon_cycle_progress" ? latestTime : 0));
       return {
-        status: activeAgeMs <= activeMaxAgeMs ? "active" : "stale",
+        status: livenessAgeMs <= activeMaxAgeMs ? "active" : "stale",
         maxAgeMs,
         activeMaxAgeMs,
         ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),

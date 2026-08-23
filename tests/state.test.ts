@@ -1677,6 +1677,10 @@ describe("review state store", () => {
     const firstRun = new Date("2026-07-01T00:00:00.000Z");
     store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_start", dryRun: false, recordedAt: firstRun });
     store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_start", dryRun: false, recordedAt: firstRun });
+    store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_progress", dryRun: false, recordedAt: new Date("2026-07-01T00:09:00.000Z") });
+    expect(store.getDaemonHeartbeat()).toMatchObject({
+      event: "daemon_cycle_progress", recordedAt: "2026-07-01T00:09:00.000Z", startedAt: firstRun.toISOString()
+    });
     store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_complete", dryRun: false, recordedAt: new Date("2026-07-01T00:10:00.000Z") });
     expect(store.getDaemonHeartbeat()).toMatchObject({ startedCycle: 1, startedAt: firstRun.toISOString() });
 

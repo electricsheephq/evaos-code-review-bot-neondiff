@@ -599,6 +599,7 @@ describe("daemon cycle resilience", () => {
     }
 
     expect(new Set(heartbeats.filter(({ event }) => event === "daemon_cycle_start").map(({ startedAt }) => startedAt)).size).toBe(1);
+    expect(heartbeats.some(({ event }) => event === "daemon_cycle_progress")).toBe(true);
     expect(cleared).toBe(1);
     const progress = stdout.map((line) => JSON.parse(line)).find((line) => line.event === "daemon_issue_enrichment_progress");
     expect(progress).toMatchObject({ stage: "analysis", phase: "start", count: 10_000 });

@@ -6950,14 +6950,14 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         status: "active",
         maxAgeMs: 120_000,
         activeMaxAgeMs: 420_000,
-        latestAt: "2026-06-30T23:57:00.000Z",
-        ageMs: 180_000,
+        latestAt: "2026-06-30T23:59:30.000Z",
+        ageMs: 30_000,
         cycle: 5,
-        event: "daemon_cycle_complete",
+        event: "daemon_cycle_progress",
         dryRun: false,
         activeCycle: 6,
-        activeStartedAt: "2026-06-30T23:59:00.000Z",
-        activeAgeMs: 60_000
+        activeStartedAt: "2026-06-30T23:50:00.000Z",
+        activeAgeMs: 600_000
       },
       now: new Date("2026-07-01T00:00:00.000Z")
     });
@@ -6966,7 +6966,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(status.gates).toContainEqual({
       name: "daemon_heartbeat_recent",
       ok: true,
-      detail: "active; active age 60000ms; max 420000ms; started cycle 6; last event daemon_cycle_complete; last cycle 5"
+      detail: "active; active age 600000ms; max 420000ms; started cycle 6; last event daemon_cycle_progress; last cycle 5"
     });
   });
 });

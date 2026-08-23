@@ -287,7 +287,7 @@ async function runIssueEnrichmentLane(input: {
   const progressStartedAt = Date.now();
   const refreshHeartbeat = (): void => {
     try {
-      input.recordHeartbeat("daemon_cycle_start", undefined, input.runStartedAt);
+      input.recordHeartbeat("daemon_cycle_progress");
     } catch (error) {
       input.stderr(formatDaemonLog({
         event: "daemon_heartbeat_failed",
