@@ -161,7 +161,7 @@ neondiff doctor --config config.local.json --json
 For the planned signed Desktop 1.1.0 Mac journey, `/Applications/NeonDiff.app` becomes
 the primary first-run surface only after the immutable signed GA artifact, `/mac` surface, and promotion gates are live; until then the public paid B0 BYO beta remains current. Its
 planned LaunchAgent uses the sealed helper `/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`. **Verify App Access** is for a new App; an existing compatible agent uses **Verify Existing Access**.
-Codex runtime and dry-run approval precede live review. The app shows license, GitHub App, daemon, and provider status;
+Codex runtime and dry-run approval precede live review. The app shows license status, GitHub App status, daemon status, and provider readiness;
 the HTML dashboard remains CLI-first/non-Mac diagnostics, not native UI.
 The managed native path binds activation and private-repository token issuance
 to the same Keychain-backed broker device identity and exact GitHub-selected
