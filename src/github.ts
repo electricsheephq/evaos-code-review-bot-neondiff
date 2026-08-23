@@ -1,5 +1,6 @@
 import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { isMap, isProxy, isSet } from "node:util/types";
 import type { IssueCommentCommandSource } from "./commands.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import type { IssueEnrichmentIssueList } from "./issue-enrichment.js";
@@ -138,6 +139,22 @@ interface GitHubInstallationResponse {
   app_id?: number;
   account?: { login?: string };
   app_slug?: string;
+}
+
+export interface CanonicalGitHubInstallationIdentity {
+  id: number;
+  app_id: number;
+  account_id: number;
+  account_login: string;
+  account_type: "User" | "Organization";
+  app_slug: string;
+  bot_login: string;
+}
+
+export interface GitHubInstallationIdentityExpectation {
+  expectedAppId: string;
+  expectedBotLogin: string;
+  repo: string;
 }
 
 export class GitHubApiRequestError extends Error {
@@ -750,6 +767,69 @@ function visibilityFromRepositorySummary(repository: RepositorySummary): {
   if (repository.private === true) return { result: "private", source: "private_flag" };
   if (repository.private === false) return { result: "public", source: "private_flag" };
   return { result: "unknown", source: "unavailable" };
+}
+
+const GITHUB_LOGIN_PATTERN = /^(?!-)(?!.*--)[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
+const GITHUB_APP_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/;
+const MISSING_GITHUB_FIELD = Symbol("missing-github-field");
+
+/** Pure required-field projection; unrelated GitHub metadata is never traversed. */
+export function normalizeAndValidateGitHubInstallationIdentity(
+  value: unknown,
+  expected: GitHubInstallationIdentityExpectation
+): CanonicalGitHubInstallationIdentity {
+  const id = readGitHubField(value, "id");
+  const appId = readGitHubField(value, "app_id");
+  const account = readGitHubField(value, "account");
+  const accountId = readGitHubField(account, "id");
+  const accountLogin = normalizeGitHubValue(readGitHubField(account, "login"), GITHUB_LOGIN_PATTERN);
+  const accountType = readGitHubField(account, "type");
+  const appSlug = normalizeGitHubAppSlug(readGitHubField(value, "app_slug"));
+  const expectedAppId = readGitHubField(expected, "expectedAppId");
+  const expectedBotLogin = normalizeGitHubBotLogin(readGitHubField(expected, "expectedBotLogin"));
+  const repo = readGitHubField(expected, "repo");
+  const repoParts = typeof repo === "string" ? repo.split("/") : [];
+  const owner = repoParts.length === 2 && repoParts[1].length > 0 && !/\s/.test(repoParts[1])
+    ? normalizeGitHubValue(repoParts[0], GITHUB_LOGIN_PATTERN) : undefined;
+  const botLogin = appSlug ? `${appSlug}[bot]` : undefined;
+  const positiveInteger = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0;
+  if (!positiveInteger(id) || !positiveInteger(appId) || !positiveInteger(accountId)
+      || typeof expectedAppId !== "string" || !/^\d+$/.test(expectedAppId.trim())
+      || String(appId) !== expectedAppId.trim() || !accountLogin || !owner || accountLogin !== owner
+      || (accountType !== "User" && accountType !== "Organization") || !appSlug
+      || !botLogin || botLogin !== expectedBotLogin) {
+    throw new Error("GitHub installation identity failed canonical validation.");
+  }
+  return Object.freeze({
+    id, app_id: appId, account_id: accountId, account_login: accountLogin,
+    account_type: accountType, app_slug: appSlug, bot_login: botLogin
+  });
+}
+
+function readGitHubField(value: unknown, key: string): unknown {
+  if (value === null || typeof value !== "object" || isProxy(value) || isMap(value) || isSet(value)
+      || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return MISSING_GITHUB_FIELD;
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && descriptor.enumerable && "value" in descriptor ? descriptor.value : MISSING_GITHUB_FIELD;
+}
+
+function normalizeGitHubAppSlug(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  const slug = normalized.endsWith("[bot]") ? normalized.slice(0, -5) : normalized;
+  return GITHUB_APP_SLUG_PATTERN.test(slug) ? slug : undefined;
+}
+
+function normalizeGitHubBotLogin(value: unknown): string | undefined {
+  const slug = normalizeGitHubAppSlug(value);
+  return slug ? `${slug}[bot]` : undefined;
+}
+
+function normalizeGitHubValue(value: unknown, pattern: RegExp): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return pattern.test(normalized) ? normalized : undefined;
 }
 
 function parseGitHubInstallationIdentity(value: unknown): GitHubInstallationIdentity {

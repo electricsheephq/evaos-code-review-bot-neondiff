@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GitHubApi } from "../src/github.js";
+import { GitHubApi, normalizeAndValidateGitHubInstallationIdentity } from "../src/github.js";
 
 describe("GitHub App read authentication", () => {
   const roots: string[] = [];
@@ -13,6 +13,66 @@ describe("GitHub App read authentication", () => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("projects required identity fields from normal installation metadata", () => {
+    const response = canonicalInstallation({
+      app_slug: " EVAOS-CODE-REVIEW-BOT[bot] ",
+      account: { id: 7, login: "Owner", type: "Organization" },
+      events: [{ id: 1, payload: { action: "created" } }],
+      single_file_paths: [".github/CODEOWNERS"],
+      permissions: { contents: "read" }
+    });
+    const identity = normalizeAndValidateGitHubInstallationIdentity(response, {
+      expectedAppId: "4184532", expectedBotLogin: " evaos-code-review-bot ", repo: "OWNER/repo"
+    });
+    expect(identity).toEqual({
+      id: 123, app_id: 4184532, account_id: 7, account_login: "owner", account_type: "Organization",
+      app_slug: "evaos-code-review-bot", bot_login: "evaos-code-review-bot[bot]"
+    });
+    expect(Object.isFrozen(identity)).toBe(true);
+    (response.account as Record<string, unknown>).login = "changed";
+    expect(identity.account_login).toBe("owner");
+  });
+
+  it.each([
+    ["App mismatch", { app_id: 4184533 }, undefined],
+    ["account mismatch", { account: { id: 7, login: "other", type: "User" } }, undefined],
+    ["account type mismatch", { account: { id: 7, login: "owner", type: "Bot" } }, undefined],
+    ["bot mismatch", { app_slug: "other-app" }, undefined],
+    ["repository mismatch", {}, "other/repo"],
+    ["missing account id", { account: { login: "owner", type: "User" } }, undefined],
+    ["missing account type", { account: { id: 7, login: "owner" } }, undefined]
+  ])("fails closed for required identity mismatch: %s", (_name, override, repo) => {
+    expect(() => normalizeAndValidateGitHubInstallationIdentity(canonicalInstallation(override), {
+      expectedAppId: "4184532", expectedBotLogin: "evaos-code-review-bot[bot]", repo: repo ?? "owner/repo"
+    })).toThrow(/canonical validation/);
+  });
+
+  it("rejects hostile required fields without executing traps or getters", () => {
+    let executions = 0;
+    const trap = { get: () => (++executions, 1), ownKeys: () => (++executions, []), getPrototypeOf: () => (++executions, Object.prototype) };
+    const revocable = Proxy.revocable(canonicalInstallation(), trap);
+    revocable.revoke();
+    const accessor = canonicalInstallation();
+    Object.defineProperty(accessor, "id", { enumerable: true, get: () => (++executions, 123) });
+    const nestedAccessor = canonicalInstallation({ account: Object.defineProperty({ id: 7, type: "User" }, "login", {
+      enumerable: true, get: () => (++executions, "owner")
+    }) });
+    const map = canonicalInstallation({ account: new Map([["id", 7]]) });
+    const set = canonicalInstallation({ account: new Set([7]) });
+    const array = canonicalInstallation({ account: [7, "owner", "User"] });
+    const symbol = canonicalInstallation({ app_id: Symbol("app") });
+    const cycle: Record<string, unknown> = {};
+    cycle.login = cycle;
+    const cyclic = canonicalInstallation({ account: { id: 7, login: cycle, type: "User" } });
+    const inherited = canonicalInstallation({ account: Object.assign(Object.create({ login: "owner" }), { id: 7, type: "User" }) });
+    for (const value of [new Proxy(canonicalInstallation(), trap), revocable.proxy, accessor, nestedAccessor, map, set, array, symbol, cyclic, inherited]) {
+      expect(() => normalizeAndValidateGitHubInstallationIdentity(value, {
+        expectedAppId: "4184532", expectedBotLogin: "evaos-code-review-bot[bot]", repo: "owner/repo"
+      })).toThrow(/canonical validation/);
+    }
+    expect(executions).toBe(0);
   });
 
   it("uses installation tokens for PR read calls when App credentials are configured", async () => {
@@ -835,6 +895,16 @@ function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
     statusText,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+function canonicalInstallation(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 123,
+    app_id: 4184532,
+    account: { id: 7, login: "owner", type: "Organization" },
+    app_slug: "evaos-code-review-bot",
+    ...overrides
+  };
 }
 
 function installThenTokenThen(handler: (url: string) => Response): (url: string) => Response {
