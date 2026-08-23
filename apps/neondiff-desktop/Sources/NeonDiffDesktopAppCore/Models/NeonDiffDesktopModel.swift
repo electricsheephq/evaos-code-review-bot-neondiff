@@ -4209,7 +4209,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
            let targetCheck = report.github.readChecks.first(where: {
                $0.repo.caseInsensitiveCompare(targetRepository) == .orderedSame
            }) {
-            byoVerifiedVisibility = targetCheck.visibilityResult?.lowercased()
+            byoVerifiedVisibility = targetCheck.visibilityResult?.lowercased() ?? "unknown"
             byoGitHubAccessAuthority = makeBYOAccessAuthority(
                 expectedContext: expectedContext,
                 targetCheck: targetCheck,
