@@ -21,6 +21,7 @@ import { riskWeightedQueuePriority } from "../../src/scheduler.js";
 import { buildChangedSurfaceValidationReport } from "../../src/validation-selector.js";
 import {
   assertPathOutsideProtectedRoot,
+  findGitCheckoutRoot,
   getProtectedCheckoutRoots,
   resolvePathFollowingExistingSymlinks
 } from "../../src/path-safety.js";
@@ -40,7 +41,7 @@ const resolvedEvidenceRoot = resolvePathFollowingExistingSymlinks(resolve(eviden
 assertPathOutsideProtectedRoot({
   path: resolvedEvidenceRoot,
   protectedRoot: undefined,
-  protectedRoots: getProtectedCheckoutRoots(),
+  protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(resolvedEvidenceRoot)],
   pathLabel: "NEONDIFF_EVIDENCE_ROOT",
   protectedRootLabel: "a protected checkout root"
 });
@@ -48,7 +49,7 @@ const EVIDENCE_DIR = join(resolvedEvidenceRoot, "neondiff-qa-lab", "risk-queue")
 assertPathOutsideProtectedRoot({
   path: resolvePathFollowingExistingSymlinks(EVIDENCE_DIR),
   protectedRoot: undefined,
-  protectedRoots: getProtectedCheckoutRoots(),
+  protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(EVIDENCE_DIR)],
   pathLabel: "NEONDIFF_EVIDENCE_ROOT",
   protectedRootLabel: "a protected checkout root"
 });

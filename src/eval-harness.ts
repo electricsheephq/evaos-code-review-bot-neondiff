@@ -3,7 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseFindings } from "./findings.js";
-import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
+import { assertPathOutsideProtectedRoot, findGitCheckoutRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { Finding, Severity } from "./types.js";
 
@@ -1534,7 +1534,7 @@ export function assertEvalOutputDirSafe(outputDir: string): string {
     assertPathOutsideProtectedRoot({
       path: resolvedOutput,
       protectedRoot: undefined,
-      protectedRoots: getProtectedCheckoutRoots(),
+      protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(resolvedOutput)],
       pathLabel: "outputDir",
       protectedRootLabel: "a protected checkout root"
     });
