@@ -26,7 +26,7 @@ const SHA40 = "^[a-f0-9]{40}$";
 const SHA256 = "^[a-f0-9]{64}$";
 const REPO = "^[A-Za-z0-9_.-]{1,100}$";
 const OWNER = "(?![^/]*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?";
-const SAFE_PATH = "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\\\u0000-\\u001f\\u007f-\\u009f])(?!.*\\/$).+$";
+const SAFE_PATH = "^(?!/)(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\\\u0000-\\u001f\\u007f-\\u009f\\uD800-\\uDFFF])(?!.*\\/$).+$";
 const STATE_RULES: Record<SevereVerificationState, { disposition: SevereVerificationDisposition; complete: boolean; reasons?: readonly SevereVerificationCode[] }> = {
   confirmed: { disposition: "retain", complete: true }, refuted: { disposition: "suppress", complete: true, reasons: ["refuted"] },
   failed: { disposition: "suppress", complete: false, reasons: ["provider_unavailable", "receipt_invalid"] },

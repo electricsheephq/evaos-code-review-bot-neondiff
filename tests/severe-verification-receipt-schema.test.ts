@@ -51,6 +51,15 @@ describe("strict severe verification receipt schema", () => {
     }
   });
 
+  it("rejects lone high/low surrogate path code units at every position", () => {
+    for (const unsafe of ["\uD800x.ts", "src/\uD800x.ts", "src/x\uD800.ts", "\uDC00x.ts", "src/\uDC00x.ts", "src/x\uDC00.ts"]) {
+      const invalid = receipt(); invalid.evidence.files[0].path = unsafe;
+      expect(validate(invalid), unsafe).toBe(false);
+    }
+    const valid = receipt(); valid.evidence.files[0].path = "src/🧪.ts";
+    expect(validate(valid)).toBe(true);
+  });
+
   it("enforces retain/suppress, reason, and completeness semantics", () => {
     const refuted = { ...receipt(), state: "refuted", disposition: "suppress", reasonCode: "refuted" };
     expect(validate(refuted)).toBe(true);
