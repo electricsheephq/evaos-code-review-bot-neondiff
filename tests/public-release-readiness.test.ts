@@ -69,7 +69,10 @@ describe("NeonDiff public release readiness", () => {
       type: "git",
       url: "git+https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git"
     });
-    expect(pkg.bin).toEqual({ neondiff: "dist/src/cli.js" });
+    expect(pkg.bin).toEqual({
+      neondiff: "dist/src/cli.js",
+      "evaos-review-bot": "dist/src/cli.js"
+    });
     expect(pkg.exports).toEqual({});
     expect(pkg.files).toEqual([
       "dist/src",
