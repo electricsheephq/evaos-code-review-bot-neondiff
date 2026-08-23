@@ -102,7 +102,8 @@ package. To preview without changing your machine:
 curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
 ```
 
-The public paid B0 Mac beta uses a separate checksum-bound worker bundle from
+**Legacy CLI/operator recovery only — not signed Desktop 1.1.0 setup:** the
+separate checksum-bound worker bundle is
 the same immutable GitHub prerelease as the app rather than an unpublished npm
 version or an unpinned source checkout. No invitation is required when the
 versioned public GitHub prerelease is published and the neondiff.com
@@ -142,9 +143,9 @@ checksum-bound prerelease bundle.
 
 ## Set Up
 
-Follow [docs/SETUP.md](docs/SETUP.md) for the CLI-first setup path (the
-first-run path on non-Mac platforms and the operator/advanced path on Mac). The
-short version is:
+Signed Desktop 1.1.0 native first run moves the app to `/Applications/NeonDiff.app`
+and follows its UI; CLI/dashboard/worker commands are not prerequisites. For
+npm CLI 1.0.4 CLI-first, non-Mac, or legacy operator setup, follow [docs/SETUP.md](docs/SETUP.md):
 
 ```bash
 neondiff init --config config.local.json
@@ -158,12 +159,12 @@ neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
-For the Mac customer journey, the native macOS app (`apps/neondiff-desktop`) is
-the human first-run surface. The local HTML dashboard is an operator/diagnostic
-surface for CLI-first and non-Mac setups, not the product UI. It shows license
-status, GitHub App status, daemon status, and provider readiness, and its
-provider card includes a `Verify API Key` control that reports redacted
-pass/fail output.
+For the signed Desktop 1.1.0 Mac journey, `/Applications/NeonDiff.app` owns
+first run and its LaunchAgent uses the sealed helper
+`/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`. A new App uses
+**Verify App Access**; an existing compatible agent uses **Verify Existing Access**.
+Codex runtime and dry-run approval precede live review; the HTML
+dashboard remains CLI-first/non-Mac diagnostics, not native UI.
 The managed native path binds activation and private-repository token issuance
 to the same Keychain-backed broker device identity and exact GitHub-selected
 repository. The raw Activation Key remains Keychain-owned: it crosses bounded
@@ -199,9 +200,9 @@ value or key-file path. The headless app re-derives that device ID from its
 Keychain identity and rejects a mismatched plist before releasing credentials.
 Review and daemon readiness remain separate gates. The
 immutable published prerelease and clean-Mac artifact proof remain distribution
-gates. Unsigned development builds still require an executable global or
-checksum-managed worker before native first run
-exposes **Initialize Local Config** (non-destructive; never force-overwrites),
+gates. Unsigned development builds are not the signed Desktop 1.1.0 customer
+path; use them only for development/operator checks. The signed app exposes
+**Initialize Local Config** (non-destructive; never force-overwrites),
 **Add Repository**, **Apply Repository**, and **Verify App Access** without a
 terminal or operator config edit. **Apply Repository** writes both the selected
 `pilotRepos` allowlist and an enabled policy profile for each selected
@@ -254,7 +255,7 @@ failure revokes that approval instead of permitting a blind retry. For that
 multi-repository worker, daemon-wide start remains blocked. The selection and
 dry-run approval fail closed if the config, target, pull request, workspace, or
 head changes.
-The same **Verify existing access** action then runs credential-free
+The same **Verify Existing Access** action then runs credential-free
 `license status --refresh true` through that exact matched worker and config.
 It does not read, copy, migrate, or prompt for the worker's Activation Key.
 Useful work unlocks only when GitHub reports the exact repository visibility

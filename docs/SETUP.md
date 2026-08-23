@@ -1,10 +1,10 @@
 # NeonDiff Setup
 
-This guide is the CLI-first setup path for the current source-available release,
-and the first-run path on non-Mac platforms. On macOS the native app
-(`apps/neondiff-desktop`) is the human first-run surface; until the native
-broker/launchd proof lands (see the native-broker note below) it hands off to
-this operator/advanced path for setup actions it cannot yet complete natively.
+This guide is the CLI/operator setup path for npm CLI 1.0.4 and non-Mac first
+run. On macOS, signed Desktop 1.1.0 at `/Applications/NeonDiff.app` owns native
+first run; CLI/dashboard/checksum-worker commands below are not prerequisites.
+See the [Mac GA architecture and release contract](architecture/mac-ga-release-contract.md)
+and [Desktop Mac release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
 The recommended path installs the `neondiff` npm package; source checkout remains
 a fallback for contributors and reviewers who want to inspect or build locally. See
 [LICENSE.md](../LICENSE.md) and [docs/license-boundary.md](license-boundary.md)
@@ -207,8 +207,7 @@ configured `evidenceDir` as
 The `keychain` backend remains reserved for a separately proven native broker.
 Headless CLI activation currently rejects Keychain writes rather than passing
 license keys through process arguments. v1.0.4 supports the approved file
-backend; the Desktop app remains blocked from useful actions until native
-broker/launchd access is proven.
+backend; signed Desktop 1.1.0 keeps activation in its app-owned Keychain path.
 The local `machineId` sent to the license API is advisory beta metadata derived
 from host name and platform, not hardware attestation or a durable seat-binding
 primitive.
@@ -262,50 +261,18 @@ manual UserDefaults rollout mutation. It does not make the managed App path
 available and is not proof that GitHub private-key custody, the compatible CLI
 package, billing, signing, or customer canaries have passed.
 
-For a B0 customer, the native first-run path is:
+For signed Desktop 1.1.0 native first run, move the app to `/Applications/NeonDiff.app` and follow its UI:
 
 1. Create and install a customer-owned GitHub App with the permissions in
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
-2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
-   PEM, then choose **Store in Keychain**.
-3. On a clean install, if NeonDiff reports that the local worker command is
-   unavailable, choose **Install / Update Local Worker** before **Initialize
-   Local Config**. From the verified extracted bundle, use Node.js 26 or newer
-   through the approved stable path `/opt/homebrew/bin/node` or
-   `/usr/local/bin/node`, then preview the credential-free install:
-
-   ```bash
-   BUNDLE_DIR="$(pwd -P)"
-   node install-b0-worker-candidate.mjs first-install \
-     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
-     --manifest-sha256 <manifest-sha256-from-release> \
-     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
-     --launchd-label com.electricsheephq.evaos-code-review-bot \
-     --dry-run true
-   ```
-
-   Inspect the public-safe preview, then repeat it with
-   `--dry-run false --confirm true`. It installs only the exact verified CLI
-   into a private versioned current-user directory and writes a 0600
-   credential-free marker. It creates or loads no LaunchAgent, starts no
-   daemon, and never reads or writes GitHub, provider, or license credentials.
-   It refuses an existing LaunchAgent or worker state; use the existing-worker
-   update flow below for those machines. Return to NeonDiff and choose
-   **Install / Update Local Worker** once more to refresh discovery; when the
-   worker is available, choose **Initialize Local Config**. Initialization
-   invokes the non-destructive `neondiff init` path without `--force`, never
-   overwrites an existing config, and keeps bot-isolated runtime, state,
-   evidence, and license paths beside the config. Review and daemon readiness
-   remain separate gates.
-4. Enter that same `owner/repo`, choose **Add Repository**, then **Apply
-   Repository**. The app writes the allowlist through the typed local `config
-   patch` command and ensures every selected repository has an enabled local
-   policy profile; the customer does not edit a config file. Existing
-   per-repository policy fields are preserved.
-5. Choose **Verify App Access**. Continue remains disabled until GitHub verifies
-   the exact configured repository through that App installation. If the local
-   profile is missing or disabled, apply the repository again before retrying
-   verification.
+2. Move the app to `/Applications/NeonDiff.app`; enter the App ID/private key
+   in its UI and choose **Store in Keychain**.
+3. Choose **Initialize Local Config**, add/apply the selected `owner/repo`, and
+   let the app write the allowlist without an operator config edit.
+4. Choose **Verify App Access** for a new App or **Verify Existing Access** for
+   a compatible agent; both checks bind the exact target.
+5. Configure provider/Codex, activate, then use **Preview Start** and **Run Dry
+   Review** before any confirmed live post.
 
 If verification reports a missing or disabled repository policy profile,
 choose **Apply Repository** again before retrying **Verify App Access**. This is a local
@@ -327,14 +294,9 @@ the app rejects it if any authorized bot now owns the same config identity.
 Choosing another account or explicitly choosing an existing bot ends the
 pending setup.
 
-When the same Mac already has one exact checksum-managed worker for the selected
-LaunchAgent label, the app reuses that worker for the isolated bot's `init`,
-`config inspect`, `config patch`, and private-key-stdin GitHub doctor commands.
-Within that proven one-worker case, it does not resolve those commands through
-an older global `neondiff` package, and it does not pass the existing bot's App
-ID or private-key file environment into the new bot process. Zero or ambiguous
-managed-worker discovery does not select this reuse path; installing and proving
-exactly one managed worker is a separate distribution gate.
+The signed app needs no global CLI or checksum-managed worker; its LaunchAgent
+invokes the sealed helper `/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`.
+Legacy recovery below is operator-only, not native first-run setup.
 
 This first-run step proves only current App installation and repository access.
 Provider verification, activation, dry run, and live review remain separate
@@ -396,7 +358,7 @@ the same Mac. In that exact case it opens a reconciliation path:
   copying its private key. The key file must be a current-user-owned regular
   file with no group/other permissions. Only its file path—not its key bytes—is
   supplied as a child-process environment coordinate for the exact config;
-- its single **Verify existing access** action first proves the exact App and
+- its single **Verify Existing Access** action first proves the exact App and
   Review Target with `doctor github --repo`. A legacy credential-bearing
   matched worker then runs credential-free
   `license status --refresh true` through that exact worker and config. A
@@ -499,23 +461,21 @@ The app's own Sparkle update does not update an external local worker.
 
 ## 4. Check Readiness
 
-Run the GitHub-only doctor first. It verifies App installation visibility and
-repo read access without running ZCode, calling a provider, posting comments, or
-printing secrets:
+For signed Desktop 1.1.0, use **Verify App Access** or **Verify Existing Access**
+in the UI; credentials go only to the sealed helper. The shell command below is
+CLI/operator diagnostics only and verifies App/repo access without provider or
+posting side effects:
 
 ```bash
 neondiff doctor github --config config.local.json --json
 ```
 
-The public paid B0 BYO desktop keeps the customer-owned App private key in the
-macOS Keychain. Its explicit **Verify App Access** action sends that key only to
-the local CLI's bounded stdin for this check. The native app's clean-install
-config lives in its user-writable Application Support directory; the equivalent
-CLI contract is:
+The CLI contract uses a checkout-local config and a private key supplied through
+bounded stdin; the signed app keeps both in its app-owned Keychain path:
 
 ```bash
-NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.json"
-neondiff doctor github --config "$NATIVE_CONFIG" \
+CLI_CONFIG="config.local.json"
+neondiff doctor github --config "$CLI_CONFIG" \
   --github-app-id "<numeric-app-id>" \
   --github-app-private-key-stdin true --json < "/path/to/app-private-key.pem"
 ```
