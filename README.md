@@ -11,14 +11,13 @@ Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
-The current npm CLI (v1.0.4) requires API-backed activation for every repository
+The current npm CLI (v1.0.x) requires API-backed activation for every repository
 (public, private, internal, and unknown); unknown visibility fails closed, and
 provider verification is required for all tiers.
 
-The later managed App/broker path targets public open-source repositories will be free
-with no Activation Key and private/commercial access by entitlement after
-GA. It is separate from the current native BYO journey and is not enforced by
-the current CLI. NeonDiff
+The later managed App/broker targets public open-source repositories will be free with no
+Activation Key; private, internal, and commercial repositories require an active entitlement.
+It remains a separate post-GA path, not current CLI enforcement. NeonDiff
 support licenses cost $1/month or $10/year for individuals,
 or $100/year for organizations. Individual plans include a 7-day trial,
 organization plans include a 30-day trial, and legacy lifetime licenses remain

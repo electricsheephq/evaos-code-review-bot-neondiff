@@ -5,12 +5,15 @@ runs on your own machine or server. The App identity is what authors review
 comments in GitHub; your local worker holds the App ID, private key, provider
 configuration, state database, and evidence files.
 
-On macOS, the signed Desktop 1.1.0 app is the native first-run surface. This
-page remains the App registration, permission, and selected-repository
-reference for the CLI/operator and native BYO journeys. The official managed B1
-App and broker are a separate post-GA path. See the [Mac GA architecture and
-release contract](architecture/mac-ga-release-contract.md) and [Desktop Mac
-release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
+On macOS, signed Desktop 1.1.0 owns native first run through its UI. The public
+paid B0 BYO/customer-owned build accepts the customer's own App ID and private key,
+one selected repository, and runs the explicit installation check from the wizard.
+No invitation is required when the versioned public GitHub prerelease is
+published and the neondiff.com purchase/download path is live. The managed B1 App
+and broker are a separate post-GA path. This document remains the operator/CLI
+reference for both paths' App identity, permission set, and install boundary.
+See the [Mac GA architecture and release contract](architecture/mac-ga-release-contract.md)
+and [Desktop Mac release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
 Matching public website onboarding copy lives in the website repo under
 neon-diff-agent-website#52.
 
@@ -233,9 +236,9 @@ not GitHub approval of the public App.
 
 ## Verify Installation
 
-Run the GitHub-only doctor before provider or daemon checks. For signed Desktop
-1.1.0 native first run, use the app's **Verify App Access** UI action; the CLI
-commands below are for CLI/operator diagnostics:
+Run the GitHub-only doctor before provider or daemon checks. For the native B0
+app, use the config created in the app's user-writable Application Support
+directory:
 
 ```bash
 NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.json"

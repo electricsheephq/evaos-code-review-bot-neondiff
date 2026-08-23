@@ -18,7 +18,7 @@ for the support-tier pricing contract.
 > matching non-prerelease GitHub Release before relying on it; v1.0.3 and
 > earlier do not enforce this boundary.
 
-## Requirements (CLI/operator path)
+## Requirements
 
 - Node.js 26 or newer
 - npm
@@ -265,8 +265,8 @@ For a customer using signed Desktop 1.1.0, the native first-run path is:
 
 1. Create and install a customer-owned GitHub App with the permissions in
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
-2. Launch NeonDiff and enter the App's numeric ID and downloaded private-key
-   PEM, then choose **Store in Keychain**.
+2. Move the signed app to `/Applications/NeonDiff.app`, launch it, and enter the
+   App ID and private-key PEM, then choose **Store in Keychain**.
 3. In the signed Desktop 1.1.0 UI, complete the displayed repository,
    provider, activation, App-access, and review-readiness steps. The app owns
    native setup; do not use the CLI, local dashboard, or checksum-managed
@@ -397,11 +397,23 @@ remain in setup/recovery and fail closed.
 
 ### Legacy CLI/operator worker recovery
 
-This legacy operator path is not part of signed Desktop 1.1.0 native first run.
-A package version alone is not sufficient: older and compatible technical-beta
-workers may both report `1.0.4`.
+The Mac app checks the exact discovered worker's `review-pr` help contract
+before enabling **Run Dry Review**. A package version alone is not sufficient:
+older and compatible technical-beta workers may both report `1.0.4`.
 
-When an existing legacy worker requires recovery or update:
+For a clean legacy CLI/operator install only, verify the same bundle, manifest,
+and tarball SHA-256 values first, then preview the checksum-bound install:
+
+```bash
+BUNDLE_DIR="$(pwd -P)"
+node install-b0-worker-candidate.mjs first-install \
+  --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
+  --manifest-sha256 <manifest-sha256-from-release> --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
+  --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
+```
+After reviewing the preview, repeat with `--dry-run false --confirm true`.
+
+If Overview shows **Worker update required**:
 
 1. Do not run or retry a live review from another terminal. The dry-to-live
    approval contract is not proven for that worker.
