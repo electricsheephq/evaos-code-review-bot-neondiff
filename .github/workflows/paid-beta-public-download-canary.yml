@@ -62,7 +62,8 @@ jobs:
           test "$release_channel" = "$artifact_channel"
           test "$release_number" = "$artifact_number"
           test "$release_version" = "1.1.0-${artifact_channel}.${artifact_number}"
-          [[ "$ARTIFACT_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "${#ARTIFACT_SHA256}" -eq 64
+          test -z "$(printf '%s' "$ARTIFACT_SHA256" | tr -d 'a-f0-9')"
           test "$(uname -m)" = "arm64"
           printf 'release_channel=%s\nrelease_version=%s\nartifact_build=%s\n' \
             "$release_channel" "$release_version" "$artifact_build" >> "$GITHUB_OUTPUT"
@@ -148,15 +149,75 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist")" = "$ARTIFACT_BUILD"
           test "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$info_plist")" = "$PUBLIC_FEED_URL"
           sparkle_key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$info_plist")"
-          [[ "$sparkle_key" =~ ^[A-Za-z0-9+/=]{32,}$ ]]
           feed="$RUNNER_TEMP/neondiff-download/appcast.xml"
           curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
             --output "$feed" "$PUBLIC_FEED_URL"
-          grep -Fq "<link>$PUBLIC_FEED_URL</link>" "$feed"
-          grep -Fq "url=\"$ARTIFACT_URL\"" "$feed"
-          grep -Fq "sparkle:version=\"$ARTIFACT_BUILD\"" "$feed"
-          grep -Fq "sparkle:shortVersionString=\"$RELEASE_VERSION\"" "$feed"
-          grep -Eq 'sparkle:edSignature="[A-Za-z0-9+/=_-]{32,}"' "$feed"
+          sparkle_signature="$(
+            python3 - "$feed" "$ARTIFACT_URL" "$ARTIFACT_BUILD" "$RELEASE_VERSION" "$PUBLIC_FEED_URL" "$sparkle_key" <<'PY'
+          import base64
+          import sys
+          import xml.etree.ElementTree as ET
+
+          SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+
+          def fail(message):
+              raise SystemExit(message)
+
+          feed, expected_url, expected_build, expected_version, expected_feed, public_key = sys.argv[1:]
+          try:
+              if len(base64.b64decode(public_key, validate=True)) != 32:
+                  fail("SUPublicEDKey must decode to 32 bytes")
+              root = ET.parse(feed).getroot()
+          except (ET.ParseError, ValueError) as error:
+              fail(f"invalid feed or public key: {error}")
+
+          def local_name(tag):
+              return tag.rsplit("}", 1)[-1]
+
+          channels = [child for child in root if local_name(child.tag) == "channel"]
+          if len(channels) != 1:
+              fail("feed must contain exactly one channel")
+          channel = channels[0]
+          links = [child for child in channel if local_name(child.tag) == "link"]
+          if len(links) != 1 or (links[0].text or "").strip() != expected_feed:
+              fail("feed link does not match the app's SUFeedURL")
+          matches = []
+          for item in channel:
+              if local_name(item.tag) != "item":
+                  continue
+              enclosures = [child for child in item if local_name(child.tag) == "enclosure"]
+              for enclosure in enclosures:
+                  if enclosure.attrib.get("url") == expected_url:
+                      matches.append((item, enclosure, len(enclosures)))
+          if len(matches) != 1 or matches[0][2] != 1:
+              fail("exactly one item must contain the expected archive enclosure")
+          _, enclosure, _ = matches[0]
+          if enclosure.attrib.get(f"{{{SPARKLE_NS}}}version") != expected_build:
+              fail("feed build does not match the immutable archive")
+          if enclosure.attrib.get(f"{{{SPARKLE_NS}}}shortVersionString") != expected_version:
+              fail("feed version does not match the extracted app")
+          signature = enclosure.attrib.get(f"{{{SPARKLE_NS}}}edSignature", "")
+          try:
+              if len(base64.b64decode(signature, validate=True)) != 64:
+                  fail("Sparkle signature must decode to 64 bytes")
+          except ValueError as error:
+              fail(f"invalid Sparkle signature: {error}")
+          print(signature, end="")
+          PY
+          )"
+          swift - "$sparkle_key" "$sparkle_signature" "$RUNNER_TEMP/neondiff-download/NeonDiff.zip" <<'SWIFT'
+          import CryptoKit
+          import Foundation
+
+          guard CommandLine.arguments.count == 4,
+                let keyData = Data(base64Encoded: CommandLine.arguments[1]),
+                let signature = Data(base64Encoded: CommandLine.arguments[2]),
+                let archive = try? Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[3])),
+                let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData),
+                publicKey.isValidSignature(signature, for: archive) else {
+              exit(1)
+          }
+          SWIFT
 
       - name: Install exact app on clean runner
         shell: bash

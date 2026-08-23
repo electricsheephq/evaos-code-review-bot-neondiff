@@ -28,6 +28,18 @@ function immutableReleaseInputValidation(workflow: string): string {
   return step.run;
 }
 
+function feedItemParser(workflow: string): string {
+  const parsed = YAML.parse(workflow) as {
+    jobs?: Record<string, { steps?: Array<{ name?: string; run?: string }> }>;
+  };
+  const step = parsed.jobs?.["public-download-install-canary"]?.steps?.find(
+    (candidate) => candidate.name === "Verify version build feed and Sparkle signature agreement"
+  );
+  const match = step?.run?.match(/python3 - [^\n]+ <<'PY'\n([\s\S]*?)\nPY/);
+  if (!match) throw new Error("missing exact feed XML parser");
+  return match[1];
+}
+
 function runImmutableReleaseInputValidation(
   validationScript: string,
   input: { releaseTag: string; artifactName: string; artifactSha256: string }
@@ -112,6 +124,35 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     }
   });
 
+  it("binds feed metadata to one exact enclosure and rejects sibling or URL drift", () => {
+    const workflow = read(".github/workflows/paid-beta-public-download-canary.yml");
+    const parser = feedItemParser(workflow);
+    const root = mkdtempSync(join(tmpdir(), "neondiff-feed-fixture-"));
+    const feedPath = join(root, "appcast.xml");
+    const feedUrl = "https://www.neondiff.com/updates/beta/appcast.xml";
+    const artifactUrl = "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/download/v1.1.0-rc.1/NeonDiff-1.1.0-rc.1-build42-macOS.zip";
+    const signature = Buffer.alloc(64, 7).toString("base64");
+    const publicKey = Buffer.alloc(32, 9).toString("base64");
+    const runParser = (xml: string) => {
+      writeFileSync(feedPath, xml);
+      return spawnSync(
+        "python3",
+        ["-", feedPath, artifactUrl, "42", "1.1.0-rc.1", feedUrl, publicKey],
+        { encoding: "utf8", input: parser }
+      );
+    };
+    try {
+      const valid = runParser(`<?xml version="1.0"?><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><link>${feedUrl}</link><item><description>${artifactUrl} sparkle:version="42"</description><enclosure url="https://stale.invalid/old.zip"/></item><item><enclosure url="${artifactUrl}" sparkle:version="42" sparkle:shortVersionString="1.1.0-rc.1" sparkle:edSignature="${signature}"/></item></channel></rss>`);
+      expect(valid.status, valid.stderr).toBe(0);
+      expect(valid.stdout.trim()).toBe(signature);
+
+      const wrongEnclosure = runParser(`<?xml version="1.0"?><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><link>${feedUrl}</link><item><description>${artifactUrl} sparkle:version="42" sparkle:edSignature="${signature}"</description><enclosure url="https://wrong.invalid/NeonDiff.zip" sparkle:version="42" sparkle:shortVersionString="1.1.0-rc.1" sparkle:edSignature="${signature}"/></item></channel></rss>`);
+      expect(wrongEnclosure.status).not.toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("defines a three-clean-Mac public download and install canary", () => {
     const workflowPath = ".github/workflows/paid-beta-public-download-canary.yml";
 
@@ -170,7 +211,11 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
       "CFBundleShortVersionString",
       "CFBundleVersion",
       "SUPublicEDKey",
-      "sparkle:edSignature"
+      "edSignature",
+      "xml.etree.ElementTree",
+      "len(matches) != 1",
+      "Curve25519.Signing.PublicKey",
+      "isValidSignature"
     ]) {
       expect(workflow).toContain(command);
     }
@@ -182,7 +227,8 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).not.toContain("open -n");
     expect(workflow).not.toContain("NeonDiffDesktop");
     expect(workflow).toContain("https://www.neondiff.com/updates/beta/appcast.xml");
-    expect(workflow).toContain("<link>$PUBLIC_FEED_URL</link>");
+    expect(workflow).not.toContain("grep -Fq \"<link>$PUBLIC_FEED_URL</link>\"");
+    expect(workflow).not.toMatch(/\[\[\s*"\$sparkle_key"\s*=~/);
   });
 
   it("defines an unsigned macOS release-smoke workflow with the required desktop gates", () => {
