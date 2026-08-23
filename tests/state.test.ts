@@ -1625,7 +1625,7 @@ describe("review state store", () => {
     store.close();
   });
 
-  it("stores the latest daemon heartbeat as a singleton", () => {
+  it("keeps daemon run identity, progress, and completion clocks distinct", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-"));
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
@@ -1634,24 +1634,87 @@ describe("review state store", () => {
       cycle: 1,
       event: "daemon_cycle_start",
       dryRun: false,
+      runId: "run-a",
       recordedAt: new Date("2026-07-01T00:00:00.000Z")
+    });
+    store.recordDaemonHeartbeat({
+      cycle: 1,
+      event: "daemon_cycle_start",
+      dryRun: false,
+      runId: "run-a",
+      recordedAt: new Date("2026-07-01T00:00:05.000Z")
+    });
+    store.recordDaemonHeartbeat({
+      cycle: 1,
+      event: "daemon_cycle_progress",
+      dryRun: false,
+      runId: "run-a",
+      recordedAt: new Date("2026-07-01T00:01:00.000Z")
+    });
+    store.recordDaemonHeartbeat({
+      cycle: 1,
+      event: "daemon_cycle_progress",
+      dryRun: false,
+      runId: "run-a",
+      recordedAt: new Date("2026-07-01T00:00:30.000Z")
+    });
+    store.recordDaemonHeartbeat({
+      cycle: 1,
+      event: "daemon_cycle_progress",
+      dryRun: false,
+      runId: "run-b",
+      recordedAt: new Date("2026-07-01T00:02:00.000Z")
     });
     store.recordDaemonHeartbeat({
       cycle: 1,
       event: "daemon_cycle_complete",
       dryRun: false,
-      recordedAt: new Date("2026-07-01T00:00:05.000Z")
+      runId: "run-a",
+      recordedAt: new Date("2026-07-01T00:03:00.000Z")
     });
 
     expect(store.getDaemonHeartbeat()).toEqual({
       cycle: 1,
       event: "daemon_cycle_complete",
       dryRun: false,
-      recordedAt: "2026-07-01T00:00:05.000Z",
+      recordedAt: "2026-07-01T00:03:00.000Z",
       startedCycle: 1,
-      startedAt: "2026-07-01T00:00:00.000Z"
+      startedAt: "2026-07-01T00:00:00.000Z",
+      runId: "run-a",
+      lastProgressAt: "2026-07-01T00:01:00.000Z",
+      completedAt: "2026-07-01T00:03:00.000Z"
     });
     store.close();
+  });
+
+  it("migrates legacy heartbeat storage idempotently without inventing progress", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-legacy-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const legacy = new DatabaseSync(statePath);
+    legacy.exec(`create table daemon_heartbeat (
+      id integer primary key, cycle integer, event text, dry_run integer,
+      recorded_at text, error text, started_cycle integer, started_at text
+    )`);
+    legacy.prepare(`insert into daemon_heartbeat
+      (id, cycle, event, dry_run, recorded_at, started_cycle, started_at)
+      values (1, 4, 'daemon_cycle_failed', 0, ?, 4, ?)`)
+      .run("2026-07-01T00:04:00.000Z", "2026-07-01T00:00:00.000Z");
+    legacy.close();
+
+    for (let open = 0; open < 2; open += 1) {
+      const store = new ReviewStateStore(statePath);
+      expect(store.getDaemonHeartbeat()).toMatchObject({
+        startedAt: "2026-07-01T00:00:00.000Z",
+        completedAt: "2026-07-01T00:04:00.000Z"
+      });
+      expect(store.getDaemonHeartbeat()?.lastProgressAt).toBeUndefined();
+      store.close();
+    }
+    const rollbackReader = new DatabaseSync(statePath, { readOnly: true });
+    expect(rollbackReader.prepare("select cycle, event, recorded_at, started_at from daemon_heartbeat").get())
+      .toMatchObject({ cycle: 4, event: "daemon_cycle_failed" });
+    rollbackReader.close();
   });
 
   it("does not treat a start-only heartbeat as a terminal daemon heartbeat", () => {

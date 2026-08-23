@@ -336,12 +336,17 @@ export interface ProviderCooldownReviewRecord extends StoredProcessedReviewRecor
   expired: boolean;
 }
 
-export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_complete" | "daemon_cycle_failed";
+export type DaemonHeartbeatEvent =
+  | "daemon_cycle_start"
+  | "daemon_cycle_progress"
+  | "daemon_cycle_complete"
+  | "daemon_cycle_failed";
 
 export interface DaemonHeartbeatRecord {
   cycle: number;
   event: DaemonHeartbeatEvent;
   dryRun: boolean;
+  runId?: string;
   recordedAt?: Date;
   error?: string;
 }
@@ -354,6 +359,9 @@ export interface StoredDaemonHeartbeatRecord {
   error?: string;
   startedCycle?: number;
   startedAt?: string;
+  runId?: string;
+  lastProgressAt?: string;
+  completedAt?: string;
 }
 
 export interface ProcessedCommandRecord {
@@ -661,7 +669,12 @@ export class ReviewStateStore {
         event text,
         dry_run integer,
         recorded_at text,
-        error text
+        error text,
+        started_cycle integer,
+        started_at text,
+        run_id text,
+        last_progress_at text,
+        completed_at text
       );
 
       create table if not exists reviewer_sessions (
@@ -3275,45 +3288,81 @@ export class ReviewStateStore {
   }
 
   recordDaemonHeartbeat(record: DaemonHeartbeatRecord): void {
+    const recordedAt = (record.recordedAt ?? new Date()).toISOString();
     if (record.event === "daemon_cycle_start") {
       this.db
         .prepare(
           `insert into daemon_heartbeat
-            (id, started_cycle, started_at)
-           values (1, ?, ?)
+            (id, started_cycle, started_at, run_id, last_progress_at, completed_at)
+           values (1, ?, ?, ?, null, null)
            on conflict(id) do update set
-             started_cycle = excluded.started_cycle,
-             started_at = excluded.started_at`
+             started_cycle = case
+               when daemon_heartbeat.run_id is excluded.run_id
+                 and daemon_heartbeat.completed_at is null
+                 and (daemon_heartbeat.event is null
+                   or daemon_heartbeat.event in ('daemon_cycle_start', 'daemon_cycle_progress'))
+               then daemon_heartbeat.started_cycle else excluded.started_cycle end,
+             started_at = case
+               when daemon_heartbeat.run_id is excluded.run_id
+                 and daemon_heartbeat.completed_at is null
+                 and (daemon_heartbeat.event is null
+                   or daemon_heartbeat.event in ('daemon_cycle_start', 'daemon_cycle_progress'))
+               then daemon_heartbeat.started_at else excluded.started_at end,
+             run_id = excluded.run_id,
+             last_progress_at = case
+               when daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
+               then daemon_heartbeat.last_progress_at else null end,
+             completed_at = case
+               when daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
+               then daemon_heartbeat.completed_at else null end`
         )
-        .run(record.cycle, (record.recordedAt ?? new Date()).toISOString());
+        .run(record.cycle, recordedAt, record.runId ?? null);
+      return;
+    }
+
+    if (record.event === "daemon_cycle_progress") {
+      this.db.prepare(
+        `update daemon_heartbeat set
+           cycle = ?, event = ?, dry_run = ?, recorded_at = ?, error = null, last_progress_at = ?
+         where id = 1 and run_id is ? and completed_at is null and started_at is not null
+           and ? >= started_at and (last_progress_at is null or last_progress_at < ?)`
+      ).run(record.cycle, record.event, record.dryRun ? 1 : 0, recordedAt, recordedAt,
+        record.runId ?? null, recordedAt, recordedAt);
       return;
     }
 
     this.db
       .prepare(
-        `insert or replace into daemon_heartbeat
-          (id, cycle, event, dry_run, recorded_at, error, started_cycle, started_at)
-         values (
-           1, ?, ?, ?, ?, ?,
-           coalesce((select started_cycle from daemon_heartbeat where id = 1), ?),
-           coalesce((select started_at from daemon_heartbeat where id = 1), ?)
-         )`
+        `insert into daemon_heartbeat
+          (id, cycle, event, dry_run, recorded_at, error, started_cycle, started_at, run_id, completed_at)
+         values (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict(id) do update set
+           cycle = excluded.cycle, event = excluded.event, dry_run = excluded.dry_run,
+           recorded_at = excluded.recorded_at, error = excluded.error,
+           completed_at = excluded.completed_at
+         where daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
+           and excluded.completed_at >= daemon_heartbeat.started_at
+           and (daemon_heartbeat.last_progress_at is null
+             or excluded.completed_at >= daemon_heartbeat.last_progress_at)`
       )
       .run(
         record.cycle,
         record.event,
         record.dryRun ? 1 : 0,
-        (record.recordedAt ?? new Date()).toISOString(),
+        recordedAt,
         record.error ? redactSecrets(record.error) : null,
         record.cycle,
-        (record.recordedAt ?? new Date()).toISOString()
+        recordedAt,
+        record.runId ?? null,
+        recordedAt
       );
   }
 
   getDaemonHeartbeat(): StoredDaemonHeartbeatRecord | undefined {
     const row = this.db
       .prepare(
-        `select cycle, event, dry_run, recorded_at, error, started_cycle, started_at
+        `select cycle, event, dry_run, recorded_at, error, started_cycle, started_at,
+                run_id, last_progress_at, completed_at
          from daemon_heartbeat
          where id = 1 and recorded_at is not null
          limit 1`
@@ -3622,11 +3671,17 @@ export class ReviewStateStore {
       .prepare("pragma table_info(daemon_heartbeat)")
       .all() as unknown as Array<{ name: string }>;
     const names = new Set(columns.map((column) => column.name));
-    if (!names.has("started_cycle")) {
-      this.db.exec("alter table daemon_heartbeat add column started_cycle integer");
-    }
-    if (!names.has("started_at")) {
-      this.db.exec("alter table daemon_heartbeat add column started_at text");
+    const additions = [
+      ["started_cycle", "integer"], ["started_at", "text"], ["run_id", "text"],
+      ["last_progress_at", "text"], ["completed_at", "text"]
+    ].filter(([name]) => !names.has(name!));
+    if (additions.length === 0) return;
+    try {
+      this.db.exec(`begin immediate; ${additions.map(([name, type]) =>
+        `alter table daemon_heartbeat add column ${name} ${type}`).join("; ")}; commit`);
+    } catch (error) {
+      try { this.db.exec("rollback"); } catch { /* transaction did not start */ }
+      throw error;
     }
   }
 
@@ -4136,6 +4191,9 @@ interface DaemonHeartbeatRow {
   error: string | null;
   started_cycle: number | null;
   started_at: string | null;
+  run_id: string | null;
+  last_progress_at: string | null;
+  completed_at: string | null;
 }
 
 interface RepoProviderCooldownRow {
@@ -4480,7 +4538,14 @@ function mapDaemonHeartbeatRow(row: DaemonHeartbeatRow): StoredDaemonHeartbeatRe
     recordedAt: row.recorded_at!,
     ...(row.error ? { error: row.error } : {}),
     ...(row.started_cycle !== null ? { startedCycle: row.started_cycle } : {}),
-    ...(row.started_at ? { startedAt: row.started_at } : {})
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.last_progress_at ? { lastProgressAt: row.last_progress_at } : {}),
+    ...(row.completed_at
+      ? { completedAt: row.completed_at }
+      : row.event === "daemon_cycle_complete" || row.event === "daemon_cycle_failed"
+        ? { completedAt: row.recorded_at! }
+        : {})
   };
 }
 
