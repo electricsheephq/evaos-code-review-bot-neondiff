@@ -91,7 +91,9 @@ tagged version.
 
 Promotion consumes an operator-approved packet binding the ZIP SHA-256 to the
 staged app's `sha256-tree-v1` digest; it never syncs or builds a checkout on
-the operations Mac. Run this whole block with `set -euo pipefail`:
+the operations Mac. The packet is JSON with `bundle`, `digest`, `source`,
+`config`, `signing`, `notary`, `gatekeeper`, `label`, and `worker` fields. Run
+this whole block with `set -euo pipefail`:
 
 ```bash
 set -euo pipefail
@@ -102,32 +104,35 @@ set -euo pipefail
 : "${NEONDIFF_EXPECTED_APP_ID:?stored App value}" "${NEONDIFF_EXPECTED_DEVICE_ID:?stored device value}"
 : "${NEONDIFF_PACKET_SOURCE_SHA:?packet source}" "${NEONDIFF_ACCEPTED_CONFIG_PATH:?packet config}"
 : "${NEONDIFF_ACCEPTED_SIGNING_RECEIPT:?signing receipt}" "${NEONDIFF_ACCEPTED_NOTARY_RECEIPT:?notary receipt}" "${NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT:?Gatekeeper receipt}"
-: "${NEONDIFF_STAGE_ROOT:?staging root}" "${NEONDIFF_STAGE_PATH:?staged app}" "${NEONDIFF_STAGED_WORKER_PATH:?staged worker}" "${NEONDIFF_LAUNCH_AGENT_PATH:?plist path}" "${NEONDIFF_LAUNCHD_LABEL:?label}" "${NEONDIFF_WORKER_EXECUTABLE:?wrapper path}" "${NEONDIFF_TREE_HASH_TOOL:?pinned tree verifier}" "${NEONDIFF_EVIDENCE_ROOT:?evidence root}"
+: "${NEONDIFF_STAGE_ROOT:?staging root}" "${NEONDIFF_STAGE_PATH:?staged app}" "${NEONDIFF_INSTALLED_APP_PATH:?installed app}" "${NEONDIFF_STAGED_WORKER_PATH:?staged worker}" "${NEONDIFF_LAUNCH_AGENT_PATH:?plist path}" "${NEONDIFF_LAUNCHD_LABEL:?label}" "${NEONDIFF_WORKER_EXECUTABLE:?wrapper path}" "${NEONDIFF_TREE_HASH_TOOL:?pinned tree verifier}" "${NEONDIFF_EVIDENCE_ROOT:?evidence root}"
 test "$NEONDIFF_INTENDED_BRANCH" = main
-test -s "$NEONDIFF_ACCEPTED_PACKET"
+export NEONDIFF_ACCEPTED_BUNDLE NEONDIFF_ACCEPTED_BUNDLE_SHA256 NEONDIFF_APPROVED_SOURCE_SHA NEONDIFF_ACCEPTED_CONFIG_PATH NEONDIFF_ACCEPTED_SIGNING_RECEIPT NEONDIFF_ACCEPTED_NOTARY_RECEIPT NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT NEONDIFF_LAUNCHD_LABEL NEONDIFF_WORKER_EXECUTABLE
+/usr/bin/env node -e 'const fs=require("node:fs"),p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); for(const [k,v] of Object.entries({bundle:process.env.NEONDIFF_ACCEPTED_BUNDLE,digest:process.env.NEONDIFF_ACCEPTED_BUNDLE_SHA256,source:process.env.NEONDIFF_APPROVED_SOURCE_SHA,config:process.env.NEONDIFF_ACCEPTED_CONFIG_PATH,signing:process.env.NEONDIFF_ACCEPTED_SIGNING_RECEIPT,notary:process.env.NEONDIFF_ACCEPTED_NOTARY_RECEIPT,gatekeeper:process.env.NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT,label:process.env.NEONDIFF_LAUNCHD_LABEL,worker:process.env.NEONDIFF_WORKER_EXECUTABLE})) if(p[k]!==v)process.exit(1);' "$NEONDIFF_ACCEPTED_PACKET"
 test "$NEONDIFF_PACKET_SOURCE_SHA" = "$NEONDIFF_APPROVED_SOURCE_SHA"
 test "$NEONDIFF_RUNTIME_CONFIG" = "$NEONDIFF_ACCEPTED_CONFIG_PATH"
 test -s "$NEONDIFF_ACCEPTED_SIGNING_RECEIPT" -a -s "$NEONDIFF_ACCEPTED_NOTARY_RECEIPT" -a -s "$NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT"
 test "$(shasum -a 256 "$NEONDIFF_ACCEPTED_BUNDLE" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_BUNDLE_SHA256"
 test ! -e "$NEONDIFF_STAGE_ROOT"
-ditto -x -k "$NEONDIFF_ACCEPTED_BUNDLE" "$NEONDIFF_STAGE_ROOT"
+ditto -x -k "$NEONDIFF_ACCEPTED_BUNDLE" "$NEONDIFF_STAGE_ROOT" && ditto "$NEONDIFF_STAGE_PATH" "$NEONDIFF_INSTALLED_APP_PATH"
 test -d "$NEONDIFF_STAGE_PATH"
 test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_STAGE_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256"
 codesign --verify --deep --strict "$NEONDIFF_STAGE_PATH"
 xcrun stapler validate "$NEONDIFF_STAGE_PATH"
 spctl --assess --type execute "$NEONDIFF_STAGE_PATH"
-test "$NEONDIFF_LAUNCHD_LABEL" = com.electricsheephq.evaos-code-review-bot -a "$NEONDIFF_WORKER_EXECUTABLE" = /Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop -a "$NEONDIFF_STAGED_WORKER_PATH" = "$NEONDIFF_STAGE_PATH/Contents/Helpers/NeonDiffWorker"
+test "$NEONDIFF_LAUNCHD_LABEL" = com.electricsheephq.evaos-code-review-bot -a "$NEONDIFF_INSTALLED_APP_PATH" = /Applications/NeonDiff.app -a "$NEONDIFF_WORKER_EXECUTABLE" = /Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop -a "$NEONDIFF_STAGED_WORKER_PATH" = "$NEONDIFF_STAGE_PATH/Contents/Helpers/NeonDiffWorker"
 export NEONDIFF_LAUNCHD_LABEL NEONDIFF_WORKER_EXECUTABLE NEONDIFF_RUNTIME_CONFIG NEONDIFF_EXPECTED_APP_ID NEONDIFF_EXPECTED_DEVICE_ID
 /usr/bin/plutil -convert json -o - "$NEONDIFF_LAUNCH_AGENT_PATH" | /usr/bin/env node -e '
 const fs=require("node:fs"),p=JSON.parse(fs.readFileSync(0,"utf8")),a=p.ProgramArguments;
 const keys=["Label","ProgramArguments","RunAtLoad","KeepAlive","LimitLoadToSessionType","ProcessType","StandardOutPath","StandardErrorPath","ThrottleInterval"].sort();
-if (Object.keys(p).sort().join()!=keys.join() || p.Label!==process.env.NEONDIFF_LAUNCHD_LABEL || !Array.isArray(a)||a.length!==10 || a[0]!==process.env.NEONDIFF_WORKER_EXECUTABLE || a[1]!=="--neondiff-worker-daemon" || a[2]!=="--config" || a[3]!==process.env.NEONDIFF_RUNTIME_CONFIG || a[4]!=="--launchd-label" || a[5]!==process.env.NEONDIFF_LAUNCHD_LABEL || a[6]!=="--github-app-id" || a[7]!==process.env.NEONDIFF_EXPECTED_APP_ID || a[8]!=="--license-machine-id" || a[9]!==process.env.NEONDIFF_EXPECTED_DEVICE_ID) process.exit(1);'
+if (Object.keys(p).sort().join()!=keys.join() || p.Label!==process.env.NEONDIFF_LAUNCHD_LABEL || p.RunAtLoad!==true || p.KeepAlive!==true || p.LimitLoadToSessionType!=="Aqua" || p.ProcessType!=="Background" || p.StandardOutPath!=="/dev/null" || p.StandardErrorPath!=="/dev/null" || p.ThrottleInterval!==10 || !Array.isArray(a)||a.length!==10 || a[0]!==process.env.NEONDIFF_WORKER_EXECUTABLE || a[1]!=="--neondiff-worker-daemon" || a[2]!=="--config" || a[3]!==process.env.NEONDIFF_RUNTIME_CONFIG || a[4]!=="--launchd-label" || a[5]!==process.env.NEONDIFF_LAUNCHD_LABEL || a[6]!=="--github-app-id" || a[7]!==process.env.NEONDIFF_EXPECTED_APP_ID || a[8]!=="--license-machine-id" || a[9]!==process.env.NEONDIFF_EXPECTED_DEVICE_ID) process.exit(1);'
 NEONDIFF_PACKET_DIR="$NEONDIFF_EVIDENCE_ROOT/$NEONDIFF_ACCEPTED_BUNDLE_SHA256"
 test ! -e "$NEONDIFF_PACKET_DIR" && mkdir "$NEONDIFF_PACKET_DIR"
-# Stop new admissions and finish the current cycle before this sole mutation.
+# Stop admissions and wait for the active cycle/lease receipt before this sole mutation.
+NEONDIFF_DRAIN_DEADLINE=$((SECONDS+NEONDIFF_DRAIN_TIMEOUT_SECONDS)); while [[ ! -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT" && $SECONDS -lt $NEONDIFF_DRAIN_DEADLINE ]]; do sleep 1; done
+test -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT"
 launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
-test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_STAGE_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256"
-test "$(shasum -a 256 "$NEONDIFF_STAGED_WORKER_PATH" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_WORKER_SHA256"
+test "$NEONDIFF_INSTALLED_APP_PATH" = /Applications/NeonDiff.app -a "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_STAGE_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256"
+test "$(codesign --display --verbose=4 "$NEONDIFF_INSTALLED_APP_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_INSTALLED_APP_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256" && test "$(shasum -a 256 "$NEONDIFF_INSTALLED_APP_PATH/Contents/Helpers/NeonDiffWorker" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_WORKER_SHA256" && printf '{"bundleTree":"%s","workerSha256":"%s","label":"%s"}\n' "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256" "$NEONDIFF_ACCEPTED_WORKER_SHA256" "$NEONDIFF_LAUNCHD_LABEL" > "$NEONDIFF_PACKET_DIR/verification.json"
 ```
 
 Any failed prelaunch command exits the block, so no later `launchctl` command
@@ -139,7 +144,7 @@ For public source-beta releases, run the same gate with manifest checks:
 ```bash
 PUBLIC_BETA_TAG=v0.4.24-beta.1
 npx tsx src/cli.ts release-status \
-  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -162,7 +167,7 @@ fetched:
 ```bash
 git fetch origin --tags
 npx tsx src/cli.ts release-status \
-  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -494,7 +499,7 @@ from the eligible open-head set. Retire only the exact failed head:
 
 ```bash
 npx tsx src/cli.ts retire-failed \
-  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --repo owner/repo \
   --pr 123 \
   --head-sha <failed-head-sha> \
@@ -563,7 +568,7 @@ Expired cooldown rows are actionable backlog. Run:
 
 ```bash
 npx tsx src/cli.ts retry-provider-cooldowns \
-  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expired-only true \
   --dry-run false \
   --zcode true
@@ -599,22 +604,23 @@ health, stage exact bytes, and mutate only at a natural cycle boundary:
 set -euo pipefail
 : "${NEONDIFF_EVIDENCE_ROOT:?evidence root}" "${NEONDIFF_LAST_KNOWN_GOOD_PACKET:?packet}"
 : "${NEONDIFF_LAST_KNOWN_GOOD_BUNDLE:?bundle}" "${NEONDIFF_LAST_KNOWN_GOOD_SHA256:?digest}"
-: "${NEONDIFF_ROLLBACK_STAGE_ROOT:?staging root}" "${NEONDIFF_ROLLBACK_STAGE_PATH:?staged app}" "${NEONDIFF_DRAIN_TIMEOUT_SECONDS:?bounded drain seconds}" "${NEONDIFF_NATURAL_CYCLE_RECEIPT:?cycle receipt}" "${NEONDIFF_LAUNCH_AGENT_PATH:?exact plist path}" "${NEONDIFF_LAUNCHD_LABEL:?exact label}"
-NEONDIFF_ROLLBACK_DIR="$NEONDIFF_EVIDENCE_ROOT/rollback-$NEONDIFF_LAST_KNOWN_GOOD_SHA256"
+: "${NEONDIFF_ROLLBACK_STAGE_ROOT:?staging root}" "${NEONDIFF_ROLLBACK_STAGE_PATH:?staged app}" "${NEONDIFF_INSTALLED_APP_PATH:?installed app}" "${NEONDIFF_ROLLBACK_WORKER_PATH:?rollback worker}" "${NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256:?worker digest}" "${NEONDIFF_DRAIN_TIMEOUT_SECONDS:?bounded drain seconds}" "${NEONDIFF_NATURAL_CYCLE_RECEIPT:?cycle receipt}" "${NEONDIFF_LAUNCH_AGENT_PATH:?exact plist path}" "${NEONDIFF_LAUNCHD_LABEL:?exact label}" "${NEONDIFF_EXPECTED_APP_ID:?stored App value}" "${NEONDIFF_EXPECTED_DEVICE_ID:?stored device value}" "${NEONDIFF_WORKER_EXECUTABLE:?wrapper path}" "${NEONDIFF_RUNTIME_CONFIG:?packet config}"
+NEONDIFF_ROLLBACK_DIR="$NEONDIFF_EVIDENCE_ROOT/rollback-$NEONDIFF_LAST_KNOWN_GOOD_SHA256-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 test ! -e "$NEONDIFF_ROLLBACK_DIR" && mkdir "$NEONDIFF_ROLLBACK_DIR"
 if [[ -n "${NEONDIFF_RUNTIME_CONFIG:-}" ]]; then set +e; npm run release:status -- --config "$NEONDIFF_RUNTIME_CONFIG" >"$NEONDIFF_ROLLBACK_DIR/current-status-advisory.json" 2>&1; set -e; else : >"$NEONDIFF_ROLLBACK_DIR/current-status-advisory.json"; fi
 test -s "$NEONDIFF_LAST_KNOWN_GOOD_PACKET" \
   && test "$(shasum -a 256 "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" | awk '{print $1}')" = "$NEONDIFF_LAST_KNOWN_GOOD_SHA256"
 test ! -e "$NEONDIFF_ROLLBACK_STAGE_ROOT"
-ditto -x -k "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" "$NEONDIFF_ROLLBACK_STAGE_ROOT"
-test -d "$NEONDIFF_ROLLBACK_STAGE_PATH"
+ditto -x -k "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" "$NEONDIFF_ROLLBACK_STAGE_ROOT" && ditto "$NEONDIFF_ROLLBACK_STAGE_PATH" "$NEONDIFF_INSTALLED_APP_PATH"
+test -d "$NEONDIFF_ROLLBACK_STAGE_PATH" -a "$NEONDIFF_INSTALLED_APP_PATH" = /Applications/NeonDiff.app
 codesign --verify --deep --strict "$NEONDIFF_ROLLBACK_STAGE_PATH"
 xcrun stapler validate "$NEONDIFF_ROLLBACK_STAGE_PATH"
 spctl --assess --type execute "$NEONDIFF_ROLLBACK_STAGE_PATH"
+export NEONDIFF_LAUNCHD_LABEL NEONDIFF_EXPECTED_APP_ID NEONDIFF_EXPECTED_DEVICE_ID NEONDIFF_WORKER_EXECUTABLE NEONDIFF_RUNTIME_CONFIG; /usr/bin/plutil -convert json -o - "$NEONDIFF_LAUNCH_AGENT_PATH" | node -e 'const fs=require("node:fs"),p=JSON.parse(fs.readFileSync(0,"utf8")),a=p.ProgramArguments,k=["Label","ProgramArguments","RunAtLoad","KeepAlive","LimitLoadToSessionType","ProcessType","StandardOutPath","StandardErrorPath","ThrottleInterval"].sort(); if(Object.keys(p).sort().join()!=k.join()||p.Label!==process.env.NEONDIFF_LAUNCHD_LABEL||p.RunAtLoad!==true||p.KeepAlive!==true||p.LimitLoadToSessionType!=="Aqua"||p.ProcessType!=="Background"||!Array.isArray(a)||a.length!==10||a[0]!==process.env.NEONDIFF_WORKER_EXECUTABLE||a[1]!=="--neondiff-worker-daemon"||a[2]!=="--config"||a[3]!==process.env.NEONDIFF_RUNTIME_CONFIG||a[4]!=="--launchd-label"||a[5]!==process.env.NEONDIFF_LAUNCHD_LABEL||a[6]!=="--github-app-id"||a[8]!=="--license-machine-id")process.exit(1);'
 NEONDIFF_DRAIN_DEADLINE=$((SECONDS+NEONDIFF_DRAIN_TIMEOUT_SECONDS)); while [[ ! -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT" && $SECONDS -lt $NEONDIFF_DRAIN_DEADLINE ]]; do sleep 1; done
 if [[ ! -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT" ]]; then test "$(plutil -extract Label raw -o - "$NEONDIFF_LAUNCH_AGENT_PATH")" = "$NEONDIFF_LAUNCHD_LABEL"; test "$(plutil -extract ProgramArguments.5 raw -o - "$NEONDIFF_LAUNCH_AGENT_PATH")" = "$NEONDIFF_LAUNCHD_LABEL"; launchctl bootout "gui/$(id -u)" "$NEONDIFF_LAUNCH_AGENT_PATH"; launchctl bootstrap "gui/$(id -u)" "$NEONDIFF_LAUNCH_AGENT_PATH"; fi
 launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
-test "$(shasum -a 256 "$NEONDIFF_ROLLBACK_WORKER_PATH" | awk '{print $1}')" = "$NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256"
+test "$(shasum -a 256 "$NEONDIFF_INSTALLED_APP_PATH/Contents/Helpers/NeonDiffWorker" | awk '{print $1}')" = "$NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256" && printf '{"rollbackWorkerSha256":"%s","label":"%s"}\n' "$NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256" "$NEONDIFF_LAUNCHD_LABEL" > "$NEONDIFF_ROLLBACK_DIR/verification.json"
 ```
 
 Missing, unsigned, mismatched, or unapproved rollback inputs exit before
