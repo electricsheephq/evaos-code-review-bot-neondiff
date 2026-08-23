@@ -17,7 +17,30 @@ export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
  * is found well within this window; exceeding it truncates rather than paging forever.
  */
 const MAX_REVIEW_COMMENT_PAGES = 5;
+const MAX_ISSUE_COMMENT_PAGES = 5;
+const MAX_ISSUE_LABEL_EVENT_PAGES = 5;
 export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
+
+export type BoundedGithubList<T> = T[] & {
+  items: T[];
+  truncated: boolean;
+  overflow: boolean;
+};
+
+export interface GithubIssueLabelEvent {
+  event?: string;
+  created_at?: string;
+  actor?: { login?: string | null } | null;
+  label?: { name?: string | null } | null;
+}
+
+function boundedGithubList<T>(items: T[], truncated: boolean): BoundedGithubList<T> {
+  const result = items as BoundedGithubList<T>;
+  result.items = items.slice();
+  result.truncated = truncated;
+  result.overflow = truncated;
+  return result;
+}
 
 export interface GitHubApiOptions {
   appId?: string;
@@ -255,38 +278,32 @@ export class GitHubApi {
     return chunk.map(normalizePullRequestSummary).filter((pull) => Boolean(pull.merged_at)).slice(0, limit);
   }
 
-  async listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]> {
+  async listIssueComments(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueCommentCommandSource>> {
     const comments: IssueCommentCommandSource[] = [];
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_ISSUE_COMMENT_PAGES; page += 1) {
       const chunk = await this.request<IssueCommentCommandSource[]>(
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token: await this.getReadToken(repo) }
       );
       comments.push(...chunk);
-      if (chunk.length < 100) return comments;
+      if (chunk.length < 100) return boundedGithubList(comments, false);
+      if (page === MAX_ISSUE_COMMENT_PAGES) return boundedGithubList(comments, true);
     }
+    return boundedGithubList(comments, true);
   }
 
-  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>> {
-    const events: Array<{
-      event?: string;
-      created_at?: string;
-      actor?: { login?: string | null } | null;
-      label?: { name?: string | null } | null;
-    }> = [];
-    for (let page = 1; ; page += 1) {
+  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedGithubList<GithubIssueLabelEvent>> {
+    const events: GithubIssueLabelEvent[] = [];
+    for (let page = 1; page <= MAX_ISSUE_LABEL_EVENT_PAGES; page += 1) {
       const chunk = await this.request<typeof events>(
         `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`,
         { token: await this.getReadToken(repo) }
       );
       events.push(...chunk);
-      if (chunk.length < 100) return events;
+      if (chunk.length < 100) return boundedGithubList(events, false);
+      if (page === MAX_ISSUE_LABEL_EVENT_PAGES) return boundedGithubList(events, true);
     }
+    return boundedGithubList(events, true);
   }
 
   async getCollaboratorPermission(
@@ -434,7 +451,7 @@ export class GitHubApi {
     marker: string,
     token: string
   ): Promise<IssueCommentSummary | undefined> {
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_ISSUE_COMMENT_PAGES; page += 1) {
       const comments = await this.request<IssueCommentSummary[]>(
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token }
@@ -443,6 +460,7 @@ export class GitHubApi {
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }
+    throw new Error("GitHub issue comment marker scan exceeded page limit");
   }
 
   private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
