@@ -2,7 +2,11 @@ import { resolve } from "node:path";
 import { formatDaemonLog } from "./daemon-log.js";
 import { loadConfig } from "./config.js";
 import { GitHubApi } from "./github.js";
-import { runIssueEnrichmentCycle, type IssueEnrichmentCycleResult } from "./issue-enrichment.js";
+import {
+  runIssueEnrichmentCycle,
+  type IssueEnrichmentCycleResult,
+  type IssueEnrichmentProgress
+} from "./issue-enrichment.js";
 import { runScheduledCycle } from "./scheduler.js";
 import {
   isAuthenticProductionLicenseAdmission,
@@ -52,6 +56,7 @@ export interface RunDaemonCycleOptions {
     configPath?: string;
     dryRun: boolean;
     licenseAdmission?: ProductionLicenseAdmission;
+    onProgress?: (progress: IssueEnrichmentProgress) => void;
   }) => Promise<IssueEnrichmentCycleResult>;
   cleanupReviewWorktreesImpl?: (options: { configPath?: string; dryRun: boolean }) => ReviewWorktreeCleanupSummary;
   recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string) => void;
@@ -131,7 +136,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   }));
 
   const issueEnrichmentPromise = input.issueEnrichmentEnabled === true
-    ? runIssueEnrichmentLane({ input, admissions, stdout, stderr })
+    ? runIssueEnrichmentLane({ input, admissions, recordHeartbeat, stdout, stderr })
     : Promise.resolve();
 
   try {
@@ -266,6 +271,7 @@ function summarizeWorktreeCleanup(cleanup: ReviewWorktreeCleanupSummary): Record
 async function runIssueEnrichmentLane(input: {
   input: RunDaemonCycleOptions;
   admissions: DaemonCycleAdmissions | void;
+  recordHeartbeat: (event: DaemonHeartbeatEvent, error?: string) => void;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
 }): Promise<void> {
@@ -275,11 +281,41 @@ async function runIssueEnrichmentLane(input: {
     cycle: input.input.cycle,
     dryRun: input.input.dryRun
   }));
+  const startedAt = Date.now();
+  const refreshHeartbeat = (): void => {
+    try {
+      input.recordHeartbeat("daemon_cycle_start");
+    } catch (error) {
+      input.stderr(formatDaemonLog({
+        event: "daemon_heartbeat_failed",
+        level: "error",
+        cycle: input.input.cycle,
+        dryRun: input.input.dryRun,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  };
+  const heartbeatTimer = setInterval(refreshHeartbeat, 60_000);
   try {
     const issueEnrichment = await issueEnrichmentCycleImpl({
       configPath: input.input.configPath,
       dryRun: input.input.dryRun,
-      ...(input.admissions ? { licenseAdmission: input.admissions.issueEnrichment } : {})
+      ...(input.admissions ? { licenseAdmission: input.admissions.issueEnrichment } : {}),
+      onProgress: (progress) => {
+        const elapsedMs = Math.min(86_400_000, Math.max(0, Date.now() - startedAt));
+        refreshHeartbeat();
+        input.stdout(formatDaemonLog({
+          event: "daemon_issue_enrichment_progress",
+          cycle: input.input.cycle,
+          dryRun: input.input.dryRun,
+          stage: progress.stage,
+          phase: progress.phase,
+          elapsedMs,
+          ...(progress.count === undefined
+            ? {}
+            : { count: Math.min(10_000, Math.max(0, Math.trunc(progress.count))) })
+        }));
+      }
     });
     input.stdout(formatDaemonLog({
       event: "daemon_issue_enrichment",
@@ -297,6 +333,8 @@ async function runIssueEnrichmentLane(input: {
       dryRun: input.input.dryRun,
       error: message
     }));
+  } finally {
+    clearInterval(heartbeatTimer);
   }
 }
 
@@ -315,6 +353,7 @@ async function runIssueEnrichmentCycleFromConfig(input: {
   configPath?: string;
   dryRun: boolean;
   licenseAdmission?: ProductionLicenseAdmission;
+  onProgress?: (progress: IssueEnrichmentProgress) => void;
 }): Promise<IssueEnrichmentCycleResult> {
   const config = loadConfig(input.configPath);
   let licenseAdmission = input.licenseAdmission;
@@ -336,7 +375,8 @@ async function runIssueEnrichmentCycleFromConfig(input: {
       state,
       github: new GitHubApi(config.github),
       dryRun: input.dryRun,
-      licenseAdmission
+      licenseAdmission,
+      onProgress: input.onProgress
     });
   } finally {
     state.close();

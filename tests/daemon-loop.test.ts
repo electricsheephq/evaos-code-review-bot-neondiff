@@ -338,6 +338,41 @@ describe("daemon cycle resilience", () => {
     expect(heartbeats).toEqual(["daemon_cycle_start", "daemon_cycle_complete"]);
   });
 
+  it("refreshes the active heartbeat with bounded issue-enrichment progress", async () => {
+    const heartbeats: string[] = [];
+    const stdout: string[] = [];
+    const timerCallbacks: Array<() => void> = [];
+    const timerSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((callback) => (timerCallbacks.push(callback as () => void), 1 as never));
+    const result = await runDaemonCycle({
+      cycle: 3,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => successfulRunOnceResult(),
+      issueEnrichmentCycleImpl: async (options) => {
+        timerCallbacks[0]?.();
+        options.onProgress?.({ stage: "analysis", phase: "start", count: 99_999 });
+        options.onProgress?.({ stage: "analysis", phase: "complete", count: 1 });
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: (event) => heartbeats.push(event),
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+    timerSpy.mockRestore();
+
+    expect(result.ok).toBe(true);
+    expect(heartbeats).toEqual(["daemon_cycle_start", "daemon_cycle_start", "daemon_cycle_start", "daemon_cycle_start", "daemon_cycle_complete"]);
+    const progress = stdout.map((line) => JSON.parse(line)).filter((line) => line.event === "daemon_issue_enrichment_progress");
+    expect(progress).toEqual([expect.objectContaining({ stage: "analysis", phase: "start", count: 10_000 }), expect.objectContaining({ stage: "analysis", phase: "complete", count: 1 })]);
+    expect(JSON.stringify(progress)).not.toMatch(/body|comment|provider|credential|path|repo/i);
+    expect(progress.every((line) => Number.isInteger(line.elapsedMs) && line.elapsedMs >= 0 && line.elapsedMs <= 86_400_000)).toBe(true);
+  });
+
   it("runs one bounded provider cooldown drain after successful review cycles", async () => {
     const events: string[] = [];
 

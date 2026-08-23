@@ -17,6 +17,13 @@ export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
  * is found well within this window; exceeding it truncates rather than paging forever.
  */
 const MAX_REVIEW_COMMENT_PAGES = 5;
+/**
+ * Bound issue comment/event reads as well. Issue enrichment retains only a small
+ * evidence prefix, and an issue with a permanently full page must not hold the
+ * worker lease (or the daemon heartbeat) forever.
+ */
+const MAX_ISSUE_COMMENT_PAGES = 5;
+const MAX_ISSUE_LABEL_EVENT_PAGES = 5;
 export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface GitHubApiOptions {
@@ -257,14 +264,15 @@ export class GitHubApi {
 
   async listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]> {
     const comments: IssueCommentCommandSource[] = [];
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_ISSUE_COMMENT_PAGES; page += 1) {
       const chunk = await this.request<IssueCommentCommandSource[]>(
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token: await this.getReadToken(repo) }
       );
       comments.push(...chunk);
-      if (chunk.length < 100) return comments;
+      if (chunk.length < 100 || page === MAX_ISSUE_COMMENT_PAGES) return comments;
     }
+    return comments;
   }
 
   async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
@@ -279,14 +287,16 @@ export class GitHubApi {
       actor?: { login?: string | null } | null;
       label?: { name?: string | null } | null;
     }> = [];
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_ISSUE_LABEL_EVENT_PAGES; page += 1) {
       const chunk = await this.request<typeof events>(
         `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`,
         { token: await this.getReadToken(repo) }
       );
       events.push(...chunk);
       if (chunk.length < 100) return events;
+      if (page === MAX_ISSUE_LABEL_EVENT_PAGES) throw new Error("GitHub issue label event scan exceeded page limit");
     }
+    return events;
   }
 
   async getCollaboratorPermission(
@@ -434,7 +444,7 @@ export class GitHubApi {
     marker: string,
     token: string
   ): Promise<IssueCommentSummary | undefined> {
-    for (let page = 1; ; page += 1) {
+    for (let page = 1; page <= MAX_ISSUE_COMMENT_PAGES; page += 1) {
       const comments = await this.request<IssueCommentSummary[]>(
         `/repos/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`,
         { token }
@@ -443,6 +453,7 @@ export class GitHubApi {
       if (existing) return existing;
       if (comments.length < 100) return undefined;
     }
+    throw new Error("GitHub issue comment marker scan exceeded page limit");
   }
 
   private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
