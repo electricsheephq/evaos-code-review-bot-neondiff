@@ -261,7 +261,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 999, app_slug: "customer-review-app" });
+        return jsonResponse({ id: 123 });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -286,7 +286,7 @@ describe("GitHub App read authentication", () => {
       installation_id_present: true,
       installation_id: 123,
       installation_account: "owner",
-      app_id: 999,
+      app_id: 4184532,
       app_slug: "customer-review-app",
       app_can_read_metadata: true,
       app_can_read_pull_requests: true,
@@ -343,6 +343,83 @@ describe("GitHub App read authentication", () => {
       });
       expect(calls, scenario.name).toHaveLength(1);
     }
+  });
+
+  it("uses one verified installation snapshot for initial and refresh token lookups", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-verified-installation-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const valid = { app_id: 4184532, app_slug: "Customer-Review-App", account: { id: 7, login: "OWNER", type: "User" } };
+    const tokenPaths: string[] = [];
+    let installationCalls = 0;
+    globalThis.fetch = vi.fn(async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/repos/owner/repo/installation")) {
+        installationCalls += 1;
+        return jsonResponse({ ...valid, id: installationCalls === 1 ? 123 : 456 });
+      }
+      if (/\/app\/installations\/(123|456)\/access_tokens$/.test(requestUrl)) {
+        tokenPaths.push(requestUrl);
+        return jsonResponse({ token: "installation-token", expires_at: installationCalls === 1 ? "2000-01-01T00:00:00Z" : "2999-01-01T00:00:00Z" });
+      }
+      if (requestUrl.endsWith("/repos/owner/repo")) return jsonResponse({ full_name: "owner/repo", private: false, visibility: "public" });
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, botLogin: " customer-review-app[BOT] " });
+    await github.getRepo("owner/repo");
+    await github.getRepo("owner/repo");
+
+    expect(installationCalls).toBe(2);
+    expect(tokenPaths).toEqual(expect.arrayContaining([
+      expect.stringContaining("/app/installations/123/access_tokens"),
+      expect.stringContaining("/app/installations/456/access_tokens")
+    ]));
+  });
+
+  it.each([
+    ["wrong App id", { app_id: 999 }],
+    ["wrong repository account", { account: { id: 7, login: "victim", type: "User" } }],
+    ["wrong account type", { account: { id: 7, login: "owner", type: "Bot" } }],
+    ["wrong normalized App slug/login", { app_slug: "other-review-app" }]
+  ])("fails closed for %s before requesting an installation token", async (_name, override) => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-verified-installation-negative-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    let tokenRequests = 0;
+    globalThis.fetch = vi.fn(async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123, app_id: 4184532, app_slug: "customer-review-app", account: { id: 7, login: "owner", type: "User" }, ...override });
+      if (requestUrl.includes("/access_tokens")) tokenRequests += 1;
+      return jsonResponse({ message: "must not mint from unverified installation" }, 500);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, botLogin: "customer-review-app[bot]" });
+    await expect(github.getRepo("owner/repo")).rejects.toThrow();
+    expect(tokenRequests).toBe(0);
+  });
+
+  it("rejects accessor-backed installation responses before token exchange", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-accessor-installation-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const installation = Object.defineProperty({ app_id: 4184532, app_slug: "customer-review-app", account: { id: 7, login: "owner", type: "User" } }, "id", { get: () => 123 });
+    let tokenRequests = 0;
+    globalThis.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith("/repos/owner/repo/installation")) return { ok: true, status: 200, statusText: "OK", json: async () => installation, text: async () => "" } as unknown as Response;
+      if (String(url).includes("/access_tokens")) tokenRequests += 1;
+      return jsonResponse({ message: "must not mint from accessor-backed installation" }, 500);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath, botLogin: "customer-review-app[bot]" });
+    await expect(github.getRepo("owner/repo")).rejects.toThrow();
+    expect(tokenRequests).toBe(0);
   });
 
   it("classifies App install-scope and visibility lookup failures without treating them as public", async () => {
@@ -830,7 +907,10 @@ describe("GitHub App read authentication", () => {
 });
 
 function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
-  return new Response(JSON.stringify(body), {
+  const payload = body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 1 && (body as { id?: unknown }).id === 123
+    ? { id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" }
+    : body;
+  return new Response(JSON.stringify(payload), {
     status,
     statusText,
     headers: { "Content-Type": "application/json" }

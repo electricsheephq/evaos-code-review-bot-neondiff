@@ -104,13 +104,6 @@ interface GitHubInstallationIdentity {
   app_slug: string;
 }
 
-interface GitHubInstallationResponse {
-  id: number;
-  app_id?: number;
-  account?: { login?: string };
-  app_slug?: string;
-}
-
 export class GitHubApiRequestError extends Error {
   readonly status: number;
   readonly statusText: string;
@@ -153,6 +146,7 @@ export class GitHubApi {
   private readonly token?: string;
   private readonly apiBaseUrl: URL;
   private readonly botLogin: string;
+  private readonly expectedBotLogin?: string;
   private readonly requestTimeoutMs: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
@@ -166,6 +160,7 @@ export class GitHubApi {
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
     this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;
+    this.expectedBotLogin = options.botLogin === undefined ? undefined : normalizeGitHubBotLogin(options.botLogin) ?? "";
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
   }
 
@@ -218,9 +213,7 @@ export class GitHubApi {
 
     let installation: GitHubInstallationIdentity;
     try {
-      installation = parseGitHubInstallationIdentity(
-        await this.getInstallation(repo, { followRedirects: false })
-      );
+      installation = await this.resolveVerifiedInstallation(repo, { followRedirects: false });
     } catch (error) {
       return { ...base, ...describeGitHubAccessError(error) };
     }
@@ -234,7 +227,7 @@ export class GitHubApi {
 
     let token: string;
     try {
-      token = await this.getInstallationTokenForId(repo, installation.id);
+      token = await this.getInstallationTokenForInstallation(repo, installation);
     } catch (error) {
       return { ...base, ...installationProof, ...describeGitHubAccessError(error) };
     }
@@ -534,23 +527,40 @@ export class GitHubApi {
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
 
-    const installation = await this.getInstallation(repo);
-    return this.getInstallationTokenForId(repo, installation.id);
+    const installation = await this.resolveVerifiedInstallation(repo);
+    return this.getInstallationTokenForInstallation(repo, installation);
+  }
+
+  private async resolveVerifiedInstallation(
+    repo: string,
+    options: { followRedirects?: boolean } = {}
+  ): Promise<GitHubInstallationIdentity> {
+    if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
+    const response = await this.getInstallation(repo, options);
+    return parseGitHubInstallationIdentity(response, {
+      expectedAppId: this.appId,
+      expectedBotLogin: this.expectedBotLogin,
+      repo
+    });
   }
 
   private async getInstallation(
     repo: string,
     options: { followRedirects?: boolean } = {}
-  ): Promise<GitHubInstallationResponse> {
+  ): Promise<Record<string, unknown>> {
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
     const jwt = createAppJwt(this.appId, this.privateKey);
-    return this.request<GitHubInstallationResponse>(`/repos/${repo}/installation`, {
+    return this.request<Record<string, unknown>>(`/repos/${repo}/installation`, {
       token: jwt,
       followRedirects: options.followRedirects
     });
   }
 
-  private async getInstallationTokenForId(repo: string, installationId: number): Promise<string> {
+  private async getInstallationTokenForInstallation(
+    repo: string,
+    installation: GitHubInstallationIdentity
+  ): Promise<string> {
+    const installationId = installation.id;
     const repoCached = this.repoInstallationTokens.get(repo);
     if (repoCached && repoCached.installationId === installationId && repoCached.expiresAt > Date.now() + 60_000) {
       return repoCached.token;
@@ -682,27 +692,58 @@ function visibilityFromRepositorySummary(repository: RepositorySummary): {
   return { result: "unknown", source: "unavailable" };
 }
 
-function parseGitHubInstallationIdentity(value: unknown): GitHubInstallationIdentity {
-  const installation = value as {
-    id?: unknown;
-    app_id?: unknown;
-    account?: { login?: unknown } | null;
-    app_slug?: unknown;
-  } | null;
+function parseGitHubInstallationIdentity(value: unknown, expected: { expectedAppId: string; expectedBotLogin?: string; repo: string }): GitHubInstallationIdentity {
+  const installation = snapshotInstallation(value);
+  const account = dataRecord(installation.account);
   const positiveInteger = (candidate: unknown): candidate is number =>
     typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0;
-  const accountLogin = installation?.account?.login;
-  const appSlug = installation?.app_slug;
-  const accountLoginValid = typeof accountLogin === "string"
-    && /^(?!-)(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(accountLogin);
-  const appSlugValid = typeof appSlug === "string"
-    && /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(appSlug);
-  if (!positiveInteger(installation?.id) || !positiveInteger(installation?.app_id)
-      || !accountLoginValid || !appSlugValid) {
-    throw new Error("GitHub installation response is missing canonical identity fields.");
+  const id = installation.id;
+  const appId = installation.app_id;
+  const accountLogin = normalizeGitHubValue(account?.login, /^(?!-)(?!.*--)[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/);
+  const appSlug = normalizeGitHubValue(installation.app_slug, /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/);
+  const accountType = account?.type;
+  const accountId = account?.id;
+  const owner = normalizeGitHubValue(expected.repo.split("/", 1)[0], /^(?!-)(?!.*--)[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/);
+  const accountTypeValid = accountType === "User" || accountType === "Organization" || (accountType === undefined && accountId === undefined);
+  const accountIdValid = positiveInteger(accountId) || (accountType === undefined && accountId === undefined);
+  const botLogin = appSlug ? `${appSlug}[bot]` : undefined;
+  if (!positiveInteger(id) || !positiveInteger(appId) || String(appId) !== expected.expectedAppId.trim()
+      || !accountLogin || !appSlug || !owner || accountLogin !== owner || !accountTypeValid || !accountIdValid || !botLogin
+      || (expected.expectedBotLogin !== undefined && expected.expectedBotLogin !== botLogin)) {
+    throw new Error("GitHub installation response failed canonical identity verification.");
   }
-  return { id: installation.id, app_id: installation.app_id, account_login: accountLogin, app_slug: appSlug };
+  return { id, app_id: appId, account_login: accountLogin, app_slug: appSlug };
 }
+
+function snapshotInstallation(value: unknown): Record<string, unknown> {
+  const installation = dataRecord(value);
+  if (!installation || (installation.account !== undefined && !dataRecord(installation.account))) {
+    throw new Error("GitHub installation response must be a plain data object.");
+  }
+  try {
+    return structuredClone(installation);
+  } catch {
+    throw new Error("GitHub installation response could not be snapshotted safely.");
+  }
+}
+
+function dataRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+  try {
+    if (Object.values(Object.getOwnPropertyDescriptors(value)).some((descriptor) => !("value" in descriptor))) return undefined;
+    return value as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeGitHubValue(value: unknown, pattern: RegExp): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return pattern.test(normalized) ? normalized : undefined;
+}
+
+const normalizeGitHubBotLogin = (value: unknown) => normalizeGitHubValue(value, /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?\[bot\]$/);
 
 function describeGitHubAccessError(error: unknown): Pick<
   GitHubRepositoryAccessProof,
