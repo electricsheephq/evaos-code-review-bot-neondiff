@@ -53,7 +53,7 @@ function candidateManifest() {
       reviewFlags: ["--expected-config-revision", "--zcode"],
       isolatedInstallPassed: true,
       offlineInstallPassed: true,
-      bundledProductionDependencies: ["validate-npm-package-license@3.0.4"]
+      bundledProductionDependencies: ["ajv@8.20.0", "validate-npm-package-license@3.0.4"]
     },
     distribution: {
       privateBucketTarget: "neondiff-beta-canary",

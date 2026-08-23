@@ -11,6 +11,7 @@ const STABLE_NODE_PATHS = new Set([
   "/usr/local/bin/node"
 ]);
 const REQUIRED_REVIEW_FLAGS = ["--expected-config-revision", "--zcode"];
+const B0_BUNDLED_PRODUCTION_DEPENDENCIES = ["ajv@8.20.0", "validate-npm-package-license@3.0.4"];
 const APP_ID_KEYS = ["NEONDIFF_GITHUB_APP_ID", "EVAOS_REVIEW_BOT_APP_ID"];
 const PRIVATE_KEY_KEYS = [
   "NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH",
@@ -157,7 +158,7 @@ export function validateWorkerCandidate({
     || manifest?.installedCompatibility?.isolatedInstallPassed !== true
     || manifest?.installedCompatibility?.offlineInstallPassed !== true
     || JSON.stringify(manifest?.installedCompatibility?.bundledProductionDependencies)
-      !== JSON.stringify(["validate-npm-package-license@3.0.4"])
+      !== JSON.stringify(B0_BUNDLED_PRODUCTION_DEPENDENCIES)
   ) {
     fail("candidate manifest package identity is invalid");
   }

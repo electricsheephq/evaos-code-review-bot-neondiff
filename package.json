@@ -66,7 +66,6 @@
   "devDependencies": {
     "@types/node": "^24.0.15",
     "@types/validate-npm-package-license": "^3.0.3",
-    "ajv": "^8.20.0",
     "esbuild": "0.28.1",
     "jose": "^6.2.3",
     "sigstore": "^5.0.0",
@@ -77,6 +76,7 @@
     "yaml": "^2.9.0"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "validate-npm-package-license": "^3.0.4"
   }
 }
