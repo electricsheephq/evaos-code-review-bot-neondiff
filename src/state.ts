@@ -2756,9 +2756,9 @@ export class ReviewStateStore {
         )
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
       const jobs = this.listReviewQueueJobs();
-      const eligible = this.listReviewQueueJobs({ excludeQuarantined: true })
-        .filter((job) => !this.isReviewQueueHeadQuarantined(job.repo, job.pullNumber, job.headSha))
+      const eligible = jobs
         .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
+        .filter((job) => !this.isReviewQueueHeadQuarantined(job.repo, job.pullNumber, job.headSha))
         .sort(buildLeaseComparator(input.aging, nowIso));
       const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
       const active = [
