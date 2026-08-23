@@ -2698,6 +2698,30 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("fences replaced and millisecond-expired queue owners with the opaque lease token", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-cas-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite")); const now = new Date("2026-08-23T00:00:00.900Z");
+    const job = store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 1, headSha: "head", now });
+    const first = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, leaseTtlMs: 1, now });
+    const replaced = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, leaseTtlMs: 2, now: new Date("2026-08-23T00:00:00.902Z") });
+    expect(replaced[0]?.leaseId).toBeDefined(); expect(replaced[0]?.leaseId).not.toBe(first[0]?.leaseId);
+    expect(() => store.updateReviewQueueJobState({ jobId: job.job.jobId, state: "failed", expectedLeaseId: first[0]!.leaseId, now: new Date("2026-08-23T00:00:00.903Z") })).toThrow("review_queue_lease_lost");
+    expect(store.updateReviewQueueJobState({ jobId: job.job.jobId, state: "failed", expectedLeaseId: replaced[0]!.leaseId, now: new Date("2026-08-23T00:00:00.903Z") }).finishedAt).toBe("2026-08-23T00:00:00.903Z"); store.close();
+  });
+
+  it("quarantines one exact head, preserves its owner, and records an idempotent receipt", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-quarantine-")); roots.push(root); const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-08-23T00:00:00.000Z"); const active = store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 2, headSha: "head-a", now }); const other = store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 2, headSha: "head-b", now });
+    const [lease] = store.leaseNextReviewQueueJobs({ maxProviderActive: 2, maxOrgActive: 2, maxRepoActive: 2, limit: 1, now });
+    expect(store.quarantineReviewQueueJobs({ repo: "owner/repo", pullNumber: 2, headSha: "head-a", reason: "missing_evidence", now })).toHaveLength(1);
+    expect(store.getReviewQueueJob(active.job.jobId)).toMatchObject({ state: "leased", quarantineRequested: true }); expect(store.fenceReviewQueueJob({ jobId: active.job.jobId, repo: "owner/repo", pullNumber: 2, headSha: "head-a", leaseId: lease!.leaseId, now })).toBeUndefined();
+    expect(store.leaseNextReviewQueueJobs({ maxProviderActive: 2, maxOrgActive: 2, maxRepoActive: 2, now }).map((job) => job.jobId)).toEqual([other.job.jobId]);
+    const terminal = store.updateReviewQueueJobState({ jobId: active.job.jobId, state: "stale_retired", expectedLeaseId: lease!.leaseId, nextEligibleAt: "2026-08-24T00:00:00.000Z", now: new Date("2026-08-23T00:00:01.000Z") });
+    expect(terminal).toMatchObject({ state: "stale_retired", quarantineRequested: true, finishedAt: "2026-08-23T00:00:01.000Z" }); expect(terminal.nextEligibleAt).toBeUndefined();
+    const input = { repo: "owner/repo", pullNumber: 3, headSha: "head-none", requiredEvidence: "required ghp_fake_token", now }; const first = store.recordReviewQueueQuarantineReceipt(input); const repeat = store.recordReviewQueueQuarantineReceipt({ ...input, requiredEvidence: "different ghp_other_token" });
+    expect(first).toEqual(repeat); expect(first.requiredEvidence).toContain("[redacted-secret]"); store.close();
+  });
+
   it("atomically rate-limits a public command per {repo,pr,head,author,action} within the cooldown window (#345)", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-pubcmd-cooldown-"));
     roots.push(root);

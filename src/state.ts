@@ -279,6 +279,15 @@ export interface ReviewQueueJobRecord {
   updatedAt: string;
   startedAt?: string;
   finishedAt?: string;
+  quarantineRequested?: boolean;
+}
+
+export interface ReviewQueueQuarantineReceipt {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  requiredEvidence: string;
+  createdAt: string;
 }
 
 export interface ReviewReadinessRecord {
@@ -721,7 +730,18 @@ export class ReviewStateStore {
         created_at text not null,
         updated_at text not null,
         started_at text,
-        finished_at text
+        finished_at text,
+        quarantine_requested integer not null default 0,
+        quarantine_reason text
+      );
+
+      create table if not exists review_queue_quarantine_receipts (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        required_evidence text not null,
+        created_at text not null,
+        primary key (repo, pull_number, head_sha)
       );
 
       create index if not exists idx_review_queue_jobs_state_priority
@@ -2510,6 +2530,7 @@ export class ReviewStateStore {
     repo: string;
     pullNumber: number;
     headSha: string;
+    expectedSessionId?: string;
     jobState: ReviewerSessionJobState;
     processedReviewStatus?: ProcessedStatus;
     now?: Date;
@@ -2519,14 +2540,20 @@ export class ReviewStateStore {
       throw new Error(`No reviewer session job for ${input.repo}#${input.pullNumber}@${input.headSha}`);
     }
     const timestamp = (input.now ?? new Date()).toISOString();
-    this.db
+    const result = this.db
       .prepare(
         `update reviewer_session_jobs
          set job_state = ?,
              started_at = case when ? = 'running' and started_at is null then ? else started_at end,
              finished_at = case when ? in ('completed', 'skipped', 'failed') then ? else finished_at end,
              processed_review_status = coalesce(?, processed_review_status)
-         where repo = ? and pull_number = ? and head_sha = ?`
+         where repo = ? and pull_number = ? and head_sha = ?
+           and (? is null or (session_id = ? and exists (
+             select 1 from reviewer_sessions
+             where reviewer_sessions.session_id = reviewer_session_jobs.session_id
+               and reviewer_sessions.state in ('warming', 'active', 'draining')
+               and reviewer_sessions.expires_at > ?
+           )))`
       )
       .run(
         input.jobState,
@@ -2537,8 +2564,14 @@ export class ReviewStateStore {
         input.processedReviewStatus ?? null,
         input.repo,
         input.pullNumber,
-        input.headSha
+        input.headSha,
+        input.expectedSessionId ?? null,
+        input.expectedSessionId ?? null,
+        timestamp
       );
+    if (input.expectedSessionId !== undefined && Number(result.changes) !== 1) {
+      throw new Error("reviewer_session_ownership_lost");
+    }
     const updated = this.getReviewerSessionJob(input.repo, input.pullNumber, input.headSha)!;
     if (input.jobState === "completed" || input.jobState === "skipped" || input.jobState === "failed") {
       this.expireDrainedReviewerSessionIfComplete(existing.sessionId);
@@ -2664,9 +2697,10 @@ export class ReviewStateStore {
                last_error = 'queue_lease_expired_requeued',
                updated_at = ?
            where state in ('leased', 'running')
+             and quarantine_requested = 0
              and (
-               (lease_expires_at is not null and datetime(lease_expires_at) <= datetime(?))
-               or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
+               (lease_expires_at is not null and lease_expires_at <= ?)
+               or (lease_expires_at is null and updated_at <= ?)
              )`
         )
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
@@ -2717,7 +2751,8 @@ export class ReviewStateStore {
                    else last_error
                  end,
                  updated_at = ?
-             where job_id = ? and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
+             where job_id = ? and state in ('queued', 'provider_deferred', 'blocked_on_proof')
+               and quarantine_requested = 0`
           )
           .run(leaseId, leaseExpiresAt, nowIso, job.jobId);
         providerActive.set(provider, providerCount + 1);
@@ -2739,6 +2774,7 @@ export class ReviewStateStore {
     jobId: string;
     state: ReviewQueueJobState;
     nextEligibleAt?: string;
+    expectedLeaseId?: string;
     leaseId?: string;
     leaseExpiresAt?: string;
     clearLease?: boolean;
@@ -2757,11 +2793,12 @@ export class ReviewStateStore {
       input.state === "provider_deferred" ||
       input.state === "blocked_on_proof"
     );
-    this.db
+    const guarded = input.expectedLeaseId !== undefined;
+    const result = this.db
       .prepare(
         `update review_queue_jobs
          set state = ?,
-             next_eligible_at = ?,
+             next_eligible_at = case when ? then null else ? end,
              lease_id = case when ? then null else coalesce(?, lease_id) end,
              lease_expires_at = case when ? then null else coalesce(?, lease_expires_at) end,
              session_id = coalesce(?, session_id),
@@ -2770,10 +2807,17 @@ export class ReviewStateStore {
              updated_at = ?,
              started_at = case when ? = 'running' and started_at is null then ? else started_at end,
              finished_at = case when ? then ? else finished_at end
-         where job_id = ?`
+         where job_id = ?
+           and (
+             ? = 0 or (
+               state in ('leased', 'running') and lease_id = ? and lease_expires_at > ?
+               and (quarantine_requested = 0 or ? = 1)
+             )
+           )`
       )
       .run(
         input.state,
+        terminal ? 1 : 0,
         input.nextEligibleAt ?? null,
         clearLease ? 1 : 0,
         input.leaseId ?? null,
@@ -2787,9 +2831,89 @@ export class ReviewStateStore {
         nowIso,
         terminal ? 1 : 0,
         nowIso,
-        input.jobId
+        input.jobId,
+        guarded ? 1 : 0,
+        input.expectedLeaseId ?? null,
+        nowIso,
+        guarded && terminal && input.state !== "posted" && input.state !== "command_recorded" ? 1 : 0
       );
+    if (guarded && Number(result.changes) !== 1) throw new Error("review_queue_lease_lost");
     return this.getReviewQueueJob(input.jobId)!;
+  }
+
+  fenceReviewQueueJob(input: {
+    jobId: string;
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    leaseId: string;
+    now?: Date;
+  }): ReviewQueueJobRecord | undefined {
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const owned = this.db.prepare(
+      `select 1 from review_queue_jobs
+       where job_id = ? and repo = ? and pull_number = ? and head_sha = ?
+         and state in ('leased', 'running') and lease_id = ? and lease_expires_at > ?
+         and quarantine_requested = 0 limit 1`
+    ).get(input.jobId, input.repo, input.pullNumber, input.headSha, input.leaseId, nowIso);
+    return owned ? this.getReviewQueueJob(input.jobId) : undefined;
+  }
+
+  quarantineReviewQueueJobs(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    reason: string;
+    now?: Date;
+  }): ReviewQueueJobRecord[] {
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const reason = redactSecrets(input.reason).slice(0, 500);
+    this.db.exec("begin immediate");
+    try {
+      const jobs = this.listReviewQueueJobs().filter((job) =>
+        job.repo === input.repo && job.pullNumber === input.pullNumber && job.headSha === input.headSha
+      );
+      for (const job of jobs) {
+        if (job.state === "leased" || job.state === "running") {
+          this.db.prepare(
+            `update review_queue_jobs set quarantine_requested = 1, quarantine_reason = ?, updated_at = ? where job_id = ?`
+          ).run(reason, nowIso, job.jobId);
+        } else if (job.state === "queued" || job.state === "provider_deferred" || job.state === "blocked_on_proof") {
+          this.db.prepare(
+            `update review_queue_jobs
+             set state = 'stale_retired', next_eligible_at = null, lease_id = null, lease_expires_at = null,
+                 quarantine_requested = 1, quarantine_reason = ?, updated_at = ?, finished_at = coalesce(finished_at, ?)
+             where job_id = ? and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
+          ).run(reason, nowIso, nowIso, job.jobId);
+        }
+      }
+      this.db.exec("commit");
+      return jobs.map((job) => this.getReviewQueueJob(job.jobId)!).filter(Boolean);
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
+  recordReviewQueueQuarantineReceipt(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    requiredEvidence: string;
+    now?: Date;
+  }): ReviewQueueQuarantineReceipt {
+    const requiredEvidence = redactSecrets(input.requiredEvidence).trim().slice(0, 2_000);
+    if (!requiredEvidence) throw new Error("requiredEvidence must be non-empty");
+    const createdAt = (input.now ?? new Date()).toISOString();
+    this.db.prepare(
+      `insert or ignore into review_queue_quarantine_receipts
+       (repo, pull_number, head_sha, required_evidence, created_at) values (?, ?, ?, ?, ?)`
+    ).run(input.repo, input.pullNumber, input.headSha, requiredEvidence, createdAt);
+    return this.db.prepare(
+      `select repo, pull_number as pullNumber, head_sha as headSha,
+              required_evidence as requiredEvidence, created_at as createdAt
+       from review_queue_quarantine_receipts where repo = ? and pull_number = ? and head_sha = ?`
+    ).get(input.repo, input.pullNumber, input.headSha) as unknown as ReviewQueueQuarantineReceipt;
   }
 
   updateReviewQueueJobPriority(input: {
@@ -2817,7 +2941,7 @@ export class ReviewStateStore {
       .prepare(
         `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at, quarantine_requested
          from review_queue_jobs
          where job_id = ?
          limit 1`
@@ -2831,7 +2955,7 @@ export class ReviewStateStore {
       .prepare(
         `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at, quarantine_requested
          from review_queue_jobs
          where attempt_id = ?
          limit 1`
@@ -2846,7 +2970,7 @@ export class ReviewStateStore {
       .prepare(
         `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at, quarantine_requested
          from review_queue_jobs
          where substr(attempt_id, 1, ?) = ?
            and state in ('queued', 'leased', 'running', 'provider_deferred', 'blocked_on_proof')
@@ -2871,7 +2995,7 @@ export class ReviewStateStore {
           .prepare(
             `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                     provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at, quarantine_requested
              from review_queue_jobs
              where repo = ?
              order by priority asc, datetime(created_at) asc`
@@ -2881,7 +3005,7 @@ export class ReviewStateStore {
           .prepare(
             `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                     provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                    comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at, quarantine_requested
              from review_queue_jobs
              order by priority asc, datetime(created_at) asc`
           )
@@ -2918,7 +3042,7 @@ export class ReviewStateStore {
       .prepare(
         `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
-                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
+                comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at, quarantine_requested
          from review_queue_jobs
          where repo = ?
            and pull_number = ?
@@ -3639,9 +3763,10 @@ export class ReviewStateStore {
 
   private ensureReviewQueueJobColumns(): void {
     const columns = this.db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === "lease_expires_at")) {
-      this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
-    }
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("lease_expires_at")) this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
+    if (!names.has("quarantine_requested")) this.db.exec("alter table review_queue_jobs add column quarantine_requested integer not null default 0");
+    if (!names.has("quarantine_reason")) this.db.exec("alter table review_queue_jobs add column quarantine_reason text");
   }
 
   private ensureRepoMemoryNoteCoarseColumns(): void {
@@ -4201,6 +4326,7 @@ interface ReviewQueueJobRow {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+  quarantine_requested: number | null;
 }
 
 interface ReviewReadinessRow {
@@ -4468,7 +4594,8 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.started_at ? { startedAt: row.started_at } : {}),
-    ...(row.finished_at ? { finishedAt: row.finished_at } : {})
+    ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
+    ...(row.quarantine_requested === 1 ? { quarantineRequested: true } : {})
   };
 }
 
