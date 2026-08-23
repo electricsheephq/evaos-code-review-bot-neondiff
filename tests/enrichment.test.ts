@@ -1025,6 +1025,7 @@ describe("sticky enrichment comments", () => {
     try {
       const result = await runIssueEnrichmentCycle({ config, state, github: { listIssuesForEnrichment: async () => [issue], listIssueLabelEvents: async () => events, getCollaboratorPermission: async () => "maintain", canPostAsApp: () => false, upsertIssueComment: async () => { throw new Error("overflow must not post"); } }, dryRun: false, includeExisting: true, checkedAt: "2026-08-24T00:00:30.000Z" });
       expect(result.summary).toMatchObject({ alreadyProcessed: 0, deferredRecorded: 1, posted: 0, failed: 0 });
+      expect(result.items.find((item) => item.issueNumber === 738)).toMatchObject({ nextEligibleAt: "2026-08-24T00:01:00.000Z" });
       expect(state.getIssueEnrichmentRecord("owner/issue-repo", 738)).toMatchObject({ reason: "issue_label_event_overflow", nextEligibleAt: "2026-08-24T00:01:00.000Z" });
     } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
   });

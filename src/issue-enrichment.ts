@@ -1164,7 +1164,7 @@ export async function runIssueEnrichmentCycle(input: {
           now: new Date(checkedAt)
         });
         summary.deferredRecorded += 1;
-        items.push({ ...item, recordStatus: "deferred" });
+        items.push({ ...item, nextEligibleAt: deferralNextEligibleAt, recordStatus: "deferred" });
         continue;
       }
 
