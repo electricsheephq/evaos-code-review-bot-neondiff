@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const root = resolve(__dirname, "..");
 const schema = JSON.parse(readFileSync(resolve(root, "docs/schema/desktop-candidate-manifest.schema.json"), "utf8"));
-const manifest = JSON.parse(readFileSync(resolve(root, "docs/desktop-candidate-manifest.json"), "utf8"));
+const manifest = JSON.parse(readFileSync(resolve(root, "docs/release-candidates/v1.1.0-desktop-candidate-manifest.json"), "utf8"));
 const ajv = new Ajv2020Module.default({ allErrors: true, strict: false, $data: true });
 const validate = ajv.compile(schema);
 const clone = () => JSON.parse(JSON.stringify(manifest));
@@ -94,6 +94,7 @@ describe("Desktop candidate manifest contract", () => {
     stableVersion.channel = "stable";
     stableVersion.version = "1.1.0";
     stableVersion.artifact.version = "1.1.0";
+    stableVersion.artifact.archiveName = "NeonDiff-1.1.0-build11091-macOS.zip";
     stableVersion.feed.channel = "stable";
     expect(validate(stableVersion)).toBe(true);
     const mixed = clone();
