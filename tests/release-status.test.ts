@@ -236,6 +236,7 @@ describe("beta release status", () => {
     processed.run("owner/repo", 9, "millisecond-posted", "posted", null, "2026-08-22T23:45:00.900Z");
     db.exec(`with recursive n(x) as (values(1) union all select x+1 from n where x<10000) insert into processed_reviews select 'history/repo',x,'history-'||x,'posted',null,'2026-01-01T00:00:00Z' from n;
       with recursive n(x) as (values(1) union all select x+1 from n where x<100) insert into processed_reviews select 'error/repo',x,'error-'||x,'failed','provider timeout','2026-08-22T23:00:00Z' from n;`);
+    db.exec("insert into processed_reviews values ('owner/repo',10,'outside-cutoff','failed','provider timeout','2026-08-22T00:00:00.100Z'),('owner/repo',11,'exact-cutoff','failed','provider timeout','2026-08-22T07:00:00.500+07:00'),('owner/repo',12,'inside-cutoff','failed','provider timeout','2026-08-22T00:00:00.900Z')");
     const queue = db.prepare("insert into review_queue_jobs (job_id,attempt_id,source,lane,repo,org,pull_number,head_sha,priority,state,last_error,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?,?,?,?)");
     queue.run("zcode", "zcode", "automatic", "background", "owner/repo", "owner", 7, "old-failure", 1, "failed", "zcode_timeout_retryable; retry_attempt=1; reason=timeout", "2026-08-21T23:30:00+07:00", "2026-08-21T23:30:00+07:00");
     queue.run("recent", "recent", "automatic", "background", "owner/repo", "owner", 8, "recent-failure", 1, "failed", "ordinary failure", "2026-08-22T23:30:00Z", "2026-08-22T23:30:00Z");
@@ -246,12 +247,12 @@ describe("beta release status", () => {
       statePath: dbPath,
       configPath: join(root, "missing-config.json"),
       launchdLabel: "com.electricsheephq.evaos-code-review-bot",
-      now: new Date("2026-08-23T00:00:00Z")
+      now: new Date("2026-08-23T00:00:00.500Z")
     });
 
     expect(status.database).toMatchObject({
-      errorCount: 103,
-      recentUnrecoveredErrorCount: 101,
+      errorCount: 106,
+      recentUnrecoveredErrorCount: 103,
       lastErrorAt: "2026-08-22T23:45:00.100Z",
       failedReviewQueueJobCount: 3,
       activeFailedReviewQueueJobCount: 1,

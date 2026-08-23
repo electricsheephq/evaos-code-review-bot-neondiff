@@ -2454,16 +2454,20 @@ function readProcessedFailureHealth(db: DatabaseSync, now: Date, recovery: Failu
   lastErrorAt?: string;
 } {
   const errorWhere = "failed.status = 'failed' or (failed.status != 'skipped' and failed.error is not null and failed.error != '')";
-  const cutoff = new Date(now.getTime() - FAILURE_HEALTH_WINDOW_MS).toISOString();
+  const cutoffMs = now.getTime() - FAILURE_HEALTH_WINDOW_MS;
+  const cutoff = new Date(cutoffMs).toISOString();
   const recent = db.prepare(
-    `select repo, pull_number, julianday(created_at) as failed_at from processed_reviews failed
+    `select repo, pull_number, created_at from processed_reviews failed
       where (${errorWhere})
-        and (datetime(failed.created_at) is null or datetime(failed.created_at) >= datetime(?))`
-  ).all(cutoff) as unknown as Array<{ repo: string; pull_number: number; failed_at: number | null }>;
+        and (datetime(failed.created_at) is null or datetime(failed.created_at) >= datetime(?, '-1 second'))`
+  ).all(cutoff) as unknown as Array<{ repo: string; pull_number: number; created_at: string }>;
   return {
     recentUnrecoveredErrorCount: recent.filter((row) => {
+      const normalized = row.created_at.replace(" ", "T");
+      const failedAt = Date.parse(/[zZ]|[+-]\d\d:\d\d$/.test(normalized) ? normalized : `${normalized}Z`);
+      if (Number.isFinite(failedAt) && failedAt < cutoffMs) return false;
       const postedAt = recovery.latestPostedAtByPull.get(`${row.repo}\u0000${row.pull_number}`);
-      return row.failed_at === null || postedAt === undefined || postedAt <= row.failed_at;
+      return !Number.isFinite(failedAt) || postedAt === undefined || postedAt <= failedAt / 86_400_000 + 2440587.5;
     }).length,
     ...(recovery.lastErrorAt ? { lastErrorAt: recovery.lastErrorAt } : {})
   };
