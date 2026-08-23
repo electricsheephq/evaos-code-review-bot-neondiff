@@ -13,6 +13,7 @@ import {
   buildReleaseStatusCommandOutput,
   collectOperatorIssueEnrichmentRuntime,
   collectOperatorLeases,
+  collectOperatorProviderCooldowns,
   collectOperatorRepoProviderCooldowns,
   collectOperatorReviewReadiness,
   collectOperatorReviewQueue,
