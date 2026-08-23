@@ -77,7 +77,7 @@ describe("Desktop release manifest contract", () => {
       (() => { const m = stable(), other = "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/124/artifacts/456"; Object.assign(m.source, { artifactRef: other }); Object.assign(m.artifact, { artifactRef: other }); return m; })(),
       (() => { const m = stable(); m.gatekeeper.assessment = null; return m; })(),
       (() => { const m = stable(); m.feed.artifactUrl = "https://downloads.neondiff.com/other.zip"; return m; })(),
-      (() => { const m = stable(); m.proofBoundary.excludes = ["Gatekeeper is not proven"]; return m; })()
+      (() => { const m = stable(); m.proofBoundary.excludes = ["Gatekeeper isn't proven", "The feed won't be published", "Rollback cannot be proven"]; return m; })()
     ];
     for (const manifest of bypasses) expect(validateDesktopReleaseManifest(manifest, { ajv: AcceptingAjv }).valid).toBe(false);
   });
