@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -37,11 +37,18 @@ describe("versioned desktop declaration index", () => {
   it("rejects duplicate or decreasing builds, predecessor mismatch, and current-path drift", () => {
     for (const items of [[{ build: 100 }, { build: 100 }], [{ build: 101 }, { build: 100 }], [{ build: 100 }, { build: 101, predecessor: "wrong.json" }]]) expect(run(items).status).not.toBe(0);
     expect(run([{ build: 100 }, { build: 101 }], (root) => { const path = join(root, "index.json"); const index = JSON.parse(readFileSync(path, "utf8")); index.currentPath = index.declarationPaths[0]; writeFileSync(path, JSON.stringify(index)); }).status).not.toBe(0);
+    expect(run([{ seq: 2, build: 100 }, { seq: 1, build: 101, predecessor: "v1.1.0-beta.2.json" }]).status).not.toBe(0);
+    expect(run([{ channel: "rc", seq: 1, build: 100 }, { channel: "beta", seq: 2, build: 101, predecessor: "v1.1.0-rc.1.json" }]).status).not.toBe(0);
   });
 
   it("rejects stable declarations and feed/channel drift", () => {
     expect(run([{ channel: "stable" }]).status).not.toBe(0);
     expect(run([{ feed: "https://updates.neondiff.com/stable/appcast.xml" }]).status).not.toBe(0);
+    expect(run([{ channel: "rc", seq: 9007199254740992 }]).status).not.toBe(0);
+  });
+
+  it("binds the filename to the declaration tag", () => {
+    expect(run([{ build: 100 }], (root, paths) => { const renamed = "v1.1.0-beta.2.json"; renameSync(join(root, "declarations", paths[0]), join(root, "declarations", renamed)); const path = join(root, "index.json"); const index = JSON.parse(readFileSync(path, "utf8")); index.declarationPaths = [renamed]; index.currentPath = renamed; writeFileSync(path, JSON.stringify(index)); }).status).not.toBe(0);
   });
 
   it("fails closed for unindexed symlink entries", () => {

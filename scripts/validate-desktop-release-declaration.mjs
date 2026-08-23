@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createRequire } from "node:module";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 const BETA_FEED = "https://www.neondiff.com/updates/beta/appcast.xml";
@@ -13,10 +13,10 @@ const indexSchema = json(new URL("../docs/schema/desktop-release-index-v1.schema
 const validateDeclaration = ajv.compile(declarationSchema), validateIndex = ajv.compile(indexSchema);
 
 function readRegular(path) {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`symlink or non-regular file: ${path}`);
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try { if (!fstatSync(fd).isFile()) throw new Error(`non-regular file: ${path}`); return JSON.parse(readFileSync(fd, "utf8")); } finally { closeSync(fd); }
+  let fd;
+  try { fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); if (!fstatSync(fd).isFile()) throw new Error(`non-regular file: ${path}`); return JSON.parse(readFileSync(fd, "utf8")); }
+  catch (error) { if (error?.code === "ELOOP") throw new Error(`symlink or non-regular file: ${path}`); throw error; }
+  finally { if (fd !== undefined) closeSync(fd); }
 }
 function fail(message) { throw new Error(message); }
 function pathIn(directory, name) {
@@ -26,12 +26,15 @@ function pathIn(directory, name) {
   return target;
 }
 function realDirectory(path) {
-  const canonical = resolve(realpathSync(path));
-  const expected = resolve(realpathSync(dirname(path)), basename(path));
-  if (canonical !== expected || lstatSync(path).isSymbolicLink()) fail("declaration directory symlinked");
-  const fd = openSync(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
-  try { if (!fstatSync(fd).isDirectory()) fail("declaration directory is not a directory"); } finally { closeSync(fd); }
-  return canonical;
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+    if (!fstatSync(fd).isDirectory()) fail("declaration directory is not a directory");
+    const canonical = resolve(realpathSync(path)), expected = resolve(realpathSync(dirname(path)), basename(path));
+    if (canonical !== expected) fail("declaration directory symlinked");
+    return canonical;
+  } catch (error) { if (error?.code === "ELOOP") fail("declaration directory symlinked"); throw error; }
+  finally { if (fd !== undefined) closeSync(fd); }
 }
 function check(value, valid, label) { if (!valid(value)) fail(`${label} schema invalid: ${ajv.errorsText(valid.errors)}`); }
 
@@ -52,14 +55,22 @@ function main() {
   const declarations = index.declarationPaths.map((name) => [name, readRegular(pathIn(directory, name))]);
   for (const [name, declaration] of declarations) {
     check(declaration, validateDeclaration, `declaration ${name}`);
-    const version = declaration.version, match = version.match(/^1\.1\.0-(beta|rc)\.([1-9][0-9]*)$/);
-    if (!match || declaration.tag !== `v${version}` || declaration.channel !== match[1] || declaration.sequence !== Number(match[2])) fail(`mixed declaration identity: ${name}`);
+    const version = declaration.version, match = version.match(/^1\.1\.0-(beta|rc)\.([1-9][0-9]{0,15})$/), sequenceText = match?.[2] ?? "";
+    if (!match || declaration.tag !== `v${version}` || name !== `${declaration.tag}.json` || declaration.channel !== match[1] || sequenceText.length > 15 && sequenceText > "9007199254740991" || String(declaration.sequence) !== sequenceText) fail(`mixed declaration identity: ${name}`);
     const expectedArtifact = `NeonDiff-${version}-build${declaration.build}-macOS.zip`;
     if (declaration.distribution.artifactName !== expectedArtifact || declaration.distribution.origins.feed !== BETA_FEED) fail(`unsupported channel/feed identity: ${name}`);
   }
   const ordered = [...declarations].sort((a, b) => a[1].build - b[1].build || a[0].localeCompare(b[0]));
   if (ordered.some((item, i) => i && item[1].build <= ordered[i - 1][1].build)) fail("retained builds must be unique and strictly increasing");
   if (JSON.stringify(index.declarationPaths) !== JSON.stringify(ordered.map(([name]) => name))) fail("declarationPaths must be deterministic build order");
+  const lastSequence = new Map(), seenRC = { value: false };
+  ordered.forEach(([name, declaration]) => {
+    if (declaration.channel === "beta" && seenRC.value) fail(`beta cannot follow RC: ${name}`);
+    if (declaration.channel === "rc") seenRC.value = true;
+    const previous = lastSequence.get(declaration.channel);
+    if (previous !== undefined && declaration.sequence <= previous) fail(`channel sequence must increase: ${name}`);
+    lastSequence.set(declaration.channel, declaration.sequence);
+  });
   ordered.forEach(([name, declaration], i) => { if (declaration.predecessor !== (i ? ordered[i - 1][0] : null)) fail(`predecessor mismatch: ${name}`); });
   if (index.currentPath !== ordered.at(-1)[0]) fail("currentPath must be newest compatible declaration");
   if (resolve(realpathSync(directory)) !== directoryCanonical) fail("declaration directory changed during validation");
