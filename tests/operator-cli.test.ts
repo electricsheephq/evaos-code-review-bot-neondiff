@@ -143,6 +143,14 @@ describe("operator CLI summaries", () => {
     expect(JSON.stringify(status)).not.toMatch(/retry-failed|retry-provider-cooldowns|--dry-run false/);
   });
 
+  it("scopes status active failures and sanitizes generated timeout recovery", () => {
+    const release = releaseStatus({ ok: true, database: { activeFailedReviewQueueJobCount: 2, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: 1 } });
+    const job = durableJob({ repo: "owner/repo", pullNumber: 1, headSha: "failed", state: "failed", lastError: "zcode_timeout_retryable", updatedAt: "2026-07-01T00:00:00.000Z" });
+    const status = buildOperatorStatus({ release, repo: "owner/repo", coverage: coverageReport({ ok: true, processed: [{ ...processedEntry(1, "failed", "posted"), createdAt: "2026-07-01T00:30:00.000Z" }] }), agents: agentInventory({ ok: true }), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 1 }, jobs: [job] }) });
+    expect(status).toMatchObject({ ok: true, summary: { activeFailedQueueJobs: 0 } });
+    expect(JSON.stringify(status)).not.toMatch(/retry-failed|retry-provider-cooldowns|--dry-run false/);
+  });
+
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
     const coverage = buildReleaseMonitoringCoverage({
       required: false,
