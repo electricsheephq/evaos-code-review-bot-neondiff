@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 let Ajv2020;
-try { Ajv2020 = (await import("ajv/dist/2020.js")).default; } catch { /* schema-only consumers may run without devDependencies */ }
+try { Ajv2020 = (await import("ajv/dist/2020.js")).default; } catch { Ajv2020 = null; }
+const SCHEMA_VALIDATOR_UNAVAILABLE = "schema validator unavailable";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = resolve(root, "docs/schema/desktop-candidate-manifest.schema.json");
@@ -17,11 +18,13 @@ const refs = (value, path, errors) => { if (!Array.isArray(value) || value.lengt
 const semver = value => { const match = typeof value === "string" && value.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/); return match && [Number(match[1]), Number(match[2]), Number(match[3]), match[4] ?? ""]; };
 const older = (target, current) => { const a = semver(target), b = semver(current); if (!a || !b) return false; for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] < b[i]; return Boolean(a[3]) && !b[3]; };
 
-export function validateDesktopCandidateManifest(manifest, schema = JSON.parse(readFileSync(schemaPath, "utf8"))) {
+export function validateDesktopCandidateManifest(manifest, schema = JSON.parse(readFileSync(schemaPath, "utf8")), options = {}) {
   const errors = [];
+  const ajvConstructor = options.ajv === undefined ? Ajv2020 : options.ajv;
+  if (!ajvConstructor) return { valid: false, errors: [SCHEMA_VALIDATOR_UNAVAILABLE] };
   try {
-    if (Ajv2020) { const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema); if (!validate(manifest)) for (const error of validate.errors ?? []) add(errors, error.instancePath || "/", error.message ?? "schema violation"); }
-  } catch (error) { add(errors, "/", `schema could not compile: ${error instanceof Error ? error.message : String(error)}`); }
+    const validate = new ajvConstructor({ allErrors: true, strict: true }).compile(schema); if (!validate(manifest)) for (const error of validate.errors ?? []) add(errors, error.instancePath || "/", error.message ?? "schema violation");
+  } catch { return { valid: false, errors: [SCHEMA_VALIDATOR_UNAVAILABLE] }; }
   if (errors.length > 0 || !manifest || typeof manifest !== "object") return { valid: false, errors };
   const m = manifest;
   const level = m.releaseLevel;

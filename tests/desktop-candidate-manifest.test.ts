@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -17,10 +18,12 @@ const invalid = (value: unknown) => expect(validateDesktopCandidateManifest(valu
 
 describe("Desktop candidate manifest", () => {
   it("accepts the versioned candidate and publishes an ordinary schema", () => { valid(candidate); expect(candidate.artifact.version).toBe(candidate.version); expect(candidate.feed.channel).toBe(candidate.channel); expect(JSON.stringify(schema)).not.toContain("$data"); expect(schema["$schema"]).toContain("draft/2020-12"); });
+  it("fails closed when Ajv is unavailable, even for a valid or missing manifest", () => { expect(validateDesktopCandidateManifest(candidate, schema, { ajv: null })).toEqual({ valid: false, errors: ["schema validator unavailable"] }); expect(validateDesktopCandidateManifest(undefined, schema, { ajv: null })).toEqual({ valid: false, errors: ["schema validator unavailable"] }); });
   it("accepts a fully proven 1.1.0 GA-BYO manifest using the manifest build", () => { const m = provenStable(); valid(m); expect(m.artifact.archiveName).toBe(`NeonDiff-${m.version}-build${m.artifact.build}-macOS.zip`); });
   it("rejects channel, archive, provenance, and artifact-digest drift", () => { const m = clone(); m.feed.channel = "stable"; invalid(m); const archive = clone(); archive.artifact.archiveName = "NeonDiff-1.1.0-beta.88-build999-macOS.zip"; invalid(archive); const provenance = clone(); provenance.artifact.artifactRef = "other"; invalid(provenance); const digests = provenStable(); digests.site.artifactSha256 = "b".repeat(64); invalid(digests); });
   it("rejects malformed HTTPS URLs and whitespace-only proof", () => { const url = provenStable(); url.feed.feedUrl = "https://%"; invalid(url); const proof = provenStable(); proof.signing.identity = " "; proof.signing.evidenceRefs = [" "]; invalid(proof); });
   it("keeps the BYO scenario contract fixed and excludes managed mode", () => { const scenarios = provenStable(); scenarios.customer.requiredScenarios = ["placeholder", "a", "b", "c", "d"]; invalid(scenarios); const managed = clone(); managed.contract.mode = "managed"; managed.contract.byoGitHubEnabled = false; managed.contract.managedBrokerEnabled = true; invalid(managed); });
   it("requires an older signed rollback target and an explicit GA contract", () => { const self = provenStable(); self.rollback.targetVersion = self.version; self.rollback.targetArtifactSha256 = digest; invalid(self); const future = provenStable(); future.rollback.targetVersion = "9.9.9"; invalid(future); const betaContract = provenStable(); betaContract.contract.paidContract = "paid-mac-beta-byo-v1"; invalid(betaContract); });
+  it("rejects representative schema-invalid documents through the CLI", () => { const dir = mkdtempSync("/tmp/neondiff-manifest-"); const script = resolve(root, "scripts/validate-desktop-candidate-manifest.mjs"); for (const mutate of [(m: any) => delete m.references, (m: any) => { m.product = "Other"; }, (m: any) => { m.schemaVersion = "wrong"; }, (m: any) => { m.channel = "stable"; }, (m: any) => { m.source.commit = "0".repeat(40); }]) { const m = clone(); mutate(m); const file = resolve(dir, "manifest.json"); writeFileSync(file, JSON.stringify(m)); expect(() => execFileSync(process.execPath, [script, file], { encoding: "utf8" })).toThrow(); } rmSync(dir, { recursive: true, force: true }); });
   it("does not change the published CLI manifest", () => { const file = resolve(root, "docs/public-release-manifest.json"); expect(createHash("sha256").update(readFileSync(file)).digest("hex")).toBe("9e5aae15c24da42c7197133dfe1b3c9cbc52e9e6578fd2a662b83d55fd4c8b4a"); });
 });
