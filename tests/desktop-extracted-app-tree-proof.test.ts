@@ -12,7 +12,7 @@ function fixture() {
   mkdirSync(join(app, "Contents", "MacOS"), { recursive: true }); writeFileSync(join(app, "Contents", "MacOS", "NeonDiffDesktop"), "desktop"); chmodSync(join(app, "Contents", "MacOS", "NeonDiffDesktop"), 0o755); writeFileSync(join(app, "Contents", "plain"), "plain"); symlinkSync("MacOS/NeonDiffDesktop", join(app, "Contents", "Current"));
   const artifact = join(root, "NeonDiff.zip"); execFileSync("zip", ["-qry", artifact, "NeonDiff.app"], { cwd: root }); return { root, artifact };
 }
-function archive(root: string, entries: Array<[string, string, number?]>) {
+function archive(root: string, entries: Array<[string, string, string?]>) {
   const artifact = join(root, "hostile.zip"), code = "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],'w');\nfor x in sys.argv[2:]:\n n,b,*m=x.split('\\t'); i=zipfile.ZipInfo(n); i.external_attr=((int(m[0],8) if m else 0o100644)<<16); z.writestr(i,b.encode())\nz.close()";
   execFileSync(python, ["-I", "-c", code, artifact, ...entries.map((entry) => entry.join("\t"))]); return artifact;
 }
