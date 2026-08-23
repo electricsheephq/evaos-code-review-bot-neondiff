@@ -105,7 +105,9 @@ struct FoundationKeychainWorkerLaunchAgentManager:
                 }
                 throw error
             }
-            return "Installed and started the Keychain-backed local review worker without placing its private key in the LaunchAgent."
+            return request.liveAuthorization == nil
+                ? "Installed and started the Keychain-backed local review worker in a dry-run hold; live review remains blocked until an exact receipt is confirmed."
+                : "Installed and started the Keychain-backed local review worker for the exact confirmed dry-review head without placing its private key in the LaunchAgent."
         }.value
     }
 

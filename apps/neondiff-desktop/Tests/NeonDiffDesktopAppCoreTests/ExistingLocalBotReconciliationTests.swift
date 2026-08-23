@@ -1830,6 +1830,14 @@ import NeonDiffDesktopCore
         #expect(fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.productionDaemonStartAvailable)
 
+        let callCountBeforeUnapprovedStart = fixture.cli.calls.count
+        fixture.model.startDaemon()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(fixture.cli.calls.count == callCountBeforeUnapprovedStart)
+        #expect(fixture.model.lastError?.contains("successful dry review") == true)
+
         fixture.model.pendingReviewPullNumber = "685"
         fixture.model.runScopedDryReview()
         #expect(await reachesCallCount(fixture, 5))

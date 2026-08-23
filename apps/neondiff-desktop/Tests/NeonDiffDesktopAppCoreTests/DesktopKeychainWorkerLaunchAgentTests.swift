@@ -105,7 +105,7 @@ import NeonDiffDesktopCore
         #expect(parsed == request)
     }
 
-    @Test func sealedWorkerDaemonRunsLiveAfterExplicitNativeInstall() throws {
+    @Test func newLaunchAgentInstallCannotStartLiveDaemonBeforeDryReceipt() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
         )
@@ -124,10 +124,53 @@ import NeonDiffDesktopCore
             "daemon",
             "--config", config.path,
             "--runtime-credentials-stdin", "true",
-            "--dry-run", "false"
+            "--dry-run", "true"
         ])
         #expect(!arguments.contains(appID))
         #expect(!arguments.contains(licenseMachineID))
+    }
+
+    @Test func exactDryReceiptAndConfirmationEnableLiveDaemonTransition() throws {
+        let config = home.appending(
+            path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
+        )
+        let receipt = try DesktopKeychainWorkerLiveAuthorization(
+            repository: "electricsheephq/evaos-code-review-bot-neondiff",
+            pullNumber: 965,
+            headSHA: String(repeating: "a", count: 40)
+        )
+        let request = try DesktopKeychainWorkerLaunchAgentRequest(
+            appID: appID,
+            licenseMachineID: licenseMachineID,
+            configPath: config.path,
+            launchdLabel: label,
+            liveAuthorization: receipt,
+            homeDirectory: home
+        )
+
+        #expect(DesktopKeychainWorkerLaunchAgentContract
+            .sealedWorkerDaemonArguments(request: request) == [
+                "daemon",
+                "--config", config.path,
+                "--runtime-credentials-stdin", "true",
+                "--dry-run", "false",
+                "--confirm", "true"
+            ])
+        let data = try DesktopKeychainWorkerLaunchAgentContract.propertyListData(
+            request: request,
+            appExecutableURL: appExecutable
+        )
+        let parsed = try #require(
+            DesktopKeychainWorkerLaunchAgentContract.parsePropertyList(
+                data,
+                expectedLabel: label,
+                homeDirectory: home,
+                appExecutableIsSafe: { $0 == self.appExecutable },
+                configExists: { $0 == config }
+            )
+        )
+        #expect(parsed == request)
+        #expect(parsed.liveAuthorization == receipt)
     }
 
     @Test func signedAppIssueRunIsExactLiveAndSecretFree() throws {

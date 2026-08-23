@@ -2480,14 +2480,41 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     package func startDaemon() {
         guard requireProductionDaemonStartAuthorization() else { return }
+        let liveAuthorization: DesktopKeychainWorkerLiveAuthorization?
+        if existingLocalAgentAccessAvailable {
+            guard scopedLiveReviewConfirmationAvailable,
+                  let approval = scopedDryRunApproval,
+                  let authorization = try? DesktopKeychainWorkerLiveAuthorization(
+                      repository: approval.repo,
+                      pullNumber: approval.pullNumber,
+                      headSHA: approval.headSHA
+                  )
+            else {
+                lastError =
+                    "Run a successful dry review, then confirm the exact repository, pull request, and head before starting the worker."
+                logText = lastError ?? "Exact dry-review confirmation required."
+                return
+            }
+            liveAuthorization = authorization
+        } else {
+            liveAuthorization = nil
+        }
         if keychainWorkerLaunchAgentActive
             || (!existingLocalAgentAccessAvailable
                 && keychainWorkerLaunchAgentInstallAvailable)
         {
-            installAndStartKeychainWorkerLaunchAgent()
+            installAndStartKeychainWorkerLaunchAgent(
+                liveAuthorization: liveAuthorization
+            )
+            if liveAuthorization != nil {
+                invalidateScopedReviewApproval(preserveStatus: true)
+            }
             return
         }
         persistLocalSettings()
+        if liveAuthorization != nil {
+            invalidateScopedReviewApproval(preserveStatus: true)
+        }
         runCLI(
             arguments: ["daemon", "start", "--config", configPath, "--launchd-label", launchdLabel, "--dry-run", "false", "--confirm", "true"],
             displayCommand: startDaemonCommand
@@ -2624,14 +2651,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    private func installAndStartKeychainWorkerLaunchAgent() {
-        guard let request = keychainWorkerLaunchAgentRequest() else {
+    private func installAndStartKeychainWorkerLaunchAgent(
+        liveAuthorization: DesktopKeychainWorkerLiveAuthorization? = nil
+    ) {
+        guard let request = keychainWorkerLaunchAgentRequest(
+            liveAuthorization: liveAuthorization
+        ) else {
             return
         }
         let manager = dependencies.keychainWorkerLaunchAgentManager
         isKeychainWorkerLaunchAgentOperationInProgress = true
         keychainWorkerLaunchAgentStatus =
-            "Installing and starting the secret-free local review worker…"
+            liveAuthorization == nil
+                ? "Installing and starting the secret-free local review worker in a dry-run hold…"
+                : "Starting the worker for the exact confirmed dry-review head…"
         Task { [weak self] in
             do {
                 let status = try await manager.installAndStart(
@@ -2657,7 +2690,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
     }
 
-    private func keychainWorkerLaunchAgentRequest()
+    private func keychainWorkerLaunchAgentRequest(
+        liveAuthorization: DesktopKeychainWorkerLiveAuthorization? = nil
+    )
         -> DesktopKeychainWorkerLaunchAgentRequest?
     {
         guard let appID = storedBYOGitHubAppId else {
@@ -2687,6 +2722,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 licenseMachineID: licenseMachineID,
                 configPath: configPath,
                 launchdLabel: launchdLabel,
+                liveAuthorization: liveAuthorization,
                 homeDirectory: homeDirectory
             )
         } catch {

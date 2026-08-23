@@ -9,12 +9,14 @@ package struct DesktopKeychainWorkerLaunchAgentRequest:
     package let licenseMachineID: String
     package let configPath: String
     package let launchdLabel: String
+    package let liveAuthorization: DesktopKeychainWorkerLiveAuthorization?
 
     package init(
         appID: String,
         licenseMachineID: String,
         configPath: String,
         launchdLabel: String,
+        liveAuthorization: DesktopKeychainWorkerLiveAuthorization? = nil,
         homeDirectory: URL
     ) throws {
         guard appID.range(
@@ -46,6 +48,7 @@ package struct DesktopKeychainWorkerLaunchAgentRequest:
         self.licenseMachineID = licenseMachineID
         self.configPath = normalizedConfig.path
         self.launchdLabel = launchdLabel
+        self.liveAuthorization = liveAuthorization
     }
 
     private static func isAccountBotConfig(
@@ -74,6 +77,45 @@ package struct DesktopKeychainWorkerLaunchAgentRequest:
                 options: .regularExpression
             ) != nil
             && suffix[3] == "config.local.json"
+    }
+}
+
+package struct DesktopKeychainWorkerLiveAuthorization:
+    Equatable,
+    Sendable
+{
+    package let repository: String
+    package let pullNumber: Int
+    package let headSHA: String
+
+    package init(
+        repository: String,
+        pullNumber: Int,
+        headSHA: String
+    ) throws {
+        guard repository.range(
+            of: #"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#,
+            options: .regularExpression
+        ) != nil else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidLiveAuthorization
+        }
+        guard pullNumber > 0,
+              Self.isHex(headSHA, length: 40)
+        else {
+            throw DesktopKeychainWorkerLaunchAgentError.invalidLiveAuthorization
+        }
+        self.repository = repository
+        self.pullNumber = pullNumber
+        self.headSHA = headSHA.lowercased()
+    }
+
+    private static func isHex(_ value: String, length: Int) -> Bool {
+        value.utf8.count == length
+            && value.utf8.allSatisfy {
+                ($0 >= 48 && $0 <= 57)
+                    || ($0 >= 65 && $0 <= 70)
+                    || ($0 >= 97 && $0 <= 102)
+            }
     }
 }
 
@@ -129,6 +171,7 @@ package enum DesktopKeychainWorkerLaunchAgentError:
     case invalidLicenseMachineID
     case invalidRepository
     case invalidIssueNumber
+    case invalidLiveAuthorization
     case invalidAppExecutable
     case serializationFailed
 
@@ -146,6 +189,8 @@ package enum DesktopKeychainWorkerLaunchAgentError:
             "The selected issue repository is invalid."
         case .invalidIssueNumber:
             "The selected issue number must be positive."
+        case .invalidLiveAuthorization:
+            "The live transition requires an exact dry-review repository, pull request, and head receipt."
         case .invalidAppExecutable:
             "The signed NeonDiff app executable path is invalid."
         case .serializationFailed:
@@ -194,24 +239,37 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
     package static func headlessArguments(
         request: DesktopKeychainWorkerLaunchAgentRequest
     ) -> [String] {
-        [
+        var arguments = [
             headlessFlag,
             "--config", request.configPath,
             "--launchd-label", request.launchdLabel,
             "--github-app-id", request.appID,
             "--license-machine-id", request.licenseMachineID
         ]
+        if let authorization = request.liveAuthorization {
+            arguments += [
+                "--live-repo", authorization.repository,
+                "--live-pr", String(authorization.pullNumber),
+                "--live-head-sha", authorization.headSHA,
+                "--live-confirmed", "true"
+            ]
+        }
+        return arguments
     }
 
     package static func sealedWorkerDaemonArguments(
         request: DesktopKeychainWorkerLaunchAgentRequest
     ) -> [String] {
-        [
+        var arguments = [
             "daemon",
             "--config", request.configPath,
             "--runtime-credentials-stdin", "true",
-            "--dry-run", "false"
+            "--dry-run", request.liveAuthorization == nil ? "true" : "false"
         ]
+        if request.liveAuthorization != nil {
+            arguments += ["--confirm", "true"]
+        }
+        return arguments
     }
 
     package static func sealedWorkerIssueRunArguments(
@@ -290,16 +348,16 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
             : "repositories"
 
         return """
-        Ready to install and start the secret-free local review worker.
+        Ready to install and start the secret-free local review worker in a dry-run hold.
         LaunchAgent: \(plistPath)
         Program: \(appExecutableURL.standardizedFileURL.path)
         ProgramArguments: \(redactedArguments)
         Sealed worker: \(sealedWorkerPath)
         EnvironmentVariables: none
-        Launch policy: RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua; stdout=/dev/null; stderr=/dev/null.
+        Launch policy: RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua; stdout=/dev/null; stderr=/dev/null; daemon starts with --dry-run true until an exact receipt is confirmed.
         Credentials: Keychain-only at runtime; no secret values in the plist, arguments, or environment.
         Repository allowlist: preserved unchanged (\(preservedRepositoryCount) configured \(repositoryLabel)); no config write.
-        Mutation: write only the selected user LaunchAgent, then restart that exact service.
+        Mutation: write only the selected user LaunchAgent, then restart that exact service; no live review is authorized by install alone.
         """
     }
 
@@ -370,7 +428,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         root["StandardOutPath"] as? String == "/dev/null",
         root["StandardErrorPath"] as? String == "/dev/null",
         let programArguments = root["ProgramArguments"] as? [String],
-        [8, 10].contains(programArguments.count),
+        [8, 10, 18].contains(programArguments.count),
         let executablePath = programArguments.first,
         executablePath.hasPrefix("/")
         else {
@@ -419,7 +477,7 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         _ arguments: [String],
         homeDirectory: URL
     ) -> DesktopKeychainWorkerLaunchAgentRequest? {
-        guard arguments.count == 9,
+        guard arguments.count == 9 || arguments.count == 17,
               arguments[0] == headlessFlag,
               arguments[1] == "--config",
               arguments[3] == "--launchd-label",
@@ -428,11 +486,32 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
         else {
             return nil
         }
+        let authorization: DesktopKeychainWorkerLiveAuthorization?
+        if arguments.count == 17 {
+            guard arguments[9] == "--live-repo",
+                  arguments[11] == "--live-pr",
+                  arguments[13] == "--live-head-sha",
+                  arguments[15] == "--live-confirmed",
+                  arguments[16] == "true",
+                  let pullNumber = Int(arguments[12])
+            else {
+                return nil
+            }
+            authorization = try? DesktopKeychainWorkerLiveAuthorization(
+                repository: arguments[10],
+                pullNumber: pullNumber,
+                headSHA: arguments[14]
+            )
+            guard authorization != nil else { return nil }
+        } else {
+            authorization = nil
+        }
         return try? DesktopKeychainWorkerLaunchAgentRequest(
             appID: arguments[6],
             licenseMachineID: arguments[8],
             configPath: arguments[2],
             launchdLabel: arguments[4],
+            liveAuthorization: authorization,
             homeDirectory: homeDirectory
         )
     }
