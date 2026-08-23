@@ -1,4 +1,4 @@
-# NeonDiff Desktop Dev MVP
+# NeonDiff Desktop architecture and local development
 
 The evaluation-first path from this development shell to a GA-quality native
 experience is specified in
@@ -6,10 +6,10 @@ experience is specified in
 and tracked by issue #514. Evaluation and layout stability land before broad
 visual redesign.
 
-NeonDiff Desktop is a SwiftPM macOS app scaffold for issue #115. It is a thin local control panel over the NeonDiff CLI and daemon contracts.
-For the 1.0 launch bar, the Mac app is intentionally a minimal launcher:
-opening the app shows local controls that can start `neondiff dashboard` or open
-the same local HTML dashboard used by the CLI.
+NeonDiff Desktop is the native macOS surface for the shared `1.1.0` GA release
+line, not the `neondiff@1.0.4` package or its release manifest. See the
+[Mac GA architecture contract](architecture/mac-ga-release-contract.md) for
+the paid-BYO/managed, sealed-worker, and GA claim boundaries.
 
 ## Boundaries
 
