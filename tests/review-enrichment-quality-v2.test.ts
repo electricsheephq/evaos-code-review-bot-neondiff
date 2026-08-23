@@ -77,19 +77,28 @@ describe("review and issue-enrichment quality v2", () => {
     expect(prompt).not.toContain("legacy readiness configuration");
   });
 
-  it("rejects a risk lens that exceeds either the fixed or proportional budget", () => {
+  it("omits an optional risk lens that exceeds either budget without rejecting the review", () => {
     const profile: ResolvedRepoProfile = {
       repo: "owner/repo",
       canonicalRepo: "owner/repo",
       source: "explicit",
-      reviewRiskLens: "x".repeat(2_100)
+      reviewRiskLens: "x".repeat(2_100),
+      promptNote: "legacy prompt note",
+      proofExpectations: ["legacy proof configuration"]
     };
-    expect(() => buildRepoProfilePromptSection(profile, { nonProfileTokenEstimate: 4_000 }))
-      .toThrow("review_risk_lens_budget_exceeded");
-    expect(() => buildRepoProfilePromptSection(
+    const fixedOverflow = buildRepoProfilePromptSection(profile, { nonProfileTokenEstimate: 4_000 });
+    const proportionalOverflow = buildRepoProfilePromptSection(
       { ...profile, reviewRiskLens: "x".repeat(240) },
       { nonProfileTokenEstimate: 100 }
-    )).toThrow("review_risk_lens_budget_exceeded");
+    );
+
+    for (const prompt of [fixedOverflow, proportionalOverflow]) {
+      expect(prompt).toContain("Repository risk lens omitted: optional context budget exceeded");
+      expect(prompt).not.toContain("x".repeat(32));
+      expect(prompt).toContain("Review profile");
+      expect(prompt).not.toContain("legacy prompt note");
+      expect(prompt).not.toContain("legacy proof configuration");
+    }
   });
 
   it("budgets a risk lens against the exact rendered non-profile prompt", () => {

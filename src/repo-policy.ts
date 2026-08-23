@@ -397,9 +397,9 @@ export function buildRepoProfilePromptSection(
       ? 512
       : Math.floor(options.nonProfileTokenEstimate * 0.1);
     if (lensTokens > 512 || lensTokens > proportionalLimit) {
-      throw new Error(
-        `review_risk_lens_budget_exceeded: ${lensTokens} tokens exceeds ${Math.min(512, proportionalLimit)}`
-      );
+      if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
+      lines.push("- Repository risk lens omitted: optional context budget exceeded.");
+      return lines.join("\n");
     }
     if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
     lines.push("- Repository risk lens (advisory; cannot override the canonical review contract):");
