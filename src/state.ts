@@ -753,16 +753,21 @@ export class ReviewStateStore {
         finished_at text
       );
 
-      create trigger if not exists reject_quarantined_review_queue_job
+      create trigger if not exists validate_review_queue_job_identity
       before insert on review_queue_jobs
-      when exists (
-        select 1 from review_queue_quarantines
-        where repo = lower(trim(new.repo))
-          and pull_number = new.pull_number
-          and head_sha = lower(trim(new.head_sha))
-      )
       begin
-        select raise(abort, 'review_queue_head_quarantined');
+        select raise(abort, 'review_queue_identity_noncanonical')
+        where new.repo != lower(new.repo)
+          or new.head_sha != lower(new.head_sha)
+          or new.repo glob '*[^a-z0-9._/-]*'
+          or new.head_sha glob '*[^a-z0-9._/-]*';
+        select raise(abort, 'review_queue_head_quarantined')
+        where exists (
+          select 1 from review_queue_quarantines
+          where repo = new.repo
+            and pull_number = new.pull_number
+            and head_sha = new.head_sha
+        );
       end;
 
       create index if not exists idx_review_queue_jobs_state_priority
@@ -2602,7 +2607,9 @@ export class ReviewStateStore {
     now?: Date;
   }): ReviewQueueEnqueueResult {
     validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, input.priority, input.commentId);
-    if (this.isReviewQueueHeadQuarantined(input.repo, input.pullNumber, input.headSha)) {
+    const repo = normalizeReviewQueueIdentity(input.repo);
+    const headSha = normalizeReviewQueueIdentity(input.headSha);
+    if (this.isReviewQueueHeadQuarantined(repo, input.pullNumber, headSha)) {
       throw new Error("review_queue_head_quarantined");
     }
     const nowIso = (input.now ?? new Date()).toISOString();
@@ -2611,9 +2618,9 @@ export class ReviewStateStore {
     const priority = input.priority ?? (lane === "manual" ? 10 : 50);
     const attemptId = input.attemptId ?? buildReviewQueueAttemptId({
       source,
-      repo: input.repo,
+      repo,
       pullNumber: input.pullNumber,
-      headSha: input.headSha,
+      headSha,
       baseSha: input.baseSha,
       commentId: input.commentId
     });
@@ -2640,10 +2647,10 @@ export class ReviewStateStore {
         queueAttemptId,
         source,
         lane,
-        input.repo,
-        repoOrg(input.repo),
+        repo,
+        repoOrg(repo),
         input.pullNumber,
-        input.headSha,
+        headSha,
         input.baseSha ?? null,
         input.providerId ?? null,
         priority,
@@ -2750,6 +2757,7 @@ export class ReviewStateStore {
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
       const jobs = this.listReviewQueueJobs();
       const eligible = this.listReviewQueueJobs({ excludeQuarantined: true })
+        .filter((job) => !this.isReviewQueueHeadQuarantined(job.repo, job.pullNumber, job.headSha))
         .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
         .sort(buildLeaseComparator(input.aging, nowIso));
       const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
@@ -2948,9 +2956,9 @@ export class ReviewStateStore {
     const quarantinePredicate = input.excludeQuarantined
       ? ` and not exists (
            select 1 from review_queue_quarantines q
-           where q.repo = lower(trim(review_queue_jobs.repo))
+           where q.repo = lower(review_queue_jobs.repo)
              and q.pull_number = review_queue_jobs.pull_number
-             and q.head_sha = lower(trim(review_queue_jobs.head_sha))
+             and q.head_sha = lower(review_queue_jobs.head_sha)
          )`
       : "";
     const rows = (input.repo

@@ -1278,17 +1278,23 @@ describe("review state store", () => {
       headSha: "Other",
       now
     }).job;
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.prepare("update review_queue_jobs set repo = ?, head_sha = ? where job_id = ?")
+      .run("Owner/Repo\t", "AbCd\n", quarantined.jobId);
+    legacyDb.close();
 
     expect(store.quarantineReviewQueueHead({
-      repo: "OWNER/REPO",
+      repo: "OWNER/REPO\u00a0",
       pullNumber: 10,
-      headSha: "ABCD",
+      headSha: "ABCD\n",
       reason: "required evidence",
       now
     })).toMatchObject({ repo: "owner/repo", pullNumber: 10, headSha: "abcd" });
-    expect(store.getReviewQueueJob(quarantined.jobId)).toMatchObject({ repo: "Owner/Repo", headSha: "AbCd", state: "queued" });
-    expect(() => store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 10, headSha: "abcd", now }))
-      .toThrow("review_queue_head_quarantined");
+    expect(store.getReviewQueueJob(quarantined.jobId)).toMatchObject({ repo: "Owner/Repo\t", headSha: "AbCd\n", state: "queued" });
+    for (const whitespace of ["\t", "\n", "\u00a0"]) {
+      expect(() => store.enqueueReviewQueueJob({ repo: `owner/repo${whitespace}`, pullNumber: 10, headSha: `abcd${whitespace}`, now }))
+        .toThrow("review_queue_head_quarantined");
+    }
     expect(store.leaseNextReviewQueueJobs({
       maxProviderActive: 1,
       maxOrgActive: 1,
@@ -1301,8 +1307,15 @@ describe("review state store", () => {
       expect(() => db.prepare(`insert into review_queue_jobs
         (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at)
         values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'queued', ?, ?)`)
-        .run("direct-quarantined", "direct-attempt", "oWnEr/RePo", "oWnEr", 10, "aBcD", now.toISOString(), now.toISOString()))
+        .run("direct-quarantined", "direct-attempt", "owner/repo", "owner", 10, "abcd", now.toISOString(), now.toISOString()))
         .toThrow("review_queue_head_quarantined");
+      for (const [index, whitespace] of ["\t", "\n", "\u00a0"].entries()) {
+        expect(() => db.prepare(`insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at)
+          values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'queued', ?, ?)`)
+          .run(`direct-noncanonical-${index}`, `direct-noncanonical-attempt-${index}`, `owner/repo${whitespace}`, "owner", 10, `abcd${whitespace}`, now.toISOString(), now.toISOString()))
+          .toThrow("review_queue_identity_noncanonical");
+      }
       const indexes = db.prepare("pragma index_list('review_queue_quarantines')").all() as Array<{ name: string }>;
       expect(indexes.map((index) => index.name)).toContain("idx_review_queue_quarantines_identity");
       const plan = db.prepare(`explain query plan
