@@ -5,14 +5,14 @@ runs on your own machine or server. The App identity is what authors review
 comments in GitHub; your local worker holds the App ID, private key, provider
 configuration, state database, and evidence files.
 
-On macOS, signed Desktop 1.1.0 at `/Applications/NeonDiff.app` owns native
-first run. The public paid customer-owned BYO/GA path accepts a customer-owned App ID/private key;
-new App uses **Verify App Access**, existing agent **Verify Existing Access**.
-The sealed helper is `/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`.
-The managed official App/broker is separate post-GA. Stable onboarding is
-[neondiff.com/mac](https://www.neondiff.com/mac); see the [Mac GA architecture
-and release contract](architecture/mac-ga-release-contract.md) and [Desktop Mac
-release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
+On macOS, signed Desktop 1.1.0 is the planned native GA journey at
+`/Applications/NeonDiff.app`; it is not current GA availability. The current public paid
+customer-owned BYO beta remains current until the immutable signed GA artifact,
+`/mac` surface, and promotion gates are live. The planned GA path accepts a
+customer-owned App ID/private key; new App uses **Verify App Access**, existing
+agent uses **Verify Existing Access**. The managed official App/broker is
+separate post-GA. Planned stable onboarding is [neondiff.com/mac](https://www.neondiff.com); see the
+[Mac GA architecture and release contract](architecture/mac-ga-release-contract.md) and [Desktop Mac release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
 
 ## Install URL
 
@@ -129,7 +129,7 @@ integration proof under #630.
 4. Pick one repository for the B0 onboarding run.
 5. Confirm the permissions above.
 6. Save the generated private key outside this repository.
-7. In signed Desktop 1.1.0, move the app to `/Applications/NeonDiff.app` and
+7. In the promoted signed Desktop 1.1.0 journey, once its immutable artifact and `/mac` promotion gates are live, move the app to `/Applications/NeonDiff.app` and
    launch it. Store the App ID/private key in Keychain, then choose **Initialize
    Local Config**, **Add Repository**, and **Apply Repository**. Choose **Verify App
    Access** for a new App or **Verify Existing Access** for an existing agent.
@@ -230,9 +230,9 @@ not GitHub approval of the public App.
 
 ## Verify Installation
 
-For signed Desktop 1.1.0 native first run, use **Verify App Access** for a new
-customer-owned App or **Verify Existing Access** for a compatible existing
-agent in the UI. The shell command below is CLI/operator diagnostics only:
+For the promoted signed Desktop 1.1.0 journey, use **Verify App Access** for a new
+customer-owned App or **Verify Existing Access** for a compatible existing agent in
+the UI; before promotion, the shell command below is CLI/operator diagnostics only:
 
 ```bash
 CLI_CONFIG="config.local.json"

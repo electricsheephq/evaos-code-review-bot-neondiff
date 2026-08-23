@@ -143,9 +143,8 @@ checksum-bound prerelease bundle.
 
 ## Set Up
 
-Signed Desktop 1.1.0 native first run moves the app to `/Applications/NeonDiff.app`
-and follows its UI; CLI/dashboard/worker commands are not prerequisites. For
-npm CLI 1.0.4 CLI-first, non-Mac, or legacy operator setup, follow [docs/SETUP.md](docs/SETUP.md):
+Signed Desktop 1.1.0 is the planned native GA first-run path at `/Applications/NeonDiff.app`;
+it becomes primary only after the immutable signed GA artifact, `/mac` surface, and promotion gates are live. Until then, the public paid B0 BYO beta is current. For npm CLI 1.0.4 CLI-first, non-Mac, or legacy operator setup, follow [docs/SETUP.md](docs/SETUP.md):
 
 ```bash
 neondiff init --config config.local.json
@@ -159,13 +158,11 @@ neondiff providers doctor --config config.local.json --json
 neondiff doctor --config config.local.json --json
 ```
 
-For the signed Desktop 1.1.0 Mac journey, `/Applications/NeonDiff.app` owns
-first run and its LaunchAgent uses the sealed helper
-`/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`. A new App uses
-**Verify App Access**; an existing compatible agent uses **Verify Existing Access**.
-Codex runtime and dry-run approval precede live review. The app shows license
-status, GitHub App status, daemon status, and provider readiness; the HTML
-dashboard remains CLI-first/non-Mac diagnostics, not native UI.
+For the planned signed Desktop 1.1.0 Mac journey, `/Applications/NeonDiff.app` becomes
+the primary first-run surface only after the immutable signed GA artifact, `/mac` surface, and promotion gates are live; until then the public paid B0 BYO beta remains current. Its
+planned LaunchAgent uses the sealed helper `/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`. **Verify App Access** is for a new App; an existing compatible agent uses **Verify Existing Access**.
+Codex runtime and dry-run approval precede live review. The app shows license, GitHub App, daemon, and provider status;
+the HTML dashboard remains CLI-first/non-Mac diagnostics, not native UI.
 The managed native path binds activation and private-repository token issuance
 to the same Keychain-backed broker device identity and exact GitHub-selected
 repository. The raw Activation Key remains Keychain-owned: it crosses bounded
@@ -182,9 +179,9 @@ The public paid B0 BYO beta build uses a separate exact
 no managed-broker fields. That contract enables the existing local direct/BYO
 path and API-backed native activation without a hidden defaults mutation. It
 is a paid path for every repository and does not claim the managed public-free
-model. The signed release app contains a sealed NeonDiff worker built from the
+model. When the immutable signed GA artifact is published, the signed release app contains a sealed NeonDiff worker built from the
 exact reviewed source and a pinned, SHA-256-verified official Node runtime. A
-clean Mac therefore does not need a global CLI or separate worker install for
+After those gates, a clean Mac therefore does not need a global CLI or separate worker install for
 the native setup and review path. The separate checksum-bound bundle remains
 available for the customer-owned local-agent path; its explicit `first-install`
 command installs only its verified CLI in a private current-user version
@@ -202,7 +199,7 @@ Keychain identity and rejects a mismatched plist before releasing credentials.
 Review and daemon readiness remain separate gates. The
 immutable published prerelease and clean-Mac artifact proof remain distribution
 gates. Unsigned development builds are not the signed Desktop 1.1.0 customer
-path; use them only for development/operator checks. The signed app exposes
+path; use them only for development/operator checks. Once GA promotion is complete, the signed app exposes
 **Initialize Local Config** (non-destructive; never force-overwrites),
 **Add Repository**, **Apply Repository**, and **Verify App Access** without a
 terminal or operator config edit. **Apply Repository** writes both the selected

@@ -1,9 +1,10 @@
 # NeonDiff Setup
 
 This guide is the CLI/operator setup path for npm CLI 1.0.4 and non-Mac first
-run. On macOS, signed Desktop 1.1.0 at `/Applications/NeonDiff.app` owns native
-first run; CLI/dashboard/checksum-worker commands below are not prerequisites.
-See the [Mac GA architecture and release contract](architecture/mac-ga-release-contract.md)
+run. The current product is the public paid B0 BYO beta. The planned signed
+Desktop 1.1.0 journey at `/Applications/NeonDiff.app` becomes primary only after
+its immutable GA artifact, `/mac` surface, and promotion gates are live. See the
+[Mac GA architecture and release contract](architecture/mac-ga-release-contract.md)
 and [Desktop Mac release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
 The recommended path installs the `neondiff` npm package; source checkout remains
 a fallback for contributors and reviewers who want to inspect or build locally. See
@@ -261,7 +262,7 @@ manual UserDefaults rollout mutation. It does not make the managed App path
 available and is not proof that GitHub private-key custody, the compatible CLI
 package, billing, signing, or customer canaries have passed.
 
-For signed Desktop 1.1.0 native first run, move the app to `/Applications/NeonDiff.app` and follow its UI:
+For the planned signed Desktop 1.1.0 GA journey, once the immutable artifact and `/mac` promotion gates are live, move the app to `/Applications/NeonDiff.app` and follow its UI:
 
 1. Create and install a customer-owned GitHub App with the permissions in
    [`github-app-setup.md`](github-app-setup.md), selecting one repository.
@@ -294,7 +295,7 @@ the app rejects it if any authorized bot now owns the same config identity.
 Choosing another account or explicitly choosing an existing bot ends the
 pending setup.
 
-The signed app needs no global CLI or checksum-managed worker; its LaunchAgent
+For that promoted GA journey, the signed app needs no global CLI or checksum-managed worker; its LaunchAgent
 invokes the sealed helper `/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`.
 Legacy recovery below is operator-only, not native first-run setup.
 
@@ -461,10 +462,9 @@ The app's own Sparkle update does not update an external local worker.
 
 ## 4. Check Readiness
 
-For signed Desktop 1.1.0, use **Verify App Access** or **Verify Existing Access**
-in the UI; credentials go only to the sealed helper. The shell command below is
-CLI/operator diagnostics only and verifies App/repo access without provider or
-posting side effects:
+For the promoted signed Desktop 1.1.0 journey, use **Verify App Access** or **Verify Existing Access**
+in the UI; before promotion, use the CLI/operator diagnostic below. Credentials go only to
+the sealed helper, and the shell command verifies App/repo access without provider or posting side effects:
 
 ```bash
 neondiff doctor github --config config.local.json --json
@@ -521,7 +521,7 @@ neondiff doctor --config config.local.json --json
 This SETUP guide is the operator/advanced CLI-first path, and the first-run path
 on non-Mac platforms. The local HTML dashboard is the operator/diagnostic surface
 it drives. On Mac, the native macOS app is the human first-run product surface.
-The signed Desktop 1.1.0 app lets the customer store the customer-owned App key in
+The promoted signed Desktop 1.1.0 app lets the customer store the customer-owned App key in
 Keychain, select and apply one repository, and verify that installation without
 an operator editing local files. For a reconciled existing worker with a
 multi-repository allowlist, choose one **Review Target** in the repository
