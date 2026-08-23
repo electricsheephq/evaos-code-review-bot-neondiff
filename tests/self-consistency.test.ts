@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runSelfConsistencyRecheck } from "../src/self-consistency.js";
+import { parseSevereVerifierOutput, runSelfConsistencyRecheck, type SevereVerificationReceipt } from "../src/self-consistency.js";
 import type { PullFilePatch, ReviewComment } from "../src/types.js";
 
 function comment(overrides: Partial<ReviewComment> & Pick<ReviewComment, "severity" | "line" | "title" | "confidence">): ReviewComment {
@@ -16,6 +16,11 @@ function comment(overrides: Partial<ReviewComment> & Pick<ReviewComment, "severi
 const files: PullFilePatch[] = [
   { filename: "src/save.ts", patch: "@@ -1,2 +1,3 @@\n export function save() {\n+  overwriteAllData();\n }" }
 ];
+
+function receipt(state: SevereVerificationReceipt["state"], complete = state === "confirmed", confidence = 0.8): { receipt: SevereVerificationReceipt } {
+  return { receipt: { schemaVersion: "severe-verifier-v1", repo: "owner/repo", pullNumber: 1, baseSha: "b".repeat(40), findingFingerprint: `finding:${"0".repeat(64)}`, headSha: "a".repeat(40), state,
+    disposition: state === "confirmed" && complete ? "retain" : "suppress", confidence, evidence: { files: [], omitted: complete ? [] : [{ path: "src/save.ts", reason: "not_read" }], complete } } };
+}
 
 describe("self-consistency re-check (#303)", () => {
   it("is a no-op with zero second-draw calls when disabled (byte-identical)", async () => {
@@ -41,7 +46,7 @@ describe("self-consistency re-check (#303)", () => {
       comments,
       files,
       config: { enabled: true, severities: ["P0", "P1"], maxFindingsPerReview: 5 },
-      secondDraw: () => ({ verified: true, confidence: 0.7 })
+      secondDraw: () => receipt("confirmed", true, 0.7)
     });
 
     expect(result.comments[0]?.confidence).toBe(0.9); // never raised, kept on agreement
@@ -49,18 +54,17 @@ describe("self-consistency re-check (#303)", () => {
     expect(result.verdicts).toEqual([expect.objectContaining({ agreed: true, originalConfidence: 0.9, secondConfidence: 0.7 })]);
   });
 
-  it("downgrades confidence and removes REQUEST_CHANGES eligibility on refutation", async () => {
+  it("suppresses the severe finding on refutation", async () => {
     const comments = [comment({ severity: "P0", line: 2, title: "Rollback clobbers state", confidence: 0.9 })];
     const result = await runSelfConsistencyRecheck({
       comments,
       files,
       config: { enabled: true, severities: ["P0", "P1"], maxFindingsPerReview: 5 },
-      secondDraw: () => ({ verified: false, confidence: 0.2 })
+      secondDraw: () => receipt("refuted", true, 0.2)
     });
 
-    expect(result.comments[0]?.confidence).toBe(0.2); // min(0.9, 0.2)
-    expect(result.comments).toHaveLength(1); // still POSTS as a comment
-    expect(result.event).toBe("COMMENT"); // lost eligibility ⇒ quieter
+    expect(result.comments).toHaveLength(0);
+    expect(result.event).toBe("COMMENT");
     expect(result.verdicts).toEqual([expect.objectContaining({ agreed: false, refuted: true })]);
   });
 
@@ -69,7 +73,7 @@ describe("self-consistency re-check (#303)", () => {
       comments: [comment({ severity: "P1", line: 2, title: "Concern", confidence: 0.4 })],
       files,
       config: { enabled: true, maxFindingsPerReview: 5 },
-      secondDraw: () => ({ verified: true, confidence: 0.99 })
+      secondDraw: () => receipt("confirmed", true, 0.99)
     });
     expect(result.comments[0]?.confidence).toBe(0.4);
   });
@@ -85,18 +89,18 @@ describe("self-consistency re-check (#303)", () => {
       config: { enabled: true, severities: ["P0"], maxFindingsPerReview: 5 },
       secondDraw: (input) => {
         seen.push(input.comment.title);
-        return { verified: true, confidence: 0.8 };
+        return receipt("confirmed");
       }
     });
 
     expect(seen).toHaveLength(5);
     // Ranked order = the comment order the gate already produced (highest-confidence first).
     expect(seen).toEqual(["Finding 0", "Finding 1", "Finding 2", "Finding 3", "Finding 4"]);
-    expect(result.verdicts).toHaveLength(5);
+    expect(result.verdicts).toHaveLength(6); expect(result.verdicts[5]?.error).toBe("severe_verifier_cap_exceeded");
   });
 
   it("only re-checks findings at configured severities (default P0/P1)", async () => {
-    const secondDraw = vi.fn(() => ({ verified: true, confidence: 0.8 }));
+    const secondDraw = vi.fn(() => receipt("confirmed"));
     await runSelfConsistencyRecheck({
       comments: [
         comment({ severity: "P0", line: 2, title: "high", confidence: 0.9 }),
@@ -109,7 +113,7 @@ describe("self-consistency re-check (#303)", () => {
     expect(secondDraw).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a finding untouched when the second draw fails (quieter-only, never blocks)", async () => {
+  it("suppresses a severe finding when the second draw fails without failing the review", async () => {
     const comments = [comment({ severity: "P0", line: 2, title: "Rollback clobbers state", confidence: 0.9 })];
     const result = await runSelfConsistencyRecheck({
       comments,
@@ -120,8 +124,8 @@ describe("self-consistency re-check (#303)", () => {
       }
     });
 
-    expect(result.comments[0]?.confidence).toBe(0.9);
-    expect(result.event).toBe("REQUEST_CHANGES");
+    expect(result.comments).toHaveLength(0);
+    expect(result.event).toBe("COMMENT");
     expect(result.verdicts).toEqual([expect.objectContaining({ error: expect.stringContaining("provider exploded") })]);
   });
 
@@ -140,12 +144,34 @@ describe("self-consistency re-check (#303)", () => {
         events.push(`start:${finding.title}`);
         await new Promise((resolve) => setTimeout(resolve, 5));
         events.push(`finish:${finding.title}`);
-        return { verified: true, confidence: 0.7 };
+        return receipt("confirmed", true, 0.7);
       }
     });
 
     expect(events).toEqual(["start:first", "finish:first", "start:second", "finish:second"]);
     expect(result.verdicts).toHaveLength(2);
     expect(result.event).toBe("REQUEST_CHANGES");
+  });
+
+  it("suppresses every non-confirmed receipt, including incomplete evidence", async () => {
+    const states: Array<SevereVerificationReceipt["state"]> = ["refuted", "malformed", "timeout", "unavailable", "stale_head", "incomplete"]; for (const state of states) {
+      const result = await runSelfConsistencyRecheck({
+        comments: [comment({ severity: "P1", line: 2, title: state, confidence: 0.9 })],
+        files,
+        config: { enabled: true },
+        secondDraw: () => receipt(state, false)
+      });
+      expect(result.comments, state).toEqual([]); expect(result.event, state).toBe("COMMENT");
+    }
+  });
+  it("strictly parses the dedicated verifier result", () => {
+    expect(parseSevereVerifierOutput({ verdict: "confirm", confidence: 0.7 })).toEqual({ verdict: "confirm", confidence: 0.7 });
+    for (const invalid of [
+      { verdict: "confirm" },
+      { verdict: "confirm", confidence: 0.7, extra: true },
+      { verdict: "confirm", confidence: Number.NaN },
+      { verdict: "confirm", confidence: 1.1 },
+      { verdict: "maybe", confidence: 0.7 }
+    ]) expect(() => parseSevereVerifierOutput(invalid)).toThrow("severe_verifier_schema_invalid");
   });
 });
