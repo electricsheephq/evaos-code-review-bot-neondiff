@@ -37,9 +37,9 @@ function canonicalRecords(rawRecords) {
       const target = text(parts[2], "symlink target");
       if (parts.length !== 3 || target.startsWith("/") || target.includes("\\")) fail("symlink target is malformed");
       const resolved = posix.normalize(posix.join(posix.dirname(path), target));
-      if (resolved === ".." || resolved.startsWith("../")) fail("symlink escapes bundle root");
+      if (resolved !== "NeonDiff.app" && !resolved.startsWith("NeonDiff.app/")) fail("symlink escapes app root");
     }
-    if (type === "file" && (parts.length !== 5 || !["-", "x"].includes(parts[2]) || !Number.isSafeInteger(parts[3]) || parts[3] < 0 || !SHA256.test(parts[4]))) fail("file tree record is malformed");
+    if (type === "file" && (parts.length !== 5 || !["-", "x"].includes(parts[2]) || !Number.isSafeInteger(parts[3]) || parts[3] < 0 || typeof parts[4] !== "string" || !SHA256.test(parts[4]))) fail("file tree record is malformed");
     return parts;
   });
   if (records[0][0] !== "dir" || records[0][1] !== "NeonDiff.app" || records.some((record) => record[1] !== "NeonDiff.app" && !record[1].startsWith("NeonDiff.app/"))) fail("tree does not describe the required app bundle");
@@ -47,7 +47,7 @@ function canonicalRecords(rawRecords) {
 }
 function treeHash(records) {
   const digest = createHash("sha256");
-  for (const record of canonicalRecords(records)) for (const part of record) { digest.update(String(part), "utf8"); digest.update("\0"); }
+  for (const record of canonicalRecords(records)) { for (const part of record) { digest.update(String(part), "utf8"); digest.update("\0"); } digest.update("\n"); }
   return digest.digest("hex");
 }
 function freeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.values(value).forEach(freeze); Object.freeze(value); } return value; }

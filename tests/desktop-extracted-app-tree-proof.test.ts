@@ -25,6 +25,7 @@ describe("authenticated extracted app-tree proof", () => {
     const second = buildExtractedAppTreeProof(fixture());
     expect(first).toEqual(second);
     expect(first.algorithm).toBe("sha256-tree-v1");
+    expect(first.treeSHA256).toBe("962e947f4cc77ba95d402ae8f9a8762bd2ba7bb7588b63243115d8d8688e11ed");
     expect(first.treeSHA256).toBe(treeProofDigest(records));
     expect(serializeExtractedAppTreeProof(first)).toBe(serializeExtractedAppTreeProof(second));
     expect(extractedAppTreeProofDigest(first)).toMatch(/^[a-f0-9]{64}$/);
@@ -38,7 +39,9 @@ describe("authenticated extracted app-tree proof", () => {
     ["mode", (value: any) => { value.records[2][2] = "rw"; }],
     ["size", (value: any) => { value.records[2][3] = -1; }],
     ["byte digest", (value: any) => { value.records[2][4] = "not-a-sha"; }],
+    ["non-primitive byte digest", (value: any) => { value.records[2][4] = ["b".repeat(64)]; }],
     ["escaping symlink", (value: any) => { value.records.splice(2, 0, ["link", "NeonDiff.app/Contents/Current", "../../../../outside"]); }],
+    ["symlink outside app root", (value: any) => { value.records.push(["link", "NeonDiff.app/escape", "../outside"]); }],
     ["bundle marker", (value: any) => { value.bundleMarkers.bundleID = "other.bundle"; }],
     ["source binding", (value: any) => { value.sourceSHA = "not-a-source-sha"; }],
     ["artifact binding", (value: any) => { value.artifactSHA256 = "not-an-artifact-sha"; }]
