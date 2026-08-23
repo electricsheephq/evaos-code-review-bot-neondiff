@@ -421,81 +421,20 @@ A local config path, launchd label, App ID, or repository name by itself is not
 authority. Suspended, revoked, pending, mismatched, or server-unrecognized bots
 remain in setup/recovery and fail closed.
 
-### Update an existing local worker
+### Operate and update the native Desktop worker
 
-The Mac app checks the exact discovered worker's `review-pr` help contract
-before enabling **Run Dry Review**. A package version alone is not sufficient:
-older and compatible technical-beta workers may both report `1.0.4`.
+Customers use only NeonDiff Desktop for the signed native worker path. In
+Overview, use **Preview Start**, then **Install & Start** (or **Start/Restart**),
+and read the resulting status there. Use **Check for Updates** for an accepted
+signed/notarized Desktop release. Do not substitute the legacy CLI worker
+installer, a source checkout, or a hand-written LaunchAgent.
 
-If Overview shows **Worker update required**:
-
-1. Do not run or retry a live review from another terminal. The dry-to-live
-   approval contract is not proven for that worker.
-2. Choose **Install / Update Local Worker**. Use only the outer worker bundle
-   ZIP named in the same immutable GitHub prerelease and release manifest as the
-   installed app. Before extracting it, compare the bundle ZIP SHA-256 with the
-   prerelease notes. After extraction, compare the release manifest SHA-256 with
-   the prerelease notes, then compare the inner `.tgz` tarball SHA-256 with both
-   the release manifest and the prerelease notes. Do not use an unpinned `main`
-   checkout or trust the ambiguous `1.0.4` version string.
-3. Confirm `node --version` reports Node.js 26 or newer. From the extracted
-   directory, preview the checksum-bound migration using the exact LaunchAgent
-   label shown in NeonDiff Settings. The installer requires absolute artifact
-   paths:
-
-   ```bash
-   BUNDLE_DIR="$(pwd -P)"
-   node install-b0-worker-candidate.mjs update \
-     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
-     --manifest-sha256 <manifest-sha256-from-release> \
-     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
-     --launchd-label <existing-label> \
-     --dry-run true
-   ```
-
-4. Inspect the public-safe preview, then repeat it with
-   `--dry-run false --confirm true`. The installer verifies the tarball before
-   mutation, freshly reinstalls an unreferenced leftover from that exact
-   artifact instead of executing it, and installs into a versioned user-owned
-   Application Support prefix,
-   preserves the existing config, LaunchAgent label/environment, GitHub App key
-   file, Keychain entries, provider state, and repository allowlist, and
-   restarts the same LaunchAgent only when it was already loaded. It never reads
-   or copies private-key bytes. Each LaunchAgent label has an isolated worker
-   version, rollback state, and install lock. A lock owned by a process that no
-   longer exists is recovered automatically; a lock with missing or invalid
-   owner metadata fails closed and must be handled with NeonDiff support. When
-   `/opt/homebrew/bin/node` or `/usr/local/bin/node` resolves to the Node runtime
-   executing the installer, that stable command is retained in the LaunchAgent
-   rather than its versioned package-manager target.
-5. Return to Overview and choose **Retry Worker Check**. Dry review stays
-   disabled until the exact installed worker advertises both config-revision
-   approval and the matching ZCode provider path.
-
-The first checksum-managed migration has no trusted prior candidate, so it
-fails closed instead of restoring the unbound original LaunchAgent invocation.
-Retain every verified worker bundle. After installing a later candidate,
-preview rollback from the complete prior bundle:
-
-```bash
-BUNDLE_DIR="$(pwd -P)"
-node install-b0-worker-candidate.mjs rollback \
-  --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.PRIOR-b0-candidate-manifest.json" \
-  --manifest-sha256 <prior-manifest-sha256-from-release> \
-  --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.PRIOR.tgz" \
-  --launchd-label <existing-label> \
-  --dry-run true
-```
-
-Rollback also requires `--dry-run false --confirm true`. It verifies that the
-supplied prior artifacts match the recorded prior candidate, installs them
-through fresh staging, and then switches atomically without executing or
-overwriting either pre-existing candidate tree or touching customer secrets.
-
-Until an immutable GitHub prerelease and release manifest name a compatible
-worker artifact, this state is a release blocker rather than a prompt to repair
-source files manually.
-The app's own Sparkle update does not update an external local worker.
+Rollback is available only when the release owner has published and verified a
+signed last-known-good rollback feed. It must preserve the selected account,
+bot, config, `state/reviews.sqlite`, Keychain items, and exactly one worker pair.
+If that feed and its installed rollback receipt do not exist, stop; manual
+rollback is not a supported customer action. See
+[Native Desktop customer adoption](../apps/neondiff-desktop/docs/customer-adoption.md).
 
 ## 4. Check Readiness
 
