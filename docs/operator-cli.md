@@ -4,6 +4,11 @@ The bot has a JSON-first operator CLI for humans, manager agents, and reviewer
 agents. It is the preferred way to answer runtime questions before touching
 launchd, SQLite, or GitHub state by hand.
 
+For the legacy LaunchAgent's absolute config/database coordinates and the
+separate native Desktop account/bot contract, see
+[legacy-cli-boundary.md](legacy-cli-boundary.md). Relative examples below are
+CLI-first examples; they do not identify a native Desktop bot.
+
 Run commands from the repository checkout:
 
 ```bash
