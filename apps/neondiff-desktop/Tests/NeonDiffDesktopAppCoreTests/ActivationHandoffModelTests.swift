@@ -128,6 +128,16 @@ import NeonDiffDesktopCore
         #expect(model.activationState == .keyReady)
     }
 
+    @Test func legacyPublicFreeSkipRestoresAsPaidBYOEntry() {
+        let prefs = MemoryPreferences()
+        prefs.set(ActivationState.publicFreeSkip.rawValue, forKey: activationStateKey)
+        let model = makeModel(preferences: prefs, productionBoundary: .testAccountLink)
+
+        #expect(model.activationState == .purchaseRequired)
+        #expect(prefs.string(forKey: activationStateKey) == ActivationState.purchaseRequired.rawValue)
+        #expect(model.activationPresentation.requiresKeyEntry)
+    }
+
     @Test func publicPathSkipsWithoutLicenseUI() {
         let model = makeModel(productionBoundary: .testManaged)
         model.enterActivation(for: .publicReposOnly)

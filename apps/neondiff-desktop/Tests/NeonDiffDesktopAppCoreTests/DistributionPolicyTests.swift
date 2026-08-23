@@ -37,4 +37,11 @@ import NeonDiffDesktopCore
     @Test func managedPublicFreeIsUnavailableUntilManagedMilestone() {
         #expect(DesktopDistributionPolicyBoundary.evaluate(policy: .managed, visibility: .public, proof: completeProof) == .blocked(reason: .managedPublicFreeUnavailable))
     }
+
+    @Test func legacyPublicFreeRestoreIsOnlyPreservedForManagedPolicy() {
+        #expect(DesktopDistributionPolicyBoundary.migrateRestoredActivationState(.publicFreeSkip, policy: .managed) == .publicFreeSkip)
+        for policy in [DesktopDistributionPolicy.byo, .mixed, .unavailable] {
+            #expect(DesktopDistributionPolicyBoundary.migrateRestoredActivationState(.publicFreeSkip, policy: policy) == .purchaseRequired)
+        }
+    }
 }

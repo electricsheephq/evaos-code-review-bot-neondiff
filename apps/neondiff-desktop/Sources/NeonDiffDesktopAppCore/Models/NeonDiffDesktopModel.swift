@@ -860,7 +860,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
         // touching the Keychain on the launch path (v1.0.3 startup-stability rule).
         if let rawActivationState = dependencies.preferences.string(forKey: activationStateKey),
            let restored = ActivationState(rawValue: rawActivationState) {
-            self.activationState = restored
+            let migrated = DesktopDistributionPolicyBoundary.migrateRestoredActivationState(
+                restored,
+                policy: dependencies.productionBoundary.distributionPolicy
+            )
+            self.activationState = migrated
+            if migrated != restored {
+                dependencies.preferences.set(migrated.rawValue, forKey: activationStateKey)
+            }
         } else {
             self.activationState = ActivationStateMachine.initialState
         }

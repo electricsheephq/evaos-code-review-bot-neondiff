@@ -44,6 +44,10 @@ package enum DesktopDistributionPolicyBoundary {
         return proof.isComplete ? .allowed : .blocked(reason: .activeExactEntitlementRequired)
     }
 
+    package static func migrateRestoredActivationState(_ state: ActivationState, policy: DesktopDistributionPolicy) -> ActivationState {
+        state == .publicFreeSkip && policy != .managed ? .purchaseRequired : state
+    }
+
     // Visibility must be broker-authoritative; managed public-free is not in GA.
     package static func evaluate(policy: DesktopDistributionPolicy, visibility: GitHubBrokerRepositoryVisibility?, proof: DesktopBYOActivationProof) -> DesktopDistributionAccess {
         guard let visibility, visibility != .unknown else { return .blocked(reason: .visibilityUnavailable) }
