@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_SEVERE_VERIFICATION_RECEIPT_BYTES,
+  parseSevereVerificationReceipt,
   parseSerializedSevereVerificationReceipt
 } from "../src/severe-verification-receipt-parser.js";
 
@@ -19,6 +20,13 @@ describe("serialized severe receipt parser", () => {
       expect(parsed).toEqual(receipt());
       expect(parsed).not.toBe(input);
     }
+    const first = parseSerializedSevereVerificationReceipt(serialized());
+    const second = parseSerializedSevereVerificationReceipt(serialized());
+    expect(first.evidence).not.toBe(second.evidence);
+    expect(first.evidence.files).not.toBe(second.evidence.files);
+    first.evidence.files[0].path = "changed";
+    expect(second.evidence.files[0].path).toBe("src/🧪.ts");
+    expect(parseSevereVerificationReceipt(serialized())).toEqual(receipt());
   });
 
   it("rejects duplicate decoded keys before parsing and accepts ordinary JSON whitespace", () => {
@@ -46,5 +54,12 @@ describe("serialized severe receipt parser", () => {
     expect(() => parseSerializedSevereVerificationReceipt(accessor)).toThrow("serialized_input");
     const iterator = new Uint8Array(); Object.defineProperty(iterator, Symbol.iterator, { value() { throw new Error("trap"); } });
     expect(() => parseSerializedSevereVerificationReceipt(iterator)).toThrow("serialized_input");
+  });
+
+  it("rejects excessive nesting, trailing content, and oversized strings", () => {
+    const deep = `${"[".repeat(300)}1${"]".repeat(300)}`;
+    expect(() => parseSerializedSevereVerificationReceipt(deep)).toThrow("depth");
+    expect(() => parseSerializedSevereVerificationReceipt(`${serialized()}{}`)).toThrow("malformed");
+    expect(() => parseSerializedSevereVerificationReceipt("x".repeat(MAX_SEVERE_VERIFICATION_RECEIPT_BYTES + 1))).toThrow("cap");
   });
 });

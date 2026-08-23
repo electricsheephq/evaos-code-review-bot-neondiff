@@ -3,6 +3,8 @@ import { type SevereVerificationReceipt, compileSevereVerificationReceiptSchema 
 export const MAX_SEVERE_VERIFICATION_RECEIPT_BYTES = 512 * 1024;
 const MAX_JSON_DEPTH = 256;
 const validate = compileSevereVerificationReceiptSchema();
+const encoder = new TextEncoder();
+const decoder = new TextDecoder("utf-8", { fatal: true });
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const intrinsicByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength")!.get!;
 const intrinsicByteOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset")!.get!;
@@ -23,8 +25,8 @@ export const parseSevereVerificationReceipt = parseSerializedSevereVerificationR
 
 function decodeInput(input: unknown): string {
   if (typeof input === "string") {
-    if (Buffer.byteLength(input, "utf8") > MAX_SEVERE_VERIFICATION_RECEIPT_BYTES) reject("cap_exceeded");
-    const encoded = new TextEncoder().encode(input);
+    if (input.length > MAX_SEVERE_VERIFICATION_RECEIPT_BYTES) reject("cap_exceeded");
+    const encoded = encoder.encode(input);
     if (encoded.byteLength > MAX_SEVERE_VERIFICATION_RECEIPT_BYTES) reject("cap_exceeded");
     const text = decodeUtf8(encoded);
     if (text !== input) reject("unicode");
@@ -52,8 +54,8 @@ function isIntrinsicByteArray(input: unknown): input is Uint8Array {
   } catch { return false; }
 }
 function hostileOwnProperties(input: Uint8Array): boolean {
-  return Reflect.ownKeys(input).some((key) => {
-    if (typeof key === "string" && /^\d+$/.test(key)) return false;
+  const keys: (string | symbol)[] = ["byteLength", "byteOffset", "buffer", "length", "constructor", "set", "subarray", "slice", "valueOf", "toString", ...Object.getOwnPropertySymbols(input)];
+  return keys.some((key) => {
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
     return Boolean(descriptor && (descriptor.get || descriptor.set || typeof descriptor.value === "function"));
   });
@@ -61,14 +63,14 @@ function hostileOwnProperties(input: Uint8Array): boolean {
 
 function decodeUtf8(bytes: Uint8Array): string {
   if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) reject("bom");
+  let text: string;
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    if (text.startsWith("\uFEFF")) reject("bom");
-    return text;
-  } catch (error) {
-    if (error instanceof Error && error.message === "severe_receipt_bom") throw error;
+    text = decoder.decode(bytes);
+  } catch {
     return reject("utf8");
   }
+  if (text.startsWith("\uFEFF")) reject("bom");
+  return text;
 }
 
 class JsonScanner {
@@ -129,5 +131,5 @@ class JsonScanner {
 function scalar(value: string): boolean { for (let i = 0; i < value.length; i++) { const code = value.charCodeAt(i); if (code >= 0xd800 && code <= 0xdbff) { const next = value.charCodeAt(++i); if (next < 0xdc00 || next > 0xdfff) return false; } else if (code >= 0xdc00 && code <= 0xdfff) return false; } return true; }
 function scanJson(text: string): void { new JsonScanner(text).scan(); }
 function copyReceipt(source: SevereVerificationReceipt): SevereVerificationReceipt {
-  return { schemaVersion: source.schemaVersion, repo: source.repo, pullNumber: source.pullNumber, baseSha: source.baseSha, headSha: source.headSha, findingFingerprint: source.findingFingerprint, state: source.state, disposition: source.disposition, ...(source.confidence === undefined ? {} : { confidence: source.confidence }), ...(source.reasonCode === undefined ? {} : { reasonCode: source.reasonCode }), evidence: { files: source.evidence.files.map((file) => ({ ...file })), omitted: source.evidence.omitted.map((item) => ({ ...item })), complete: source.evidence.complete } };
+  return { schemaVersion: source.schemaVersion, repo: source.repo, pullNumber: source.pullNumber, baseSha: source.baseSha, headSha: source.headSha, findingFingerprint: source.findingFingerprint, state: source.state, disposition: source.disposition, ...(source.confidence === undefined ? {} : { confidence: source.confidence }), ...(source.reasonCode === undefined ? {} : { reasonCode: source.reasonCode }), evidence: { files: source.evidence.files.map((file) => ({ path: file.path, kind: file.kind, sha256: file.sha256, bytes: file.bytes, complete: file.complete })), omitted: source.evidence.omitted.map((item) => ({ path: item.path, code: item.code })), complete: source.evidence.complete } };
 }
