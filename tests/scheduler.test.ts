@@ -3246,7 +3246,7 @@ describe("provider-aware review scheduler", () => {
     });
     const github = {
       ...githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), new Map(), statusCalls),
-      listIssueComments: async () => { throw new Error("uncapped reader must not run"); },
+      listIssueComments: async () => [],
       listIssueCommentsForEnrichment: async () => truncatedEvidence
     };
     let reviewCalls = 0;
@@ -3275,6 +3275,9 @@ describe("provider-aware review scheduler", () => {
     expect(state.getReviewReadiness("org/repo-a", 1, HEAD_B)).toMatchObject({ state: "ready_for_human", reason: "comment_review_posted" });
     state.close();
   });
+
+  it("admits an explicit review command found beyond bounded evidence pages", async () => { const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-page-six-command-")); roots.push(root); const config = schedulerConfig(root, ["org/repo-a"]); config.commands = { enabled: true, botMentions: ["@evaos-code-review-bot"], trustedAuthors: ["100yenadmin"], acknowledge: false }; const state = new ReviewStateStore(config.statePath); const comments = [...Array.from({ length: 500 }, (_unused, index) => comment(index + 1, "other", "ordinary discussion")), comment(501, "100yenadmin", "@evaos-code-review-bot review")]; const bounded = Object.assign(comments.slice(0, 500), { items: comments.slice(0, 500), rawCount: 500, truncated: true, overflow: true }); let reads = "", reviewCalls = 0;
+    const result = await runScheduledCycleWithDeps({ config, state, github: { ...githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]])), listIssueCommentsForEnrichment: async () => { reads += "b"; return bounded; }, listIssueComments: async () => { reads += "u"; return comments; } }, options: { dryRun: false, useZCode: false }, reviewPullImpl: async ({ state: s, repo, pull: p }) => { reviewCalls += 1; s.recordProcessed({ repo, pullNumber: p.number, headSha: p.head.sha, status: "posted", event: "COMMENT" }); return "reviewed_command"; } }); expect(reads).toBe("bu"); expect(result).toMatchObject({ reviewed: 1, commandReviewRequested: 1, commandFetchErrors: 0 }); expect(result.queue).toMatchObject({ enqueued: 1, leased: 1, failedQueueJobs: 0, remainingQueued: 0 }); expect(reviewCalls).toBe(1); state.close(); });
 
   it("allows scoped trusted commands for activation-baselined heads", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-baseline-scoped-"));

@@ -1246,6 +1246,7 @@ async function resolveSchedulerCommandDecision(input: {
 }): Promise<SchedulerCommandDecision> {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
+  let boundedEvidenceIncomplete = false;
   try {
     let boundedEvidence: BoundedGithubList<IssueCommentCommandSource> | undefined;
     if (input.github.listIssueCommentsForEnrichment) {
@@ -1255,13 +1256,11 @@ async function resolveSchedulerCommandDecision(input: {
         // Keep the uncapped command reader as the source of truth when the optional evidence read is unavailable.
       }
     }
-    if (boundedEvidence?.truncated || boundedEvidence?.overflow) {
-      input.onCommandFetchError?.();
-      return { action: "none", shouldReview: false, blocked: "required_evidence_incomplete" };
-    }
+    boundedEvidenceIncomplete = Boolean(boundedEvidence?.truncated || boundedEvidence?.overflow);
     comments = await input.github.listIssueComments(input.repo, input.pull.number);
   } catch {
     input.onCommandFetchError?.();
+    if (boundedEvidenceIncomplete) return { action: "none", shouldReview: false, blocked: "required_evidence_incomplete" };
     return { action: "none", shouldReview: false };
   }
   const collected = collectTrustedReviewCommands(comments, input.config.commands);
@@ -1317,7 +1316,7 @@ async function resolveSchedulerCommandDecision(input: {
       author: requestChanges.author
     });
   }
-  return decideCommandAction({
+  const commandDecision = decideCommandAction({
     commands: authorizedCommands.filter((command) =>
       !isFinishingTouchCommandAction(command.action) ||
       (repoProfile.allowed && isFinishingTouchActionEnabled(command.action, repoProfile.profile.finishingTouches))
@@ -1328,6 +1327,11 @@ async function resolveSchedulerCommandDecision(input: {
     hasProcessedCommand: (repo, pullNumber, headSha, commentId) =>
       input.state.hasProcessedCommand(repo, pullNumber, headSha, commentId)
   });
+  if (boundedEvidenceIncomplete && !commandDecision.shouldReview) {
+    input.onCommandFetchError?.();
+    return { action: "none", shouldReview: false, blocked: "required_evidence_incomplete" };
+  }
+  return commandDecision;
 }
 
 function latestPendingRequestChanges(input: {
