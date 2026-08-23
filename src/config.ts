@@ -5,6 +5,7 @@ import { DEFAULT_CONTEXT_BUDGET_CONFIG, type ContextBudgetConfig } from "./conte
 import type { EnrichmentConfig } from "./enrichment.js";
 import type { GitNexusContextConfig } from "./gitnexus-context.js";
 import type { GitHubRelatedContextConfig } from "./github-related-context.js";
+import { normalizeGitHubBotLogin } from "./github.js";
 import { DEFAULT_ISSUE_ENRICHMENT_CONFIG, type IssueEnrichmentConfig } from "./issue-enrichment.js";
 import { resolveEnvAlias } from "./env-alias.js";
 import type { LicenseConfig } from "./license.js";
@@ -644,6 +645,10 @@ export function loadConfigFromObject(fromFile: unknown): BotConfig {
     valueLabel: "github.privateKeyPath"
   }) ?? merged.github.privateKeyPath;
   merged.github.token = process.env.GITHUB_TOKEN ?? merged.github.token;
+  if (merged.github.botLogin !== undefined) {
+    const normalizedBotLogin = normalizeGitHubBotLogin(merged.github.botLogin); if (!normalizedBotLogin) throw new Error("config.github.botLogin must be a valid GitHub App slug or <slug>[bot]");
+    merged.github.botLogin = normalizedBotLogin;
+  }
   validateConfig(merged);
   applyRuntimeGitHubCredentials(merged.github);
 

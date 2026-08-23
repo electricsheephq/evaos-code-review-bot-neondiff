@@ -15,6 +15,31 @@ describe("GitHub App read authentication", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("normalizes slug and slug[bot] forms, while omission cannot accept a wrong App", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-identity-config-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    let tokenRequests = 0;
+    globalThis.fetch = vi.fn(async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/repos/owner/repo/installation")) return jsonResponse({ ...canonicalInstallation(), app_slug: "Customer-Review-App" });
+      if (requestUrl.includes("/access_tokens")) {
+        tokenRequests += 1;
+        return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (requestUrl.endsWith("/repos/owner/repo")) return jsonResponse({ full_name: "owner/repo", private: false });
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    await new GitHubApi({ appId: "4184532", privateKeyPath, botLogin: " customer-review-app " }).getRepo("owner/repo");
+    expect(tokenRequests).toBe(1);
+    tokenRequests = 0;
+    await expect(new GitHubApi({ appId: "4184532", privateKeyPath }).getRepo("owner/repo")).rejects.toThrow();
+    expect(tokenRequests).toBe(0);
+  });
+
   it("uses installation tokens for PR read calls when App credentials are configured", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-read-"));
     roots.push(root);
@@ -261,7 +286,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 999, app_slug: "customer-review-app" });
+        return jsonResponse({ id: 123 });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -285,9 +310,12 @@ describe("GitHub App read authentication", () => {
       visibility_source: "repository_api",
       installation_id_present: true,
       installation_id: 123,
+      installation_account_id: 7,
+      installation_account_type: "User",
       installation_account: "owner",
-      app_id: 999,
-      app_slug: "customer-review-app",
+      app_id: 4184532,
+      app_slug: "evaos-code-review-bot",
+      bot_login: "evaos-code-review-bot[bot]",
       app_can_read_metadata: true,
       app_can_read_pull_requests: true,
       openPullCount: 1
@@ -303,7 +331,7 @@ describe("GitHub App read authentication", () => {
     const privateKeyPath = join(root, "app.pem");
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
-    const valid = { id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" };
+    const valid = canonicalInstallation();
     const cases: Array<{ name: string; installation: unknown }> = [
       { name: "missing installation id", installation: { ...valid, id: undefined } },
       { name: "null installation id", installation: { ...valid, id: null } },
@@ -315,6 +343,11 @@ describe("GitHub App read authentication", () => {
       { name: "wrong-type App id", installation: { ...valid, app_id: "4184532" } },
       { name: "non-positive App id", installation: { ...valid, app_id: -1 } },
       { name: "missing account", installation: { ...valid, account: undefined } },
+      { name: "missing account id", installation: { ...valid, account: { login: "owner", type: "User" } } },
+      { name: "missing account type", installation: { ...valid, account: { id: 7, login: "owner" } } },
+      { name: "wrong account id type", installation: { ...valid, account: { id: "7", login: "owner", type: "User" } } },
+      { name: "wrong account type", installation: { ...valid, account: { id: 7, login: "owner", type: "Bot" } } },
+      { name: "wrong repository owner", installation: { ...valid, account: { id: 7, login: "victim", type: "User" } } },
       { name: "missing account login", installation: { ...valid, account: {} } },
       { name: "null account login", installation: { ...valid, account: { login: null } } },
       { name: "wrong-type account login", installation: { ...valid, account: { login: 42 } } },
@@ -343,6 +376,49 @@ describe("GitHub App read authentication", () => {
       });
       expect(calls, scenario.name).toHaveLength(1);
     }
+  });
+
+  it.each(["accessor", "proxy"])("rejects %s installation responses before token exchange", async (shape) => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-hostile-installation-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    let tokenRequests = 0;
+    const installation = shape === "accessor"
+      ? Object.defineProperty(canonicalInstallation(), "id", { get: () => 123 })
+      : new Proxy(canonicalInstallation(), {});
+    globalThis.fetch = vi.fn(async (url) => String(url).endsWith("/repos/owner/repo/installation")
+      ? { ok: true, status: 200, statusText: "OK", json: async () => installation, text: async () => "" } as Response
+      : (String(url).includes("/access_tokens") ? (++tokenRequests, jsonResponse({ message: "must not mint" }, 500)) : jsonResponse({ message: "unexpected" }, 404))) as typeof fetch;
+
+    await expect(new GitHubApi({ appId: "4184532", privateKeyPath }).getRepo("owner/repo")).rejects.toThrow();
+    expect(tokenRequests).toBe(0);
+  });
+
+  it("re-runs the resolver on refresh and rejects a rotated installation before mint", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-rotated-installation-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    let installationCalls = 0;
+    let tokenRequests = 0;
+    globalThis.fetch = vi.fn(async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation({ id: ++installationCalls === 1 ? 123 : 456 }));
+      if (requestUrl.includes("/access_tokens")) {
+        tokenRequests += 1;
+        return jsonResponse({ token: "installation-token", expires_at: "2000-01-01T00:00:00Z" });
+      }
+      return requestUrl.endsWith("/repos/owner/repo") ? jsonResponse({ full_name: "owner/repo", private: false }) : jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    await expect(github.getRepo("owner/repo")).resolves.toMatchObject({ full_name: "owner/repo" });
+    await expect(github.getRepo("owner/repo")).rejects.toThrow(/identity changed/);
+    expect(installationCalls).toBe(2);
+    expect(tokenRequests).toBe(1);
   });
 
   it("classifies App install-scope and visibility lookup failures without treating them as public", async () => {
@@ -480,7 +556,7 @@ describe("GitHub App read authentication", () => {
       const redirect = init?.redirect;
       calls.push({ url: requestUrl, method, redirect });
       if (requestUrl.endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
+        return jsonResponse({ id: 123 });
       }
       if (requestUrl.endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -830,17 +906,28 @@ describe("GitHub App read authentication", () => {
 });
 
 function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
-  return new Response(JSON.stringify(body), {
+  const payload = body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 1 && (body as { id?: unknown }).id === 123 ? canonicalInstallation() : body;
+  return new Response(JSON.stringify(payload), {
     status,
     statusText,
     headers: { "Content-Type": "application/json" }
   });
 }
 
+function canonicalInstallation(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 123,
+    app_id: 4184532,
+    account: { id: 7, login: "owner", type: "User" },
+    app_slug: "evaos-code-review-bot",
+    ...overrides
+  };
+}
+
 function installThenTokenThen(handler: (url: string) => Response): (url: string) => Response {
   return (url: string) => {
     if (url.endsWith("/repos/owner/repo/installation")) {
-      return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
+      return jsonResponse(canonicalInstallation());
     }
     if (url.endsWith("/app/installations/123/access_tokens")) {
       return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
