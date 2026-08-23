@@ -340,6 +340,7 @@ describe("daemon cycle resilience", () => {
 
   it("refreshes the active heartbeat with bounded issue-enrichment progress", async () => {
     const heartbeats: string[] = [];
+    const heartbeatStarts: string[] = [];
     const stdout: string[] = [];
     const timerCallbacks: Array<() => void> = [];
     const timerSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((callback) => (timerCallbacks.push(callback as () => void), 1 as never));
@@ -360,7 +361,10 @@ describe("daemon cycle resilience", () => {
         options.onProgress?.({ stage: "analysis", phase: "complete", count: 1 });
         return successfulIssueEnrichmentCycleResult();
       },
-      recordHeartbeatImpl: (event) => heartbeats.push(event),
+      recordHeartbeatImpl: (event, _error, recordedAt) => {
+        heartbeats.push(event);
+        if (event === "daemon_cycle_start" && recordedAt) heartbeatStarts.push(recordedAt.toISOString());
+      },
       stdout: (line) => stdout.push(line),
       stderr: () => undefined
     });
@@ -370,6 +374,7 @@ describe("daemon cycle resilience", () => {
 
     expect(result.ok).toBe(true);
     expect(heartbeats).toEqual(["daemon_cycle_start", "daemon_cycle_start", "daemon_cycle_start", "daemon_cycle_start", "daemon_cycle_complete"]);
+    expect(new Set(heartbeatStarts).size).toBe(1);
     const progress = stdout.map((line) => JSON.parse(line)).filter((line) => line.event === "daemon_issue_enrichment_progress");
     expect(progress).toEqual([
       expect.objectContaining({ stage: "analysis", phase: "start", count: 10_000 }),
