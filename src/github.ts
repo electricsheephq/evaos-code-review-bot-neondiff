@@ -18,6 +18,7 @@ export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
  */
 const MAX_REVIEW_COMMENT_PAGES = 5;
 const MAX_ISSUE_COMMENT_PAGES = 5;
+const MAX_ISSUE_LABEL_EVENT_PAGES = 5;
 export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
 /** Array-compatible metadata for bounded GitHub reads. `rawCount` is the count before downstream filters. */
@@ -417,7 +418,7 @@ export class GitHubApi {
     });
   }
 
-  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
+  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedGithubList<{
     event?: string;
     created_at?: string;
     actor?: { login?: string | null } | null;
@@ -435,8 +436,10 @@ export class GitHubApi {
         { token: await this.getReadToken(repo) }
       );
       events.push(...chunk);
-      if (chunk.length < 100) return events;
+      if (chunk.length < 100) return boundedGithubList(events, false);
+      if (page === MAX_ISSUE_LABEL_EVENT_PAGES) return boundedGithubList(events, true);
     }
+    return boundedGithubList(events, true);
   }
 
   async getCollaboratorPermission(

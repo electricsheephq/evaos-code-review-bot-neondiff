@@ -58,6 +58,30 @@ describe("bounded issue-comment pagination primitive", () => {
     expect(result.truncated).toBe(false);
     expect(result.overflow).toBe(false);
   });
+
+  it("bounds label-event reads and preserves short-page termination", async () => {
+    const pages: number[] = [];
+    globalThis.fetch = vi.fn(async (url) => {
+      const request = new URL(String(url));
+      const page = Number(request.searchParams.get("page"));
+      pages.push(page);
+      const events = page === 2 ? [{ event: "labeled" }] : Array.from({ length: 100 }, () => ({ event: "labeled" }));
+      return jsonResponse(events);
+    }) as typeof fetch;
+    const result = await new GitHubApi({ token: "fixture" }).listIssueLabelEvents("owner/repo", 738);
+    expect(pages).toEqual([1, 2]);
+    expect(result).toHaveLength(101);
+    expect(result.rawCount).toBe(101);
+    expect(result.truncated).toBe(false);
+    expect(result.overflow).toBe(false);
+
+    globalThis.fetch = vi.fn(async () => jsonResponse(Array.from({ length: 100 }, () => ({ event: "labeled" })))) as typeof fetch;
+    const overflow = await new GitHubApi({ token: "fixture" }).listIssueLabelEvents("owner/repo", 738);
+    expect(overflow).toHaveLength(500);
+    expect(overflow.rawCount).toBe(500);
+    expect(overflow.truncated).toBe(true);
+    expect(overflow.overflow).toBe(true);
+  });
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
