@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isProxy } from "node:util/types";
 
 export const SEVERE_EVIDENCE_SCHEMA = "severe-evidence/v2" as const;
 export const SEVERE_RECEIPT_SCHEMA = "severe-verifier-receipt/v2" as const;
@@ -114,12 +115,13 @@ export function idempotencyKey(value: unknown, expectedSubject: SevereHostSubjec
 
 function validateEvidence(value: Record<string, unknown>, subject: SevereHostSubject, state: SevereState, reason: SevereFailureCode | undefined): string[] {
   const errors: string[] = [];
-  if (!exact(value, ["schema", "files", "omissions", "complete"]) || value.schema !== SEVERE_EVIDENCE_SCHEMA || !Array.isArray(value.files) || !Array.isArray(value.omissions) || typeof value.complete !== "boolean") return ["evidence shape is invalid"];
-  if (value.files.length > MAX_SEVERE_ENTRIES || value.omissions.length > MAX_SEVERE_ENTRIES || value.files.length + value.omissions.length > MAX_SEVERE_ENTRIES) return ["evidence entry count is invalid"];
+  const fileItems = entries(value.files), omissionItems = entries(value.omissions);
+  if (!exact(value, ["schema", "files", "omissions", "complete"]) || value.schema !== SEVERE_EVIDENCE_SCHEMA || !fileItems || !omissionItems || typeof value.complete !== "boolean") return ["evidence shape is invalid"];
+  if (fileItems.length > MAX_SEVERE_ENTRIES || omissionItems.length > MAX_SEVERE_ENTRIES || fileItems.length + omissionItems.length > MAX_SEVERE_ENTRIES) return ["evidence entry count is invalid"];
   const files: SevereEvidenceFile[] = [];
   const seen = new Set<string>();
   let totalBytes = 0;
-  for (const item of value.files) {
+  for (const item of fileItems) {
     if (!direct(item) || !exact(item, ["path", "kind", "sha256", "bytes", "complete"], ["lineStart", "lineEnd"])) { errors.push("evidence file has unknown or missing keys"); continue; }
     if (!path(item.path) || !string(item.kind) || (item.kind !== "whole_file" && item.kind !== "module") || !sha256(item.sha256) || !integer(item.bytes) || item.bytes < 1 || item.bytes > MAX_SEVERE_FILE_BYTES || typeof item.complete !== "boolean") { errors.push("evidence file is invalid"); continue; }
     if (seen.has(item.path)) errors.push("duplicate or conflicting evidence path");
@@ -132,7 +134,7 @@ function validateEvidence(value: Record<string, unknown>, subject: SevereHostSub
     files.push(item as unknown as SevereEvidenceFile);
   }
   const omissions: SevereEvidenceOmission[] = [];
-  for (const item of value.omissions) {
+  for (const item of omissionItems) {
     if (!direct(item) || !exact(item, ["path", "code"]) || !path(item.path) || !string(item.code) || !CODES.has(item.code as SevereFailureCode)) { errors.push("evidence omission is invalid"); continue; }
     if (seen.has(item.path)) errors.push("file and omission evidence overlap");
     seen.add(item.path); omissions.push(item as unknown as SevereEvidenceOmission);
@@ -159,7 +161,7 @@ function omissionAllowed(state: SevereState, code: SevereFailureCode, reason: Se
 }
 function sameSubject(a: SevereHostSubject, b: SevereHostSubject): boolean { return SUBJECT_KEYS.every((key) => a[key as keyof SevereHostSubject] === b[key as keyof SevereHostSubject]); }
 function repo(value: unknown): value is string { if (!string(value) || !unicode(value)) return false; const parts = value.split("/"); return parts.length === 2 && parts.every((part) => /^[a-z0-9][a-z0-9._-]{0,99}$/.test(part) && part !== "." && part !== ".." && byteLength(part) <= 100); }
-function path(value: unknown): value is string { if (!string(value) || !unicode(value) || value.length === 0 || byteLength(value) > 4096 || value.startsWith("/") || /^[A-Za-z]:/.test(value) || /[\\\0\r\n\u0000-\u001f\u007f\u2028\u2029]/.test(value)) return false; return value.split("/").every((part) => part !== "." && part !== ".." && part.length > 0 && byteLength(part) <= 255); }
+function path(value: unknown): value is string { if (!string(value) || value.length === 0 || value.length > 4096 || !unicode(value) || byteLength(value) > 4096 || value.startsWith("/") || /^[A-Za-z]:/.test(value) || /[\\\0\r\n\u0000-\u001f\u007f\u0085\u2028\u2029]/.test(value)) return false; return value.split("/").every((part) => part !== "." && part !== ".." && part.length > 0 && byteLength(part) <= 255); }
 function unicode(value: string): boolean { for (let i = 0; i < value.length; i += 1) { const code = value.charCodeAt(i); if (code >= 0xd800 && code <= 0xdbff) { const next = value.charCodeAt(i + 1); if (next < 0xdc00 || next > 0xdfff) return false; i += 1; } else if (code >= 0xdc00 && code <= 0xdfff) return false; } return value.normalize("NFC") === value; }
 function sha1(value: unknown): value is string { return string(value) && SHA1.test(value); }
 function sha256(value: unknown): value is string { return string(value) && SHA256.test(value); }
@@ -169,8 +171,9 @@ function number(value: unknown): value is number { return typeof value === "numb
 function string(value: unknown): value is string { return typeof value === "string"; }
 function byteLength(value: string): number { return Buffer.byteLength(value, "utf8"); }
 function direct(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  if (typeof value !== "object" || value === null || isProxy(value) || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
   return Reflect.ownKeys(value).every((key) => typeof key === "string" && Object.getOwnPropertyDescriptor(value, key)?.enumerable === true && Object.hasOwn(Object.getOwnPropertyDescriptor(value, key)!, "value"));
 }
 function exact(value: Record<string, unknown>, required: string[], optional: string[] = []): boolean { const keys = Reflect.ownKeys(value); const allowed = new Set([...required, ...optional]); return required.every((key) => Object.hasOwn(value, key) && value[key] !== undefined) && keys.every((key) => typeof key === "string" && allowed.has(key)); }
-function canonical(value: unknown): string { if (Array.isArray(value)) return "[" + value.map(canonical).sort().join(",") + "]"; if (value && typeof value === "object") { const entries = Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0); return "{" + entries.map(([key, item]) => JSON.stringify(key) + ":" + canonical(item)).join(",") + "}"; } return JSON.stringify(value); }
+function entries(value: unknown): unknown[] | undefined { if (!Array.isArray(value) || isProxy(value) || value.length > MAX_SEVERE_ENTRIES) return; const keys = Reflect.ownKeys(value); if (keys.length !== value.length + 1 || !keys.includes("length")) return; for (let i = 0; i < value.length; i += 1) { const descriptor = Object.getOwnPropertyDescriptor(value, String(i)); if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) return; } return Array.from({ length: value.length }, (_, i) => Object.getOwnPropertyDescriptor(value, String(i))!.value); }
+function canonical(value: unknown): string { if (Array.isArray(value)) { const items = entries(value); if (!items) throw new Error("severe canonical array invalid"); return "[" + items.map(canonical).sort().join(",") + "]"; } if (value && typeof value === "object") { const object = value as Record<string, unknown>; const entries = Object.entries(object).filter(([, item]) => item !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0); return "{" + entries.map(([key, item]) => JSON.stringify(key) + ":" + canonical(item)).join(",") + "}"; } return JSON.stringify(value); }

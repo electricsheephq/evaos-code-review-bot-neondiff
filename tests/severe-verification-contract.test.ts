@@ -153,7 +153,7 @@ describe("severe verifier v2 contract", () => {
   });
 
   it("rejects Unicode line separators and paths over the UTF-8 byte cap", () => {
-    for (const separator of ["\u2028", "\u2029"]) {
+    for (const separator of ["\u0085", "\u2028", "\u2029"]) {
       const badPath = "src/" + separator + "record.ts";
       const badSubject = { ...subject, path: badPath };
       expect(isSevereVerificationReceipt(receipt({ subject: badSubject, evidence: evidence({ files: [file({ path: badPath })] }) }), badSubject)).toBe(false);
@@ -169,6 +169,33 @@ describe("severe verifier v2 contract", () => {
     const files = new Array(65) as Array<unknown>;
     Object.defineProperty(files, 0, { enumerable: true, get: () => { throw new Error("entry traversed"); } });
     expect(isSevereVerificationReceipt(receipt({ evidence: evidence({ files }) }), subject)).toBe(false);
+  });
+
+  it("rejects hostile array own keys and revoked or mutable proxies without throwing", () => {
+    const hiddenDuplicate = [file(), file({ sha256: "0".repeat(64) })];
+    Object.defineProperty(hiddenDuplicate, Symbol.iterator, { value: function* () { yield hiddenDuplicate[0]; } });
+    expect(isSevereVerificationReceipt(receipt({ evidence: evidence({ files: hiddenDuplicate }) }), subject)).toBe(false);
+
+    const overriddenMap = [file()];
+    Object.defineProperty(overriddenMap, "map", { value: () => [] });
+    expect(isSevereVerificationReceipt(receipt({ evidence: evidence({ files: overriddenMap }) }), subject)).toBe(false);
+
+    const sparse = new Array(1);
+    expect(isSevereVerificationReceipt(receipt({ evidence: evidence({ files: sparse }) }), subject)).toBe(false);
+    const accessor = [file()];
+    Object.defineProperty(accessor, "0", { enumerable: true, get: () => file() });
+    expect(isSevereVerificationReceipt(receipt({ evidence: evidence({ files: accessor }) }), subject)).toBe(false);
+
+    const revoked = Proxy.revocable(receipt(), {});
+    revoked.revoke();
+    expect(() => isSevereVerificationReceipt(revoked.proxy, subject)).not.toThrow();
+    expect(isSevereVerificationReceipt(revoked.proxy, subject)).toBe(false);
+
+    const mutable = new Proxy(receipt(), { get: (target, key, receiver) => {
+      if (key === "state") target.state = "refuted";
+      return Reflect.get(target, key, receiver);
+    } });
+    expect(isSevereVerificationReceipt(mutable, subject)).toBe(false);
   });
 
   it("binds the original finding fingerprint and every host coordinate", () => {
