@@ -497,6 +497,60 @@ worker artifact, this state is a release blocker rather than a prompt to repair
 source files manually.
 The app's own Sparkle update does not update an external local worker.
 
+### Legacy CLI/operator worker recovery
+
+This is an operator-only recovery path for an already verified checksum-managed
+worker. It is not the native Mac customer journey and is not a GA setup claim.
+After the checksum-bound `first-install` or `update` flow above succeeds, bind
+one private shell function to that worker's `current` target. Set the label and
+manifest digest from the same release receipt; do not substitute a global
+`neondiff` package or an unpinned checkout.
+
+```bash
+LEGACY_LABEL="<installed-launchd-label>"
+LEGACY_NODE="/opt/homebrew/bin/node" # or /usr/local/bin/node when approved
+LEGACY_WORKER="$HOME/Library/Application Support/NeonDiffDesktop/Workers/$LEGACY_LABEL/current"
+LEGACY_CLI="$LEGACY_WORKER/node_modules/neondiff/dist/src/cli.js"
+LEGACY_CONFIG="/absolute/path/to/config.local.json"
+LEGACY_MANIFEST_SHA256="<manifest-sha256-from-release>"
+
+neondiff_legacy() {
+  if [ ! -x "$LEGACY_NODE" ] || [ ! -f "$LEGACY_CLI" ] \
+    || [ ! -f "$LEGACY_WORKER/.neondiff-candidate-manifest.sha256" ] \
+    || [ "$(tr -d '\n' < "$LEGACY_WORKER/.neondiff-candidate-manifest.sha256")" != "$LEGACY_MANIFEST_SHA256" ]; then
+    echo "refusing an unverified legacy worker path" >&2
+    return 1
+  fi
+  "$LEGACY_NODE" "$LEGACY_CLI" "$@"
+}
+```
+
+Use that same function for the complete operator sequence, keeping config and
+artifact paths quoted when they contain spaces:
+
+```bash
+neondiff_legacy init --config "$LEGACY_CONFIG"
+neondiff_legacy doctor github --config "$LEGACY_CONFIG" --json
+neondiff_legacy providers list --config "$LEGACY_CONFIG" --json
+neondiff_legacy providers doctor --config "$LEGACY_CONFIG" --json
+security find-generic-password -s YOUR_APPROVED_SOURCE -w \
+  | neondiff_legacy license activate --config "$LEGACY_CONFIG" --license-key-stdin true --json
+neondiff_legacy license status --config "$LEGACY_CONFIG" --refresh true --json
+neondiff_legacy doctor --config "$LEGACY_CONFIG" --json
+neondiff_legacy review-pr --config "$LEGACY_CONFIG" --repo owner/name --pr 123 \
+  --expected-config-revision <verified-config-revision> --dry-run true --zcode true
+neondiff_legacy status --json --config "$LEGACY_CONFIG"
+neondiff_legacy runtime-inventory --json --config "$LEGACY_CONFIG"
+neondiff_legacy dashboard --operator true --config "$LEGACY_CONFIG" --limit 10
+```
+
+The function is private to the current shell: it adds no global `PATH` entry,
+creates or loads no LaunchAgent, and does not install or promote a daemon. Keep
+license keys on the approved stdin path; never place them in argv, config,
+environment, logs, or evidence. This sequence proves operator recovery only;
+it does not prove the native Desktop journey, GA readiness, release promotion,
+or customer readiness.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and
