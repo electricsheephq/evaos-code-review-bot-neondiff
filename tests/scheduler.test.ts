@@ -3528,6 +3528,16 @@ describe("provider-aware review scheduler", () => {
       acknowledge: false
     };
     const state = new ReviewStateStore(config.statePath);
+    state.recordReviewReadiness({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "old-head",
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old",
+      now: new Date("2026-06-30T00:00:00.000Z")
+    });
     const reviewed: string[] = [];
     const truncated = Object.assign([], { items: [], truncated: true, overflow: true });
     const result = await runScheduledCycleWithDeps({
@@ -3552,6 +3562,10 @@ describe("provider-aware review scheduler", () => {
     expect(result.commandFetchErrors).toBe(1);
     expect(result.failed).toBe(1);
     expect(reviewed).toEqual(["org/repo-b#1"]);
+    expect(state.getReviewReadiness("org/repo-a", 1, "old-head")).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted"
+    });
     expect(state.getReviewReadiness("org/repo-a", 1, "a1")).toBeUndefined();
     expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toHaveLength(0);
     state.close();

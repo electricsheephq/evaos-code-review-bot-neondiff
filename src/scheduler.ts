@@ -545,6 +545,7 @@ async function enqueuePullIfEligible(input: {
     return "skipped_draft";
   }
   if (!isCanaryAllowed(input.config, input.repo, input.pull.number)) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     recordReadinessTransition({
       state: input.state,
       repo: input.repo,
