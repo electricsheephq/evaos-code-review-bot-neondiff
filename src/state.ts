@@ -281,6 +281,14 @@ export interface ReviewQueueJobRecord {
   finishedAt?: string;
 }
 
+export interface ReviewQueuePostClaim {
+  jobId: string;
+  postKey: string;
+  leaseId: string;
+  reconcileRequired: boolean;
+  receipt?: string;
+}
+
 export interface ReviewReadinessRecord {
   repo: string;
   pullNumber: number;
@@ -732,6 +740,23 @@ export class ReviewStateStore {
         started_at text,
         finished_at text
       );
+
+      create table if not exists review_queue_quarantines (
+        repo text not null, pull_number integer not null, head_sha text not null,
+        reason text not null, created_at text not null, primary key (repo, pull_number, head_sha)
+      );
+
+      create table if not exists review_queue_post_claims (
+        job_id text not null, post_key text not null, lease_id text not null, claimed_at text not null,
+        reconcile_required integer not null default 0, receipt text, receipt_at text,
+        primary key (job_id, post_key)
+      );
+
+      create trigger if not exists reject_case_variant_quarantined_review_queue_job
+      before insert on review_queue_jobs
+      when exists (select 1 from review_queue_quarantines
+        where lower(repo) = lower(new.repo) and pull_number = new.pull_number and lower(head_sha) = lower(new.head_sha))
+      begin select raise(abort, 'review_queue_head_quarantined'); end;
 
       create index if not exists idx_review_queue_jobs_state_priority
         on review_queue_jobs (state, priority, created_at);
@@ -2555,6 +2580,12 @@ export class ReviewStateStore {
     return updated;
   }
 
+  private isReviewQueueHeadQuarantined(repo: string, pullNumber: number, headSha: string): boolean {
+    return Boolean(this.db.prepare(`select 1 from review_queue_quarantines
+      where lower(repo) = lower(?) and pull_number = ? and lower(head_sha) = lower(?)`)
+      .get(repo, pullNumber, headSha));
+  }
+
   enqueueReviewQueueJob(input: {
     repo: string;
     pullNumber: number;
@@ -2570,6 +2601,9 @@ export class ReviewStateStore {
     now?: Date;
   }): ReviewQueueEnqueueResult {
     validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, input.priority, input.commentId);
+    if (this.isReviewQueueHeadQuarantined(input.repo, input.pullNumber, input.headSha)) {
+      throw new Error("review_queue_head_quarantined");
+    }
     const nowIso = (input.now ?? new Date()).toISOString();
     const source = input.source ?? "automatic";
     const lane = input.lane ?? (source === "manual_command" ? "manual" : "background");
@@ -2681,7 +2715,8 @@ export class ReviewStateStore {
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
       const jobs = this.listReviewQueueJobs();
       const eligible = jobs
-        .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
+        .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso) &&
+          !this.isReviewQueueHeadQuarantined(job.repo, job.pullNumber, job.headSha))
         .sort(buildLeaseComparator(input.aging, nowIso));
       const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
       const active = [
@@ -2759,46 +2794,121 @@ export class ReviewStateStore {
     const existing = this.getReviewQueueJob(input.jobId);
     if (!existing) throw new Error(`No review queue job for jobId ${input.jobId}`);
     const nowIso = (input.now ?? new Date()).toISOString();
-    const terminal = isTerminalQueueState(input.state);
-    const clearLease = input.clearLease ?? (
-      terminal ||
-      input.state === "queued" ||
-      input.state === "provider_deferred" ||
-      input.state === "blocked_on_proof"
-    );
-    this.db
-      .prepare(
-        `update review_queue_jobs
-         set state = ?,
-             next_eligible_at = ?,
-             lease_id = case when ? then null else coalesce(?, lease_id) end,
-             lease_expires_at = case when ? then null else coalesce(?, lease_expires_at) end,
-             session_id = coalesce(?, session_id),
-             review_url = coalesce(?, review_url),
-             last_error = coalesce(?, last_error),
-             updated_at = ?,
-             started_at = case when ? = 'running' and started_at is null then ? else started_at end,
-             finished_at = case when ? then ? else finished_at end
-         where job_id = ?`
-      )
-      .run(
-        input.state,
-        input.nextEligibleAt ?? null,
-        clearLease ? 1 : 0,
-        input.leaseId ?? null,
-        clearLease ? 1 : 0,
-        input.leaseExpiresAt ?? null,
-        input.sessionId ?? null,
-        input.reviewUrl ?? null,
-        input.lastError ? redactSecrets(input.lastError) : null,
-        nowIso,
-        input.state,
-        nowIso,
-        terminal ? 1 : 0,
-        nowIso,
-        input.jobId
-      );
+    this.db.exec("begin immediate");
+    try {
+      const quarantined = this.isReviewQueueHeadQuarantined(existing.repo, existing.pullNumber, existing.headSha);
+      const targetState: ReviewQueueJobState = quarantined ? "stale_retired" : input.state;
+      const terminal = isTerminalQueueState(targetState);
+      const clearLease = quarantined ? true : input.clearLease ?? (terminal || input.state === "queued" ||
+        input.state === "provider_deferred" || input.state === "blocked_on_proof");
+      this.db
+        .prepare(
+          `update review_queue_jobs
+           set state = ?,
+               next_eligible_at = ?,
+               lease_id = case when ? then null else coalesce(?, lease_id) end,
+               lease_expires_at = case when ? then null else coalesce(?, lease_expires_at) end,
+               session_id = coalesce(?, session_id),
+               review_url = coalesce(?, review_url),
+               last_error = coalesce(?, last_error),
+               updated_at = ?,
+               started_at = case when ? = 'running' and started_at is null then ? else started_at end,
+               finished_at = case when ? then ? else finished_at end
+           where job_id = ?`
+        )
+        .run(
+          targetState,
+          quarantined ? null : input.nextEligibleAt ?? null,
+          clearLease ? 1 : 0,
+          input.leaseId ?? null,
+          clearLease ? 1 : 0,
+          input.leaseExpiresAt ?? null,
+          input.sessionId ?? null,
+          input.reviewUrl ?? null,
+          input.lastError ? redactSecrets(input.lastError) : null,
+          nowIso,
+          targetState,
+          nowIso,
+          terminal ? 1 : 0,
+          nowIso,
+          input.jobId
+        );
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
     return this.getReviewQueueJob(input.jobId)!;
+  }
+
+  claimReviewQueuePost(input: {
+    jobId: string; repo: string; pullNumber: number; headSha: string; leaseId: string; postKey: string; now?: Date;
+  }): ReviewQueuePostClaim {
+    const nowIso = (input.now ?? new Date()).toISOString();
+    if (!input.postKey.trim()) throw new Error("postKey must be non-empty");
+    const row = this.db.prepare(
+      `insert into review_queue_post_claims (job_id, post_key, lease_id, claimed_at, reconcile_required)
+       select ?, ?, ?, ?, 0 from review_queue_jobs j
+       where j.job_id = ? and lower(j.repo) = lower(?) and j.pull_number = ? and lower(j.head_sha) = lower(?)
+         and j.lease_id = ? and j.state in ('leased', 'running') and j.lease_expires_at > ?
+         and not exists (select 1 from review_queue_quarantines q
+           where lower(q.repo) = lower(j.repo) and q.pull_number = j.pull_number and lower(q.head_sha) = lower(j.head_sha))
+       on conflict(job_id, post_key) do update set
+         lease_id = case when receipt is null then excluded.lease_id else lease_id end,
+         reconcile_required = 1
+       returning job_id, post_key, lease_id, reconcile_required, receipt`
+    ).get(input.jobId, input.postKey, input.leaseId, nowIso, input.jobId, input.repo,
+      input.pullNumber, input.headSha, input.leaseId, nowIso) as ReviewQueuePostClaimRow | undefined;
+    if (!row) throw new Error("review_queue_post_fenced");
+    return mapReviewQueuePostClaim(row);
+  }
+
+  recordReviewQueuePostReceipt(input: {
+    jobId: string; repo: string; pullNumber: number; headSha: string; leaseId: string;
+    postKey: string; receipt: string; now?: Date;
+  }): ReviewQueuePostClaim {
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const receipt = redactSecrets(input.receipt).trim().slice(0, 2_000);
+    if (!receipt) throw new Error("receipt must be non-empty");
+    const row = this.db.prepare(
+      `update review_queue_post_claims as c set receipt = coalesce(receipt, ?), receipt_at = coalesce(receipt_at, ?)
+       where c.job_id = ? and c.post_key = ? and c.lease_id = ? and (c.receipt is null or c.receipt = ?)
+         and exists (select 1 from review_queue_jobs j where j.job_id = c.job_id and lower(j.repo) = lower(?)
+           and j.pull_number = ? and lower(j.head_sha) = lower(?) and j.lease_id = ? and j.state in ('leased', 'running')
+           and j.lease_expires_at > ? and not exists (select 1 from review_queue_quarantines q
+             where lower(q.repo) = lower(j.repo) and q.pull_number = j.pull_number and lower(q.head_sha) = lower(j.head_sha)))
+       returning job_id, post_key, lease_id, reconcile_required, receipt`
+    ).get(receipt, nowIso, input.jobId, input.postKey, input.leaseId, receipt, input.repo,
+      input.pullNumber, input.headSha, input.leaseId, nowIso) as ReviewQueuePostClaimRow | undefined;
+    if (!row) throw new Error("review_queue_post_receipt_conflict");
+    return mapReviewQueuePostClaim(row);
+  }
+
+  quarantineReviewQueueHead(input: {
+    repo: string; pullNumber: number; headSha: string; reason: string; now?: Date;
+  }): void {
+    validateReviewQueueInput(input.repo, input.pullNumber, input.headSha);
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const reason = redactSecrets(input.reason).trim().slice(0, 500);
+    if (!reason) throw new Error("reason must be non-empty");
+    const repo = input.repo.toLowerCase();
+    const headSha = input.headSha.toLowerCase();
+    this.db.exec("begin immediate");
+    try {
+      this.db.prepare(`insert or ignore into review_queue_quarantines
+        (repo, pull_number, head_sha, reason, created_at) values (?, ?, ?, ?, ?)`).run(
+          repo, input.pullNumber, headSha, reason, nowIso);
+      this.db.prepare(`update review_queue_jobs set state = 'stale_retired', next_eligible_at = null,
+        lease_id = null, lease_expires_at = null, last_error = 'required_evidence_quarantined',
+        updated_at = ?, finished_at = coalesce(finished_at, ?)
+        where lower(repo) = lower(?) and pull_number = ? and lower(head_sha) = lower(?)
+          and state in ('queued', 'provider_deferred', 'blocked_on_proof', 'leased', 'running')`).run(
+            nowIso, nowIso, input.repo, input.pullNumber, input.headSha);
+      this.db.exec("commit");
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   updateReviewQueueJobPriority(input: {
@@ -4247,6 +4357,14 @@ interface ReviewQueueJobRow {
   finished_at: string | null;
 }
 
+interface ReviewQueuePostClaimRow {
+  job_id: string;
+  post_key: string;
+  lease_id: string;
+  reconcile_required: number;
+  receipt: string | null;
+}
+
 interface ReviewReadinessRow {
   repo: string;
   pull_number: number;
@@ -4513,6 +4631,16 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     updatedAt: row.updated_at,
     ...(row.started_at ? { startedAt: row.started_at } : {}),
     ...(row.finished_at ? { finishedAt: row.finished_at } : {})
+  };
+}
+
+function mapReviewQueuePostClaim(row: ReviewQueuePostClaimRow): ReviewQueuePostClaim {
+  return {
+    jobId: row.job_id,
+    postKey: row.post_key,
+    leaseId: row.lease_id,
+    reconcileRequired: row.reconcile_required === 1,
+    ...(row.receipt ? { receipt: row.receipt } : {})
   };
 }
 
