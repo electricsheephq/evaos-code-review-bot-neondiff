@@ -152,6 +152,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var pendingBYOGitHubAppPrivateKey = ""
     @Published package private(set) var byoGitHubPrivateKeyStored = false
     @Published package private(set) var byoGitHubCredentialsVerified = false
+    @Published package private(set) var byoGitHubRepositoryVisibility: GitHubBrokerRepositoryVisibility?
     @Published package private(set) var isBYOGitHubVerificationInProgress = false
     @Published package private(set) var byoGitHubCredentialStatus = "Customer-owned GitHub App credentials are not stored."
     @Published package var pendingReviewPullNumber = "" {
@@ -384,7 +385,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         if dependencies.productionBoundary.byoGitHubEnabled {
             let byoProof = DesktopBYOActivationProof(
-                currentAccountBound: dependencies.productionBoundary.nativeActivationBrokerVerified,
+                currentAccountBound: currentAccountBindingVerified,
                 githubAppVerified: byoGitHubCredentialsVerified,
                 repositoryBound: repositoryConfigurationReady && scopedReviewTargetReady,
                 apiEntitlementActive: currentRepositoryActivationReady
@@ -392,6 +393,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             guard dependencies.productionBoundary.distributionPolicy == .byo,
                   DesktopDistributionPolicyBoundary.evaluate(
                       policy: .byo,
+                      visibility: byoGitHubRepositoryVisibility,
                       proof: byoProof
                   ) == .allowed
             else {
@@ -877,6 +879,14 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var selectedAccountWorkspace: DesktopAccountWorkspace? {
         guard let accountID = accountWorkspaceSelection.accountID else { return nil }
         return accountWorkspaceCatalog.accounts.first { $0.id == accountID }
+    }
+
+    private var currentAccountBindingVerified: Bool {
+        selectedAccountWorkspace != nil
+            && DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+                verifiedAt: accountWorkspaceCatalogVerifiedAt,
+                now: dependencies.clock.now
+            )
     }
 
     package var selectedBotInstallation: DesktopBotInstallation? {
@@ -1950,6 +1960,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubRecovery = nil
         managedGitHubConnectionState = managedGitHubAvailable ? .disconnected : .quarantined
         byoGitHubCredentialsVerified = false
+        byoGitHubRepositoryVisibility = nil
         providerVerificationStatus = "Verify the selected account's provider credential when ready."
         activationVerifiedThisLaunch = false
         activationVerifiedRepositoryThisLaunch = nil
@@ -3912,6 +3923,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let cli = dependencies.cli
         isBYOGitHubVerificationInProgress = true
         byoGitHubCredentialsVerified = false
+        byoGitHubRepositoryVisibility = nil
         lastError = nil
         lastCommandLine = safeCommand
         byoGitHubCredentialStatus = repositoryScope == nil
@@ -4020,6 +4032,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let cli = dependencies.cli
         isBYOGitHubVerificationInProgress = true
         byoGitHubCredentialsVerified = false
+        byoGitHubRepositoryVisibility = nil
         lastError = nil
         lastCommandLine =
             "\(shellQuote(cliPath)) doctor github --config \(shellQuote(configPath)) --repo \(shellQuote(targetRepository)) --json"
@@ -4207,6 +4220,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let repositories = report.github.readChecks.map(\.repo).sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }.joined(separator: ", ")
+        let selectedReadCheck = report.github.readChecks.first { check in
+            guard let selectedReviewRepository else { return false }
+            return check.repo.caseInsensitiveCompare(selectedReviewRepository)
+                == .orderedSame
+        } ?? report.github.readChecks.first
+        if let visibility = selectedReadCheck?.visibilityResult?.lowercased(),
+           let resolvedVisibility = GitHubBrokerRepositoryVisibility(rawValue: visibility) {
+            byoGitHubRepositoryVisibility = resolvedVisibility
+        } else {
+            byoGitHubRepositoryVisibility = .unknown
+        }
         byoGitHubCredentialsVerified = true
         lastError = nil
         switch expectedContext.source {
@@ -4500,6 +4524,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private func invalidateBYOGitHubVerificationContext() {
         invalidateScopedReviewApproval()
+        byoGitHubRepositoryVisibility = nil
         guard byoGitHubCredentialOnboardingAvailable else { return }
         byoGitHubCredentialsVerified = false
         guard !isBYOGitHubVerificationInProgress else { return }
@@ -4735,7 +4760,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package var activationPresentation: ActivationStatePresentation {
-        ActivationStateMachine.presentation(for: activationState, redactedKeyPrefix: activationKeyRedactedPrefix)
+        ActivationStateMachine.presentation(
+            for: activationState,
+            redactedKeyPrefix: activationKeyRedactedPrefix,
+            publicBYO: onboardingFlow.mode == .publicReposOnly
+                && dependencies.productionBoundary.distributionPolicy == .byo
+        )
     }
 
     private var activationLicenseClient: (any ActivationLicenseClienting)? {
@@ -4817,6 +4847,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         switch activationState {
         case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
             enterActivation(for: .publicReposOnly)
+        case .publicFreeSkip
+            where dependencies.productionBoundary.distributionPolicy != .managed:
+            enterActivation(for: onboardingFlow.mode)
         case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
             applyActivationEvent(.choosePrivatePath)
         default:

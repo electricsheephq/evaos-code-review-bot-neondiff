@@ -146,6 +146,27 @@ import NeonDiffDesktopCore
         #expect(model.activationPresentation.recovery == nil)
     }
 
+    @Test func publicBYOPathRequiresActivationAndSaysSo() {
+        let model = makeModel(productionBoundary: .testAccountLink)
+        model.onboardingFlow.mode = .publicReposOnly
+        model.enterActivation(for: .publicReposOnly)
+
+        #expect(model.activationState == .purchaseRequired)
+        #expect(model.activationPresentation.title == "Every repository requires activation")
+        #expect(model.activationPresentation.cause.contains("Every BYO repository"))
+    }
+
+    @Test func publicBYOLegacyStateSyncReturnsToPaidEntry() {
+        let model = makeModel(productionBoundary: .testAccountLink)
+        model.activationState = .publicFreeSkip
+        model.onboardingFlow.mode = .publicReposOnly
+
+        model.syncActivationEntryFromOnboardingMode()
+
+        #expect(model.activationState == .purchaseRequired)
+        #expect(model.activationPresentation.requiresKeyEntry)
+    }
+
     @Test func privatePathBeginsCheckoutPausedWhenCheckoutDisabled() {
         let model = makeModel()
         model.enterActivation(for: .privateRepos)

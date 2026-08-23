@@ -527,7 +527,43 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.selectedAccountWorkspace == nil)
         #expect(fixture.model.selectedBotInstallation == nil)
         #expect(fixture.model.currentRepositoryActivationReady)
-        #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @Test func unknownRepositoryVisibilityCannotUnlockBYOUsefulWork() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(doctorResult(
+                    readChecks: doctorReadCheck(repo: "acme/demo", visibility: "unknown")
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                    stderr: ""
+                ))
+            ],
+            activationLicenseClient: ActiveBYOActivationClient(),
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([fixtureWorkspace(id: "account-a")]))
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+
+        fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
+        fixture.model.provideExistingActivationKey()
+        await fixture.model.submitActivation()
+
+        #expect(fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
     @Test func verificationFailsClosedUnlessDoctorChecksExactlyMatchEnabledRepositories() async throws {
@@ -772,12 +808,13 @@ private func doctorResult(
 private func doctorReadCheck(
     repo: String,
     skippedByPolicy: String? = nil,
-    ok: Bool = true
+    ok: Bool = true,
+    visibility: String = "public"
 ) -> String {
     let skippedField = skippedByPolicy.map {
         #","skippedByPolicy":"\#($0)""#
     } ?? ""
-    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
+    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"\#(visibility)","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
 }
 
 private let exactB0Boundary = DesktopProductionBoundary.resolve(infoDictionary: [

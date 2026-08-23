@@ -29,6 +29,11 @@ import NeonDiffDesktopCore
     @Test func missingUnknownAndMixedMarkersFailClosed() {
         #expect(DesktopDistributionPolicyBoundary.evaluate(policy: .byo, visibility: nil, proof: completeProof) == .blocked(reason: .visibilityUnavailable))
         #expect(DesktopDistributionPolicyBoundary.evaluate(policy: .byo, visibility: .unknown, proof: completeProof) == .blocked(reason: .visibilityUnavailable))
+        let missingAccount = DesktopBYOActivationProof(
+            currentAccountBound: false, githubAppVerified: true,
+            repositoryBound: true, apiEntitlementActive: true
+        )
+        #expect(DesktopDistributionPolicyBoundary.evaluate(policy: .byo, visibility: .private, proof: missingAccount) == .blocked(reason: .activeExactEntitlementRequired))
         for policy in [DesktopDistributionPolicy.mixed, .unavailable] {
             #expect(DesktopDistributionPolicyBoundary.evaluate(policy: policy, visibility: .private, proof: completeProof) == .blocked(reason: .distributionMarkerInvalid))
         }
