@@ -168,7 +168,7 @@ repository-scoped entitlement must still pass before a new dry or live review.
 Local config alone never establishes membership, installation authority, or
 review authorization.
 
-The single **Verify Existing Access** action first runs `doctor github` for the
+The single **Verify existing access** action first runs `doctor github` for the
 exact selected repository. A legacy credential-bearing matched worker then runs
 credential-free `license status --refresh true --json` through that exact
 worker and config. A secret-free Keychain-backed worker instead revalidates the
@@ -208,7 +208,9 @@ confirmed rollback; neither path reads or copies key bytes. When a stable
 Homebrew Node command resolves to the same binary as `process.execPath`, the
 installer keeps the stable command instead of pinning a versioned Cellar path.
 
-Keep the private key and local config out of git. A typical shell setup is:
+The public paid customer-owned BYO/GA shell recovery below is CLI/operator-only;
+signed Desktop 1.1.0 uses Keychain, not this PEM path. Keep the private key and
+local config out of git. A typical shell setup is:
 
 ```bash
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"

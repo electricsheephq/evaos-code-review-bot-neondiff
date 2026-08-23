@@ -521,7 +521,7 @@ neondiff doctor --config config.local.json --json
 This SETUP guide is the operator/advanced CLI-first path, and the first-run path
 on non-Mac platforms. The local HTML dashboard is the operator/diagnostic surface
 it drives. On Mac, the native macOS app is the human first-run product surface.
-The exact B0 bundle lets the customer store the customer-owned App key in
+The signed Desktop 1.1.0 app lets the customer store the customer-owned App key in
 Keychain, select and apply one repository, and verify that installation without
 an operator editing local files. For a reconciled existing worker with a
 multi-repository allowlist, choose one **Review Target** in the repository

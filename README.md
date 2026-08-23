@@ -163,7 +163,8 @@ For the signed Desktop 1.1.0 Mac journey, `/Applications/NeonDiff.app` owns
 first run and its LaunchAgent uses the sealed helper
 `/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`. A new App uses
 **Verify App Access**; an existing compatible agent uses **Verify Existing Access**.
-Codex runtime and dry-run approval precede live review; the HTML
+Codex runtime and dry-run approval precede live review. The app shows license
+status, GitHub App status, daemon status, and provider readiness; the HTML
 dashboard remains CLI-first/non-Mac diagnostics, not native UI.
 The managed native path binds activation and private-repository token issuance
 to the same Keychain-backed broker device identity and exact GitHub-selected
@@ -255,7 +256,7 @@ failure revokes that approval instead of permitting a blind retry. For that
 multi-repository worker, daemon-wide start remains blocked. The selection and
 dry-run approval fail closed if the config, target, pull request, workspace, or
 head changes.
-The same **Verify Existing Access** action then runs credential-free
+The same **Verify existing access** action then runs credential-free
 `license status --refresh true` through that exact matched worker and config.
 It does not read, copy, migrate, or prompt for the worker's Activation Key.
 Useful work unlocks only when GitHub reports the exact repository visibility
