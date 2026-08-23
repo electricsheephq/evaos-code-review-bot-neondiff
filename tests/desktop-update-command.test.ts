@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { executeDesktopTransition, planDesktopUpdate } from "../scripts/lib/desktop-update-command.mjs";
+import { desktopValidatorPath, executeDesktopTransition, planDesktopUpdate, selectDesktopDeclarationPath } from "../scripts/lib/desktop-update-command.mjs";
 
 const hex = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 function fixture() {
@@ -9,7 +10,7 @@ function fixture() {
   const declarationBytes = Buffer.from(JSON.stringify(declaration)), packet = {
     schemaVersion: 1, declarationSHA256: hex(declarationBytes),
     release: { version: declaration.version, tag: declaration.tag, channel: declaration.channel, build: declaration.build, artifactName: declaration.distribution.artifactName, artifactSHA256: hex(artifact), treeSHA256: "b".repeat(64) },
-    sparkle: { publicKey: publicKey.export({ type: "spki", format: "der" }).toString("base64"), edSignature: sign(null, artifact, privateKey).toString("base64"), feedURL: declaration.distribution.origins.feed, entrySHA256: "c".repeat(64) },
+    sparkle: { publicKey: Buffer.from(publicKey.export({ type: "spki", format: "der" })).subarray(-32).toString("base64"), edSignature: sign(null, artifact, privateKey).toString("base64"), feedURL: declaration.distribution.origins.feed, entrySHA256: "c".repeat(64) },
     apple: { teamID: "TEAM123456", notarized: true, stapled: true, gatekeeper: true },
     prestate: { appSHA256: "d".repeat(64), accountIdentitySHA256: "3".repeat(64), botIdentitySHA256: "4".repeat(64), configSHA256: "e".repeat(64), databaseSHA256: "f".repeat(64), allowlistSHA256: "1".repeat(64), keychainIdentitySHA256: "5".repeat(64), plistSHA256: "2".repeat(64), label: "com.electricsheephq.neondiff", wrapperPID: 101, wrapperPath: "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop", helperPID: 102, helperPath: "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker" }
   };
@@ -36,9 +37,18 @@ describe("signed Desktop update preflight", () => {
       ["build", (v) => { v.packet.release.build = "11093"; }],
       ["notarization", (v) => { v.packet.apple.notarized = false; }],
       ["stapling", (v) => { v.packet.apple.stapled = false; }],
-      ["Gatekeeper", (v) => { v.packet.apple.gatekeeper = false; }]
+      ["Gatekeeper", (v) => { v.packet.apple.gatekeeper = false; }],
+      ["launchd label", (v) => { v.packet.prestate.label = "bot_label"; }]
     ];
     for (const [label, mutate] of cases) { const value = fixture(); mutate(value); value.packetBytes = Buffer.from(JSON.stringify(value.packet)); value.input.packetBytes = value.packetBytes; if (label !== "packet digest") value.input.packetSHA256 = hex(value.packetBytes); expect(() => planDesktopUpdate(value.input), label).toThrow(); }
+  });
+  it("selects retained rollback identity and decodes validator file URLs", () => {
+    const value = fixture(), prior = "v1.1.0-beta.87.json", index = { status: "retained", declarationPaths: [prior, `${value.packet.release.tag}.json`], currentPath: `${value.packet.release.tag}.json` };
+    value.packet.release.tag = "v1.1.0-beta.87";
+    expect(selectDesktopDeclarationPath("rollback", index, value.packet)).toBe(prior);
+    expect(() => selectDesktopDeclarationPath("update", index, value.packet)).toThrow();
+    const base = pathToFileURL("/tmp/Neon Diff%#/scripts/lib/desktop-update-command.mjs").href;
+    expect(desktopValidatorPath(base)).toBe("/tmp/Neon Diff%#/scripts/validate-desktop-release-declaration.mjs");
   });
 });
 
