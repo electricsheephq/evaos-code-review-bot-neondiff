@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSevereVerificationReceipt, parseSevereVerificationReceipt } from "../src/severe-verification-receipt.js";
+import { isSevereVerificationReceipt, parseSevereVerificationReceipt, validateSevereVerificationReceipt } from "../src/severe-verification-receipt.js";
 
 const path = "src/safe file+Δ.ts";
 const base = () => ({ schemaVersion: "severe-verifier-v1", repo: "owner/repo", pullNumber: 7, baseSha: "b".repeat(40), findingFingerprint: `finding:${"f".repeat(64)}`, headSha: "a".repeat(40), state: "confirmed", disposition: "retain", confidence: 0.9, evidence: { files: [{ path, kind: "module", sha256: "c".repeat(64), bytes: 42, complete: true }], omitted: [], complete: true } });
@@ -25,6 +25,11 @@ describe("severe verification receipt parser", () => {
       expect(isSevereVerificationReceipt(receipt({ evidence: { files: [{ path: unsafe, kind: "module", sha256: "c".repeat(64), bytes: 1, complete: true }], omitted: [], complete: true } }))).toBe(false);
     }
     expect(isSevereVerificationReceipt(receipt(), { expectedPath: "src/other.ts" })).toBe(false);
+  });
+
+  it("rejects dot repositories and mismatched review identities", () => {
+    for (const repo of ["./repo", "owner/.."]) expect(isSevereVerificationReceipt(receipt({ repo }))).toBe(false);
+    for (const [key, value] of [["expectedRepo", "other/repo"], ["expectedPullNumber", 8], ["expectedBaseSha", "c".repeat(40)], ["expectedHeadSha", "d".repeat(40)], ["expectedFindingFingerprint", `finding:${"e".repeat(64)}`]]) expect(validateSevereVerificationReceipt(receipt(), { [key]: value } as never)).toEqual({ ok: false, errors: ["receipt identity mismatch"] });
   });
 
   it("requires nonempty, complete, relevant evidence for confirmed/refuted states", () => {
