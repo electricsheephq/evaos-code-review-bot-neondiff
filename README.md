@@ -68,18 +68,13 @@ evals prove it.
 
 ## Install
 
-CLI/operator requirements for npm CLI 1.0.4:
+Requirements:
 
 - Node.js 26 or newer
 - npm
 - a GitHub App installed on the repos you want to review
 - a model/provider path configured locally, such as GLM/Z.ai, Ollama, or a
   future OpenAI-compatible provider slot
-
-For macOS native first run, use the signed NeonDiff Desktop 1.1.0 UI. The
-signed artifact and distribution availability remain owner-gated; see the
-[Mac GA architecture and release contract](docs/architecture/mac-ga-release-contract.md)
-and [Desktop Mac release runbook](apps/neondiff-desktop/docs/mac-release-runbook.md).
 
 > **v1.0.4 verification notice:** v1.0.4 is the first package intended to enforce
 > mandatory API-backed activation. Verify `npm view neondiff version` and the
@@ -260,7 +255,7 @@ failure revokes that approval instead of permitting a blind retry. For that
 multi-repository worker, daemon-wide start remains blocked. The selection and
 dry-run approval fail closed if the config, target, pull request, workspace, or
 head changes.
-The same **Verify existing access** action then runs credential-free
+The same **Verify Existing Access** action then runs credential-free
 `license status --refresh true` through that exact matched worker and config.
 It does not read, copy, migrate, or prompt for the worker's Activation Key.
 Useful work unlocks only when GitHub reports the exact repository visibility

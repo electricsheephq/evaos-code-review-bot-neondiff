@@ -27,7 +27,7 @@ for the support-tier pricing contract.
 - NeonDiff license key for repository review (CLI 1.0.4 requires activation for
   every repository; the later managed path has separate entitlement rules)
 
-The current CLI (v1.0.4) requires API-backed activation for every repository
+The current CLI (v1.0.x) requires API-backed activation for every repository
 (public, private, internal, and unknown); unknown visibility fails closed, and
 GitHub-authoritative visibility (public, private, internal, and unknown) decides
 the tier. The later managed App/broker targets public-free/private-paid access
@@ -320,7 +320,7 @@ After App access, provider, repository, and activation are verified, the native
 daemon step offers **Preview Start** followed by **Install & Start** when no
 supported LaunchAgent exists. Preview validates the exact signed
 `/Applications/NeonDiff.app`, account-scoped config, customer-owned App ID, and
-the worker sealed inside the signed app. Confirmed install writes one 0600 secret-free plist in
+the sealed helper `/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`. Confirmed install writes one 0600 secret-free plist in
 `~/Library/LaunchAgents` and starts it through the current user's launchd
 domain. The plist invokes the signed app's bounded headless mode and contains no
 private-key value or file path. It includes the non-secret broker device ID
@@ -370,7 +370,7 @@ the same Mac. In that exact case it opens a reconciliation path:
   copying its private key. The key file must be a current-user-owned regular
   file with no group/other permissions. Only its file path—not its key bytes—is
   supplied as a child-process environment coordinate for the exact config;
-- its single **Verify existing access** action first proves the exact App and
+- its single **Verify Existing Access** action first proves the exact App and
   Review Target with `doctor github --repo`. A legacy credential-bearing
   matched worker then runs credential-free
   `license status --refresh true` through that exact worker and config. A
@@ -401,17 +401,12 @@ The Mac app checks the exact discovered worker's `review-pr` help contract
 before enabling **Run Dry Review**. A package version alone is not sufficient:
 older and compatible technical-beta workers may both report `1.0.4`.
 
-For a clean legacy CLI/operator install only, verify the same bundle, manifest,
-and tarball SHA-256 values first, then preview the checksum-bound install:
-
+For a clean legacy CLI/operator install, verify bundle, manifest, and tarball SHA-256, then preview:
 ```bash
 BUNDLE_DIR="$(pwd -P)"
-node install-b0-worker-candidate.mjs first-install \
-  --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
-  --manifest-sha256 <manifest-sha256-from-release> --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
+node install-b0-worker-candidate.mjs first-install --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" --manifest-sha256 <manifest-sha256-from-release> --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" --launchd-label com.electricsheephq.evaos-code-review-bot --dry-run true
 ```
-After reviewing the preview, repeat with `--dry-run false --confirm true`.
+After review, repeat with `--dry-run false --confirm true`; invoke the private CLI (no PATH or LaunchAgent effect) as `/opt/homebrew/bin/node "$HOME/Library/Application Support/NeonDiffDesktop/Workers/<label>/current/node_modules/neondiff/dist/src/cli.js" init --config config.local.json` (use `/usr/local/bin/node` when approved).
 
 If Overview shows **Worker update required**:
 

@@ -5,17 +5,16 @@ runs on your own machine or server. The App identity is what authors review
 comments in GitHub; your local worker holds the App ID, private key, provider
 configuration, state database, and evidence files.
 
-On macOS, signed Desktop 1.1.0 owns native first run through its UI. The public BYO/customer-owned
-paid B0 build accepts the customer's own App ID and private key,
-one selected repository, and runs the explicit installation check from the wizard.
-No invitation is required when the versioned public GitHub prerelease is
-published and the neondiff.com purchase/download path is live. The managed B1 App
-and broker are a separate post-GA path. This document remains the operator/CLI
-reference for both paths' App identity, permission set, and install boundary.
-See the [Mac GA architecture and release contract](architecture/mac-ga-release-contract.md)
-and [Desktop Mac release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
-Matching public website onboarding copy lives in the website repo under
-neon-diff-agent-website#52.
+On macOS, signed Desktop 1.1.0 owns native first run through its UI. The public
+paid BYO/customer-owned B0 build accepts the customer's App ID and private key,
+one selected repository, and runs the explicit installation check. No invitation
+is required when the versioned public GitHub prerelease is published and the
+neondiff.com purchase/download path is live.
+The managed B1 App/broker is separate post-GA; see the [Mac GA architecture and
+release contract](architecture/mac-ga-release-contract.md) and [Desktop Mac release
+runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md). This remains the
+canonical App registration/recovery reference. Stable onboarding is [neondiff.com/mac](https://www.neondiff.com/mac),
+delivered by website #132 from issue #52.
 
 ## Install URL
 
@@ -90,10 +89,6 @@ because milestone or planning days can create large issue bursts.
 
 ## Selected-Repo Install Path
 
-For signed Desktop 1.1.0 native first run, launch the app and follow its UI.
-The checksum-managed `first-install`, update, and rollback commands below are
-legacy CLI/operator recovery only.
-
 > This page covers the shipped **local-worker direct install**, where the worker
 > holds the App private key itself and no OAuth-during-install step is needed. The
 > separate **managed authorization broker** (official App registered, source
@@ -149,7 +144,8 @@ integration proof under #630.
    config, launchd label, and non-secret activation device ID. Its headless mode
    re-derives that device ID from the existing broker identity in the app-owned
    Keychain, rejects any mismatch before reading credentials, validates the
-   checksum-managed worker, and hands the private key plus API-backed activation
+   sealed helper at `/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker`,
+   and hands the private key plus API-backed activation
    credential to the local worker only through one bounded JSON stdin envelope.
    It never exports either secret, writes a PEM or license file, places a secret
    in the plist or environment, or uses a generic `security -w` wrapper. Any
@@ -174,7 +170,7 @@ repository-scoped entitlement must still pass before a new dry or live review.
 Local config alone never establishes membership, installation authority, or
 review authorization.
 
-The single **Verify existing access** action first runs `doctor github` for the
+The single **Verify Existing Access** action first runs `doctor github` for the
 exact selected repository. A legacy credential-bearing matched worker then runs
 credential-free `license status --refresh true --json` through that exact
 worker and config. A secret-free Keychain-backed worker instead revalidates the
@@ -199,8 +195,7 @@ returned head SHA, and requires explicit confirmation before a live post pinned
 to both. Any transport failure revokes approval and requires a new dry review.
 Daemon-wide start stays blocked for a multi-repository worker.
 
-For an existing legacy CLI/LaunchAgent only, if the matched worker reports
-**Worker update required**, choose
+If this matched local worker reports **Worker update required**, choose
 **Install / Update Local Worker** and use only the checksum-bound B0 bundle
 named in the same immutable GitHub prerelease and release manifest as the app.
 Verify the outer bundle ZIP against the prerelease notes before extraction.
@@ -236,13 +231,13 @@ not GitHub approval of the public App.
 
 ## Verify Installation
 
-Run the GitHub-only doctor before provider or daemon checks. For the native B0
-app, use the config created in the app's user-writable Application Support
-directory:
+For signed Desktop 1.1.0 native first run, use **Verify App Access** for a new
+customer-owned App or **Verify Existing Access** for a compatible existing agent
+in the UI. The shell command below is CLI/operator diagnostics only:
 
 ```bash
-NATIVE_CONFIG="$HOME/Library/Application Support/NeonDiffDesktop/config.local.json"
-neondiff doctor github --config "$NATIVE_CONFIG" --repo owner/repo --json
+CLI_CONFIG="config.local.json"
+neondiff doctor github --config "$CLI_CONFIG" --repo owner/repo --json
 ```
 
 CLI-first and non-Mac setups may instead use the checkout-local path documented
