@@ -529,7 +529,14 @@ async function main(): Promise<void> {
       : parseBooleanArg(args["require-coverage"], "--require-coverage");
     const collectCoverage = requireCoverage ||
       (args.coverage === undefined ? false : parseBooleanArg(args.coverage, "--coverage"));
-    const config = loadConfig(args.config);
+    let config: BotConfig;
+    let configLoadError: string | undefined;
+    try {
+      config = loadConfig(args.config);
+    } catch (error) {
+      configLoadError = error instanceof Error ? error.message : "config load failed";
+      config = loadConfig();
+    }
     const status = collectReleaseStatusWithConfig({
       cwd: process.cwd(),
       configPath: args.config,
@@ -543,9 +550,10 @@ async function main(): Promise<void> {
       statePath: args["state-path"],
       budgetDetails: args["budget-details"] === "true",
       ...(budgetDetailLimit !== undefined ? { budgetDetailLimit } : {}),
-      ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {})
+      ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {}),
+      ...(configLoadError ? { configLoadError } : {})
     }, config);
-    const coverageReport = collectCoverage
+    const coverageReport = collectCoverage && !configLoadError
       ? await collectCoverageReport(args, config)
       : undefined;
     const monitoringCoverage = buildReleaseMonitoringCoverage({
@@ -598,13 +606,11 @@ async function main(): Promise<void> {
       budgetDetailLimit,
       budgetJobLimit
     });
+    const configLoadGate = status.gates.find((gate) => gate.name === "config_load");
     const readyToRetry = status.budget?.providerDeferred.readyToRetry ?? 0;
     const failed = status.database.failedReviewQueueJobCount ?? 0;
-    const ok = status.budget?.enabled === true &&
-      status.budget.details.inputJobsTruncated !== true &&
-      readyToRetry === 0 &&
-      failed === 0;
     const gates = [
+      ...(configLoadGate ? [configLoadGate] : []),
       {
         name: "budget_available",
         ok: status.budget?.enabled === true,
@@ -626,6 +632,7 @@ async function main(): Promise<void> {
         detail: `${failed} failed durable queue job(s)`
       }
     ];
+    const ok = gates.every((gate) => gate.ok);
     console.log(stringifyRedactedJson({
       ok,
       healthState: ok ? "runtime_ok" : "runtime_blocked",
@@ -639,6 +646,7 @@ async function main(): Promise<void> {
       },
       failedGates: failedGates(gates),
       recommendedActions: ok ? [] : [
+        ...(configLoadGate ? ["provide an existing config file for budget-status"] : []),
         ...(readyToRetry > 0 ? ["wait for the next scheduler cycle or inspect provider-deferred jobs marked ready_to_retry"] : []),
         ...(failed > 0 ? ["inspect operator queue failed jobs before promotion"] : [])
       ],
