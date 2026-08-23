@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotConfig } from "../src/config.js";
 import { runScheduledCycleWithDeps as runScheduledCycleWithDepsImpl, type SchedulerGitHubApi } from "../src/scheduler.js";
+import type { BoundedGithubList } from "../src/github.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { PullRequestSummary } from "../src/types.js";
 import { reviewPull as reviewPullImpl, type ReviewPullInput, type ReviewPullResult } from "../src/worker.js";
@@ -3517,6 +3518,64 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("quarantines incomplete evidence before leasing and preserves unrelated work", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-evidence-order-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]); config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath);
+    const oldJob = state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_B }).job;
+    const currentJob = state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A }).job;
+    const statusCalls: StatusCommentCall[] = [], reviewed: string[] = [];
+    const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]], ["org/repo-b", [pull("org/repo-b", 1, HEAD_C)]]]), new Map(), statusCalls, new Map([["org/repo-a#1", new Error("bounded ghp_secret")], ["org/repo-b#1", boundedComments([])]]));
+    const result = await runScheduledCycleWithDeps({ config, github: { ...github, listIssueComments: async () => [] }, state, options: { dryRun: false, useZCode: false }, reviewPullImpl: async ({ state: s, repo, pull: p }) => { reviewed.push(repo); s.recordProcessed({ repo, pullNumber: p.number, headSha: p.head.sha, status: "posted", event: "COMMENT" }); return "reviewed"; }, now: new Date("2026-07-01T00:00:00.000Z") });
+    expect(reviewed).toEqual(["org/repo-b"]); expect(result.queue).toMatchObject({ leased: 1, failedQueueJobs: 1, staleRetired: 1 });
+    expect(state.getReviewQueueJob(currentJob.jobId)).toMatchObject({ state: "failed", finishedAt: expect.any(String) });
+    expect(state.getReviewQueueJob(oldJob.jobId)).toMatchObject({ state: "stale_retired", finishedAt: expect.any(String) });
+    expect(statusCalls.every((c) => c.repo !== "org/repo-a")).toBe(true); expect(JSON.stringify(result)).not.toContain("ghp_"); state.close();
+  });
+
+  it("fails closed without a queue job while complete stop evidence survives uncapped failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-evidence-fail-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]); config.reviewStatusComment!.enabled = true; config.commands = { enabled: true, botMentions: ["@neondiff"], trustedAuthors: ["maintainer"], acknowledge: false };
+    const state = new ReviewStateStore(config.statePath), statusCalls: StatusCommentCall[] = [], stop = comment(991, "maintainer", "@neondiff stop");
+    const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]], ["org/repo-b", [pull("org/repo-b", 1, HEAD_B)]]]), new Map(), statusCalls, new Map([["org/repo-a#1", new Error("bounded ghp_orphan")], ["org/repo-b#1", boundedComments([stop])]]));
+    const result = await runScheduledCycleWithDeps({ config, github: { ...github, listIssueComments: async () => { throw new Error("uncapped failed"); } }, state, options: { dryRun: false, useZCode: false }, reviewPullImpl: async () => "skipped_command_stop" });
+    expect(result.skippedCommandStop).toBe(1); expect(statusCalls).toEqual([]); expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({ state: "failed", reason: "incomplete_evidence" });
+    expect(state.listReviewQueueJobs({ state: "command_recorded" })).toEqual([expect.objectContaining({ repo: "org/repo-b", commentId: 991 })]); state.close();
+  });
+
+  it("does not let retryable processed heads bypass evidence quarantine", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-evidence-processed-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]), state = new ReviewStateStore(join(root, "state.sqlite"));
+    const job = state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A }).job;
+    state.recordProcessed({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, status: "failed", error: "transient" });
+    const result = await runScheduledCycleWithDeps({ config, github: githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), new Map(), undefined, new Map([["org/repo-a#1", new Error("bounded failed")]])), state, options: { dryRun: false, useZCode: false }, reviewPullImpl: async () => "reviewed" });
+    expect(result.queue).toMatchObject({ leased: 0, failedQueueJobs: 1 }); expect(state.getReviewQueueJob(job.jobId)).toMatchObject({ state: "failed" }); state.close();
+  });
+
+  it("silently retires superseded work for a terminal processed head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-evidence-terminal-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]); config.reviewStatusComment!.enabled = true;
+    const state = new ReviewStateStore(config.statePath), statusCalls: StatusCommentCall[] = [];
+    const oldJob = state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_B }).job;
+    state.recordProcessed({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, status: "posted", event: "COMMENT" });
+    const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), new Map(), statusCalls, new Map([["org/repo-a#1", new Error("bounded failed")]]));
+    const result = await runScheduledCycleWithDeps({ config, github: { ...github, listIssueComments: async () => [] }, state, options: { dryRun: false, useZCode: false }, reviewPullImpl: async () => "reviewed" });
+    expect(result.queue).toMatchObject({ leased: 0, staleRetired: 1 }); expect(state.getReviewQueueJob(oldJob.jobId)).toMatchObject({ state: "stale_retired" }); expect(statusCalls).toEqual([]); expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)?.state).not.toBe("failed"); state.close();
+  });
+
+  it("admits page-6 request-changes and rechecks an expired exact head", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-scheduler-evidence-page-")); roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]); config.commands = { enabled: true, botMentions: ["@neondiff"], trustedAuthors: ["maintainer"], acknowledge: false };
+    const state = new ReviewStateStore(config.statePath), t0 = new Date("2026-07-01T00:00:00.000Z");
+    const expired = state.enqueueReviewQueueJob({ repo: "org/repo-b", pullNumber: 1, headSha: HEAD_B }).job;
+    state.updateReviewQueueJobState({ jobId: expired.jobId, state: "running", leaseId: "lease-b", leaseExpiresAt: "2026-07-01T00:00:00.001Z", clearLease: false, now: t0 });
+    const bounded = Array.from({ length: 500 }, (_u, i) => comment(i + 1, "maintainer", "discussion"));
+    const request = `@neondiff request-changes --repo org/repo-a --pr 1 --head ${HEAD_A}`;
+    const github = githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]], ["org/repo-b", [pull("org/repo-b", 1, HEAD_B)]]]), new Map(), undefined, new Map([["org/repo-a#1", boundedComments(bounded, true)], ["org/repo-b#1", new Error("read failed")]]));
+    const result = await runScheduledCycleWithDeps({ config, github: { ...github, listIssueComments: async (repo) => repo === "org/repo-a" ? [...bounded, comment(501, "maintainer", request)] : Promise.reject(new Error("read failed")) }, state, options: { dryRun: false, useZCode: false }, reviewPullImpl: async ({ state: s, repo, pull: p }) => { s.recordProcessed({ repo, pullNumber: p.number, headSha: p.head.sha, status: "posted", event: "REQUEST_CHANGES" }); return "reviewed_command"; }, now: t0, clock: () => new Date("2026-07-01T00:00:00.002Z") });
+    expect(result.commandReviewRequested).toBe(1); expect(result.queue.failedQueueJobs).toBe(1); expect(state.getReviewQueueJob(expired.jobId)).toMatchObject({ state: "failed" }); expect(state.listReviewQueueJobs({ state: "posted" })).toEqual([expect.objectContaining({ source: "manual_command", commentId: 501 })]); state.close();
+  });
+
   it("assigns scheduler jobs to reusable repo-sticky reviewer sessions when enabled", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-reposticky-"));
     roots.push(root);
@@ -5212,7 +5271,8 @@ function schedulerConfig(root: string, repos: string[]): BotConfig {
 function githubFromMap(
   pullsByRepo: Map<string, PullRequestSummary[]>,
   commentsByPull = new Map<string, ReturnType<typeof comment>[]>(),
-  statusCalls?: StatusCommentCall[]
+  statusCalls?: StatusCommentCall[],
+  boundedByPull = new Map<string, BoundedGithubList<ReturnType<typeof comment>> | Error>()
 ): SchedulerGitHubApi {
   return {
     listOpenPulls: async (repo) => pullsByRepo.get(repo)?.filter((entry) => entry.state === undefined || entry.state === "open") ?? [],
@@ -5222,6 +5282,11 @@ function githubFromMap(
       return pull;
     },
     listIssueComments: async (repo, issueNumber) => commentsByPull.get(`${repo}#${issueNumber}`) ?? [],
+    listIssueCommentsForEnrichment: async (repo, issueNumber) => {
+      const value = boundedByPull.get(`${repo}#${issueNumber}`);
+      if (value instanceof Error) throw value;
+      return value ?? boundedComments([]);
+    },
     ...(statusCalls
       ? {
           canPostAsApp: () => true,
@@ -5232,6 +5297,10 @@ function githubFromMap(
         }
       : {})
   };
+}
+
+function boundedComments(comments: ReturnType<typeof comment>[], truncated = false): BoundedGithubList<ReturnType<typeof comment>> {
+  return Object.assign(comments, { items: comments.slice(), rawCount: comments.length, truncated, overflow: truncated });
 }
 
 interface StatusCommentCall {
