@@ -83,6 +83,8 @@ describe("B0 access-controlled CLI candidate", () => {
     expect(script).toContain("empty-npm-cache");
     expect(script).toMatch(/execFileSync\("npm", \[\s*"ci",\s*"--ignore-scripts"/);
     expect(script).toContain("--allow-b0-bundled-production-closure");
+    expect(script).toContain('name: "ajv", version: "8.20.0"');
+    expect(script).toContain('name: "validate-npm-package-license", version: "3.0.4"');
     expect(script).toContain("git status --porcelain");
     expect(script).toContain("must not be a symbolic link");
     expect(script).toContain("must be private to the current user (0700)");
@@ -118,6 +120,11 @@ describe("B0 access-controlled CLI candidate", () => {
       "docker-compose.example.yml"
     ];
     const allowedClosure = [
+      "node_modules/ajv/package.json",
+      "node_modules/fast-deep-equal/package.json",
+      "node_modules/fast-uri/package.json",
+      "node_modules/json-schema-traverse/package.json",
+      "node_modules/require-from-string/package.json",
       "node_modules/spdx-correct/package.json",
       "node_modules/spdx-exceptions/package.json",
       "node_modules/spdx-expression-parse/package.json",

@@ -7,6 +7,11 @@ const allowB0BundledProductionClosure = process.argv.includes(
   "--allow-b0-bundled-production-closure"
 );
 const allowedBundledProductionRoots = [
+  "node_modules/ajv/",
+  "node_modules/fast-deep-equal/",
+  "node_modules/fast-uri/",
+  "node_modules/json-schema-traverse/",
+  "node_modules/require-from-string/",
   "node_modules/spdx-correct/",
   "node_modules/spdx-exceptions/",
   "node_modules/spdx-expression-parse/",

@@ -22,6 +22,10 @@ const CLEAN_STATUS_COMMAND = "git status --porcelain";
 const CANDIDATE_VERSION_PATTERN = /^1\.1\.0-beta\.[1-9][0-9]{0,3}$/;
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const PRIVATE_BUCKET_TARGET = "neondiff-beta-canary";
+const B0_BUNDLED_PRODUCTION_DEPENDENCIES = [
+  { name: "ajv", version: "8.20.0" },
+  { name: "validate-npm-package-license", version: "3.0.4" }
+];
 
 function fail(message) {
   throw new Error(message);
@@ -183,21 +187,18 @@ function main() {
       stdio: ["ignore", "pipe", "pipe"]
     });
 
-    const productionDependencyPath = join(
-      repoRoot,
-      "node_modules",
-      "validate-npm-package-license",
-      "package.json"
-    );
-    if (!existsSync(productionDependencyPath)) {
-      fail("exact production dependency is missing from the reviewed install");
-    }
-    const productionDependency = JSON.parse(readFileSync(productionDependencyPath, "utf8"));
-    if (productionDependency.name !== "validate-npm-package-license" || productionDependency.version !== "3.0.4") {
-      fail("reviewed production dependency version is not validate-npm-package-license@3.0.4");
+    for (const dependency of B0_BUNDLED_PRODUCTION_DEPENDENCIES) {
+      const dependencyPath = join(repoRoot, "node_modules", dependency.name, "package.json");
+      if (!existsSync(dependencyPath)) {
+        fail(`exact production dependency is missing from the reviewed install: ${dependency.name}`);
+      }
+      const productionDependency = JSON.parse(readFileSync(dependencyPath, "utf8"));
+      if (productionDependency.name !== dependency.name || productionDependency.version !== dependency.version) {
+        fail(`reviewed production dependency version is not ${dependency.name}@${dependency.version}`);
+      }
     }
     const candidatePackage = JSON.parse(readFileSync(packagePath, "utf8"));
-    candidatePackage.bundledDependencies = ["validate-npm-package-license"];
+    candidatePackage.bundledDependencies = B0_BUNDLED_PRODUCTION_DEPENDENCIES.map(({ name }) => name);
     writeFileSync(packagePath, `${JSON.stringify(candidatePackage, null, 2)}\n`);
 
     const packOutput = execFileSync("npm", [
@@ -215,10 +216,10 @@ function main() {
     if (!pack || parsedPack.length !== 1 || pack.name !== "neondiff" || pack.version !== packageVersion) {
       fail("npm pack did not emit the exact requested neondiff candidate");
     }
-    if (!Array.isArray(pack.files) || !pack.files.some(
-      (entry) => entry?.path === "node_modules/validate-npm-package-license/package.json"
+    if (!Array.isArray(pack.files) || B0_BUNDLED_PRODUCTION_DEPENDENCIES.some(
+      ({ name }) => !pack.files.some((entry) => entry?.path === `node_modules/${name}/package.json`)
     )) {
-      fail("npm pack did not bundle the exact production dependency closure");
+      fail("npm pack did not bundle the exact direct production dependency closure");
     }
 
     packJsonPath = join(outputDirectory, "pack.json");
@@ -311,7 +312,9 @@ function main() {
         reviewFlags,
         isolatedInstallPassed: true,
         offlineInstallPassed: true,
-        bundledProductionDependencies: ["validate-npm-package-license@3.0.4"]
+        bundledProductionDependencies: B0_BUNDLED_PRODUCTION_DEPENDENCIES.map(
+          ({ name, version }) => `${name}@${version}`
+        )
       },
       distribution: {
         privateBucketTarget: PRIVATE_BUCKET_TARGET,
