@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { resolvePortableHomePath } from "./config.js";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { Finding, Severity } from "./types.js";
@@ -1491,10 +1493,10 @@ function buildLabelEvidence(finding: Finding | EvalLabelInput): Record<string, s
 
 export function resolveEvalOutputRoot(): string {
   const configuredRoot = process.env.NEONDIFF_EVAL_ROOT?.trim();
-  if (!configuredRoot) {
-    throw new Error("NEONDIFF_EVAL_ROOT is required for default eval output; set an external root outside this checkout");
-  }
-  return resolve(configuredRoot);
+  const root = configuredRoot
+    ? resolve(configuredRoot)
+    : resolvePortableHomePath(homedir(), ".local", "share", "neondiff", "evals");
+  return assertEvalOutputDirSafe(root);
 }
 
 function defaultEvalOutputDir(input: Pick<EvalScenarioInput, "runId">, now: Date): string {

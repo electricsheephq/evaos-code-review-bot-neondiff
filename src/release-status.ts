@@ -120,6 +120,7 @@ export interface ReleaseStatusInput {
   budget?: ReviewBudgetStatus;
   publicRelease?: PublicReleaseStatus;
   now?: Date;
+  configLoadError?: string;
 }
 
 export interface PublicReleaseStatus {
@@ -306,6 +307,9 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     "--expired-only true --dry-run false --zcode true";
   const inspectZCodeTimeoutCommand = buildZCodeTimeoutInspectCommand(input.configPath);
   const runtimeGates = [
+    ...(input.configLoadError
+      ? [{ name: "config_load", ok: false, detail: input.configLoadError }]
+      : []),
     {
       name: "expected_head",
       ok: expectedHeadOk,
@@ -513,7 +517,13 @@ export function collectReleaseStatus(input: {
   budgetJobLimit?: number;
   now?: Date;
 }): ReleaseStatus {
-  const config = loadConfig(input.configPath);
+  let config: BotConfig;
+  try {
+    config = loadConfig(input.configPath);
+  } catch (error) {
+    const configLoadError = error instanceof Error ? error.message : "config load failed";
+    return collectReleaseStatusWithConfig({ ...input, configLoadError }, loadConfig());
+  }
   return collectReleaseStatusWithConfig(input, config);
 }
 
@@ -530,6 +540,7 @@ export function collectReleaseStatusWithConfig(input: {
   budgetDetailLimit?: number;
   budgetJobLimit?: number;
   now?: Date;
+  configLoadError?: string;
 }, config: BotConfig): ReleaseStatus {
   validatePublicReleaseManifestInputs(input);
   const configPath = input.configPath ?? "(default config)";
@@ -563,6 +574,7 @@ export function collectReleaseStatusWithConfig(input: {
           })
         }
       : {}),
+    configLoadError: input.configLoadError,
     now
   });
 }

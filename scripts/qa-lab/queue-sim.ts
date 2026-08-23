@@ -14,7 +14,7 @@
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { loadConfigFromObject, type BotConfig } from "../../src/config.js";
 import { ReviewStateStore } from "../../src/state.js";
 import { riskWeightedQueuePriority } from "../../src/scheduler.js";
@@ -28,7 +28,13 @@ import { percentile } from "./stats.js";
 
 const evidenceRoot = process.env.NEONDIFF_EVIDENCE_ROOT?.trim();
 if (!evidenceRoot) throw new Error("NEONDIFF_EVIDENCE_ROOT is required for QA-lab evidence output");
-const EVIDENCE_DIR = join(evidenceRoot, "neondiff-qa-lab", "risk-queue");
+if (!isAbsolute(evidenceRoot)) throw new Error("NEONDIFF_EVIDENCE_ROOT must be absolute");
+const resolvedEvidenceRoot = resolve(evidenceRoot);
+const evidenceRelation = relative(process.cwd(), resolvedEvidenceRoot);
+if (evidenceRelation === "" || (!evidenceRelation.startsWith("..") && !isAbsolute(evidenceRelation))) {
+  throw new Error("NEONDIFF_EVIDENCE_ROOT must be outside the current checkout");
+}
+const EVIDENCE_DIR = join(resolvedEvidenceRoot, "neondiff-qa-lab", "risk-queue");
 const BASELINE = 50;
 const MAX_WAIT_MINUTES = 60;
 const TICK_MS = 60_000; // one minute per service interval

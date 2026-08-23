@@ -44,8 +44,13 @@ const MAX_LICENSE_OFFLINE_GRACE_MS = 15 * 60_000;
 const MAX_ISSUE_POLICY_TEXT_LENGTH = 4_000;
 const MAX_ISSUE_POLICY_ITEMS = 20;
 const MAX_ISSUE_POLICY_ALIASES = 50;
-const DEFAULT_SKILL_ROOT = join(homedir(), ".config", "neondiff", "skills");
-const DEFAULT_ZCODE_APP_CONFIG_PATH = join(homedir(), ".config", "zcode", "config.json");
+export function resolvePortableHomePath(homeDirectory: string, ...segments: string[]): string {
+  if (!isAbsolute(homeDirectory)) throw new Error("user home directory must be absolute");
+  return join(homeDirectory, ...segments);
+}
+
+const DEFAULT_SKILL_ROOT = resolvePortableHomePath(homedir(), ".config", "neondiff", "skills");
+const DEFAULT_ZCODE_APP_CONFIG_PATH = resolvePortableHomePath(homedir(), ".config", "zcode", "config.json");
 
 export interface BotConfig {
   pilotRepos: string[];
