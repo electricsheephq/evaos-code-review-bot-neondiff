@@ -1,0 +1,26 @@
+name: Desktop manifest contract
+on:
+  pull_request:
+    paths:
+      - "docs/release-candidates/**"
+      - "docs/schema/desktop-release-manifest-v1.schema.json"
+      - "scripts/validate-desktop-candidate-manifest.mjs"
+      - "tests/desktop-candidate-manifest.test.ts"
+      - ".github/workflows/desktop-manifest-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/release-candidates/**"
+      - "docs/schema/desktop-release-manifest-v1.schema.json"
+      - "scripts/validate-desktop-candidate-manifest.mjs"
+      - ".github/workflows/desktop-manifest-contract.yml"
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 26, cache: npm }
+      - run: npm ci --ignore-scripts
+      - run: node scripts/validate-desktop-candidate-manifest.mjs --index docs/release-candidates/desktop-manifests.index.json
+      - run: npx vitest run tests/desktop-candidate-manifest.test.ts --pool=forks --maxWorkers=1

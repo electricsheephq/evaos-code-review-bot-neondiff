@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -88,8 +88,30 @@ export function validateDesktopReleaseManifest(manifest, options = {}) {
   }
   return errors.length ? fail(...errors) : { valid: true, errors: [] };
 }
+export function validateManifestIndex(indexPath, options = {}) {
+  const Ajv = Object.prototype.hasOwnProperty.call(options, "ajv") ? options.ajv : ImportedAjv;
+  if (!Ajv) return fail(SCHEMA_UNAVAILABLE);
+  try { (typeof Ajv === "function" ? new Ajv({ allErrors: true, strict: true, allowUnionTypes: true }) : Ajv).compile(schema); } catch { return fail(SCHEMA_UNAVAILABLE); }
+  let index;
+  try { index = JSON.parse(readFileSync(resolve(indexPath), "utf8")); } catch { return fail("manifest index unreadable or invalid"); }
+  if (!index || typeof index !== "object" || Array.isArray(index)) return fail("manifest index shape invalid");
+  const errors = [], expectedKeys = ["manifestPaths", "reason", "schemaVersion", "status"];
+  if (JSON.stringify(Object.keys(index).sort()) !== JSON.stringify(expectedKeys)) errors.push("index: unexpected or missing fields");
+  if (index.schemaVersion !== "desktop-release-manifest-index.v1" || !["no-versioned-manifest", "current"].includes(index.status) || !Array.isArray(index.manifestPaths) || index.manifestPaths.some((path) => typeof path !== "string" || !/^v\d+\.\d+\.\d+(?:-[^/]+)?-desktop-[^/]+\.json$/.test(path))) errors.push("index: strict versioned manifest index shape required");
+  if (!nonblank(index.reason)) errors.push("index: reason is required");
+  let discovered = [];
+  try { discovered = readdirSync(resolve(indexPath, ".."), { withFileTypes: true }).filter((entry) => entry.isFile() && /^v\d+\.\d+\.\d+(?:-[^/]+)?-desktop-[^/]+\.json$/.test(entry.name)).map((entry) => entry.name).sort(); } catch { errors.push("index: candidate directory unreadable"); }
+  const listed = Array.isArray(index.manifestPaths) ? [...index.manifestPaths].sort() : [];
+  if (JSON.stringify(discovered) !== JSON.stringify(listed)) errors.push("index: does not enumerate every versioned Desktop manifest");
+  if (index.status === "no-versioned-manifest" && (listed.length || !/defer|frozen|not a release candidate/i.test(index.reason ?? ""))) errors.push("index: pending status must explain deferred non-candidate state");
+  if (index.status === "current" && !listed.length) errors.push("index: current status requires a manifest");
+  for (const path of listed) {
+    try { const result = validateDesktopReleaseManifest(JSON.parse(readFileSync(resolve(indexPath, "..", path), "utf8")), options); if (!result.valid) errors.push(`${path}: ${result.errors.join("; ")}`); } catch { errors.push(`${path}: manifest unreadable or invalid`); }
+  }
+  return errors.length ? fail(...errors) : { valid: true, errors: [] };
+}
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-  const path = process.argv[2];
-  if (!path || path === "--index") { console.error("usage: node scripts/validate-desktop-candidate-manifest.mjs <manifest.json>"); process.exitCode = 64; }
-  else { try { const result = validateDesktopReleaseManifest(JSON.parse(readFileSync(resolve(path), "utf8"))); if (!result.valid) { for (const error of result.errors) console.error(error); process.exitCode = 1; } } catch { console.error("manifest input unreadable or invalid"); process.exitCode = 1; } }
+  const mode = process.argv[2], path = mode === "--index" ? process.argv[3] : mode;
+  if (!path) { console.error("usage: node scripts/validate-desktop-candidate-manifest.mjs [--index] <path>"); process.exitCode = 64; }
+  else { const result = mode === "--index" ? validateManifestIndex(path) : (() => { try { return validateDesktopReleaseManifest(JSON.parse(readFileSync(resolve(path), "utf8"))); } catch { return fail("manifest input unreadable or invalid"); } })(); if (!result.valid) { for (const error of result.errors) console.error(error); process.exitCode = 1; } }
 }

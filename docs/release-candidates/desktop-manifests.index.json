@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "desktop-release-manifest-index.v1",
+  "status": "no-versioned-manifest",
+  "manifestPaths": [],
+  "reason": "The versioned Desktop candidate is deferred until the frozen accepted source and artifact are available; this index is not a release candidate."
+}

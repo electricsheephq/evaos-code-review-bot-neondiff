@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { compareSemver, validateDesktopReleaseManifest } from "../scripts/validate-desktop-candidate-manifest.mjs";
+import { compareSemver, validateDesktopReleaseManifest, validateManifestIndex } from "../scripts/validate-desktop-candidate-manifest.mjs";
 const commit = "a".repeat(40);
 const artifactSha = "a".repeat(64);
 const rollbackSha = "b".repeat(64);
@@ -69,5 +69,9 @@ describe("Desktop release manifest contract", () => {
     const rollback = stable(); rollback.rollback.targetVersion = "1.1.0";
     expect(validateDesktopReleaseManifest(rollback, { ajv: AcceptingAjv }).valid).toBe(false);
     const boundary = stable(); boundary.proofBoundary.excludes = ["This is not a release candidate."]; expect(validateDesktopReleaseManifest(boundary, { ajv: AcceptingAjv }).valid).toBe(false);
+  });
+  it("requires the explicit index and fails closed without Ajv", () => {
+    expect(validateManifestIndex("docs/release-candidates/desktop-manifests.index.json", { ajv: Ajv2020 })).toEqual({ valid: true, errors: [] });
+    expect(validateManifestIndex("docs/release-candidates/desktop-manifests.index.json", { ajv: null })).toEqual({ valid: false, errors: ["schema validator unavailable"] });
   });
 });
