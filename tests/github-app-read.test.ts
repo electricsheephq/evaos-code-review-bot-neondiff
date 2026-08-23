@@ -70,6 +70,20 @@ describe("GitHub App read authentication", () => {
     expect(reads).toBe(0);
   });
 
+  it("rejects a nested account accessor before cloning or reading it", () => {
+    let reads = 0;
+    const account = Object.defineProperty({ id: 7, login: "owner", type: "User" }, "login", {
+      get: () => (++reads, "owner")
+    });
+
+    expect(() => normalizeAndValidateGitHubInstallationIdentity(canonicalInstallation({ account }), {
+      expectedAppId: "4184532",
+      expectedBotLogin: "evaos-code-review-bot[bot]",
+      repo: "owner/repo"
+    })).toThrow(/canonical validation/);
+    expect(reads).toBe(0);
+  });
+
   it("uses installation tokens for PR read calls when App credentials are configured", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-read-"));
     roots.push(root);

@@ -836,13 +836,23 @@ function normalizeGitHubBotLogin(value: unknown): string | undefined {
 function snapshotGitHubDataRecord(value: unknown): Record<string, unknown> | undefined {
   try {
     if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    if (Object.values(descriptors).some((descriptor) => !("value" in descriptor))) return undefined;
+    if (!hasOnlyDataProperties(value, new Set())) return undefined;
     const snapshot = structuredClone(value);
     return Object.getPrototypeOf(snapshot) === Object.prototype ? snapshot as Record<string, unknown> : undefined;
   } catch {
     return undefined;
   }
+}
+
+function hasOnlyDataProperties(value: object, seen: Set<object>): boolean {
+  if (seen.has(value)) return true;
+  seen.add(value);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  return Object.values(descriptors).every((descriptor) => {
+    if (!("value" in descriptor)) return false;
+    return descriptor.value === null || typeof descriptor.value !== "object"
+      || hasOnlyDataProperties(descriptor.value, seen);
+  });
 }
 
 function normalizeGitHubValue(value: unknown, pattern: RegExp): string | undefined {
