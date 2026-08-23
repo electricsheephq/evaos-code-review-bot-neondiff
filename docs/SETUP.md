@@ -473,10 +473,15 @@ the sealed helper, and the shell command verifies App/repo access without provid
 neondiff doctor github --config config.local.json --json
 ```
 
-The CLI contract uses the local `config.local.json` file for non-secret
-configuration, while private keys and other runtime secrets remain Keychain-only
-and cross only bounded stdin. The signed app does not store the config file in
-Keychain. The equivalent CLI contract is:
+The CLI/operator contract uses the local `config.local.json` file for non-secret
+configuration and may reference a customer-owned PEM through
+`github.privateKeyPath` (or `NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH`). Keep that
+file outside the repository, current-user-owned, and protected by restrictive
+permissions; never put its key bytes in config, arguments, environment values,
+logs, or evidence. The signed Desktop/LaunchAgent path is different: its private
+key remains app-owned Keychain material, and the plist, arguments, and
+environment contain neither the key nor a private-key path. The equivalent CLI
+contract is:
 
 ```bash
 CLI_CONFIG="config.local.json"
@@ -489,11 +494,12 @@ The relative `config.local.json` examples elsewhere in this guide remain the
 separate CLI-first/operator path; they do not inspect the native app's config.
 
 The private key must be one unencrypted RSA PKCS#1 or PKCS#8 PEM no larger than
-64 KiB. Do not put the private-key bytes in arguments, environment variables,
-config, logs, or evidence. The reconciled-existing-worker path may supply only
-the already-configured private-key file path to the exact child process. A
-passing doctor proves only current installation/repository read access for the
-configured allowlist; it does not execute or post a review.
+64 KiB. A CLI/operator config may contain only its file path, never the key
+bytes. The reconciled-existing-worker path may supply only the already-configured
+private-key file path to the exact child process; keep that file current-user-owned
+with no group/other permissions. A passing doctor proves only current
+installation/repository read access for the configured allowlist; it does not
+execute or post a review.
 
 The signed Mac app uses the same bounded stdin credential contract for
 `review-pr` and the raw long-running daemon. It routes every credential-bearing
