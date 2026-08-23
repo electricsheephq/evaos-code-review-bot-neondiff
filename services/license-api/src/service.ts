@@ -178,7 +178,7 @@ export function validate(store: LicenseStore, req: LicenseRequest, now: Date): S
     // Key valid but never activated on this machine → single-activation binding fails.
     return seatExhaustedResult(record);
   }
-  if (activation.repo !== req.repo) {
+  if (activation.repo !== undefined && activation.repo !== req.repo) {
     return repositoryBindingMismatchResult();
   }
   store.touchActivation(record.licenseKeyHash, req.machineId, now.toISOString());

@@ -94,6 +94,7 @@ describe("license service endpoints", () => {
     const result = validate(store, req(key, "machine-a"), NOW);
     assert.equal(result.httpStatus, 200);
     assert.equal(entitlement(result).status, "active");
+    assert.equal(validate(store, req(key, "machine-a", "acme/legacy-target"), NOW).httpStatus, 200);
   });
 
   it("validate requires the exact repository bound during activation", () => {
