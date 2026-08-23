@@ -29,6 +29,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Validate committed Desktop declaration index
+        run: node scripts/validate-desktop-release-declaration.mjs --index docs/releases/desktop/index.json
+
       - name: Enforce Review Bench public-corpus admission
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
