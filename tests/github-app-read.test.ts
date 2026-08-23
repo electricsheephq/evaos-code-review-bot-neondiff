@@ -773,6 +773,7 @@ describe("GitHub App read authentication", () => {
     const valid = { id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" };
     const scenarios = [
       { name: "missing App slug", installation: { ...valid, app_slug: undefined }, botLogin: "customer-review-app[bot]" },
+      { name: "mismatched App id", installation: { ...valid, app_id: 999 }, botLogin: "customer-review-app[bot]" },
       { name: "mismatched explicit bot login", installation: valid, botLogin: "other-review-app[bot]" }
     ];
 

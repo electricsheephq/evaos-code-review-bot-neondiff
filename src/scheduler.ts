@@ -1693,7 +1693,10 @@ async function repairProcessedHeadStatusCommentIfNeeded(input: {
     input.onStatusCommentFailure?.();
     return;
   }
-  if (!botLogin) return;
+  if (!botLogin) {
+    input.onStatusCommentFailure?.();
+    return;
+  }
 
   const marker = buildReviewStatusMarker({
     repo: input.repo,

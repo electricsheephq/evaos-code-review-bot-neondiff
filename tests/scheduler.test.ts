@@ -2301,6 +2301,7 @@ describe("provider-aware review scheduler", () => {
           ["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]
         ])),
         canPostAsApp: () => true,
+        getCanonicalBotLogin: async () => undefined,
         upsertIssueComment: async () => {
           throw new Error("GitHub API 500");
         }

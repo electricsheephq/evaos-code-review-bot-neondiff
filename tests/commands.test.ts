@@ -305,6 +305,7 @@ describe("public command bot-author identity (#345)", () => {
     expect(isBotCommandComment({ login: "dependabot[bot]", type: "Bot" }, "evaos-code-review-bot[bot]")).toBe(true);
     // A human author is not a bot.
     expect(isBotCommandComment({ login: "randopublic", type: "User" }, "evaos-code-review-bot[bot]")).toBe(false);
+    expect(isBotCommandComment({ login: "human" }, "invalid-configured-login")).toBe(false);
     expect(isBotCommandComment(null, "evaos-code-review-bot[bot]")).toBe(false);
   });
 

@@ -588,6 +588,7 @@ const HUMAN_THREAD: PullReviewComment[] = [
  * target merged PR is #1@sha1; `subsequent` are later merged PRs (revert / hotfix) the reader scans.
  */
 function deepGithub(input: {
+  botLogin?: string;
   merged?: boolean;
   mergeCommitSha?: string;
   pullTitle?: string;
@@ -599,6 +600,7 @@ function deepGithub(input: {
   return {
     listOpenPulls: async () => [],
     listIssueComments: async () => [],
+    getCanonicalBotLogin: async () => input.botLogin ?? "evaos-code-review-bot[bot]",
     getPull: async (_repo, pullNumber) =>
       ({
         number: pullNumber,
@@ -772,6 +774,13 @@ describe("buildObservedPullOutcome enrichment (#371)", () => {
       botLogin: "my-bot[bot]"
     });
     expect(humanReply.humanThreadResolved).toBe(true);
+  });
+
+  it("does not use the default login when verified custom identity is unavailable", () => {
+    expect(buildObservedPullOutcome({
+      merged: true, pullNumber: 1, findings: [OBSERVED_FINDING], subsequentPulls: [],
+      reviewComments: [{ path: "src/save.ts", line: 42, in_reply_to_id: 9, user: { login: "CUSTOM-REVIEW-APP[BOT]" } }]
+    }).humanThreadResolved).toBe(false);
   });
 });
 

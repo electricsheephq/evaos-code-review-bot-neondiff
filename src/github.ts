@@ -192,6 +192,7 @@ export class GitHubApi {
     } catch {
       return undefined;
     }
+    if (String(installation.app_id) !== this.appId?.trim()) return undefined;
     const botLogin = deriveCanonicalBotLogin({ appSlug: installation.app_slug });
     const configuredBotLogin = normalizeBotLogin(this.configuredBotLogin);
     if (!botLogin || (this.configuredBotLogin !== undefined && configuredBotLogin !== botLogin)) return undefined;

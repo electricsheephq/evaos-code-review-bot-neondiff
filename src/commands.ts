@@ -251,7 +251,9 @@ export function classifyCommandAuthorization(
  */
 export function isBotCommandComment(user: { login: string; type?: string } | null | undefined, botLogin: string): boolean {
   if (!user) return false;
-  return user.type === "Bot" || normalizeBotLogin(user.login) === normalizeBotLogin(botLogin);
+  const userLogin = normalizeBotLogin(user.login);
+  const expectedLogin = normalizeBotLogin(botLogin);
+  return user.type === "Bot" || (userLogin !== undefined && userLogin === expectedLogin);
 }
 
 export function isReviewCommandAction(action: ReviewCommandAction): boolean {
