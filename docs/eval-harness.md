@@ -8,12 +8,25 @@ Run it with a local scenario file:
 npm run eval:offline -- --input /path/to/scenario.json
 ```
 
+When `--output-dir` is omitted, the packet is written under the portable
+default `~/.local/share/neondiff/evals/<date>/<run-id>/`. Set
+`NEONDIFF_EVAL_ROOT` to explicitly override that default with another
+directory outside the active git checkout:
+
+```bash
+NEONDIFF_EVAL_ROOT="$HOME/neondiff-evals" \
+  npm run eval:offline -- --input /path/to/scenario.json
+```
+
+The commands below use `--output-root` because those commands require an
+explicit output root.
+
 Run the checked-in local suite fixtures:
 
 ```bash
 npm run eval:suite -- \
   --input-dir tests/fixtures/eval-suite-scenarios \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/local-suite
+  --output-root ~/.local/share/neondiff/evals/$(date +%F)/local-suite
 ```
 
 Run the paired sticky-vs-cold fixture:
@@ -21,7 +34,7 @@ Run the paired sticky-vs-cold fixture:
 ```bash
 npm run eval:sticky-vs-cold -- \
   --input tests/fixtures/sticky-vs-cold/seeded_quality_packet.json \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold-seeded-quality
+  --output-root ~/.local/share/neondiff/evals/$(date +%F)/sticky-vs-cold-seeded-quality
 ```
 
 Run the repo-wiki context A/B gate with a fixture that contains baseline,
@@ -30,7 +43,7 @@ deterministic repo-wiki, and curated OpenWiki-derived findings:
 ```bash
 npx tsx src/cli.ts eval-repo-wiki-context-ab \
   --input /path/to/repo-wiki-context-ab.json \
-  --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/ab
+  --output-root ~/.local/share/neondiff/evals/$(date +%F)/openwiki-context/eval-gates/ab
 ```
 
 Run the suggest-only OpenWiki docs-drift gate:
@@ -38,7 +51,7 @@ Run the suggest-only OpenWiki docs-drift gate:
 ```bash
 npx tsx src/cli.ts eval-openwiki-docs-drift \
   --input /path/to/docs-drift.json \
-  --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/docs-drift
+  --output-root ~/.local/share/neondiff/evals/$(date +%F)/openwiki-context/eval-gates/docs-drift
 ```
 
 Both OpenWiki gates are offline evidence generators. They do not call a model,
@@ -52,7 +65,7 @@ Run the review-lenses dry-run comparison gate:
 ```bash
 npx tsx src/cli.ts review-lenses-eval \
   --input-dir tests/fixtures/review-lenses-eval \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) \
+  --output-root ~/.local/share/neondiff/evals/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) \
   --dry-run true
 ```
 
@@ -65,13 +78,17 @@ The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.
 
-By default, packets are written under:
+The `eval:offline` default packet root is:
 
 ```text
-/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/<date>/<run-id>/
+~/.local/share/neondiff/evals/<date>/<run-id>/
 ```
 
-Use `--output-dir` for tests or scratch runs.
+`NEONDIFF_EVAL_ROOT` overrides that default when `--output-dir` is omitted; an
+explicit `--output-dir` still takes precedence. The suite, sticky-vs-cold,
+OpenWiki, and review-lenses commands require `--output-root`, as shown above.
+Use `--output-dir` for tests or scratch runs, and keep every chosen output root
+outside the active git checkout.
 
 ## Scenario Shape
 
