@@ -20,6 +20,7 @@ describe("packaged customer setup surface", () => {
 
     const readme = read("README.md");
     const setup = read("docs/SETUP.md");
+    const githubSetup = read("docs/github-app-setup.md");
     expect(readme).toContain("docs/SETUP.md#native-desktop-adoption");
     expect(readme).toContain("docs/SETUP.md#update-an-existing-local-worker");
     expect(setup).toContain("## Native Desktop adoption");
@@ -28,6 +29,12 @@ describe("packaged customer setup surface", () => {
     expect(setup).toContain("state/reviews.sqlite");
     expect(setup).toContain("mac-update-rollback.md");
     expect(setup).toContain("Useful current-launch work requires the exact");
+    expect(setup).toContain("REFRESH ACCOUNTS");
+    expect(setup).toContain("pending local bot cannot promote itself");
+    for (const guide of [readme, setup, githubSetup]) {
+      expect(guide).toContain("REFRESH ACCOUNTS");
+      expect(guide).toContain("pending local bot");
+    }
     expect(setup).not.toContain("apps/neondiff-desktop/docs/customer-adoption.md");
   });
 });

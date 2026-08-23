@@ -231,6 +231,10 @@ commands always use the sealed worker; the app never sends Keychain material to
 a global, customer-writable, or checksum-marker-only executable. A verified
 legacy LaunchAgent remains supported without migrating or exporting its
 existing credential environment.
+The app cannot promote a pending local bot client-side. After an authorized
+account operator registers the same bot/App identity in the NeonDiff account
+service, choose **REFRESH ACCOUNTS**; useful work remains blocked until the
+fresh server catalog returns that exact bot as verified.
 This
 source path does not prove customer-safe private-key custody, a compatible
 published CLI, signing, billing, canaries, or release readiness.

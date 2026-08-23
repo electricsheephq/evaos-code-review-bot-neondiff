@@ -347,6 +347,11 @@ For a B0 customer, the native first-run path is:
    the exact configured repository through that App installation. If the local
    profile is missing or disabled, apply the repository again before retrying
    verification.
+6. A pending local bot cannot promote itself to account authority. Have an
+   authorized NeonDiff account operator register the same bot/App identity in
+   the account service, then choose **REFRESH ACCOUNTS** and reselect it. Stop
+   while the fresh server catalog still reports it as pending or absent;
+   useful work requires that exact bot to return as verified.
 
 If verification reports a missing or disabled repository policy profile,
 choose **Apply Repository** again before retrying **Verify App Access**. This is a local

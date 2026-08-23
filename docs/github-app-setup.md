@@ -166,6 +166,10 @@ integration proof under #630.
    manifest/tarball and dry-run-default, confirm-required `first-install`
    command. Source support does not prove that immutable release publication,
    signing, clean-Mac execution, review, or daemon readiness has passed.
+   A pending local bot cannot become account authority client-side. After an
+   authorized account operator registers the same bot/App identity in the
+   NeonDiff account service, choose **REFRESH ACCOUNTS** and reselect it; useful
+   work stays blocked until the fresh server catalog returns it as verified.
 
 8. After App access, provider, repository, and activation are verified, use the
    native daemon step's **Preview Start** and **Install & Start** actions. The
