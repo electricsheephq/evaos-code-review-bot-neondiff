@@ -779,7 +779,7 @@ export function normalizeAndValidateGitHubInstallationIdentity(
 ): CanonicalGitHubInstallationIdentity {
   const installation = snapshotGitHubRecord(value);
   const expectations = snapshotGitHubRecord(expected);
-  const account = installation && snapshotGitHubRecord(installation.account);
+  const account = installation?.account as Record<string, unknown> | undefined;
   const expectedAppId = typeof expectations?.expectedAppId === "string" ? expectations.expectedAppId.trim() : undefined;
   const expectedBotLogin = normalizeGitHubBotLogin(expectations?.expectedBotLogin);
   const repoParts = typeof expectations?.repo === "string" ? expectations.repo.split("/") : [];
