@@ -3283,7 +3283,12 @@ export class ReviewStateStore {
            values (1, ?, ?)
            on conflict(id) do update set
              started_cycle = excluded.started_cycle,
-             started_at = excluded.started_at`
+             started_at = case
+               when daemon_heartbeat.started_cycle = excluded.started_cycle
+                 and daemon_heartbeat.started_at = excluded.started_at
+               then daemon_heartbeat.started_at
+               else excluded.started_at
+             end`
         )
         .run(record.cycle, (record.recordedAt ?? new Date()).toISOString());
       return;

@@ -59,7 +59,7 @@ export interface RunDaemonCycleOptions {
     onProgress?: (progress: IssueEnrichmentProgress) => void;
   }) => Promise<IssueEnrichmentCycleResult>;
   cleanupReviewWorktreesImpl?: (options: { configPath?: string; dryRun: boolean }) => ReviewWorktreeCleanupSummary;
-  recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string) => void;
+  recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string, recordedAt?: Date) => void;
   admitDaemonCycleImpl?: (configPath?: string) => Promise<DaemonCycleAdmissions | void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -90,13 +90,14 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   const schedulerEnabled = input.reviewSchedulerEnabled === true;
   const runOnceImpl = input.runOnceImpl ?? (schedulerEnabled ? runScheduledCycle : runOnce);
   const retryProviderCooldownsImpl = input.retryProviderCooldownsImpl ?? retryProviderCooldowns;
-  const recordHeartbeat = input.recordHeartbeatImpl ?? ((event: DaemonHeartbeatEvent, error?: string) => {
+  const recordHeartbeat = input.recordHeartbeatImpl ?? ((event: DaemonHeartbeatEvent, error?: string, recordedAt?: Date) => {
     recordDaemonHeartbeatFromConfig({
       configPath: input.configPath,
       cycle: input.cycle,
       dryRun: input.dryRun,
       event,
       error,
+      recordedAt,
       stderr
     });
   });
@@ -124,7 +125,8 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     }
   }
 
-  recordHeartbeat("daemon_cycle_start");
+  const runStartedAt = new Date();
+  recordHeartbeat("daemon_cycle_start", undefined, runStartedAt);
   stdout(formatDaemonLog({
     event: "daemon_cycle_start",
     cycle: input.cycle,
@@ -136,7 +138,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
   }));
 
   const issueEnrichmentPromise = input.issueEnrichmentEnabled === true
-    ? runIssueEnrichmentLane({ input, admissions, recordHeartbeat, stdout, stderr })
+    ? runIssueEnrichmentLane({ input, admissions, recordHeartbeat, runStartedAt, stdout, stderr })
     : Promise.resolve();
 
   try {
@@ -271,7 +273,8 @@ function summarizeWorktreeCleanup(cleanup: ReviewWorktreeCleanupSummary): Record
 async function runIssueEnrichmentLane(input: {
   input: RunDaemonCycleOptions;
   admissions: DaemonCycleAdmissions | void;
-  recordHeartbeat: (event: DaemonHeartbeatEvent, error?: string) => void;
+  recordHeartbeat: (event: DaemonHeartbeatEvent, error?: string, recordedAt?: Date) => void;
+  runStartedAt: Date;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
 }): Promise<void> {
@@ -281,10 +284,10 @@ async function runIssueEnrichmentLane(input: {
     cycle: input.input.cycle,
     dryRun: input.input.dryRun
   }));
-  const startedAt = Date.now();
+  const progressStartedAt = Date.now();
   const refreshHeartbeat = (): void => {
     try {
-      input.recordHeartbeat("daemon_cycle_start");
+      input.recordHeartbeat("daemon_cycle_start", undefined, input.runStartedAt);
     } catch (error) {
       input.stderr(formatDaemonLog({
         event: "daemon_heartbeat_failed",
@@ -302,7 +305,7 @@ async function runIssueEnrichmentLane(input: {
       dryRun: input.input.dryRun,
       ...(input.admissions ? { licenseAdmission: input.admissions.issueEnrichment } : {}),
       onProgress: (progress) => {
-        const elapsedMs = Math.min(86_400_000, Math.max(0, Date.now() - startedAt));
+        const elapsedMs = Math.min(86_400_000, Math.max(0, Date.now() - progressStartedAt));
         refreshHeartbeat();
         input.stdout(formatDaemonLog({
           event: "daemon_issue_enrichment_progress",
@@ -389,6 +392,7 @@ function recordDaemonHeartbeatFromConfig(input: {
   dryRun: boolean;
   event: DaemonHeartbeatEvent;
   error?: string;
+  recordedAt?: Date;
   stderr: (line: string) => void;
 }): void {
   try {
@@ -399,6 +403,7 @@ function recordDaemonHeartbeatFromConfig(input: {
         cycle: input.cycle,
         dryRun: input.dryRun,
         event: input.event,
+        ...(input.recordedAt ? { recordedAt: input.recordedAt } : {}),
         ...(input.error ? { error: input.error } : {})
       });
     } finally {
