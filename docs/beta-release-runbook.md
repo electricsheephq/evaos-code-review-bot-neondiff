@@ -5,13 +5,18 @@ update as a named beta release, not as an informal pull from `main`.
 
 ## Release Boundary
 
-The beta release unit is:
+The beta release unit uses operator-owned paths:
 
-- source checkout: `/Volumes/LEXAR/repos/evaos-code-review-bot`
+- source checkout: `$NEONDIFF_RELEASE_CHECKOUT` (normally under `/Users/m1/repos`)
 - launchd job: `com.electricsheephq.evaos-code-review-bot`
-- launchd config: `/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json`
-- state DB: `/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews-live.sqlite`
-- evidence root: `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
+- launchd config: `$NEONDIFF_RUNTIME_CONFIG` (operator-approved account path)
+- state DB: adjacent to the operator's runtime config/state root
+- evidence root: `$NEONDIFF_EVIDENCE_ROOT` (normally under `/Users/m1/Codex`)
+
+Run the executable `prepare` preflight in [release governance](release-governance.md)
+in the same shell before navigation, sync, test, build, tag, promotion, or
+`launchctl`; run its `exact` phase after sync. It validates the sealed worker,
+plist label, exact `--config`/`--launchd-label`, main branch, and approved head.
 
 Packaged or non-source deployments must set
 `NEONDIFF_PROTECTED_CHECKOUT_ROOT` to the live operator checkout so
@@ -92,34 +97,50 @@ tagged version.
 Run from a clean release checkout on `main`:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+set -euo pipefail
+neondiff_release_preflight prepare || exit $?
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git status --short
 git pull --ff-only
+neondiff_release_preflight exact || exit $?
 npm test
 npm run build
-npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
-  --expected-head "$(git rev-parse HEAD)" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
+status_file="$NEONDIFF_EVIDENCE_ROOT/pre-restart-status.json"
+if npx tsx src/cli.ts release-status \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
+  --expected-head "$NEONDIFF_EXPECTED_HEAD" \
+  --launchd-label "$NEONDIFF_LAUNCHD_LABEL" > "$status_file"; then
+  :
+elif /usr/bin/env node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const f=(j.gates??[]).filter(g=>!g.ok).map(g=>g.name);process.exit(f.length===1&&f[0]==="launchd_config"?0:1)' "$status_file"; then
+  echo "pre-restart status records only the allowed previous-worker launchd_config mismatch"
+else
+  echo "pre-restart release-status failed outside the allowed stale-runtime condition; do not launch" >&2
+  exit 1
+fi
+launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
 sleep 5
-npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
-  --expected-head "$(git rev-parse HEAD)" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot \
-  --require-coverage true
+post_status_file="$NEONDIFF_EVIDENCE_ROOT/post-restart-status.json"
+if ! npx tsx src/cli.ts release-status \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
+  --expected-head "$NEONDIFF_EXPECTED_HEAD" \
+  --launchd-label "$NEONDIFF_LAUNCHD_LABEL" \
+  --require-coverage true > "$post_status_file"; then
+  echo "post-restart status failed; stop and execute the reviewed rollback trigger" >&2
+  exit 1
+fi
 ```
 
 For public source-beta releases, run the same gate with manifest checks:
 
 ```bash
+neondiff_release_preflight exact || exit $?
 PUBLIC_BETA_TAG=v0.4.24-beta.1
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
-  --expected-head "$(git rev-parse HEAD)" \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
+  --expected-head "$NEONDIFF_EXPECTED_HEAD" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
-  --launchd-label com.electricsheephq.evaos-code-review-bot \
+  --launchd-label "$NEONDIFF_LAUNCHD_LABEL" \
   --require-coverage true
 ```
 
@@ -136,14 +157,16 @@ Public promotion evidence should include the strict variant after tags are
 fetched:
 
 ```bash
+neondiff_release_preflight prepare || exit $?
 git fetch origin --tags
+neondiff_release_preflight exact || exit $?
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
-  --expected-head "$(git rev-parse HEAD)" \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
+  --expected-head "$NEONDIFF_EXPECTED_HEAD" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
   --verify-public-rollback-refs true \
-  --launchd-label com.electricsheephq.evaos-code-review-bot
+  --launchd-label "$NEONDIFF_LAUNCHD_LABEL"
 ```
 
 If the first `release:status` fails only because launchd is still on the
@@ -469,8 +492,9 @@ and confirm the target PR is closed, draft-skipped, stale, or otherwise absent
 from the eligible open-head set. Retire only the exact failed head:
 
 ```bash
+neondiff_release_preflight exact || exit $?
 npx tsx src/cli.ts retire-failed \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --repo owner/repo \
   --pr 123 \
   --head-sha <failed-head-sha> \
@@ -539,8 +563,9 @@ packet names the affected PR head and follow-up.
 Expired cooldown rows are actionable backlog. Run:
 
 ```bash
+neondiff_release_preflight exact || exit $?
 npx tsx src/cli.ts retry-provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expired-only true \
   --dry-run false \
   --zcode true
@@ -557,12 +582,14 @@ Default rollback is to restart the existing launchd job after checking out the
 last known-good merge commit:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
-git fetch origin
-git checkout main
-git reset --hard <last-known-good-merge-sha>
-npm run build
-launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
+set -euo pipefail
+NEONDIFF_ROLLBACK_REF="${NEONDIFF_ROLLBACK_REF:?operator-supplied previous tag or merge ref}" NEONDIFF_ROLLBACK_HEAD="${NEONDIFF_ROLLBACK_HEAD:?operator-supplied 40-character rollback head}"
+neondiff_release_preflight prepare || exit $?; cd "$NEONDIFF_RELEASE_CHECKOUT"
+git fetch origin --tags; git rev-parse --verify "$NEONDIFF_ROLLBACK_REF^{commit}" >/dev/null; git checkout main; git reset --hard "$NEONDIFF_ROLLBACK_REF"
+neondiff_release_preflight exact "$NEONDIFF_ROLLBACK_HEAD" || exit $?; npm run build
+npx tsx src/cli.ts release-status --config "$NEONDIFF_RUNTIME_CONFIG" --expected-head "$NEONDIFF_ROLLBACK_HEAD" --launchd-label "$NEONDIFF_LAUNCHD_LABEL" >/dev/null
+launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"; sleep 5
+npx tsx src/cli.ts release-status --config "$NEONDIFF_RUNTIME_CONFIG" --expected-head "$NEONDIFF_ROLLBACK_HEAD" --launchd-label "$NEONDIFF_LAUNCHD_LABEL" >/dev/null || { echo "post-rollback status failed; stop and review rollback trigger" >&2; exit 1; }
 ```
 
 Use `git reset --hard` only as an explicit rollback operation with the target
@@ -572,7 +599,8 @@ unrelated dirty work.
 To stop the live beta worker entirely:
 
 ```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
+neondiff_release_preflight prepare || exit $?
+launchctl bootout gui/$(id -u) "$NEONDIFF_LAUNCH_AGENT_PATH"
 ```
 
 ## Evidence Packet
@@ -601,7 +629,7 @@ For each beta promotion, record:
   tracking issue or `not in this release`.
 - next monitoring action or heartbeat.
 
-Keep raw evidence under `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
+Keep raw evidence under `$NEONDIFF_EVIDENCE_ROOT`
 or session notes. Do not paste secrets, private keys, tokens, cookies, raw
 customer data, or long logs into GitHub comments.
 
