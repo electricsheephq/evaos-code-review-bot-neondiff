@@ -1262,6 +1262,47 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("marks older readiness rows stale when the new head is skipped as draft", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-draft-superseded-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    const state = new ReviewStateStore(config.statePath);
+    state.recordReviewReadiness({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: HEAD_A,
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old",
+      now: new Date("2026-07-02T00:00:00.000Z")
+    });
+
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: githubFromMap(new Map([
+        ["org/repo-a", [pull("org/repo-a", 1, HEAD_B, "base", { draft: true })]]
+      ])),
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => {
+        throw new Error("draft heads must not run review work");
+      },
+      now: new Date("2026-07-02T00:05:00.000Z")
+    });
+
+    expect(result.skippedDraft).toBe(1);
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({
+      state: "stale",
+      reason: `superseded_by_head=${HEAD_B}`
+    });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_B)).toMatchObject({
+      state: "skipped",
+      reason: "draft_pr"
+    });
+    state.close();
+  });
+
   it("repairs non-terminal readiness rows from processed review truth", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-readiness-backfill-"));
     roots.push(root);
@@ -3514,6 +3555,60 @@ describe("provider-aware review scheduler", () => {
     expect(result.failed).toBe(0);
     expect(result.commandFetchErrors).toBe(1);
     expect(reviewed).toHaveLength(2);
+    state.close();
+  });
+
+  it("blocks automatic enqueue when bounded command evidence is truncated", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-truncated-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a", "org/repo-b"]);
+    config.commands = {
+      enabled: true,
+      botMentions: ["@evaos-code-review-bot"],
+      trustedAuthors: ["100yenadmin"],
+      acknowledge: false
+    };
+    const state = new ReviewStateStore(config.statePath);
+    state.recordReviewReadiness({
+      repo: "org/repo-a",
+      pullNumber: 1,
+      headSha: "old-head",
+      state: "ready_for_human",
+      reason: "comment_review_posted",
+      event: "COMMENT",
+      reviewUrl: "https://github.com/org/repo-a/pull/1#pullrequestreview-old",
+      now: new Date("2026-06-30T00:00:00.000Z")
+    });
+    const reviewed: string[] = [];
+    const truncated = Object.assign([], { items: [], truncated: true, overflow: true });
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github: {
+        ...githubFromMap(new Map([
+          ["org/repo-a", [pull("org/repo-a", 1, "a1")]],
+          ["org/repo-b", [pull("org/repo-b", 1, "b1")]]
+        ])),
+        listIssueComments: async (repo) => repo === "org/repo-a" ? truncated : []
+      },
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async ({ state: reviewState, repo, pull: reviewPull }) => {
+        reviewed.push(`${repo}#${reviewPull.number}`);
+        reviewState.recordProcessed({ repo, pullNumber: reviewPull.number, headSha: reviewPull.head.sha, status: "posted", event: "COMMENT" });
+        return "reviewed";
+      },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    expect(result.commandFetchErrors).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(reviewed).toEqual(["org/repo-b#1"]);
+    expect(state.getReviewReadiness("org/repo-a", 1, "old-head")).toMatchObject({
+      state: "ready_for_human",
+      reason: "comment_review_posted"
+    });
+    expect(state.getReviewReadiness("org/repo-a", 1, "a1")).toBeUndefined();
+    expect(state.listReviewQueueJobs({ repo: "org/repo-a" })).toHaveLength(0);
     state.close();
   });
 

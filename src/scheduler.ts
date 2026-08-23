@@ -13,7 +13,7 @@ import {
   type ReviewCommand
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
-import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi, type BoundedGithubList } from "./github.js";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
@@ -109,7 +109,7 @@ export interface ScheduledRunResult extends RunOnceResult {
 export interface SchedulerGitHubApi {
   listOpenPulls(repo: string): Promise<PullRequestSummary[]>;
   getPull(repo: string, pullNumber: number): Promise<PullRequestSummary>;
-  listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
+  listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[] | BoundedGithubList<IssueCommentCommandSource>>;
   canPostAsApp?: ReviewStatusCommentGithub["canPostAsApp"];
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
   // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
@@ -503,6 +503,7 @@ async function collectSubsequentMergedPulls(input: {
 type EnqueueStatus =
   | "enqueued"
   | "already_queued"
+  | "command_fetch_failed"
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_processed"
@@ -532,8 +533,8 @@ async function enqueuePullIfEligible(input: {
     await retireQueuedJobsForClosedPull(input);
     return "closed_retired";
   }
-  markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
   if (input.config.skipDrafts && input.pull.draft) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     recordReadinessTransition({
       state: input.state,
       repo: input.repo,
@@ -545,6 +546,7 @@ async function enqueuePullIfEligible(input: {
     return "skipped_draft";
   }
   if (!isCanaryAllowed(input.config, input.repo, input.pull.number)) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     recordReadinessTransition({
       state: input.state,
       repo: input.repo,
@@ -579,6 +581,8 @@ async function enqueuePullIfEligible(input: {
   }
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
+  if ("blocked" in commandDecision) return "command_fetch_failed";
+  markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
   if (commandDecision.action !== "none") {
     if (commandDecision.shouldReview) {
       await retireSupersededQueueJobsForPull(input);
@@ -1155,11 +1159,19 @@ async function resolveSchedulerCommandDecision(input: {
   repo: string;
   pull: PullRequestSummary;
   onCommandFetchError?: () => void;
-}): Promise<CommandDecision> {
+}): Promise<CommandDecision | { action: "none"; shouldReview: false; blocked: "command_evidence_truncated" }> {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
   try {
-    comments = await input.github.listIssueComments(input.repo, input.pull.number);
+    const result = await input.github.listIssueComments(input.repo, input.pull.number);
+    const bounded = "items" in result
+      ? result
+      : { items: result, truncated: false, overflow: false };
+    if (bounded.truncated || bounded.overflow) {
+      input.onCommandFetchError?.();
+      return { action: "none", shouldReview: false, blocked: "command_evidence_truncated" };
+    }
+    comments = bounded.items;
   } catch {
     input.onCommandFetchError?.();
     return { action: "none", shouldReview: false };
@@ -1676,7 +1688,15 @@ async function repairProcessedHeadStatusCommentIfNeeded(input: {
 
   let comments: IssueCommentCommandSource[];
   try {
-    comments = await input.github.listIssueComments(input.repo, input.pull.number);
+    const result = await input.github.listIssueComments(input.repo, input.pull.number);
+    const bounded = "items" in result
+      ? result
+      : { items: result, truncated: false, overflow: false };
+    if (bounded.truncated || bounded.overflow) {
+      input.onStatusCommentFailure?.();
+      return;
+    }
+    comments = bounded.items;
   } catch {
     input.onStatusCommentFailure?.();
     return;
@@ -2592,6 +2612,9 @@ function nextLicenseGateRetryAt(now = new Date()): string {
 
 function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): void {
   switch (status) {
+    case "command_fetch_failed":
+      result.failed += 1;
+      break;
     case "enqueued":
       result.queue.enqueued += 1;
       break;
