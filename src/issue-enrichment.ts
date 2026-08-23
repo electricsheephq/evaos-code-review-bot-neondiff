@@ -1103,8 +1103,14 @@ export async function runIssueEnrichmentCycle(input: {
         shouldBackfillIssueEnrichmentAnalysisInputHash(existing, issueUpdatedAt, item.action)
         ? plannedAnalysisInputHashForItem(item)
         : undefined;
-      const authoritativeDeferral = item.reason === "issue_label_event_overflow";
-      if (!authoritativeDeferral && input.force !== true && existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action)) {
+      const preservesOverflowCooldown = item.reason === "issue_label_event_overflow" &&
+        existing?.status === "deferred" &&
+        existing.reason === item.reason &&
+        Boolean(existing.nextEligibleAt) &&
+        shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action);
+      const authoritativeDeferral = item.reason === "issue_label_event_overflow" && !preservesOverflowCooldown;
+      const deferralNextEligibleAt = preservesOverflowCooldown ? existing?.nextEligibleAt ?? item.nextEligibleAt : item.nextEligibleAt;
+      if (!authoritativeDeferral && !preservesOverflowCooldown && input.force !== true && existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action)) {
         const refreshedAnalysisInputHash = existing.analysisInputHash ?? analysisInputHash;
         if (!input.dryRun && (
           existing.issueUpdatedAt !== issueUpdatedAt ||
@@ -1154,7 +1160,7 @@ export async function runIssueEnrichmentCycle(input: {
           issueUpdatedAt,
           status: "deferred",
           reason: item.reason,
-          nextEligibleAt: item.nextEligibleAt,
+          nextEligibleAt: deferralNextEligibleAt,
           now: new Date(checkedAt)
         });
         summary.deferredRecorded += 1;
@@ -1411,8 +1417,8 @@ function planRepoIssueScan(input: {
     ...input.renderPolicy
   }));
   const eligible = planned.filter((output) => !output.skipped);
-  const countableEligible = input.shouldCountItem
-    ? eligible.filter((output) => input.shouldCountItem!(
+  const countableEligible = eligible.filter((output) => !input.scanReasons?.[output.issueNumber]).filter((output) => input.shouldCountItem
+    ? input.shouldCountItem!(
         issueScanItem(
           input.repo,
           output.issueNumber,
@@ -1421,8 +1427,8 @@ function planRepoIssueScan(input: {
           "eligible",
           output.url
         )
-      ))
-    : eligible;
+      )
+    : true);
   const burstExceeded = countableEligible.length > input.throttle.maxIssuesPerBurst;
   let enriched = 0;
   let comments = 0;

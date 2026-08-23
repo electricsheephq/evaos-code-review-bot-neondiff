@@ -14,6 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
+import type { BoundedGithubList } from "../src/github.js";
 import type { IssueAnalysis } from "../src/issue-analysis.js";
 import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
@@ -1013,6 +1014,21 @@ describe("sticky enrichment comments", () => {
     }
   });
 
+  it("preserves an existing overflow cooldown before expiry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-overflow-cooldown-"));
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = loadConfig();
+    config.issueEnrichment = { ...config.issueEnrichment!, enabled: true, postIssueComment: false, allowlist: ["owner/issue-repo"], maxIssuesPerCycle: 5, maxCommentsPerCycle: 0, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 10, lookbackMs: 60_000, processExistingOpenIssuesOnActivation: true, repos: { "owner/issue-repo": { promotionMaintainers: [{ login: "trusted", validFrom: "2026-01-01T00:00:00Z" }] } } };
+    const issue: GitHubRelatedIssueOrPull = { number: 738, title: "Overflowed label history", state: "open", updated_at: "2026-08-24T00:00:00.000Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }], body: "Continue current-main work." };
+    const events = Object.assign([], { items: [], rawCount: 500, truncated: true, overflow: true }) as BoundedGithubList<{ event?: string }>;
+    state.recordIssueEnrichment({ repo: "owner/issue-repo", issueNumber: 738, issueUpdatedAt: issue.updated_at!, status: "deferred", reason: "issue_label_event_overflow", nextEligibleAt: "2026-08-24T00:01:00.000Z", now: new Date("2026-08-24T00:00:00.000Z") });
+    try {
+      const result = await runIssueEnrichmentCycle({ config, state, github: { listIssuesForEnrichment: async () => [issue], listIssueLabelEvents: async () => events, getCollaboratorPermission: async () => "maintain", canPostAsApp: () => false, upsertIssueComment: async () => { throw new Error("overflow must not post"); } }, dryRun: false, includeExisting: true, checkedAt: "2026-08-24T00:00:30.000Z" });
+      expect(result.summary).toMatchObject({ alreadyProcessed: 0, deferredRecorded: 1, posted: 0, failed: 0 });
+      expect(state.getIssueEnrichmentRecord("owner/issue-repo", 738)).toMatchObject({ reason: "issue_label_event_overflow", nextEligibleAt: "2026-08-24T00:01:00.000Z" });
+    } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("fails closed without posting when structured issue analysis fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "issue-enrichment-model-failure-"));
     try {
@@ -1452,6 +1468,22 @@ describe("sticky enrichment comments", () => {
         deferred: 3
       });
       expect(scan.items.every((item) => item.action === "deferred" && item.reason === "burst_threshold_exceeded")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes overflowed scan reasons from burst threshold accounting", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-overflow-burst-"));
+    try {
+      const configPath = join(root, "config.json");
+      writeFileSync(configPath, `${JSON.stringify({ issueEnrichment: { enabled: true, postIssueComment: false, allowlist: ["owner/issue-repo"], maxIssuesPerCycle: 5, maxCommentsPerCycle: 0, maxIssuesPerBurst: 1 } })}\n`);
+      const scan = await collectIssueEnrichmentScan({
+        config: loadConfig(configPath), dryRun: true, includeExisting: true, checkedAt: "2026-07-03T00:00:00.000Z",
+        reader: { listIssuesForEnrichment: async () => Object.assign([{ number: 20, title: "Overflowed issue", state: "open", body: "Acceptance criteria and owner present." }, { number: 21, title: "Ordinary sibling", state: "open", body: "Acceptance criteria and owner present." }], { scanReasons: { 20: "issue_label_event_overflow" as const } }) }
+      });
+      expect(scan.items).toEqual(expect.arrayContaining([expect.objectContaining({ issueNumber: 20, action: "deferred", reason: "issue_label_event_overflow" }), expect.objectContaining({ issueNumber: 21, action: "would_enrich", reason: "eligible" })]));
+      expect(scan.summary).toMatchObject({ issuesSeen: 2, eligible: 1, wouldEnrich: 1, deferred: 1 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
