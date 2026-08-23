@@ -32,7 +32,7 @@ function runFeed(xml: string, expectedUrl = "https://github.com/example/NeonDiff
   }
 }
 
-const validFeed = `<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:other="urn:other"><channel><link>https://www.neondiff.com/updates/beta/appcast.xml</link><item><description>stale build 1.1.0-beta.99</description><sparkle:channel> beta </sparkle:channel><enclosure url="https://github.com/example/NeonDiff.zip" sparkle:version="42" sparkle:shortVersionString="1.1.0-rc.1" sparkle:edSignature="${Buffer.alloc(64).toString("base64")}" /></item></channel></rss>`;
+const validFeed = `<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:other="urn:other"><channel><link>https://www.neondiff.com/updates/beta/appcast.xml</link><item><description>stale build 1.1.0-beta.99</description><sparkle:channel> beta </sparkle:channel><enclosure url="https://github.com/example/NeonDiff.zip" sparkle:version="42" sparkle:shortVersionString="1.1.0-rc.1" sparkle:edSignature="${Buffer.alloc(64).toString("base64")}" /></item><item><description>candidate 1.1.0-rc.1 build 42</description><enclosure url="https://github.com/example/stale.zip" sparkle:version="42" sparkle:shortVersionString="1.1.0-rc.1" /></item></channel></rss>`;
 
 describe("paid beta public download canary", () => {
   it("consumes immutable identity and keeps the workflow read-only", () => {
