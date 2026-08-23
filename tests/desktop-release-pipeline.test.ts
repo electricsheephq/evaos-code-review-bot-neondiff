@@ -104,6 +104,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
             name?: string;
             uses?: string;
             run?: string;
+            env?: Record<string, string>;
             with?: Record<string, string>;
             "working-directory"?: string;
           }>;
@@ -147,6 +148,16 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(fixtureBoundaryStep?.run).toBe(
       "npm run check:desktop-fixture-boundary -- apps/neondiff-desktop/dist/NeonDiff.app"
     );
+    for (const stepName of [
+      "Build unsigned Release app bundle",
+      "Check unsigned Release app bundle"
+    ]) {
+      const step = job?.steps?.find((candidate) => candidate.name === stepName);
+      expect(step?.env?.NEONDIFF_DESKTOP_PAID_BETA_CONTRACT).toBe(
+        "paid-mac-beta-byo-v1"
+      );
+      expect(step?.env?.NEONDIFF_DESKTOP_BYO_GITHUB_ENABLED).toBe("true");
+    }
     expect(workflow).toContain("unsigned");
     expect(workflow).toMatch(/macOS 15 Keychain contract compilation/);
     expect(workflow).toMatch(/persist-credentials:\s*false/);

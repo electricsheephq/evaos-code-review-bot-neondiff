@@ -1627,7 +1627,30 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let saved = dependencies.preferences.string(forKey: accountWorkspacePreferenceKey)
         let initial = catalog.accounts.first(where: { $0.id == saved }) ?? catalog.accounts[0]
         let savedBotID = dependencies.preferences.string(forKey: accountBotPreferenceKey)
-        selectAccountWorkspace(initial.id, clearSavedBot: false)
+        let savedConfigPath = dependencies.preferences.string(
+            forKey: Self.configPathPreferenceKey
+        )
+        let hasPersistedActivationJourney = dependencies.preferences.string(
+            forKey: activationStateKey
+        ).flatMap(ActivationState.init(rawValue:)) != nil
+        let restoresExactMatch = hasPersistedActivationJourney
+            && initial.id == saved
+            && initial.bots.contains(where: {
+                guard $0.id == savedBotID,
+                      $0.status == .verified,
+                      let localConfigPath = $0.localConfigPath,
+                      let savedConfigPath
+                else {
+                    return false
+                }
+                return normalizedPath(localConfigPath)
+                    == normalizedPath(savedConfigPath)
+            })
+        selectAccountWorkspace(
+            initial.id,
+            clearSavedBot: false,
+            preservingActivationJourney: restoresExactMatch
+        )
         if let restoredPlan = restoredPendingNewBotPlan(
             account: initial,
             savedBotID: savedBotID
@@ -1653,7 +1676,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
             ) != nil
             selectBotInstallation(
                 savedBotID,
-                preservesPendingNewBotPlan: preservesPendingPlan
+                preservesPendingNewBotPlan: preservesPendingPlan,
+                restoringExactMatch: restoresExactMatch
             )
         } else {
             dependencies.preferences.removeValue(forKey: accountBotPreferenceKey)
@@ -1667,17 +1691,27 @@ package final class NeonDiffDesktopModel: ObservableObject {
     }
 
     package func selectAccountWorkspace(_ accountID: String) {
-        selectAccountWorkspace(accountID, clearSavedBot: true)
+        selectAccountWorkspace(
+            accountID,
+            clearSavedBot: true,
+            preservingActivationJourney: false
+        )
     }
 
-    private func selectAccountWorkspace(_ accountID: String, clearSavedBot: Bool) {
+    private func selectAccountWorkspace(
+        _ accountID: String,
+        clearSavedBot: Bool,
+        preservingActivationJourney: Bool
+    ) {
         guard accountWorkspaceCatalog.accounts.contains(where: { $0.id == accountID }) else {
             accountWorkspaceStatus = "That account is not available to this signed-in user."
             return
         }
         guard accountWorkspaceSelection.accountID != accountID else { return }
 
-        resetWorkspaceBoundRuntimeState()
+        resetWorkspaceBoundRuntimeState(
+            preservingActivationJourney: preservingActivationJourney
+        )
         accountWorkspaceSelection.selectAccount(accountID)
         pendingNewBotPlan = nil
         dependencies.preferences.set(accountID, forKey: accountWorkspacePreferenceKey)
@@ -1699,12 +1733,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
             )
             return
         }
-        selectBotInstallation(botID, preservesPendingNewBotPlan: false)
+        selectBotInstallation(
+            botID,
+            preservesPendingNewBotPlan: false,
+            restoringExactMatch: false
+        )
     }
 
     private func selectBotInstallation(
         _ botID: String,
-        preservesPendingNewBotPlan: Bool
+        preservesPendingNewBotPlan: Bool,
+        restoringExactMatch: Bool
     ) {
         guard let account = selectedAccountWorkspace,
               let bot = account.bots.first(where: { $0.id == botID }),
@@ -1715,7 +1754,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         guard accountWorkspaceSelection.botID != botID else { return }
 
-        resetWorkspaceBoundRuntimeState()
+        resetWorkspaceBoundRuntimeState(
+            preservingActivationJourney: restoringExactMatch
+        )
         accountWorkspaceSelection.selectBot(botID)
         pendingNewBotPlan = nil
         if !preservesPendingNewBotPlan {
@@ -1725,11 +1766,28 @@ package final class NeonDiffDesktopModel: ObservableObject {
         }
         dependencies.preferences.set(botID, forKey: accountBotPreferenceKey)
         if let localConfigPath = bot.localConfigPath {
+            let restoredActivationJourney = restoringExactMatch
+                ? activationState
+                : nil
             configPath = localConfigPath
+            if let restoredActivationJourney {
+                activationState = restoredActivationJourney
+                dependencies.preferences.set(
+                    activationState.rawValue,
+                    forKey: activationStateKey
+                )
+            }
             accountWorkspaceStatus = "Local bot selected. Verify its config and GitHub binding before use."
             inspectConfig(
                 allowDuringAccountRestore: isAccountLinkInProgress
             )
+            if restoringExactMatch {
+                statusRefreshFailureMessage = nil
+                runCLI(
+                    arguments: ["daemon", "status", "--config", configPath, "--launchd-label", launchdLabel],
+                    displayCommand: statusCommand
+                )
+            }
         } else {
             configPath = isolatedBotConfigPath(
                 accountID: account.id,
@@ -1815,7 +1873,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
     /// Runtime proof is account-bound. Switching accounts or bots invalidates
     /// it without deleting Keychain material; credentials must be reselected
     /// and reverified for the new context before useful work is available.
-    private func resetWorkspaceBoundRuntimeState() {
+    private func resetWorkspaceBoundRuntimeState(
+        preservingActivationJourney: Bool = false
+    ) {
+        let preservedActivationState = preservingActivationJourney
+            ? activationState
+            : nil
         workspaceContextGeneration &+= 1
         activationRequestGeneration &+= 1
         githubAuthorizationTask?.cancel()
@@ -1869,7 +1932,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         providerVerificationStatus = "Verify the selected account's provider credential when ready."
         activationVerifiedThisLaunch = false
         activationVerifiedRepositoryThisLaunch = nil
-        activationState = ActivationStateMachine.initialState
+        if !preservingActivationJourney {
+            dependencies.preferences.set("", forKey: activationRepositoryKey)
+        }
+        activationState = preservedActivationState
+            ?? ActivationStateMachine.initialState
         dependencies.preferences.set(activationState.rawValue, forKey: activationStateKey)
         activationKeyRedactedPrefix = nil
         pendingActivationKey = ""
@@ -3145,7 +3212,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         invalidateScopedReviewApproval()
-        invalidateActivationForRepositoryChange()
+        invalidateActivationForRepositoryChange(fullReset: true)
         selectedBYOReviewRepository = repository.name
         dependencies.preferences.set(
             repository.name,
@@ -6592,12 +6659,26 @@ package final class NeonDiffDesktopModel: ObservableObject {
         pendingRepoPatchProof = nil
     }
 
-    private func invalidateActivationForRepositoryChange() {
+    private func invalidateActivationForRepositoryChange(
+        fullReset: Bool = false
+    ) {
         activationRequestGeneration &+= 1
         if activationState == .activationPending {
             applyActivationEvent(.checkoutCancelled)
             onboardingFlow.licenseActivation = .servicePending
             lastError = "Repository context changed during activation. Review the current target, then retry safely."
+        }
+        if fullReset {
+            activationVerifiedThisLaunch = false
+            activationVerifiedRepositoryThisLaunch = nil
+            dependencies.preferences.set("", forKey: activationRepositoryKey)
+            activationState = ActivationStateMachine.initialState
+            dependencies.preferences.set(
+                activationState.rawValue,
+                forKey: activationStateKey
+            )
+            onboardingFlow.licenseActivation = .servicePending
+            return
         }
         guard activationVerifiedThisLaunch
                 || activationVerifiedRepositoryThisLaunch != nil

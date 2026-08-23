@@ -2,6 +2,26 @@ import Testing
 @testable import NeonDiffDesktopAppCore
 
 @Suite struct ProductionBoundaryContractTests {
+    @Test func releaseProofRequiresExactBYOOutputMarkers() throws {
+        let releaseProof = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot()
+                .appendingPathComponent("script/release-proof.sh")
+        )
+
+        #expect(releaseProof.contains(
+            #"Print :NeonDiffPaidBetaContract"#
+        ))
+        #expect(releaseProof.contains(
+            #"paid-mac-beta-byo-v1"#
+        ))
+        #expect(releaseProof.contains(
+            #"Print :NeonDiffBYOGitHubEnabled"#
+        ))
+        #expect(releaseProof.contains(
+            #"assert_byo_production_contract "$INFO_PLIST""#
+        ))
+    }
+
     @MainActor
     @Test func quarantinedProductionModelBlocksUsefulWorkAndPseudoActivation() throws {
         let fixture = ModelDependencyFixture(productionBoundary: .quarantined)

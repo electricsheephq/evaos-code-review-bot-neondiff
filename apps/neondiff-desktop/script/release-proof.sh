@@ -44,6 +44,25 @@ normalize_bool() {
   esac
 }
 
+assert_byo_production_contract() {
+  local info_plist="$1"
+  local contract
+  local byo_enabled
+  local managed_enabled
+  local managed_origin
+  contract="$(/usr/libexec/PlistBuddy -c "Print :NeonDiffPaidBetaContract" "$info_plist" 2>/dev/null || true)"
+  byo_enabled="$(/usr/libexec/PlistBuddy -c "Print :NeonDiffBYOGitHubEnabled" "$info_plist" 2>/dev/null || true)"
+  managed_enabled="$(/usr/libexec/PlistBuddy -c "Print :NeonDiffManagedGitHubBrokerEnabled" "$info_plist" 2>/dev/null || true)"
+  managed_origin="$(/usr/libexec/PlistBuddy -c "Print :NeonDiffGitHubBrokerOrigin" "$info_plist" 2>/dev/null || true)"
+  if [ "$contract" != "paid-mac-beta-byo-v1" ] \
+    || [ "$byo_enabled" != "true" ] \
+    || [ -n "$managed_enabled" ] \
+    || [ -n "$managed_origin" ]; then
+    echo "release artifact is missing the exact BYO production contract" >&2
+    exit 1
+  fi
+}
+
 ensure_clean_source_tree() {
   if ! git -C "$REPO_ROOT" diff --quiet --ignore-submodules --; then
     echo "source tree has unstaged changes; set SOURCE_SHA and SOURCE_REF explicitly or commit/stash before release proof" >&2
@@ -109,6 +128,7 @@ mkdir -p "$RELEASE_SMOKE_DIR"
 rm -rf "$APP_BUNDLE"
 rm -f "$ARTIFACT_PATH" "$METADATA_PATH"
 ditto "$SOURCE_APP_BUNDLE" "$APP_BUNDLE"
+assert_byo_production_contract "$INFO_PLIST"
 
 if [ "$UI_LAUNCH" = "true" ]; then
   verify_existing_app_launch
