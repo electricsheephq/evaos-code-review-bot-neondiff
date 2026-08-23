@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GitHubApi } from "../src/github.js";
+import { GitHubApi, normalizeAndValidateGitHubInstallationIdentity } from "../src/github.js";
 
 describe("GitHub App read authentication", () => {
   const roots: string[] = [];
@@ -13,6 +13,61 @@ describe("GitHub App read authentication", () => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("returns one frozen canonical identity from slug or bot-login forms", () => {
+    const installation = canonicalInstallation({
+      app_slug: " EVAOS-CODE-REVIEW-BOT[bot] ",
+      account: { id: 7, login: "Owner", type: "Organization" }
+    });
+    const identity = normalizeAndValidateGitHubInstallationIdentity(installation, {
+      expectedAppId: "4184532",
+      expectedBotLogin: " evaos-code-review-bot ",
+      repo: "OWNER/repo"
+    });
+
+    expect(identity).toEqual({
+      id: 123,
+      app_id: 4184532,
+      account_id: 7,
+      account_login: "owner",
+      account_type: "Organization",
+      app_slug: "evaos-code-review-bot",
+      bot_login: "evaos-code-review-bot[bot]"
+    });
+    expect(Object.isFrozen(identity)).toBe(true);
+  });
+
+  it.each([
+    ["missing installation id", { id: undefined }],
+    ["wrong App id", { app_id: 4184533 }],
+    ["missing account id", { account: { login: "owner", type: "User" } }],
+    ["missing account type", { account: { id: 7, login: "owner" } }],
+    ["wrong account type", { account: { id: 7, login: "owner", type: "Bot" } }],
+    ["wrong owner", { account: { id: 7, login: "other", type: "User" } }],
+    ["wrong App slug", { app_slug: "other-app" }],
+    ["malformed App slug", { app_slug: "Bad_App" }]
+  ])("rejects %s before any token-capable caller can use the result", (_name, override) => {
+    expect(() => normalizeAndValidateGitHubInstallationIdentity(
+      canonicalInstallation(override),
+      { expectedAppId: "4184532", expectedBotLogin: "evaos-code-review-bot[bot]", repo: "owner/repo" }
+    )).toThrow(/canonical validation/);
+  });
+
+  it.each(["accessor", "proxy"])("rejects hostile %s input without reading its values", (shape) => {
+    let reads = 0;
+    const installation = shape === "accessor"
+      ? Object.defineProperty(canonicalInstallation(), "id", { get: () => (++reads, 123) })
+      : new Proxy(canonicalInstallation(), {
+        get: () => (++reads, 123)
+      });
+
+    expect(() => normalizeAndValidateGitHubInstallationIdentity(installation, {
+      expectedAppId: "4184532",
+      expectedBotLogin: "evaos-code-review-bot[bot]",
+      repo: "owner/repo"
+    })).toThrow(/canonical validation/);
+    expect(reads).toBe(0);
   });
 
   it("uses installation tokens for PR read calls when App credentials are configured", async () => {
@@ -835,6 +890,16 @@ function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
     statusText,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+function canonicalInstallation(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 123,
+    app_id: 4184532,
+    account: { id: 7, login: "owner", type: "User" },
+    app_slug: "evaos-code-review-bot",
+    ...overrides
+  };
 }
 
 function installThenTokenThen(handler: (url: string) => Response): (url: string) => Response {

@@ -140,6 +140,27 @@ interface GitHubInstallationResponse {
   app_slug?: string;
 }
 
+/**
+ * Canonical identity returned by the side-effect-free installation validator.
+ * Keep this value independent of the GitHub response so token resolvers cannot
+ * accidentally retain a live response object or accessor-backed field.
+ */
+export interface CanonicalGitHubInstallationIdentity {
+  id: number;
+  app_id: number;
+  account_id: number;
+  account_login: string;
+  account_type: "User" | "Organization";
+  app_slug: string;
+  bot_login: string;
+}
+
+export interface GitHubInstallationIdentityExpectation {
+  expectedAppId: string;
+  expectedBotLogin: string;
+  repo: string;
+}
+
 export class GitHubApiRequestError extends Error {
   readonly status: number;
   readonly statusText: string;
@@ -750,6 +771,84 @@ function visibilityFromRepositorySummary(repository: RepositorySummary): {
   if (repository.private === true) return { result: "private", source: "private_flag" };
   if (repository.private === false) return { result: "public", source: "private_flag" };
   return { result: "unknown", source: "unavailable" };
+}
+
+const GITHUB_LOGIN_PATTERN = /^(?!-)(?!.*--)[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$/;
+const GITHUB_APP_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/;
+
+/**
+ * Snapshot and validate the complete installation identity before a caller
+ * can use it for token resolution. This primitive deliberately performs no
+ * I/O, token minting, caching, or mutation.
+ */
+export function normalizeAndValidateGitHubInstallationIdentity(
+  value: unknown,
+  expected: GitHubInstallationIdentityExpectation
+): CanonicalGitHubInstallationIdentity {
+  const installation = snapshotGitHubDataRecord(value);
+  const expectations = snapshotGitHubDataRecord(expected);
+  const account = installation && snapshotGitHubDataRecord(installation.account);
+  const positiveInteger = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0;
+  const expectedAppId = typeof expectations?.expectedAppId === "string" ? expectations.expectedAppId.trim() : undefined;
+  const expectedBotLogin = normalizeGitHubBotLogin(expectations?.expectedBotLogin);
+  const repo = expectations?.repo;
+  const repoParts = typeof repo === "string" ? repo.split("/") : [];
+  const owner = repoParts.length === 2 && repoParts.every((part) => part.length > 0 && !/\s/.test(part))
+    ? normalizeGitHubValue(repoParts[0], GITHUB_LOGIN_PATTERN)
+    : undefined;
+  const appSlug = normalizeGitHubAppSlug(installation?.app_slug);
+  const botLogin = appSlug ? `${appSlug}[bot]` : undefined;
+  const accountLogin = normalizeGitHubValue(account?.login, GITHUB_LOGIN_PATTERN);
+  const accountType = account?.type;
+  if (!installation || !expectations || !account || typeof expectedAppId !== "string"
+      || !/^\d+$/.test(expectedAppId) || !expectedBotLogin || !owner
+      || !positiveInteger(installation.id) || !positiveInteger(installation.app_id)
+      || String(installation.app_id) !== expectedAppId
+      || !positiveInteger(account.id) || !accountLogin || accountLogin !== owner
+      || (accountType !== "User" && accountType !== "Organization")
+      || !appSlug || !botLogin || botLogin !== expectedBotLogin) {
+    throw new Error("GitHub installation identity failed canonical validation.");
+  }
+  return Object.freeze({
+    id: installation.id,
+    app_id: installation.app_id,
+    account_id: account.id,
+    account_login: accountLogin,
+    account_type: accountType,
+    app_slug: appSlug,
+    bot_login: botLogin
+  });
+}
+
+function normalizeGitHubAppSlug(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  const slug = normalized.endsWith("[bot]") ? normalized.slice(0, -5) : normalized;
+  return GITHUB_APP_SLUG_PATTERN.test(slug) ? slug : undefined;
+}
+
+function normalizeGitHubBotLogin(value: unknown): string | undefined {
+  const slug = normalizeGitHubAppSlug(value);
+  return slug ? `${slug}[bot]` : undefined;
+}
+
+function snapshotGitHubDataRecord(value: unknown): Record<string, unknown> | undefined {
+  try {
+    if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Object.values(descriptors).some((descriptor) => !("value" in descriptor))) return undefined;
+    const snapshot = structuredClone(value);
+    return Object.getPrototypeOf(snapshot) === Object.prototype ? snapshot as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeGitHubValue(value: unknown, pattern: RegExp): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return pattern.test(normalized) ? normalized : undefined;
 }
 
 function parseGitHubInstallationIdentity(value: unknown): GitHubInstallationIdentity {
