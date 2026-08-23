@@ -331,7 +331,8 @@ export type IssueEnrichmentScanReason =
   | "repo_max_comments_per_cycle"
   | "global_max_issues_per_cycle"
   | "global_max_comments_per_cycle"
-  | "burst_threshold_exceeded";
+  | "burst_threshold_exceeded"
+  | "issue_comment_marker_overflow";
 
 export function shouldDeferPreservationPreviewToPromotion(reason: IssueEnrichmentScanReason): boolean {
   return reason === "preservation_only_upstream_intake";
@@ -451,6 +452,7 @@ export async function buildIssueEvidenceContext(input: {
       ? await input.github.listIssueComments(input.repo, input.issue.number)
       : [];
   const { items: rawComments, rawCount: rawCommentCount, truncated: commentsTruncated } = unpackBoundedGithubList(commentResult);
+  if (commentsTruncated) throw new GithubPaginationOverflowError("issue_comment_marker");
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
@@ -1298,18 +1300,19 @@ export async function runIssueEnrichmentCycle(input: {
         items.push({ ...item, recordStatus: "posted", ...(commentUrl ? { commentUrl } : {}) });
       } catch (error) {
         const message = redactSecrets(error instanceof Error ? error.message : String(error));
+        const markerOverflow = message.includes("GitHub issue comment marker scan exceeded page limit");
         input.state.recordIssueEnrichment({
           repo: item.repo,
           issueNumber: item.issueNumber,
           issueUpdatedAt,
           ...(analysisInputHash ? { analysisInputHash } : {}),
-          status: "failed",
-          reason: "analysis_or_post_failed",
+          status: markerOverflow ? "deferred" : "failed",
+          reason: markerOverflow ? "issue_comment_marker_overflow" : "analysis_or_post_failed",
           error: message,
           now: new Date(checkedAt)
         });
-        summary.failed += 1;
-        items.push({ ...item, recordStatus: "failed", error: message });
+        summary[markerOverflow ? "deferred" : "failed"] += 1;
+        items.push({ ...item, recordStatus: markerOverflow ? "deferred" : "failed", error: message });
       }
     }
 

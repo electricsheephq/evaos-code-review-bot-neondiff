@@ -3372,26 +3372,8 @@ describe("issue-enrichment pagination overflow", () => {
     try {
       const configPath = join(root, "config.json");
       const statePath = join(root, "state.sqlite");
-      writeFileSync(configPath, `${JSON.stringify({
-        statePath,
-        issueEnrichment: {
-          enabled: true,
-          postIssueComment: true,
-          allowlist: ["owner/issue-repo"],
-          maxIssuesPerCycle: 1,
-          maxCommentsPerCycle: 1,
-          processExistingOpenIssuesOnActivation: true,
-          repos: {
-            "owner/issue-repo": {
-              promotionMaintainers: [{
-                login: "trusted-maintainer",
-                validFrom: "2026-08-01T00:00:00Z",
-                validUntil: "2026-09-01T00:00:00Z"
-              }]
-            }
-          }
-        }
-      })}\n`);
+      const config = { statePath, issueEnrichment: { enabled: true, postIssueComment: true, allowlist: ["owner/issue-repo"], maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, processExistingOpenIssuesOnActivation: true, repos: { "owner/issue-repo": { maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 10, lookbackMs: 600_000, promotionMaintainers: [{ login: "trusted-maintainer", validFrom: "2026-08-01T00:00:00Z", validUntil: "2026-09-01T00:00:00Z" }] } } };
+      writeFileSync(configPath, `${JSON.stringify(config)}\n`);
       const state = new ReviewStateStore(statePath);
       state.recordIssueEnrichmentRepoWatermark({
         repo: "owner/issue-repo",
@@ -3424,6 +3406,7 @@ describe("issue-enrichment pagination overflow", () => {
           github: {
             listIssuesForEnrichment: async () => [issue],
             listIssueLabelEvents: async () => overflowEvents,
+            getCollaboratorPermission: async () => "maintain",
             canPostAsApp: () => true,
             upsertIssueComment: async () => {
               postCalls += 1;
