@@ -452,7 +452,6 @@ export async function buildIssueEvidenceContext(input: {
       ? await input.github.listIssueComments(input.repo, input.issue.number)
       : [];
   const { items: rawComments, rawCount: rawCommentCount, truncated: commentsTruncated } = unpackBoundedGithubList(commentResult);
-  if (commentsTruncated) throw new GithubPaginationOverflowError("issue_comment_marker");
   const externalComments = rawComments.filter((comment) =>
     !(comment.body ?? "").trimStart().startsWith(ENRICHMENT_MARKER_PREFIX)
   );
