@@ -89,19 +89,20 @@ to its `docs/releases/<version>.md` packet the same way existing entries do.
 Commit this alongside the release packet PR so `CHANGELOG.md` never lags the
 tagged version.
 
-Promotion consumes an operator-approved packet; it never syncs a checkout or
-builds on the operations Mac. Run this whole block with `set -euo pipefail`:
+Promotion consumes an operator-approved packet binding the ZIP SHA-256 to the
+staged app's `sha256-tree-v1` digest; it never syncs or builds a checkout on
+the operations Mac. Run this whole block with `set -euo pipefail`:
 
 ```bash
 set -euo pipefail
 : "${NEONDIFF_ACCEPTED_PACKET:?packet path}" "${NEONDIFF_ACCEPTED_BUNDLE:?bundle path}"
 : "${NEONDIFF_ACCEPTED_BUNDLE_SHA256:?accepted digest}" "${NEONDIFF_APPROVED_SOURCE_SHA:?approved source}"
-: "${NEONDIFF_ACCEPTED_WORKER_SHA256:?accepted worker digest}" "${NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH:?accepted code hash}"
+: "${NEONDIFF_ACCEPTED_WORKER_SHA256:?accepted worker digest}" "${NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH:?accepted code hash}" "${NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256:?sha256-tree-v1 digest}"
 : "${NEONDIFF_INTENDED_BRANCH:?operator decision}" "${NEONDIFF_RUNTIME_CONFIG:?config path}"
 : "${NEONDIFF_EXPECTED_APP_ID:?stored App value}" "${NEONDIFF_EXPECTED_DEVICE_ID:?stored device value}"
 : "${NEONDIFF_PACKET_SOURCE_SHA:?packet source}" "${NEONDIFF_ACCEPTED_CONFIG_PATH:?packet config}"
 : "${NEONDIFF_ACCEPTED_SIGNING_RECEIPT:?signing receipt}" "${NEONDIFF_ACCEPTED_NOTARY_RECEIPT:?notary receipt}" "${NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT:?Gatekeeper receipt}"
-: "${NEONDIFF_STAGE_ROOT:?staging root}" "${NEONDIFF_STAGE_PATH:?staged app}" "${NEONDIFF_STAGED_WORKER_PATH:?staged worker}" "${NEONDIFF_LAUNCH_AGENT_PATH:?plist path}" "${NEONDIFF_LAUNCHD_LABEL:?label}" "${NEONDIFF_WORKER_EXECUTABLE:?worker path}" "${NEONDIFF_EVIDENCE_ROOT:?evidence root}"
+: "${NEONDIFF_STAGE_ROOT:?staging root}" "${NEONDIFF_STAGE_PATH:?staged app}" "${NEONDIFF_STAGED_WORKER_PATH:?staged worker}" "${NEONDIFF_LAUNCH_AGENT_PATH:?plist path}" "${NEONDIFF_LAUNCHD_LABEL:?label}" "${NEONDIFF_WORKER_EXECUTABLE:?wrapper path}" "${NEONDIFF_TREE_HASH_TOOL:?pinned tree verifier}" "${NEONDIFF_EVIDENCE_ROOT:?evidence root}"
 test "$NEONDIFF_INTENDED_BRANCH" = main
 test -s "$NEONDIFF_ACCEPTED_PACKET"
 test "$NEONDIFF_PACKET_SOURCE_SHA" = "$NEONDIFF_APPROVED_SOURCE_SHA"
@@ -111,11 +112,11 @@ test "$(shasum -a 256 "$NEONDIFF_ACCEPTED_BUNDLE" | awk '{print $1}')" = "$NEOND
 test ! -e "$NEONDIFF_STAGE_ROOT"
 ditto -x -k "$NEONDIFF_ACCEPTED_BUNDLE" "$NEONDIFF_STAGE_ROOT"
 test -d "$NEONDIFF_STAGE_PATH"
-test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH"
+test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_STAGE_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256"
 codesign --verify --deep --strict "$NEONDIFF_STAGE_PATH"
 xcrun stapler validate "$NEONDIFF_STAGE_PATH"
 spctl --assess --type execute "$NEONDIFF_STAGE_PATH"
-test "$NEONDIFF_LAUNCHD_LABEL" = com.electricsheephq.evaos-code-review-bot
+test "$NEONDIFF_LAUNCHD_LABEL" = com.electricsheephq.evaos-code-review-bot -a "$NEONDIFF_WORKER_EXECUTABLE" = /Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop -a "$NEONDIFF_STAGED_WORKER_PATH" = "$NEONDIFF_STAGE_PATH/Contents/Helpers/NeonDiffWorker"
 export NEONDIFF_LAUNCHD_LABEL NEONDIFF_WORKER_EXECUTABLE NEONDIFF_RUNTIME_CONFIG NEONDIFF_EXPECTED_APP_ID NEONDIFF_EXPECTED_DEVICE_ID
 /usr/bin/plutil -convert json -o - "$NEONDIFF_LAUNCH_AGENT_PATH" | /usr/bin/env node -e '
 const fs=require("node:fs"),p=JSON.parse(fs.readFileSync(0,"utf8")),a=p.ProgramArguments;
@@ -125,7 +126,7 @@ NEONDIFF_PACKET_DIR="$NEONDIFF_EVIDENCE_ROOT/$NEONDIFF_ACCEPTED_BUNDLE_SHA256"
 test ! -e "$NEONDIFF_PACKET_DIR" && mkdir "$NEONDIFF_PACKET_DIR"
 # Stop new admissions and finish the current cycle before this sole mutation.
 launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
-test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH"
+test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH" -a "$("$NEONDIFF_TREE_HASH_TOOL" --directory "$NEONDIFF_STAGE_PATH" | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).sha256)')" = "$NEONDIFF_ACCEPTED_BUNDLE_TREE_SHA256"
 test "$(shasum -a 256 "$NEONDIFF_STAGED_WORKER_PATH" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_WORKER_SHA256"
 ```
 
@@ -598,21 +599,20 @@ health, stage exact bytes, and mutate only at a natural cycle boundary:
 set -euo pipefail
 : "${NEONDIFF_EVIDENCE_ROOT:?evidence root}" "${NEONDIFF_LAST_KNOWN_GOOD_PACKET:?packet}"
 : "${NEONDIFF_LAST_KNOWN_GOOD_BUNDLE:?bundle}" "${NEONDIFF_LAST_KNOWN_GOOD_SHA256:?digest}"
-: "${NEONDIFF_ROLLBACK_STAGE_ROOT:?staging root}" "${NEONDIFF_ROLLBACK_STAGE_PATH:?staged app}"
+: "${NEONDIFF_ROLLBACK_STAGE_ROOT:?staging root}" "${NEONDIFF_ROLLBACK_STAGE_PATH:?staged app}" "${NEONDIFF_DRAIN_TIMEOUT_SECONDS:?bounded drain seconds}" "${NEONDIFF_NATURAL_CYCLE_RECEIPT:?cycle receipt}" "${NEONDIFF_LAUNCH_AGENT_PATH:?exact plist path}" "${NEONDIFF_LAUNCHD_LABEL:?exact label}"
 NEONDIFF_ROLLBACK_DIR="$NEONDIFF_EVIDENCE_ROOT/rollback-$NEONDIFF_LAST_KNOWN_GOOD_SHA256"
 test ! -e "$NEONDIFF_ROLLBACK_DIR" && mkdir "$NEONDIFF_ROLLBACK_DIR"
-set +e
-npm run release:status -- --config "$NEONDIFF_RUNTIME_CONFIG" >"$NEONDIFF_ROLLBACK_DIR/current-status-advisory.json" 2>&1
-set -e
+if [[ -n "${NEONDIFF_RUNTIME_CONFIG:-}" ]]; then set +e; npm run release:status -- --config "$NEONDIFF_RUNTIME_CONFIG" >"$NEONDIFF_ROLLBACK_DIR/current-status-advisory.json" 2>&1; set -e; else : >"$NEONDIFF_ROLLBACK_DIR/current-status-advisory.json"; fi
 test -s "$NEONDIFF_LAST_KNOWN_GOOD_PACKET" \
   && test "$(shasum -a 256 "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" | awk '{print $1}')" = "$NEONDIFF_LAST_KNOWN_GOOD_SHA256"
-codesign --verify --deep --strict "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE"
-xcrun stapler validate "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE"
-spctl --assess --type execute "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE"
 test ! -e "$NEONDIFF_ROLLBACK_STAGE_ROOT"
 ditto -x -k "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" "$NEONDIFF_ROLLBACK_STAGE_ROOT"
 test -d "$NEONDIFF_ROLLBACK_STAGE_PATH"
-# Run the complete ten-argument/no-extra-key plist validator above for this target.
+codesign --verify --deep --strict "$NEONDIFF_ROLLBACK_STAGE_PATH"
+xcrun stapler validate "$NEONDIFF_ROLLBACK_STAGE_PATH"
+spctl --assess --type execute "$NEONDIFF_ROLLBACK_STAGE_PATH"
+NEONDIFF_DRAIN_DEADLINE=$((SECONDS+NEONDIFF_DRAIN_TIMEOUT_SECONDS)); while [[ ! -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT" && $SECONDS -lt $NEONDIFF_DRAIN_DEADLINE ]]; do sleep 1; done
+if [[ ! -f "$NEONDIFF_NATURAL_CYCLE_RECEIPT" ]]; then test "$(plutil -extract Label raw -o - "$NEONDIFF_LAUNCH_AGENT_PATH")" = "$NEONDIFF_LAUNCHD_LABEL"; test "$(plutil -extract ProgramArguments.5 raw -o - "$NEONDIFF_LAUNCH_AGENT_PATH")" = "$NEONDIFF_LAUNCHD_LABEL"; launchctl bootout "gui/$(id -u)" "$NEONDIFF_LAUNCH_AGENT_PATH"; launchctl bootstrap "gui/$(id -u)" "$NEONDIFF_LAUNCH_AGENT_PATH"; fi
 launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
 test "$(shasum -a 256 "$NEONDIFF_ROLLBACK_WORKER_PATH" | awk '{print $1}')" = "$NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256"
 ```
