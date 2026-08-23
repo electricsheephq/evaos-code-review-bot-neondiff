@@ -9,8 +9,8 @@ const declarationSchema = JSON.parse(readFileSync(resolve(here, "../docs/schema/
 const indexSchema = JSON.parse(readFileSync(resolve(here, "../docs/schema/desktop-release-index-v1.schema.json"), "utf8"));
 let DefaultAjv;
 try { DefaultAjv = (await import("ajv/dist/2020.js")).Ajv2020; } catch {}
-const VERSION = /^1\.1\.0(?:-(beta|rc)\.([1-9][0-9]*))?$/;
-const NAME = /^v1\.1\.0(?:-(?:beta|rc)\.[1-9][0-9]*)?\.json$/;
+const VERSION = /^1\.1\.0(?:-(beta\.[1-9][0-9]{0,3}|rc\.[1-9][0-9]*))?$/;
+const NAME = /^v1\.1\.0(?:-(?:beta\.[1-9][0-9]{0,3}|rc\.[1-9][0-9]*))?\.json$/;
 const READ_ONLY = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
 const DIRECTORY = constants.O_DIRECTORY ?? 0;
 const fail = (...errors) => ({ valid: false, errors });
@@ -30,9 +30,9 @@ export function validateDesktopReleaseDeclaration(value, options = {}) {
   if (!shape.valid) return shape;
   const parts = versionParts(value.version);
   if (!parts) return fail("version/tag must be canonical");
-  const expectedContract = parts.channel === "stable" ? "paid-mac-ga-byo-v1" : "paid-mac-beta-byo-v1";
+  const expectedContract = "paid-mac-beta-byo-v1";
   const expectedTag = `v${value.version}`;
-  const expectedName = `NeonDiffDesktop-${value.version}.zip`;
+  const expectedName = `NeonDiff-${value.version}-build${value.build}-macOS.zip`;
   const errors = [];
   if (!parts || value.tag !== expectedTag) errors.push("version/tag must be canonical");
   if (value.contract !== expectedContract) errors.push("contract does not match release class");
