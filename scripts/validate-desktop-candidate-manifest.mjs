@@ -91,6 +91,7 @@ export function validateDesktopReleaseManifest(manifest, options = {}) {
 export function validateManifestIndex(indexPath, options = {}) {
   const Ajv = Object.prototype.hasOwnProperty.call(options, "ajv") ? options.ajv : ImportedAjv;
   if (!Ajv) return fail(SCHEMA_UNAVAILABLE);
+  try { (typeof Ajv === "function" ? new Ajv({ allErrors: true, strict: true, allowUnionTypes: true }) : Ajv).compile(schema); } catch { return fail(SCHEMA_UNAVAILABLE); }
   let index;
   try { index = JSON.parse(readFileSync(resolve(indexPath), "utf8")); } catch { return fail("manifest index unreadable or invalid"); }
   if (!index || typeof index !== "object" || Array.isArray(index)) return fail("manifest index shape invalid");
