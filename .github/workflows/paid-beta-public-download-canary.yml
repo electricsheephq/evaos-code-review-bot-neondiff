@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       artifact_name:
-        description: Exact signed and notarized Mac app ZIP asset
+        description: Exact signed and notarized build-named Mac app ZIP asset
         required: true
         type: string
       artifact_sha256:
@@ -51,15 +51,44 @@ jobs:
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v1\.1\.0-beta\.([0-9]+)$ ]]
-          release_beta="${BASH_REMATCH[1]}"
-          [[ "$ARTIFACT_NAME" =~ ^NeonDiff-1\.1\.0-beta\.([0-9]+)-build[0-9]+-macOS\.zip$ ]]
-          artifact_beta="${BASH_REMATCH[1]}"
-          test "$release_beta" = "$artifact_beta"
-          [[ "$ARTIFACT_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$RELEASE_TAG" =~ ^v1\.1\.0-(beta\.([0-9]+)|rc\.([1-9][0-9]*))$ ]]
+          release_channel="${BASH_REMATCH[1]%%.*}"
+          release_number="${BASH_REMATCH[1]#*.}"
+          release_version="1.1.0-${release_channel}.${release_number}"
+          [[ "$ARTIFACT_NAME" =~ ^NeonDiff-1\.1\.0-(beta\.([0-9]+)|rc\.([1-9][0-9]*))-build([0-9]+)-macOS\.zip$ ]]
+          artifact_channel="${BASH_REMATCH[1]%%.*}"
+          artifact_number="${BASH_REMATCH[1]#*.}"
+          artifact_build="${BASH_REMATCH[4]}"
+          test "$release_channel" = "$artifact_channel"
+          test "$release_number" = "$artifact_number"
+          test "${#ARTIFACT_SHA256}" -eq 64
+          test -z "$(printf '%s' "$ARTIFACT_SHA256" | tr -d 'a-f0-9')"
           test "$(uname -m)" = "arm64"
+          printf 'release_channel=%s\nrelease_version=%s\nartifact_build=%s\n' \
+            "$release_channel" "$release_version" "$artifact_build" >> "$GITHUB_OUTPUT"
           printf 'url=https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/download/%s/%s\n' \
             "$RELEASE_TAG" "$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Verify annotated tag and immutable release digest
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+        run: |
+          set -euo pipefail
+          api_base="https://api.github.com/repos/electricsheephq/evaos-code-review-bot-neondiff"
+          headers=(--header "Authorization: Bearer $GITHUB_TOKEN" --header 'Accept: application/vnd.github+json')
+          tag="$(curl --fail --location --proto '=https' --tlsv1.2 "${headers[@]}" "$api_base/git/ref/tags/$RELEASE_TAG")"
+          test "$(jq -r '.ref' <<<"$tag")" = "refs/tags/$RELEASE_TAG"
+          test "$(jq -r '.object.type' <<<"$tag")" = "tag"
+          release="$(curl --fail --location --proto '=https' --tlsv1.2 "${headers[@]}" "$api_base/releases/tags/$RELEASE_TAG")"
+          test "$(jq -r '.tag_name' <<<"$release")" = "$RELEASE_TAG"
+          test "$(jq -r '.draft' <<<"$release")" = false
+          test "$(jq -r '.prerelease' <<<"$release")" = true
+          digest="$(jq -er --arg name "$ARTIFACT_NAME" '[.assets[] | select(.name == $name) | .digest] | if length == 1 then .[0] else error("exactly one matching asset required") end' <<<"$release")"
+          test "$digest" = "sha256:$ARTIFACT_SHA256"
 
       - name: Download exact public release asset
         shell: bash
@@ -100,6 +129,72 @@ jobs:
           xcrun stapler validate "$extract_root/NeonDiff.app"
           spctl --assess --type execute "$extract_root/NeonDiff.app"
 
+      - name: Verify version build feed and Sparkle signature agreement
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.release.outputs.url }}
+          ARTIFACT_BUILD: ${{ steps.release.outputs.artifact_build }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          PUBLIC_FEED_URL: https://www.neondiff.com/updates/beta/appcast.xml
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/neondiff-download/extracted/NeonDiff.app"
+          plist="$app/Contents/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" = "$RELEASE_VERSION"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = "$ARTIFACT_BUILD"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$plist")" = "$PUBLIC_FEED_URL"
+          key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$plist")"
+          feed="$RUNNER_TEMP/neondiff-download/appcast.xml"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output "$feed" "$PUBLIC_FEED_URL"
+          signature="$(python3 - "$feed" "$ARTIFACT_URL" "$ARTIFACT_BUILD" "$RELEASE_VERSION" "$PUBLIC_FEED_URL" "$key" <<'PY'
+          import base64, sys, xml.etree.ElementTree as ET
+          SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+          fail = lambda message: (_ for _ in ()).throw(SystemExit(message))
+          feed, url, build, version, feed_url, public_key = sys.argv[1:]
+          try:
+              if len(base64.b64decode(public_key, validate=True)) != 32: fail("invalid SUPublicEDKey")
+              root = ET.parse(feed).getroot()
+          except (ET.ParseError, ValueError) as error:
+              fail(f"invalid feed or public key: {error}")
+          direct = lambda node, name: [child for child in node if child.tag == name]
+          if root.tag != "rss": fail("root must be rss")
+          channels = direct(root, "channel")
+          if len(channels) != 1: fail("exactly one channel required")
+          channel = channels[0]
+          links = direct(channel, "link")
+          if len(links) != 1 or (links[0].text or "").strip() != feed_url: fail("feed link mismatch")
+          matches = []
+          for item in direct(channel, "item"):
+              enclosures = direct(item, "enclosure")
+              if len(enclosures) == 1 and enclosures[0].attrib.get("url") == url:
+                  matches.append((item, enclosures[0]))
+          if len(matches) != 1: fail("exactly one matching enclosure required")
+          item, enclosure = matches[0]
+          channel_key = f"{{{SPARKLE}}}channel"
+          channel_children = [child for child in item if child.tag == channel_key or child.tag == "channel" or child.tag.endswith("}channel")]
+          if len(channel_children) != 1 or channel_children[0].tag != channel_key or (channel_children[0].text or "").strip() != "beta":
+              fail("matched item must have one canonical beta channel element")
+          if enclosure.attrib.get(f"{{{SPARKLE}}}version") != build: fail("build mismatch")
+          if enclosure.attrib.get(f"{{{SPARKLE}}}shortVersionString") != version: fail("version mismatch")
+          signature = enclosure.attrib.get(f"{{{SPARKLE}}}edSignature", "")
+          try:
+              if len(base64.b64decode(signature, validate=True)) != 64: fail("invalid signature")
+          except ValueError as error:
+              fail(f"invalid signature: {error}")
+          print(signature, end="")
+          PY
+          )"
+          swift - "$key" "$signature" "$RUNNER_TEMP/neondiff-download/NeonDiff.zip" <<'SWIFT'
+          import CryptoKit
+          import Foundation
+          guard CommandLine.arguments.count == 4,
+                let key = Data(base64Encoded: CommandLine.arguments[1]),
+                let signature = Data(base64Encoded: CommandLine.arguments[2]),
+                let archive = try? Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[3])),
+                let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: key),
+                publicKey.isValidSignature(signature, for: archive) else { exit(1) }
+          SWIFT
+
       - name: Install exact app on clean runner
         shell: bash
         run: |
@@ -119,6 +214,9 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           ARTIFACT_NAME: ${{ inputs.artifact_name }}
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          RELEASE_CHANNEL: ${{ steps.release.outputs.release_channel }}
+          RELEASE_VERSION: ${{ steps.release.outputs.release_version }}
+          ARTIFACT_BUILD: ${{ steps.release.outputs.artifact_build }}
           RUNNER_LABEL: ${{ matrix.runner }}
         run: |
           set -euo pipefail
@@ -127,6 +225,9 @@ jobs:
             --arg releaseTag "$RELEASE_TAG" \
             --arg artifactName "$ARTIFACT_NAME" \
             --arg artifactSha256 "$ARTIFACT_SHA256" \
+            --arg releaseChannel "$RELEASE_CHANNEL" \
+            --arg releaseVersion "$RELEASE_VERSION" \
+            --arg artifactBuild "$ARTIFACT_BUILD" \
             --arg runnerLabel "$RUNNER_LABEL" \
             --arg macOSVersion "$(sw_vers -productVersion)" \
             --arg architecture "$(uname -m)" \
@@ -134,13 +235,18 @@ jobs:
             '{
               schemaVersion: $schemaVersion,
               releaseTag: $releaseTag,
+              releaseChannel: $releaseChannel,
+              releaseVersion: $releaseVersion,
               artifactName: $artifactName,
+              artifactBuild: $artifactBuild,
               artifactSha256: $artifactSha256,
               runnerLabel: $runnerLabel,
               macOSVersion: $macOSVersion,
               architecture: $architecture,
               publicDownload: $result,
               checksum: $result,
+              feed: $result,
+              sparkleSignature: $result,
               developerIdSignature: $result,
               notarizationTicket: $result,
               gatekeeper: $result,
