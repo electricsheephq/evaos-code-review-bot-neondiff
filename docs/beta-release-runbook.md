@@ -96,21 +96,22 @@ builds on the operations Mac. Run this whole block with `set -euo pipefail`:
 set -euo pipefail
 : "${NEONDIFF_ACCEPTED_PACKET:?packet path}" "${NEONDIFF_ACCEPTED_BUNDLE:?bundle path}"
 : "${NEONDIFF_ACCEPTED_BUNDLE_SHA256:?accepted digest}" "${NEONDIFF_APPROVED_SOURCE_SHA:?approved source}"
-: "${NEONDIFF_ACCEPTED_WORKER_SHA256:?accepted worker digest}"
+: "${NEONDIFF_ACCEPTED_WORKER_SHA256:?accepted worker digest}" "${NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH:?accepted code hash}"
 : "${NEONDIFF_INTENDED_BRANCH:?operator decision}" "${NEONDIFF_RUNTIME_CONFIG:?config path}"
 : "${NEONDIFF_EXPECTED_APP_ID:?stored App value}" "${NEONDIFF_EXPECTED_DEVICE_ID:?stored device value}"
 : "${NEONDIFF_PACKET_SOURCE_SHA:?packet source}" "${NEONDIFF_ACCEPTED_CONFIG_PATH:?packet config}"
 : "${NEONDIFF_ACCEPTED_SIGNING_RECEIPT:?signing receipt}" "${NEONDIFF_ACCEPTED_NOTARY_RECEIPT:?notary receipt}" "${NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT:?Gatekeeper receipt}"
-: "${NEONDIFF_STAGE_PATH:?staging path}" "${NEONDIFF_STAGED_WORKER_PATH:?staged worker}" "${NEONDIFF_LAUNCH_AGENT_PATH:?plist path}" "${NEONDIFF_LAUNCHD_LABEL:?label}" "${NEONDIFF_WORKER_EXECUTABLE:?worker path}" "${NEONDIFF_EVIDENCE_ROOT:?evidence root}"
+: "${NEONDIFF_STAGE_ROOT:?staging root}" "${NEONDIFF_STAGE_PATH:?staged app}" "${NEONDIFF_STAGED_WORKER_PATH:?staged worker}" "${NEONDIFF_LAUNCH_AGENT_PATH:?plist path}" "${NEONDIFF_LAUNCHD_LABEL:?label}" "${NEONDIFF_WORKER_EXECUTABLE:?worker path}" "${NEONDIFF_EVIDENCE_ROOT:?evidence root}"
 test "$NEONDIFF_INTENDED_BRANCH" = main
 test -s "$NEONDIFF_ACCEPTED_PACKET"
 test "$NEONDIFF_PACKET_SOURCE_SHA" = "$NEONDIFF_APPROVED_SOURCE_SHA"
 test "$NEONDIFF_RUNTIME_CONFIG" = "$NEONDIFF_ACCEPTED_CONFIG_PATH"
 test -s "$NEONDIFF_ACCEPTED_SIGNING_RECEIPT" -a -s "$NEONDIFF_ACCEPTED_NOTARY_RECEIPT" -a -s "$NEONDIFF_ACCEPTED_GATEKEEPER_RECEIPT"
 test "$(shasum -a 256 "$NEONDIFF_ACCEPTED_BUNDLE" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_BUNDLE_SHA256"
-test ! -e "$NEONDIFF_STAGE_PATH"
-ditto "$NEONDIFF_ACCEPTED_BUNDLE" "$NEONDIFF_STAGE_PATH"
-test "$(shasum -a 256 "$NEONDIFF_STAGE_PATH" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_BUNDLE_SHA256"
+test ! -e "$NEONDIFF_STAGE_ROOT"
+ditto -x -k "$NEONDIFF_ACCEPTED_BUNDLE" "$NEONDIFF_STAGE_ROOT"
+test -d "$NEONDIFF_STAGE_PATH"
+test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH"
 codesign --verify --deep --strict "$NEONDIFF_STAGE_PATH"
 xcrun stapler validate "$NEONDIFF_STAGE_PATH"
 spctl --assess --type execute "$NEONDIFF_STAGE_PATH"
@@ -124,6 +125,7 @@ NEONDIFF_PACKET_DIR="$NEONDIFF_EVIDENCE_ROOT/$NEONDIFF_ACCEPTED_BUNDLE_SHA256"
 test ! -e "$NEONDIFF_PACKET_DIR" && mkdir "$NEONDIFF_PACKET_DIR"
 # Stop new admissions and finish the current cycle before this sole mutation.
 launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
+test "$(codesign --display --verbose=4 "$NEONDIFF_STAGE_PATH" 2>&1 | awk -F= '/CDHash=/{print $2}')" = "$NEONDIFF_ACCEPTED_CODE_DIRECTORY_HASH"
 test "$(shasum -a 256 "$NEONDIFF_STAGED_WORKER_PATH" | awk '{print $1}')" = "$NEONDIFF_ACCEPTED_WORKER_SHA256"
 ```
 
@@ -596,6 +598,7 @@ health, stage exact bytes, and mutate only at a natural cycle boundary:
 set -euo pipefail
 : "${NEONDIFF_EVIDENCE_ROOT:?evidence root}" "${NEONDIFF_LAST_KNOWN_GOOD_PACKET:?packet}"
 : "${NEONDIFF_LAST_KNOWN_GOOD_BUNDLE:?bundle}" "${NEONDIFF_LAST_KNOWN_GOOD_SHA256:?digest}"
+: "${NEONDIFF_ROLLBACK_STAGE_ROOT:?staging root}" "${NEONDIFF_ROLLBACK_STAGE_PATH:?staged app}"
 NEONDIFF_ROLLBACK_DIR="$NEONDIFF_EVIDENCE_ROOT/rollback-$NEONDIFF_LAST_KNOWN_GOOD_SHA256"
 test ! -e "$NEONDIFF_ROLLBACK_DIR" && mkdir "$NEONDIFF_ROLLBACK_DIR"
 set +e
@@ -606,8 +609,9 @@ test -s "$NEONDIFF_LAST_KNOWN_GOOD_PACKET" \
 codesign --verify --deep --strict "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE"
 xcrun stapler validate "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE"
 spctl --assess --type execute "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE"
-test ! -e "$NEONDIFF_ROLLBACK_STAGE_PATH"
-ditto "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" "$NEONDIFF_ROLLBACK_STAGE_PATH"
+test ! -e "$NEONDIFF_ROLLBACK_STAGE_ROOT"
+ditto -x -k "$NEONDIFF_LAST_KNOWN_GOOD_BUNDLE" "$NEONDIFF_ROLLBACK_STAGE_ROOT"
+test -d "$NEONDIFF_ROLLBACK_STAGE_PATH"
 # Run the complete ten-argument/no-extra-key plist validator above for this target.
 launchctl kickstart -k "gui/$(id -u)/$NEONDIFF_LAUNCHD_LABEL"
 test "$(shasum -a 256 "$NEONDIFF_ROLLBACK_WORKER_PATH" | awk '{print $1}')" = "$NEONDIFF_LAST_KNOWN_GOOD_WORKER_SHA256"
