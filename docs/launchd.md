@@ -18,7 +18,7 @@ with a global or customer-writable executable. A signed app, Keychain identity,
 worker identity, config revision, and selected LaunchAgent label must all match;
 ambiguous or missing evidence fails closed.
 
-## Legacy CLI/operator path
+## Public BYO and legacy CLI/operator path
 
 The following environment-backed examples are retained only for existing CLI or
 operator workers, including legacy Mac installations. They are not instructions

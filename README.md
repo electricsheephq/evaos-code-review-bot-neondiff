@@ -11,11 +11,11 @@ Use it when you want a GitHub App to review pull requests from a local worker,
 with your GitHub installation, your provider keys, your repo policy, and
 public-safe evidence for every live posting decision.
 
-The npm CLI remains `neondiff@1.0.4` and requires API-backed activation for every
-repository (public, private, internal, and unknown); unknown visibility fails
-closed, and provider verification is required for all tiers. The native Mac
-Desktop release line is `1.1.0`; it is a separate signed Desktop artifact and
-does not silently change the npm CLI version.
+The current npm CLI (v1.0.x) requires API-backed activation for every repository
+(public, private, internal, and unknown); unknown visibility fails closed, and
+provider verification is required for all tiers. The native Mac Desktop release
+line is `1.1.0`; it is a separate signed Desktop artifact and does not silently
+change the npm CLI version.
 
 The later managed-app path is post-GA and is not the Mac 1.1.0 first-run path.
 Coming with the native app: public open-source repositories will be free with no
