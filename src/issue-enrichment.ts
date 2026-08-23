@@ -13,6 +13,12 @@ import {
 } from "./enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "./github-related-context.js";
 import {
+  GithubIssueLabelEventOverflowError,
+  unpackBoundedGithubList,
+  type BoundedGithubList,
+  type GithubIssueLabelEvent
+} from "./github.js";
+import {
   buildIssueAnalysisInputHash,
   runIssueAnalysis,
   type IssueAnalysis,
@@ -276,12 +282,7 @@ export interface IssueEnrichmentCycleResult extends Omit<IssueEnrichmentScanResu
 
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
   getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
-  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>>;
+  listIssueLabelEvents?(repo: string, issueNumber: number): Promise<GithubIssueLabelEvent[] | BoundedGithubList<GithubIssueLabelEvent>>;
   getCollaboratorPermission?(repo: string, login: string): Promise<IssuePromotionPermission>;
   listIssueComments?(repo: string, issueNumber: number): Promise<Array<{
     id: number;
@@ -390,7 +391,9 @@ async function evaluateIssuePromotion(input: {
     return { issue: input.issue };
   }
   try {
-    const events = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
+    const eventResult = await input.github.listIssueLabelEvents(input.repo, input.issue.number);
+    const { items: events, overflow } = unpackBoundedGithubList(eventResult);
+    if (overflow) throw new GithubIssueLabelEventOverflowError();
     const labelEvent = events
       .filter((event) => event.event === "labeled" && event.label?.name?.trim().toLowerCase() === "active-continuation")
       .filter((event) => Boolean(event.actor?.login && event.created_at))
@@ -414,7 +417,8 @@ async function evaluateIssuePromotion(input: {
       },
       evidence
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof GithubIssueLabelEventOverflowError) throw error;
     return { issue: input.issue };
   }
 }
