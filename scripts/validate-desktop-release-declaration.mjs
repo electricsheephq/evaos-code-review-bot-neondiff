@@ -39,7 +39,7 @@ function rejectDuplicateKeys(raw) {
     const keys = objects.at(-1); if (keys.has(key)) fail(`duplicate object key: ${key}`); keys.add(key);
   }
 }
-function readRegular(path) {
+function readRawRegular(path) {
   let fd;
   try {
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -47,10 +47,11 @@ function readRegular(path) {
     const raw = readFileSync(fd, "utf8");
     if (/(?:"build"|"sequence")\s*:\s*(?!"[0-9]+")/.test(raw)) fail("identity fields must be quoted decimal text");
     rejectDuplicateKeys(raw);
-    return JSON.parse(raw);
+    return raw;
   } catch (error) { if (error?.code === "ELOOP") fail(`symlink or non-regular file: ${path}`); throw error; }
   finally { if (fd !== undefined) closeSync(fd); }
 }
+function readRegular(path) { return JSON.parse(readRawRegular(path)); }
 function openDirectory(path) {
   let fd;
   try {
@@ -69,11 +70,32 @@ function pathIn(directory, name) {
 }
 function check(value, valid, label) { if (!valid(value)) fail(`${label} schema invalid: ${ajv.errorsText(valid.errors)}`); }
 function buildCompare(a, b) { const left = BigInt(a), right = BigInt(b); return left < right ? -1 : left > right ? 1 : 0; }
+function validateTransition(index, directory, baseIndexPath) {
+  const base = readRegular(baseIndexPath);
+  check(base, validateIndex, "base index");
+  if (base.status !== "retained") return;
+  if (index.status !== "retained") fail("retained history cannot regress to empty");
+  if (base.declarationPaths.some((name, i) => index.declarationPaths[i] !== name)) fail("retained declaration history must be an exact prefix");
+  const baseDirectory = resolve(dirname(baseIndexPath), base.declarationDirectory), baseHandle = openDirectory(baseDirectory);
+  try {
+    for (const name of base.declarationPaths) {
+      if (readRawRegular(pathIn(directory, name)) !== readRawRegular(pathIn(baseDirectory, name))) fail(`retained declaration rewritten: ${name}`);
+    }
+    if (!sameDirectory(baseDirectory, baseHandle.stat)) fail("base declaration directory changed during validation");
+  } finally { closeSync(baseHandle.fd); }
+}
+function parseArgs() {
+  const args = process.argv.slice(2);
+  if (args.length === 2 && args[0] === "--index") return { indexPath: resolve(args[1]), baseIndexPath: null, initial: false };
+  if (args.length === 4 && args[0] === "--index" && args[2] === "--base-index") return { indexPath: resolve(args[1]), baseIndexPath: resolve(args[3]), initial: false };
+  if (args.length === 3 && args[0] === "--index" && args[2] === "--initial") return { indexPath: resolve(args[1]), baseIndexPath: null, initial: true };
+  fail("usage: validate-desktop-release-declaration.mjs --index PATH [--base-index PATH|--initial]");
+}
 
 function main() {
-  if (process.argv.length !== 4 || process.argv[2] !== "--index") fail("usage: validate-desktop-release-declaration.mjs --index PATH");
-  const indexPath = resolve(process.argv[3]), index = readRegular(indexPath);
+  const { indexPath, baseIndexPath, initial } = parseArgs(), index = readRegular(indexPath);
   check(index, validateIndex, "index");
+  if (initial && index.status !== "empty") fail("initial history requires the empty clean-checkout convention");
   const directory = resolve(dirname(indexPath), index.declarationDirectory), handle = openDirectory(directory);
   try {
     const entries = readdirSync(directory, { withFileTypes: true }), listed = new Set(index.declarationPaths);
@@ -83,7 +105,7 @@ function main() {
       if (entry.name === ".gitkeep") { if (!entry.isFile()) fail("empty convention must be a regular file"); convention = true; continue; }
       if (!entry.isFile() || !listed.has(entry.name)) fail(`unindexed declaration entry: ${entry.name}`);
     }
-    if (index.status === "empty") { if (!convention || entries.length !== 1) fail("empty index requires only tracked .gitkeep convention"); return "empty"; }
+    if (index.status === "empty") { if (!convention || entries.length !== 1) fail("empty index requires only tracked .gitkeep convention"); if (!sameDirectory(directory, handle.stat)) fail("declaration directory changed during validation"); if (baseIndexPath) { validateTransition(index, directory, baseIndexPath); if (!sameDirectory(directory, handle.stat)) fail("declaration directory changed during transition"); } return "empty"; }
     if (convention) fail(".gitkeep is only valid for an empty index");
     const declarations = index.declarationPaths.map((name) => [name, readRegular(pathIn(directory, name))]);
     for (const [name, declaration] of declarations) {
@@ -106,6 +128,7 @@ function main() {
     ordered.forEach(([name, declaration], i) => { if (declaration.predecessor !== (i ? ordered[i - 1][0] : null)) fail(`predecessor mismatch: ${name}`); });
     if (index.currentPath !== ordered.at(-1)[0]) fail("currentPath must be newest compatible declaration");
     if (!sameDirectory(directory, handle.stat)) fail("declaration directory changed during validation");
+    if (baseIndexPath) { validateTransition(index, directory, baseIndexPath); if (!sameDirectory(directory, handle.stat)) fail("declaration directory changed during transition"); }
     return `${index.declarationPaths.length} declarations; currentPath=${index.currentPath}`;
   } finally { closeSync(handle.fd); }
 }
