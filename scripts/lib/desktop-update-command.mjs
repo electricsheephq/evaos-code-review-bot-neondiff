@@ -51,3 +51,31 @@ export function planDesktopUpdate({ action, declaration, declarationBytes, packe
     steps: ["wait-for-zero-lease-cycle", "stage-and-verify", "swap-and-restart-exact-service", "verify-poststate"]
   };
 }
+
+export function executeDesktopTransition({ plan, snapshot, ops }) {
+  exact(snapshot, ["cycleBoundary", "timedOut", "activeLeases", "workerPairs", "label", "appSHA256", "accountIdentitySHA256", "botIdentitySHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "keychainIdentitySHA256", "plistSHA256", "destinationDevice", "stageDevice"], "transition snapshot");
+  exact(ops, ["stage", "verifyStage", "stopExactService", "exchange", "startExactService", "inspectPoststate"], "transition operations");
+  if (plan?.schemaVersion !== 1 || plan?.dryRun !== true) fail("accepted dry plan is required");
+  if (snapshot.timedOut || snapshot.cycleBoundary !== true || snapshot.activeLeases !== 0) fail("bounded zero-lease cycle boundary is required");
+  if (snapshot.workerPairs !== 1 || snapshot.label !== plan.prestate.label) fail("exactly one selected worker service is required");
+  for (const key of ["appSHA256", "accountIdentitySHA256", "botIdentitySHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "keychainIdentitySHA256", "plistSHA256"]) if (snapshot[key] !== plan.prestate[key]) fail(`prestate ${key} drifted`);
+  if (!Number.isInteger(snapshot.destinationDevice) || snapshot.destinationDevice !== snapshot.stageDevice) fail("stage and destination must share one filesystem");
+  for (const name of Object.keys(ops)) if (typeof ops[name] !== "function") fail(`transition operation ${name} is invalid`);
+  ops.stage(plan.candidate); ops.verifyStage(plan.candidate);
+  let stopped = false, swapped = false;
+  try {
+    ops.stopExactService(snapshot.label); stopped = true;
+    ops.exchange(); swapped = true;
+    ops.startExactService(snapshot.label);
+    const poststate = ops.inspectPoststate();
+    exact(poststate, ["version", "build", "appSHA256", "accountIdentitySHA256", "botIdentitySHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "keychainIdentitySHA256", "plistSHA256", "label", "workerPairs", "heartbeatFresh", "statusAccepted"], "poststate receipt");
+    if (poststate.version !== plan.candidate.version || poststate.build !== plan.candidate.build || poststate.appSHA256 !== plan.candidate.treeSHA256 || poststate.label !== snapshot.label || poststate.workerPairs !== 1 || poststate.heartbeatFresh !== true || poststate.statusAccepted !== true) fail("installed app or worker poststate is not accepted");
+    for (const key of ["accountIdentitySHA256", "botIdentitySHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "keychainIdentitySHA256", "plistSHA256"]) if (poststate[key] !== plan.prestate[key]) fail(`poststate ${key} drifted`);
+    return poststate;
+  } catch (error) {
+    if (!stopped) throw error;
+    try { if (swapped) { ops.stopExactService(snapshot.label); ops.exchange(); } ops.startExactService(snapshot.label); }
+    catch (recovery) { fail(`Desktop transition failed and recovery was incomplete: ${error instanceof Error ? error.message : error}; ${recovery instanceof Error ? recovery.message : recovery}`); }
+    throw error;
+  }
+}

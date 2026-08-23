@@ -1,6 +1,6 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { planDesktopUpdate } from "../scripts/lib/desktop-update-command.mjs";
+import { executeDesktopTransition, planDesktopUpdate } from "../scripts/lib/desktop-update-command.mjs";
 
 const hex = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 function fixture() {
@@ -39,5 +39,32 @@ describe("signed Desktop update preflight", () => {
       ["Gatekeeper", (v) => { v.packet.apple.gatekeeper = false; }]
     ];
     for (const [label, mutate] of cases) { const value = fixture(); mutate(value); value.packetBytes = Buffer.from(JSON.stringify(value.packet)); value.input.packetBytes = value.packetBytes; if (label !== "packet digest") value.input.packetSHA256 = hex(value.packetBytes); expect(() => planDesktopUpdate(value.input), label).toThrow(); }
+  });
+});
+
+describe("failure-atomic Desktop transition", () => {
+  function transition(overrides: Record<string, unknown> = {}, failAt = "") {
+    const { input } = fixture(), plan = planDesktopUpdate(input), events: string[] = [];
+    const snapshot = { cycleBoundary: true, timedOut: false, activeLeases: 0, workerPairs: 1, label: plan.prestate.label, appSHA256: plan.prestate.appSHA256, accountIdentitySHA256: plan.prestate.accountIdentitySHA256, botIdentitySHA256: plan.prestate.botIdentitySHA256, configSHA256: plan.prestate.configSHA256, databaseSHA256: plan.prestate.databaseSHA256, allowlistSHA256: plan.prestate.allowlistSHA256, keychainIdentitySHA256: plan.prestate.keychainIdentitySHA256, plistSHA256: plan.prestate.plistSHA256, destinationDevice: 7, stageDevice: 7, ...overrides };
+    let starts = 0;
+    const call = (name: string) => { events.push(name); if (failAt === name || failAt === "start-new" && name === "start" && starts++ === 0) throw new Error(`${name} failed`); };
+    const poststate = { version: plan.candidate.version, build: plan.candidate.build, appSHA256: plan.candidate.treeSHA256, accountIdentitySHA256: plan.prestate.accountIdentitySHA256, botIdentitySHA256: plan.prestate.botIdentitySHA256, configSHA256: plan.prestate.configSHA256, databaseSHA256: plan.prestate.databaseSHA256, allowlistSHA256: plan.prestate.allowlistSHA256, keychainIdentitySHA256: plan.prestate.keychainIdentitySHA256, plistSHA256: plan.prestate.plistSHA256, label: plan.prestate.label, workerPairs: 1, heartbeatFresh: true, statusAccepted: true };
+    const run = () => executeDesktopTransition({ plan, snapshot, ops: { stage: () => call("stage"), verifyStage: () => call("verify"), stopExactService: () => call("stop"), exchange: () => call("exchange"), startExactService: () => call("start"), inspectPoststate: () => poststate } });
+    return { run, events };
+  }
+
+  it("stages and verifies before one exact-service atomic exchange", () => {
+    const value = transition(); expect(value.run()).toMatchObject({ workerPairs: 1, heartbeatFresh: true });
+    expect(value.events).toEqual(["stage", "verify", "stop", "exchange", "start"]);
+  });
+
+  it("rejects lease, timeout, second-worker, cross-device, and state drift before mutation", () => {
+    for (const drift of [{ activeLeases: 1 }, { timedOut: true }, { workerPairs: 2 }, { stageDevice: 8 }, { configSHA256: "0".repeat(64) }]) { const value = transition(drift); expect(value.run).toThrow(); expect(value.events).toEqual([]); }
+  });
+
+  it("does not stop on stage failure and restores prior bytes/service after transition failures", () => {
+    const stage = transition({}, "stage"); expect(stage.run).toThrow(); expect(stage.events).toEqual(["stage"]);
+    const swap = transition({}, "exchange"); expect(swap.run).toThrow(); expect(swap.events).toEqual(["stage", "verify", "stop", "exchange", "start"]);
+    const launchd = transition({}, "start-new"); expect(launchd.run).toThrow(); expect(launchd.events).toEqual(["stage", "verify", "stop", "exchange", "start", "stop", "exchange", "start"]);
   });
 });
