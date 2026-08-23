@@ -497,6 +497,11 @@ worker artifact, this state is a release blocker rather than a prompt to repair
 source files manually.
 The app's own Sparkle update does not update an external local worker.
 
+For operator-only recovery of an already-installed legacy CLI worker, see
+[Legacy operator recovery](operator-cli.md#legacy-operator-recovery). It is not
+required for signed Desktop first-run or update and does not replace the native
+customer path.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and

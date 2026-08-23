@@ -567,6 +567,170 @@ successful non-truncated scan with no deferred or failed issue-enrichment rows.
 Explicit dry-run/backfill commands can still opt into existing issues with
 `includeExisting` / `--include-existing` style controls.
 
+## Legacy operator recovery
+
+This is an operator-only path for an already verified checksum-managed legacy
+CLI worker. It is not the signed Desktop customer journey, does not install or
+update a worker, and does not create, load, or mutate a LaunchAgent. Run it in a
+fresh bash or zsh shell with values from the approved worker/release record.
+
+The paths are deliberately separate:
+
+- **First install** has no existing plist. It uses the approved config path and
+  App metadata, runs setup/readiness, and stops before daemon-health commands.
+- **Update recovery** has an existing plist. Its preflight reads one selected
+  plist, verifies its exact label and daemon `--config` path, checks the App
+  aliases, and only then permits license, state, provider, review, or health
+  commands.
+
+### Shared binding
+
+The binding below restores only the non-secret App ID and private-key path. It
+never opens the private-key file. Existing canonical/legacy aliases must be
+unset or equal to the selected values; the shell then keeps only the canonical
+names for child commands.
+
+```bash
+set -eu
+
+LEGACY_LABEL="<label-from-approved-record>"
+LEGACY_NODE="/opt/homebrew/bin/node" # or /usr/local/bin/node
+LEGACY_WORKER="$HOME/Library/Application Support/NeonDiffDesktop/Workers/$LEGACY_LABEL/current"
+LEGACY_CLI="$LEGACY_WORKER/node_modules/neondiff/dist/src/cli.js"
+LEGACY_MANIFEST_SHA256="<manifest-sha256-from-release>"
+LEGACY_SOURCE_CHECKOUT="/absolute/path/to/intended/source/checkout"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
+LEGACY_READY=false
+
+legacy_die() { echo "legacy recovery refused: $*" >&2; return 1; }
+
+legacy_bind_metadata() {
+  local app_id="$1" key_path="$2" config_path="$3"
+  case "$app_id" in ''|0|*[!0-9]*) legacy_die "invalid App ID";; esac
+  case "$key_path" in /*) ;; *) legacy_die "private-key path must be absolute";; esac
+  case "$config_path" in /*) ;; *) legacy_die "config path must be absolute";; esac
+  [ -z "${NEONDIFF_GITHUB_APP_ID:-}" ] || [ "$NEONDIFF_GITHUB_APP_ID" = "$app_id" ] || legacy_die "canonical App ID conflicts"
+  [ -z "${EVAOS_REVIEW_BOT_APP_ID:-}" ] || [ "$EVAOS_REVIEW_BOT_APP_ID" = "$app_id" ] || legacy_die "legacy App ID conflicts"
+  [ -z "${NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH:-}" ] || [ "$NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH" = "$key_path" ] || legacy_die "canonical key path conflicts"
+  [ -z "${EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH:-}" ] || [ "$EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH" = "$key_path" ] || legacy_die "legacy key path conflicts"
+  unset EVAOS_REVIEW_BOT_APP_ID EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH
+  export NEONDIFF_GITHUB_APP_ID="$app_id"
+  export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="$key_path"
+  LEGACY_CONFIG="$config_path"
+  LEGACY_READY=true
+}
+
+legacy_cli() {
+  [ "$LEGACY_READY" = true ] || legacy_die "identity preflight has not passed"
+  [ -x "$LEGACY_NODE" ] && [ -f "$LEGACY_CLI" ] || legacy_die "worker CLI is unavailable"
+  [ -f "$LEGACY_WORKER/.neondiff-candidate-manifest.sha256" ] || legacy_die "worker manifest marker is missing"
+  [ "$(tr -d '\n' < "$LEGACY_WORKER/.neondiff-candidate-manifest.sha256")" = "$LEGACY_MANIFEST_SHA256" ] || legacy_die "worker manifest mismatch"
+  "$LEGACY_NODE" "$LEGACY_CLI" "$@"
+}
+
+legacy_update_binding() {
+  [ "$(basename "$LEGACY_PLIST")" = "$LEGACY_LABEL.plist" ] || legacy_die "plist is not selected by label"
+  [ -f "$LEGACY_PLIST" ] || legacy_die "selected plist is missing"
+  local selected
+  selected="$(
+    /usr/bin/plutil -convert json -o - "$LEGACY_PLIST" |
+      "$LEGACY_NODE" -e '
+        const fs = require("node:fs");
+        const p = JSON.parse(fs.readFileSync(0, "utf8"));
+        const label = process.argv[1];
+        if (p.Label !== label || !/^\/.+/.test(p.WorkingDirectory ?? "")) throw new Error("plist identity mismatch");
+        const a = p.ProgramArguments;
+        const daemon = Array.isArray(a) ? a.reduce((n, v, i) => n.concat(v === "daemon" ? [i] : []), []) : [];
+        const configs = Array.isArray(a) ? a.reduce((n, v, i) => n.concat(v === "--config" ? [i] : []), []) : [];
+        if (daemon.length !== 1 || configs.length !== 1 || !/^\/.+/.test(a[configs[0] + 1] ?? "")) throw new Error("plist config binding is invalid");
+        const e = p.EnvironmentVariables;
+        const one = (primary, legacy, name) => {
+          const values = [e?.[primary], e?.[legacy]].filter((v) => v !== undefined);
+          if (values.length === 0 || new Set(values).size !== 1) throw new Error(`plist ${name} aliases conflict or are missing`);
+          return values[0];
+        };
+        const app = one("NEONDIFF_GITHUB_APP_ID", "EVAOS_REVIEW_BOT_APP_ID", "App ID");
+        const key = one("NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH", "EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH", "key path");
+        if (!/^[1-9][0-9]*$/.test(app) || !/^\/.+/.test(key)) throw new Error("plist metadata is invalid");
+        process.stdout.write([p.Label, a[configs[0] + 1], app, key].join("\t"));
+      ' "$LEGACY_LABEL"
+  )" || legacy_die "selected plist cannot be validated"
+  local selected_label selected_config selected_app selected_key
+  IFS="$(printf '\t')" read -r selected_label selected_config selected_app selected_key <<EOF
+$selected
+EOF
+  [ "$selected_label" = "$LEGACY_LABEL" ] || legacy_die "plist label changed during read"
+  [ -z "${LEGACY_CONFIG:-}" ] || [ "$LEGACY_CONFIG" = "$selected_config" ] || legacy_die "config path conflicts"
+  legacy_bind_metadata "$selected_app" "$selected_key" "$selected_config"
+}
+
+legacy_config_revision() {
+  [ -f "$LEGACY_CONFIG" ] || legacy_die "selected config is missing"
+  legacy_cli config inspect --config "$LEGACY_CONFIG" --json |
+    "$LEGACY_NODE" -e '
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const value = JSON.parse(fs.readFileSync(0, "utf8"));
+      const expected = fs.realpathSync(process.argv[1]);
+      if (!value.ok || value.configPath !== expected || !/^[a-f0-9]{64}$/.test(value.revision)) process.exit(1);
+      process.stdout.write(value.revision);
+    ' "$LEGACY_CONFIG"
+}
+```
+
+### First install: stop before daemon health
+
+Use this only when the selected plist does not exist. A first install must not
+pretend that a daemon exists or continue into `status`, `runtime-inventory`,
+`daemon`, or release-health checks.
+
+```bash
+[ ! -e "$LEGACY_PLIST" ] || legacy_die "an existing plist requires update recovery"
+LEGACY_CONFIG="/absolute/path/to/config.local.json"
+legacy_bind_metadata "<preserved-app-id>" \
+  "/absolute/path/to/preserved-private-key.pem" "$LEGACY_CONFIG"
+[ -e "$LEGACY_CONFIG" ] || legacy_cli init --config "$LEGACY_CONFIG"
+legacy_cli doctor github --config "$LEGACY_CONFIG" --json
+legacy_cli providers list --config "$LEGACY_CONFIG" --json
+legacy_cli providers doctor --config "$LEGACY_CONFIG" --json
+legacy_cli license status --config "$LEGACY_CONFIG" --json
+legacy_cli doctor --config "$LEGACY_CONFIG" --json
+LEGACY_CONFIG_REVISION="$(legacy_config_revision)"
+legacy_cli review-pr --config "$LEGACY_CONFIG" --repo owner/name --pr 123 \
+  --expected-config-revision "$LEGACY_CONFIG_REVISION" --dry-run true --zcode true
+echo "first-install setup ends before daemon-health gates"
+```
+
+### Update recovery: plist-bound health
+
+Use this only when the existing worker and plist are the intended recovery
+target. The first command is the identity gate; it must complete before any
+license, state, provider, review, or health command.
+
+```bash
+legacy_update_binding
+legacy_cli license status --config "$LEGACY_CONFIG" --refresh true --json
+legacy_cli doctor --config "$LEGACY_CONFIG" --json
+LEGACY_CONFIG_REVISION="$(legacy_config_revision)"
+legacy_cli review-pr --config "$LEGACY_CONFIG" --repo owner/name --pr 123 \
+  --expected-config-revision "$LEGACY_CONFIG_REVISION" --dry-run true --zcode true
+legacy_cli status --json --config "$LEGACY_CONFIG" --launchd-label "$LEGACY_LABEL"
+legacy_cli runtime-inventory --json --config "$LEGACY_CONFIG" --launchd-label "$LEGACY_LABEL"
+(
+  cd "$LEGACY_SOURCE_CHECKOUT" || exit 1
+  [ "$(pwd -P)" = "$(cd "$LEGACY_SOURCE_CHECKOUT" && pwd -P)" ] || exit 1
+  SOURCE_HEAD="$(git rev-parse HEAD)"
+  legacy_cli release-status --config "$LEGACY_CONFIG" --expected-head "$SOURCE_HEAD" \
+    --launchd-label "$LEGACY_LABEL"
+  legacy_cli coverage-audit --config "$LEGACY_CONFIG"
+  legacy_cli provider-cooldowns --config "$LEGACY_CONFIG" --expired-only true
+)
+```
+
+These flows do not export `PATH`, write a global config, mutate the selected
+plist, call `launchctl`, or read private-key bytes in the shell. A failed
+identity, alias, config-revision, or source-checkout check stops the flow.
+
 ## Safety Boundaries
 
 Default operator commands are read-only. They can return nonzero when a gate is
