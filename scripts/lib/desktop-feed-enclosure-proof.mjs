@@ -30,20 +30,21 @@ function canonicalBytes(value) {
 }
 function validateEnclosure(enclosure) {
   const value = exactObject(enclosure, ENCLOSURE_FIELDS, "enclosure");
-  const url = new URL(text(value.url, "enclosure.url"));
-  if (url.toString() !== value.url || url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !value.url.startsWith(OFFICIAL_ARTIFACT_PREFIX)) fail("enclosure.url must be the canonical official artifact URL");
-  const version = text(value.version, "enclosure.version"), build = text(value.build, "enclosure.build");
+  const urlText = text(value.url, "enclosure.url"), url = new URL(urlText);
+  if (url.toString() !== urlText || /[?#]/.test(urlText) || url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !urlText.startsWith(OFFICIAL_ARTIFACT_PREFIX)) fail("enclosure.url must be the canonical official artifact URL");
+  const version = text(value.version, "enclosure.version"), build = text(value.build, "enclosure.build"), shortVersionString = text(value.shortVersionString, "enclosure.shortVersionString");
+  const channel = value.channel, artifactNameInput = text(value.artifactName, "enclosure.artifactName"), artifactSHA256 = text(value.artifactSHA256, "enclosure.artifactSHA256"), edSignature = text(value.edSignature, "enclosure.edSignature");
   if (!/^\d+\.\d+\.\d+(?:-(?:beta|rc)\.[1-9]\d{0,15})?$/.test(version) || !/^\d+$/.test(build)) fail("enclosure version/build is malformed");
   const prerelease = version.match(/-(beta|rc)\./)?.[1] ?? null;
-  if (value.shortVersionString !== version || !["beta", "rc", "stable"].includes(value.channel) || (prerelease ?? "stable") !== value.channel) fail("enclosure identity is malformed");
+  if (shortVersionString !== version || !["beta", "rc", "stable"].includes(channel) || (prerelease ?? "stable") !== channel) fail("enclosure identity is malformed");
   const artifactName = `NeonDiff-${version}-build${build}-macOS.zip`;
-  if (value.artifactName !== artifactName) fail("enclosure artifact name is not canonical");
+  if (artifactNameInput !== artifactName) fail("enclosure artifact name is not canonical");
   const path = url.pathname;
   const pathMatch = path.match(/^\/electricsheephq\/evaos-code-review-bot-neondiff\/releases\/download\/([^/]+)\/([^/]+)$/);
   if (!pathMatch || pathMatch[1] !== `v${version}` || pathMatch[2] !== artifactName) fail("enclosure artifact identity is not canonical");
-  if (!/^[a-f0-9]{64}$/.test(value.artifactSHA256)) fail("enclosure artifact SHA-256 is malformed");
-  base64(value.edSignature, 64, "enclosure.edSignature");
-  return value;
+  if (!/^[a-f0-9]{64}$/.test(artifactSHA256)) fail("enclosure artifact SHA-256 is malformed");
+  const signatureBytes = base64(edSignature, 64, "enclosure.edSignature");
+  return { url: urlText, version, build, shortVersionString, channel, artifactName, artifactSHA256, edSignature, signatureBytes };
 }
 function validateProof(proof) {
   const value = exactObject(proof, PROOF_FIELDS, "proof");
@@ -56,7 +57,7 @@ function validateProof(proof) {
 export function buildFeedEnclosureProof(enclosure, { acceptedPublicKey, signedContent } = {}) {
   const value = validateEnclosure(enclosure), bytes = canonicalBytes(signedContent);
   if (sha256(bytes) !== value.artifactSHA256) fail("signed content digest does not match enclosure artifact");
-  const publicKey = base64(acceptedPublicKey, 32, "acceptedPublicKey"), signature = base64(value.edSignature, 64, "enclosure.edSignature");
+  const publicKey = base64(acceptedPublicKey, 32, "acceptedPublicKey"), signature = value.signatureBytes;
   const key = createPublicKey({ key: Buffer.concat([SPKI_ED25519_PREFIX, publicKey]), format: "der", type: "spki" });
   if (!verify(null, bytes, key, signature)) fail("Sparkle EdDSA signature verification failed");
   const proof = Object.freeze({ schemaVersion: 1, kind: KIND, verified: true, signatureScope: SIGNATURE_SCOPE, channel: value.channel, url: value.url, artifactName: value.artifactName, artifactSHA256: value.artifactSHA256, version: value.version, build: value.build, shortVersionString: value.shortVersionString, edSignature: value.edSignature, publicKeyFingerprint: `sha256:${sha256(publicKey)}`, signedContentSHA256: sha256(bytes) });

@@ -30,6 +30,8 @@ describe("desktop feed enclosure proof", () => {
     ["localhost URL", (value: any) => { value.url = value.url.replace("github.com", "localhost"); }],
     ["private URL", (value: any) => { value.url = value.url.replace("github.com", "192.168.1.4"); }],
     ["noncanonical URL", (value: any) => { value.url = value.url.replace("/download/", "/download/../download/"); }],
+    ["bare query delimiter", (value: any) => { value.url += "?"; }],
+    ["bare fragment delimiter", (value: any) => { value.url += "#"; }],
     ["substituted artifact digest", (value: any) => { value.artifactSHA256 = "a".repeat(64); }]
   ])("rejects %s", (_label, mutate) => {
     const value = enclosure(); mutate(value);
@@ -47,5 +49,17 @@ describe("desktop feed enclosure proof", () => {
     expect(() => serializeFeedEnclosureProof(JSON.parse(serializeFeedEnclosureProof(proof)))).toThrow();
     const { signedContentSHA256: _omitted, ...missing } = proof;
     expect(() => serializeFeedEnclosureProof(missing)).toThrow();
+  });
+
+  it("snapshots the verified signature against accessor substitution", () => {
+    const substituted = Buffer.alloc(64, 1).toString("base64");
+    let reads = 0;
+    const proxied = new Proxy(enclosure(), { get(target, key, receiver) {
+      if (key === "edSignature") { reads += 1; return reads < 3 ? signature : substituted; }
+      return Reflect.get(target, key, receiver);
+    } });
+    const proof = buildFeedEnclosureProof(proxied, options);
+    expect(reads).toBe(1);
+    expect(proof.edSignature).toBe(signature);
   });
 });
