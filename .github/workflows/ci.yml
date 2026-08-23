@@ -32,6 +32,28 @@ jobs:
       - name: Validate committed Desktop declaration index
         run: node scripts/validate-desktop-release-declaration.mjs --index docs/releases/desktop/index.json
 
+      - name: Validate Desktop declaration history transition
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then comparison_sha="$PR_BASE_SHA"; else comparison_sha="$PUSH_BEFORE_SHA"; fi
+          if [[ "$comparison_sha" =~ ^0{40}$ ]]; then
+            node scripts/validate-desktop-release-declaration.mjs --index docs/releases/desktop/index.json --initial
+            exit 0
+          fi
+          [[ "$comparison_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid comparison SHA" >&2; exit 1; }
+          git fetch --no-tags origin "$comparison_sha" --depth=1
+          [[ "$(git rev-parse --verify "${comparison_sha}^{commit}")" == "$comparison_sha" ]]
+          [[ "$(git cat-file -t "$comparison_sha")" == "commit" ]]
+          base="$RUNNER_TEMP/desktop-base"
+          mkdir -p "$base"
+          git archive "$comparison_sha" docs/releases/desktop | tar -x -C "$base"
+          test -f "$base/docs/releases/desktop/index.json"
+          node scripts/validate-desktop-release-declaration.mjs --index docs/releases/desktop/index.json --base-index "$base/docs/releases/desktop/index.json"
+
       - name: Enforce Review Bench public-corpus admission
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

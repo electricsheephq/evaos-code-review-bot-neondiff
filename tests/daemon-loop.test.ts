@@ -278,7 +278,7 @@ describe("daemon cycle resilience", () => {
   });
 
   it("records start and completion heartbeat events for successful cycles", async () => {
-    const heartbeats: string[] = [];
+    const heartbeats: Array<{ event: string; runId?: string }> = [];
 
     const result = await runDaemonCycle({
       cycle: 2,
@@ -329,13 +329,15 @@ describe("daemon cycle resilience", () => {
           other: 0
         }
       }),
-      recordHeartbeatImpl: (event) => heartbeats.push(event),
+      recordHeartbeatImpl: (event, _error, runId) => heartbeats.push({ event, runId }),
       stdout: () => undefined,
       stderr: () => undefined
     });
 
     expect(result.ok).toBe(true);
-    expect(heartbeats).toEqual(["daemon_cycle_start", "daemon_cycle_complete"]);
+    expect(heartbeats.map(({ event }) => event)).toEqual(["daemon_cycle_start", "daemon_cycle_complete"]);
+    expect(new Set(heartbeats.map(({ runId }) => runId)).size).toBe(1);
+    expect(heartbeats[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("runs one bounded provider cooldown drain after successful review cycles", async () => {
@@ -456,6 +458,7 @@ describe("daemon cycle resilience", () => {
 
   it("records a failed heartbeat with the failure message", async () => {
     const heartbeats: Array<{ event: string; error?: string }> = [];
+    const runIds: string[] = [];
 
     const result = await runDaemonCycle({
       cycle: 3,
@@ -467,7 +470,10 @@ describe("daemon cycle resilience", () => {
       runOnceImpl: async () => {
         throw new Error("second timeout");
       },
-      recordHeartbeatImpl: (event, error) => heartbeats.push({ event, ...(error ? { error } : {}) }),
+      recordHeartbeatImpl: (event, error, runId) => {
+        heartbeats.push({ event, ...(error ? { error } : {}) });
+        runIds.push(runId!);
+      },
       stdout: () => undefined,
       stderr: () => undefined
     });
@@ -478,6 +484,7 @@ describe("daemon cycle resilience", () => {
       { event: "daemon_cycle_start" },
       { event: "daemon_cycle_failed", error: "second timeout" }
     ]);
+    expect(new Set(runIds).size).toBe(1);
   });
 
   it("runs and logs the issue enrichment cycle when the default-off lane is enabled", async () => {
