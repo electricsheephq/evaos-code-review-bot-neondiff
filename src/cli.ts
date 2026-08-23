@@ -98,6 +98,7 @@ import {
   collectOperatorReviewQueue,
   explainPullStatus,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorDurableQueueSnapshot,
@@ -724,7 +725,7 @@ async function main(): Promise<void> {
       }),
       issueEnrichmentRuntime
     });
-    console.log(stringifyRedactedJson(status));
+    console.log(args.human === "true" ? formatOperatorStatusHuman(status) : stringifyRedactedJson(status));
     if (!status.ok) process.exitCode = 1;
     return;
   }
@@ -3613,7 +3614,8 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--limit", description: "Cap the number of provider-cooldown/durable-queue rows returned." },
       { name: "--expected-head", description: "Expected release head SHA to verify against." },
       { name: "--launchd-label", description: "launchd label to inspect for daemon liveness." },
-      { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." }
+      { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." },
+      { name: "--human", description: "Print a compact operator summary instead of JSON; the exit code still follows the combined operator gate." }
     ]
   },
   "release-status": {

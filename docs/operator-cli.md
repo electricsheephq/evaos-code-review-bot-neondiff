@@ -10,6 +10,13 @@ Run commands from the repository checkout:
 npx tsx src/cli.ts status --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
+Add `--human` for a compact operator headline and actionable gates; the exit
+code remains nonzero when the combined status gate is blocked:
+
+```bash
+npx tsx src/cli.ts status --human --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
+```
+
 After `npm run build` and `npm link`, the package exposes the `neondiff`
 binary and the `evaos-review-bot` compatibility alias (same CLI, older name):
 
@@ -22,13 +29,16 @@ evaos-review-bot status --config config.local.json
 
 - `status`: aggregated operator health. Includes release gates, launchd,
   heartbeat, DB error/cooldown counts, coverage buckets, active/stale leases,
-  durable queue counts, and recommended actions.
+  durable queue counts, and recommended actions. Current gates use active and
+  recent-unrecovered health; retained error and failed-queue totals remain
+  visible as history.
 - `runtime-inventory`: read-only runtime classifier for release operators. It
   includes release status, coverage, durable queue work, provider cooldowns,
   budget status, leases, heartbeat, and bot-owned process rows. It can classify
   the worker as `healthy_active` when open PR heads are already covered by
   active queue work, even if the stricter `status` command is nonzero because
-  live PR churn exists. JSON is the default; use `--human` for a compact
+  live PR churn exists. Active failures gate this command; retained failures
+  stay visible in history. JSON is the default; use `--human` for a compact
   operator summary.
 - `agents`: launchd, heartbeat, and review-run lease inventory. This is
   read-only; it does not restart, kill, prune, or retire anything.

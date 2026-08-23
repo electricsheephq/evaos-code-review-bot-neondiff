@@ -19,6 +19,7 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorAgentInventory,
@@ -969,6 +970,49 @@ describe("operator CLI summaries", () => {
     expect(output).toContain("queue: active=0 queued=0 running=0 providerDeferred=0 failed=0");
     expect(output).toContain("budget: wouldLease=1 delayed=1 delayedByReason={\"manual_reserve\":1}");
     expect(output).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("uses active failures for gates and keeps recovered history visible", () => {
+    const release = (active: number, recent: number) => releaseStatus({
+      ok: true,
+      database: {
+        errorCount: 2,
+        recentUnrecoveredErrorCount: recent,
+        failedReviewQueueJobCount: 2,
+        activeFailedReviewQueueJobCount: active,
+        zcodeTimeoutFailedReviewQueueJobCount: 1,
+        activeZCodeTimeoutFailedReviewQueueJobCount: active
+      }
+    });
+    const recovered = buildOperatorStatus({ release: release(0, 0), agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 2 }, jobs: [] }) });
+    expect(recovered.ok).toBe(true);
+    expect(recovered.summary.failedQueueJobs).toBe(2);
+    expect(recovered.gates).toContainEqual(expect.objectContaining({ name: "durable_queue_no_failed_jobs", ok: true }));
+    expect(recovered.gates).toContainEqual(expect.objectContaining({ name: "durable_queue_no_zcode_timeout_failed_jobs", ok: true }));
+    expect(formatOperatorStatusHuman(recovered)).toContain("status: ok (operator)");
+    expect(buildRuntimeInventory({ release: release(0, 0), agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 2 }, jobs: [] }) }).ok).toBe(true);
+    const active = buildOperatorStatus({ release: release(1, 1), agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 2 }, jobs: [] }) });
+    expect(active.ok).toBe(false);
+    expect(formatOperatorStatusHuman(active)).toContain("status: blocked (operator)");
+  });
+
+  it("does not emit retry commands when active ZCode row identity is ambiguous", () => {
+    const jobs = ["recovered-head", "active-head"].map((headSha, index) => durableJob({
+      repo: "owner/repo", pullNumber: index + 1, headSha, state: "failed",
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1"
+    }));
+    const status = buildOperatorStatus({
+      release: releaseStatus({ ok: false, database: {
+        failedReviewQueueJobCount: 2, activeFailedReviewQueueJobCount: 1,
+        zcodeTimeoutFailedReviewQueueJobCount: 2, activeZCodeTimeoutFailedReviewQueueJobCount: 1
+      } }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 2 }, jobs })
+    });
+    expect(status.recommendedActions.some((action) => action.includes("retry-failed"))).toBe(false);
+    expect(status.recommendedActions).toContain("npx tsx src/cli.ts queue --config /config/live.json --state failed");
+    const runtime = buildRuntimeInventory({ release: status.release, agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 2 }, jobs }) });
+    expect(runtime.recommendedActions.some((action) => action.includes("retry-failed"))).toBe(false);
   });
 
   it("builds a read-only dashboard over coverage, durable queue, readiness, and evidence links", () => {
@@ -1979,10 +2023,16 @@ function createTempDatabase(tempDirs: string[]): string {
   return join(dir, "state.sqlite");
 }
 
+type ActiveHealthDatabaseFixture = Partial<ReleaseStatus["database"]> & {
+  recentUnrecoveredErrorCount?: number;
+  activeFailedReviewQueueJobCount?: number;
+  activeZCodeTimeoutFailedReviewQueueJobCount?: number;
+};
+
 function releaseStatus(input: {
   ok: boolean;
   recommendedActions?: string[];
-  database?: Partial<ReleaseStatus["database"]>;
+  database?: ActiveHealthDatabaseFixture;
   budget?: ReviewBudgetStatus;
 }): ReleaseStatus {
   const providerCooldownCount = input.database?.providerCooldownCount ?? (input.ok ? 0 : 1);
@@ -2011,14 +2061,14 @@ function releaseStatus(input: {
 	      retryableExpiredProviderCooldowns: input.database?.retryableExpiredProviderCooldownCount ?? expiredProviderCooldownCount,
 	      activeProviderCooldowns: input.database?.activeProviderCooldownCount ?? 0
 	    },
-	    database: {
+    database: {
       rowCount: 10,
       errorCount: 0,
       providerCooldownCount,
       expiredProviderCooldownCount,
       activeProviderCooldownCount: 0,
       ...input.database
-    },
+    } as ReleaseStatus["database"],
     ...(input.budget ? { budget: input.budget } : {}),
     heartbeat: {
       status: "fresh",
