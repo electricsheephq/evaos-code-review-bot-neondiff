@@ -7,6 +7,87 @@ import NeonDiffDesktopCore
     private let configPath = "/fixture/evaos-code-review-bot/config.local.json"
 
     @MainActor
+    @Test func automaticExactMatchRestorePreservesJourneyAndOnlyReadsDaemonStatus() async {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            preferenceStrings: [
+                "neondiff.accountWorkspaceID": "account-electric-sheep",
+                "neondiff.accountBotID": "bot-evaos-code-review-bot",
+                "neondiff.configPath": configPath,
+                "neondiff.activationState.v1": ActivationState.checkoutPaused.rawValue
+            ],
+            productionBoundary: .testAccountLink
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        #expect(await reachesCallCount(fixture, 2))
+
+        #expect(fixture.model.activationState == .checkoutPaused)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+        #expect(fixture.cli.calls.filter {
+            $0.arguments.prefix(2) == ["config", "inspect"]
+        }.count == 1)
+        #expect(fixture.cli.calls.filter {
+            $0.arguments.prefix(2) == ["daemon", "status"]
+        }.count == 1)
+        #expect(!fixture.cli.calls.contains {
+            ["start", "stop", "install", "bootstrap", "bootout", "restart"]
+                .contains(where: $0.arguments.contains)
+        })
+
+        fixture.cli.resumeSuspendedRuns()
+    }
+
+    @MainActor
+    @Test func automaticRestoreConfigMismatchFullyResetsAndSkipsDaemonStatus() async {
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            preferenceStrings: [
+                "neondiff.accountWorkspaceID": "account-electric-sheep",
+                "neondiff.accountBotID": "bot-evaos-code-review-bot",
+                "neondiff.configPath": "/fixture/different/config.local.json",
+                "neondiff.activationState.v1": ActivationState.checkoutPaused.rawValue
+            ],
+            productionBoundary: .testAccountLink
+        )
+
+        fixture.model.applyAccountWorkspaceCatalog(.loaded([
+            workspace(entitlement: .internalAdmin)
+        ]))
+        await fixture.cli.waitUntilCallCount(1)
+
+        #expect(fixture.model.activationState == .purchaseRequired)
+        #expect(!fixture.cli.calls.contains {
+            $0.arguments.prefix(2) == ["daemon", "status"]
+        })
+
+        fixture.cli.resumeSuspendedRuns()
+    }
+
+    @MainActor
+    @Test func explicitRepositorySwitchClearsPersistedActivationJourney() {
+        let firstRepository = "electricsheephq/WorldOS"
+        let secondRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let fixture = ModelDependencyFixture(
+            suspendCLIRuns: true,
+            productionBoundary: .testAccountLink
+        )
+        fixture.loadConfig(existingBotConfig(
+            authMode: "zcode-app-config",
+            repositories: [firstRepository, secondRepository]
+        ))
+        fixture.model.selectBYOReviewRepository(fullName: firstRepository)
+        fixture.model.activationState = .checkoutPaused
+
+        fixture.model.selectBYOReviewRepository(fullName: secondRepository)
+
+        #expect(fixture.model.activationState == .purchaseRequired)
+        #expect(!fixture.model.currentRepositoryActivationReady)
+    }
+
+    @MainActor
     @Test func verifiedExistingBotReconcilesSetupWithoutUnlockingUsefulWork() {
         let fixture = ModelDependencyFixture(
             suspendCLIRuns: true,
@@ -373,7 +454,7 @@ import NeonDiffDesktopCore
         await fixture.model.submitActivation()
         fixture.model.selectBYOReviewRepository(fullName: secondRepository)
 
-        #expect(fixture.model.activationState == .invalid)
+        #expect(fixture.model.activationState == .purchaseRequired)
         #expect(fixture.model.selectedBYOReviewRepository == secondRepository)
     }
 
