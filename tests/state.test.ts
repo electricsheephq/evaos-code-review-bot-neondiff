@@ -1667,6 +1667,19 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("preserves active cycle age when a progress heartbeat refreshes the start row", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-progress-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordDaemonHeartbeat({ cycle: 8, event: "daemon_cycle_start", dryRun: false, recordedAt: new Date("2026-07-01T00:00:00.000Z") });
+    store.recordDaemonHeartbeat({ cycle: 8, event: "daemon_cycle_start", dryRun: false, recordedAt: new Date("2026-07-01T00:10:00.000Z") });
+    store.recordDaemonHeartbeat({ cycle: 8, event: "daemon_cycle_complete", dryRun: false, recordedAt: new Date("2026-07-01T00:10:01.000Z") });
+
+    expect(store.getDaemonHeartbeat()).toMatchObject({ startedCycle: 8, startedAt: "2026-07-01T00:00:00.000Z" });
+    store.close();
+  });
+
   it("redacts daemon heartbeat errors", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-redact-"));
     roots.push(root);
