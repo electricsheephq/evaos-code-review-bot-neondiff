@@ -53,8 +53,8 @@ class JsonScanner {
     this.space();
     const code = this.text.charCodeAt(this.position);
     if (code === 34) return void this.string();
-    if (code === 123) return void this.object(depth + 1);
-    if (code === 91) return void this.array(depth + 1);
+    if (code === 123) { if (depth >= MAX_JSON_DEPTH) reject("depth"); return void this.object(depth + 1); }
+    if (code === 91) { if (depth >= MAX_JSON_DEPTH) reject("depth"); return void this.array(depth + 1); }
     if (code === 116 && this.literal("true")) return;
     if (code === 102 && this.literal("false")) return;
     if (code === 110 && this.literal("null")) return;

@@ -27,7 +27,13 @@ describe("severe receipt Parser B JSON boundary", () => {
   });
 
   it("bounds nesting before parse", () => {
+    expect(() => parse(`${"[".repeat(256)}0${"]".repeat(256)}`)).not.toThrow();
+    expect(() => parse(`${"[".repeat(256)}${"]".repeat(256)}`)).not.toThrow();
+    expect(() => parse(`${'{"a":'.repeat(256)}0${"}".repeat(256)}`)).not.toThrow();
+    expect(() => parse(`${'{"a":'.repeat(255)}{}${"}".repeat(255)}`)).not.toThrow();
     const deep = `${"[".repeat(257)}0${"]".repeat(257)}`;
     expect(() => parse(deep)).toThrow("depth");
+    expect(() => parse(`${"[".repeat(257)}${"]".repeat(257)}`)).toThrow("depth");
+    expect(() => parse(`${'{"a":'.repeat(256)}{}${"}".repeat(256)}`)).toThrow("depth");
   });
 });
