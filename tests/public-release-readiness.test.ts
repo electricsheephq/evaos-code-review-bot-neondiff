@@ -60,7 +60,7 @@ describe("NeonDiff public release readiness", () => {
     };
 
     expect(pkg.name).toBe("neondiff");
-    expect(pkg.version).toBe("1.0.4");
+    expect(pkg.version).toBe("1.0.5");
     expect(pkg.private).toBeUndefined();
     expect(pkg.description).toMatch(/local-first AI PR reviewer/i);
     expect(pkg.license).toBe("SEE LICENSE IN LICENSE.md");
@@ -69,7 +69,10 @@ describe("NeonDiff public release readiness", () => {
       type: "git",
       url: "git+https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git"
     });
-    expect(pkg.bin).toEqual({ neondiff: "dist/src/cli.js" });
+    expect(pkg.bin).toEqual({
+      neondiff: "dist/src/cli.js",
+      "evaos-review-bot": "dist/src/cli.js"
+    });
     expect(pkg.exports).toEqual({});
     expect(pkg.files).toEqual([
       "dist/src",
@@ -79,6 +82,7 @@ describe("NeonDiff public release readiness", () => {
       "CODE_OF_CONDUCT.md",
       "config.example.json",
       "docs/SETUP.md",
+      "docs/operator-cli.md",
       "docs/ci-runner.md",
       "docs/docker.md",
       "docs/github-app-setup.md",
@@ -94,12 +98,15 @@ describe("NeonDiff public release readiness", () => {
     ]);
 
     expect(lock.name).toBe("neondiff");
-    expect(lock.version).toBe("1.0.4");
+    expect(lock.version).toBe("1.0.5");
     expect(lock.packages?.[""]).toMatchObject({
       name: "neondiff",
-      version: "1.0.4",
+      version: "1.0.5",
       license: "SEE LICENSE IN LICENSE.md",
-      bin: { neondiff: "dist/src/cli.js" }
+      bin: {
+        neondiff: "dist/src/cli.js",
+        "evaos-review-bot": "dist/src/cli.js"
+      }
     });
     expect(manifest.packageArtifact).toMatchObject({
       name: "neondiff",
@@ -491,6 +498,60 @@ describe("NeonDiff public release readiness", () => {
       expect(existsSync(artifact.ref ?? "")).toBe(true);
       expect(createHash("sha256").update(read(artifact.ref ?? "")).digest("hex")).toBe(artifact.sha256);
     }
+  });
+
+  it("declares the unreleased v1.0.5 operator-surface candidate without publication proof", () => {
+    const candidatePath = "docs/release-candidates/v1.0.5.json";
+    expect(existsSync(candidatePath)).toBe(true);
+    if (!existsSync(candidatePath)) return;
+    const candidate = JSON.parse(read(candidatePath)) as {
+      version?: string;
+      packageVersion?: string;
+      previousReleasedPackageVersion?: string;
+      state?: string;
+      trackingIssue?: string;
+      packageSurface?: {
+        binaries?: Record<string, string>;
+        files?: string[];
+      };
+      registry?: { state?: string; latest?: string; releaseCandidatePresent?: boolean };
+      proofBoundary?: { allowed?: string[]; forbidden?: string[] };
+    };
+
+    expect(candidate).toMatchObject({
+      version: "v1.0.5",
+      packageVersion: "1.0.5",
+      previousReleasedPackageVersion: "1.0.4",
+      state: "unreleased_candidate",
+      trackingIssue: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/610",
+      packageSurface: {
+        binaries: {
+          neondiff: "dist/src/cli.js",
+          "evaos-review-bot": "dist/src/cli.js"
+        },
+        files: ["docs/operator-cli.md"]
+      },
+      registry: {
+        state: "not_published",
+        latest: "1.0.4",
+        releaseCandidatePresent: false
+      }
+    });
+    expect(candidate).not.toHaveProperty("candidateSourceSha");
+    expect(candidate).not.toHaveProperty("releaseCommit");
+    expect(candidate).not.toHaveProperty("githubReleaseUrl");
+    expect(candidate).not.toHaveProperty("publishRunUrl");
+    expect(candidate).not.toHaveProperty("packageArtifact");
+    expect(candidate).not.toHaveProperty("publicationProofPath");
+    expect(candidate.proofBoundary?.allowed).toEqual([
+      "package and lockfile metadata agree on v1.0.5",
+      "npm pack --dry-run includes docs/operator-cli.md and both CLI binaries resolve to dist/src/cli.js"
+    ]);
+    expect(candidate.proofBoundary?.forbidden).toEqual([
+      "npm publication, GitHub Release, tag, or provenance is claimed",
+      "published v1.0.4 manifest, evidence, tag, or package bytes are changed",
+      "Desktop, runtime, customer, billing, or release state is mutated"
+    ]);
   });
 
   it("locks published package identity to downloaded registry tarball proof after state stamps", () => {

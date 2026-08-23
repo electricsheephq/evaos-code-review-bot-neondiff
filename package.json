@@ -1,10 +1,11 @@
 {
   "name": "neondiff",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE.md",
   "bin": {
-    "neondiff": "dist/src/cli.js"
+    "neondiff": "dist/src/cli.js",
+    "evaos-review-bot": "dist/src/cli.js"
   },
   "exports": {},
   "description": "Local-first AI PR reviewer for teams that want current-head reviews without handing every diff to a hosted review SaaS.",
@@ -21,6 +22,7 @@
     "CODE_OF_CONDUCT.md",
     "config.example.json",
     "docs/SETUP.md",
+    "docs/operator-cli.md",
     "docs/ci-runner.md",
     "docs/docker.md",
     "docs/github-app-setup.md",

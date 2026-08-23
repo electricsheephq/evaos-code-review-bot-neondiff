@@ -1,0 +1,36 @@
+{
+  "version": "v1.0.5",
+  "packageVersion": "1.0.5",
+  "previousReleasedPackageVersion": "1.0.4",
+  "state": "unreleased_candidate",
+  "trackingIssue": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/610",
+  "packageSurface": {
+    "binaries": {
+      "neondiff": "dist/src/cli.js",
+      "evaos-review-bot": "dist/src/cli.js"
+    },
+    "files": [
+      "docs/operator-cli.md"
+    ]
+  },
+  "registry": {
+    "state": "not_published",
+    "latest": "1.0.4",
+    "releaseCandidatePresent": false
+  },
+  "immutablePredecessor": {
+    "manifest": "docs/public-release-manifest.json",
+    "candidate": "docs/release-candidates/v1.0.4.json"
+  },
+  "proofBoundary": {
+    "allowed": [
+      "package and lockfile metadata agree on v1.0.5",
+      "npm pack --dry-run includes docs/operator-cli.md and both CLI binaries resolve to dist/src/cli.js"
+    ],
+    "forbidden": [
+      "npm publication, GitHub Release, tag, or provenance is claimed",
+      "published v1.0.4 manifest, evidence, tag, or package bytes are changed",
+      "Desktop, runtime, customer, billing, or release state is mutated"
+    ]
+  }
+}
