@@ -287,7 +287,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
     @Test func explicitVerificationReadsKeychainAndUsesOnlyBoundedCLIStdin() async throws {
         let doctorResult = CLIRunResult(
             exitCode: 0,
-            stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"acme/demo","ok":true,"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+            stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"123456","appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"acme/demo","ok":true,"visibility_result":"public","installation_id_present":true,"installation_id":42,"installation_account":"acme","app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
             stderr: ""
         )
         let fixture = ModelDependencyFixture(
@@ -728,6 +728,27 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(!fixture.model.productionUsefulWorkAvailable)
         #expect(fixture.model.productionDaemonStopAvailable)
     }
+
+    @Test func doctorProofMustMatchTheConfiguredAppIdentity() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(doctorResult(
+                readChecks: doctorReadCheck(repo: "acme/demo"),
+                appId: "999999"
+            ))],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.lastError?.contains("GitHub") == true)
+    }
 }
 
 private func fixtureWorkspace(id: String) -> DesktopAccountWorkspace {
@@ -759,12 +780,13 @@ private func byoRepoPatchJSON(repository: String) -> String {
 
 private func doctorResult(
     readChecks: String,
+    appId: String = "123456",
     exitCode: Int32 = 0,
     ok: Bool = true
 ) -> CLIRunResult {
     CLIRunResult(
         exitCode: exitCode,
-        stdout: #"{"ok":\#(ok),"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
+        stdout: #"{"ok":\#(ok),"command":"doctor github","appCredentials":{"appId":"\#(appId)","appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
         stderr: ""
     )
 }
@@ -777,7 +799,7 @@ private func doctorReadCheck(
     let skippedField = skippedByPolicy.map {
         #","skippedByPolicy":"\#($0)""#
     } ?? ""
-    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
+    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id_present":true,"installation_id":42,"installation_account":"acme","app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
 }
 
 private let exactB0Boundary = DesktopProductionBoundary.resolve(infoDictionary: [

@@ -769,7 +769,7 @@ import NeonDiffDesktopCore
             "electricsheephq/evaos-code-review-bot-neondiff"
         let otherRepository = "electricsheephq/WorldOS"
         let readCheck =
-            #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
+            #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"installation_id":72001,"installation_account":"electricsheephq","app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
         let fixture = ModelDependencyFixture(
             cliOutcomes: [
                 .success(CLIRunResult(
@@ -782,7 +782,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"4184532","appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
                     stderr: ""
                 ))
             ],
@@ -850,7 +850,7 @@ import NeonDiffDesktopCore
             expectedKey: activationKey
         )
         let readCheck =
-            #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
+            #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"installation_id":72001,"installation_account":"electricsheephq","app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
         let fixture = ModelDependencyFixture(
             cliOutcomes: [
                 .success(CLIRunResult(
@@ -868,7 +868,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"4184532","appIdConfigured":true,"privateKeyConfigured":true,"source":"stdin"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readCheck)]}}"#,
                     stderr: ""
                 ))
             ],
@@ -1051,7 +1051,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"electricsheephq/evaos-code-review-bot-neondiff","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"4184532","appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"electricsheephq/evaos-code-review-bot-neondiff","ok":true,"visibility_result":"private","installation_id_present":true,"installation_id":72001,"installation_account":"electricsheephq","app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
                     stderr: ""
                 )),
                 .success(existingAgentLicenseStatus(
@@ -1119,7 +1119,7 @@ import NeonDiffDesktopCore
             targetRepository
         ]
         let readChecks =
-            #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
+            #"{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"installation_id":72001,"installation_account":"electricsheephq","app_can_read_metadata":true,"app_can_read_pull_requests":true}"#
         let reviewHeadSHA = String(repeating: "a", count: 40)
         let fixture = ModelDependencyFixture(
             cliOutcomes: [
@@ -1138,7 +1138,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"4184532","appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[\#(readChecks)]}}"#,
                     stderr: ""
                 )),
                 .success(CLIRunResult(
@@ -1338,7 +1338,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"4184532","appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"installation_id":72001,"installation_account":"electricsheephq","app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
                     stderr: ""
                 )),
                 .success(existingAgentLicenseStatus(
@@ -1438,7 +1438,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"4184532","appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"installation_id":72001,"installation_account":"electricsheephq","app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
                     stderr: ""
                 )),
                 .success(CLIRunResult(
@@ -1738,7 +1738,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"4184532","appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"private","installation_id_present":true,"installation_id":72001,"installation_account":"electricsheephq","app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
                     stderr: ""
                 )),
                 .success(existingAgentLicenseStatus(
@@ -1911,6 +1911,62 @@ import NeonDiffDesktopCore
             "--zcode", "true"
         ])
         #expect(fixture.model.scopedReviewStatus.contains("posted"))
+    }
+
+    @MainActor
+    @Test func changingReviewTargetRetiresOldVerificationAndAllowsImmediateRetry() async throws {
+        let firstRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let secondRepository = "electricsheephq/WorldOS"
+        let fixture = await preparedExistingAgentVerificationFixture(
+            visibility: "private",
+            licenseResult: existingAgentLicenseStatus(
+                scope: "private",
+                privateRepoAllowed: true
+            ),
+            repositories: [firstRepository, secondRepository]
+        )
+        fixture.cli.suspendFutureRuns()
+
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        await fixture.cli.waitUntilCallCount(3)
+        #expect(fixture.model.isBYOGitHubVerificationInProgress)
+
+        fixture.model.selectBYOReviewRepository(fullName: secondRepository)
+
+        #expect(fixture.model.selectedBYOReviewRepository == secondRepository)
+        #expect(!fixture.model.isBYOGitHubVerificationInProgress)
+
+        fixture.cli.resumeSuspendedRuns()
+        for _ in 0..<20 { await Task.yield() }
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        await fixture.cli.waitUntilCallCount(4)
+        #expect(fixture.cli.calls[3].arguments.contains(secondRepository))
+    }
+
+    @MainActor
+    @Test func selectedBotRequiresExactInstallationAndAccountProof() async throws {
+        let targetRepository = "electricsheephq/evaos-code-review-bot-neondiff"
+        let fixture = await preparedExistingAgentVerificationFixture(
+            visibility: "private",
+            licenseResult: existingAgentLicenseStatus(
+                scope: "private",
+                privateRepoAllowed: true
+            ),
+            doctorInstallationID: 72002,
+            doctorInstallationAccount: "another-account"
+        )
+
+        fixture.model.verifyExistingLocalBotGitHubAccess()
+        await fixture.cli.waitUntilCallCount(3)
+        for _ in 0..<20 where fixture.model.isBYOGitHubVerificationInProgress {
+            await Task.yield()
+        }
+
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.lastError?.contains("GitHub") == true)
+        #expect(fixture.cli.calls.last?.arguments.contains(targetRepository) == true)
     }
 
     @MainActor
@@ -2202,7 +2258,9 @@ import NeonDiffDesktopCore
         visibility: String,
         licenseResult: CLIRunResult,
         activationLicenseClient: (any ActivationLicenseClienting)? = nil,
-        repositories: [String]? = nil
+        repositories: [String]? = nil,
+        doctorInstallationID: Int64 = 72001,
+        doctorInstallationAccount: String = "electricsheephq"
     ) async -> ModelDependencyFixture {
         let targetRepository =
             "electricsheephq/evaos-code-review-bot-neondiff"
@@ -2224,7 +2282,7 @@ import NeonDiffDesktopCore
                 )),
                 .success(CLIRunResult(
                     exitCode: 0,
-                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"\#(visibility)","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
+                    stdout: #"{"ok":true,"command":"doctor github","appCredentials":{"appId":"4184532","appIdConfigured":true,"privateKeyConfigured":true,"source":"configured"},"github":{"canPostAsApp":true,"readMode":"app_installation","readChecks":[{"repo":"\#(targetRepository)","ok":true,"visibility_result":"\#(visibility)","installation_id_present":true,"installation_id":\#(doctorInstallationID),"installation_account":"\#(doctorInstallationAccount)","app_can_read_metadata":true,"app_can_read_pull_requests":true}]}}"#,
                     stderr: ""
                 )),
                 .success(licenseResult)
