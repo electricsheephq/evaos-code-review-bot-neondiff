@@ -1913,7 +1913,7 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeRedactedJson(join(evidenceDir, "repo-profile.json"), repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "filter-impact.json"), filterImpact);
     const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
-    const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile);
+    const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile, { reviewPrompt: prompt });
     const forbiddenPromptFragments = reviewPromptForbiddenFragments();
     const assertReviewOutputSafe = (text: string) => {
       assertPublicReviewOutputSafe(text, forbiddenPromptFragments);

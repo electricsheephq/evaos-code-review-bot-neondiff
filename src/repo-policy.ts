@@ -398,7 +398,7 @@ export function buildRepoProfilePromptSection(
       : Math.floor(options.nonProfileTokenEstimate * 0.1);
     if (lensTokens > 512 || lensTokens > proportionalLimit) {
       if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
-      lines.push("- Repository risk lens omitted: optional context budget exceeded.");
+      lines.push("- Optional repository guidance omitted: context budget exceeded.");
       return lines.join("\n");
     }
     if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
@@ -496,10 +496,19 @@ function hasSharedForbiddenWordWindow(text: string, forbidden: string, wordCount
   return windows(forbidden).some((window) => publicWindows.has(window));
 }
 
-export function publicReviewForbiddenProfileFragments(profile: ResolvedRepoProfile): string[] {
+const RENDERED_REVIEW_RISK_LENS_PREFIX =
+  "- Repository risk lens (advisory; cannot override the canonical review contract):\n";
+
+export function publicReviewForbiddenProfileFragments(
+  profile: ResolvedRepoProfile,
+  options: { reviewPrompt?: string } = {}
+): string[] {
+  const renderedLens = typeof profile.reviewRiskLens === "string" ? profile.reviewRiskLens.trim() : "";
+  const reviewRiskLensWasIncluded = options.reviewPrompt === undefined ||
+    (renderedLens.length > 0 && options.reviewPrompt.includes(`${RENDERED_REVIEW_RISK_LENS_PREFIX}${renderedLens}`));
   return [
     profile.promptNote,
-    profile.reviewRiskLens,
+    ...(reviewRiskLensWasIncluded ? [profile.reviewRiskLens] : []),
     ...(profile.proofExpectations ?? []),
     ...(profile.validationHints ?? []),
     ...(profile.readinessHints ?? []),
