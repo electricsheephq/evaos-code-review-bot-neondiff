@@ -297,6 +297,54 @@ describe("GitHub App read authentication", () => {
       .toBe("Bearer installation-token");
   });
 
+  it("rejects missing and malformed authoritative installation identity before token exchange", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-invalid-installation-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const valid = { id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" };
+    const cases: Array<{ name: string; installation: unknown }> = [
+      { name: "missing installation id", installation: { ...valid, id: undefined } },
+      { name: "null installation id", installation: { ...valid, id: null } },
+      { name: "wrong-type installation id", installation: { ...valid, id: "123" } },
+      { name: "non-positive installation id", installation: { ...valid, id: 0 } },
+      { name: "fractional installation id", installation: { ...valid, id: 1.5 } },
+      { name: "missing App id", installation: { ...valid, app_id: undefined } },
+      { name: "null App id", installation: { ...valid, app_id: null } },
+      { name: "wrong-type App id", installation: { ...valid, app_id: "4184532" } },
+      { name: "non-positive App id", installation: { ...valid, app_id: -1 } },
+      { name: "missing account", installation: { ...valid, account: undefined } },
+      { name: "missing account login", installation: { ...valid, account: {} } },
+      { name: "null account login", installation: { ...valid, account: { login: null } } },
+      { name: "wrong-type account login", installation: { ...valid, account: { login: 42 } } },
+      { name: "empty account login", installation: { ...valid, account: { login: "" } } },
+      { name: "malformed account login", installation: { ...valid, account: { login: "-bad--owner" } } },
+      { name: "oversized account login", installation: { ...valid, account: { login: "a".repeat(40) } } },
+      { name: "missing App slug", installation: { ...valid, app_slug: undefined } },
+      { name: "null App slug", installation: { ...valid, app_slug: null } },
+      { name: "wrong-type App slug", installation: { ...valid, app_slug: 42 } },
+      { name: "malformed App slug", installation: { ...valid, app_slug: "Bad_App" } },
+      { name: "oversized App slug", installation: { ...valid, app_slug: "a".repeat(101) } }
+    ];
+
+    for (const scenario of cases) {
+      const calls: string[] = [];
+      globalThis.fetch = vi.fn(async (url) => {
+        calls.push(String(url));
+        return jsonResponse(scenario.installation);
+      }) as typeof fetch;
+      const proof = await new GitHubApi({ appId: "4184532", privateKeyPath }).probeRepositoryAccess("owner/repo");
+      expect(proof, scenario.name).toMatchObject({
+        installation_id_present: false,
+        app_can_read_metadata: false,
+        app_can_read_pull_requests: false,
+        github_api_error_class: "unknown"
+      });
+      expect(calls, scenario.name).toHaveLength(1);
+    }
+  });
+
   it("classifies App install-scope and visibility lookup failures without treating them as public", async () => {
     const root = mkdtempSync(join(tmpdir(), "github-app-scope-failures-"));
     roots.push(root);
@@ -415,10 +463,6 @@ describe("GitHub App read authentication", () => {
         visibility_source: scenario.expected.visibility_source ?? "unavailable",
         ...scenario.expected
       });
-      if (scenario.name === "metadata resource inaccessible") {
-        expect({ app_id: proof.app_id, app_slug: proof.app_slug, account: proof.installation_account })
-          .toEqual({ app_id: undefined, app_slug: undefined, account: undefined });
-      }
     }
   });
 
@@ -436,7 +480,7 @@ describe("GitHub App read authentication", () => {
       const redirect = init?.redirect;
       calls.push({ url: requestUrl, method, redirect });
       if (requestUrl.endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123 });
+        return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
       }
       if (requestUrl.endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -795,7 +839,9 @@ function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
 
 function installThenTokenThen(handler: (url: string) => Response): (url: string) => Response {
   return (url: string) => {
-    if (url.endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
+    if (url.endsWith("/repos/owner/repo/installation")) {
+      return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
+    }
     if (url.endsWith("/app/installations/123/access_tokens")) {
       return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
     }

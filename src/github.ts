@@ -97,6 +97,20 @@ export interface GitHubRepositoryAccessProof {
   github_api_error?: string;
 }
 
+interface GitHubInstallationIdentity {
+  id: number;
+  app_id: number;
+  account_login: string;
+  app_slug: string;
+}
+
+interface GitHubInstallationResponse {
+  id: number;
+  app_id?: number;
+  account?: { login?: string };
+  app_slug?: string;
+}
+
 export class GitHubApiRequestError extends Error {
   readonly status: number;
   readonly statusText: string;
@@ -202,18 +216,20 @@ export class GitHubApi {
       };
     }
 
-    let installation: { id: number; account_login?: string; app_id?: number; app_slug?: string };
+    let installation: GitHubInstallationIdentity;
     try {
-      installation = await this.getInstallation(repo, { followRedirects: false });
+      installation = parseGitHubInstallationIdentity(
+        await this.getInstallation(repo, { followRedirects: false })
+      );
     } catch (error) {
       return { ...base, ...describeGitHubAccessError(error) };
     }
     const installationProof = {
       installation_id_present: true,
       installation_id: installation.id,
-      ...(installation.account_login ? { installation_account: installation.account_login } : {}),
-      ...(installation.app_id === undefined ? {} : { app_id: installation.app_id }),
-      ...(installation.app_slug ? { app_slug: installation.app_slug } : {})
+      installation_account: installation.account_login,
+      app_id: installation.app_id,
+      app_slug: installation.app_slug
     };
 
     let token: string;
@@ -525,24 +541,13 @@ export class GitHubApi {
   private async getInstallation(
     repo: string,
     options: { followRedirects?: boolean } = {}
-  ): Promise<{ id: number; account_login?: string; app_id?: number; app_slug?: string }> {
+  ): Promise<GitHubInstallationResponse> {
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
     const jwt = createAppJwt(this.appId, this.privateKey);
-    const installation = await this.request<{
-      id: number;
-      account?: { login?: string };
-      app_id?: number;
-      app_slug?: string;
-    }>(`/repos/${repo}/installation`, {
+    return this.request<GitHubInstallationResponse>(`/repos/${repo}/installation`, {
       token: jwt,
       followRedirects: options.followRedirects
     });
-    return {
-      id: installation.id,
-      ...(installation.account?.login ? { account_login: installation.account.login } : {}),
-      ...(installation.app_id === undefined ? {} : { app_id: installation.app_id }),
-      ...(installation.app_slug ? { app_slug: installation.app_slug } : {})
-    };
   }
 
   private async getInstallationTokenForId(repo: string, installationId: number): Promise<string> {
@@ -675,6 +680,28 @@ function visibilityFromRepositorySummary(repository: RepositorySummary): {
   if (repository.private === true) return { result: "private", source: "private_flag" };
   if (repository.private === false) return { result: "public", source: "private_flag" };
   return { result: "unknown", source: "unavailable" };
+}
+
+function parseGitHubInstallationIdentity(value: unknown): GitHubInstallationIdentity {
+  const installation = value as {
+    id?: unknown;
+    app_id?: unknown;
+    account?: { login?: unknown } | null;
+    app_slug?: unknown;
+  } | null;
+  const positiveInteger = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0;
+  const accountLogin = installation?.account?.login;
+  const appSlug = installation?.app_slug;
+  const accountLoginValid = typeof accountLogin === "string"
+    && /^(?!-)(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(accountLogin);
+  const appSlugValid = typeof appSlug === "string"
+    && /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(appSlug);
+  if (!positiveInteger(installation?.id) || !positiveInteger(installation?.app_id)
+      || !accountLoginValid || !appSlugValid) {
+    throw new Error("GitHub installation response is missing canonical identity fields.");
+  }
+  return { id: installation.id, app_id: installation.app_id, account_login: accountLogin, app_slug: appSlug };
 }
 
 function describeGitHubAccessError(error: unknown): Pick<

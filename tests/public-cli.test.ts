@@ -1782,7 +1782,12 @@ exit 1
       const url = new URL(request.url ?? "/", "http://localhost");
       response.setHeader("Content-Type", "application/json");
       if (request.method === "GET" && url.pathname === "/repos/acme/demo/installation") {
-        response.end(JSON.stringify({ id: 42 }));
+        response.end(JSON.stringify({
+          id: 42,
+          app_id: 12345,
+          account: { login: "acme" },
+          app_slug: "customer-review-app"
+        }));
         return;
       }
       if (request.method === "POST" && url.pathname === "/app/installations/42/access_tokens") {
