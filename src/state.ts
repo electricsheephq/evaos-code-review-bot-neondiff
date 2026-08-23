@@ -281,6 +281,14 @@ export interface ReviewQueueJobRecord {
   finishedAt?: string;
 }
 
+export interface ReviewQueueQuarantineRecord {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  reason: string;
+  createdAt: string;
+}
+
 export interface ReviewReadinessRecord {
   repo: string;
   pullNumber: number;
@@ -707,6 +715,18 @@ export class ReviewStateStore {
         foreign key (session_id) references reviewer_sessions(session_id)
       );
 
+      create table if not exists review_queue_quarantines (
+        repo text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        reason text not null,
+        created_at text not null,
+        check (repo = lower(repo) and head_sha = lower(head_sha)),
+        primary key (repo, pull_number, head_sha)
+      );
+      create index if not exists idx_review_queue_quarantines_identity
+        on review_queue_quarantines (repo, pull_number, head_sha);
+
       create table if not exists review_queue_jobs (
         job_id text primary key,
         attempt_id text not null unique,
@@ -732,6 +752,18 @@ export class ReviewStateStore {
         started_at text,
         finished_at text
       );
+
+      create trigger if not exists reject_quarantined_review_queue_job
+      before insert on review_queue_jobs
+      when exists (
+        select 1 from review_queue_quarantines
+        where repo = lower(trim(new.repo))
+          and pull_number = new.pull_number
+          and head_sha = lower(trim(new.head_sha))
+      )
+      begin
+        select raise(abort, 'review_queue_head_quarantined');
+      end;
 
       create index if not exists idx_review_queue_jobs_state_priority
         on review_queue_jobs (state, priority, created_at);
@@ -2570,6 +2602,9 @@ export class ReviewStateStore {
     now?: Date;
   }): ReviewQueueEnqueueResult {
     validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, input.priority, input.commentId);
+    if (this.isReviewQueueHeadQuarantined(input.repo, input.pullNumber, input.headSha)) {
+      throw new Error("review_queue_head_quarantined");
+    }
     const nowIso = (input.now ?? new Date()).toISOString();
     const source = input.source ?? "automatic";
     const lane = input.lane ?? (source === "manual_command" ? "manual" : "background");
@@ -2618,6 +2653,40 @@ export class ReviewStateStore {
         nowIso
       );
     return { enqueued: true, job: this.getReviewQueueJob(jobId)! };
+  }
+
+  quarantineReviewQueueHead(input: {
+    repo: string;
+    pullNumber: number;
+    headSha: string;
+    reason: string;
+    now?: Date;
+  }): ReviewQueueQuarantineRecord {
+    validateReviewQueueInput(input.repo, input.pullNumber, input.headSha);
+    const reason = redactSecrets(input.reason).trim().slice(0, 500);
+    if (!reason) throw new Error("reason must be non-empty");
+    const repo = normalizeReviewQueueIdentity(input.repo);
+    const headSha = normalizeReviewQueueIdentity(input.headSha);
+    const createdAt = (input.now ?? new Date()).toISOString();
+    this.db.prepare(`
+      insert or ignore into review_queue_quarantines
+        (repo, pull_number, head_sha, reason, created_at)
+      values (?, ?, ?, ?, ?)
+    `).run(repo, input.pullNumber, headSha, reason, createdAt);
+    const row = this.db.prepare(`
+      select repo, pull_number, head_sha, reason, created_at
+      from review_queue_quarantines
+      where repo = ? and pull_number = ? and head_sha = ?
+    `).get(repo, input.pullNumber, headSha) as unknown as ReviewQueueQuarantineRow;
+    return mapReviewQueueQuarantineRow(row);
+  }
+
+  private isReviewQueueHeadQuarantined(repo: string, pullNumber: number, headSha: string): boolean {
+    return Boolean(this.db.prepare(`
+      select 1 from review_queue_quarantines
+      where repo = ? and pull_number = ? and head_sha = ?
+      limit 1
+    `).get(normalizeReviewQueueIdentity(repo), pullNumber, normalizeReviewQueueIdentity(headSha)));
   }
 
   leaseNextReviewQueueJobs(input: {
@@ -2680,7 +2749,7 @@ export class ReviewStateStore {
         )
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
       const jobs = this.listReviewQueueJobs();
-      const eligible = jobs
+      const eligible = this.listReviewQueueJobs({ excludeQuarantined: true })
         .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
         .sort(buildLeaseComparator(input.aging, nowIso));
       const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
@@ -2871,10 +2940,19 @@ export class ReviewStateStore {
     state?: ReviewQueueJobState;
     states?: ReviewQueueJobState[];
     limit?: number;
+    excludeQuarantined?: boolean;
   } = {}): ReviewQueueJobRecord[] {
     if (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1)) {
       throw new Error("limit must be a positive integer");
     }
+    const quarantinePredicate = input.excludeQuarantined
+      ? ` and not exists (
+           select 1 from review_queue_quarantines q
+           where q.repo = lower(trim(review_queue_jobs.repo))
+             and q.pull_number = review_queue_jobs.pull_number
+             and q.head_sha = lower(trim(review_queue_jobs.head_sha))
+         )`
+      : "";
     const rows = (input.repo
       ? this.db
           .prepare(
@@ -2882,7 +2960,7 @@ export class ReviewStateStore {
                     provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                     comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
              from review_queue_jobs
-             where repo = ?
+             where repo = ?${quarantinePredicate}
              order by priority asc, datetime(created_at) asc`
           )
           .all(input.repo)
@@ -2892,6 +2970,7 @@ export class ReviewStateStore {
                     provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                     comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
              from review_queue_jobs
+             where 1 = 1${quarantinePredicate}
              order by priority asc, datetime(created_at) asc`
           )
           .all()) as unknown as ReviewQueueJobRow[];
@@ -4247,6 +4326,14 @@ interface ReviewQueueJobRow {
   finished_at: string | null;
 }
 
+interface ReviewQueueQuarantineRow {
+  repo: string;
+  pull_number: number;
+  head_sha: string;
+  reason: string;
+  created_at: string;
+}
+
 interface ReviewReadinessRow {
   repo: string;
   pull_number: number;
@@ -4514,6 +4601,20 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     ...(row.started_at ? { startedAt: row.started_at } : {}),
     ...(row.finished_at ? { finishedAt: row.finished_at } : {})
   };
+}
+
+function mapReviewQueueQuarantineRow(row: ReviewQueueQuarantineRow): ReviewQueueQuarantineRecord {
+  return {
+    repo: row.repo,
+    pullNumber: row.pull_number,
+    headSha: row.head_sha,
+    reason: row.reason,
+    createdAt: row.created_at
+  };
+}
+
+function normalizeReviewQueueIdentity(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function mapDaemonHeartbeatRow(row: DaemonHeartbeatRow): StoredDaemonHeartbeatRecord {

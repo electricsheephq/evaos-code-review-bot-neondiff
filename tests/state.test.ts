@@ -1260,6 +1260,65 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("case-normalizes quarantine identity and fences enqueue, lease, and direct insert", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-quarantine-identity-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const store = new ReviewStateStore(dbPath);
+    const now = new Date("2026-08-24T00:00:00.000Z");
+    const quarantined = store.enqueueReviewQueueJob({
+      repo: "Owner/Repo",
+      pullNumber: 10,
+      headSha: "AbCd",
+      now
+    }).job;
+    const unrelated = store.enqueueReviewQueueJob({
+      repo: "Owner/Repo",
+      pullNumber: 11,
+      headSha: "Other",
+      now
+    }).job;
+
+    expect(store.quarantineReviewQueueHead({
+      repo: "OWNER/REPO",
+      pullNumber: 10,
+      headSha: "ABCD",
+      reason: "required evidence",
+      now
+    })).toMatchObject({ repo: "owner/repo", pullNumber: 10, headSha: "abcd" });
+    expect(store.getReviewQueueJob(quarantined.jobId)).toMatchObject({ repo: "Owner/Repo", headSha: "AbCd", state: "queued" });
+    expect(() => store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 10, headSha: "abcd", now }))
+      .toThrow("review_queue_head_quarantined");
+    expect(store.leaseNextReviewQueueJobs({
+      maxProviderActive: 1,
+      maxOrgActive: 1,
+      maxRepoActive: 1,
+      now
+    }).map((job) => job.jobId)).toEqual([unrelated.jobId]);
+
+    const db = new DatabaseSync(dbPath);
+    try {
+      expect(() => db.prepare(`insert into review_queue_jobs
+        (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at)
+        values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'queued', ?, ?)`)
+        .run("direct-quarantined", "direct-attempt", "oWnEr/RePo", "oWnEr", 10, "aBcD", now.toISOString(), now.toISOString()))
+        .toThrow("review_queue_head_quarantined");
+      const indexes = db.prepare("pragma index_list('review_queue_quarantines')").all() as Array<{ name: string }>;
+      expect(indexes.map((index) => index.name)).toContain("idx_review_queue_quarantines_identity");
+      const plan = db.prepare(`explain query plan
+        select 1 from review_queue_quarantines where repo = ? and pull_number = ? and head_sha = ?`)
+        .all("owner/repo", 10, "abcd") as Array<{ detail: string }>;
+      expect(plan.map((step) => step.detail).join(" ")).toMatch(/INDEX/);
+      const stored = db.prepare(`select repo, pull_number, head_sha, reason
+        from review_queue_quarantines where repo = ? and pull_number = ? and head_sha = ?`)
+        .get("owner/repo", 10, "abcd");
+      expect(stored).toEqual({ repo: "owner/repo", pull_number: 10, head_sha: "abcd", reason: "required evidence" });
+    } finally {
+      db.close();
+      store.close();
+    }
+  });
+
   it("dry-runs and clears expired review queue leases without manual SQL", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-lease-clear-"));
     roots.push(root);
