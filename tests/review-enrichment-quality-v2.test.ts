@@ -77,19 +77,40 @@ describe("review and issue-enrichment quality v2", () => {
     expect(prompt).not.toContain("legacy readiness configuration");
   });
 
-  it("rejects a risk lens that exceeds either the fixed or proportional budget", () => {
+  it("omits an optional risk lens that exceeds either budget without rejecting the review", () => {
+    const profile: ResolvedRepoProfile = {
+      repo: "owner/repo",
+      canonicalRepo: "owner/repo",
+      source: "explicit",
+      reviewRiskLens: "x".repeat(2_100),
+      promptNote: "legacy prompt note",
+      proofExpectations: ["legacy proof configuration"]
+    };
+    const fixedOverflow = buildRepoProfilePromptSection(profile, { nonProfileTokenEstimate: 4_000 });
+    const proportionalOverflow = buildRepoProfilePromptSection(
+      { ...profile, reviewRiskLens: "x".repeat(240) },
+      { nonProfileTokenEstimate: 100 }
+    );
+
+    for (const prompt of [fixedOverflow, proportionalOverflow]) {
+      expect(prompt).toContain("Optional repository guidance omitted: context budget exceeded");
+      expect(prompt).not.toContain("x".repeat(32));
+      expect(prompt).toContain("Review profile");
+      expect(prompt).not.toContain("legacy prompt note");
+      expect(prompt).not.toContain("legacy proof configuration");
+    }
+  });
+
+  it("keeps the public overflow status safe if the provider echoes it", () => {
     const profile: ResolvedRepoProfile = {
       repo: "owner/repo",
       canonicalRepo: "owner/repo",
       source: "explicit",
       reviewRiskLens: "x".repeat(2_100)
     };
-    expect(() => buildRepoProfilePromptSection(profile, { nonProfileTokenEstimate: 4_000 }))
-      .toThrow("review_risk_lens_budget_exceeded");
-    expect(() => buildRepoProfilePromptSection(
-      { ...profile, reviewRiskLens: "x".repeat(240) },
-      { nonProfileTokenEstimate: 100 }
-    )).toThrow("review_risk_lens_budget_exceeded");
+    const prompt = buildRepoProfilePromptSection(profile, { nonProfileTokenEstimate: 4_000 });
+    expect(() => assertPublicReviewOutputSafe(prompt)).not.toThrow();
+    expect(prompt).not.toContain("review risk lens");
   });
 
   it("budgets a risk lens against the exact rendered non-profile prompt", () => {
@@ -217,6 +238,42 @@ describe("review and issue-enrichment quality v2", () => {
       publicReviewForbiddenProfileFragments(canaryProfile),
       PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
     )).toThrow("public_review_config_leak_rejected");
+
+    const oversizedProfile: ResolvedRepoProfile = {
+      ...profile,
+      reviewRiskLens: "Focus on lossless ordering and provenance; session and profile isolation. ".repeat(12)
+    };
+    const omittedPrompt = buildReviewPrompt({
+      repo: oversizedProfile.repo,
+      pull: {
+        number: 1,
+        title: "x",
+        draft: false,
+        head: { sha: "a".repeat(40), ref: "feature/x", repo: { full_name: oversizedProfile.repo } },
+        base: { sha: "b".repeat(40), ref: "main", repo: { full_name: oversizedProfile.repo } },
+        html_url: "https://github.test/owner/repo/pull/1"
+      },
+      files: [],
+      repoProfile: oversizedProfile
+    });
+    const omittedFragments = publicReviewForbiddenProfileFragments(oversizedProfile, { reviewPrompt: omittedPrompt });
+    expect(omittedPrompt).toContain("Optional repository guidance omitted: context budget exceeded");
+    expect(omittedFragments).not.toContain(oversizedProfile.reviewRiskLens);
+    expect(() => assertPublicReviewOutputSafe(
+      "The provider mentioned lossless ordering and provenance while describing the changed behavior.",
+      omittedFragments,
+      PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
+    )).not.toThrow();
+
+    const includedPrompt = buildRepoProfilePromptSection(profile, { nonProfileTokenEstimate: 4_000 });
+    const includedFragments = publicReviewForbiddenProfileFragments(profile, { reviewPrompts: [omittedPrompt, includedPrompt] });
+    expect(includedFragments).toContain(profile.reviewRiskLens);
+    expect(() => assertPublicReviewOutputSafe(
+      `Provider echo: ${profile.reviewRiskLens}`,
+      includedFragments,
+      PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
+    )).toThrow("public_review_config_leak_rejected");
+
     expect(() => assertPublicReviewOutputSafe(
       "Do not modify files",
       reviewPromptForbiddenFragments()

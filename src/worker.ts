@@ -1913,16 +1913,6 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     writeRedactedJson(join(evidenceDir, "repo-profile.json"), repoPolicy.profile);
     writeRedactedJson(join(evidenceDir, "filter-impact.json"), filterImpact);
     const settingsPreview = buildReviewSettingsPreview(config, repoPolicy.profile);
-    const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile);
-    const forbiddenPromptFragments = reviewPromptForbiddenFragments();
-    const assertReviewOutputSafe = (text: string) => {
-      assertPublicReviewOutputSafe(text, forbiddenPromptFragments);
-      assertPublicReviewOutputSafe(
-        text,
-        forbiddenProfileFragments,
-        PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
-      );
-    };
     writeRedactedJson(join(evidenceDir, "review-settings-preview.json"), settingsPreview);
     if (commandDecision.action !== "none") {
       writeRedactedJson(join(evidenceDir, "command.json"), commandDecision.command);
@@ -1948,6 +1938,21 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
       });
       return "skipped_context_budget";
     }
+    const executedReviewPrompts = contextBudget.mode === "chunk"
+      ? contextBudget.chunks.map((chunk) => promptForFiles(chunk.files))
+      : [prompt];
+    const forbiddenProfileFragments = publicReviewForbiddenProfileFragments(repoPolicy.profile, {
+      reviewPrompts: executedReviewPrompts
+    });
+    const forbiddenPromptFragments = reviewPromptForbiddenFragments();
+    const assertReviewOutputSafe = (text: string) => {
+      assertPublicReviewOutputSafe(text, forbiddenPromptFragments);
+      assertPublicReviewOutputSafe(
+        text,
+        forbiddenProfileFragments,
+        PUBLIC_REVIEW_PROFILE_FRAGMENT_WORD_WINDOW
+      );
+    };
 
     const assertApprovedProviderConfigCurrent = (): void => {
       if (!input.configRevision || !input.sourceConfigRevision) return;

@@ -434,6 +434,44 @@ describe("worker context budget preflight", () => {
     state.close();
   });
 
+  it("accepts a dry-run when the lens fits the unsent full prompt but is omitted from every chunk", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-context-budget-chunk-risk-lens-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    const reviewRiskLens = "Focus on lossless ordering and provenance; session and profile isolation. ".repeat(18);
+    config.repoProfiles = { repos: { "electricsheephq/WorldOS": { reviewRiskLens } } };
+    config.contextBudget = {
+      enabled: true,
+      overflow: "chunk",
+      reservedOutputTokens: 50,
+      charsPerToken: 1,
+      providerFudgeFactor: 1,
+      maxChunks: 5
+    };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(403, "e".repeat(40));
+    const files = [pullFile("src/a.ts", 5_000), pullFile("src/b.ts", 5_000), pullFile("src/c.ts", 5_000)];
+    zcodeFindingsByPath.set("src/a.ts", [finding("src/a.ts", "Focus on lossless ordering and provenance; session and")]);
+    const largestSinglePromptLength = Math.max(...files.map((entry) => reviewPromptLength(config, pull, [entry])));
+    config.providers!.providers["zcode-glm"]!.contextWindowTokens = largestSinglePromptLength + 2_050;
+
+    const result = await reviewPull({
+      config,
+      github: githubForPull(pull, files),
+      state,
+      repo: "electricsheephq/WorldOS",
+      pull,
+      dryRun: true,
+      useZCode: true
+    });
+
+    expect(result).toBe("reviewed");
+    expect(zcodePrompts).toHaveLength(3);
+    expect(zcodePrompts.every((prompt) => !prompt.includes(reviewRiskLens.trim()))).toBe(true);
+    expect(createdReviews).toEqual([]);
+    state.close();
+  });
+
   it("runs the enabled shadow ensemble without changing the canonical posted review", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-shadow-"));
     roots.push(root);

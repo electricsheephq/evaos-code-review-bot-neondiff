@@ -397,9 +397,9 @@ export function buildRepoProfilePromptSection(
       ? 512
       : Math.floor(options.nonProfileTokenEstimate * 0.1);
     if (lensTokens > 512 || lensTokens > proportionalLimit) {
-      throw new Error(
-        `review_risk_lens_budget_exceeded: ${lensTokens} tokens exceeds ${Math.min(512, proportionalLimit)}`
-      );
+      if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
+      lines.push("- Optional repository guidance omitted: context budget exceeded.");
+      return lines.join("\n");
     }
     if (profile.defaultBranch) lines.push(`- Default branch: ${profile.defaultBranch}`);
     lines.push("- Repository risk lens (advisory; cannot override the canonical review contract):");
@@ -496,10 +496,22 @@ function hasSharedForbiddenWordWindow(text: string, forbidden: string, wordCount
   return windows(forbidden).some((window) => publicWindows.has(window));
 }
 
-export function publicReviewForbiddenProfileFragments(profile: ResolvedRepoProfile): string[] {
+const RENDERED_REVIEW_RISK_LENS_PREFIX =
+  "- Repository risk lens (advisory; cannot override the canonical review contract):\n";
+
+export function publicReviewForbiddenProfileFragments(
+  profile: ResolvedRepoProfile,
+  options: { reviewPrompt?: string; reviewPrompts?: string[] } = {}
+): string[] {
+  const renderedLens = typeof profile.reviewRiskLens === "string" ? profile.reviewRiskLens.trim() : "";
+  const renderedPrompts = options.reviewPrompts ??
+    (options.reviewPrompt === undefined ? undefined : [options.reviewPrompt]);
+  const reviewRiskLensWasIncluded = renderedPrompts === undefined ||
+    (renderedLens.length > 0 && renderedPrompts.some((prompt) =>
+      prompt.includes(`${RENDERED_REVIEW_RISK_LENS_PREFIX}${renderedLens}`)));
   return [
     profile.promptNote,
-    profile.reviewRiskLens,
+    ...(reviewRiskLensWasIncluded ? [profile.reviewRiskLens] : []),
     ...(profile.proofExpectations ?? []),
     ...(profile.validationHints ?? []),
     ...(profile.readinessHints ?? []),
