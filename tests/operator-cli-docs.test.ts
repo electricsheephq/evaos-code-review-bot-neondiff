@@ -18,11 +18,13 @@ describe("legacy CLI/operator documentation boundary", () => {
     expect(legacy).toContain("evidence must be outside checkout");
     expect(legacy).toContain("--allow-external-plist true");
     expect(legacy).toContain("scripts/install-b0-worker-candidate.mjs update");
+    expect(legacy).toContain("scripts/install-b0-worker-candidate.mjs rollback");
     expect(legacy).toContain("--manifest-sha256");
     expect(legacy).toContain("Workers/<label>/current/node_modules/neondiff/dist/src/cli.js");
     expect(legacy).toContain("one worker pair");
     expect(legacy).not.toContain("Volumes/LEXAR");
     expect(legacy).toContain("Accounts/<account>/Bots/<bot>/config.local.json");
+    expect(legacy).toContain("reviews.sqlite");
     expect(operator).toContain("legacy-cli-boundary.md");
   });
 });

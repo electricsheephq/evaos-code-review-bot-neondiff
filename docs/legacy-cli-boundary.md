@@ -80,6 +80,8 @@ identity, and allowlist are kept with that selected account/bot. The
 artifacts are under the selected label's Desktop `Workers` root. A legacy
 plist's arbitrary absolute config path is not evidence of native account or
 bot ownership, and native onboarding must not adopt it by path coincidence.
+The native database is the selected bot's `reviews.sqlite`; it is never derived
+from a legacy plist's `statePath`.
 
 ## Managed candidate versus source-managed worker
 
@@ -114,7 +116,27 @@ node scripts/install-b0-worker-candidate.mjs update \
 ```
 
 Rollback uses the recorded prior manifest and tarball through the same
-preview-then-confirm contract. It preserves the legacy config and its
+preview-then-confirm contract; re-update repeats `update` with the retained
+current candidate after rollback:
+
+```bash
+for path in "$NEONDIFF_PRIOR_MANIFEST" "$NEONDIFF_PRIOR_TARBALL"; do
+  case "$path" in /*) ;; *) echo "prior artifacts must be absolute" >&2; exit 1 ;; esac
+  test -f "$path" || exit 1
+done
+node scripts/install-b0-worker-candidate.mjs rollback \
+  --manifest "$NEONDIFF_PRIOR_MANIFEST" --manifest-sha256 <prior-manifest-sha256> \
+  --tarball "$NEONDIFF_PRIOR_TARBALL" --launchd-label "$NEONDIFF_LAUNCHD_LABEL" \
+  --dry-run true
+# After approving the preview, repeat it with --dry-run false --confirm true.
+node scripts/install-b0-worker-candidate.mjs update \
+  --manifest "$NEONDIFF_CANDIDATE_MANIFEST" --manifest-sha256 <current-manifest-sha256> \
+  --tarball "$NEONDIFF_CANDIDATE_TARBALL" --launchd-label "$NEONDIFF_LAUNCHD_LABEL" \
+  --dry-run true
+# After approving the re-update preview, repeat it with --dry-run false --confirm true.
+```
+
+Rollback preserves the legacy config and its
 `statePath` database, allowlist, launchd label, credential/Keychain references,
 and one worker pair; it does not reset a source checkout or copy secret bytes.
 The candidate installer does not update the signed Desktop app or native
