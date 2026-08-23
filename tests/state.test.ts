@@ -463,6 +463,7 @@ describe("review state store", () => {
     const blocked = store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-01T00:00:01.000Z"));
 
     expect(first).toBeDefined();
+    expect(first?.queueJobId).toBeUndefined();
     expect(blocked).toBeUndefined();
     store.releaseReviewRunLease(first!.leaseId);
     expect(store.tryAcquireReviewRunLease(1, 60_000, new Date("2026-07-01T00:00:02.000Z"))).toBeDefined();
@@ -1622,6 +1623,43 @@ describe("review state store", () => {
     })).toEqual([
       expect.objectContaining({ jobId: job.jobId, state: "leased" })
     ]);
+    store.close();
+  });
+
+  it("atomically claims one exact leased post and fences replay receipts", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-post-claim-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const now = new Date("2026-08-24T00:00:00.000Z");
+    const job = store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 7, headSha: "head", now }).job;
+    const [lease] = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, leaseTtlMs: 10, now });
+    const run = store.tryAcquireReviewRunLease(1, 10, now, process.pid, { queueJobId: job.jobId, queueLeaseId: lease!.leaseId!, repo: job.repo, pullNumber: 7, headSha: "head" });
+    expect(run).toMatchObject({ queueJobId: job.jobId, queueLeaseId: lease!.leaseId, repo: job.repo, pullNumber: 7, headSha: "head" });
+    store.releaseReviewRunLease(run!.leaseId);
+    expect(store.tryAcquireReviewRunLease(1, 10, now, process.pid, { queueJobId: job.jobId, queueLeaseId: "wrong", repo: job.repo, pullNumber: 7, headSha: "head" })).toBeUndefined();
+    const claim = { jobId: job.jobId, repo: job.repo, pullNumber: 7, headSha: "head", leaseId: lease!.leaseId!, postKey: "review" };
+    expect(() => store.claimReviewQueuePost({ ...claim, leaseId: "replaced", now })).toThrow("review_queue_post_fenced");
+    expect(store.claimReviewQueuePost({ ...claim, now })).toMatchObject({ reconcileRequired: false });
+    expect(store.claimReviewQueuePost({ ...claim, now })).toMatchObject({ reconcileRequired: true });
+    expect(store.recordReviewQueuePostReceipt({ ...claim, receipt: "https://github.com/review/1", now }).receipt).toContain("/1");
+    expect(store.recordReviewQueuePostReceipt({ ...claim, receipt: "https://github.com/review/1", now }).receipt).toContain("/1");
+    expect(() => store.recordReviewQueuePostReceipt({ ...claim, receipt: "https://github.com/review/2", now })).toThrow("review_queue_post_receipt_conflict");
+    expect(() => store.claimReviewQueuePost({ ...claim, postKey: "late", now: new Date("2026-08-24T00:00:00.010Z") })).toThrow("review_queue_post_fenced");
+    store.close();
+  });
+
+  it("keeps exact-head quarantine durable and retires expired owners without capacity leaks", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-quarantine-")); roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite")); const now = new Date("2026-08-24T00:00:00.000Z");
+    const blocked = store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 8, headSha: "blocked", now }).job;
+    const other = store.enqueueReviewQueueJob({ repo: "owner/repo", pullNumber: 9, headSha: "other", now }).job;
+    const [lease] = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, limit: 1, leaseTtlMs: 1, now });
+    store.quarantineReviewQueueHead({ repo: blocked.repo, pullNumber: 8, headSha: "blocked", reason: "required ghp_fake_token", now });
+    expect(() => store.enqueueReviewQueueJob({ repo: blocked.repo, pullNumber: 8, headSha: "blocked", now })).toThrow("review_queue_head_quarantined");
+    expect(() => store.claimReviewQueuePost({ jobId: blocked.jobId, repo: blocked.repo, pullNumber: 8, headSha: "blocked", leaseId: lease!.leaseId!, postKey: "review", now })).toThrow("review_queue_post_fenced");
+    const leased = store.leaseNextReviewQueueJobs({ maxProviderActive: 1, maxOrgActive: 1, maxRepoActive: 1, now: new Date("2026-08-24T00:00:00.002Z") });
+    expect(leased.map((job) => job.jobId)).toEqual([other.jobId]);
+    expect(store.getReviewQueueJob(blocked.jobId)).toMatchObject({ state: "stale_retired", finishedAt: "2026-08-24T00:00:00.002Z" });
+    expect(store.getReviewQueueJob(blocked.jobId)?.nextEligibleAt).toBeUndefined();
     store.close();
   });
 
