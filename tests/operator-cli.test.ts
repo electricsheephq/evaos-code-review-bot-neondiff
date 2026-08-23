@@ -19,6 +19,7 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorAgentInventory,
@@ -98,6 +99,40 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("uses active failures for gates while retaining history and separating coverage headlines", () => {
+    const release = releaseStatus({ ok: true, database: {
+      errorCount: 2, recentUnrecoveredErrorCount: 0, failedReviewQueueJobCount: 2,
+      activeFailedReviewQueueJobCount: 0, zcodeTimeoutFailedReviewQueueJobCount: 1,
+      activeZCodeTimeoutFailedReviewQueueJobCount: 0
+    } });
+    release.health = { state: "amber", reason: "current gates pass; retained history has 2 review error(s) and 2 failed queue job(s)", active: { failedQueueJobs: 0, staleReviewLeases: 0 }, recent: { unrecoveredReviewErrors: 0 }, history: { reviewErrors: 2, failedQueueJobs: 2 } };
+    const recovered = buildOperatorStatus({ release, coverage: coverageReport({ ok: true }), agents: agentInventory({}), durableQueue: durableQueueSnapshot({ ok: false, summary: { ...cleanDurableQueueSummary(), failed: 2 }, jobs: [] }) });
+    expect(recovered.ok).toBe(true);
+    expect(recovered.summary.failedQueueJobs).toBe(2);
+    expect(recovered.gates).toContainEqual(expect.objectContaining({ name: "durable_queue_no_failed_jobs", ok: true }));
+    expect(formatOperatorStatusHuman(recovered)).toContain("status: ok (operator)");
+
+    const coverageBlocked = buildOperatorStatus({ release, coverage: coverageReport({ unprocessed: [pullEntry(9, "pending-head")] }), agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: cleanDurableQueueSummary() }) });
+    const human = formatOperatorStatusHuman(coverageBlocked);
+    expect(human).toContain("status: blocked (operator) - queue_no_pending_heads");
+    expect(human).toContain("releaseHealth: amber - current gates pass");
+    expect(human).not.toContain("blocked (operator) - current gates pass");
+  });
+
+  it("redacts dynamic human status values", () => {
+    const status = buildOperatorStatus({
+      release: releaseStatus({
+        ok: false,
+        recommendedActions: ["inspect ghp_fake_token", "npx tsx src/cli.ts retry-provider-cooldowns --dry-run false"]
+      }),
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({ summary: cleanDurableQueueSummary() })
+    });
+    expect(formatOperatorStatusHuman(status)).not.toContain("ghp_fake_token");
+    expect(JSON.stringify(status)).not.toMatch(/retry-provider-cooldowns|retry-failed|--dry-run false/);
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
