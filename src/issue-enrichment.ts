@@ -275,6 +275,19 @@ export interface IssueEnrichmentCycleResult extends Omit<IssueEnrichmentScanResu
   }>;
 }
 
+export const ISSUE_ENRICHMENT_PROGRESS_STAGES = [
+  "source_snapshot",
+  "github_evidence",
+  "analysis",
+  "post",
+  "persist"
+] as const;
+export interface IssueEnrichmentProgress {
+  stage: typeof ISSUE_ENRICHMENT_PROGRESS_STAGES[number];
+  phase: "start" | "complete";
+  count?: number;
+}
+
 type IssueEnrichmentComment = {
   id: number;
   html_url?: string | null;
@@ -795,6 +808,7 @@ export async function runIssueEnrichmentCycle(input: {
   preacquiredLease?: { leaseId: string };
   licenseAdmission?: ProductionLicenseAdmission;
   analyzeIssue?: IssueAnalysisRunner;
+  onProgress?: (progress: IssueEnrichmentProgress) => void;
 }): Promise<IssueEnrichmentCycleResult> {
   if (!input.licenseAdmission) throw new Error("production license admission is required for issue enrichment cycles");
   if (!isAuthenticProductionLicenseAdmission(input.licenseAdmission, "issue_enrichment")) {
@@ -802,6 +816,16 @@ export async function runIssueEnrichmentCycle(input: {
   }
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const reportProgress = (progress: IssueEnrichmentProgress): void => {
+    try {
+      input.onProgress?.({
+        ...progress,
+        ...(progress.count === undefined ? {} : { count: Math.min(10_000, Math.max(0, Math.trunc(progress.count))) })
+      });
+    } catch {
+      // Diagnostic progress must never change issue-enrichment semantics.
+    }
+  };
   const shouldCollectModelEvidence = !input.dryRun && config.postIssueComment && input.analyzeIssue === undefined;
   const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const releasePreacquiredLeaseBeforeRun = () => {
@@ -922,6 +946,7 @@ export async function runIssueEnrichmentCycle(input: {
 
     const sourceSnapshots = new Map<string, PreparedWorktree>();
     const defaultBranches = new Map<string, string>();
+    reportProgress({ stage: "source_snapshot", phase: "start", count: reposToScan.length });
     if (shouldCollectModelEvidence) {
       if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
       if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
@@ -941,6 +966,7 @@ export async function runIssueEnrichmentCycle(input: {
         defaultBranches.set(repo.toLowerCase(), defaultBranch);
       }
     }
+    reportProgress({ stage: "source_snapshot", phase: "complete", count: sourceSnapshots.size });
 
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
     const issueEvidenceContextByIssue = new Map<string, IssueAnalysisEvidenceContext>();
@@ -1005,6 +1031,7 @@ export async function runIssueEnrichmentCycle(input: {
         : undefined;
       return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action));
     };
+    reportProgress({ stage: "github_evidence", phase: "start", count: reposToScan.length });
     const scanned = reposToScan.length
       ? await collectIssueEnrichmentScan({
           config: input.config,
@@ -1057,6 +1084,7 @@ export async function runIssueEnrichmentCycle(input: {
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
         };
+    reportProgress({ stage: "github_evidence", phase: "complete", count: scanned.summary.issuesSeen });
     applyGlobalIssueEnrichmentCaps({
       items: scanned.items,
       repoScans: scanned.repos,
@@ -1207,6 +1235,7 @@ export async function runIssueEnrichmentCycle(input: {
           return result.analysis;
         });
         const runtime = input.config.codexRuntime;
+        reportProgress({ stage: "analysis", phase: "start" });
         const analysis = await analyzer({
           repo: item.repo,
           issue,
@@ -1223,6 +1252,7 @@ export async function runIssueEnrichmentCycle(input: {
           timeoutMs: runtime?.timeoutMs ?? 1,
           maxOutputBytes: runtime?.maxOutputBytes ?? 1
         });
+        reportProgress({ stage: "analysis", phase: "complete" });
         if (!input.github.getIssueOrPull && input.analyzeIssue === undefined) {
           throw new Error("issue_enrichment_current_issue_read_required");
         }
@@ -1267,6 +1297,7 @@ export async function runIssueEnrichmentCycle(input: {
           });
           continue;
         }
+        reportProgress({ stage: "post", phase: "start" });
         const post = await postEnrichmentComment({
           enabled: true,
           dryRun: false,
@@ -1275,6 +1306,7 @@ export async function runIssueEnrichmentCycle(input: {
           pullNumber: item.issueNumber,
           enrichment
         });
+        reportProgress({ stage: "post", phase: "complete" });
         if (!post.posted) throw new Error(`issue enrichment comment not posted: ${post.reason}`);
         const commentUrl = post.html_url ? redactSecrets(post.html_url) : undefined;
         input.state.recordIssueEnrichment({
@@ -1306,6 +1338,7 @@ export async function runIssueEnrichmentCycle(input: {
       }
     }
 
+    reportProgress({ stage: "persist", phase: "start" });
     if (!input.dryRun && input.advanceWatermarks !== false) {
       for (const repo of scanned.repos) {
         if (!repo.allowed || !repo.ok || repo.baselined) continue;
@@ -1320,6 +1353,7 @@ export async function runIssueEnrichmentCycle(input: {
         });
       }
     }
+    reportProgress({ stage: "persist", phase: "complete" });
 
     return {
       ...scan,

@@ -965,6 +965,7 @@ describe("sticky enrichment comments", () => {
       const state = new ReviewStateStore(statePath);
       let analysisCalls = 0;
       let postCalls = 0;
+      const progressStages: string[] = [];
       try {
         const promotedIssue: GitHubRelatedIssueOrPull = {
           number: 127,
@@ -996,6 +997,7 @@ describe("sticky enrichment comments", () => {
           dryRun: false,
           includeExisting: true,
           checkedAt: "2026-08-16T10:02:00.000Z",
+          onProgress: ({ stage }) => progressStages.push(stage),
           analyzeIssue: async ({ issue }) => {
             analysisCalls += 1;
             return fixtureIssueAnalysis(issue);
@@ -1005,6 +1007,7 @@ describe("sticky enrichment comments", () => {
         expect(result.summary).toMatchObject({ posted: 1, failed: 0 });
         expect(analysisCalls).toBe(1);
         expect(postCalls).toBe(1);
+        expect(new Set(progressStages)).toEqual(new Set(["source_snapshot", "github_evidence", "analysis", "post", "persist"]));
       } finally {
         state.close();
       }

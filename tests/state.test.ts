@@ -1670,6 +1670,23 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("preserves same-run progress age but starts a restarted cycle fresh", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-run-identity-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const firstRun = new Date("2026-07-01T00:00:00.000Z");
+    store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_start", dryRun: false, recordedAt: firstRun });
+    store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_start", dryRun: false, recordedAt: firstRun });
+    store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_complete", dryRun: false, recordedAt: new Date("2026-07-01T00:10:00.000Z") });
+    expect(store.getDaemonHeartbeat()).toMatchObject({ startedCycle: 1, startedAt: firstRun.toISOString() });
+
+    const restarted = new Date("2026-07-01T01:00:00.000Z");
+    store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_start", dryRun: false, recordedAt: restarted });
+    store.recordDaemonHeartbeat({ cycle: 1, event: "daemon_cycle_complete", dryRun: false, recordedAt: new Date("2026-07-01T01:10:00.000Z") });
+    expect(store.getDaemonHeartbeat()).toMatchObject({ startedCycle: 1, startedAt: restarted.toISOString() });
+    store.close();
+  });
+
   it("redacts daemon heartbeat errors", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-redact-"));
     roots.push(root);

@@ -566,6 +566,45 @@ describe("daemon cycle resilience", () => {
     ]));
   });
 
+  it("refreshes one bounded active heartbeat while issue enrichment progresses", async () => {
+    const heartbeats: Array<{ event: string; startedAt?: string }> = [];
+    const stdout: string[] = [];
+    const timers: Array<() => void> = [];
+    const timerSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((callback) => (timers.push(callback as () => void), 1 as never));
+    let cleared = 0;
+    const clearSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => { cleared += 1; });
+    try {
+      await runDaemonCycle({
+        cycle: 13,
+        dryRun: false,
+        pilotRepos: [],
+        monitoredRepos: [],
+        canaryPulls: [],
+        commandsEnabled: false,
+        reviewSchedulerEnabled: true,
+        issueEnrichmentEnabled: true,
+        runOnceImpl: async () => successfulRunOnceResult(),
+        issueEnrichmentCycleImpl: async (options) => {
+          timers[0]?.();
+          options.onProgress?.({ stage: "analysis", phase: "start", count: 99_999 });
+          return successfulIssueEnrichmentCycleResult();
+        },
+        recordHeartbeatImpl: (event, _error, recordedAt) => heartbeats.push({ event, startedAt: recordedAt?.toISOString() }),
+        stdout: (line) => stdout.push(line),
+        stderr: () => undefined
+      });
+    } finally {
+      timerSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+
+    expect(new Set(heartbeats.filter(({ event }) => event === "daemon_cycle_start").map(({ startedAt }) => startedAt)).size).toBe(1);
+    expect(cleared).toBe(1);
+    const progress = stdout.map((line) => JSON.parse(line)).find((line) => line.event === "daemon_issue_enrichment_progress");
+    expect(progress).toMatchObject({ stage: "analysis", phase: "start", count: 10_000 });
+    expect(JSON.stringify(progress)).not.toMatch(/body|comment|provider|credential|path|repo/i);
+  });
+
   it("waits for issue-lane cleanup before returning a review failure", async () => {
     let releaseIssue!: () => void;
     const issueBarrier = new Promise<void>((resolve) => { releaseIssue = resolve; });
