@@ -275,6 +275,21 @@ export interface IssueEnrichmentCycleResult extends Omit<IssueEnrichmentScanResu
   }>;
 }
 
+export const ISSUE_ENRICHMENT_PROGRESS_STAGES = [
+  "source_snapshot",
+  "github_evidence",
+  "analysis",
+  "post",
+  "persist"
+] as const;
+export type IssueEnrichmentProgressStage = typeof ISSUE_ENRICHMENT_PROGRESS_STAGES[number];
+export type IssueEnrichmentProgressPhase = "start" | "complete";
+export interface IssueEnrichmentProgress {
+  stage: IssueEnrichmentProgressStage;
+  phase: IssueEnrichmentProgressPhase;
+  count?: number;
+}
+
 export type IssueEnrichmentCycleGithub = IssueEnrichmentReader & EnrichmentCommentGithub & {
   getRepo?(repo: string): Promise<{ default_branch?: string; clone_url?: string }>;
   listIssueLabelEvents?(repo: string, issueNumber: number): Promise<GithubIssueLabelEvent[] | BoundedGithubList<GithubIssueLabelEvent>>;
@@ -796,6 +811,7 @@ export async function runIssueEnrichmentCycle(input: {
   preacquiredLease?: { leaseId: string };
   licenseAdmission?: ProductionLicenseAdmission;
   analyzeIssue?: IssueAnalysisRunner;
+  onProgress?: (progress: IssueEnrichmentProgress) => void;
 }): Promise<IssueEnrichmentCycleResult> {
   if (!input.licenseAdmission) throw new Error("production license admission is required for issue enrichment cycles");
   if (!isAuthenticProductionLicenseAdmission(input.licenseAdmission, "issue_enrichment")) {
@@ -803,6 +819,21 @@ export async function runIssueEnrichmentCycle(input: {
   }
   const checkedAt = input.checkedAt ?? new Date().toISOString();
   const config = input.config.issueEnrichment ?? DEFAULT_ISSUE_ENRICHMENT_CONFIG;
+  const reportProgress = (
+    stage: IssueEnrichmentProgressStage,
+    phase: IssueEnrichmentProgressPhase,
+    count?: number
+  ): void => {
+    try {
+      input.onProgress?.({
+        stage,
+        phase,
+        ...(count === undefined ? {} : { count: Math.max(0, Math.min(10_000, Math.trunc(count))) })
+      });
+    } catch {
+      // Progress reporting is diagnostic and must not change cycle semantics.
+    }
+  };
   const shouldCollectModelEvidence = !input.dryRun && config.postIssueComment && input.analyzeIssue === undefined;
   const renderPolicy = resolveIssueEnrichmentRenderPolicy(input.config);
   const releasePreacquiredLeaseBeforeRun = () => {
@@ -868,6 +899,19 @@ export async function runIssueEnrichmentCycle(input: {
     }
   }
 
+  const recordEnrichment = (record: Parameters<typeof input.state.recordIssueEnrichment>[0]): void => {
+    reportProgress("persist", "start");
+    input.state.recordIssueEnrichment(record);
+    reportProgress("persist", "complete");
+  };
+  const recordWatermark = (
+    record: Parameters<typeof input.state.recordIssueEnrichmentRepoWatermark>[0]
+  ): void => {
+    reportProgress("persist", "start");
+    input.state.recordIssueEnrichmentRepoWatermark(record);
+    reportProgress("persist", "complete");
+  };
+
   try {
     const baselineRepos: IssueEnrichmentRepoScan[] = [];
     const reposToScan: string[] = [];
@@ -895,7 +939,7 @@ export async function runIssueEnrichmentCycle(input: {
         continue;
       }
       if (!input.dryRun && input.advanceWatermarks !== false) {
-        input.state.recordIssueEnrichmentRepoWatermark({
+        recordWatermark({
           repo,
           activatedAt: checkedAt,
           lastCheckedAt: checkedAt,
@@ -923,6 +967,7 @@ export async function runIssueEnrichmentCycle(input: {
 
     const sourceSnapshots = new Map<string, PreparedWorktree>();
     const defaultBranches = new Map<string, string>();
+    reportProgress("source_snapshot", "start", reposToScan.length);
     if (shouldCollectModelEvidence) {
       if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
       if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
@@ -942,6 +987,7 @@ export async function runIssueEnrichmentCycle(input: {
         defaultBranches.set(repo.toLowerCase(), defaultBranch);
       }
     }
+    reportProgress("source_snapshot", "complete", sourceSnapshots.size);
 
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
     const issueEvidenceContextByIssue = new Map<string, IssueAnalysisEvidenceContext>();
@@ -1006,6 +1052,7 @@ export async function runIssueEnrichmentCycle(input: {
         : undefined;
       return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action));
     };
+    reportProgress("github_evidence", "start", reposToScan.length);
     const scanned = reposToScan.length
       ? await collectIssueEnrichmentScan({
           config: input.config,
@@ -1058,6 +1105,7 @@ export async function runIssueEnrichmentCycle(input: {
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
         };
+    reportProgress("github_evidence", "complete", scanned.summary.issuesSeen);
     applyGlobalIssueEnrichmentCaps({
       items: scanned.items,
       repoScans: scanned.repos,
@@ -1098,7 +1146,7 @@ export async function runIssueEnrichmentCycle(input: {
           existing.issueUpdatedAt !== issueUpdatedAt ||
           refreshedAnalysisInputHash !== existing.analysisInputHash
         )) {
-          input.state.recordIssueEnrichment({
+          recordEnrichment({
             repo: item.repo,
             issueNumber: item.issueNumber,
             issueUpdatedAt,
@@ -1122,7 +1170,7 @@ export async function runIssueEnrichmentCycle(input: {
       }
 
       if (item.action === "skipped") {
-        input.state.recordIssueEnrichment({
+        recordEnrichment({
           repo: item.repo,
           issueNumber: item.issueNumber,
           issueUpdatedAt,
@@ -1136,7 +1184,7 @@ export async function runIssueEnrichmentCycle(input: {
       }
 
       if (item.action === "deferred") {
-        input.state.recordIssueEnrichment({
+        recordEnrichment({
           repo: item.repo,
           issueNumber: item.issueNumber,
           issueUpdatedAt,
@@ -1152,7 +1200,7 @@ export async function runIssueEnrichmentCycle(input: {
 
       if (!config.postIssueComment || item.action === "would_enrich") {
         const dryRunAnalysisInputHash = plannedAnalysisInputHashForItem(item);
-        input.state.recordIssueEnrichment({
+        recordEnrichment({
           repo: item.repo,
           issueNumber: item.issueNumber,
           issueUpdatedAt,
@@ -1208,6 +1256,7 @@ export async function runIssueEnrichmentCycle(input: {
           return result.analysis;
         });
         const runtime = input.config.codexRuntime;
+        reportProgress("analysis", "start");
         const analysis = await analyzer({
           repo: item.repo,
           issue,
@@ -1224,6 +1273,7 @@ export async function runIssueEnrichmentCycle(input: {
           timeoutMs: runtime?.timeoutMs ?? 1,
           maxOutputBytes: runtime?.maxOutputBytes ?? 1
         });
+        reportProgress("analysis", "complete");
         if (!input.github.getIssueOrPull && input.analyzeIssue === undefined) {
           throw new Error("issue_enrichment_current_issue_read_required");
         }
@@ -1248,7 +1298,7 @@ export async function runIssueEnrichmentCycle(input: {
         });
         const postBodyHash = enrichment.bodyHash;
         if (input.force !== true && existing?.status === "posted" && existing.bodyHash === postBodyHash) {
-          input.state.recordIssueEnrichment({
+          recordEnrichment({
             repo: item.repo,
             issueNumber: item.issueNumber,
             issueUpdatedAt,
@@ -1268,6 +1318,7 @@ export async function runIssueEnrichmentCycle(input: {
           });
           continue;
         }
+        reportProgress("post", "start");
         const post = await postEnrichmentComment({
           enabled: true,
           dryRun: false,
@@ -1276,9 +1327,10 @@ export async function runIssueEnrichmentCycle(input: {
           pullNumber: item.issueNumber,
           enrichment
         });
+        reportProgress("post", "complete");
         if (!post.posted) throw new Error(`issue enrichment comment not posted: ${post.reason}`);
         const commentUrl = post.html_url ? redactSecrets(post.html_url) : undefined;
-        input.state.recordIssueEnrichment({
+        recordEnrichment({
           repo: item.repo,
           issueNumber: item.issueNumber,
           issueUpdatedAt,
@@ -1292,7 +1344,7 @@ export async function runIssueEnrichmentCycle(input: {
         items.push({ ...item, recordStatus: "posted", ...(commentUrl ? { commentUrl } : {}) });
       } catch (error) {
         const message = redactSecrets(error instanceof Error ? error.message : String(error));
-        input.state.recordIssueEnrichment({
+        recordEnrichment({
           repo: item.repo,
           issueNumber: item.issueNumber,
           issueUpdatedAt,
@@ -1313,7 +1365,7 @@ export async function runIssueEnrichmentCycle(input: {
         const repoItems = items.filter((item) => item.repo === repo.repo);
         if (repo.truncated || repoItems.some((item) => item.recordStatus === "deferred" || item.recordStatus === "failed")) continue;
         const existingWatermark = input.state.getIssueEnrichmentRepoWatermark(repo.repo);
-        input.state.recordIssueEnrichmentRepoWatermark({
+        recordWatermark({
           repo: repo.repo,
           activatedAt: existingWatermark?.activatedAt ?? checkedAt,
           lastCheckedAt: checkedAt,
