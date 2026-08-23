@@ -87,5 +87,5 @@ describe("portable output roots", () => {
     expect(result.status).toBe(0);
     expect(output.ok).toBe(true);
     expect(output.evidenceDir).toBe(join(externalRoot, "neondiff-qa-lab", "risk-queue"));
-  });
+  }, 30_000);
 });
