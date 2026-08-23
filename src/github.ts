@@ -27,6 +27,16 @@ export type BoundedGithubList<T> = T[] & {
   overflow: boolean;
 };
 
+export function unpackBoundedGithubList<T>(result: T[] | BoundedGithubList<T>): {
+  items: T[];
+  truncated: boolean;
+  overflow: boolean;
+} {
+  return "items" in result
+    ? result
+    : { items: result, truncated: false, overflow: false };
+}
+
 export interface GithubIssueLabelEvent {
   event?: string;
   created_at?: string;

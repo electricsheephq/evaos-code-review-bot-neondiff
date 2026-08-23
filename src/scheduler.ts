@@ -13,7 +13,7 @@ import {
   type ReviewCommand
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
-import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi, unpackBoundedGithubList, type BoundedGithubList } from "./github.js";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
@@ -109,7 +109,7 @@ export interface ScheduledRunResult extends RunOnceResult {
 export interface SchedulerGitHubApi {
   listOpenPulls(repo: string): Promise<PullRequestSummary[]>;
   getPull(repo: string, pullNumber: number): Promise<PullRequestSummary>;
-  listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
+  listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[] | BoundedGithubList<IssueCommentCommandSource>>;
   canPostAsApp?: ReviewStatusCommentGithub["canPostAsApp"];
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
   // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
@@ -1159,7 +1159,13 @@ async function resolveSchedulerCommandDecision(input: {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
   try {
-    comments = await input.github.listIssueComments(input.repo, input.pull.number);
+    const result = await input.github.listIssueComments(input.repo, input.pull.number);
+    const bounded = unpackBoundedGithubList(result);
+    if (bounded.truncated || bounded.overflow) {
+      input.onCommandFetchError?.();
+      return { action: "none", shouldReview: false };
+    }
+    comments = bounded.items;
   } catch {
     input.onCommandFetchError?.();
     return { action: "none", shouldReview: false };
@@ -1676,7 +1682,13 @@ async function repairProcessedHeadStatusCommentIfNeeded(input: {
 
   let comments: IssueCommentCommandSource[];
   try {
-    comments = await input.github.listIssueComments(input.repo, input.pull.number);
+    const result = await input.github.listIssueComments(input.repo, input.pull.number);
+    const bounded = unpackBoundedGithubList(result);
+    if (bounded.truncated || bounded.overflow) {
+      input.onStatusCommentFailure?.();
+      return;
+    }
+    comments = bounded.items;
   } catch {
     input.onStatusCommentFailure?.();
     return;
