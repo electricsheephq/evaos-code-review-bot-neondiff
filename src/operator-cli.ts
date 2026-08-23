@@ -1957,10 +1957,12 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     attemptId: row.attempt_id,
     source: row.source,
     lane: row.lane,
-    repo: row.repo,
+    repo: readableQueueText(row.repo),
+    ...(typeof row.repo_key === "string" ? { repoKey: row.repo_key } : {}),
     org: row.org,
     pullNumber: row.pull_number,
-    headSha: row.head_sha,
+    headSha: readableQueueText(row.head_sha),
+    ...(typeof row.head_sha_key === "string" ? { headShaKey: row.head_sha_key } : {}),
     ...(row.base_sha ? { baseSha: row.base_sha } : {}),
     ...(row.provider_id ? { providerId: row.provider_id } : {}),
     priority: row.priority,
@@ -1977,6 +1979,10 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     ...(row.started_at ? { startedAt: row.started_at } : {}),
     ...(row.finished_at ? { finishedAt: row.finished_at } : {})
   };
+}
+
+function readableQueueText(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
 function upsertDashboardItem(
@@ -2252,7 +2258,9 @@ function reviewQueueSelectColumns(db: DatabaseSync): string {
   const leaseExpiresAtColumn = hasColumn(db, "review_queue_jobs", "lease_expires_at")
     ? "lease_expires_at"
     : "null as lease_expires_at";
-  return `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+  const repoKeyColumn = hasColumn(db, "review_queue_jobs", "repo_key") ? "repo_key" : "null as repo_key";
+  const headShaKeyColumn = hasColumn(db, "review_queue_jobs", "head_sha_key") ? "head_sha_key" : "null as head_sha_key";
+  return `select job_id, attempt_id, source, lane, repo, ${repoKeyColumn}, org, pull_number, head_sha, ${headShaKeyColumn}, base_sha,
                  provider_id, priority, state, next_eligible_at, lease_id, ${leaseExpiresAtColumn}, session_id,
                  comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at`;
 }
@@ -2367,10 +2375,12 @@ interface ReviewQueueJobRow {
   attempt_id: string;
   source: ReviewQueueJobRecord["source"];
   lane: ReviewQueueJobRecord["lane"];
-  repo: string;
+  repo: unknown;
+  repo_key: unknown;
   org: string;
   pull_number: number;
-  head_sha: string;
+  head_sha: unknown;
+  head_sha_key: unknown;
   base_sha: string | null;
   provider_id: string | null;
   priority: number;

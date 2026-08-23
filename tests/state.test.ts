@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { collectOperatorReviewQueue } from "../src/operator-cli.js";
 import { parseProviderCooldownError, ReviewStateStore } from "../src/state.js";
 
 describe("review state store", () => {
@@ -32,6 +33,76 @@ describe("review state store", () => {
     expect(store.getProcessedReview("electricsheephq/WorldOS", 1205, "abc123")?.createdAt).toBe("2026-08-23T00:00:00.900Z");
     expect(store.hasProcessed("electricsheephq/WorldOS", 1205, "def456")).toBe(false);
     store.close();
+  });
+
+  it("backfills strict shadow identity without rewriting hostile legacy queue rows", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-shadow-v2-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      create table review_queue_jobs (
+        job_id text primary key, attempt_id text, source text, lane text, repo,
+        org text, pull_number integer, head_sha, base_sha text, provider_id text,
+        priority integer, state text, next_eligible_at text, lease_id text,
+        lease_expires_at text, session_id text, comment_id integer, review_url text,
+        last_error text, created_at text, updated_at text, started_at text, finished_at text
+      )
+    `);
+    const insert = legacyDb.prepare(`
+      insert into review_queue_jobs
+        (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at)
+      values (?, ?, 'automatic', 'background', ?, 'Owner', 1, ?, 50, 'queued', '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z')
+    `);
+    const add = (id: string, repo: unknown, headSha: unknown) => insert.run(id, id, repo, headSha);
+    const validRepo = "Owner/Configured-Repo";
+    const validHead = "A".repeat(40);
+    add("valid", validRepo, validHead);
+    add("blob", Buffer.from("legacy-repo"), validHead);
+    add("null", null, validHead);
+    add("numeric", 42, 7);
+    add("tab", "Owner/Bad\tRepo", validHead);
+    add("lf", "Owner/Bad\nRepo", validHead);
+    add("nbsp", "Owner/Bad\u00a0Repo", validHead);
+    legacyDb.close();
+
+    const store = new ReviewStateStore(dbPath);
+    const jobs = store.listReviewQueueJobs();
+    const byId = new Map(jobs.map((job) => [job.jobId, job]));
+    expect(byId.get("valid")).toMatchObject({
+      repo: validRepo,
+      headSha: validHead,
+      repoKey: validRepo.toLowerCase(),
+      headShaKey: validHead.toLowerCase()
+    });
+    for (const id of ["blob", "null", "numeric", "tab", "lf", "nbsp"]) {
+      expect(byId.get(id)?.repoKey).toBeUndefined();
+      expect(byId.get(id)?.headShaKey).toBeUndefined();
+    }
+    store.recordProcessed({ repo: validRepo, pullNumber: 1, headSha: validHead, status: "posted" });
+    store.assignReviewerSessionJob({
+      repo: validRepo, pullNumber: 1, headSha: validHead, ttlMs: 60_000, headCountLimit: 2, allowProcessed: true
+    });
+    expect(store.getProcessedReview(validRepo, 1, validHead)?.repo).toBe(validRepo);
+    expect(store.getReviewerSessionJob(validRepo, 1, validHead)?.headSha).toBe(validHead);
+    const enqueued = store.enqueueReviewQueueJob({ repo: "OWNER/New-Repo", pullNumber: 2, headSha: "B".repeat(40) });
+    expect(enqueued.job).toMatchObject({ repo: "OWNER/New-Repo", repoKey: "owner/new-repo", headShaKey: "b".repeat(40) });
+    store.close();
+
+    const operatorQueue = collectOperatorReviewQueue(dbPath);
+    expect(operatorQueue.jobs).toHaveLength(8);
+    const reopened = new ReviewStateStore(dbPath);
+    expect(reopened.listReviewQueueJobs()).toHaveLength(8);
+    reopened.close();
+    const verify = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const raw = verify.prepare("select repo, head_sha, repo_key, head_sha_key from review_queue_jobs where job_id = ?").get("valid") as Record<string, unknown>;
+      expect(raw).toEqual({ repo: validRepo, head_sha: validHead, repo_key: validRepo.toLowerCase(), head_sha_key: validHead.toLowerCase() });
+      expect(verify.prepare("select name from review_state_migrations where name = ?").get("review_queue_jobs_shadow_identity_v1")).toBeTruthy();
+      expect(verify.prepare("pragma index_list(review_queue_jobs)").all()).toEqual(expect.arrayContaining([expect.objectContaining({ name: "idx_review_queue_jobs_shadow_identity" })]));
+    } finally {
+      verify.close();
+    }
   });
 
   it("stores normalized issue enrichment public and private hashes and rejects invalid hashes", () => {
