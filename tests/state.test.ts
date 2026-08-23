@@ -34,6 +34,96 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("backfills indexed shadow identity without rewriting linked configured bytes", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-shadow-identity-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const repo = "Owner/Configured-Repo";
+    const headSha = "A".repeat(40);
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb.exec(`
+      create table review_queue_jobs (
+        job_id text primary key,
+        attempt_id text not null unique,
+        source text not null,
+        lane text not null,
+        repo text not null,
+        org text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        base_sha text,
+        provider_id text,
+        priority integer not null,
+        state text not null,
+        next_eligible_at text,
+        lease_id text,
+        lease_expires_at text,
+        session_id text,
+        comment_id integer,
+        review_url text,
+        last_error text,
+        created_at text not null,
+        updated_at text not null,
+        started_at text,
+        finished_at text
+      );
+    `);
+    legacyDb.prepare(`
+      insert into review_queue_jobs
+        (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at)
+      values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'queued', ?, ?)
+    `).run("legacy-valid", "attempt-valid", repo, "Owner", 7, headSha, "2026-08-24T00:00:00.000Z", "2026-08-24T00:00:00.000Z");
+    legacyDb.prepare(`
+      insert into review_queue_jobs
+        (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at)
+      values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'queued', ?, ?)
+    `).run("legacy-malformed", "attempt-malformed", `${repo}\t`, "Owner", 8, `${headSha}\n`, "2026-08-24T00:00:00.000Z", "2026-08-24T00:00:00.000Z");
+    legacyDb.close();
+
+    const store = new ReviewStateStore(dbPath);
+    expect(store.getReviewQueueJob("legacy-valid")).toMatchObject({
+      repo,
+      headSha,
+      repoKey: repo.toLowerCase(),
+      headShaKey: headSha.toLowerCase()
+    });
+    store.assignReviewerSessionJob({ repo, pullNumber: 7, headSha, ttlMs: 60_000, headCountLimit: 10 });
+    store.recordProcessed({ repo, pullNumber: 7, headSha, status: "posted" });
+    expect(store.getReviewerSessionJob(repo, 7, headSha)).toMatchObject({ repo, headSha });
+    expect(store.getProcessedReview(repo, 7, headSha)).toMatchObject({ repo, headSha });
+    store.close();
+
+    const migratedDb = new DatabaseSync(dbPath);
+    try {
+      const valid = migratedDb.prepare(`
+        select repo, head_sha, repo_key, head_sha_key from review_queue_jobs where job_id = ?
+      `).get("legacy-valid");
+      const malformed = migratedDb.prepare(`
+        select repo, head_sha, repo_key, head_sha_key from review_queue_jobs where job_id = ?
+      `).get("legacy-malformed");
+      expect(valid).toEqual({ repo, head_sha: headSha, repo_key: repo.toLowerCase(), head_sha_key: headSha.toLowerCase() });
+      expect(malformed).toEqual({ repo: `${repo}\t`, head_sha: `${headSha}\n`, repo_key: null, head_sha_key: null });
+      const indexes = migratedDb.prepare("pragma index_list('review_queue_jobs')").all() as Array<{ name: string }>;
+      expect(indexes.map((index) => index.name)).toContain("idx_review_queue_jobs_shadow_identity");
+      const plan = migratedDb.prepare(`
+        explain query plan
+        select 1 from review_queue_jobs where repo_key = ? and pull_number = ? and head_sha_key = ?
+      `).all(repo.toLowerCase(), 7, headSha.toLowerCase()) as Array<{ detail: string }>;
+      expect(plan.map((step) => step.detail).join(" ")).toMatch(/INDEX/);
+    } finally {
+      migratedDb.close();
+    }
+
+    const reopened = new ReviewStateStore(dbPath);
+    expect(reopened.getReviewQueueJob("legacy-valid")).toMatchObject({
+      repo,
+      headSha,
+      repoKey: repo.toLowerCase(),
+      headShaKey: headSha.toLowerCase()
+    });
+    reopened.close();
+  });
+
   it("stores normalized issue enrichment public and private hashes and rejects invalid hashes", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-issue-enrichment-body-hash-"));
     roots.push(root);

@@ -261,9 +261,11 @@ export interface ReviewQueueJobRecord {
   source: ReviewQueueJobSource;
   lane: ReviewQueueJobLane;
   repo: string;
+  repoKey?: string;
   org: string;
   pullNumber: number;
   headSha: string;
+  headShaKey?: string;
   baseSha?: string;
   providerId?: string;
   priority: number;
@@ -716,6 +718,8 @@ export class ReviewStateStore {
         org text not null,
         pull_number integer not null,
         head_sha text not null,
+        repo_key text,
+        head_sha_key text,
         base_sha text,
         provider_id text,
         priority integer not null,
@@ -844,6 +848,7 @@ export class ReviewStateStore {
     this.ensureDaemonHeartbeatColumns();
     this.ensureReviewRunLeaseColumns();
     this.ensureReviewQueueJobColumns();
+    this.ensureReviewQueueJobShadowIdentityColumns();
     this.ensureRepoMemoryNoteCoarseColumns();
     this.db.exec(`
       create table if not exists processed_commands (
@@ -2570,6 +2575,7 @@ export class ReviewStateStore {
     now?: Date;
   }): ReviewQueueEnqueueResult {
     validateReviewQueueInput(input.repo, input.pullNumber, input.headSha, input.priority, input.commentId);
+    const shadowIdentity = canonicalReviewQueueIdentity(input.repo, input.headSha);
     const nowIso = (input.now ?? new Date()).toISOString();
     const source = input.source ?? "automatic";
     const lane = input.lane ?? (source === "manual_command" ? "manual" : "background");
@@ -2596,9 +2602,9 @@ export class ReviewStateStore {
     this.db
       .prepare(
         `insert into review_queue_jobs
-          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+          (job_id, attempt_id, source, lane, repo, repo_key, org, pull_number, head_sha, head_sha_key, base_sha,
            provider_id, priority, state, session_id, comment_id, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`
       )
       .run(
         jobId,
@@ -2606,9 +2612,11 @@ export class ReviewStateStore {
         source,
         lane,
         input.repo,
+        shadowIdentity?.repoKey ?? null,
         repoOrg(input.repo),
         input.pullNumber,
         input.headSha,
+        shadowIdentity?.headShaKey ?? null,
         input.baseSha ?? null,
         input.providerId ?? null,
         priority,
@@ -2824,7 +2832,7 @@ export class ReviewStateStore {
   getReviewQueueJob(jobId: string): ReviewQueueJobRecord | undefined {
     const row = this.db
       .prepare(
-        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+        `select job_id, attempt_id, source, lane, repo, repo_key, org, pull_number, head_sha, head_sha_key, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
@@ -2838,7 +2846,7 @@ export class ReviewStateStore {
   getReviewQueueJobByAttemptId(attemptId: string): ReviewQueueJobRecord | undefined {
     const row = this.db
       .prepare(
-        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+        `select job_id, attempt_id, source, lane, repo, repo_key, org, pull_number, head_sha, head_sha_key, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
@@ -2853,7 +2861,7 @@ export class ReviewStateStore {
     const retryPrefix = `${attemptId}:after-terminal:`;
     const row = this.db
       .prepare(
-        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+        `select job_id, attempt_id, source, lane, repo, repo_key, org, pull_number, head_sha, head_sha_key, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
@@ -2878,7 +2886,7 @@ export class ReviewStateStore {
     const rows = (input.repo
       ? this.db
           .prepare(
-            `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+            `select job_id, attempt_id, source, lane, repo, repo_key, org, pull_number, head_sha, head_sha_key, base_sha,
                     provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                     comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
              from review_queue_jobs
@@ -2888,7 +2896,7 @@ export class ReviewStateStore {
           .all(input.repo)
       : this.db
           .prepare(
-            `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+            `select job_id, attempt_id, source, lane, repo, repo_key, org, pull_number, head_sha, head_sha_key, base_sha,
                     provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                     comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
              from review_queue_jobs
@@ -2925,7 +2933,7 @@ export class ReviewStateStore {
     ];
     const rows = this.db
       .prepare(
-        `select job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, base_sha,
+        `select job_id, attempt_id, source, lane, repo, repo_key, org, pull_number, head_sha, head_sha_key, base_sha,
                 provider_id, priority, state, next_eligible_at, lease_id, lease_expires_at, session_id,
                 comment_id, review_url, last_error, created_at, updated_at, started_at, finished_at
          from review_queue_jobs
@@ -3685,6 +3693,45 @@ export class ReviewStateStore {
     }
   }
 
+  private ensureReviewQueueJobShadowIdentityColumns(): void {
+    const columns = this.db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
+    const names = new Set(columns.map((column) => column.name));
+    const additions = ["repo_key", "head_sha_key"].filter((name) => !names.has(name));
+    if (additions.length > 0) {
+      this.db.exec(`begin immediate; ${additions.map((name) => `alter table review_queue_jobs add column ${name} text`).join("; ")}; commit`);
+    }
+    this.db.exec(`create index if not exists idx_review_queue_jobs_shadow_identity
+      on review_queue_jobs (repo_key, pull_number, head_sha_key)`);
+
+    const rows = this.db.prepare(`
+      select rowid, repo, head_sha, repo_key, head_sha_key
+      from review_queue_jobs
+      where repo_key is null or head_sha_key is null
+    `).all() as unknown as Array<{
+      rowid: number;
+      repo: string;
+      head_sha: string;
+      repo_key: string | null;
+      head_sha_key: string | null;
+    }>;
+    const backfill = this.db.prepare(`
+      update review_queue_jobs
+      set repo_key = coalesce(repo_key, ?), head_sha_key = coalesce(head_sha_key, ?)
+      where rowid = ? and (repo_key is null or head_sha_key is null)
+    `);
+    this.db.exec("begin immediate");
+    try {
+      for (const row of rows) {
+        const identity = canonicalReviewQueueIdentity(row.repo, row.head_sha);
+        if (identity) backfill.run(identity.repoKey, identity.headShaKey, row.rowid);
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      try { this.db.exec("rollback"); } catch { /* transaction did not start */ }
+      throw error;
+    }
+  }
+
   private ensureRepoMemoryNoteCoarseColumns(): void {
     // Additive migration (#302): older DBs gain the coarse false-positive-match columns; existing
     // rows keep NULLs and fall back to exact-only matching.
@@ -3835,6 +3882,25 @@ function validateReviewQueueInput(
   if (commentId !== undefined && (!Number.isInteger(commentId) || commentId < 1)) {
     throw new Error("commentId must be a positive integer");
   }
+}
+
+function canonicalReviewQueueIdentity(repo: string, headSha: string): { repoKey: string; headShaKey: string } | undefined {
+  const [owner, name, extra] = repo.split("/");
+  if (
+    extra !== undefined ||
+    !owner ||
+    !name ||
+    owner === "." ||
+    owner === ".." ||
+    name === "." ||
+    name === ".." ||
+    !/^[A-Za-z0-9_.-]{1,100}$/.test(owner) ||
+    !/^[A-Za-z0-9_.-]{1,100}$/.test(name) ||
+    !/^[0-9a-f]{40}$/i.test(headSha)
+  ) {
+    return undefined;
+  }
+  return { repoKey: repo.toLowerCase(), headShaKey: headSha.toLowerCase() };
 }
 
 function validatePullAndCommand(pullNumber: number, commandCommentId: number): void {
@@ -4227,9 +4293,11 @@ interface ReviewQueueJobRow {
   source: ReviewQueueJobSource;
   lane: ReviewQueueJobLane;
   repo: string;
+  repo_key: string | null;
   org: string;
   pull_number: number;
   head_sha: string;
+  head_sha_key: string | null;
   base_sha: string | null;
   provider_id: string | null;
   priority: number;
@@ -4495,9 +4563,11 @@ function mapReviewQueueJobRow(row: ReviewQueueJobRow): ReviewQueueJobRecord {
     source: row.source,
     lane: row.lane,
     repo: row.repo,
+    ...(row.repo_key ? { repoKey: row.repo_key } : {}),
     org: row.org,
     pullNumber: row.pull_number,
     headSha: row.head_sha,
+    ...(row.head_sha_key ? { headShaKey: row.head_sha_key } : {}),
     ...(row.base_sha ? { baseSha: row.base_sha } : {}),
     ...(row.provider_id ? { providerId: row.provider_id } : {}),
     priority: row.priority,
