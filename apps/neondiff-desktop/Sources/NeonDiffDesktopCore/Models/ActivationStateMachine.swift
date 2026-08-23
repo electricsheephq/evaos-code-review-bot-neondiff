@@ -180,7 +180,8 @@ public enum ActivationStateMachine {
 
     public static func presentation(
         for state: ActivationState,
-        redactedKeyPrefix: String? = nil
+        redactedKeyPrefix: String? = nil,
+        publicBYO: Bool = false
     ) -> ActivationStatePresentation {
         let keyTerm = ActivationTerminology.activationKey
         switch state {
@@ -199,14 +200,18 @@ public enum ActivationStateMachine {
         case .purchaseRequired:
             return ActivationStatePresentation(
                 state: state,
-                title: "Private repositories need activation",
-                cause: "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued.",
+                title: publicBYO ? "This BYO repository requires activation" : "Private repositories need activation",
+                cause: publicBYO
+                    ? "This BYO repository requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued."
+                    : "Private repository review requires an active \(keyTerm). Buy one through checkout, or paste the key checkout already issued.",
                 recovery: ActivationRecovery(
                     label: "Continue with this key",
                     event: .provideExistingKey,
                     accessibilityLabel: "Store the existing \(keyTerm) securely and continue"
                 ),
-                accessibilityLabel: "Private repositories require an active \(keyTerm).",
+                accessibilityLabel: publicBYO
+                    ? "This BYO repository requires an active \(keyTerm)."
+                    : "Private repositories require an active \(keyTerm).",
                 isSuccess: false,
                 requiresKeyEntry: true,
                 showsNotifyOption: false
@@ -249,13 +254,17 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Activate your \(keyTerm)",
-                cause: "Your \(keyTerm)\(prefixNote) is ready. Activate it to unlock private repository review.",
+                cause: publicBYO
+                    ? "Your \(keyTerm)\(prefixNote) is ready. Activate it to review this BYO repository."
+                    : "Your \(keyTerm)\(prefixNote) is ready. Activate it to unlock private repository review.",
                 recovery: ActivationRecovery(
                     label: "Activate",
                     event: .submitActivation,
                     accessibilityLabel: "Activate the \(keyTerm)"
                 ),
-                accessibilityLabel: "\(keyTerm)\(prefixNote) is ready to activate.",
+                accessibilityLabel: publicBYO
+                    ? "\(keyTerm)\(prefixNote) is ready to activate for this BYO repository."
+                    : "\(keyTerm)\(prefixNote) is ready to activate.",
                 isSuccess: false,
                 requiresKeyEntry: true,
                 showsNotifyOption: false
@@ -281,9 +290,13 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Activated",
-                cause: "Your \(keyTerm) is active. Private repository review is unlocked.",
+                cause: publicBYO
+                    ? "Your \(keyTerm) is active. This BYO repository is unlocked."
+                    : "Your \(keyTerm) is active. Private repository review is unlocked.",
                 recovery: nil,
-                accessibilityLabel: "\(keyTerm) is active. Private repositories unlocked.",
+                accessibilityLabel: publicBYO
+                    ? "\(keyTerm) is active. This BYO repository is unlocked."
+                    : "\(keyTerm) is active. Private repositories unlocked.",
                 isSuccess: true,
                 requiresKeyEntry: false,
                 showsNotifyOption: false
@@ -309,13 +322,17 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Your entitlement expired",
-                cause: "This \(keyTerm) has expired. Renew to keep reviewing private repositories, or paste a renewed key.",
+                cause: publicBYO
+                    ? "This \(keyTerm) has expired. Renew to keep reviewing this BYO repository, or paste a renewed key."
+                    : "This \(keyTerm) has expired. Renew to keep reviewing private repositories, or paste a renewed key.",
                 recovery: ActivationRecovery(
                     label: "Renew",
                     event: .renew,
                     accessibilityLabel: "Renew your entitlement"
                 ),
-                accessibilityLabel: "The \(keyTerm) has expired.",
+                accessibilityLabel: publicBYO
+                    ? "The \(keyTerm) has expired for this BYO repository."
+                    : "The \(keyTerm) has expired.",
                 isSuccess: false,
                 requiresKeyEntry: false,
                 showsNotifyOption: false

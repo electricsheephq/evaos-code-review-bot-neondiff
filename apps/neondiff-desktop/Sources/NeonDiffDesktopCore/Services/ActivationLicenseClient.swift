@@ -96,6 +96,17 @@ public struct ActivationEntitlementSummary: Sendable, Equatable {
         if privateRepoAllowed == false { return false }
         return repoVisibilityScope == "all" || repoVisibilityScope == "private"
     }
+
+    public func covers(repositoryVisibility: String) -> Bool {
+        switch repositoryVisibility.lowercased() {
+        case "public":
+            return ["all", "public", "private"].contains(repoVisibilityScope.lowercased())
+        case "private", "internal":
+            return coversPrivateRepos
+        default:
+            return false
+        }
+    }
 }
 
 /// The classified outcome of an activation/validation call.

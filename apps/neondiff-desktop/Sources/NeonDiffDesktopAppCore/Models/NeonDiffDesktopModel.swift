@@ -219,12 +219,19 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var activationUpdateAuthorityValidUntil: Date?
     private var accountWorkspaceCatalogVerifiedAt: Date?
     private var activationVerifiedRepositoryThisLaunch: String?
+    private var verifiedBYORepository: String?
+    private var verifiedBYORepositoryVisibility: String?
     private var appliedRepoSelection: AppliedRepoSelection?
     private var scopedReviewTask: Task<Void, Never>?
     private var scopedDryRunApproval: ScopedReviewApproval?
 
     package var productionActivationBoundaryMessage: String {
         "Native activation broker proof is not available in this build. Provider verification, daemon control, updates, and onboarding completion remain blocked."
+    }
+
+    private var managedPublicFreeDistribution: Bool {
+        dependencies.productionBoundary.managedGitHubBrokerOrigin != nil
+            && !dependencies.productionBoundary.byoGitHubEnabled
     }
 
     package var customerRuntimeBoundaryMessage: String {
@@ -846,7 +853,13 @@ package final class NeonDiffDesktopModel: ObservableObject {
         // touching the Keychain on the launch path (v1.0.3 startup-stability rule).
         if let rawActivationState = dependencies.preferences.string(forKey: activationStateKey),
            let restored = ActivationState(rawValue: rawActivationState) {
-            self.activationState = restored
+            let migrated = restored == .publicFreeSkip && !managedPublicFreeDistribution
+                ? .purchaseRequired
+                : restored
+            self.activationState = migrated
+            if migrated != restored {
+                dependencies.preferences.set(migrated.rawValue, forKey: activationStateKey)
+            }
         } else {
             self.activationState = ActivationStateMachine.initialState
         }
@@ -1932,6 +1945,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         providerVerificationStatus = "Verify the selected account's provider credential when ready."
         activationVerifiedThisLaunch = false
         activationVerifiedRepositoryThisLaunch = nil
+        verifiedBYORepository = nil
+        verifiedBYORepositoryVisibility = nil
         if !preservingActivationJourney {
             dependencies.preferences.set("", forKey: activationRepositoryKey)
         }
@@ -3891,6 +3906,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         let cli = dependencies.cli
         isBYOGitHubVerificationInProgress = true
         byoGitHubCredentialsVerified = false
+        verifiedBYORepository = nil
+        verifiedBYORepositoryVisibility = nil
         lastError = nil
         lastCommandLine = safeCommand
         byoGitHubCredentialStatus = repositoryScope == nil
@@ -4187,6 +4204,16 @@ package final class NeonDiffDesktopModel: ObservableObject {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }.joined(separator: ", ")
         byoGitHubCredentialsVerified = true
+        if let selectedReviewRepository,
+           let readCheck = report.github.readChecks.first(where: {
+               $0.repo.caseInsensitiveCompare(selectedReviewRepository) == .orderedSame
+           }) {
+            verifiedBYORepository = selectedReviewRepository
+            verifiedBYORepositoryVisibility = readCheck.visibilityResult?.lowercased()
+        } else {
+            verifiedBYORepository = nil
+            verifiedBYORepositoryVisibility = nil
+        }
         lastError = nil
         switch expectedContext.source {
         case .existingLocalAgent:
@@ -4479,6 +4506,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private func invalidateBYOGitHubVerificationContext() {
         invalidateScopedReviewApproval()
+        verifiedBYORepository = nil
+        verifiedBYORepositoryVisibility = nil
         guard byoGitHubCredentialOnboardingAvailable else { return }
         byoGitHubCredentialsVerified = false
         guard !isBYOGitHubVerificationInProgress else { return }
@@ -4713,8 +4742,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
             || dependencies.preferences.bool(forKey: activationCheckoutEnabledKey)
     }
 
+    private var selectedBYOActivationContext: Bool {
+        dependencies.productionBoundary.byoGitHubEnabled
+            && onboardingFlow.mode == .publicReposOnly
+            && selectedReviewRepository != nil
+    }
+
     package var activationPresentation: ActivationStatePresentation {
-        ActivationStateMachine.presentation(for: activationState, redactedKeyPrefix: activationKeyRedactedPrefix)
+        ActivationStateMachine.presentation(
+            for: activationState,
+            redactedKeyPrefix: activationKeyRedactedPrefix,
+            publicBYO: selectedBYOActivationContext
+        )
     }
 
     private var activationLicenseClient: (any ActivationLicenseClienting)? {
@@ -4781,10 +4820,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.preferences.set(next.rawValue, forKey: activationStateKey)
     }
 
-    /// Enter the activation branch from the chosen onboarding path. The public
-    /// path skips straight to a free, license-free state.
+    /// Enter the activation branch from the chosen onboarding path. Only the
+    /// managed broker path may skip activation for public repositories.
     package func enterActivation(for mode: OnboardingMode) {
-        applyActivationEvent(mode == .publicReposOnly ? .choosePublicPath : .choosePrivatePath)
+        let publicFree = mode == .publicReposOnly && managedPublicFreeDistribution
+        applyActivationEvent(publicFree ? .choosePublicPath : .choosePrivatePath)
     }
 
     /// Align the activation entry state with the onboarding mode when the flow
@@ -4794,7 +4834,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func syncActivationEntryFromOnboardingMode() {
         switch activationState {
         case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
-            applyActivationEvent(.choosePublicPath)
+            enterActivation(for: .publicReposOnly)
+        case .publicFreeSkip where !managedPublicFreeDistribution:
+            enterActivation(for: onboardingFlow.mode)
         case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
             applyActivationEvent(.choosePrivatePath)
         default:
@@ -4959,6 +5001,17 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 lastError = "Apply and read back the selected Review Target before activating."
                 return
             }
+            guard byoGitHubCredentialsVerified,
+                  let verifiedBYORepository,
+                  verifiedBYORepository.caseInsensitiveCompare(activationRepository)
+                      == .orderedSame,
+                  let visibility = verifiedBYORepositoryVisibility,
+                  ["public", "private", "internal"].contains(visibility)
+            else {
+                applyActivationEvent(.activationServiceError)
+                lastError = "Verify the exact GitHub visibility for this Review Target before activating."
+                return
+            }
             if let activatedRepository,
                activatedRepository.caseInsensitiveCompare(activationRepository)
                    != .orderedSame {
@@ -5014,14 +5067,24 @@ package final class NeonDiffDesktopModel: ObservableObject {
         )
     }
 
-    /// A 200-`active` response can still be public-only or `privateRepoAllowed=false`,
-    /// which the server review gate rejects for private repos. Downgrade such a
-    /// scope-insufficient success to a scope conflict so the pane never reports
-    /// private review as unlocked when it is not.
+    /// A 200-`active` response is accepted only when its entitlement covers the
+    /// exact GitHub-verified visibility of the selected BYO repository. Unknown,
+    /// stale, mismatched, or scope-insufficient proof becomes a scope conflict so
+    /// the pane never reports access beyond that repository.
     private func resolveActivationOutcome(_ outcome: ActivationClientOutcome) -> ActivationClientOutcome {
-        if case let .active(summary) = outcome, !summary.coversPrivateRepos {
+        guard case let .active(summary) = outcome else { return outcome }
+        guard dependencies.productionBoundary.byoGitHubEnabled else {
+            return summary.coversPrivateRepos ? outcome : .scopeConflict
+        }
+        guard byoGitHubCredentialsVerified,
+              let repository = selectedReviewRepository,
+              let verifiedBYORepository,
+              verifiedBYORepository.caseInsensitiveCompare(repository) == .orderedSame,
+              let visibility = verifiedBYORepositoryVisibility?.lowercased()
+        else {
             return .scopeConflict
         }
+        guard summary.covers(repositoryVisibility: visibility) else { return .scopeConflict }
         return outcome
     }
 
@@ -5049,7 +5112,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             let plan = summary.plan.map { " · \($0)" } ?? ""
             license.entitlement = "active (\(scope)\(plan))"
             logText = activeLogMessage
-                ?? "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked."
+                ?? (selectedBYOActivationContext
+                    ? "\(ActivationTerminology.activationKey) is active for this BYO repository."
+                    : "\(ActivationTerminology.activationKey) is active. Private repository review is unlocked.")
             activationVerifiedRepositoryThisLaunch = repository
             if let repository {
                 dependencies.preferences.set(repository, forKey: activationRepositoryKey)
@@ -5059,7 +5124,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
         case .scopeConflict:
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil
-            lastError = "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
+            lastError = selectedBYOActivationContext
+                ? "This \(ActivationTerminology.activationKey) does not cover this BYO repository. Verify its exact GitHub visibility and use a matching entitlement."
+                : "This \(ActivationTerminology.activationKey) does not cover private repositories. Use a key with a private-repo entitlement."
         case .expired, .revoked, .invalid:
             activationVerifiedThisLaunch = false
             activationVerifiedRepositoryThisLaunch = nil

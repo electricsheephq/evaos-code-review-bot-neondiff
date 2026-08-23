@@ -180,4 +180,18 @@ import Testing
         #expect(!p.requiresKeyEntry, "public_free_skip must never ask for an activation key")
         #expect(p.recovery == nil, "public_free_skip is a clean skip, not a gated wall")
     }
+
+    @Test func selectedBYOPresentationNeverOverclaimsScope() {
+        let scopedStates: [ActivationState] = [.purchaseRequired, .keyReady, .active, .expired]
+        for state in scopedStates {
+            let presentation = ActivationStateMachine.presentation(
+                for: state,
+                publicBYO: true
+            )
+            let copy = "\(presentation.title) \(presentation.cause) \(presentation.accessibilityLabel)"
+            #expect(copy.localizedCaseInsensitiveContains("this byo repository"))
+            #expect(!copy.localizedCaseInsensitiveContains("private repository"))
+            #expect(!copy.localizedCaseInsensitiveContains("every repository"))
+        }
+    }
 }

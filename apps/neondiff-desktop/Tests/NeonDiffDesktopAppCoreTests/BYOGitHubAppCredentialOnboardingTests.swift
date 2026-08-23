@@ -506,7 +506,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
                     stderr: ""
                 ))
             ],
-            activationLicenseClient: ActiveBYOActivationClient(),
+            activationLicenseClient: ActiveBYOActivationClient(scope: "public"),
             preferenceStrings: availableCLIPreference,
             productionBoundary: exactB0Boundary
         )
@@ -528,6 +528,8 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.selectedBotInstallation == nil)
         #expect(fixture.model.currentRepositoryActivationReady)
         #expect(fixture.model.productionUsefulWorkAvailable)
+        #expect(fixture.model.logText == "NeonDiff Activation Key is active for this BYO repository.")
+        #expect(!fixture.model.logText.contains("Private repository"))
     }
 
     @Test func verificationFailsClosedUnlessDoctorChecksExactlyMatchEnabledRepositories() async throws {
@@ -786,10 +788,16 @@ private let exactB0Boundary = DesktopProductionBoundary.resolve(infoDictionary: 
 ])
 
 private struct ActiveBYOActivationClient: ActivationLicenseClienting {
+    let scope: String
+
+    init(scope: String = "private") {
+        self.scope = scope
+    }
+
     func activate(key _: ActivationKeyMaterial) async throws -> ActivationClientOutcome {
         .active(ActivationEntitlementSummary(
             status: .active,
-            repoVisibilityScope: "private",
+            repoVisibilityScope: scope,
             privateRepoAllowed: true,
             updateEntitlement: true,
             expiresAt: nil,

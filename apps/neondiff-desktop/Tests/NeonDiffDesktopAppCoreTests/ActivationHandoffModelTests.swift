@@ -128,12 +128,38 @@ import NeonDiffDesktopCore
         #expect(model.activationState == .keyReady)
     }
 
+    @Test func legacyPublicFreeSkipMigratesToPaidBYOEntry() {
+        let prefs = MemoryPreferences()
+        prefs.set(ActivationState.publicFreeSkip.rawValue, forKey: activationStateKey)
+        let model = makeModel(
+            preferences: prefs,
+            productionBoundary: .testAccountLink
+        )
+
+        #expect(model.activationState == .purchaseRequired)
+        #expect(prefs.string(forKey: activationStateKey) == ActivationState.purchaseRequired.rawValue)
+    }
+
     @Test func publicPathSkipsWithoutLicenseUI() {
-        let model = makeModel()
+        let model = makeModel(productionBoundary: .testManaged)
         model.enterActivation(for: .publicReposOnly)
         #expect(model.activationState == .publicFreeSkip)
         #expect(model.activationPresentation.requiresKeyEntry == false)
         #expect(model.activationPresentation.recovery == nil)
+    }
+
+    @Test func selectedBYOStatesUseExactRepositoryCopy() {
+        let model = makeModel(productionBoundary: .testAccountLink)
+        model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        model.enterActivation(for: .publicReposOnly)
+
+        for state in [ActivationState.purchaseRequired, .keyReady, .active, .expired] {
+            model.activationState = state
+            let copy = "\(model.activationPresentation.title) \(model.activationPresentation.cause)"
+            #expect(copy.localizedCaseInsensitiveContains("this byo repository"))
+            #expect(!copy.localizedCaseInsensitiveContains("private repository"))
+            #expect(!copy.localizedCaseInsensitiveContains("every repository"))
+        }
     }
 
     @Test func privatePathBeginsCheckoutPausedWhenCheckoutDisabled() {
@@ -357,7 +383,7 @@ import NeonDiffDesktopCore
     /// Thread 2: choosing Public Repos must skip the license wall, not sit at
     /// purchase_required.
     @Test func publicModeSyncSkipsLicenseWall() {
-        let model = makeModel()
+        let model = makeModel(productionBoundary: .testManaged)
         model.onboardingFlow.mode = .publicReposOnly
         #expect(model.activationState == .purchaseRequired)
         model.syncActivationEntryFromOnboardingMode()
