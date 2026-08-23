@@ -29,6 +29,7 @@ describe("artifact-bound extracted app tree proof", () => {
       ["dir", "Contents"], ["link", "Contents/Current"], ["file", "Contents/Info.plist"],
       ["dir", "Contents/MacOS"], ["file", "Contents/MacOS/NeonDiffDesktop"]
     ]);
+    expect(proof.records.filter((record: unknown[]) => record[0] === "file").map((record: unknown[]) => record[2])).toEqual(["-", "x"]);
     expect(proof.treeSHA256).toBe(treeProofDigest(proof.records));
     expect(serializeExtractedAppTreeProof(proof)).toBe(serializeExtractedAppTreeProof(second));
     expect(serializeExtractedAppTreeProof(proof)).toMatch(/\n$/);
