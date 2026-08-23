@@ -19,7 +19,10 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
+  formatOperatorStatusJson,
   formatRuntimeInventoryHuman,
+  formatRuntimeInventoryJson,
   summarizeAgentInventory,
   type OperatorAgentInventory,
   type OperatorDurableQueueSnapshot
@@ -98,6 +101,31 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("presents status as nested human output with command-free JSON and gate exit semantics", () => {
+    const release = releaseStatus({ ok: false, recommendedActions: ["retry cooldowns --dry-run false"] });
+    release.releaseUnit.configPath = "/config/ghp_status_secret.json";
+    const status = buildOperatorStatus({
+      release,
+      coverage: coverageReport({
+        providerDeferred: [providerDeferredEntry(8, "head-deferred")],
+        unprocessed: [pullEntry(9, "head-pending")]
+      }),
+      agents: agentInventory({})
+    });
+
+    const human = formatOperatorStatusHuman(status);
+    expect(human).toContain("status: blocked (operator)");
+    expect(human).toContain("  gates:");
+    expect(human).toContain("  next:");
+    expect(human).toContain("inspect operator recovery rows before any action");
+    expect(human).not.toMatch(/retry-failed|retry-provider-cooldowns|restart worker|kickstart -k|bootout |--dry-run false/i);
+
+    const json = formatOperatorStatusJson(status);
+    expect(json).toContain("[redacted-secret]");
+    expect(json).not.toMatch(/retry-failed|retry-provider-cooldowns|restart worker|kickstart -k|bootout |--dry-run false/i);
+    expect(status.ok).toBe(false);
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
@@ -953,8 +981,10 @@ describe("operator CLI summaries", () => {
   });
 
   it("formats a concise human runtime inventory without leaking secrets", () => {
+    const release = releaseStatus({ ok: true, recommendedActions: ["restart worker --dry-run false"] });
+    release.releaseUnit.configPath = "/runtime/ghp_runtime_secret.json";
     const inventory = buildRuntimeInventory({
-      release: releaseStatus({ ok: true, budget: reviewBudgetStatus() }),
+      release: { ...release, budget: reviewBudgetStatus() },
       coverage: coverageReport({ ok: true }),
       agents: agentInventory({ ok: true }),
       durableQueue: durableQueueSnapshot({ ok: true, summary: cleanDurableQueueSummary() }),
@@ -969,6 +999,9 @@ describe("operator CLI summaries", () => {
     expect(output).toContain("queue: active=0 queued=0 running=0 providerDeferred=0 failed=0");
     expect(output).toContain("budget: wouldLease=1 delayed=1 delayedByReason={\"manual_reserve\":1}");
     expect(output).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+    expect(output).not.toMatch(/restart worker|kickstart -k|bootout |--dry-run false/i);
+    expect(formatRuntimeInventoryJson(inventory)).toContain("[redacted-secret]");
+    expect(formatRuntimeInventoryJson(inventory)).not.toMatch(/restart worker|kickstart -k|bootout |--dry-run false/i);
   });
 
   it("builds a read-only dashboard over coverage, durable queue, readiness, and evidence links", () => {

@@ -14,7 +14,7 @@ import type {
 import type { IssueEnrichmentStatus } from "./issue-enrichment.js";
 import type { ReviewBudgetStatus } from "./review-budget.js";
 import type { ReleaseHeartbeatStatus, ReleaseLaunchdStatus, ReleaseStatus } from "./release-status.js";
-import { redactSecrets } from "./secrets.js";
+import { redactSecrets, stringifyRedactedJson } from "./secrets.js";
 import {
   parseProviderCooldownError,
   PROVIDER_COOLDOWN_ERROR_PREFIX,
@@ -881,7 +881,47 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
     lines.push("recommendedActions:");
     for (const action of inventory.recommendedActions) lines.push(`- ${action}`);
   }
-  return lines.join("\n");
+  return redactSecrets(lines.map(sanitizeOperatorAction).join("\n"));
+}
+
+export function formatOperatorStatusHuman(status: OperatorStatus): string {
+  const summary = status.summary as OperatorStatus["summary"] & {
+    activeFailedQueueJobs?: number;
+    recentUnrecoveredReviewErrors?: number;
+  };
+  const failingGates = status.gates.filter((gate) => !gate.ok);
+  const health = status.release.health;
+  const activeFailedQueueJobs = summary.activeFailedQueueJobs ?? summary.failedQueueJobs;
+  const recentUnrecoveredReviewErrors = summary.recentUnrecoveredReviewErrors ?? summary.failedRows;
+  const reason = failingGates[0]?.detail ?? health?.reason ?? "current operator gates pass";
+  const lines = [
+    `status: ${status.ok ? "ok" : "blocked"} (operator) - ${sanitizeOperatorAction(reason)}`,
+    `  releaseHealth: ${health?.state ?? (status.release.ok ? "green" : "red")}`,
+    "  current:",
+    `    failedQueueJobs: ${activeFailedQueueJobs}`,
+    `    recentUnrecoveredReviewErrors: ${recentUnrecoveredReviewErrors}`,
+    `    staleLeases: ${summary.staleLeases}`,
+    "  history:",
+    `    reviewErrors: ${summary.failedRows}`,
+    `    failedQueueJobs: ${summary.failedQueueJobs}`,
+    "  gates:",
+    ...(failingGates.length > 0
+      ? failingGates.map((gate) => `    - ${gate.name}: ${sanitizeOperatorAction(gate.detail)}`)
+      : ["    - none"]),
+    "  next:",
+    ...(status.recommendedActions.length > 0
+      ? status.recommendedActions.map((action) => `    - ${sanitizeOperatorAction(action)}`)
+      : ["    - inspect current operator status before any action"])
+  ];
+  return redactSecrets(lines.join("\n"));
+}
+
+export function formatOperatorStatusJson(status: OperatorStatus): string {
+  return stringifyRedactedJson(sanitizeOperatorProjection(status));
+}
+
+export function formatRuntimeInventoryJson(inventory: RuntimeInventory): string {
+  return stringifyRedactedJson(sanitizeOperatorProjection(inventory));
 }
 
 export function summarizeAgentInventory(input: {
@@ -1733,6 +1773,24 @@ function staleHeadQueueEntry(entry: CoverageStaleHead): OperatorQueueEntry {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+function sanitizeOperatorProjection(input: unknown): unknown {
+  if (typeof input === "string") return sanitizeOperatorAction(input);
+  if (input instanceof Date) return input.toISOString();
+  if (Array.isArray(input)) return input.map((item) => sanitizeOperatorProjection(item));
+  if (input && typeof input === "object") {
+    const output: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input)) output[key] = sanitizeOperatorProjection(value);
+    return output;
+  }
+  return input;
+}
+
+function sanitizeOperatorAction(action: string): string {
+  return /\b(?:retry|requeue|restart|kickstart|bootout|clear|retire)\b|--dry-run\s+false/i.test(action)
+    ? "inspect operator recovery rows before any action"
+    : action;
 }
 
 function zcodeTimeoutQueueCounts(

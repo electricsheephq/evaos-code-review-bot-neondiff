@@ -98,7 +98,10 @@ import {
   collectOperatorReviewQueue,
   explainPullStatus,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
+  formatOperatorStatusJson,
   formatRuntimeInventoryHuman,
+  formatRuntimeInventoryJson,
   summarizeAgentInventory,
   type OperatorDurableQueueSnapshot,
   type OperatorQueueSnapshot
@@ -724,7 +727,7 @@ async function main(): Promise<void> {
       }),
       issueEnrichmentRuntime
     });
-    console.log(stringifyRedactedJson(status));
+    console.log(args.human === "true" ? formatOperatorStatusHuman(status) : formatOperatorStatusJson(status));
     if (!status.ok) process.exitCode = 1;
     return;
   }
@@ -788,7 +791,7 @@ async function main(): Promise<void> {
       issueEnrichmentRuntime,
       checkedAt: now.toISOString()
     });
-    console.log(args.human === "true" ? formatRuntimeInventoryHuman(inventory) : JSON.stringify(inventory, null, 2));
+    console.log(args.human === "true" ? formatRuntimeInventoryHuman(inventory) : formatRuntimeInventoryJson(inventory));
     if (!inventory.ok) process.exitCode = 1;
     return;
   }
@@ -3614,7 +3617,8 @@ const COMMAND_USAGE: Record<string, CommandUsage> = {
       { name: "--limit", description: "Cap the number of provider-cooldown/durable-queue rows returned." },
       { name: "--expected-head", description: "Expected release head SHA to verify against." },
       { name: "--launchd-label", description: "launchd label to inspect for daemon liveness." },
-      { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." }
+      { name: "--state-path", description: "Override the SQLite state path (defaults to config.statePath)." },
+      { name: "--human", description: "Print a compact nested operator summary instead of JSON; exit status still follows the combined gate." }
     ]
   },
   "release-status": {

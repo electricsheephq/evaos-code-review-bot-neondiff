@@ -311,6 +311,20 @@ Check whether the live bot is healthy:
 npx tsx src/cli.ts status --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
 
+For a nested summary intended for a person at the terminal, add `--human`:
+
+```bash
+npx tsx src/cli.ts status --human --config config.local.json --launchd-label com.electricsheephq.evaos-code-review-bot
+```
+
+Human status prints the current release health, current blocking counts,
+retained history, failed gates, and read-only next guidance. JSON remains the
+default and both formats recursively redact secret-looking values and replace
+recovery commands with inspection guidance. The command exits `0` only when
+the combined operator gate passes; `--human` changes presentation only, so a
+failed gate still exits nonzero and does not authorize a restart, retry,
+requeue, or launchd mutation.
+
 Classify whether the bot is idle, healthy-active, or blocked:
 
 ```bash
