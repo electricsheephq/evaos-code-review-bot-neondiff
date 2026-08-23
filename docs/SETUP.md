@@ -513,6 +513,9 @@ LEGACY_WORKER="$HOME/Library/Application Support/NeonDiffDesktop/Workers/$LEGACY
 LEGACY_CLI="$LEGACY_WORKER/node_modules/neondiff/dist/src/cli.js"
 LEGACY_CONFIG="/absolute/path/to/config.local.json"
 LEGACY_MANIFEST_SHA256="<manifest-sha256-from-release>"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/$LEGACY_LABEL.plist"
+LEGACY_SOURCE_CHECKOUT="/absolute/path/to/intended/source/checkout"
+LEGACY_METADATA_READY=false
 
 neondiff_legacy() {
   if [ ! -x "$LEGACY_NODE" ] || [ ! -f "$LEGACY_CLI" ] \
@@ -521,15 +524,44 @@ neondiff_legacy() {
     echo "refusing an unverified legacy worker path" >&2
     return 1
   fi
+  if [ "${1:-}" != "init" ] && [ "$LEGACY_METADATA_READY" != "true" ]; then
+    if [ -e "$LEGACY_PLIST" ]; then
+      LEGACY_APP_ID="$(
+        /usr/bin/plutil -extract EnvironmentVariables.NEONDIFF_GITHUB_APP_ID raw -o - "$LEGACY_PLIST" 2>/dev/null \
+          || /usr/bin/plutil -extract EnvironmentVariables.EVAOS_REVIEW_BOT_APP_ID raw -o - "$LEGACY_PLIST" 2>/dev/null
+      )"
+      LEGACY_KEY_PATH="$(
+        /usr/bin/plutil -extract EnvironmentVariables.NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH raw -o - "$LEGACY_PLIST" 2>/dev/null \
+          || /usr/bin/plutil -extract EnvironmentVariables.EVAOS_REVIEW_BOT_PRIVATE_KEY_PATH raw -o - "$LEGACY_PLIST" 2>/dev/null
+      )"
+      [ -n "${LEGACY_APP_ID:-}" ] && export NEONDIFF_GITHUB_APP_ID="$LEGACY_APP_ID"
+      [ -n "${LEGACY_KEY_PATH:-}" ] && export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="$LEGACY_KEY_PATH"
+    fi
+    if [ -z "${NEONDIFF_GITHUB_APP_ID:-}" ] || [ -z "${NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; then
+      echo "supply preserved App ID and private-key path metadata; key bytes are never read" >&2
+      return 1
+    fi
+    LEGACY_METADATA_READY=true
+  fi
   "$LEGACY_NODE" "$LEGACY_CLI" "$@"
 }
+```
+
+For a first install with no preserved plist, set only the non-secret metadata
+from the approved setup record before the first non-`init` command:
+
+```bash
+export NEONDIFF_GITHUB_APP_ID="<preserved-app-id>"
+export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/preserved-private-key.pem"
 ```
 
 Use that same function for the complete operator sequence, keeping config and
 artifact paths quoted when they contain spaces:
 
 ```bash
-neondiff_legacy init --config "$LEGACY_CONFIG"
+if [ ! -e "$LEGACY_CONFIG" ]; then
+  neondiff_legacy init --config "$LEGACY_CONFIG"
+fi
 neondiff_legacy doctor github --config "$LEGACY_CONFIG" --json
 neondiff_legacy providers list --config "$LEGACY_CONFIG" --json
 neondiff_legacy providers doctor --config "$LEGACY_CONFIG" --json
@@ -537,19 +569,33 @@ security find-generic-password -s YOUR_APPROVED_SOURCE -w \
   | neondiff_legacy license activate --config "$LEGACY_CONFIG" --license-key-stdin true --json
 neondiff_legacy license status --config "$LEGACY_CONFIG" --refresh true --json
 neondiff_legacy doctor --config "$LEGACY_CONFIG" --json
+LEGACY_CONFIG_REVISION="$(
+  neondiff_legacy config inspect --config "$LEGACY_CONFIG" --json |
+    "$LEGACY_NODE" -e '
+      const fs = require("fs");
+      const revision = JSON.parse(fs.readFileSync(0, "utf8")).revision;
+      if (!/^[a-f0-9]{64}$/.test(revision)) process.exit(1);
+      process.stdout.write(revision);
+    '
+)"
 neondiff_legacy review-pr --config "$LEGACY_CONFIG" --repo owner/name --pr 123 \
-  --expected-config-revision <verified-config-revision> --dry-run true --zcode true
-neondiff_legacy status --json --config "$LEGACY_CONFIG"
-neondiff_legacy runtime-inventory --json --config "$LEGACY_CONFIG"
+  --expected-config-revision "$LEGACY_CONFIG_REVISION" --dry-run true --zcode true
+(
+  cd "$LEGACY_SOURCE_CHECKOUT" || exit 1
+  neondiff_legacy status --json --config "$LEGACY_CONFIG" --launchd-label "$LEGACY_LABEL"
+  neondiff_legacy runtime-inventory --json --config "$LEGACY_CONFIG" --launchd-label "$LEGACY_LABEL"
+)
 neondiff_legacy dashboard --operator true --config "$LEGACY_CONFIG" --limit 10
 ```
 
 The function is private to the current shell: it adds no global `PATH` entry,
 creates or loads no LaunchAgent, and does not install or promote a daemon. Keep
-license keys on the approved stdin path; never place them in argv, config,
-environment, logs, or evidence. This sequence proves operator recovery only;
-it does not prove the native Desktop journey, GA readiness, release promotion,
-or customer readiness.
+license keys on the approved stdin path; the plist step reads only non-secret
+App ID/path metadata and never reads key bytes. The release-health commands run
+from the intended source checkout because they derive branch/cleanliness from
+`process.cwd()`. This sequence proves operator recovery only; it does not prove
+the native Desktop journey, GA readiness, release promotion, or customer
+readiness.
 
 ## 4. Check Readiness
 
