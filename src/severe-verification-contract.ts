@@ -167,6 +167,9 @@ function integer(value: unknown): value is number { return typeof value === "num
 function number(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 function string(value: unknown): value is string { return typeof value === "string"; }
 function byteLength(value: string): number { return Buffer.byteLength(value, "utf8"); }
-function direct(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype; }
+function direct(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  return Reflect.ownKeys(value).every((key) => typeof key === "string" && Object.getOwnPropertyDescriptor(value, key)?.enumerable === true && Object.hasOwn(Object.getOwnPropertyDescriptor(value, key)!, "value"));
+}
 function exact(value: Record<string, unknown>, required: string[], optional: string[] = []): boolean { const keys = Reflect.ownKeys(value); const allowed = new Set([...required, ...optional]); return required.every((key) => Object.hasOwn(value, key) && value[key] !== undefined) && keys.every((key) => typeof key === "string" && allowed.has(key)); }
-function canonical(value: unknown): string { if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]"; if (value && typeof value === "object") { const entries = Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0); return "{" + entries.map(([key, item]) => JSON.stringify(key) + ":" + canonical(item)).join(",") + "}"; } return JSON.stringify(value); }
+function canonical(value: unknown): string { if (Array.isArray(value)) return "[" + value.map(canonical).sort().join(",") + "]"; if (value && typeof value === "object") { const entries = Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0); return "{" + entries.map(([key, item]) => JSON.stringify(key) + ":" + canonical(item)).join(",") + "}"; } return JSON.stringify(value); }

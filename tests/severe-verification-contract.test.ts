@@ -118,6 +118,40 @@ describe("severe verifier v2 contract", () => {
     expect(severeVerificationDigest(receipt({ confidence: 0.8 }), subject)).not.toBe(severeVerificationDigest(a, subject));
   });
 
+  it("is order-independent for the validated evidence set", () => {
+    const other = file({ path: "src/other.ts", sha256: "1".repeat(64), lineStart: 1, lineEnd: 20 });
+    const omitted = { path: "src/omitted.ts", code: "incomplete" };
+    const omittedAgain = { path: "src/omitted-again.ts", code: "incomplete" };
+    const a = receipt({
+      state: "incomplete",
+      disposition: "suppress",
+      reasonCode: "incomplete",
+      evidence: evidence({ files: [file({ complete: false }), other], omissions: [omitted, omittedAgain], complete: false })
+    });
+    const b = receipt({
+      state: "incomplete",
+      disposition: "suppress",
+      reasonCode: "incomplete",
+      evidence: evidence({ files: [other, file({ complete: false })], omissions: [omittedAgain, omitted], complete: false })
+    });
+    expect(severeVerificationDigest(a, subject)).toBe(severeVerificationDigest(b, subject));
+    expect(idempotencyKey(a, subject)).toBe(idempotencyKey(b, subject));
+  });
+
+  it("rejects non-enumerable and accessor fields before canonicalization", () => {
+    const hidden = { ...subject } as Record<string, unknown>;
+    Object.defineProperty(hidden, "lineSha256", { value: subject.lineSha256, enumerable: false });
+    expect(isSevereVerificationReceipt(receipt({ subject: hidden }), subject)).toBe(false);
+
+    const accessor = { ...subject } as Record<string, unknown>;
+    Object.defineProperty(accessor, "repo", { enumerable: true, get: () => subject.repo });
+    expect(isSevereVerificationReceipt(receipt({ subject: accessor }), subject)).toBe(false);
+
+    const hiddenConfidence = receipt();
+    Object.defineProperty(hiddenConfidence, "confidence", { value: 0.9, enumerable: false });
+    expect(isSevereVerificationReceipt(hiddenConfidence, subject)).toBe(false);
+  });
+
   it("binds the original finding fingerprint and every host coordinate", () => {
     for (const key of ["repo", "pull", "base", "head", "fingerprint", "path", "line", "side", "lineSha256", "hunkSha256"] as const) {
       const altered = { ...subject, [key]: key === "pull" || key === "line" ? (subject[key] as number) + 1 : `${subject[key]}x` } as SevereHostSubject;
