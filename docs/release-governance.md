@@ -4,6 +4,8 @@ This bot is a live beta agent. A live promotion is not complete until the
 source SHA is tied to an immutable Git tag, a GitHub Release, runtime evidence,
 and a rollback path.
 
+Native signed Desktop recovery follows [the immutable Mac runbook](mac-update-rollback.md); source/npm rules below do not downgrade it.
+
 ## Release Levels
 
 - `beta`: local launchd worker on the operator Mac, posting as the GitHub App
