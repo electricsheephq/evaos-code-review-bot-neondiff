@@ -19,6 +19,8 @@ import {
   explainPullStatus,
   filterBotProcessRows,
   formatOperatorDashboardHuman,
+  formatOperatorStatusHuman,
+  formatOperatorStatusJson,
   formatRuntimeInventoryHuman,
   summarizeAgentInventory,
   type OperatorAgentInventory,
@@ -98,6 +100,32 @@ describe("operator CLI summaries", () => {
     expect(status.recommendedActions).toContain("inspect operator queue failed jobs before promotion");
     expect(status.recommendedActions).toContain("retry or requeue provider-deferred jobs whose nextEligibleAt has expired");
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
+  });
+
+  it("scopes recovered queue/error truth and keeps display limits from hiding active failures", () => {
+    const release = releaseStatus({ ok: false, recommendedActions: ["retry-provider-cooldowns --dry-run false"], database: {
+      errorCount: 7, recentUnrecoveredErrorCount: 5, reviewErrorsByRepo: [
+        { repo: "owner/repo", recentUnrecovered: 0 }, { repo: "owner/other", recentUnrecovered: 5 }
+      ], reviewQueueJobsByRepo: [
+        { repo: "owner/repo", total: 1, queued: 0, leased: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 1, activeFailed: 0 },
+        { repo: "owner/other", total: 1, queued: 0, leased: 0, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 1, activeFailed: 1 }
+      ]
+    }});
+    const queue = durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 1 }, jobs: [] });
+    expect(buildOperatorStatus({ release, repo: "owner/repo", coverage: coverageReport({ ok: true }), agents: agentInventory({ ok: true }), durableQueue: queue })).toMatchObject({ ok: true, summary: { failedRows: 0, failedQueueJobs: 1, activeFailedQueueJobs: 0, recentUnrecoveredReviewErrors: 0 } });
+    const json = formatOperatorStatusJson(buildOperatorStatus({ release, repo: "owner/repo", coverage: coverageReport({ ok: true }), agents: agentInventory({ ok: true }), durableQueue: queue }));
+    expect(json).not.toMatch(/retry-provider-cooldowns|--dry-run false|kickstart|bootout/);
+    expect(formatOperatorStatusHuman(JSON.parse(json))).toContain("status: ok (operator)");
+  });
+
+  it("keeps stale-looking queue leases out of active status when complete rows are retained", () => {
+    const release = releaseStatus({ ok: true, database: { reviewQueueJobsByRepo: [{ repo: "owner/repo", total: 1, queued: 0, leased: 1, running: 0, providerDeferred: 0, retryableProviderDeferred: 0, failed: 0, activeFailed: 0 }] } });
+    const queue = durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), total: 1, leased: 1 }, jobs: [] });
+    Object.defineProperty(queue, "completeJobs", { value: [{ ...durableJob({ repo: "owner/repo", pullNumber: 1, headSha: "stale", state: "leased" }), leaseExpiresAt: "2026-06-30T23:00:00.000Z" }], enumerable: false });
+    const status = buildOperatorStatus({ release, repo: "owner/repo", coverage: coverageReport({ ok: true }), agents: agentInventory({ ok: true }), durableQueue: queue, checkedAt: "2026-07-01T00:30:00.000Z" });
+    expect(status.summary.activeFailedQueueJobs).toBe(0);
+    expect(status.ok).toBe(false);
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "repo_no_stale_queue_leases", ok: false }));
   });
 
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
