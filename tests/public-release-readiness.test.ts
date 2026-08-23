@@ -84,6 +84,7 @@ describe("NeonDiff public release readiness", () => {
       "docs/github-app-setup.md",
       "docs/providers.md",
       "docs/license-boundary.md",
+      "docs/mac-update-rollback.md",
       "docs/pricing.md",
       "docs/schema/neondiff-config.schema.json",
       "docs/systemd.md",
