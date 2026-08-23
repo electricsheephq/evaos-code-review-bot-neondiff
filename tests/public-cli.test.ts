@@ -1524,7 +1524,12 @@ exit 1
       const url = new URL(request.url ?? "/", "http://localhost");
       response.setHeader("Content-Type", "application/json");
       if (request.method === "GET" && url.pathname === "/repos/acme/demo/installation") {
-        response.end(JSON.stringify({ id: 42 }));
+        response.end(JSON.stringify({
+          id: 42,
+          account: { login: "acme" },
+          app_id: 12345,
+          app_slug: "customer-review-app"
+        }));
         return;
       }
       if (request.method === "POST" && url.pathname === "/app/installations/42/access_tokens") {
@@ -1636,6 +1641,10 @@ exit 1
               visibility_result: "public",
               visibility_source: "repository_api",
               installation_id_present: true,
+              installation_id: 42,
+              installation_account: "acme",
+              app_id: 12345,
+              app_slug: "customer-review-app",
               app_can_read_metadata: true,
               app_can_read_pull_requests: true,
               license_gate_decision: "active_public_entitlement_required",
@@ -1773,7 +1782,12 @@ exit 1
       const url = new URL(request.url ?? "/", "http://localhost");
       response.setHeader("Content-Type", "application/json");
       if (request.method === "GET" && url.pathname === "/repos/acme/demo/installation") {
-        response.end(JSON.stringify({ id: 42 }));
+        response.end(JSON.stringify({
+          id: 42,
+          app_id: 12345,
+          account: { login: "acme" },
+          app_slug: "customer-review-app"
+        }));
         return;
       }
       if (request.method === "POST" && url.pathname === "/app/installations/42/access_tokens") {
