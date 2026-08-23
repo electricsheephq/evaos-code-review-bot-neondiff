@@ -2379,9 +2379,10 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
       : retryableExpiredProviderCooldownCount > 0
         ? "expired_retryable"
         : "none";
-    const failureHealth = readProcessedFailureHealth(db, now);
+    const recovery = readFailureRecoveryIndex(db);
+    const failureHealth = readProcessedFailureHealth(db, now, recovery);
     const reviewerSessions = readReviewerSessionCounts(db, now, leaseTtlMs);
-    const reviewQueue = readReviewQueueCounts(db, now);
+    const reviewQueue = readReviewQueueCounts(db, now, recovery.latestPostedAtByPull);
     const reviewRunLeases = readReviewRunLeaseCounts(db, now);
     const staleActiveReviewQueueJobCount = readStaleActiveReviewQueueJobCount(db, now, leaseTtlMs);
     return {
@@ -2425,38 +2426,53 @@ function readDatabaseStatus(statePath: string, now: Date, leaseTtlMs = 15 * 60_0
   }
 }
 
-type FailedQueueRow = { last_error: string | null; active: number };
+type FailedQueueRow = { repo: string; pull_number: number; last_error: string | null; failed_at: number | null };
+type FailureRecoveryIndex = { latestPostedAtByPull: Map<string, number>; lastErrorAt?: string };
 
-function readProcessedFailureHealth(db: DatabaseSync, now: Date): {
+function readFailureRecoveryIndex(db: DatabaseSync): FailureRecoveryIndex {
+  const rows = db.prepare(
+    `select repo, pull_number,
+            max(case when status = 'posted' then julianday(created_at) end) as posted_at,
+            max(case when (status = 'failed' or (status != 'skipped' and error is not null and error != '')) and julianday(created_at) is not null
+                     then printf('%020.10f|%s', julianday(created_at), created_at) end) as error_marker
+       from processed_reviews group by repo, pull_number`
+  ).all() as unknown as Array<{ repo: string; pull_number: number; posted_at: number | null; error_marker: string | null }>;
+  const latestPostedAtByPull = new Map<string, number>();
+  let lastErrorMarker: string | undefined;
+  for (const row of rows) {
+    if (row.posted_at !== null) latestPostedAtByPull.set(`${row.repo}\u0000${row.pull_number}`, row.posted_at);
+    if (row.error_marker && (!lastErrorMarker || row.error_marker > lastErrorMarker)) lastErrorMarker = row.error_marker;
+  }
+  return {
+    latestPostedAtByPull,
+    ...(lastErrorMarker ? { lastErrorAt: lastErrorMarker.slice(lastErrorMarker.indexOf("|") + 1) } : {})
+  };
+}
+
+function readProcessedFailureHealth(db: DatabaseSync, now: Date, recovery: FailureRecoveryIndex): {
   recentUnrecoveredErrorCount: number;
   lastErrorAt?: string;
 } {
   const errorWhere = "failed.status = 'failed' or (failed.status != 'skipped' and failed.error is not null and failed.error != '')";
   const cutoff = new Date(now.getTime() - FAILURE_HEALTH_WINDOW_MS).toISOString();
   const recent = db.prepare(
-    `select count(*) as count from processed_reviews failed
+    `select repo, pull_number, julianday(created_at) as failed_at from processed_reviews failed
       where (${errorWhere})
-        and (datetime(failed.created_at) is null or datetime(failed.created_at) >= datetime(?))
-        and not exists (
-          select 1 from processed_reviews posted
-           where posted.repo = failed.repo and posted.pull_number = failed.pull_number
-             and posted.status = 'posted' and datetime(posted.created_at) > datetime(failed.created_at)
-        )`
-  ).get(cutoff) as { count: number };
-  const last = db.prepare(
-    `select created_at from processed_reviews failed
-      where ${errorWhere}
-      order by datetime(created_at) desc limit 1`
-  ).get() as { created_at?: string } | undefined;
+        and (datetime(failed.created_at) is null or datetime(failed.created_at) >= datetime(?))`
+  ).all(cutoff) as unknown as Array<{ repo: string; pull_number: number; failed_at: number | null }>;
   return {
-    recentUnrecoveredErrorCount: recent.count ?? 0,
-    ...(last?.created_at ? { lastErrorAt: last.created_at } : {})
+    recentUnrecoveredErrorCount: recent.filter((row) => {
+      const postedAt = recovery.latestPostedAtByPull.get(`${row.repo}\u0000${row.pull_number}`);
+      return row.failed_at === null || postedAt === undefined || postedAt <= row.failed_at;
+    }).length,
+    ...(recovery.lastErrorAt ? { lastErrorAt: recovery.lastErrorAt } : {})
   };
 }
 
 function readReviewQueueCounts(
   db: DatabaseSync,
-  now: Date
+  now: Date,
+  latestPostedAtByPull: Map<string, number>
 ): {
   total: number;
   queued: number;
@@ -2523,16 +2539,14 @@ function readReviewQueueCounts(
     )
     .all(nowIso) as unknown as Array<QueueCountRow & { repo: string }>;
   const failedRows = db.prepare(
-    `select failed.last_error,
-            not exists (
-              select 1 from processed_reviews posted
-               where posted.repo = failed.repo and posted.pull_number = failed.pull_number
-                 and posted.status = 'posted' and datetime(posted.created_at) > datetime(failed.updated_at)
-            ) as active
+    `select repo, pull_number, last_error, julianday(updated_at) as failed_at
        from review_queue_jobs failed
       where failed.state = 'failed'`
   ).all() as unknown as FailedQueueRow[];
-  const activeFailedRows = failedRows.filter((row) => row.active === 1);
+  const activeFailedRows = failedRows.filter((row) => {
+    const postedAt = latestPostedAtByPull.get(`${row.repo}\u0000${row.pull_number}`);
+    return row.failed_at === null || postedAt === undefined || postedAt <= row.failed_at;
+  });
   const timeoutCounts = summarizeZCodeTimeoutErrors(failedRows.map((row) => row.last_error));
   const activeTimeoutCounts = summarizeZCodeTimeoutErrors(activeFailedRows.map((row) => row.last_error));
   return {
