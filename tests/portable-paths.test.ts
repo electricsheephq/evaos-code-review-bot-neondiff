@@ -1,9 +1,13 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig, loadConfigFromObject, resolvePortableHomePath } from "../src/config.js";
 import { resolveEvalOutputRoot } from "../src/eval-harness.js";
+
+const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
 describe("portable source defaults", () => {
   const originalEvalRoot = process.env.NEONDIFF_EVAL_ROOT;
@@ -46,5 +50,40 @@ describe("portable source defaults", () => {
       "config file not found"
     );
     expect(() => loadConfig("")).toThrow("config path is required");
+  });
+
+  it("rejects QA evidence inside the checkout from a nested cwd", () => {
+    const tsxCommand = process.env.NEONDIFF_TEST_TSX ?? join(repoRoot, "node_modules", ".bin", "tsx");
+    const result = spawnSync(tsxCommand, [
+      join(repoRoot, "scripts", "qa-lab", "queue-sim.ts")
+    ], {
+      cwd: join(repoRoot, "tests"),
+      env: { ...process.env, NEONDIFF_EVIDENCE_ROOT: repoRoot },
+      encoding: "utf8",
+      timeout: 5_000
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("NEONDIFF_EVIDENCE_ROOT must be outside the current checkout");
+  });
+
+  it("reports a missing release-status config as structured JSON", () => {
+    const missingConfig = join(tmpdir(), `neondiff-missing-${Date.now()}.json`);
+    const tsxCommand = process.env.NEONDIFF_TEST_TSX ?? join(repoRoot, "node_modules", ".bin", "tsx");
+    const result = spawnSync(tsxCommand, [
+      join(repoRoot, "src", "cli.ts"),
+      "release-status",
+      "--config",
+      missingConfig
+    ], { cwd: repoRoot, encoding: "utf8" });
+    const output = JSON.parse(result.stdout);
+
+    expect(result.status).toBe(1);
+    expect(output.ok).toBe(false);
+    expect(output.failedGates).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "config_load", ok: false })])
+    );
+    expect(result.stderr).toBe("");
   });
 });

@@ -529,7 +529,14 @@ async function main(): Promise<void> {
       : parseBooleanArg(args["require-coverage"], "--require-coverage");
     const collectCoverage = requireCoverage ||
       (args.coverage === undefined ? false : parseBooleanArg(args.coverage, "--coverage"));
-    const config = loadConfig(args.config);
+    let config: BotConfig;
+    let configLoadError: string | undefined;
+    try {
+      config = loadConfig(args.config);
+    } catch (error) {
+      configLoadError = error instanceof Error ? error.message : "config load failed";
+      config = loadConfig();
+    }
     const status = collectReleaseStatusWithConfig({
       cwd: process.cwd(),
       configPath: args.config,
@@ -543,9 +550,10 @@ async function main(): Promise<void> {
       statePath: args["state-path"],
       budgetDetails: args["budget-details"] === "true",
       ...(budgetDetailLimit !== undefined ? { budgetDetailLimit } : {}),
-      ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {})
+      ...(budgetJobLimit !== undefined ? { budgetJobLimit } : {}),
+      ...(configLoadError ? { configLoadError } : {})
     }, config);
-    const coverageReport = collectCoverage
+    const coverageReport = collectCoverage && !configLoadError
       ? await collectCoverageReport(args, config)
       : undefined;
     const monitoringCoverage = buildReleaseMonitoringCoverage({

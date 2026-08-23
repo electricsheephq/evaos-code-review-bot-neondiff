@@ -14,12 +14,13 @@
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { loadConfigFromObject, type BotConfig } from "../../src/config.js";
 import { ReviewStateStore } from "../../src/state.js";
 import { riskWeightedQueuePriority } from "../../src/scheduler.js";
 import { buildChangedSurfaceValidationReport } from "../../src/validation-selector.js";
 import { stringifyRedactedJson } from "../../src/secrets.js";
+import { findGitCheckoutRoot, resolvePathFollowingExistingSymlinks } from "../../src/path-safety.js";
 import type { PullFilePatch, PullRequestSummary } from "../../src/types.js";
 // Reuse the merged QA-lab harness (#341/#358): scenario file-sets drive the REAL tier, and the
 // harness percentile math (nearest-rank) is reused rather than re-implemented here.
@@ -29,9 +30,16 @@ import { percentile } from "./stats.js";
 const evidenceRoot = process.env.NEONDIFF_EVIDENCE_ROOT?.trim();
 if (!evidenceRoot) throw new Error("NEONDIFF_EVIDENCE_ROOT is required for QA-lab evidence output");
 if (!isAbsolute(evidenceRoot)) throw new Error("NEONDIFF_EVIDENCE_ROOT must be absolute");
-const resolvedEvidenceRoot = resolve(evidenceRoot);
-const evidenceRelation = relative(process.cwd(), resolvedEvidenceRoot);
-if (evidenceRelation === "" || (!evidenceRelation.startsWith("..") && !isAbsolute(evidenceRelation))) {
+const checkoutRoot = findGitCheckoutRoot(process.cwd());
+if (!checkoutRoot) throw new Error("NEONDIFF_EVIDENCE_ROOT requires a git checkout");
+const resolvedEvidenceRoot = resolvePathFollowingExistingSymlinks(evidenceRoot);
+const resolvedCheckoutRoot = resolvePathFollowingExistingSymlinks(checkoutRoot);
+const evidenceRelation = relative(resolvedCheckoutRoot, resolvedEvidenceRoot);
+const evidenceIsInsideCheckout = evidenceRelation === ""
+  || (!isAbsolute(evidenceRelation)
+    && evidenceRelation !== ".."
+    && !evidenceRelation.startsWith(`..${sep}`));
+if (evidenceIsInsideCheckout) {
   throw new Error("NEONDIFF_EVIDENCE_ROOT must be outside the current checkout");
 }
 const EVIDENCE_DIR = join(resolvedEvidenceRoot, "neondiff-qa-lab", "risk-queue");
