@@ -44,6 +44,16 @@ export type ReviewReadinessState =
   | "command_recorded"
   | "skipped"
   | "failed";
+export interface ReviewEvidenceQuarantine {
+  repo: string;
+  pullNumber: number;
+  headSha: string;
+  reason: string;
+}
+export interface ReviewEvidenceQuarantineResult {
+  failedQueueJobs: number;
+  retiredQueueJobs: number;
+}
 export type RepoMemoryNoteKind =
   | "policy_note"
   | "machine_fact"
@@ -2611,6 +2621,23 @@ export class ReviewStateStore {
     return { enqueued: true, job: this.getReviewQueueJob(jobId)! };
   }
 
+  quarantineIncompleteReviewEvidence(input: ReviewEvidenceQuarantine & { leaseTtlMs?: number; now?: Date }): ReviewEvidenceQuarantineResult {
+    validateReviewQueueInput(input.repo, input.pullNumber, input.headSha);
+    const leaseTtlMs = input.leaseTtlMs ?? 15 * 60_000;
+    validatePositiveQueueLimit(leaseTtlMs, "leaseTtlMs");
+    const nowIso = (input.now ?? new Date()).toISOString();
+    const legacyLeaseCutoffIso = new Date(Date.parse(nowIso) - leaseTtlMs).toISOString();
+    this.db.exec("begin immediate");
+    try {
+      const result = this.applyIncompleteReviewEvidence(input, nowIso, legacyLeaseCutoffIso);
+      this.db.exec("commit");
+      return result;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
+  }
+
   leaseNextReviewQueueJobs(input: {
     maxGlobalActive?: number;
     maxProviderActive: number;
@@ -2619,6 +2646,7 @@ export class ReviewStateStore {
     maxRepoActiveByRepo?: Record<string, number>;
     manualCommandReserve?: number;
     excludeJobIds?: Iterable<string>;
+    quarantines?: Iterable<ReviewEvidenceQuarantine>;
     reservedActiveJobs?: Iterable<Pick<ReviewQueueJobRecord, "jobId" | "providerId" | "org" | "repo" | "pullNumber" | "headSha">>;
     limit?: number;
     leaseTtlMs?: number;
@@ -2650,6 +2678,8 @@ export class ReviewStateStore {
     const legacyLeaseCutoffIso = new Date(Date.parse(nowIso) - leaseTtlMs).toISOString();
     const leaseExpiresAt = new Date(Date.parse(nowIso) + leaseTtlMs).toISOString();
     const excludeJobIds = new Set(input.excludeJobIds ?? []);
+    const quarantines = Array.from(input.quarantines ?? []);
+    for (const quarantine of quarantines) validateReviewQueueInput(quarantine.repo, quarantine.pullNumber, quarantine.headSha);
     const reservedActiveJobs = Array.from(input.reservedActiveJobs ?? []);
     const leased: ReviewQueueJobRecord[] = [];
 
@@ -2665,11 +2695,12 @@ export class ReviewStateStore {
                updated_at = ?
            where state in ('leased', 'running')
              and (
-               (lease_expires_at is not null and datetime(lease_expires_at) <= datetime(?))
-               or (lease_expires_at is null and datetime(updated_at) <= datetime(?))
+               (lease_expires_at is not null and lease_expires_at <= ?)
+               or (lease_expires_at is null and updated_at <= ?)
              )`
         )
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
+      for (const quarantine of quarantines) this.applyIncompleteReviewEvidence(quarantine, nowIso, legacyLeaseCutoffIso);
       const jobs = this.listReviewQueueJobs();
       const eligible = jobs
         .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
@@ -2733,6 +2764,68 @@ export class ReviewStateStore {
     }
 
     return leased;
+  }
+
+  private applyIncompleteReviewEvidence(input: ReviewEvidenceQuarantine, nowIso: string, legacyLeaseCutoffIso: string): ReviewEvidenceQuarantineResult {
+    const reason = redactSecrets(input.reason).trim().slice(0, 500);
+    const supersededReason = `superseded_by_head=${input.headSha}`;
+    this.db.prepare(
+      `update review_queue_jobs set state = 'queued', lease_id = null, lease_expires_at = null,
+              last_error = 'queue_lease_expired_requeued', updated_at = ?
+       where repo = ? and pull_number = ? and state in ('leased', 'running') and
+         ((lease_expires_at is not null and lease_expires_at <= ?) or
+          (lease_expires_at is null and updated_at <= ?))`
+    ).run(nowIso, input.repo, input.pullNumber, nowIso, legacyLeaseCutoffIso);
+    const retiredQueueJobs = Number(this.db.prepare(
+      `update review_queue_jobs set state = 'stale_retired', lease_id = null, lease_expires_at = null,
+              next_eligible_at = null, finished_at = coalesce(finished_at, ?), last_error = ?, updated_at = ?
+       where repo = ? and pull_number = ? and head_sha <> ?
+         and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
+    ).run(nowIso, supersededReason, nowIso, input.repo, input.pullNumber, input.headSha).changes);
+    const failedQueueJobs = Number(this.db.prepare(
+      `update review_queue_jobs set state = 'failed', lease_id = null, lease_expires_at = null,
+              next_eligible_at = null, finished_at = coalesce(finished_at, ?), last_error = ?, updated_at = ?
+       where repo = ? and pull_number = ? and head_sha = ?
+         and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
+    ).run(nowIso, reason, nowIso, input.repo, input.pullNumber, input.headSha).changes);
+    this.db.prepare(
+      `update review_readiness set state = 'stale', reason = ?, updated_at = ?
+       where repo = ? and pull_number = ? and head_sha <> ?
+         and state in ('queued', 'reviewing', 'needs_fix', 'awaiting_re_review', 'blocked_on_checks',
+                       'blocked_on_proof', 'ready_for_human', 'provider_deferred', 'command_recorded')`
+    ).run(supersededReason, nowIso, input.repo, input.pullNumber, input.headSha);
+    this.db.prepare(
+      `insert into review_readiness (repo, pull_number, head_sha, state, reason, created_at, updated_at)
+       values (?, ?, ?, 'failed', ?, ?, ?)
+       on conflict(repo, pull_number, head_sha) do update set
+         state = excluded.state, reason = excluded.reason, updated_at = excluded.updated_at
+       where review_readiness.state <> 'failed' or coalesce(review_readiness.reason, '') <> excluded.reason`
+    ).run(input.repo, input.pullNumber, input.headSha, reason, nowIso, nowIso);
+    this.db.prepare(
+      `update reviewer_session_jobs set job_state = 'failed', finished_at = coalesce(finished_at, ?),
+              processed_review_status = 'failed'
+       where repo = ? and pull_number = ? and head_sha = ? and job_state in ('assigned', 'running')
+         and not exists (select 1 from review_queue_jobs q where q.repo = reviewer_session_jobs.repo
+           and q.pull_number = reviewer_session_jobs.pull_number and q.head_sha = reviewer_session_jobs.head_sha
+           and q.state in ('leased', 'running')
+           and ((q.lease_expires_at is not null and q.lease_expires_at > ?)
+             or (q.lease_expires_at is null and q.updated_at > ?)))`
+    ).run(nowIso, input.repo, input.pullNumber, input.headSha, nowIso, legacyLeaseCutoffIso);
+    this.db.prepare(
+      `update reviewer_session_jobs set job_state = 'skipped', finished_at = coalesce(finished_at, ?),
+              processed_review_status = 'skipped'
+       where repo = ? and pull_number = ? and head_sha <> ? and job_state in ('assigned', 'running')
+         and not exists (select 1 from review_queue_jobs q where q.repo = reviewer_session_jobs.repo
+           and q.pull_number = reviewer_session_jobs.pull_number and q.head_sha = reviewer_session_jobs.head_sha
+           and q.state in ('leased', 'running')
+           and ((q.lease_expires_at is not null and q.lease_expires_at > ?)
+             or (q.lease_expires_at is null and q.updated_at > ?)))`
+    ).run(nowIso, input.repo, input.pullNumber, input.headSha, nowIso, legacyLeaseCutoffIso);
+    const sessions = this.db.prepare(
+      "select distinct session_id from reviewer_session_jobs where repo = ? and pull_number = ?"
+    ).all(input.repo, input.pullNumber) as unknown as Array<{ session_id: string }>;
+    for (const session of sessions) this.expireDrainedReviewerSessionIfComplete(session.session_id);
+    return { failedQueueJobs, retiredQueueJobs };
   }
 
   updateReviewQueueJobState(input: {

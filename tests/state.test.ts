@@ -1260,6 +1260,52 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("atomically quarantines one exact head while fencing leases and converging sessions", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-evidence-quarantine-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const repo = "org/repo-a";
+    const now = new Date("2026-07-01T00:00:02.100Z");
+    const current = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-b", now }).job;
+    const retry = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-b", source: "manual_command", commentId: 2, now }).job;
+    const active = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-b", source: "manual_command", commentId: 3, now }).job;
+    const superseded = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-a", now }).job;
+    const unrelated = store.enqueueReviewQueueJob({ repo, pullNumber: 2, headSha: "head-c", now }).job;
+    store.updateReviewQueueJobState({ jobId: current.jobId, state: "blocked_on_proof", nextEligibleAt: "2026-07-01T00:10:00Z" });
+    store.updateReviewQueueJobState({ jobId: retry.jobId, state: "leased", leaseId: "expired", leaseExpiresAt: "2026-07-01T00:00:02.000Z" });
+    store.updateReviewQueueJobState({ jobId: active.jobId, state: "running", leaseId: "active", leaseExpiresAt: "2026-07-01T00:00:02.900Z" });
+    store.updateReviewQueueJobState({ jobId: superseded.jobId, state: "blocked_on_proof" });
+    store.recordReviewReadiness({ repo, pullNumber: 1, headSha: "head-a", state: "blocked_on_proof", reason: "proof" });
+    const activeAssignment = store.assignReviewerSessionJob({ repo, pullNumber: 1, headSha: "head-b", ttlMs: 60_000, headCountLimit: 1, now });
+    const supersededAssignment = store.assignReviewerSessionJob({ repo, pullNumber: 1, headSha: "head-a", ttlMs: 60_000, headCountLimit: 1, now });
+
+    expect(store.quarantineIncompleteReviewEvidence({ repo, pullNumber: 1, headSha: "head-b", reason: "token=ghp_fake_token", now })).toEqual({
+      failedQueueJobs: 2, retiredQueueJobs: 1
+    });
+    expect(store.getReviewQueueJob(current.jobId)).toMatchObject({ state: "failed", finishedAt: now.toISOString(), lastError: expect.not.stringContaining("ghp_fake_token") });
+    expect(store.getReviewQueueJob(current.jobId)).not.toHaveProperty("nextEligibleAt");
+    expect(store.getReviewQueueJob(retry.jobId)).toMatchObject({ state: "failed", finishedAt: now.toISOString() });
+    expect(store.getReviewQueueJob(active.jobId)).toMatchObject({ state: "running", leaseId: "active" });
+    expect(store.getReviewQueueJob(superseded.jobId)).toMatchObject({ state: "stale_retired", finishedAt: now.toISOString() });
+    expect(store.getReviewReadiness(repo, 1, "head-a")).toMatchObject({ state: "stale" });
+    expect(store.getReviewerSessionJob(repo, 1, "head-b")).toMatchObject({ jobState: "assigned" });
+    expect(store.getReviewerSessionJob(repo, 1, "head-b")).not.toHaveProperty("finishedAt");
+    expect(store.getReviewerSession(activeAssignment.session!.sessionId)).toMatchObject({ state: "draining" });
+    expect(store.getReviewerSessionJob(repo, 1, "head-a")).toMatchObject({ jobState: "skipped", finishedAt: now.toISOString() });
+    expect(store.getReviewerSession(supersededAssignment.session!.sessionId)).toMatchObject({ state: "expired" });
+    expect(store.quarantineIncompleteReviewEvidence({ repo, pullNumber: 1, headSha: "head-b", reason: "same", now })).toEqual({ failedQueueJobs: 0, retiredQueueJobs: 0 });
+    expect(store.getReviewReadiness(repo, 1, "head-b")).toMatchObject({ state: "failed", reason: expect.not.stringContaining("ghp_fake_token") });
+    expect(store.quarantineIncompleteReviewEvidence({ repo, pullNumber: 3, headSha: "head-no-job", reason: "required_evidence_incomplete", now })).toEqual({ failedQueueJobs: 0, retiredQueueJobs: 0 });
+    expect(store.getReviewReadiness(repo, 3, "head-no-job")).toMatchObject({ state: "failed", reason: "required_evidence_incomplete" });
+    const orphan = store.assignReviewerSessionJob({ repo, pullNumber: 4, headSha: "head-orphan", ttlMs: 60_000, headCountLimit: 1, now });
+    store.updateReviewerSessionJobState({ repo, pullNumber: 4, headSha: "head-orphan", jobState: "running", now });
+    store.quarantineIncompleteReviewEvidence({ repo, pullNumber: 4, headSha: "head-orphan", reason: "required_evidence_incomplete", now });
+    expect(store.getReviewerSessionJob(repo, 4, "head-orphan")).toMatchObject({ jobState: "failed", finishedAt: now.toISOString() });
+    expect(store.getReviewerSession(orphan.session!.sessionId)).toMatchObject({ state: "expired" });
+    expect(store.leaseNextReviewQueueJobs({ maxProviderActive: 2, maxOrgActive: 2, maxRepoActive: 2, now })).toEqual([expect.objectContaining({ jobId: unrelated.jobId, state: "leased" })]);
+    store.close();
+  });
+
   it("dry-runs and clears expired review queue leases without manual SQL", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-review-queue-lease-clear-"));
     roots.push(root);
