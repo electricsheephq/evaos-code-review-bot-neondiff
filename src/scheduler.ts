@@ -13,7 +13,7 @@ import {
   type ReviewCommand
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
-import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
+import { DEFAULT_BOT_LOGIN, GitHubApi, type BoundedGithubList } from "./github.js";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
@@ -110,6 +110,8 @@ export interface SchedulerGitHubApi {
   listOpenPulls(repo: string): Promise<PullRequestSummary[]>;
   getPull(repo: string, pullNumber: number): Promise<PullRequestSummary>;
   listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
+  // Bounded evidence is separate from the uncapped command reader (#857).
+  listIssueCommentsForEnrichment?(repo: string, issueNumber: number): Promise<BoundedGithubList<IssueCommentCommandSource>>;
   canPostAsApp?: ReviewStatusCommentGithub["canPostAsApp"];
   upsertIssueComment?: ReviewStatusCommentGithub["upsertIssueComment"];
   // Optional: only invoked when riskWeightedQueue is enabled, to derive risk from changed surface.
@@ -172,6 +174,7 @@ export async function runScheduledCycleWithDeps(input: {
   const result = emptyScheduledRunResult();
   const now = input.now ?? new Date();
   const eventClock = input.clock ?? (() => input.now ?? new Date());
+  const excludedHeadKeys = new Set<string>();
   const repos = input.options.repo ? [input.options.repo] : listReposToScan(config);
   const providerId = config.zcode.providerId ?? config.zcode.model ?? "zcode";
   if (config.reviewerSessions?.enabled) {
@@ -242,6 +245,11 @@ export async function runScheduledCycleWithDeps(input: {
         },
         onCommandFetchError: () => {
           result.commandFetchErrors += 1;
+        },
+        clock: eventClock,
+        onQueueJobsQuarantined: ({ headKey, count }) => {
+          excludedHeadKeys.add(headKey);
+          result.queue.failedQueueJobs += count;
         }
       });
       applyEnqueueStatus(result, enqueueStatus);
@@ -287,6 +295,7 @@ export async function runScheduledCycleWithDeps(input: {
     manualCommandReserve: Math.min(scheduler.manualCommandReserve, effectiveSlots),
     limit: effectiveSlots,
     leaseTtlMs: config.reviewConcurrency.leaseTtlMs,
+    excludeHeadKeys: excludedHeadKeys,
     ...(config.riskWeightedQueue?.aging ? { aging: config.riskWeightedQueue.aging } : {}),
     now: eventClock()
   });
@@ -503,6 +512,7 @@ async function collectSubsequentMergedPulls(input: {
 type EnqueueStatus =
   | "enqueued"
   | "already_queued"
+  | "command_fetch_failed"
   | "skipped_draft"
   | "skipped_canary"
   | "skipped_processed"
@@ -526,14 +536,16 @@ async function enqueuePullIfEligible(input: {
   allowActivationBaselineCommandLookup?: boolean;
   onStatusCommentFailure?: () => void;
   onCommandFetchError?: () => void;
+  clock?: () => Date;
+  onQueueJobsQuarantined?: (input: { headKey: string; count: number }) => void;
   automaticPriorityOverride?: number;
 }): Promise<EnqueueStatus> {
   if (isClosedPull(input.pull)) {
     await retireQueuedJobsForClosedPull(input);
     return "closed_retired";
   }
-  markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
   if (input.config.skipDrafts && input.pull.draft) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     recordReadinessTransition({
       state: input.state,
       repo: input.repo,
@@ -545,6 +557,7 @@ async function enqueuePullIfEligible(input: {
     return "skipped_draft";
   }
   if (!isCanaryAllowed(input.config, input.repo, input.pull.number)) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     recordReadinessTransition({
       state: input.state,
       repo: input.repo,
@@ -567,18 +580,32 @@ async function enqueuePullIfEligible(input: {
       pull: input.pull
     })
   ) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     await retireSupersededQueueJobsForPull(input);
     recordActivationBaselineExistingHead(input.state, input.repo, input.pull);
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }
   if (!input.allowActivationBaselineCommandLookup && isActivationBaselineProcessedReview(processed)) {
+    markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
     await retireSupersededQueueJobsForPull(input);
     backfillReadinessFromProcessedHead(input.state, input.repo, input.pull, input.now);
     return "skipped_processed";
   }
 
   const commandDecision = await resolveSchedulerCommandDecision(input);
+  if ("blocked" in commandDecision) {
+    const quarantine = quarantineQueueJobsForIncompleteEvidence({
+      config: input.config,
+      state: input.state,
+      repo: input.repo,
+      pull: input.pull,
+      now: input.clock?.() ?? input.now
+    });
+    input.onQueueJobsQuarantined?.(quarantine);
+    return "command_fetch_failed";
+  }
+  markSupersededReadinessRowsForPull(input.state, input.repo, input.pull, input.now);
   if (commandDecision.action !== "none") {
     if (commandDecision.shouldReview) {
       await retireSupersededQueueJobsForPull(input);
@@ -1102,6 +1129,61 @@ async function retireSupersededQueueJobsForPull(input: {
   }
 }
 
+function quarantineQueueJobsForIncompleteEvidence(input: {
+  config: BotConfig;
+  state: ReviewStateStore;
+  repo: string;
+  pull: PullRequestSummary;
+  now: Date;
+}): { headKey: string; count: number } {
+  const jobs = input.state.listReviewQueueJobsForPull({
+    repo: input.repo,
+    pullNumber: input.pull.number,
+    states: ["queued", "provider_deferred", "blocked_on_proof", "leased", "running"]
+  }).filter((job) => job.headSha === input.pull.head.sha);
+  let count = 0;
+  for (const job of jobs) {
+    const eligible = job.state === "queued" || job.state === "provider_deferred" || job.state === "blocked_on_proof";
+    const expired = (job.state === "leased" || job.state === "running") && isQueueJobLeaseExpired({
+      job,
+      now: input.now,
+      leaseTtlMs: input.config.reviewConcurrency.leaseTtlMs
+    });
+    if (!eligible && !expired) continue;
+    input.state.updateReviewQueueJobState({
+      jobId: job.jobId,
+      state: "failed",
+      lastError: "required_evidence_incomplete",
+      now: input.now
+    });
+    recordReadinessTransition({
+      state: input.state,
+      repo: input.repo,
+      pull: pullForQueueJob(job, input.pull),
+      readinessState: "failed",
+      reason: "required_evidence_incomplete",
+      now: input.now
+    });
+    updateReviewerSessionJobFromQueueStatus({ state: input.state, job, now: input.now }, "failed", "failed");
+    count += 1;
+  }
+  return {
+    headKey: `${input.repo.toLowerCase()}#${input.pull.number}@${input.pull.head.sha.toLowerCase()}`,
+    count
+  };
+}
+
+function isQueueJobLeaseExpired(input: {
+  job: ReviewQueueJobRecord;
+  now: Date;
+  leaseTtlMs: number;
+}): boolean {
+  const leaseExpiryMs = input.job.leaseExpiresAt
+    ? Date.parse(input.job.leaseExpiresAt)
+    : Date.parse(input.job.updatedAt) + input.leaseTtlMs;
+  return Number.isFinite(leaseExpiryMs) && leaseExpiryMs <= input.now.getTime();
+}
+
 async function retireQueuedJobsForClosedPull(input: {
   config: BotConfig;
   github: SchedulerGitHubApi;
@@ -1148,6 +1230,12 @@ async function retireQueuedJobsForClosedPull(input: {
   }
 }
 
+type SchedulerCommandDecision = CommandDecision | {
+  action: "none";
+  shouldReview: false;
+  blocked: "required_evidence_incomplete";
+};
+
 async function resolveSchedulerCommandDecision(input: {
   config: BotConfig;
   github: SchedulerGitHubApi;
@@ -1155,10 +1243,22 @@ async function resolveSchedulerCommandDecision(input: {
   repo: string;
   pull: PullRequestSummary;
   onCommandFetchError?: () => void;
-}): Promise<CommandDecision> {
+}): Promise<SchedulerCommandDecision> {
   if (!input.config.commands.enabled) return { action: "none", shouldReview: false };
   let comments: IssueCommentCommandSource[];
   try {
+    let boundedEvidence: BoundedGithubList<IssueCommentCommandSource> | undefined;
+    if (input.github.listIssueCommentsForEnrichment) {
+      try {
+        boundedEvidence = await input.github.listIssueCommentsForEnrichment(input.repo, input.pull.number);
+      } catch {
+        // Keep the uncapped command reader as the source of truth when the optional evidence read is unavailable.
+      }
+    }
+    if (boundedEvidence?.truncated || boundedEvidence?.overflow) {
+      input.onCommandFetchError?.();
+      return { action: "none", shouldReview: false, blocked: "required_evidence_incomplete" };
+    }
     comments = await input.github.listIssueComments(input.repo, input.pull.number);
   } catch {
     input.onCommandFetchError?.();
@@ -2592,6 +2692,9 @@ function nextLicenseGateRetryAt(now = new Date()): string {
 
 function applyEnqueueStatus(result: ScheduledRunResult, status: EnqueueStatus): void {
   switch (status) {
+    case "command_fetch_failed":
+      result.failed += 1;
+      break;
     case "enqueued":
       result.queue.enqueued += 1;
       break;

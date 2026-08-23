@@ -3199,6 +3199,83 @@ describe("provider-aware review scheduler", () => {
     state.close();
   });
 
+  it("quarantines only the incomplete head without public status writes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-evidence-quarantine-"));
+    roots.push(root);
+    const config = schedulerConfig(root, ["org/repo-a"]);
+    config.commands = { enabled: true, botMentions: ["@evaos-code-review-bot"], trustedAuthors: ["100yenadmin"], acknowledge: false };
+    config.reviewStatusComment!.enabled = true;
+    config.reviewerSessions = { enabled: true, ttlMs: 8 * 60 * 60_000, headCountLimit: 10 };
+    const state = new ReviewStateStore(config.statePath);
+    const now = new Date("2026-07-01T00:01:00.000Z");
+    const assignment = state.assignReviewerSessionJob({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, ttlMs: config.reviewerSessions.ttlMs, headCountLimit: config.reviewerSessions.headCountLimit, now });
+    if (!assignment.assigned || !assignment.session) throw new Error("expected reviewer session assignment");
+    const queue = (headSha: string, source: "automatic" | "manual_command" = "automatic", commentId?: number) => state.enqueueReviewQueueJob({ repo: "org/repo-a", pullNumber: 1, headSha, baseSha: "base", source, ...(commentId ? { commentId } : {}), sessionId: assignment.session!.sessionId, now }).job;
+    const sameHeadAutomatic = queue(HEAD_A);
+    const sameHeadDeferred = queue(HEAD_A, "manual_command", 501);
+    state.updateReviewQueueJobState({
+      jobId: sameHeadDeferred.jobId,
+      state: "provider_deferred",
+      nextEligibleAt: "2026-07-01T00:00:30.000Z",
+      now
+    });
+    const sameHeadExpired = queue(HEAD_A, "manual_command", 502);
+    state.updateReviewQueueJobState({
+      jobId: sameHeadExpired.jobId,
+      state: "leased",
+      leaseId: "expired",
+      leaseExpiresAt: "2026-07-01T00:00:30.000Z",
+      now
+    });
+    const otherHead = queue(HEAD_B);
+    state.updateReviewQueueJobState({
+      jobId: otherHead.jobId,
+      state: "leased",
+      leaseId: "other-live",
+      leaseExpiresAt: "2026-07-01T00:10:00.000Z",
+      now
+    });
+    state.recordReviewReadiness({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_A, state: "queued", reason: "automatic_enqueue", now });
+    state.recordReviewReadiness({ repo: "org/repo-a", pullNumber: 1, headSha: HEAD_B, state: "ready_for_human", reason: "comment_review_posted", now });
+    const statusCalls: StatusCommentCall[] = [];
+    const truncatedEvidence = Object.assign([], {
+      items: [],
+      rawCount: 500,
+      truncated: true,
+      overflow: true
+    });
+    const github = {
+      ...githubFromMap(new Map([["org/repo-a", [pull("org/repo-a", 1, HEAD_A)]]]), new Map(), statusCalls),
+      listIssueComments: async () => { throw new Error("uncapped reader must not run"); },
+      listIssueCommentsForEnrichment: async () => truncatedEvidence
+    };
+    let reviewCalls = 0;
+    const result = await runScheduledCycleWithDeps({
+      config,
+      github,
+      state,
+      options: { dryRun: false, useZCode: false },
+      reviewPullImpl: async () => { reviewCalls += 1; return "reviewed"; },
+      now,
+      clock: () => now
+    });
+
+    expect(result).toMatchObject({ failed: 1, commandFetchErrors: 1 });
+    expect(result.queue).toMatchObject({ leased: 0, failedQueueJobs: 3, remainingQueued: 0 });
+    expect(reviewCalls).toBe(0);
+    expect(statusCalls).toEqual([]);
+    expect(state.listReviewQueueJobs({ state: "failed" })).toEqual(expect.arrayContaining([
+      expect.objectContaining({ jobId: sameHeadAutomatic.jobId, lastError: "required_evidence_incomplete" }),
+      expect.objectContaining({ jobId: sameHeadDeferred.jobId, lastError: "required_evidence_incomplete" }),
+      expect.objectContaining({ jobId: sameHeadExpired.jobId, lastError: "required_evidence_incomplete" })
+    ]));
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_A)).toMatchObject({ state: "failed", reason: "required_evidence_incomplete" });
+    expect(state.getReviewerSessionJob("org/repo-a", 1, HEAD_A)).toMatchObject({ jobState: "failed", processedReviewStatus: "failed" });
+    expect(state.getReviewQueueJob(otherHead.jobId)).toMatchObject({ state: "leased" });
+    expect(state.getReviewReadiness("org/repo-a", 1, HEAD_B)).toMatchObject({ state: "ready_for_human", reason: "comment_review_posted" });
+    state.close();
+  });
+
   it("allows scoped trusted commands for activation-baselined heads", async () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-scheduler-command-baseline-scoped-"));
     roots.push(root);

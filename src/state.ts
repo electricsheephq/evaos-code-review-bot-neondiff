@@ -2624,6 +2624,7 @@ export class ReviewStateStore {
     leaseTtlMs?: number;
     aging?: { enabled: boolean; maxWaitMinutes: number };
     now?: Date;
+    excludeHeadKeys?: Iterable<string>;
   }): ReviewQueueJobRecord[] {
     validatePositiveQueueLimit(input.maxProviderActive, "maxProviderActive");
     const maxGlobalActive = input.maxGlobalActive ?? input.maxProviderActive;
@@ -2650,6 +2651,7 @@ export class ReviewStateStore {
     const legacyLeaseCutoffIso = new Date(Date.parse(nowIso) - leaseTtlMs).toISOString();
     const leaseExpiresAt = new Date(Date.parse(nowIso) + leaseTtlMs).toISOString();
     const excludeJobIds = new Set(input.excludeJobIds ?? []);
+    const excludeHeadKeys = new Set(input.excludeHeadKeys ?? []);
     const reservedActiveJobs = Array.from(input.reservedActiveJobs ?? []);
     const leased: ReviewQueueJobRecord[] = [];
 
@@ -2672,7 +2674,7 @@ export class ReviewStateStore {
         .run(nowIso, nowIso, legacyLeaseCutoffIso);
       const jobs = this.listReviewQueueJobs();
       const eligible = jobs
-        .filter((job) => !excludeJobIds.has(job.jobId) && isQueueJobEligible(job, nowIso))
+        .filter((job) => !excludeJobIds.has(job.jobId) && !excludeHeadKeys.has(reviewQueueHeadKey(job)) && isQueueJobEligible(job, nowIso))
         .sort(buildLeaseComparator(input.aging, nowIso));
       const reservedJobIds = new Set(reservedActiveJobs.map((job) => job.jobId));
       const active = [
