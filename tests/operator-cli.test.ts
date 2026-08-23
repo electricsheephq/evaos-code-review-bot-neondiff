@@ -1003,6 +1003,51 @@ describe("operator CLI summaries", () => {
     expect(inventory.recommendedActions).not.toContain("retry expired provider cooldowns or inspect provider health");
   });
 
+  it("keeps repo runtime inventory on selected rows and strips global recovery actions", () => {
+    const release = releaseStatus({
+      ok: false,
+      recommendedActions: [
+        "npx tsx src/cli.ts retry-failed --dry-run false",
+        "retry expired provider cooldowns or inspect provider health"
+      ],
+      database: {
+        errorCount: 3,
+        recentUnrecoveredErrorCount: 2,
+        failedReviewQueueJobCount: 2,
+        activeFailedReviewQueueJobCount: 2,
+        zcodeTimeoutFailedReviewQueueJobCount: 1,
+        activeZCodeTimeoutFailedReviewQueueJobCount: 1,
+        retryableExpiredProviderCooldownCount: 1
+      }
+    });
+    release.gates.push(
+      { name: "live_db_no_errors", ok: false, detail: "2 recent unrecovered blocking error row(s)" },
+      { name: "queue_no_failed_jobs", ok: false, detail: "2 active failed durable queue job(s)" },
+      { name: "queue_no_zcode_timeout_failed_jobs", ok: false, detail: "1 active ZCode timeout failed durable queue job(s)" },
+      { name: "queue_no_retryable_provider_deferred_jobs", ok: false, detail: "1 ready-to-retry provider-deferred durable queue job(s)" }
+    );
+    const selected = buildRuntimeInventory({
+      release,
+      repo: "owner/selected",
+      coverage: coverageReport({ ok: true }),
+      agents: agentInventory({ ok: true }),
+      providerCooldowns: [],
+      repoProviderCooldowns: [],
+      durableQueue: durableQueueSnapshot({
+        ok: true,
+        summary: { ...cleanDurableQueueSummary(), total: 1, posted: 1 },
+        jobs: [durableJob({ repo: "owner/selected", pullNumber: 7, headSha: "recovered", state: "posted" })]
+      }),
+      checkedAt: "2026-07-01T00:30:00.000Z"
+    });
+
+    expect(selected.ok).toBe(true);
+    expect(selected.summary.failedQueueJobs).toBe(0);
+    expect(selected.gates.some((gate) => /^(live_db|provider_cooldown_backlog|queue_no_)/.test(gate.name))).toBe(false);
+    expect(`${selected.recommendedActions.join("\n")}\n${JSON.stringify(selected)}`).not.toMatch(/retry-failed|retry-provider-cooldowns|--dry-run false|retry or requeue/i);
+
+  });
+
   it("formats a concise human runtime inventory without leaking secrets", () => {
     const inventory = buildRuntimeInventory({
       release: releaseStatus({ ok: true, budget: reviewBudgetStatus() }),

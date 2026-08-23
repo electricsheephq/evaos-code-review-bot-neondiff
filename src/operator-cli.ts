@@ -598,6 +598,7 @@ export function formatOperatorStatusHuman(status: OperatorStatus): string {
 export function buildRuntimeInventory(input: {
   release: ReleaseStatus;
   coverage?: CoverageAuditReport;
+  repo?: string;
   agents: OperatorAgentInventory;
   processes?: RuntimeProcessInventory;
   providerCooldowns?: ProviderCooldownReviewRecord[];
@@ -607,10 +608,25 @@ export function buildRuntimeInventory(input: {
   issueEnrichmentRuntime?: OperatorIssueEnrichmentRuntime;
   checkedAt?: string;
 }): RuntimeInventory {
-  const queue = input.coverage ? buildOperatorQueue(input.coverage) : undefined;
-  const durableQueue = input.durableQueue;
-  const providerCooldowns = input.providerCooldowns ?? [];
-  const repoProviderCooldowns = input.repoProviderCooldowns ?? [];
+  const checkedAt = input.checkedAt ?? input.release.checkedAt;
+  const checkedAtMs = Date.parse(checkedAt);
+  const nowMs = Number.isFinite(checkedAtMs) ? checkedAtMs : Date.now();
+  const now = new Date(nowMs);
+  const runtimeRelease = scopeRuntimeRelease(input.release, input.repo);
+  const queue = input.coverage
+    ? buildOperatorQueue(input.repo ? scopeCoverageReport(input.coverage, input.repo) : input.coverage)
+    : undefined;
+  const durableQueue = input.repo
+    ? input.durableQueue
+      ? buildDurableQueueSnapshot(input.durableQueue.jobs.filter((job) => job.repo === input.repo), now)
+      : undefined
+    : input.durableQueue;
+  const providerCooldowns = (input.providerCooldowns ?? []).filter((cooldown) =>
+    !input.repo || cooldown.repo === input.repo
+  );
+  const repoProviderCooldowns = (input.repoProviderCooldowns ?? []).filter((cooldown) =>
+    !input.repo || cooldown.repo === input.repo
+  );
   const activeWork = (durableQueue?.jobs ?? []).filter((job) =>
     job.state === "queued" || job.state === "leased" || job.state === "running"
   );
@@ -620,31 +636,31 @@ export function buildRuntimeInventory(input: {
   const coveredPendingHeads = (queue?.pending.length ?? 0) - uncoveredPendingHeads.length;
   const expiredProviderCooldowns = providerCooldowns.filter((cooldown) => cooldown.expired).length;
   const activeProviderCooldowns = providerCooldowns.length - expiredProviderCooldowns;
-  const checkedAtMs = Date.parse(input.checkedAt ?? input.release.checkedAt);
-  const nowMs = Number.isFinite(checkedAtMs) ? checkedAtMs : Date.now();
   const activeRepoCooldowns = repoProviderCooldowns.filter((cooldown) => {
     const cooldownUntilMs = Date.parse(cooldown.cooldownUntil);
     return Number.isFinite(cooldownUntilMs) && cooldownUntilMs > nowMs;
   }).length;
-  const coveredExpiredProviderCooldowns =
-    input.release.database.coveredExpiredProviderCooldownCount ??
-    (activeRepoCooldowns > 0 || activeProviderCooldowns > 0 ? expiredProviderCooldowns : 0);
-  const retryableExpiredProviderCooldowns =
-    input.release.database.retryableExpiredProviderCooldownCount ??
-    Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
-  const retryCoveredReviewerSessions = input.release.database.retryCoveredReviewerSessionCount ?? 0;
-  const failedQueueJobs = durableQueue?.summary.failed ?? 0;
-  const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue);
-  const zcodeTimeoutRetryActions = zcodeTimeoutRecommendedActions(input.release, durableQueue);
+  const coveredExpiredProviderCooldowns = input.repo
+    ? (activeRepoCooldowns > 0 || activeProviderCooldowns > 0 ? expiredProviderCooldowns : 0)
+    : input.release.database.coveredExpiredProviderCooldownCount ??
+      (activeRepoCooldowns > 0 || activeProviderCooldowns > 0 ? expiredProviderCooldowns : 0);
+  const retryableExpiredProviderCooldowns = input.repo
+    ? Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns)
+    : input.release.database.retryableExpiredProviderCooldownCount ??
+      Math.max(0, expiredProviderCooldowns - coveredExpiredProviderCooldowns);
+  const retryCoveredReviewerSessions = input.repo ? 0 : input.release.database.retryCoveredReviewerSessionCount ?? 0;
+  const queueFailures = operatorQueueFailureCounts(input.release, durableQueue, Boolean(input.repo));
+  const failedQueueJobs = queueFailures.total;
+  const activeFailedQueueJobs = queueFailures.active;
+  const zcodeTimeoutQueue = zcodeTimeoutQueueCounts(input.release, durableQueue, Boolean(input.repo));
   const providerDeferredJobs = durableQueue?.summary.providerDeferred ?? 0;
   const readFailures = queue?.summary.readFailures ?? 0;
   const staleHeads = queue?.summary.staleHeads ?? 0;
   const providerDeferredHeads = queue?.summary.providerDeferred ?? 0;
   const budget = input.release.budget;
-  const retryableProviderDeferredJobs = actionableProviderDeferredJobs(
-    budget,
-    durableQueue?.summary.retryableProviderDeferred ?? 0
-  );
+  const retryableProviderDeferredJobs = input.repo
+    ? durableQueue?.summary.retryableProviderDeferred ?? 0
+    : actionableProviderDeferredJobs(budget, durableQueue?.summary.retryableProviderDeferred ?? 0);
   const issueEnrichment = input.issueEnrichment;
   const issueEnrichmentRuntime = input.issueEnrichmentRuntime;
   const issueEnrichmentRuntimeState = displayIssueEnrichmentRuntimeState(issueEnrichment, issueEnrichmentRuntime);
@@ -654,7 +670,7 @@ export function buildRuntimeInventory(input: {
     describeIssueEnrichmentRuntimeRetryableDeferred(issueEnrichmentRuntimeRetryableDeferred);
 
   const gates = [
-    ...input.release.gates,
+    ...runtimeRelease.gates,
     {
       name: "runtime_no_stale_leases",
       ok: input.agents.summary.staleLeases === 0,
@@ -662,20 +678,25 @@ export function buildRuntimeInventory(input: {
     },
     {
       name: "runtime_no_failed_queue_jobs",
-      ok: failedQueueJobs === 0,
-      detail: `${failedQueueJobs} failed durable queue job(s)`
+      ok: activeFailedQueueJobs === 0,
+      detail: activeFailedQueueJobs === failedQueueJobs
+        ? `${failedQueueJobs} failed durable queue job(s)`
+        : `${activeFailedQueueJobs} active failed durable queue job(s); ${failedQueueJobs} retained history`
     },
     {
       name: "runtime_no_zcode_timeout_failed_queue_jobs",
-      ok: zcodeTimeoutQueue.total === 0,
-      detail:
-        `${zcodeTimeoutQueue.total} ZCode timeout failed durable queue job(s); ` +
-        `retryable=${zcodeTimeoutQueue.retryable} exhausted=${zcodeTimeoutQueue.exhausted}`
+      ok: zcodeTimeoutQueue.activeTotal === 0,
+      detail: zcodeTimeoutQueue.activeTotal === zcodeTimeoutQueue.total
+        ? `${zcodeTimeoutQueue.total} ZCode timeout failed durable queue job(s); ` +
+          `retryable=${zcodeTimeoutQueue.retryable} exhausted=${zcodeTimeoutQueue.exhausted}`
+        : `${zcodeTimeoutQueue.activeTotal} active ZCode timeout failed durable queue job(s); ` +
+          `retained=${zcodeTimeoutQueue.total}; retryable=${zcodeTimeoutQueue.retryable} ` +
+          `exhausted=${zcodeTimeoutQueue.exhausted}`
     },
     {
       name: "runtime_no_retryable_provider_deferred_jobs",
       ok: retryableProviderDeferredJobs === 0,
-      detail: describeActionableProviderDeferredJobs(budget, retryableProviderDeferredJobs)
+      detail: input.repo ? `${retryableProviderDeferredJobs} retryable provider-deferred durable queue job(s)` : describeActionableProviderDeferredJobs(budget, retryableProviderDeferredJobs)
     },
     {
       name: "runtime_pending_heads_covered",
@@ -754,17 +775,21 @@ export function buildRuntimeInventory(input: {
       : "healthy_idle";
 
   const recommendedActions = uniqueStrings([
-    ...input.release.recommendedActions,
+    ...runtimeRelease.recommendedActions,
     ...(activeWork.length > 0 ? ["monitor active review work; avoid restarting a healthy in-flight run"] : []),
     ...(uncoveredPendingHeads.length > 0 ? ["wait for daemon cycle or run scoped run-once for uncovered pending heads"] : []),
     ...(readFailures > 0 ? ["run doctor and inspect GitHub App installation/read permissions"] : []),
     ...(input.agents.summary.staleLeases > 0 ? ["inspect stale leases before restarting launchd"] : []),
-    ...(failedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
-    ...(zcodeTimeoutQueue.total > 0
-      ? zcodeTimeoutRetryActions
+    ...(activeFailedQueueJobs > 0 ? ["inspect operator queue failed jobs before promotion"] : []),
+    ...(zcodeTimeoutQueue.activeTotal > 0
+      ? [buildZCodeTimeoutInspectCommand(runtimeRelease.releaseUnit.configPath)]
       : []),
-    ...(retryableProviderDeferredJobs > 0 ? ["retry or requeue provider-deferred jobs whose nextEligibleAt has expired"] : []),
-    ...(retryableExpiredProviderCooldowns > 0 ? ["retry expired provider cooldowns or inspect provider health"] : []),
+    ...(retryableProviderDeferredJobs > 0
+      ? ["inspect provider-deferred recovery rows before any action"]
+      : []),
+    ...(retryableExpiredProviderCooldowns > 0
+      ? ["inspect provider cooldown recovery rows before any action"]
+      : []),
     ...(issueEnrichment && !issueEnrichment.ok ? ["resolve issue-enrichment blockers before enabling live issue comments"] : []),
     ...(issueEnrichmentRuntimeFailed > 0 ? ["inspect failed issue-enrichment records before promotion"] : []),
     ...(issueEnrichmentRuntimeRetryableDeferred > 0 ? ["retry or inspect deferred issue-enrichment records"] : [])
@@ -772,12 +797,12 @@ export function buildRuntimeInventory(input: {
 
   return {
     ok,
-    checkedAt: input.checkedAt ?? input.release.checkedAt,
+    checkedAt,
     runtimeState,
     classification: runtimeState,
     summary: {
-      launchdState: input.release.launchd.state,
-      heartbeatStatus: input.release.heartbeat.status,
+      launchdState: runtimeRelease.launchd.state,
+      heartbeatStatus: runtimeRelease.heartbeat.status,
       activeLeases: input.agents.summary.activeLeases,
       staleLeases: input.agents.summary.staleLeases,
       activeQueueJobs: activeWork.length,
@@ -813,7 +838,7 @@ export function buildRuntimeInventory(input: {
     recommendedActions,
     activeWork,
     uncoveredPendingHeads,
-    release: input.release,
+    release: runtimeRelease,
     ...(budget ? { budget } : {}),
     agents: input.agents,
     ...(input.processes ? { processes: input.processes } : {}),
@@ -1772,6 +1797,39 @@ function staleHeadQueueEntry(entry: CoverageStaleHead): OperatorQueueEntry {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+const REPO_GLOBAL_RUNTIME_GATES = new Set(["live_db_no_errors", "provider_cooldown_backlog", "queue_no_failed_jobs", "queue_no_zcode_timeout_failed_jobs", "queue_no_stale_review_leases", "queue_no_retryable_provider_deferred_jobs"]);
+
+function scopeRuntimeRelease(release: ReleaseStatus, repo?: string): ReleaseStatus {
+  const safeRelease = sanitizeOperatorRelease(release);
+  const runtimeRelease: ReleaseStatus = {
+    ...safeRelease,
+    recommendedActions: safeRelease.recommendedActions.map(sanitizeRuntimeAction),
+    gates: safeRelease.gates.map((gate) => ({ ...gate, detail: sanitizeRuntimeAction(gate.detail) }))
+  };
+  if (!repo) return runtimeRelease;
+  return {
+    ...runtimeRelease,
+    gates: runtimeRelease.gates.filter((gate) => !REPO_GLOBAL_RUNTIME_GATES.has(gate.name)),
+    recommendedActions: []
+  };
+}
+
+function sanitizeRuntimeAction(action: string): string {
+  return /\b(?:retry|requeue|retire|restart|kickstart|bootout)\b|--dry-run false/i.test(action)
+    ? "inspect operator recovery rows before any action"
+    : action;
+}
+
+function scopeCoverageReport(report: CoverageAuditReport, repo: string): CoverageAuditReport {
+  const filter = <T extends { repo: string }>(rows: T[]): T[] => rows.filter((row) => row.repo === repo);
+  return {
+    ...report,
+    processed: filter(report.processed), providerDeferred: filter(report.providerDeferred),
+    queued: filter(report.queued), unprocessed: filter(report.unprocessed), skipped: filter(report.skipped),
+    staleHeads: filter(report.staleHeads), readFailures: filter(report.readFailures)
+  };
 }
 
 function sanitizeOperatorRelease(release: ReleaseStatus): ReleaseStatus {

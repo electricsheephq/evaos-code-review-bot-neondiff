@@ -777,6 +777,7 @@ async function main(): Promise<void> {
     const inventory = buildRuntimeInventory({
       release,
       coverage,
+      ...(args.repo ? { repo: args.repo } : {}),
       agents,
       processes,
       providerCooldowns,
@@ -790,7 +791,7 @@ async function main(): Promise<void> {
       issueEnrichmentRuntime,
       checkedAt: now.toISOString()
     });
-    console.log(args.human === "true" ? formatRuntimeInventoryHuman(inventory) : JSON.stringify(inventory, null, 2));
+    console.log(args.human === "true" ? formatRuntimeInventoryHuman(inventory) : stringifyRedactedJson(inventory));
     if (!inventory.ok) process.exitCode = 1;
     return;
   }
