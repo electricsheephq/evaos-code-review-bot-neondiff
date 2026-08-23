@@ -2443,6 +2443,22 @@ function readFailureRecoveryIndex(db: DatabaseSync): FailureRecoveryIndex {
     if (row.posted_at !== null) latestPostedAtByPull.set(`${row.repo}\u0000${row.pull_number}`, row.posted_at);
     if (row.error_marker && (!lastErrorMarker || row.error_marker > lastErrorMarker)) lastErrorMarker = row.error_marker;
   }
+  const hasAuthorizedPostedAt = db
+    .prepare("select 1 from pragma_table_info('review_event_authorization_consumptions') where name = 'posted_at'")
+    .get();
+  const authorizedRows = hasAuthorizedPostedAt
+    ? db.prepare(
+        `select repo, pull_number, max(julianday(posted_at)) as posted_at
+           from review_event_authorization_consumptions
+          where posted_at is not null group by repo, pull_number`
+      ).all() as unknown as Array<{ repo: string; pull_number: number; posted_at: number | null }>
+    : [];
+  for (const row of authorizedRows) {
+    const key = `${row.repo}\u0000${row.pull_number}`;
+    if (row.posted_at !== null && row.posted_at > (latestPostedAtByPull.get(key) ?? -Infinity)) {
+      latestPostedAtByPull.set(key, row.posted_at);
+    }
+  }
   return {
     latestPostedAtByPull,
     ...(lastErrorMarker ? { lastErrorAt: lastErrorMarker.slice(lastErrorMarker.indexOf("|") + 1) } : {})
