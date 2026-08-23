@@ -1270,6 +1270,7 @@ describe("review state store", () => {
     const expiryRace = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-b", source: "manual_command", commentId: 3, now: new Date("2026-07-01T00:00:00Z") }).job;
     const superseded = store.enqueueReviewQueueJob({ repo, pullNumber: 1, headSha: "head-a", now: new Date("2026-07-01T00:00:00Z") }).job;
     const unrelated = store.enqueueReviewQueueJob({ repo, pullNumber: 2, headSha: "head-c", now: new Date("2026-07-01T00:00:00Z") }).job;
+    store.updateReviewQueueJobState({ jobId: current.jobId, state: "provider_deferred", nextEligibleAt: "2026-07-01T00:10:00Z" });
     store.updateReviewQueueJobState({ jobId: expired.jobId, state: "leased", leaseId: "expired", leaseExpiresAt: "2026-07-01T00:00:01Z" });
     store.updateReviewQueueJobState({ jobId: expiryRace.jobId, state: "leased", leaseId: "race", leaseExpiresAt: "2026-07-01T00:00:04.500Z" });
     store.recordReviewReadiness({ repo, pullNumber: 1, headSha: "head-a", state: "queued", reason: "automatic_enqueue" });
@@ -1284,21 +1285,26 @@ describe("review state store", () => {
       retiredQueueJobs: 0
     });
     expect(store.getReviewQueueJob(current.jobId)).toMatchObject({ state: "failed", lastError: expect.not.stringContaining("ghp_fake_token") });
+    expect(store.getReviewQueueJob(current.jobId)).not.toHaveProperty("nextEligibleAt");
     expect(store.getReviewQueueJob(expired.jobId)).toMatchObject({ state: "failed" });
     expect(store.getReviewQueueJob(expired.jobId)).not.toHaveProperty("leaseId");
+    expect(store.getReviewQueueJob(expiryRace.jobId)).toMatchObject({ state: "leased", leaseId: "race" });
+    expect(store.quarantineIncompleteReviewEvidence({ ...quarantine, now: new Date("2026-07-01T00:00:04.100Z") })).toEqual({ failedQueueJobs: 0, retiredQueueJobs: 0 });
     expect(store.getReviewQueueJob(expiryRace.jobId)).toMatchObject({ state: "leased", leaseId: "race" });
     expect(store.getReviewQueueJob(superseded.jobId)).toMatchObject({ state: "stale_retired", lastError: "superseded_by_head=head-b" });
     expect(store.getReviewReadiness(repo, 1, "head-a")).toMatchObject({ state: "stale", reason: "superseded_by_head=head-b" });
     expect(store.getReviewReadiness(repo, 1, "head-b")).toMatchObject({ state: "failed", reason: expect.not.stringContaining("ghp_fake_token") });
 
     const noJob = { repo, pullNumber: 3, headSha: "head-no-job", reason: "required_evidence_incomplete" };
-    store.assignReviewerSessionJob({ ...noJob, ttlMs: 60_000, headCountLimit: 2, now: new Date("2026-07-01T00:00:03Z") });
+    const assignment = store.assignReviewerSessionJob({ ...noJob, ttlMs: 60_000, headCountLimit: 1, now: new Date("2026-07-01T00:00:03Z") });
+    store.updateReviewerSessionJobState({ ...noJob, jobState: "running", now: new Date("2026-07-01T00:00:03Z") });
     expect(store.quarantineIncompleteReviewEvidence({ ...noJob, now: new Date("2026-07-01T00:00:03Z") })).toEqual({
       failedQueueJobs: 0,
       retiredQueueJobs: 0
     });
     expect(store.getReviewReadiness(repo, 3, "head-no-job")).toMatchObject({ state: "failed", reason: "required_evidence_incomplete" });
     expect(store.getReviewerSessionJob(repo, 3, "head-no-job")).toMatchObject({ jobState: "failed", processedReviewStatus: "failed" });
+    expect(store.getReviewerSession(assignment.session!.sessionId)).toMatchObject({ state: "expired" });
 
     expect(store.leaseNextReviewQueueJobs({
       maxProviderActive: 2,

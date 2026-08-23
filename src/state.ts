@@ -2784,17 +2784,17 @@ export class ReviewStateStore {
       `update review_queue_jobs set state = 'queued', lease_id = null, lease_expires_at = null,
               last_error = 'queue_lease_expired_requeued', updated_at = ?
        where repo = ? and pull_number = ? and state in ('leased', 'running') and
-         ((lease_expires_at is not null and datetime(lease_expires_at) <= datetime(?)) or
-          (lease_expires_at is null and datetime(updated_at) <= datetime(?)))`
+         ((lease_expires_at is not null and lease_expires_at <= ?) or
+          (lease_expires_at is null and updated_at <= ?))`
     ).run(nowIso, input.repo, input.pullNumber, nowIso, legacyLeaseCutoffIso);
     const retiredQueueJobs = Number(this.db.prepare(
-      `update review_queue_jobs set state = 'stale_retired', lease_id = null, lease_expires_at = null,
+      `update review_queue_jobs set state = 'stale_retired', lease_id = null, lease_expires_at = null, next_eligible_at = null,
               last_error = ?, updated_at = ?
        where repo = ? and pull_number = ? and head_sha <> ?
          and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
     ).run(supersededReason, nowIso, input.repo, input.pullNumber, input.headSha).changes);
     const failedQueueJobs = Number(this.db.prepare(
-      `update review_queue_jobs set state = 'failed', lease_id = null, lease_expires_at = null,
+      `update review_queue_jobs set state = 'failed', lease_id = null, lease_expires_at = null, next_eligible_at = null,
               last_error = ?, updated_at = ?
        where repo = ? and pull_number = ? and head_sha = ?
          and state in ('queued', 'provider_deferred', 'blocked_on_proof')`
@@ -2815,22 +2815,30 @@ export class ReviewStateStore {
       `update reviewer_session_jobs set job_state = 'failed', finished_at = coalesce(finished_at, ?),
               processed_review_status = 'failed'
        where repo = ? and pull_number = ? and head_sha = ? and
-         (job_state = 'assigned' or (job_state = 'running' and exists (
+         (job_state = 'assigned' or (job_state = 'running' and not exists (
            select 1 from review_queue_jobs q where q.repo = reviewer_session_jobs.repo
              and q.pull_number = reviewer_session_jobs.pull_number
-             and q.head_sha = reviewer_session_jobs.head_sha and q.state = 'failed'
+             and q.head_sha = reviewer_session_jobs.head_sha and q.state in ('leased', 'running')
+             and ((q.lease_expires_at is not null and q.lease_expires_at > ?)
+               or (q.lease_expires_at is null and q.updated_at > ?))
          )))`
-    ).run(nowIso, input.repo, input.pullNumber, input.headSha);
+    ).run(nowIso, input.repo, input.pullNumber, input.headSha, nowIso, legacyLeaseCutoffIso);
     this.db.prepare(
       `update reviewer_session_jobs set job_state = 'skipped', finished_at = coalesce(finished_at, ?),
               processed_review_status = 'skipped'
        where repo = ? and pull_number = ? and head_sha <> ? and
-         (job_state = 'assigned' or (job_state = 'running' and exists (
+         (job_state = 'assigned' or (job_state = 'running' and not exists (
            select 1 from review_queue_jobs q where q.repo = reviewer_session_jobs.repo
              and q.pull_number = reviewer_session_jobs.pull_number
-             and q.head_sha = reviewer_session_jobs.head_sha and q.state = 'stale_retired'
+             and q.head_sha = reviewer_session_jobs.head_sha and q.state in ('leased', 'running')
+             and ((q.lease_expires_at is not null and q.lease_expires_at > ?)
+               or (q.lease_expires_at is null and q.updated_at > ?))
          )))`
-    ).run(nowIso, input.repo, input.pullNumber, input.headSha);
+    ).run(nowIso, input.repo, input.pullNumber, input.headSha, nowIso, legacyLeaseCutoffIso);
+    const sessions = this.db.prepare(
+      "select distinct session_id from reviewer_session_jobs where repo = ? and pull_number = ?"
+    ).all(input.repo, input.pullNumber) as unknown as Array<{ session_id: string }>;
+    for (const session of sessions) this.expireDrainedReviewerSessionIfComplete(session.session_id);
     return { failedQueueJobs, retiredQueueJobs };
   }
 
