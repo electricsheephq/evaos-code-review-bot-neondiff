@@ -6,11 +6,17 @@ import { describe, expect, it } from "vitest";
 
 const script = "scripts/validate-desktop-release-declaration.mjs", feed = "https://www.neondiff.com/updates/beta/appcast.xml", bundle = "com.electricsheephq.NeonDiffDesktop";
 type Item = { channel?: string; seq?: string; build?: string; feed?: string; predecessor?: string | null; bundle?: string };
-function run(items: Item[], alter: (root: string, paths: string[]) => void = () => {}) {
-  const root = mkdtempSync(join(tmpdir(), "neondiff-declaration-")), directory = join(root, "declarations"); mkdirSync(directory);
+function writeFixture(root: string, items: Item[]) {
+  const directory = join(root, "declarations"); mkdirSync(directory, { recursive: true });
   const paths = items.map((item, index) => { const channel = item.channel ?? "beta", seq = item.seq ?? String(index + 1), build = item.build ?? String(index + 100), version = `1.1.0-${channel}.${seq}`, path = `v${version}.json`, predecessor = item.predecessor === undefined ? (index ? `v1.1.0-${items[index - 1].channel ?? "beta"}.${items[index - 1].seq ?? String(index)}.json` : null) : item.predecessor; writeFileSync(join(directory, path), JSON.stringify({ schemaVersion: 1, product: "neondiff-desktop", version, tag: `v${version}`, channel, sequence: seq, build, predecessor, contract: "paid-mac-beta-byo-v1", distribution: { bundleId: item.bundle ?? bundle, appPath: "NeonDiff.app", artifactName: `NeonDiff-${version}-build${build}-macOS.zip`, releaseClass: "paid-beta", origins: { github: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff", site: "https://www.neondiff.com", feed: item.feed ?? feed } } })); return path; });
   if (!items.length) writeFileSync(join(directory, ".gitkeep"), "");
-  const index = join(root, "index.json"); writeFileSync(index, JSON.stringify({ schemaVersion: 1, status: items.length ? "retained" : "empty", declarationDirectory: "declarations", declarationPaths: paths, currentPath: paths.at(-1) ?? null })); alter(root, paths); const result = spawnSync(process.execPath, [script, "--index", index], { cwd: process.cwd(), encoding: "utf8" }); rmSync(root, { recursive: true, force: true }); return result;
+  const index = join(root, "index.json"); writeFileSync(index, JSON.stringify({ schemaVersion: 1, status: items.length ? "retained" : "empty", declarationDirectory: "declarations", declarationPaths: paths, currentPath: paths.at(-1) ?? null })); return { index, paths };
+}
+function run(items: Item[], alter: (root: string, paths: string[]) => void = () => {}) {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-declaration-")), fixture = writeFixture(root, items); alter(root, fixture.paths); const result = spawnSync(process.execPath, [script, "--index", fixture.index], { cwd: process.cwd(), encoding: "utf8" }); rmSync(root, { recursive: true, force: true }); return result;
+}
+function runTransition(baseItems: Item[], currentItems: Item[], alter: (root: string) => void = () => {}) {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-declaration-transition-")), base = writeFixture(join(root, "base"), baseItems), current = writeFixture(join(root, "current"), currentItems); alter(root); const result = spawnSync(process.execPath, [script, "--index", current.index, "--base-index", base.index], { cwd: process.cwd(), encoding: "utf8" }); rmSync(root, { recursive: true, force: true }); return result;
 }
 
 describe("versioned desktop declaration index", () => {
@@ -22,5 +28,12 @@ describe("versioned desktop declaration index", () => {
     expect(run([{ build: "100" }], (root) => { const path = join(root, "declarations", "v1.1.0-beta.1.json"), raw = readFileSync(path, "utf8").replace('"build":"100"', '"build":"100","build":"101"'); writeFileSync(path, raw); }).status).not.toBe(0);
     expect(run([{ build: "100" }], (root) => { const path = join(root, "declarations", "v1.1.0-beta.1.json"), raw = readFileSync(path, "utf8").replace('"site":"https://www.neondiff.com"', '"site":"https://www.neondiff.com","site":"https://www.neondiff.com"'); writeFileSync(path, raw); }).status).not.toBe(0);
     expect(run([{ build: "100" }], (root, paths) => symlinkSync(join(root, "declarations", paths[0]), join(root, "declarations", "alias.json"))).status).not.toBe(0);
+  });
+  it("preserves retained history across base transitions", () => {
+    const base = [{ build: "100" }], appended = [{ build: "100" }, { build: "101" }];
+    expect(runTransition(base, appended).status).toBe(0);
+    expect(runTransition(base, []).status).not.toBe(0);
+    expect(runTransition(base, [{ build: "101" }]).status).not.toBe(0);
+    expect(runTransition(base, base, (root) => { renameSync(join(root, "current", "declarations"), join(root, "current", "declarations-real")); symlinkSync(join(root, "current", "declarations-real"), join(root, "current", "declarations")); }).status).not.toBe(0);
   });
 });

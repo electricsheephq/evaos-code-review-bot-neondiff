@@ -32,6 +32,19 @@ jobs:
       - name: Validate committed Desktop declaration index
         run: node scripts/validate-desktop-release-declaration.mjs --index docs/releases/desktop/index.json
 
+      - name: Validate committed Desktop declaration history
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags origin "$BASE_SHA" --depth=1
+          base="$RUNNER_TEMP/desktop-base"
+          mkdir -p "$base"
+          git archive "$BASE_SHA" docs/releases/desktop | tar -x -C "$base"
+          node scripts/validate-desktop-release-declaration.mjs \
+            --index docs/releases/desktop/index.json \
+            --base-index "$base/docs/releases/desktop/index.json"
+
       - name: Enforce Review Bench public-corpus admission
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
