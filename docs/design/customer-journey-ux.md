@@ -5,6 +5,12 @@ visual contract), authored for the #610 customer-journey milestone. This is the 
 #519 (onboarding), #521 (shell/Home), #522 (repos/providers), #612 (activation), and #613 (GitHub
 connect) implement together.
 
+Boundary: this blueprint describes the native GA journey and later managed
+convenience path; it is not proof that managed activation is enabled or that
+the current paid-BYO candidate is GA-ready. Use [docs/SETUP.md](../SETUP.md)
+and the [Mac GA architecture contract](../architecture/mac-ga-release-contract.md)
+for the current sealed-worker, Keychain, exact-artifact, and runtime gates.
+
 ## Product sentence
 
 A normal person installs the app and gets their first useful PR review without touching a terminal —

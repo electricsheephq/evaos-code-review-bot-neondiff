@@ -4,6 +4,31 @@ This bot is a live beta agent. A live promotion is not complete until the
 source SHA is tied to an immutable Git tag, a GitHub Release, runtime evidence,
 and a rollback path.
 
+## Operator preflight
+
+Use `/Users/m1/repos` for the clean checkout and `/Users/m1/Codex` for active
+config/evidence. This block is executable; the final `exit` prevents a failed
+helper return from reaching a release command.
+
+```bash
+export NEONDIFF_RELEASE_CHECKOUT="${NEONDIFF_RELEASE_CHECKOUT:-/Users/m1/repos/evaos-code-review-bot-neondiff}" NEONDIFF_RUNTIME_CONFIG="${NEONDIFF_RUNTIME_CONFIG:-/Users/m1/Codex/evaos-code-review-bot-neondiff/config/active-installed-live.json}"
+export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-/Users/m1/Codex/evidence/neondiff}" NEONDIFF_LAUNCH_AGENT_PATH="${NEONDIFF_LAUNCH_AGENT_PATH:-$HOME/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist}"
+
+neondiff_release_preflight() {
+  local path origin
+  for path in "$NEONDIFF_RELEASE_CHECKOUT" "$NEONDIFF_RUNTIME_CONFIG" "$NEONDIFF_EVIDENCE_ROOT" "$NEONDIFF_LAUNCH_AGENT_PATH"; do case "$path" in /*) ;; *) echo "release paths must be absolute" >&2; return 2;; esac; done
+  [ -d "$NEONDIFF_RELEASE_CHECKOUT" ] || { echo "release checkout is missing" >&2; return 2; }
+  git -C "$NEONDIFF_RELEASE_CHECKOUT" rev-parse --show-toplevel >/dev/null 2>&1 || { echo "release checkout is not a Git repository" >&2; return 2; }
+  origin="$(git -C "$NEONDIFF_RELEASE_CHECKOUT" remote get-url origin 2>/dev/null)" || origin=
+  case "$origin" in https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git|git@github.com:electricsheephq/evaos-code-review-bot-neondiff.git) ;; *) echo "release checkout origin is not NeonDiff" >&2; return 2;; esac
+  [ -f "$NEONDIFF_RUNTIME_CONFIG" ] && [ -d "$NEONDIFF_EVIDENCE_ROOT" ] && [ -f "$NEONDIFF_LAUNCH_AGENT_PATH" ] || { echo "runtime, evidence, or LaunchAgent path is missing" >&2; return 2; }
+  [ -z "$(git -C "$NEONDIFF_RELEASE_CHECKOUT" status --porcelain)" ] || { echo "release checkout is dirty" >&2; return 2; }
+}
+
+# First executable boundary: invalid input terminates before release commands.
+neondiff_release_preflight || exit $?
+```
+
 ## Release Levels
 
 - `beta`: local launchd worker on the operator Mac, posting as the GitHub App
@@ -73,6 +98,7 @@ published through another path or the tag needs repair, the explicit cutover
 command is:
 
 ```bash
+neondiff_release_preflight || exit $?
 npm dist-tag add neondiff@<ga> latest
 ```
 
@@ -278,6 +304,7 @@ attestations. If that 30-day ceiling has expired, do not promote the package;
 produce a new replacement version and fresh protected lifecycle proof.
 
 ```bash
+neondiff_release_preflight || exit $?
 gh workflow run publish-npm.yml \
   --repo electricsheephq/evaos-code-review-bot-neondiff \
   --ref v<version> \
@@ -292,6 +319,7 @@ After that exact-tag run succeeds, verify the registry package identity and
 stable channel without mutating either one:
 
 ```bash
+neondiff_release_preflight || exit $?
 npm view neondiff@<version> version dist.integrity dist.shasum gitHead dist.attestations --json
 test "$(npm view neondiff dist-tags.latest)" = "<version>"
 ```
@@ -316,6 +344,7 @@ After the recovery change is merged to protected main, dispatch only this
 bounded command:
 
 ```bash
+neondiff_release_preflight || exit $?
 gh workflow run publish-npm.yml \
   --repo electricsheephq/evaos-code-review-bot-neondiff \
   --ref main \
@@ -342,7 +371,8 @@ unchanged and treat the package as quarantined.
 Create an annotated tag from the merged source SHA:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+neondiff_release_preflight || exit $?
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
 git pull --ff-only origin main
@@ -360,8 +390,9 @@ release tracker.
 Create the GitHub prerelease from the release packet:
 
 ```bash
+neondiff_release_preflight || exit $?
 gh release create vX.Y.Z-beta.N \
-  --repo electricsheephq/evaos-code-review-bot \
+  --repo electricsheephq/evaos-code-review-bot-neondiff \
   --title "vX.Y.Z-beta.N" \
   --notes-file docs/releases/vX.Y.Z-beta.N.md \
   --prerelease \
@@ -377,13 +408,14 @@ pass that file as `--notes-file` and include the tag name at the top.
 After the GitHub Release exists:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+neondiff_release_preflight || exit $?
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
 git pull --ff-only origin main
 test "$(git rev-parse HEAD)" = "<source-sha>"
-launchctl bootout gui/$(id -u) /Users/lume/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) /Users/lume/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
+launchctl bootout gui/$(id -u) "$NEONDIFF_LAUNCH_AGENT_PATH" 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) "$NEONDIFF_LAUNCH_AGENT_PATH"
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 ```
 
@@ -392,10 +424,11 @@ launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 Run the status gate with App credentials set in the shell:
 
 ```bash
+neondiff_release_preflight || exit $?
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head <source-sha> \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
@@ -403,10 +436,11 @@ npm run release:status -- \
 For public source-beta or public beta releases, include the public manifest gate:
 
 ```bash
+neondiff_release_preflight || exit $?
 SOURCE_SHA=replace-with-release-source-sha
 PUBLIC_BETA_TAG=vX.Y.Z-beta.N
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$SOURCE_SHA" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -423,10 +457,11 @@ that checkout; absent refs are reported as a missing rollback target.
 Also run:
 
 ```bash
+neondiff_release_preflight || exit $?
 npx tsx src/cli.ts coverage-audit \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+  --config "$NEONDIFF_RUNTIME_CONFIG"
 npx tsx src/cli.ts provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expired-only true
 ```
 
@@ -458,13 +493,14 @@ before calling the release green.
 Rollback is tag-first:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+neondiff_release_preflight || exit $?
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin --tags
 git checkout main
 git reset --hard <previous-release-tag>
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```

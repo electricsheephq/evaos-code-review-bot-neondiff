@@ -204,11 +204,11 @@ For `review-pr` license blocks, the gate writes its local proof under the
 configured `evidenceDir` as
 `<date>/<owner__repo>/pr-<number>/<head-sha>/license-gate.json`.
 
-The `keychain` backend remains reserved for a separately proven native broker.
-Headless CLI activation currently rejects Keychain writes rather than passing
-license keys through process arguments. v1.0.4 supports the approved file
-backend; the Desktop app remains blocked from useful actions until native
-broker/launchd access is proven.
+The `keychain` backend is reserved for the native sealed-worker boundary.
+Headless CLI activation rejects Keychain writes; `v1.0.4` uses the approved
+file backend. The native `1.1.0` BYO candidate has a separate
+[Mac GA architecture contract](architecture/mac-ga-release-contract.md), and
+unsigned or mixed-marker bundles remain quarantined.
 The local `machineId` sent to the license API is advisory beta metadata derived
 from host name and platform, not hardware attestation or a durable seat-binding
 primitive.
