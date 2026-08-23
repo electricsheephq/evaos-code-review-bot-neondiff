@@ -3,6 +3,7 @@
 import { createRequire } from "node:module";
 import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const BETA_FEED = "https://www.neondiff.com/updates/beta/appcast.xml";
 const MAX_SAFE = "9007199254740991";
@@ -70,6 +71,14 @@ function pathIn(directory, name) {
 }
 function check(value, valid, label) { if (!valid(value)) fail(`${label} schema invalid: ${ajv.errorsText(valid.errors)}`); }
 function buildCompare(a, b) { const left = BigInt(a), right = BigInt(b); return left < right ? -1 : left > right ? 1 : 0; }
+export function validateReleaseDeclaration(declaration, declarationName = null) {
+  check(declaration, validateDeclaration, "declaration");
+  const match = declaration.version.match(/^1\.1\.0-(beta|rc)\.([1-9][0-9]{0,15})$/), sequence = match?.[2] ?? "";
+  if (!match || declaration.tag !== `v${declaration.version}` || declarationName !== null && declarationName !== `${declaration.tag}.json` || declaration.channel !== match[1] || declaration.sequence !== sequence || sequence.length > 15 && sequence > MAX_SAFE) fail("mixed declaration identity");
+  const artifactName = `NeonDiff-${declaration.version}-build${declaration.build}-macOS.zip`;
+  if (declaration.distribution.artifactName !== artifactName || declaration.distribution.origins.feed !== BETA_FEED) fail("unsupported channel/feed identity");
+  return { schemaVersion: 1, kind: "neondiff.desktop.release-declaration-validation-v1", verified: true, releaseTag: declaration.tag, version: declaration.version, channel: declaration.channel, sequence, build: declaration.build, artifactName, feed: BETA_FEED };
+}
 function validateTransition(index, directory, baseIndexPath) {
   const base = readRegular(baseIndexPath);
   check(base, validateIndex, "base index");
@@ -109,10 +118,7 @@ function main() {
     if (convention) fail(".gitkeep is only valid for an empty index");
     const declarations = index.declarationPaths.map((name) => [name, readRegular(pathIn(directory, name))]);
     for (const [name, declaration] of declarations) {
-      check(declaration, validateDeclaration, `declaration ${name}`);
-      const match = declaration.version.match(/^1\.1\.0-(beta|rc)\.([1-9][0-9]{0,15})$/), sequence = match?.[2] ?? "";
-      if (!match || declaration.tag !== `v${declaration.version}` || name !== `${declaration.tag}.json` || declaration.channel !== match[1] || declaration.sequence !== sequence || sequence.length > 15 && sequence > MAX_SAFE) fail(`mixed declaration identity: ${name}`);
-      if (declaration.distribution.artifactName !== `NeonDiff-${declaration.version}-build${declaration.build}-macOS.zip` || declaration.distribution.origins.feed !== BETA_FEED) fail(`unsupported channel/feed identity: ${name}`);
+      validateReleaseDeclaration(declaration, name);
     }
     const ordered = [...declarations].sort((a, b) => buildCompare(a[1].build, b[1].build) || a[0].localeCompare(b[0]));
     if (ordered.some((item, i) => i && buildCompare(item[1].build, ordered[i - 1][1].build) <= 0)) fail("retained builds must be unique and strictly increasing");
@@ -133,4 +139,6 @@ function main() {
   } finally { closeSync(handle.fd); }
 }
 
-try { console.log(main()); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  try { console.log(main()); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; }
+}
