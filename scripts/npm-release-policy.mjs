@@ -13,6 +13,8 @@ const V104_PROVENANCE_RECOVERY = Object.freeze({
   commit: "fc66d27b6ab9f6a1eb8282d289ef63407cd96982",
   predecessor: "1.0.3"
 });
+const DESKTOP_ONLY_RC_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-rc\.(?:[1-9]\d*)$/;
+const DESKTOP_ONLY_TAG_ANNOTATION = "NeonDiff-Release-Class: desktop-only";
 
 function fail(message) {
   console.error(message);
@@ -46,10 +48,28 @@ function git(args) {
   return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+function gitRaw(args) {
+  return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
 function isAncestor(ancestor, descendant) {
   try {
     execFileSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], { stdio: "ignore" });
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDesktopOnlyTag(tag) {
+  if (!DESKTOP_ONLY_RC_TAG.test(tag)) return false;
+  try {
+    if (git(["cat-file", "-t", tag]) !== "tag") return false;
+    const rawTag = gitRaw(["cat-file", "tag", tag]);
+    const messageStart = rawTag.indexOf("\n\n");
+    if (messageStart < 0) return false;
+    const annotation = rawTag.slice(messageStart + 2);
+    return annotation.split("\n").filter((line) => line === DESKTOP_ONLY_TAG_ANNOTATION).length === 1;
   } catch {
     return false;
   }
@@ -72,19 +92,13 @@ function classify(args) {
   }
 
   const npmTag = packageVersion.includes("-") ? "beta" : "latest";
-  if (eventName === "release" && releasePrerelease && npmTag === "latest") {
-    fail("stable npm packages require a non-prerelease GitHub Release");
-  }
-  if (eventName === "release" && !releasePrerelease && npmTag === "beta") {
-    fail("beta npm packages require a prerelease GitHub Release");
-  }
+  let releaseMetadata;
   if (eventName === "workflow_dispatch") {
     const releaseMetadataPath = args.get("release-metadata");
     if (!releaseMetadataPath && npmTag === "latest") {
       fail("manual stable publish requires an existing non-prerelease GitHub Release");
     }
     if (!releaseMetadataPath) fail("manual npm publish requires existing GitHub Release metadata");
-    let releaseMetadata;
     try {
       releaseMetadata = JSON.parse(readFileSync(releaseMetadataPath, "utf8"));
     } catch {
@@ -93,6 +107,26 @@ function classify(args) {
     if (releaseMetadata.tag_name !== tag || releaseMetadata.draft !== false) {
       fail("manual npm publish requires matching published GitHub Release metadata");
     }
+  }
+  const effectiveReleasePrerelease = eventName === "workflow_dispatch"
+    ? releaseMetadata?.prerelease
+    : releasePrerelease;
+  if (effectiveReleasePrerelease === true && isDesktopOnlyTag(tag)) {
+    const result = { shouldPublish: false, npmTag, releaseKind: "desktop-only" };
+    const githubOutput = args.get("github-output");
+    if (githubOutput) {
+      appendFileSync(githubOutput, `should_publish=false\nnpm_tag=${npmTag}\nrelease_kind=desktop-only\n`, { encoding: "utf8" });
+    }
+    console.log(JSON.stringify(result));
+    return;
+  }
+  if (eventName === "release" && releasePrerelease && npmTag === "latest") {
+    fail("stable npm packages require a non-prerelease GitHub Release");
+  }
+  if (eventName === "release" && !releasePrerelease && npmTag === "beta") {
+    fail("beta npm packages require a prerelease GitHub Release");
+  }
+  if (eventName === "workflow_dispatch") {
     if (npmTag === "latest" && releaseMetadata.prerelease !== false) {
       fail("manual stable publish requires an existing non-prerelease GitHub Release");
     }
