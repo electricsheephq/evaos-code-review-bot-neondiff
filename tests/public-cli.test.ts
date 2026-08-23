@@ -46,7 +46,10 @@ describe("public NeonDiff CLI surface", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
     const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
 
-    expect(packageJson.bin).toEqual({ neondiff: "dist/src/cli.js" });
+    expect(packageJson.bin).toEqual({
+      neondiff: "dist/src/cli.js",
+      "evaos-review-bot": "dist/src/cli.js"
+    });
     expect(packageLock.packages[""].bin).toEqual({ neondiff: "dist/src/cli.js" });
   });
 
