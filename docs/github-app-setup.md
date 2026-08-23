@@ -11,7 +11,7 @@ customer-owned BYO beta remains current until the immutable signed GA artifact,
 `/mac` surface, and promotion gates are live. The planned GA path accepts a
 customer-owned App ID/private key; new App uses **Verify App Access**, existing
 agent uses **Verify Existing Access**. The managed official App/broker is
-separate post-GA. Planned stable onboarding is [neondiff.com/mac](https://www.neondiff.com); see the
+separate post-GA. Planned stable onboarding is [neondiff.com/mac](https://www.neondiff.com/mac); see the
 [Mac GA architecture and release contract](architecture/mac-ga-release-contract.md) and [Desktop Mac release runbook](../apps/neondiff-desktop/docs/mac-release-runbook.md).
 
 ## Install URL
@@ -129,11 +129,34 @@ integration proof under #630.
 4. Pick one repository for the B0 onboarding run.
 5. Confirm the permissions above.
 6. Save the generated private key outside this repository.
-7. In the promoted signed Desktop 1.1.0 journey, once its immutable artifact and `/mac` promotion gates are live, move the app to `/Applications/NeonDiff.app` and
-   launch it. Store the App ID/private key in Keychain, then choose **Initialize
-   Local Config**, **Add Repository**, and **Apply Repository**. Choose **Verify App
-   Access** for a new App or **Verify Existing Access** for an existing agent.
-   Checksum-worker commands below are legacy recovery only, not native setup.
+7. Until the signed Desktop 1.1.0 artifact and `/mac` promotion gates are live,
+   the public paid B0 BYO path remains current. Launch NeonDiff, store the
+   customer-owned App ID/private-key PEM in Keychain, and if the worker command
+   is unavailable choose **Install / Update Local Worker**. From the verified
+   extracted bundle, use Node.js 26 or newer through `/opt/homebrew/bin/node` or
+   `/usr/local/bin/node`, then preview and confirm the checksum-bound install:
+
+   ```bash
+   BUNDLE_DIR="$(pwd -P)"
+   node install-b0-worker-candidate.mjs first-install \
+     --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
+     --manifest-sha256 <manifest-sha256-from-release> \
+     --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
+     --launchd-label com.electricsheephq.evaos-code-review-bot \
+     --dry-run true
+   ```
+
+   Inspect the preview, then repeat with `--dry-run false --confirm true`.
+   This installs only the verified CLI and a credential-free marker; it creates
+   or loads no LaunchAgent, starts no daemon, and reads or writes no credentials.
+   Return to NeonDiff and choose **Install / Update Local Worker** once more to
+   refresh discovery, then choose **Initialize Local Config**, **Add Repository**,
+   and **Apply Repository**. Choose **Verify App Access** for a new App or
+   **Verify Existing Access** for an existing agent.
+
+   After those promotion gates are live, move the signed Desktop 1.1.0 app to
+   `/Applications/NeonDiff.app` for the promoted native journey; the
+   checksum-worker commands above are then legacy recovery only.
 
 8. After App access, provider, repository, and activation are verified, use the
    native daemon step's **Preview Start** and **Install & Start** actions. The
