@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -45,6 +45,14 @@ describe("artifact-bound extracted app tree proof", () => {
     expect(() => buildExtractedAppTreeProof({ artifactPath: escaped, sourceSHA: source })).toThrow();
     const duplicate = fixture("42", true);
     expect(() => buildExtractedAppTreeProof({ artifactPath: duplicate.artifact, sourceSHA: source })).toThrow();
+  });
+  it("bounds archive acquisition before extraction and ignores PATH extractors", () => {
+    const value = fixture(), oversized = join(value.root, "oversized.zip"); writeFileSync(oversized, ""); truncateSync(oversized, 512 * 1024 * 1024 + 1);
+    expect(() => buildExtractedAppTreeProof({ artifactPath: oversized, sourceSHA: source })).toThrow(/artifact bytes exceed bound/);
+    const shadow = mkdtempSync(join(tmpdir(), "neondiff-tree-proof-shadow-")); roots.push(shadow);
+    writeFileSync(join(shadow, "unzip"), "#!/bin/sh\nexit 99\n"); chmodSync(join(shadow, "unzip"), 0o755);
+    const previous = process.env.PATH; process.env.PATH = `${shadow}:${previous ?? ""}`;
+    try { expect(buildExtractedAppTreeProof({ artifactPath: value.artifact, sourceSHA: source }).verified).toBe(true); } finally { process.env.PATH = previous; }
   });
   it("rejects forged serialization and hostile direct records", () => {
     const value = fixture(); const proof = buildExtractedAppTreeProof({ artifactPath: value.artifact, sourceSHA: source });

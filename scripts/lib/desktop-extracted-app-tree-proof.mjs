@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, fstatSync, lstatSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdtempSync, openSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, resolve } from "node:path";
 import { walkDescriptorTree } from "../shared/safe-fs.mjs";
@@ -61,11 +61,22 @@ function normalizeRecords(raw) {
 }
 function treeHash(records) { const hash = createHash("sha256"); for (const record of records) { for (const part of record) { hash.update(String(part), "utf8"); hash.update("\0"); } hash.update("\n"); } return hash.digest("hex"); }
 function freeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; }
+function readBounded(descriptor) {
+  const before = fstatSync(descriptor); if (!before.isFile() || before.size > MAX_BYTES) fail("artifact bytes exceed bound");
+  const chunks = [], buffer = Buffer.allocUnsafe(1024 * 1024); let total = 0, count;
+  do { count = readSync(descriptor, buffer, 0, buffer.length, null); if (count) { total += count; if (total > MAX_BYTES) fail("artifact bytes exceed bound"); chunks.push(Buffer.from(buffer.subarray(0, count))); } } while (count);
+  const after = fstatSync(descriptor); if (before.size !== after.size || total !== after.size) fail("artifact changed during read");
+  return Buffer.concat(chunks, total);
+}
 function listArchive(artifact) {
   let listed; try { listed = JSON.parse(execFileSync("/usr/bin/python3", ["-c", "import json,sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); print(json.dumps([[i.filename,i.file_size] for i in z.infolist()]))", artifact], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })); } catch { fail("artifact is not a readable ZIP"); }
   if (!Array.isArray(listed) || listed.length === 0 || listed.length > MAX_ENTRIES) fail("archive entry bound exceeded");
   const seen = new Set(); let total = 0;
   for (let i = 0; i < listed.length; i += 1) { const item = listed[i]; if (!Array.isArray(item) || item.length !== 2 || typeof item[1] !== "number" || !Number.isSafeInteger(item[1]) || item[1] < 0 || (total += item[1]) > MAX_BYTES) fail("archive byte bound exceeded"); const raw = text(item[0], "archive entry"); const name = raw.endsWith("/") ? raw.slice(0, -1) : raw; safePath(name, "archive entry"); if (name !== "NeonDiff.app" && !name.startsWith("NeonDiff.app/")) fail("archive contains data outside NeonDiff.app"); const key = fold(name); if (seen.has(key)) fail("archive entry collision"); seen.add(key); }
+}
+function extractArchive(artifact, directory) {
+  const code = "import os,sys,zipfile; a,d=sys.argv[1:]; z=zipfile.ZipFile(a); infos=z.infolist(); total=0;\nfor i in infos:\n n=i.filename[:-1] if i.filename.endswith('/') else i.filename; p=os.path.join(d,n);\n if n=='NeonDiff.app' or n.startswith('NeonDiff.app/'):\n  if i.filename.endswith('/'): os.makedirs(p,exist_ok=True)\n  else:\n   os.makedirs(os.path.dirname(p),exist_ok=True)\n   with z.open(i) as s, open(p,'wb') as t:\n    while True:\n     b=s.read(1048576)\n     if not b: break\n     total+=len(b)\n     if total>536870912: raise RuntimeError('archive byte bound exceeded')\n     t.write(b)\n else: raise RuntimeError('archive contains data outside NeonDiff.app')\nz.close()";
+  try { execFileSync("/usr/bin/python3", ["-c", code, artifact, directory], { maxBuffer: 1024 * 1024 }); } catch { fail("bounded archive extraction failed"); }
 }
 function markers(bytes) {
   let value;
@@ -86,10 +97,10 @@ export function buildExtractedAppTreeProof(input) {
   const keys = Object.keys(input); if (keys.length !== 2 || !keys.includes("artifactPath") || !keys.includes("sourceSHA")) fail("tree proof inputs have undeclared fields");
   const artifactPath = text(input.artifactPath, "artifact path"), sourceSHA = digest(input.sourceSHA, "source SHA", SHA1);
   const artifact = resolve(artifactPath), descriptor = openSync(artifact, constants.O_RDONLY | constants.O_NOFOLLOW); let bytes;
-  try { const before = fstatSync(descriptor); if (!before.isFile()) fail("artifact path must be a regular file"); bytes = readFileSync(descriptor); const after = fstatSync(descriptor); if (bytes.byteLength !== after.size || before.size !== after.size) fail("artifact changed during read"); } finally { closeSync(descriptor); }
+  try { bytes = readBounded(descriptor); } finally { closeSync(descriptor); }
   const artifactSHA256 = createHash("sha256").update(bytes).digest("hex");
   const temporary = mkdtempSync(join(tmpdir(), "neondiff-tree-proof-"));
-  try { const archive = join(temporary, "artifact.zip"); writeFileSync(archive, bytes, { mode: 0o600 }); listArchive(archive); execFileSync("unzip", ["-q", "-o", archive, "-d", temporary], { maxBuffer: 1024 * 1024 }); const app = join(temporary, "NeonDiff.app"); if (!lstatSync(app).isDirectory()) fail("archive does not contain NeonDiff.app"); const value = extracted(app); const proof = { schemaVersion: 1, kind: KIND, verified: true, algorithm: "sha256-tree-v1", sourceSHA, artifactSHA256, treeSHA256: treeHash(value.records), records: value.records, bundleMarkers: value.markers }; authenticated.add(proof); return freeze(proof); } finally { rmSync(temporary, { recursive: true, force: true }); }
+  try { const archive = join(temporary, "artifact.zip"); writeFileSync(archive, bytes, { mode: 0o600 }); listArchive(archive); extractArchive(archive, temporary); const app = join(temporary, "NeonDiff.app"); if (!lstatSync(app).isDirectory()) fail("archive does not contain NeonDiff.app"); const value = extracted(app); const proof = { schemaVersion: 1, kind: KIND, verified: true, algorithm: "sha256-tree-v1", sourceSHA, artifactSHA256, treeSHA256: treeHash(value.records), records: value.records, bundleMarkers: value.markers }; authenticated.add(proof); return freeze(proof); } finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 export function serializeExtractedAppTreeProof(proof) { if (!authenticated.has(proof)) fail("proof was not produced by the extracted-tree producer"); return `${JSON.stringify(Object.fromEntries(FIELDS.map((field) => [field, proof[field]])))}\n`; }
 export function extractedAppTreeProofDigest(proof) { return createHash("sha256").update(serializeExtractedAppTreeProof(proof), "utf8").digest("hex"); }
