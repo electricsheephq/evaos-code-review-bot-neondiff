@@ -8,10 +8,10 @@ import { buildExtractedAppTreeProof, extractedAppTreeProofDigest, serializeExtra
 
 const source = "0123456789abcdef0123456789abcdef01234567";
 const roots: string[] = [];
-function fixture(build = "42", duplicate = false) {
+function fixture(build = "42", duplicate = false, binary = false) {
   const root = mkdtempSync(join(tmpdir(), "neondiff-tree-proof-test-")); roots.push(root);
   const app = join(root, "NeonDiff.app"); mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
-  writeFileSync(join(app, "Contents", "Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>1.1.0-rc.9</string><key>CFBundleVersion</key><string>${build}</string>${duplicate ? "<key>CFBundleVersion</key><string>1</string>" : ""}</dict></plist>`);
+  writeFileSync(join(app, "Contents", "Info.plist"), binary ? Buffer.from("bplist00\x00duplicate-key-fixture") : `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>1.1.0-rc.9</string><key>CFBundleVersion</key><string>${build}</string>${duplicate ? "<key>CFBundleVersion</key><string>1</string>" : ""}</dict></plist>`);
   writeFileSync(join(app, "Contents", "MacOS", "NeonDiffDesktop"), "desktop"); chmodSync(join(app, "Contents", "MacOS", "NeonDiffDesktop"), 0o755);
   symlinkSync("MacOS/NeonDiffDesktop", join(app, "Contents", "Current"));
   const artifact = join(root, "NeonDiff.zip"); execFileSync("zip", ["-qry", artifact, "NeonDiff.app"], { cwd: root }); return { root, artifact };
@@ -45,6 +45,8 @@ describe("artifact-bound extracted app tree proof", () => {
     expect(() => buildExtractedAppTreeProof({ artifactPath: escaped, sourceSHA: source })).toThrow();
     const duplicate = fixture("42", true);
     expect(() => buildExtractedAppTreeProof({ artifactPath: duplicate.artifact, sourceSHA: source })).toThrow();
+    const binary = fixture("42", false, true);
+    expect(() => buildExtractedAppTreeProof({ artifactPath: binary.artifact, sourceSHA: source })).toThrow(/binary Info\.plist is unsupported/);
   });
   it("rejects forged serialization and hostile direct records", () => {
     const value = fixture(); const proof = buildExtractedAppTreeProof({ artifactPath: value.artifact, sourceSHA: source });
