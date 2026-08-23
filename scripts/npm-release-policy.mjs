@@ -14,6 +14,7 @@ const V104_PROVENANCE_RECOVERY = Object.freeze({
   predecessor: "1.0.3"
 });
 const DESKTOP_ONLY_RC_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-rc\.(?:[1-9]\d*)$/;
+const DESKTOP_ONLY_FINAL_TAG = "v1.1.0";
 const DESKTOP_ONLY_TAG_ANNOTATION = "NeonDiff-Release-Class: desktop-only";
 
 function fail(message) {
@@ -62,7 +63,7 @@ function isAncestor(ancestor, descendant) {
 }
 
 function isDesktopOnlyTag(tag) {
-  if (!DESKTOP_ONLY_RC_TAG.test(tag)) return false;
+  if (!DESKTOP_ONLY_RC_TAG.test(tag) && tag !== DESKTOP_ONLY_FINAL_TAG) return false;
   try {
     if (git(["cat-file", "-t", tag]) !== "tag") return false;
     const rawTag = gitRaw(["cat-file", "tag", tag]);
@@ -111,7 +112,11 @@ function classify(args) {
   const effectiveReleasePrerelease = eventName === "workflow_dispatch"
     ? releaseMetadata?.prerelease
     : releasePrerelease;
-  if (effectiveReleasePrerelease === true && isDesktopOnlyTag(tag)) {
+  const isDesktopOnlyRelease = isDesktopOnlyTag(tag) && (
+    (DESKTOP_ONLY_RC_TAG.test(tag) && effectiveReleasePrerelease === true)
+    || (tag === DESKTOP_ONLY_FINAL_TAG && effectiveReleasePrerelease === false)
+  );
+  if (isDesktopOnlyRelease) {
     const result = { shouldPublish: false, npmTag, releaseKind: "desktop-only" };
     const githubOutput = args.get("github-output");
     if (githubOutput) {

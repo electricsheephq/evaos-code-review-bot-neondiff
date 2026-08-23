@@ -33,9 +33,9 @@ describe("npm release policy", () => {
     return root;
   }
 
-  function classifyDesktopTag(root: string, tag: string) {
+  function classifyDesktopTag(root: string, tag: string, releasePrerelease = true) {
     return spawnSync(process.execPath, [
-      policyScript, "classify", "--event-name", "release", "--release-prerelease", "true",
+      policyScript, "classify", "--event-name", "release", "--release-prerelease", String(releasePrerelease),
       "--tag", tag, "--package-version", "1.0.4", "--release-level", "stable", "--skipped-versions-json", "[]"
     ], { cwd: root, encoding: "utf8" });
   }
@@ -58,6 +58,25 @@ describe("npm release policy", () => {
     }
   });
 
+  it.each([
+    [desktopOnlyAnnotation, true],
+    ["", false],
+    [` ${desktopOnlyAnnotation}`, false],
+    [`${desktopOnlyAnnotation} `, false],
+    [`${desktopOnlyAnnotation}\n${desktopOnlyAnnotation}`, false],
+    ["neondiff-release-class: desktop-only", false],
+    [`${desktopOnlyAnnotation}-x`, false]
+  ])("classifies only the exact final Desktop GA identity: %s", (annotation, desktopOnly) => {
+    const result = classifyDesktopTag(taggedRepo("v1.1.0", annotation), "v1.1.0", false);
+    if (desktopOnly) {
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ shouldPublish: false, npmTag: "latest", releaseKind: "desktop-only" });
+    } else {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("release tag v1.1.0 does not match package.json version v1.0.4");
+    }
+  });
+
   it("rejects a lightweight Desktop-only RC tag", () => {
     const root = taggedRepo("v1.1.0-rc.1", desktopOnlyAnnotation, false);
     const candidate = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
@@ -68,6 +87,13 @@ describe("npm release policy", () => {
     ], { cwd: root, encoding: "utf8" });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("release tag must be annotated");
+  });
+
+  it("rejects a lightweight final Desktop GA tag", () => {
+    const root = taggedRepo("v1.1.0", desktopOnlyAnnotation, false);
+    const result = classifyDesktopTag(root, "v1.1.0", false);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("release tag v1.1.0 does not match package.json version v1.0.4");
   });
 
   it("rejects a stable npm package from a prerelease GitHub Release", () => {
@@ -115,6 +141,36 @@ describe("npm release policy", () => {
     ], { encoding: "utf8" });
 
     expect(JSON.parse(output)).toEqual({ shouldPublish: true, npmTag: "latest" });
+  });
+
+  it("classifies the current CLI stable release for npm latest", () => {
+    const output = execFileSync(process.execPath, [
+      policyScript,
+      "classify",
+      "--event-name", "release",
+      "--release-prerelease", "false",
+      "--tag", "v1.0.4",
+      "--package-version", "1.0.4",
+      "--release-level", "stable",
+      "--skipped-versions-json", "[]"
+    ], { encoding: "utf8" });
+
+    expect(JSON.parse(output)).toEqual({ shouldPublish: true, npmTag: "latest" });
+  });
+
+  it("classifies a matching CLI beta release for npm beta", () => {
+    const output = execFileSync(process.execPath, [
+      policyScript,
+      "classify",
+      "--event-name", "release",
+      "--release-prerelease", "true",
+      "--tag", "v1.0.5-beta.1",
+      "--package-version", "1.0.5-beta.1",
+      "--release-level", "beta",
+      "--skipped-versions-json", "[]"
+    ], { encoding: "utf8" });
+
+    expect(JSON.parse(output)).toEqual({ shouldPublish: true, npmTag: "beta" });
   });
 
   it("requires manual stable retries to prove an existing non-prerelease GitHub Release", () => {
@@ -622,6 +678,24 @@ describe("npm release policy", () => {
     expect(workflow).toContain("verify-npm-provenance.mjs");
     expect(workflow).toContain('npm audit signatures --prefix "$SIGNATURE_VERIFY_ROOT" --json');
     expect(workflow).not.toMatch(/^\s*npm publish --provenance/m);
+  });
+
+  it("guards npm authentication, install, build, and publication on the classifier", () => {
+    const workflow = readFileSync(join(repoRoot, ".github", "workflows", "publish-npm.yml"), "utf8");
+    for (const step of [
+      "Verify npm publish token is configured",
+      "Setup Node.js",
+      "Install dependencies",
+      "Build",
+      "Verify package",
+      "Publish or verify existing package"
+    ]) {
+      const start = workflow.indexOf(`      - name: ${step}`);
+      const end = workflow.indexOf("\n      - name:", start + 1);
+      const block = workflow.slice(start, end < 0 ? undefined : end);
+      expect(start, step).toBeGreaterThan(-1);
+      expect(block, step).toContain("steps.package_release.outputs.should_publish == 'true'");
+    }
   });
 
   it("allows only absent, identical, or manifest-declared predecessor channel values", () => {
