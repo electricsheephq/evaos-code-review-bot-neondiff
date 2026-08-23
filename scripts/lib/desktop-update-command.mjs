@@ -23,12 +23,13 @@ export function planDesktopUpdate({ action, declaration, declarationBytes, packe
   if (!Buffer.isBuffer(packetBytes) || !Buffer.isBuffer(artifactBytes)) fail("accepted packet and artifact must be immutable bytes");
   if (!SHA.test(packetSHA256 ?? "") || hash(packetBytes) !== packetSHA256) fail("accepted packet digest mismatch");
   if (JSON.stringify(packet) !== packetBytes.toString("utf8")) fail("accepted packet must be canonical JSON");
-  exact(packet, ["schemaVersion", "declarationSHA256", "release", "sparkle", "apple", "prestate"], "accepted packet");
+  exact(packet, ["schemaVersion", "declarationSHA256", "release", "sparkle", "apple", "rollback", "prestate"], "accepted packet");
   if (packet.schemaVersion !== 1) fail("accepted packet schema is invalid");
   if (!Buffer.isBuffer(declarationBytes) || !SHA.test(packet.declarationSHA256 ?? "") || hash(declarationBytes) !== packet.declarationSHA256) fail("accepted declaration digest mismatch");
   exact(packet.release, ["version", "tag", "channel", "build", "artifactName", "artifactSHA256", "treeSHA256"], "release receipt");
   exact(packet.sparkle, ["publicKey", "edSignature", "feedURL", "entrySHA256"], "Sparkle receipt");
   exact(packet.apple, ["teamID", "notarized", "stapled", "gatekeeper"], "Apple receipt");
+  exact(packet.rollback, ["feedPointer", "entrySHA256", "targetArtifactSHA256"], "rollback receipt");
   exact(packet.prestate, ["appSHA256", "accountIdentitySHA256", "botIdentitySHA256", "configSHA256", "databaseSHA256", "allowlistSHA256", "keychainIdentitySHA256", "plistSHA256", "label", "wrapperPID", "wrapperPath", "helperPID", "helperPath"], "prestate receipt");
   const release = packet.release, expected = [declaration.version, declaration.tag, declaration.channel, declaration.build, declaration.distribution?.artifactName];
   if (JSON.stringify([release.version, release.tag, release.channel, release.build, release.artifactName]) !== JSON.stringify(expected)) fail("accepted packet disagrees with declaration identity");
@@ -36,6 +37,9 @@ export function planDesktopUpdate({ action, declaration, declarationBytes, packe
   if (hash(artifactBytes) !== release.artifactSHA256) fail("artifact digest mismatch");
   hashes(packet.sparkle, ["entrySHA256"], "Sparkle receipt");
   if (packet.sparkle.feedURL !== declaration.distribution?.origins?.feed) fail("Sparkle feed disagrees with declaration");
+  hashes(packet.rollback, ["entrySHA256", "targetArtifactSHA256"], "rollback receipt");
+  if (packet.rollback.feedPointer !== `${packet.sparkle.feedURL}#rollback-beta87`) fail("rollback feed pointer is not canonical");
+  if (action === "rollback" && packet.rollback.targetArtifactSHA256 !== release.artifactSHA256) fail("rollback packet does not target its accepted artifact");
   const signature = base64(packet.sparkle.edSignature, 64, "Sparkle signature"), keyBytes = base64(packet.sparkle.publicKey, 44, "Sparkle public key");
   let verified = false;
   try { verified = verify(null, artifactBytes, createPublicKey({ key: keyBytes, format: "der", type: "spki" }), signature); } catch { verified = false; }
@@ -47,9 +51,24 @@ export function planDesktopUpdate({ action, declaration, declarationBytes, packe
   return {
     schemaVersion: 1, dryRun: true, action, packetSHA256,
     candidate: { version: release.version, build: release.build, channel: release.channel, declarationSHA256: packet.declarationSHA256, artifactSHA256: release.artifactSHA256, treeSHA256: release.treeSHA256, feedEntrySHA256: packet.sparkle.entrySHA256 },
-    prestate: { ...packet.prestate },
+    rollback: { ...packet.rollback }, prestate: { ...packet.prestate },
     steps: ["wait-for-zero-lease-cycle", "stage-and-verify", "swap-and-restart-exact-service", "verify-poststate"]
   };
+}
+
+export function runDesktopUpdateCommand({ plan, snapshot, history, ops }) {
+  const { publishRollbackFeed, readRollbackFeed, ...transitionOps } = ops ?? {};
+  if (plan?.action === "rollback") {
+    if (typeof publishRollbackFeed !== "function" || typeof readRollbackFeed !== "function") fail("rollback feed operations are required");
+    publishRollbackFeed(plan.rollback);
+    const receipt = readRollbackFeed(); exact(receipt, ["feedPointer", "entrySHA256", "targetArtifactSHA256"], "rollback feed readback");
+    if (JSON.stringify(receipt) !== JSON.stringify(plan.rollback)) fail("rollback feed readback mismatch");
+  }
+  if (plan?.action === "reupdate") {
+    exact(history, ["acceptedArtifactSHA256"], "re-update history");
+    if (history.acceptedArtifactSHA256 !== plan.candidate.artifactSHA256) fail("re-update must use the identical accepted artifact digest");
+  }
+  return executeDesktopTransition({ plan, snapshot, ops: transitionOps });
 }
 
 export function executeDesktopTransition({ plan, snapshot, ops }) {

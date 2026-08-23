@@ -1,9 +1,9 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { executeDesktopTransition, planDesktopUpdate } from "../scripts/lib/desktop-update-command.mjs";
+import { executeDesktopTransition, planDesktopUpdate, runDesktopUpdateCommand } from "../scripts/lib/desktop-update-command.mjs";
 
 const hex = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
-function fixture() {
+function fixture(action = "update") {
   const artifact = Buffer.from("immutable desktop zip"), { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const declaration = { version: "1.1.0-rc.1", tag: "v1.1.0-rc.1", channel: "rc", build: "11092", distribution: { artifactName: "NeonDiff-1.1.0-rc.1-build11092-macOS.zip", origins: { feed: "https://www.neondiff.com/updates/beta/appcast.xml" } } };
   const declarationBytes = Buffer.from(JSON.stringify(declaration)), packet = {
@@ -11,10 +11,11 @@ function fixture() {
     release: { version: declaration.version, tag: declaration.tag, channel: declaration.channel, build: declaration.build, artifactName: declaration.distribution.artifactName, artifactSHA256: hex(artifact), treeSHA256: "b".repeat(64) },
     sparkle: { publicKey: publicKey.export({ type: "spki", format: "der" }).toString("base64"), edSignature: sign(null, artifact, privateKey).toString("base64"), feedURL: declaration.distribution.origins.feed, entrySHA256: "c".repeat(64) },
     apple: { teamID: "TEAM123456", notarized: true, stapled: true, gatekeeper: true },
+    rollback: { feedPointer: `${declaration.distribution.origins.feed}#rollback-beta87`, entrySHA256: "6".repeat(64), targetArtifactSHA256: action === "rollback" ? hex(artifact) : "7".repeat(64) },
     prestate: { appSHA256: "d".repeat(64), accountIdentitySHA256: "3".repeat(64), botIdentitySHA256: "4".repeat(64), configSHA256: "e".repeat(64), databaseSHA256: "f".repeat(64), allowlistSHA256: "1".repeat(64), keychainIdentitySHA256: "5".repeat(64), plistSHA256: "2".repeat(64), label: "com.electricsheephq.neondiff", wrapperPID: 101, wrapperPath: "/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop", helperPID: 102, helperPath: "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker" }
   };
   const packetBytes = Buffer.from(JSON.stringify(packet));
-  return { artifact, declaration, packet, packetBytes, input: { action: "update", declaration, declarationBytes, packet, packetBytes, packetSHA256: hex(packetBytes), artifactBytes: artifact, expectedTeamID: "TEAM123456" } };
+  return { artifact, declaration, packet, packetBytes, input: { action, declaration, declarationBytes, packet, packetBytes, packetSHA256: hex(packetBytes), artifactBytes: artifact, expectedTeamID: "TEAM123456" } };
 }
 
 describe("signed Desktop update preflight", () => {
@@ -40,6 +41,18 @@ describe("signed Desktop update preflight", () => {
     ];
     for (const [label, mutate] of cases) { const value = fixture(); mutate(value); value.packetBytes = Buffer.from(JSON.stringify(value.packet)); value.input.packetBytes = value.packetBytes; if (label !== "packet digest") value.input.packetSHA256 = hex(value.packetBytes); expect(() => planDesktopUpdate(value.input), label).toThrow(); }
   });
+});
+
+describe("rollback feed and identical re-update", () => {
+  function command(action: string, readback = true, accepted = "") {
+    const { input } = fixture(action), plan = planDesktopUpdate(input), events: string[] = [];
+    const snapshot = { cycleBoundary: true, timedOut: false, activeLeases: 0, workerPairs: 1, label: plan.prestate.label, appSHA256: plan.prestate.appSHA256, accountIdentitySHA256: plan.prestate.accountIdentitySHA256, botIdentitySHA256: plan.prestate.botIdentitySHA256, configSHA256: plan.prestate.configSHA256, databaseSHA256: plan.prestate.databaseSHA256, allowlistSHA256: plan.prestate.allowlistSHA256, keychainIdentitySHA256: plan.prestate.keychainIdentitySHA256, plistSHA256: plan.prestate.plistSHA256, destinationDevice: 7, stageDevice: 7 };
+    const ops = { publishRollbackFeed: () => events.push("publish-feed"), readRollbackFeed: () => { events.push("read-feed"); return readback ? plan.rollback : { ...plan.rollback, entrySHA256: "0".repeat(64) }; }, stage: () => events.push("stage"), verifyStage: () => events.push("verify"), stopExactService: () => events.push("stop"), exchange: () => events.push("exchange"), startExactService: () => events.push("start"), inspectPoststate: () => ({ version: plan.candidate.version, build: plan.candidate.build, appSHA256: plan.candidate.treeSHA256, accountIdentitySHA256: plan.prestate.accountIdentitySHA256, botIdentitySHA256: plan.prestate.botIdentitySHA256, configSHA256: plan.prestate.configSHA256, databaseSHA256: plan.prestate.databaseSHA256, allowlistSHA256: plan.prestate.allowlistSHA256, keychainIdentitySHA256: plan.prestate.keychainIdentitySHA256, plistSHA256: plan.prestate.plistSHA256, label: plan.prestate.label, workerPairs: 1, heartbeatFresh: true, statusAccepted: true }) };
+    return { plan, events, run: () => runDesktopUpdateCommand({ plan, snapshot, history: { acceptedArtifactSHA256: accepted || plan.candidate.artifactSHA256 }, ops }) };
+  }
+  it("publishes and reads back rollback feed before older bytes", () => { const value = command("rollback"); value.run(); expect(value.events.slice(0, 4)).toEqual(["publish-feed", "read-feed", "stage", "verify"]); });
+  it("rejects rollback feed mismatch before staging", () => { const value = command("rollback", false); expect(value.run).toThrow(); expect(value.events).toEqual(["publish-feed", "read-feed"]); });
+  it("requires the identical originally accepted digest for re-update", () => { expect(command("reupdate").run()).toMatchObject({ workerPairs: 1 }); const drift = command("reupdate", true, "0".repeat(64)); expect(drift.run).toThrow(); expect(drift.events).toEqual([]); });
 });
 
 describe("failure-atomic Desktop transition", () => {
