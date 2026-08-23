@@ -23,9 +23,10 @@ The staged bundle must hash to the accepted digest before any launchd mutation.
 
 ## Runtime and service contract
 
-The sealed executable is
-`/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop`, launched in worker
-daemon mode. The plist has the expected label
+The sealed wrapper is
+`/Applications/NeonDiff.app/Contents/MacOS/NeonDiffDesktop`; it launches the
+sealed helper `Contents/Helpers/NeonDiffWorker` in worker daemon mode. The
+packet carries both identities and their digests. The plist has the expected label
 `com.electricsheephq.evaos-code-review-bot`, exactly ten ordered
 `ProgramArguments`, the stored App/device values in their two argument slots,
 and no `EnvironmentVariables` or unexpected top-level keys. The complete

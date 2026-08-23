@@ -43,8 +43,9 @@ or describe npm `latest` as Desktop evidence.
   `docs/architecture/mac-ga-release-contract.md`.
 - The CLI package keeps its independent `1.0.4` identity and existing beta
   dist-tag policy. A CLI tag or npm dist-tag never proves Desktop promotion.
-- Historical pre-Desktop-GA or npm-default-channel wording is obsolete. A
-  future CLI version requires a separate owner decision and changed bytes.
+- Historical pre-Desktop-GA or npm-default-channel wording is obsolete. The
+  root-owned Desktop `v1.1.0` npm no-op/source dependency must land before
+  this packet can be called current; these docs do not claim it already works.
 
 ### What qualifies a native GA cut
 
