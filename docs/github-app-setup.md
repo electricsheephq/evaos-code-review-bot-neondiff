@@ -7,8 +7,8 @@ configuration, state database, and evidence files.
 
 On macOS, signed Desktop 1.1.0 owns native first run through its UI. The
 public paid BYO/customer-owned B0 build accepts the customer's App ID and private key,
-one selected repository, and runs the explicit installation check. No invitation
-is required when the versioned public GitHub prerelease is published and the
+one selected repository, and runs the explicit installation check. No invitation is required
+when the versioned public GitHub prerelease is published and the
 neondiff.com purchase/download path is live.
 The managed B1 App/broker is separate post-GA; see the [Mac GA architecture and
 release contract](architecture/mac-ga-release-contract.md) and [Desktop Mac release
