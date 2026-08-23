@@ -436,6 +436,11 @@ If that feed and its installed rollback receipt do not exist, stop; manual
 rollback is not a supported customer action. See
 [Native Desktop customer adoption](../apps/neondiff-desktop/docs/customer-adoption.md).
 
+Legacy CLI worker updates remain an operator path. Use only the outer worker
+bundle ZIP whose inner `.tgz` tarball, prerelease notes, and release manifest
+agree on immutable digests; follow `docs/beta-release-runbook.md` rather than
+the native Desktop controls above.
+
 ## 4. Check Readiness
 
 Run the GitHub-only doctor first. It verifies App installation visibility and
