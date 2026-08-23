@@ -18,16 +18,10 @@
     "releaseLevel": { "enum": ["candidate", "beta", "stable"] },
     "channel": { "enum": ["beta", "stable"] },
     "contract": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["mode", "paidBetaContract", "byoGitHubEnabled", "managedBrokerEnabled", "brokerOrigin"],
-      "properties": {
-        "mode": { "enum": ["byo", "managed"] },
-        "paidBetaContract": { "enum": ["paid-mac-beta-byo-v1", "paid-mac-beta-v1"] },
-        "byoGitHubEnabled": { "type": "boolean" },
-        "managedBrokerEnabled": { "type": "boolean" },
-        "brokerOrigin": { "type": ["string", "null"], "format": "uri" }
-      }
+      "oneOf": [
+        { "$ref": "#/$defs/byoContract" },
+        { "$ref": "#/$defs/managedContract" }
+      ]
     },
     "source": { "$ref": "#/$defs/source" },
     "artifact": { "$ref": "#/$defs/artifact" },
@@ -36,7 +30,7 @@
     "feed": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["state", "technology", "channel", "feedUrl", "publicKeyRef", "artifactUrl", "signatureRef", "rollbackRef", "evidenceRefs"],
+      "required": ["state", "technology", "channel", "feedUrl", "publicKeyRef", "artifactUrl", "artifactSha256", "signatureRef", "rollbackRef", "evidenceRefs"],
       "properties": {
         "state": { "$ref": "#/$defs/state" },
         "technology": { "const": "Sparkle 2" },
@@ -44,10 +38,12 @@
         "feedUrl": { "$ref": "#/$defs/nullableString" },
         "publicKeyRef": { "$ref": "#/$defs/nullableString" },
         "artifactUrl": { "$ref": "#/$defs/nullableString" },
+        "artifactSha256": { "$ref": "#/$defs/nullableSha256" },
         "signatureRef": { "$ref": "#/$defs/nullableString" },
         "rollbackRef": { "$ref": "#/$defs/nullableString" },
         "evidenceRefs": { "$ref": "#/$defs/refs" }
-      }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "proven" } } }, "then": { "required": ["feedUrl", "publicKeyRef", "artifactUrl", "artifactSha256", "signatureRef", "rollbackRef", "evidenceRefs"], "properties": { "feedUrl": { "type": "string", "minLength": 1 }, "publicKeyRef": { "type": "string", "minLength": 1 }, "artifactUrl": { "type": "string", "minLength": 1 }, "artifactSha256": { "$ref": "#/$defs/sha256" }, "signatureRef": { "type": "string", "minLength": 1 }, "rollbackRef": { "type": "string", "minLength": 1 }, "evidenceRefs": { "minItems": 1 } } } }]
     },
     "site": { "$ref": "#/$defs/site" },
     "billing": {
@@ -60,7 +56,8 @@
         "authorityRef": { "$ref": "#/$defs/nullableString" },
         "activationRef": { "$ref": "#/$defs/nullableString" },
         "evidenceRefs": { "$ref": "#/$defs/refs" }
-      }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "proven" } } }, "then": { "required": ["authorityRef", "activationRef", "evidenceRefs"], "properties": { "authorityRef": { "type": "string", "minLength": 1 }, "activationRef": { "type": "string", "minLength": 1 }, "evidenceRefs": { "minItems": 1 } } } }]
     },
     "customer": {
       "type": "object",
@@ -71,19 +68,22 @@
         "canaryRef": { "$ref": "#/$defs/nullableString" },
         "requiredScenarios": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "evidenceRefs": { "$ref": "#/$defs/refs" }
-      }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "proven" } } }, "then": { "required": ["canaryRef", "evidenceRefs"], "properties": { "canaryRef": { "type": "string", "minLength": 1 }, "evidenceRefs": { "minItems": 1 } } } }]
     },
     "runtime": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["state", "launchdLabel", "workerVersion", "noDowntimeInvariant", "evidenceRefs"],
+      "required": ["state", "launchdLabel", "workerVersion", "configIdentitySha256", "noDowntimeInvariant", "evidenceRefs"],
       "properties": {
         "state": { "$ref": "#/$defs/state" },
         "launchdLabel": { "type": "string", "minLength": 1 },
         "workerVersion": { "$ref": "#/$defs/nullableString" },
+        "configIdentitySha256": { "$ref": "#/$defs/nullableSha256" },
         "noDowntimeInvariant": { "type": "string", "minLength": 20 },
         "evidenceRefs": { "$ref": "#/$defs/refs" }
-      }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "proven" } } }, "then": { "required": ["workerVersion", "configIdentitySha256", "evidenceRefs"], "properties": { "workerVersion": { "type": "string", "minLength": 1 }, "configIdentitySha256": { "$ref": "#/$defs/sha256" }, "evidenceRefs": { "minItems": 1 } } } }]
     },
     "rollback": {
       "type": "object",
@@ -96,7 +96,8 @@
         "targetReleaseRef": { "$ref": "#/$defs/nullableString" },
         "statePreservationRequired": { "const": true },
         "evidenceRefs": { "$ref": "#/$defs/refs" }
-      }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "proven" } } }, "then": { "required": ["targetVersion", "targetArtifactSha256", "targetReleaseRef", "evidenceRefs"], "properties": { "targetVersion": { "type": "string", "minLength": 1 }, "targetArtifactSha256": { "$ref": "#/$defs/sha256" }, "targetReleaseRef": { "type": "string", "minLength": 1 }, "evidenceRefs": { "minItems": 1 } } } }]
     },
     "references": {
       "type": "object",
@@ -126,7 +127,10 @@
     "state": { "enum": ["pending", "proven", "not-applicable", "not-performed", "blocked"] },
     "nullableString": { "type": ["string", "null"] },
     "nullableSha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
-    "refs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "refs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "byoContract": { "type": "object", "additionalProperties": false, "required": ["mode", "paidBetaContract", "byoGitHubEnabled", "managedBrokerEnabled", "brokerOrigin"], "properties": { "mode": { "const": "byo" }, "paidBetaContract": { "const": "paid-mac-beta-byo-v1" }, "byoGitHubEnabled": { "const": true }, "managedBrokerEnabled": { "const": false }, "brokerOrigin": { "const": null } } },
+    "managedContract": { "type": "object", "additionalProperties": false, "required": ["mode", "paidBetaContract", "byoGitHubEnabled", "managedBrokerEnabled", "brokerOrigin"], "properties": { "mode": { "const": "managed" }, "paidBetaContract": { "const": "paid-mac-beta-v1" }, "byoGitHubEnabled": { "const": false }, "managedBrokerEnabled": { "const": true }, "brokerOrigin": { "const": "https://neondiff-license.fly.dev" } } },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -148,13 +152,14 @@
         "state": { "$ref": "#/$defs/state" },
         "bundleId": { "const": "com.electricsheephq.NeonDiffDesktop" },
         "appPath": { "type": "string", "minLength": 1 },
-        "archiveName": { "$ref": "#/$defs/nullableString" },
+        "archiveName": { "type": ["string", "null"], "pattern": "^NeonDiff-1\\.1\\.0-beta\\.[0-9]+-build[0-9]+-macOS\\.zip$" },
         "build": { "$ref": "#/$defs/nullableString" },
         "sha256": { "$ref": "#/$defs/nullableSha256" },
         "workflowRunRef": { "$ref": "#/$defs/nullableString" },
         "artifactRef": { "$ref": "#/$defs/nullableString" },
         "evidenceRefs": { "$ref": "#/$defs/refs" }
-      }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "proven" } } }, "then": { "required": ["archiveName", "build", "sha256", "workflowRunRef", "artifactRef", "evidenceRefs"], "properties": { "archiveName": { "type": "string", "minLength": 1 }, "build": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha256" }, "workflowRunRef": { "type": "string", "minLength": 1 }, "artifactRef": { "type": "string", "minLength": 1 }, "evidenceRefs": { "minItems": 1 } } } }]
     },
     "gate": {
       "type": "object",
@@ -164,7 +169,8 @@
         "state": { "$ref": "#/$defs/state" },
         "identity": { "$ref": "#/$defs/nullableString" },
         "evidenceRefs": { "$ref": "#/$defs/refs" }
-      }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "proven" } } }, "then": { "properties": { "identity": { "type": "string", "minLength": 1 }, "evidenceRefs": { "minItems": 1 } } } }]
     },
     "site": {
       "type": "object",
@@ -177,7 +183,8 @@
         "releaseNotesUrl": { "$ref": "#/$defs/nullableString" },
         "artifactSha256": { "$ref": "#/$defs/nullableSha256" },
         "evidenceRefs": { "$ref": "#/$defs/refs" }
-      }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "proven" } } }, "then": { "required": ["downloadUrl", "releaseNotesUrl", "artifactSha256", "evidenceRefs"], "properties": { "downloadUrl": { "type": "string", "minLength": 1 }, "releaseNotesUrl": { "type": "string", "minLength": 1 }, "artifactSha256": { "$ref": "#/$defs/sha256" }, "evidenceRefs": { "minItems": 1 } } } }]
     }
   }
 }

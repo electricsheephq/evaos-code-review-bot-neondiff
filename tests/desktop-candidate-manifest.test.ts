@@ -1,12 +1,24 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import * as Ajv2020Module from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(__dirname, "..");
 const schema = JSON.parse(readFileSync(resolve(root, "docs/schema/desktop-candidate-manifest.schema.json"), "utf8"));
 const manifest = JSON.parse(readFileSync(resolve(root, "docs/release-candidates/v1.1.0-desktop-candidate-manifest.json"), "utf8"));
+const ajv = new Ajv2020Module.default({ allErrors: true, strict: false });
+const validate = ajv.compile(schema);
+const cloneManifest = () => JSON.parse(JSON.stringify(manifest));
+const feedMatchesArtifact = (candidate: typeof manifest) =>
+  candidate.feed.artifactSha256 === null || candidate.artifact.sha256 === null ||
+  candidate.feed.artifactSha256 === candidate.artifact.sha256;
 
 describe("Desktop candidate manifest contract", () => {
+  it("compiles and validates the versioned manifest with Ajv2020", () => {
+    expect(validate(manifest), JSON.stringify(validate.errors)).toBe(true);
+    expect(manifest.artifact.bundleId).toBe("com.electricsheephq.NeonDiffDesktop");
+  });
+
   it("keeps all release and customer gates explicit", () => {
     for (const field of schema.required) expect(manifest).toHaveProperty(field);
     expect(manifest.schemaVersion).toBe("desktop-candidate-manifest.v1");
@@ -28,7 +40,40 @@ describe("Desktop candidate manifest contract", () => {
       expect(manifest[gate].evidenceRefs.length).toBeGreaterThan(0);
     }
     expect(manifest.runtime.noDowntimeInvariant).toMatch(/prior candidate|replacement/i);
+    expect(manifest.artifact.archiveName).toMatch(/^NeonDiff-1\.1\.0-beta\.87-build[0-9]+-macOS\.zip$/);
+    expect(manifest.feed.artifactSha256).toBeNull();
+    expect(manifest.runtime.configIdentitySha256).toBeNull();
     expect(manifest.rollback.statePreservationRequired).toBe(true);
+  });
+
+  it("rejects mixed contracts and proven gates without proof identity", () => {
+    const mixed = cloneManifest();
+    mixed.contract.managedBrokerEnabled = true;
+    expect(validate(mixed)).toBe(false);
+
+    const unprovenIdentity = cloneManifest();
+    unprovenIdentity.signing.state = "proven";
+    unprovenIdentity.signing.identity = null;
+    unprovenIdentity.signing.evidenceRefs = [];
+    expect(validate(unprovenIdentity)).toBe(false);
+
+    const unboundRuntime = cloneManifest();
+    unboundRuntime.runtime.state = "proven";
+    unboundRuntime.runtime.workerVersion = "1.1.0-beta.87-build11091";
+    unboundRuntime.runtime.configIdentitySha256 = null;
+    expect(validate(unboundRuntime)).toBe(false);
+  });
+
+  it("rejects an archive without a build and catches feed checksum drift", () => {
+    const malformedArchive = cloneManifest();
+    malformedArchive.artifact.archiveName = "NeonDiff-1.1.0-beta.87-macOS.zip";
+    expect(validate(malformedArchive)).toBe(false);
+
+    const mismatchedFeed = cloneManifest();
+    mismatchedFeed.artifact.sha256 = "a".repeat(64);
+    mismatchedFeed.feed.artifactSha256 = "b".repeat(64);
+    expect(validate(mismatchedFeed)).toBe(true);
+    expect(feedMatchesArtifact(mismatchedFeed)).toBe(false);
   });
 
   it("does not contain obsolete mounts or secret-shaped values", () => {

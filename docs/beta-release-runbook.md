@@ -22,6 +22,29 @@ particular external volume is mounted:
 export NEONDIFF_RELEASE_CHECKOUT="${NEONDIFF_RELEASE_CHECKOUT:?absolute clean release checkout}"
 export NEONDIFF_RUNTIME_CONFIG="${NEONDIFF_RUNTIME_CONFIG:?absolute active config path}"
 export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/Codex/evidence/neondiff}"
+export NEONDIFF_LAUNCH_AGENT_PATH="${NEONDIFF_LAUNCH_AGENT_PATH:?absolute LaunchAgent plist path}"
+
+neondiff_release_preflight() {
+  local value origin
+  for value in "$NEONDIFF_RELEASE_CHECKOUT" "$NEONDIFF_RUNTIME_CONFIG" \
+    "$NEONDIFF_EVIDENCE_ROOT" "$NEONDIFF_LAUNCH_AGENT_PATH"; do
+    case "$value" in /*) ;; *) echo "release paths must be absolute" >&2; return 2;; esac
+  done
+  test -d "$NEONDIFF_RELEASE_CHECKOUT" || { echo "release checkout is missing" >&2; return 2; }
+  git -C "$NEONDIFF_RELEASE_CHECKOUT" rev-parse --show-toplevel >/dev/null || { echo "release checkout is not a Git repository" >&2; return 2; }
+  origin="$(git -C "$NEONDIFF_RELEASE_CHECKOUT" remote get-url origin 2>/dev/null)" || { echo "release checkout has no origin" >&2; return 2; }
+  case "$origin" in
+    https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git|git@github.com:electricsheephq/evaos-code-review-bot-neondiff.git) ;;
+    *) echo "release checkout origin is not the NeonDiff repository" >&2; return 2 ;;
+  esac
+  test -f "$NEONDIFF_RUNTIME_CONFIG" || { echo "runtime config is missing" >&2; return 2; }
+  test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "evidence root is missing" >&2; return 2; }
+  test -f "$NEONDIFF_LAUNCH_AGENT_PATH" || { echo "LaunchAgent plist is missing" >&2; return 2; }
+  test -z "$(git -C "$NEONDIFF_RELEASE_CHECKOUT" status --porcelain)" || { echo "release checkout is dirty" >&2; return 2; }
+}
+
+# Hard stop: run before any cd, fetch, test, build, promotion, or launchctl command.
+neondiff_release_preflight
 ```
 
 Packaged or non-source deployments must set
@@ -102,6 +125,7 @@ tagged version.
 Run from a clean release checkout on `main`:
 
 ```bash
+neondiff_release_preflight
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git status --short
 git pull --ff-only
@@ -146,6 +170,7 @@ Public promotion evidence should include the strict variant after tags are
 fetched:
 
 ```bash
+neondiff_release_preflight
 git fetch origin --tags
 npx tsx src/cli.ts release-status \
   --config "$NEONDIFF_RUNTIME_CONFIG" \
@@ -567,6 +592,7 @@ Default rollback is to restart the existing launchd job after checking out the
 last known-good merge commit:
 
 ```bash
+neondiff_release_preflight
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin
 git checkout main
@@ -582,6 +608,7 @@ unrelated dirty work.
 To stop the live beta worker entirely:
 
 ```bash
+neondiff_release_preflight
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
 ```
 

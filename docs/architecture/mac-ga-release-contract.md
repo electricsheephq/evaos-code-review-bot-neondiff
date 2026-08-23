@@ -108,7 +108,15 @@ Runbooks must use operator-provided paths, never a historical machine mount:
 export NEONDIFF_RELEASE_CHECKOUT="${NEONDIFF_RELEASE_CHECKOUT:?absolute clean release checkout}"
 export NEONDIFF_RUNTIME_CONFIG="${NEONDIFF_RUNTIME_CONFIG:?absolute active config path}"
 export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/Codex/evidence/neondiff}"
+export NEONDIFF_LAUNCH_AGENT_PATH="${NEONDIFF_LAUNCH_AGENT_PATH:?absolute LaunchAgent plist path}"
 ```
+
+Before navigation, sync, testing, build, tagging, promotion, or `launchctl`,
+the runbook preflight must reject any non-absolute path, missing checkout,
+non-NeonDiff `origin`, dirty checkout, missing runtime config, missing evidence
+root, or missing LaunchAgent plist. The preflight is an executable operator
+boundary; this architecture contract does not treat a path string alone as
+proof of repository, config, or runtime identity.
 
 Historical release packets may retain the paths recorded at the time they were
 written. Current runbooks must not copy those paths into new commands or claim

@@ -20,6 +20,29 @@ recorded paths as historical evidence only.
 export NEONDIFF_RELEASE_CHECKOUT="${NEONDIFF_RELEASE_CHECKOUT:?absolute clean release checkout}"
 export NEONDIFF_RUNTIME_CONFIG="${NEONDIFF_RUNTIME_CONFIG:?absolute active config path}"
 export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/Codex/evidence/neondiff}"
+export NEONDIFF_LAUNCH_AGENT_PATH="${NEONDIFF_LAUNCH_AGENT_PATH:?absolute LaunchAgent plist path}"
+
+neondiff_release_preflight() {
+  local value origin
+  for value in "$NEONDIFF_RELEASE_CHECKOUT" "$NEONDIFF_RUNTIME_CONFIG" \
+    "$NEONDIFF_EVIDENCE_ROOT" "$NEONDIFF_LAUNCH_AGENT_PATH"; do
+    case "$value" in /*) ;; *) echo "release paths must be absolute" >&2; return 2;; esac
+  done
+  test -d "$NEONDIFF_RELEASE_CHECKOUT" || { echo "release checkout is missing" >&2; return 2; }
+  git -C "$NEONDIFF_RELEASE_CHECKOUT" rev-parse --show-toplevel >/dev/null || { echo "release checkout is not a Git repository" >&2; return 2; }
+  origin="$(git -C "$NEONDIFF_RELEASE_CHECKOUT" remote get-url origin 2>/dev/null)" || { echo "release checkout has no origin" >&2; return 2; }
+  case "$origin" in
+    https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git|git@github.com:electricsheephq/evaos-code-review-bot-neondiff.git) ;;
+    *) echo "release checkout origin is not the NeonDiff repository" >&2; return 2 ;;
+  esac
+  test -f "$NEONDIFF_RUNTIME_CONFIG" || { echo "runtime config is missing" >&2; return 2; }
+  test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "evidence root is missing" >&2; return 2; }
+  test -f "$NEONDIFF_LAUNCH_AGENT_PATH" || { echo "LaunchAgent plist is missing" >&2; return 2; }
+  test -z "$(git -C "$NEONDIFF_RELEASE_CHECKOUT" status --porcelain)" || { echo "release checkout is dirty" >&2; return 2; }
+}
+
+# Hard stop: run before any cd, fetch, test, build, tag, promotion, or launchctl command.
+neondiff_release_preflight
 ```
 
 - `beta`: local launchd worker on the operator Mac, posting as the GitHub App
@@ -368,6 +391,7 @@ unchanged and treat the package as quarantined.
 Create an annotated tag from the merged source SHA:
 
 ```bash
+neondiff_release_preflight
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
@@ -386,6 +410,7 @@ release tracker.
 Create the GitHub prerelease from the release packet:
 
 ```bash
+neondiff_release_preflight
 gh release create vX.Y.Z-beta.N \
   --repo electricsheephq/evaos-code-review-bot \
   --title "vX.Y.Z-beta.N" \
@@ -403,6 +428,7 @@ pass that file as `--notes-file` and include the tag name at the top.
 After the GitHub Release exists:
 
 ```bash
+neondiff_release_preflight
 cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin main --tags
 git checkout main
@@ -418,6 +444,7 @@ launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 Run the status gate with App credentials set in the shell:
 
 ```bash
+neondiff_release_preflight
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 npm run release:status -- \

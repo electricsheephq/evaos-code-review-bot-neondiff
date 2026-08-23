@@ -23,8 +23,8 @@
     "state": "pending",
     "bundleId": "com.electricsheephq.NeonDiffDesktop",
     "appPath": "apps/neondiff-desktop/dist/NeonDiff.app",
-    "archiveName": "NeonDiff-1.1.0-beta.87-macOS.zip",
-    "build": null,
+    "archiveName": "NeonDiff-1.1.0-beta.87-build11091-macOS.zip",
+    "build": "11091",
     "sha256": null,
     "workflowRunRef": null,
     "artifactRef": null,
@@ -47,6 +47,7 @@
     "feedUrl": null,
     "publicKeyRef": null,
     "artifactUrl": null,
+    "artifactSha256": null,
     "signatureRef": null,
     "rollbackRef": "apps/neondiff-desktop/fixtures/appcast/rollback.json",
     "evidenceRefs": ["docs/desktop-auto-update-channel.md", "#116"]
@@ -82,6 +83,7 @@
     "state": "not-performed",
     "launchdLabel": "com.electricsheephq.evaos-code-review-bot",
     "workerVersion": null,
+    "configIdentitySha256": null,
     "noDowntimeInvariant": "Stage and verify the replacement before switching the same worker slot; retain the prior candidate and prove post-switch status before declaring runtime safety.",
     "evidenceRefs": ["#738"]
   },
