@@ -581,6 +581,7 @@ struct BYOGitHubAppCredentialOnboardingTests {
             now: clock.now,
             cliOutcomes: [
                 .success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo"))),
+                .success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo"))),
                 .success(CLIRunResult(
                     exitCode: 0,
                     stdout: byoRepoPatchJSON(repository: "acme/demo"),
@@ -602,6 +603,12 @@ struct BYOGitHubAppCredentialOnboardingTests {
         fixture.model.storeBYOGitHubAppCredentials()
         fixture.model.verifyBYOGitHubAppCredentials()
         await waitForBYOVerification(fixture)
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        fixture.model.pendingBYOGitHubAppId = "654321"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
         fixture.model.applyRepoAllowlistPatch()
         await fixture.waitForConfigPatchToFinish()
         fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
@@ -609,6 +616,9 @@ struct BYOGitHubAppCredentialOnboardingTests {
         await fixture.model.submitActivation()
 
         #expect(fixture.model.productionUsefulWorkAvailable)
+        fixture.model.accountWorkspaceCatalog = .loaded([workspaceWithBot(id: "account-a", configPath: nil, status: .pending)])
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+        fixture.model.accountWorkspaceCatalog = .loaded([workspaceWithBot(id: "account-a", configPath: nil)])
         fixture.clock.advance(by: 301)
         #expect(!fixture.model.productionUsefulWorkAvailable)
     }
@@ -824,7 +834,7 @@ private func fixtureWorkspace(id: String) -> DesktopAccountWorkspace {
     )
 }
 
-private func workspaceWithBot(id: String, configPath: String?) -> DesktopAccountWorkspace {
+private func workspaceWithBot(id: String, configPath: String?, status: DesktopBotStatus = .verified) -> DesktopAccountWorkspace {
     DesktopAccountWorkspace(
         id: id,
         kind: .organization,
@@ -833,12 +843,12 @@ private func workspaceWithBot(id: String, configPath: String?) -> DesktopAccount
         entitlement: .internalAdmin,
         bots: [DesktopBotInstallation(
             id: "bot-\(id)",
-            appID: 123456,
+            appID: 654321,
             appSlug: "neondiff-byo",
             mode: .byo,
             githubInstallationID: 42,
             githubAccountLogin: "acme",
-            status: .verified,
+            status: status,
             localConfigPath: configPath
         )]
     )

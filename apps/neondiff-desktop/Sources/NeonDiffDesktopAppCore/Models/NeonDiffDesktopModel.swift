@@ -880,6 +880,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var currentAccountBindingVerified: Bool {
         selectedAccountWorkspace != nil
             && selectedBotInstallation != nil
+            && selectedBotInstallation?.status == .verified
             && DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
                 verifiedAt: accountWorkspaceCatalogVerifiedAt,
                 now: dependencies.clock.now
@@ -4209,6 +4210,12 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
+        guard let expectedAppID = Int64(expectedContext.appId),
+              selectedBotInstallation == nil || selectedBotInstallation?.appID == expectedAppID else {
+            invalidateBYOGitHubVerificationContext()
+            return
+        }
+
         let selectedTarget = selectedReviewRepository
         let selectedReadCheck = selectedTarget.flatMap { target in
             report.github.readChecks.first(where: {
@@ -4225,7 +4232,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             byoGitHubRepositoryProof = BYOGitHubRepositoryProof(
                 accountID: account.id,
                 botID: bot.id,
-                appID: bot.appID,
+                appID: expectedAppID,
                 repository: selectedTarget,
                 visibility: visibility,
                 credentialRevision: expectedContext.credentialRevision,
