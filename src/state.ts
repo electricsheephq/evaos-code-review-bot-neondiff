@@ -53,6 +53,7 @@ export type RepoMemoryNoteKind =
 export type IssueEnrichmentRecordStatus = "dry_run" | "posted" | "skipped" | "deferred" | "failed";
 const REPO_MEMORY_NOTE_KINDS: RepoMemoryNoteKind[] = ["policy_note", "machine_fact", "false_positive", "review_outcome", "proof_preference"];
 const WORKTREE_CLEANUP_GUARD_TTL_MS = 60_000;
+const REVIEW_QUEUE_SHADOW_IDENTITY_MIGRATION = "review_queue_jobs_shadow_identity_v1";
 
 export interface ProcessedReviewRecord {
   repo: string;
@@ -840,6 +841,11 @@ export class ReviewStateStore {
         started_at text not null,
         expires_at text not null,
         owner_pid integer
+      );
+
+      create table if not exists review_state_migrations (
+        name text primary key,
+        completed_at text not null
       );
     `);
     this.ensureProcessedReviewColumns();
@@ -3700,6 +3706,7 @@ export class ReviewStateStore {
     if (additions.length > 0) {
       this.db.exec(`begin immediate; ${additions.map((name) => `alter table review_queue_jobs add column ${name} text`).join("; ")}; commit`);
     }
+    if (this.db.prepare("select 1 from review_state_migrations where name = ? limit 1").get(REVIEW_QUEUE_SHADOW_IDENTITY_MIGRATION)) return;
     this.db.exec(`create index if not exists idx_review_queue_jobs_shadow_identity
       on review_queue_jobs (repo_key, pull_number, head_sha_key)`);
 
@@ -3725,6 +3732,8 @@ export class ReviewStateStore {
         const identity = canonicalReviewQueueIdentity(row.repo, row.head_sha);
         if (identity) backfill.run(identity.repoKey, identity.headShaKey, row.rowid);
       }
+      this.db.prepare("insert or ignore into review_state_migrations (name, completed_at) values (?, datetime('now'))")
+        .run(REVIEW_QUEUE_SHADOW_IDENTITY_MIGRATION);
       this.db.exec("commit");
     } catch (error) {
       try { this.db.exec("rollback"); } catch { /* transaction did not start */ }

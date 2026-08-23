@@ -110,6 +110,13 @@ describe("review state store", () => {
         select 1 from review_queue_jobs where repo_key = ? and pull_number = ? and head_sha_key = ?
       `).all(repo.toLowerCase(), 7, headSha.toLowerCase()) as Array<{ detail: string }>;
       expect(plan.map((step) => step.detail).join(" ")).toMatch(/INDEX/);
+      expect(migratedDb.prepare("select completed_at from review_state_migrations where name = ?")
+        .get("review_queue_jobs_shadow_identity_v1")).toBeDefined();
+      migratedDb.prepare(`
+        insert into review_queue_jobs
+          (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at)
+        values (?, ?, 'automatic', 'background', ?, ?, ?, ?, 50, 'queued', ?, ?)
+      `).run("late-valid", "late-attempt", repo, "Owner", 9, headSha, "2026-08-24T00:00:00.000Z", "2026-08-24T00:00:00.000Z");
     } finally {
       migratedDb.close();
     }
@@ -122,6 +129,10 @@ describe("review state store", () => {
       headShaKey: headSha.toLowerCase()
     });
     reopened.close();
+    const afterReopen = new DatabaseSync(dbPath);
+    expect(afterReopen.prepare("select repo_key, head_sha_key from review_queue_jobs where job_id = ?")
+      .get("late-valid")).toEqual({ repo_key: null, head_sha_key: null });
+    afterReopen.close();
   });
 
   it("stores normalized issue enrichment public and private hashes and rejects invalid hashes", () => {
