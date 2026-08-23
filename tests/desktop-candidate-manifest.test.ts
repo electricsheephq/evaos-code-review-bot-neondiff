@@ -1,0 +1,26 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+// @ts-ignore The validator is intentionally a dependency-free .mjs CLI.
+import { validateDesktopCandidateManifest } from "../scripts/validate-desktop-candidate-manifest.mjs";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const schema = JSON.parse(readFileSync(resolve(root, "docs/schema/desktop-candidate-manifest.schema.json"), "utf8"));
+const candidate = JSON.parse(readFileSync(resolve(root, "docs/release-candidates/v1.1.0-desktop-candidate-manifest.json"), "utf8"));
+const clone = () => JSON.parse(JSON.stringify(candidate));
+const digest = "a".repeat(64);
+const provenStable = () => { const m = clone(); m.version = "1.1.0"; m.releaseLevel = "stable"; m.channel = "stable"; m.contract.paidContract = "paid-mac-ga-byo-v1"; m.source.workflowRunRef = "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/1"; m.source.artifactRef = "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/actions/runs/1/artifacts/1"; m.artifact = { ...m.artifact, state: "proven", version: "1.1.0", archiveName: "NeonDiff-1.1.0-build11091-macOS.zip", sha256: digest, workflowRunRef: m.source.workflowRunRef, artifactRef: m.source.artifactRef }; for (const gate of ["signing", "notarization"]) m[gate] = { ...m[gate], state: "proven", artifactSha256: digest }; m.feed = { ...m.feed, state: "proven", channel: "stable", feedUrl: "https://updates.neondiff.com/stable/appcast.xml", publicKeyRef: "key-1", artifactUrl: "https://updates.neondiff.com/stable/NeonDiff-1.1.0.zip", artifactSha256: digest, signatureRef: "sig-1", rollbackRef: "https://updates.neondiff.com/stable/rollback.json" }; m.site = { ...m.site, state: "proven", downloadUrl: "https://www.neondiff.com/download", releaseNotesUrl: "https://www.neondiff.com/releases/1.1.0", artifactSha256: digest }; m.billing = { ...m.billing, state: "proven", authorityRef: "billing-1", activationRef: "activation-1" }; m.customer.state = "proven"; m.customer.canaryRef = "canary-1"; m.runtime = { ...m.runtime, state: "proven", workerVersion: "1.1.0-build11091", configIdentitySha256: digest }; m.rollback = { ...m.rollback, state: "proven", targetVersion: "1.0.4", targetArtifactSha256: "b".repeat(64), targetReleaseRef: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.4", targetSignatureRef: "https://updates.neondiff.com/signatures/v1.0.4.sig", targetPublicKeyRef: "https://updates.neondiff.com/keys/sparkle.pub" }; return m; };
+const valid = (value: unknown) => expect(validateDesktopCandidateManifest(value).valid, JSON.stringify(validateDesktopCandidateManifest(value).errors)).toBe(true);
+const invalid = (value: unknown) => expect(validateDesktopCandidateManifest(value).valid).toBe(false);
+
+describe("Desktop candidate manifest", () => {
+  it("accepts the versioned candidate and publishes an ordinary schema", () => { valid(candidate); expect(candidate.artifact.version).toBe(candidate.version); expect(candidate.feed.channel).toBe(candidate.channel); expect(JSON.stringify(schema)).not.toContain("$data"); expect(schema["$schema"]).toContain("draft/2020-12"); });
+  it("accepts a fully proven 1.1.0 GA-BYO manifest using the manifest build", () => { const m = provenStable(); valid(m); expect(m.artifact.archiveName).toBe(`NeonDiff-${m.version}-build${m.artifact.build}-macOS.zip`); });
+  it("rejects channel, archive, provenance, and artifact-digest drift", () => { const m = clone(); m.feed.channel = "stable"; invalid(m); const archive = clone(); archive.artifact.archiveName = "NeonDiff-1.1.0-beta.88-build999-macOS.zip"; invalid(archive); const provenance = clone(); provenance.artifact.artifactRef = "other"; invalid(provenance); const digests = provenStable(); digests.site.artifactSha256 = "b".repeat(64); invalid(digests); });
+  it("rejects malformed HTTPS URLs and whitespace-only proof", () => { const url = provenStable(); url.feed.feedUrl = "https://%"; invalid(url); const proof = provenStable(); proof.signing.identity = " "; proof.signing.evidenceRefs = [" "]; invalid(proof); });
+  it("keeps the BYO scenario contract fixed and excludes managed mode", () => { const scenarios = provenStable(); scenarios.customer.requiredScenarios = ["placeholder", "a", "b", "c", "d"]; invalid(scenarios); const managed = clone(); managed.contract.mode = "managed"; managed.contract.byoGitHubEnabled = false; managed.contract.managedBrokerEnabled = true; invalid(managed); });
+  it("requires an older signed rollback target and an explicit GA contract", () => { const self = provenStable(); self.rollback.targetVersion = self.version; self.rollback.targetArtifactSha256 = digest; invalid(self); const future = provenStable(); future.rollback.targetVersion = "9.9.9"; invalid(future); const betaContract = provenStable(); betaContract.contract.paidContract = "paid-mac-beta-byo-v1"; invalid(betaContract); });
+  it("does not change the published CLI manifest", () => { const file = resolve(root, "docs/public-release-manifest.json"); expect(createHash("sha256").update(readFileSync(file)).digest("hex")).toBe("9e5aae15c24da42c7197133dfe1b3c9cbc52e9e6578fd2a662b83d55fd4c8b4a"); });
+});
