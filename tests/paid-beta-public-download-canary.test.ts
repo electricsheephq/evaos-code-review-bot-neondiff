@@ -43,6 +43,7 @@ describe("paid beta public RC canary", () => {
       ["v1.1.0-rc.1", "NeonDiff-1.1.0-rc.2-build42-macOS.zip", digest],
       ["v1.1.0-rc.1", "NeonDiff-1.1.0-rc.1-build42-macOS.zip", "A".repeat(64)]
     ]) expect(runInput(script, tag, name, hash)).not.toBe(0);
+    for (const sequence of ["0", "00", "01"]) expect(runInput(script, `v1.1.0-rc.${sequence}`, `NeonDiff-1.1.0-rc.${sequence}-build42-macOS.zip`, digest)).not.toBe(0);
   });
 
   it("requires the canonical Sparkle namespace, beta channel, and exact enclosure", () => {

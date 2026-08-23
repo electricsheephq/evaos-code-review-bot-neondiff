@@ -51,14 +51,14 @@ jobs:
           ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v1\.1\.0-(beta|rc)\.([0-9]+)$ ]]
-          release_channel="${BASH_REMATCH[1]}"
-          release_number="${BASH_REMATCH[2]}"
+          [[ "$RELEASE_TAG" =~ ^v1\.1\.0-(beta\.([0-9]+)|rc\.([1-9][0-9]*))$ ]]
+          release_channel="${BASH_REMATCH[1]%%.*}"
+          release_number="${BASH_REMATCH[1]#*.}"
           release_version="1.1.0-${release_channel}.${release_number}"
-          [[ "$ARTIFACT_NAME" =~ ^NeonDiff-1\.1\.0-(beta|rc)\.([0-9]+)-build([0-9]+)-macOS\.zip$ ]]
-          artifact_channel="${BASH_REMATCH[1]}"
-          artifact_number="${BASH_REMATCH[2]}"
-          artifact_build="${BASH_REMATCH[3]}"
+          [[ "$ARTIFACT_NAME" =~ ^NeonDiff-1\.1\.0-(beta\.([0-9]+)|rc\.([1-9][0-9]*))-build([0-9]+)-macOS\.zip$ ]]
+          artifact_channel="${BASH_REMATCH[1]%%.*}"
+          artifact_number="${BASH_REMATCH[1]#*.}"
+          artifact_build="${BASH_REMATCH[4]}"
           test "$release_channel" = "$artifact_channel"
           test "$release_number" = "$artifact_number"
           test "${#ARTIFACT_SHA256}" -eq 64
