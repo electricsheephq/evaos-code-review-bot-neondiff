@@ -139,6 +139,16 @@ describe("operator CLI summaries", () => {
     expect(human).toContain("actionable: none");
   });
 
+  it("does not block on retained ZCode timeout history", () => {
+    const release = releaseStatus({ ok: true, database: { failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: 0, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: 0, retryableZCodeTimeoutFailedReviewQueueJobCount: 1 } });
+    const status = buildOperatorStatus({ release, agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), total: 1, failed: 1 }, jobs: [durableJob({ repo: "owner/repo", pullNumber: 7, headSha: "historical-timeout", state: "failed", lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1" })] }) });
+
+    expect(status.ok).toBe(true);
+    expect(status.summary.zcodeTimeoutFailedQueueJobs).toBe(1);
+    expect(status.gates).toContainEqual(expect.objectContaining({ name: "durable_queue_no_zcode_timeout_failed_jobs", ok: true }));
+    expect(status.recommendedActions).not.toContain(expect.stringContaining("retry-failed"));
+  });
+
   it("passes required release monitoring coverage when all coverage gates are green", () => {
     const coverage = buildReleaseMonitoringCoverage({
       required: true,

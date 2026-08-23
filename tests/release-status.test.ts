@@ -6768,6 +6768,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     });
     expect(status.database).toMatchObject({
       zcodeTimeoutFailedReviewQueueJobCount: 1,
+      activeZCodeTimeoutFailedReviewQueueJobCount: 1,
       retryableZCodeTimeoutFailedReviewQueueJobCount: 1,
       exhaustedZCodeTimeoutFailedReviewQueueJobCount: 0
     });
