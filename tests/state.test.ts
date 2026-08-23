@@ -91,8 +91,14 @@ describe("review state store", () => {
 
     const operatorQueue = collectOperatorReviewQueue(dbPath);
     expect(operatorQueue.jobs).toHaveLength(8);
+    const lateDb = new DatabaseSync(dbPath);
+    lateDb.prepare("insert into review_queue_jobs (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at) values (?, ?, 'automatic', 'background', ?, 'Owner', 3, ?, 50, 'queued', ?, ?)").run("late", "late", "Owner/Late-Repo", "C".repeat(40), "2099-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z");
+    lateDb.close();
+    const lateOpen = new ReviewStateStore(dbPath);
+    expect(lateOpen.getReviewQueueJob("late")).toMatchObject({ repoKey: "owner/late-repo", headShaKey: "c".repeat(40) });
+    lateOpen.close();
     const reopened = new ReviewStateStore(dbPath);
-    expect(reopened.listReviewQueueJobs()).toHaveLength(8);
+    expect(reopened.listReviewQueueJobs()).toHaveLength(9);
     reopened.close();
     const verify = new DatabaseSync(dbPath, { readOnly: true });
     try {

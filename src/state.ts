@@ -3707,18 +3707,30 @@ export class ReviewStateStore {
       this.db.exec(`begin immediate; ${additions.map((name) =>
         `alter table review_queue_jobs add column ${name} text`).join("; ")}; commit`);
     }
-    if (this.db.prepare("select 1 from review_state_migrations where name = ? limit 1")
-      .get(REVIEW_QUEUE_SHADOW_IDENTITY_MIGRATION)) return;
+    let completedAt = (this.db.prepare("select completed_at from review_state_migrations where name = ? limit 1")
+      .get(REVIEW_QUEUE_SHADOW_IDENTITY_MIGRATION) as { completed_at: string } | undefined)?.completed_at;
+    const hasMissingShadowKeys = () => Boolean(this.db.prepare(
+      `select 1 from review_queue_jobs where repo_key is null or head_sha_key is null
+       ${completedAt ? "and julianday(created_at) > julianday(?)" : ""} limit 1`
+    ).get(...(completedAt ? [completedAt] : [])));
+    if (completedAt && !hasMissingShadowKeys()) return;
 
     this.db.exec("begin immediate");
     try {
+      completedAt = (this.db.prepare("select completed_at from review_state_migrations where name = ? limit 1")
+        .get(REVIEW_QUEUE_SHADOW_IDENTITY_MIGRATION) as { completed_at: string } | undefined)?.completed_at;
+      if (completedAt && !hasMissingShadowKeys()) {
+        this.db.exec("commit");
+        return;
+      }
       this.db.exec(`create index if not exists idx_review_queue_jobs_shadow_identity
         on review_queue_jobs (repo_key, pull_number, head_sha_key)`);
       const rows = this.db.prepare(`
         select rowid, repo, head_sha, repo_key, head_sha_key
         from review_queue_jobs
         where repo_key is null or head_sha_key is null
-      `).all() as unknown as Array<{
+        ${completedAt ? "and julianday(created_at) > julianday(?)" : ""}
+      `).all(...(completedAt ? [completedAt] : [])) as unknown as Array<{
         rowid: number; repo: unknown; head_sha: unknown; repo_key: string | null; head_sha_key: string | null;
       }>;
       const update = this.db.prepare(`
@@ -3730,7 +3742,7 @@ export class ReviewStateStore {
         const identity = canonicalReviewQueueIdentity(row.repo, row.head_sha);
         if (identity) update.run(identity.repoKey, identity.headShaKey, row.rowid);
       }
-      this.db.prepare("insert into review_state_migrations (name, completed_at) values (?, datetime('now'))")
+      this.db.prepare("insert or ignore into review_state_migrations (name, completed_at) values (?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
         .run(REVIEW_QUEUE_SHADOW_IDENTITY_MIGRATION);
       this.db.exec("commit");
     } catch (error) {
