@@ -1283,7 +1283,7 @@ export async function runIssueEnrichmentCycle(input: {
           pullNumber: item.issueNumber,
           enrichment
         });
-        if (!post.posted) throw new Error(`issue enrichment comment not posted: ${post.reason}`);
+        if (!post.posted) throw new Error(`issue enrichment comment not posted: ${post.error ?? post.reason}`);
         const commentUrl = post.html_url ? redactSecrets(post.html_url) : undefined;
         input.state.recordIssueEnrichment({
           repo: item.repo,
