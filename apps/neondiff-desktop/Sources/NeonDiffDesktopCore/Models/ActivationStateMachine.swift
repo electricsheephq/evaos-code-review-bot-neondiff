@@ -254,13 +254,17 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Activate your \(keyTerm)",
-                cause: "Your \(keyTerm)\(prefixNote) is ready. Activate it to unlock private repository review.",
+                cause: publicBYO
+                    ? "Your \(keyTerm)\(prefixNote) is ready. Activate it to review every BYO repository."
+                    : "Your \(keyTerm)\(prefixNote) is ready. Activate it to unlock private repository review.",
                 recovery: ActivationRecovery(
                     label: "Activate",
                     event: .submitActivation,
                     accessibilityLabel: "Activate the \(keyTerm)"
                 ),
-                accessibilityLabel: "\(keyTerm)\(prefixNote) is ready to activate.",
+                accessibilityLabel: publicBYO
+                    ? "\(keyTerm)\(prefixNote) is ready to activate for every BYO repository."
+                    : "\(keyTerm)\(prefixNote) is ready to activate.",
                 isSuccess: false,
                 requiresKeyEntry: true,
                 showsNotifyOption: false
@@ -286,9 +290,13 @@ public enum ActivationStateMachine {
             return ActivationStatePresentation(
                 state: state,
                 title: "Activated",
-                cause: "Your \(keyTerm) is active. Private repository review is unlocked.",
+                cause: publicBYO
+                    ? "Your \(keyTerm) is active. Every BYO repository is unlocked."
+                    : "Your \(keyTerm) is active. Private repository review is unlocked.",
                 recovery: nil,
-                accessibilityLabel: "\(keyTerm) is active. Private repositories unlocked.",
+                accessibilityLabel: publicBYO
+                    ? "\(keyTerm) is active. Every BYO repository is unlocked."
+                    : "\(keyTerm) is active. Private repositories unlocked.",
                 isSuccess: true,
                 requiresKeyEntry: false,
                 showsNotifyOption: false

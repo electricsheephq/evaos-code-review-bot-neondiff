@@ -156,6 +156,11 @@ import NeonDiffDesktopCore
         #expect(model.activationState == .purchaseRequired)
         #expect(model.activationPresentation.title == "Every repository requires activation")
         #expect(model.activationPresentation.cause.contains("Every BYO repository"))
+
+        model.activationState = .keyReady
+        #expect(model.activationPresentation.cause.contains("every BYO repository"))
+        model.activationState = .active
+        #expect(model.activationPresentation.cause.contains("Every BYO repository"))
     }
 
     @Test func legacyPublicFreeSkipSyncReturnsToPaidBYOEntry() {
