@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { parseFindings } from "./findings.js";
+import { assertPathOutsideProtectedRoot, getProtectedCheckoutRoots } from "./path-safety.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
 import type { Finding, Severity } from "./types.js";
 
@@ -1489,9 +1491,17 @@ function buildLabelEvidence(finding: Finding | EvalLabelInput): Record<string, s
   return Object.keys(evidence).length > 0 ? evidence : undefined;
 }
 
+export function resolveEvalOutputRoot(): string {
+  const configuredRoot = process.env.NEONDIFF_EVAL_ROOT?.trim();
+  const root = configuredRoot
+    ? resolve(configuredRoot)
+    : join(homedir(), ".local", "share", "neondiff", "evals");
+  return assertEvalOutputDirSafe(root);
+}
+
 function defaultEvalOutputDir(input: Pick<EvalScenarioInput, "runId">, now: Date): string {
   const date = now.toISOString().slice(0, 10);
-  return join("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review", date, sanitizePathSegment(input.runId));
+  return join(resolveEvalOutputRoot(), date, sanitizePathSegment(input.runId));
 }
 
 function sanitizePathSegment(value: string): string {
@@ -1520,13 +1530,16 @@ function sha256File(path: string): string {
 
 export function assertEvalOutputDirSafe(outputDir: string): string {
   const resolvedOutput = resolve(outputDir);
-  const gitRoot = findGitRoot(process.cwd());
-  if (!gitRoot) return resolvedOutput;
-  const realOutput = resolveRealPathForPotentialOutput(resolvedOutput);
-  const realGitRoot = realpathSync(gitRoot);
-  const relation = relative(realGitRoot, realOutput);
-  if (relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))) {
-    throw new Error("outputDir must not be inside the current git checkout; write eval packets under /Volumes/LEXAR/Codex/evals or a temp directory");
+  try {
+    assertPathOutsideProtectedRoot({
+      path: resolvedOutput,
+      protectedRoot: undefined,
+      protectedRoots: getProtectedCheckoutRoots(),
+      pathLabel: "outputDir",
+      protectedRootLabel: "a protected checkout root"
+    });
+  } catch {
+    throw new Error("outputDir must not be inside the current git checkout; use NEONDIFF_EVAL_ROOT or a temp directory");
   }
   return resolvedOutput;
 }
@@ -1543,34 +1556,6 @@ export function guardEmptyOutputRoot(outputRoot: string, evalLabel = "sticky-vs-
   }
   if (readdirSync(outputRoot).length > 0) {
     throw new Error(`outputRoot must be empty before running ${evalLabel}; choose a fresh output root to avoid stale artifacts`);
-  }
-}
-
-function resolveRealPathForPotentialOutput(path: string): string {
-  const resolved = resolve(path);
-  if (existsSync(resolved)) return realpathSync(resolved);
-  const segments: string[] = [];
-  let cursor = resolved;
-  while (!existsSync(cursor)) {
-    const parent = dirname(cursor);
-    if (parent === cursor) return resolved;
-    segments.unshift(cursor.slice(parent.length + 1));
-    cursor = parent;
-  }
-  return resolve(realpathSync(cursor), ...segments);
-}
-
-function findGitRoot(start: string): string | undefined {
-  let cursor = resolve(start);
-  for (;;) {
-    const gitPath = join(cursor, ".git");
-    if (existsSync(gitPath)) {
-      const stat = statSync(gitPath);
-      if (stat.isDirectory() || stat.isFile()) return cursor;
-    }
-    const parent = dirname(cursor);
-    if (parent === cursor) return undefined;
-    cursor = parent;
   }
 }
 
@@ -1602,7 +1587,7 @@ function roundMetric(value: number): number {
 
 function defaultStickyVsColdOutputRoot(input: Pick<StickyVsColdScenarioInput, "runId">, now: Date): string {
   const date = now.toISOString().slice(0, 10);
-  return join("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review", date, sanitizePathSegment(input.runId));
+  return join(resolveEvalOutputRoot(), date, sanitizePathSegment(input.runId));
 }
 
 function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {
