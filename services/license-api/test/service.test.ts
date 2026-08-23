@@ -96,6 +96,24 @@ describe("license service endpoints", () => {
     assert.equal(entitlement(result).status, "active");
   });
 
+  it("validate requires the exact repository bound during activation", () => {
+    const { key } = issue();
+    activate(store, req(key, "machine-a", "acme/public-a"), NOW);
+
+    assert.equal(
+      validate(store, req(key, "machine-a", "acme/public-a"), NOW).httpStatus,
+      200
+    );
+    for (const repo of ["acme/public-b", undefined]) {
+      const result = validate(store, req(key, "machine-a", repo), NOW);
+      assert.equal(result.httpStatus, 409);
+      assert.deepEqual(result.body, {
+        status: "scope_mismatch",
+        detail: "license activation is already bound to a different repository"
+      });
+    }
+  });
+
   it("validate rejects a never-activated machine → 409 scope_mismatch", () => {
     const { key } = issue();
     const result = validate(store, req(key, "machine-a"), NOW);
