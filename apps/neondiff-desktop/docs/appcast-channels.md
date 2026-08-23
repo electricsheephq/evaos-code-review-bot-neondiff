@@ -7,18 +7,24 @@ It does not prove hosted feeds, notarized artifacts, or real EdDSA signing.
 
 - `beta`: early desktop builds for opted-in testers.
 - `stable`: signed release builds after the Mac release runbook has passed.
-- Rollback is represented by a stable feed whose newest marker pins the channel
-  latest to an earlier stable version via `rollback_to`; the generated appcast
-  excludes the superseded newer build so Sparkle cannot select it.
+- The current updater cannot downgrade an installed build. Rollback requires a
+  retained prior immutable artifact and a separately verified feed/channel
+  publication; `rollback_to` is fixture metadata, not a supported downgrade.
 
 ## Dry-Run Generator
 
 Generate a local appcast from a committed fixture:
 
 ```sh
+: "${NEONDIFF_EVIDENCE_ROOT:?set an absolute evidence root outside the checkout}"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "evidence root must be absolute" >&2; exit 1;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "evidence root must already exist" >&2; exit 1; }
+EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"
+CHECKOUT_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+case "$EVIDENCE_ROOT/" in "$CHECKOUT_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 1;; esac
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture fixtures/appcast/beta.json \
-  --output /Volumes/LEXAR/Codex/evidence/neondiff-desktop/neondiff-beta-appcast.xml \
+  --output "$EVIDENCE_ROOT/neondiff-desktop/neondiff-beta-appcast.xml" \
   --dry-run
 ```
 
@@ -53,7 +59,8 @@ Fixtures live under `apps/neondiff-desktop/fixtures/appcast/`:
 
 - `beta.json`: beta-channel appcast.
 - `stable.json`: stable-channel appcast.
-- `rollback.json`: stable rollback feed that pins latest to a prior version.
+- `rollback.json`: fixture metadata for a retained prior target; it is not a
+  supported installed-app downgrade feed.
 - `signature-failure.json`: intentionally invalid signature metadata for the
   client-side failure story.
 - `stale-version.json`: stale-version fixture for release checks.

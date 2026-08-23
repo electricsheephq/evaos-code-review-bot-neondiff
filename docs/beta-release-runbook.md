@@ -3,6 +3,8 @@
 This repository runs a live local beta worker through launchd. Treat each live
 update as a named beta release, not as an informal pull from `main`.
 
+Use [the immutable Mac runbook](mac-update-rollback.md) for native signed Desktop; this remains the legacy worker flow.
+
 ## Release Boundary
 
 The beta release unit is:
