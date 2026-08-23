@@ -17,9 +17,14 @@ Generate a local appcast from a committed fixture:
 
 ```sh
 : "${NEONDIFF_EVIDENCE_ROOT:?set an absolute evidence root outside the checkout}"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "evidence root must be absolute" >&2; exit 1;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "evidence root must already exist" >&2; exit 1; }
+EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"
+CHECKOUT_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+case "$EVIDENCE_ROOT/" in "$CHECKOUT_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 1;; esac
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture fixtures/appcast/beta.json \
-  --output "$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/neondiff-beta-appcast.xml" \
+  --output "$EVIDENCE_ROOT/neondiff-desktop/neondiff-beta-appcast.xml" \
   --dry-run
 ```
 

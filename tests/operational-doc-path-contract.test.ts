@@ -10,7 +10,8 @@ describe("operational documentation path contract", () => {
     expect(guide).toContain("state/reviews.sqlite");
     expect(guide).toContain("**Preview Start**");
     expect(guide).toContain("**Check for Updates**");
-    expect(guide).toContain("signed last-known-good feed");
+    expect(guide).toContain("appcast cannot downgrade");
+    expect(guide).toContain("accepted immutable signed/notarized");
     expect(guide).toContain("one wrapper/helper worker pair");
     expect(guide).not.toContain("install-b0-worker-candidate.mjs");
     expect(guide).not.toContain("/Volumes/LEXAR");
@@ -19,6 +20,8 @@ describe("operational documentation path contract", () => {
   it("guards the appcast evidence root", () => {
     const guide = read("apps/neondiff-desktop/docs/appcast-channels.md");
     expect(guide).toContain("${NEONDIFF_EVIDENCE_ROOT:?");
+    expect(guide).toContain("case \"$NEONDIFF_EVIDENCE_ROOT\" in /*)");
+    expect(guide).toContain('in "$CHECKOUT_ROOT/"*)');
     expect(guide).not.toContain("/Volumes/LEXAR");
   });
 });

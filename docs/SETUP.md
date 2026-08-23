@@ -421,7 +421,7 @@ A local config path, launchd label, App ID, or repository name by itself is not
 authority. Suspended, revoked, pending, mismatched, or server-unrecognized bots
 remain in setup/recovery and fail closed.
 
-### Operate and update the native Desktop worker
+### Update an existing local worker
 
 Customers use only NeonDiff Desktop for the signed native worker path. In
 Overview, use **Preview Start**, then **Install & Start** (or **Start/Restart**),
@@ -429,11 +429,13 @@ and read the resulting status there. Use **Check for Updates** for an accepted
 signed/notarized Desktop release. Do not substitute the legacy CLI worker
 installer, a source checkout, or a hand-written LaunchAgent.
 
-Rollback is available only when the release owner has published and verified a
-signed last-known-good rollback feed. It must preserve the selected account,
-bot, config, `state/reviews.sqlite`, Keychain items, and exactly one worker pair.
-If that feed and its installed rollback receipt do not exist, stop; manual
-rollback is not a supported customer action. See
+The current Sparkle appcast cannot downgrade an installed build. Native rollback
+therefore remains unavailable until the release owner provides a separate,
+proven recovery path using an accepted immutable signed/notarized
+last-known-good artifact. That path must preserve the selected account, bot,
+config, `state/reviews.sqlite`, Keychain items, and exactly one worker pair.
+Do not use **Check for Updates**, a source reset, or a manually edited appcast as
+rollback. See
 [Native Desktop customer adoption](../apps/neondiff-desktop/docs/customer-adoption.md).
 
 Legacy CLI worker updates remain an operator path. Use only the outer worker
