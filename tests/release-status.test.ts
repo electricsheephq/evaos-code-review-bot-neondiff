@@ -272,6 +272,22 @@ describe("beta release status", () => {
     expect(status.gates).toContainEqual(expect.objectContaining({ name: "queue_no_failed_jobs", ok: false }));
   });
 
+  it("projects closed-PR recovery into complete repository queue counts", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-closed-recovery-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`create table processed_reviews (repo text, pull_number integer, head_sha text, status text, event text, error text, created_at text, primary key (repo, pull_number, head_sha));
+      create table review_event_authorization_consumptions (repo text, pull_number integer, posted_event text, posted_at text);
+      create table review_queue_jobs (job_id text primary key, attempt_id text, source text, lane text, repo text, org text, pull_number integer, head_sha text, priority integer, state text, next_eligible_at text, lease_expires_at text, last_error text, created_at text, updated_at text);`);
+    db.prepare("insert into processed_reviews values (?,?,?,?,?,?,?)").run("owner/repo", 7, "failed-head", "failed", null, "provider timeout", "2026-08-22T23:30:00Z");
+    db.prepare("insert into review_event_authorization_consumptions values (?,?,?,?)").run("owner/repo", 7, "COMMENT", "2026-08-22T23:45:00Z");
+    db.prepare("insert into review_queue_jobs values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run("failed", "attempt", "automatic", "background", "owner/repo", "owner", 7, "failed-head", 1, "failed", null, null, "ordinary failure", "2026-08-22T23:30:00Z", "2026-08-22T23:30:00Z");
+    db.close();
+    const status = collectReleaseStatus({ cwd: repoRoot, statePath: dbPath, configPath: join(root, "missing.json"), launchdLabel: "worker", now: new Date("2026-08-23T00:00:00Z") });
+    expect(status.database.reviewQueueJobsByRepo?.[0]).toMatchObject({ repo: "owner/repo", failed: 1, activeFailed: 0 });
+  });
+
   it("keeps recovered historical failures amber rather than red", () => {
     const status = buildReleaseStatus({ repo: { branch: "main", head: "head", dirtyFiles: [] }, expectedHead: "head", configPath: "/config/live.json", launchd: { label: "worker", state: "running", configPath: "/config/live.json", usesSystemCa: true }, database: { rowCount: 2, errorCount: 1, recentUnrecoveredErrorCount: 0, lastErrorAt: "2026-08-21T00:00:00Z", failedReviewQueueJobCount: 1, activeFailedReviewQueueJobCount: 0, zcodeTimeoutFailedReviewQueueJobCount: 1, activeZCodeTimeoutFailedReviewQueueJobCount: 0 }, heartbeat: freshHeartbeat(), now: new Date("2026-08-23T00:00:00Z") });
     expect(status.ok).toBe(true);
@@ -6205,7 +6221,10 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 0,
         providerDeferred: 0,
         retryableProviderDeferred: 0,
-        failed: 1
+        failed: 1,
+        activeFailed: 1,
+        zcodeTimeoutFailed: 0,
+        activeZCodeTimeoutFailed: 0
       },
       {
         repo: "100yenadmin/evaOS-GUI",
@@ -6215,7 +6234,10 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 0,
         providerDeferred: 2,
         retryableProviderDeferred: 1,
-        failed: 0
+        failed: 0,
+        activeFailed: 0,
+        zcodeTimeoutFailed: 0,
+        activeZCodeTimeoutFailed: 0
       },
       {
         repo: "electricsheephq/WorldOS",
@@ -6225,7 +6247,10 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         running: 1,
         providerDeferred: 0,
         retryableProviderDeferred: 0,
-        failed: 0
+        failed: 0,
+        activeFailed: 0,
+        zcodeTimeoutFailed: 0,
+        activeZCodeTimeoutFailed: 0
       }
     ]);
     expect(status.gates).toContainEqual({
