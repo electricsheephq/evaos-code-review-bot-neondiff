@@ -2,6 +2,7 @@ import type { SevereVerificationEvidenceRead, SevereVerificationEvidenceSubject 
 import { parseSevereVerificationReceipt, type SevereVerificationCode, type SevereVerificationReceipt } from "./severe-verification-receipt.js";
 
 export interface SevereVerificationFinding { path: string; line: number; severity: "P0" | "P1"; title: string; body: string; fingerprint: string; }
+export type SevereVerificationFailureCode = Exclude<SevereVerificationCode, "refuted">;
 const PROMPT_TEXT_BYTES = 8 * 1024;
 const PROMPT_HUNK_BYTES = 32 * 1024;
 
@@ -27,7 +28,7 @@ export function parseSevereVerificationVerdict(rawResponse: string, evidence: Se
   } catch { throw new Error("severe_verifier_receipt_invalid"); }
 }
 
-export function buildSevereFailureReceipt(subject: SevereVerificationEvidenceSubject, finding: SevereVerificationFinding, code: SevereVerificationCode, suppliedEvidence?: SevereVerificationEvidenceRead): SevereVerificationReceipt {
+export function buildSevereFailureReceipt(subject: SevereVerificationEvidenceSubject, finding: SevereVerificationFinding, code: SevereVerificationFailureCode, suppliedEvidence?: SevereVerificationEvidenceRead): SevereVerificationReceipt {
   assertBinding(finding, subject);
   if (suppliedEvidence) assertEvidenceBinding(suppliedEvidence, subject);
   const state = failureState(code);
@@ -51,7 +52,7 @@ export function severeVerificationFailureCode(error: unknown): SevereVerificatio
   return "provider_unavailable";
 }
 
-function failureState(code: SevereVerificationCode): SevereVerificationReceipt["state"] {
+function failureState(code: SevereVerificationFailureCode): SevereVerificationReceipt["state"] {
   if (code === "identity_mismatch" || code === "stale_head") return "stale_head";
   if (code === "timeout") return "timeout";
   if (code === "provider_unavailable" || code === "receipt_invalid") return "failed";
