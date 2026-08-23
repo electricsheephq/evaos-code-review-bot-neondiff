@@ -1816,6 +1816,8 @@ function zcodeTimeoutRecommendedActions(
   release: ReleaseStatus,
   durableQueue?: OperatorDurableQueueSnapshot
 ): string[] {
+  const counts = zcodeTimeoutQueueCounts(release, durableQueue);
+  if (counts.activeTotal !== counts.total) return [buildZCodeTimeoutInspectCommand(release.releaseUnit.configPath)];
   const retryCommands = buildZCodeTimeoutRetryCommandsForJobs({
     configPath: release.releaseUnit.configPath,
     jobs: durableQueue?.jobs ?? []

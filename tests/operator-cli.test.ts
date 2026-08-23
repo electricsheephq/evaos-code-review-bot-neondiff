@@ -996,6 +996,25 @@ describe("operator CLI summaries", () => {
     expect(formatOperatorStatusHuman(active)).toContain("status: blocked (operator)");
   });
 
+  it("does not emit retry commands when active ZCode row identity is ambiguous", () => {
+    const jobs = ["recovered-head", "active-head"].map((headSha, index) => durableJob({
+      repo: "owner/repo", pullNumber: index + 1, headSha, state: "failed",
+      lastError: "zcode_timeout_retryable; reason=zcode_hard_timeout; retry_attempt=1"
+    }));
+    const status = buildOperatorStatus({
+      release: releaseStatus({ ok: false, database: {
+        failedReviewQueueJobCount: 2, activeFailedReviewQueueJobCount: 1,
+        zcodeTimeoutFailedReviewQueueJobCount: 2, activeZCodeTimeoutFailedReviewQueueJobCount: 1
+      } }),
+      agents: agentInventory({}),
+      durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 2 }, jobs })
+    });
+    expect(status.recommendedActions.some((action) => action.includes("retry-failed"))).toBe(false);
+    expect(status.recommendedActions).toContain("npx tsx src/cli.ts queue --config /config/live.json --state failed");
+    const runtime = buildRuntimeInventory({ release: status.release, agents: agentInventory({}), durableQueue: durableQueueSnapshot({ summary: { ...cleanDurableQueueSummary(), failed: 2 }, jobs }) });
+    expect(runtime.recommendedActions.some((action) => action.includes("retry-failed"))).toBe(false);
+  });
+
   it("builds a read-only dashboard over coverage, durable queue, readiness, and evidence links", () => {
     const dashboard = buildOperatorDashboard({
       coverage: coverageReport({
