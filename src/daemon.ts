@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { formatDaemonLog } from "./daemon-log.js";
 import { loadConfig } from "./config.js";
@@ -54,7 +55,7 @@ export interface RunDaemonCycleOptions {
     licenseAdmission?: ProductionLicenseAdmission;
   }) => Promise<IssueEnrichmentCycleResult>;
   cleanupReviewWorktreesImpl?: (options: { configPath?: string; dryRun: boolean }) => ReviewWorktreeCleanupSummary;
-  recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string) => void;
+  recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string, runId?: string) => void;
   admitDaemonCycleImpl?: (configPath?: string) => Promise<DaemonCycleAdmissions | void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -83,15 +84,17 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     return { ok: false, failureKind: "admission_denied", error: message };
   }
   const schedulerEnabled = input.reviewSchedulerEnabled === true;
+  const heartbeatRunId = randomUUID();
   const runOnceImpl = input.runOnceImpl ?? (schedulerEnabled ? runScheduledCycle : runOnce);
   const retryProviderCooldownsImpl = input.retryProviderCooldownsImpl ?? retryProviderCooldowns;
-  const recordHeartbeat = input.recordHeartbeatImpl ?? ((event: DaemonHeartbeatEvent, error?: string) => {
+  const recordHeartbeat = input.recordHeartbeatImpl ?? ((event: DaemonHeartbeatEvent, error?: string, runId?: string) => {
     recordDaemonHeartbeatFromConfig({
       configPath: input.configPath,
       cycle: input.cycle,
       dryRun: input.dryRun,
       event,
       error,
+      runId,
       stderr
     });
   });
@@ -119,7 +122,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     }
   }
 
-  recordHeartbeat("daemon_cycle_start");
+  recordHeartbeat("daemon_cycle_start", undefined, heartbeatRunId);
   stdout(formatDaemonLog({
     event: "daemon_cycle_start",
     cycle: input.cycle,
@@ -181,7 +184,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       result
     }));
-    recordHeartbeat("daemon_cycle_complete");
+    recordHeartbeat("daemon_cycle_complete", undefined, heartbeatRunId);
     return { ok: true, result };
   } catch (error) {
     await issueEnrichmentPromise;
@@ -193,7 +196,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       error: message
     }));
-    recordHeartbeat("daemon_cycle_failed", message);
+    recordHeartbeat("daemon_cycle_failed", message, heartbeatRunId);
     return { ok: false, failureKind: "runtime_failure", error: message };
   }
 }
@@ -349,6 +352,7 @@ function recordDaemonHeartbeatFromConfig(input: {
   dryRun: boolean;
   event: DaemonHeartbeatEvent;
   error?: string;
+  runId?: string;
   stderr: (line: string) => void;
 }): void {
   try {
@@ -359,6 +363,7 @@ function recordDaemonHeartbeatFromConfig(input: {
         cycle: input.cycle,
         dryRun: input.dryRun,
         event: input.event,
+        ...(input.runId ? { runId: input.runId } : {}),
         ...(input.error ? { error: input.error } : {})
       });
     } finally {

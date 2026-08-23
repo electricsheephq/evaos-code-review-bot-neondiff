@@ -1630,48 +1630,14 @@ describe("review state store", () => {
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
 
-    store.recordDaemonHeartbeat({
-      cycle: 1,
-      event: "daemon_cycle_start",
-      dryRun: false,
-      runId: "run-a",
-      recordedAt: new Date("2026-07-01T00:00:00.000Z")
-    });
-    store.recordDaemonHeartbeat({
-      cycle: 1,
-      event: "daemon_cycle_start",
-      dryRun: false,
-      runId: "run-a",
-      recordedAt: new Date("2026-07-01T00:00:05.000Z")
-    });
-    store.recordDaemonHeartbeat({
-      cycle: 1,
-      event: "daemon_cycle_progress",
-      dryRun: false,
-      runId: "run-a",
-      recordedAt: new Date("2026-07-01T00:01:00.000Z")
-    });
-    store.recordDaemonHeartbeat({
-      cycle: 1,
-      event: "daemon_cycle_progress",
-      dryRun: false,
-      runId: "run-a",
-      recordedAt: new Date("2026-07-01T00:00:30.000Z")
-    });
-    store.recordDaemonHeartbeat({
-      cycle: 1,
-      event: "daemon_cycle_progress",
-      dryRun: false,
-      runId: "run-b",
-      recordedAt: new Date("2026-07-01T00:02:00.000Z")
-    });
-    store.recordDaemonHeartbeat({
-      cycle: 1,
-      event: "daemon_cycle_complete",
-      dryRun: false,
-      runId: "run-a",
-      recordedAt: new Date("2026-07-01T00:03:00.000Z")
-    });
+    const record = (event: "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete", runId: string, at: string) =>
+      store.recordDaemonHeartbeat({ cycle: 1, event, dryRun: false, runId, recordedAt: new Date(at) });
+    record("daemon_cycle_start", "run-a", "2026-07-01T00:00:00.000Z");
+    record("daemon_cycle_start", "run-a", "2026-07-01T00:00:05.000Z");
+    record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z");
+    record("daemon_cycle_progress", "run-a", "2026-07-01T00:00:30.000Z");
+    record("daemon_cycle_progress", "run-b", "2026-07-01T00:02:00.000Z");
+    record("daemon_cycle_complete", "run-a", "2026-07-01T00:03:00.000Z");
 
     expect(store.getDaemonHeartbeat()).toEqual({
       cycle: 1,
@@ -1684,6 +1650,13 @@ describe("review state store", () => {
       lastProgressAt: "2026-07-01T00:01:00.000Z",
       completedAt: "2026-07-01T00:03:00.000Z"
     });
+    record("daemon_cycle_start", "run-b", "2026-07-01T01:00:00.000Z");
+    record("daemon_cycle_progress", "run-a", "2026-07-01T01:01:00.000Z");
+    record("daemon_cycle_complete", "run-a", "2026-07-01T01:02:00.000Z");
+    expect(store.getDaemonHeartbeat()).toBeUndefined();
+    record("daemon_cycle_progress", "run-b", "2026-07-01T01:03:00.000Z");
+    expect(store.getDaemonHeartbeat()).toMatchObject({ runId: "run-b", startedAt: "2026-07-01T01:00:00.000Z",
+      lastProgressAt: "2026-07-01T01:03:00.000Z" });
     store.close();
   });
 

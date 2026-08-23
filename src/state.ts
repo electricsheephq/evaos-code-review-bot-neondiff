@@ -336,11 +336,7 @@ export interface ProviderCooldownReviewRecord extends StoredProcessedReviewRecor
   expired: boolean;
 }
 
-export type DaemonHeartbeatEvent =
-  | "daemon_cycle_start"
-  | "daemon_cycle_progress"
-  | "daemon_cycle_complete"
-  | "daemon_cycle_failed";
+export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete" | "daemon_cycle_failed";
 
 export interface DaemonHeartbeatRecord {
   cycle: number;
@@ -3290,33 +3286,23 @@ export class ReviewStateStore {
   recordDaemonHeartbeat(record: DaemonHeartbeatRecord): void {
     const recordedAt = (record.recordedAt ?? new Date()).toISOString();
     if (record.event === "daemon_cycle_start") {
+      const runId = record.runId ?? null;
+      const current = this.db.prepare(
+        "select run_id, completed_at, event from daemon_heartbeat where id = 1"
+      ).get() as { run_id: string | null; completed_at: string | null; event: string | null } | undefined;
+      if (current?.run_id === runId && current.completed_at === null &&
+          (current.event === null || current.event === "daemon_cycle_start" || current.event === "daemon_cycle_progress")) return;
       this.db
         .prepare(
           `insert into daemon_heartbeat
             (id, started_cycle, started_at, run_id, last_progress_at, completed_at)
            values (1, ?, ?, ?, null, null)
            on conflict(id) do update set
-             started_cycle = case
-               when daemon_heartbeat.run_id is excluded.run_id
-                 and daemon_heartbeat.completed_at is null
-                 and (daemon_heartbeat.event is null
-                   or daemon_heartbeat.event in ('daemon_cycle_start', 'daemon_cycle_progress'))
-               then daemon_heartbeat.started_cycle else excluded.started_cycle end,
-             started_at = case
-               when daemon_heartbeat.run_id is excluded.run_id
-                 and daemon_heartbeat.completed_at is null
-                 and (daemon_heartbeat.event is null
-                   or daemon_heartbeat.event in ('daemon_cycle_start', 'daemon_cycle_progress'))
-               then daemon_heartbeat.started_at else excluded.started_at end,
-             run_id = excluded.run_id,
-             last_progress_at = case
-               when daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
-               then daemon_heartbeat.last_progress_at else null end,
-             completed_at = case
-               when daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
-               then daemon_heartbeat.completed_at else null end`
+             started_cycle = excluded.started_cycle, started_at = excluded.started_at,
+             run_id = excluded.run_id, cycle = null, event = null, dry_run = null,
+             recorded_at = null, error = null, last_progress_at = null, completed_at = null`
         )
-        .run(record.cycle, recordedAt, record.runId ?? null);
+        .run(record.cycle, recordedAt, runId);
       return;
     }
 
