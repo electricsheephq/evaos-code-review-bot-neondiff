@@ -41,7 +41,7 @@ function stable() {
   Object.assign(m.customer, { state: "proven", canaryRef: url });
   Object.assign(m.runtime, { state: "proven", workerVersion: "1.1.0", artifactSha256: artifactSha, configIdentitySha256: "c".repeat(64) });
   Object.assign(m.rollback, { state: "proven", targetVersion: "1.0.4", targetArtifactSha256: rollbackSha, targetReleaseRef: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/tag/v1.0.4", targetSignatureRef: url, targetPublicKeyRef: url });
-  return m;
+  m.proofBoundary.excludes = ["No claims beyond this manifest contract."]; return m;
 }
 describe("Desktop release manifest contract", () => {
   it("fails closed when Ajv is unavailable, including for no manifest", () => {
@@ -58,10 +58,8 @@ describe("Desktop release manifest contract", () => {
     expect(validateDesktopReleaseManifest(stable(), { ajv: Ajv2020 })).toEqual({ valid: true, errors: [] });
   });
   it("rejects schema identity, source, feed, runtime, URL, and rollback counterexamples", () => {
-    const bad = stable(); bad.product = "wrong";
-    expect(validateDesktopReleaseManifest(bad, { ajv: Ajv2020 }).valid).toBe(false);
-    const source = stable(); source.source.commit = "0".repeat(40);
-    expect(validateDesktopReleaseManifest(source, { ajv: AcceptingAjv }).valid).toBe(false);
+    const bad = stable(); bad.product = "wrong"; expect(validateDesktopReleaseManifest(bad, { ajv: Ajv2020 }).valid).toBe(false);
+    const source = stable(); source.source.commit = "0".repeat(40); expect(validateDesktopReleaseManifest(source, { ajv: AcceptingAjv }).valid).toBe(false);
     const feed = stable(); feed.feed.embeddedFeedUrl = "https://updates.neondiff.com/other.xml";
     expect(validateDesktopReleaseManifest(feed, { ajv: AcceptingAjv }).valid).toBe(false);
     const runtime = stable(); runtime.runtime.configIdentitySha256 = " ".repeat(64);
@@ -70,5 +68,6 @@ describe("Desktop release manifest contract", () => {
     expect(validateDesktopReleaseManifest(urlBad, { ajv: AcceptingAjv }).valid).toBe(false);
     const rollback = stable(); rollback.rollback.targetVersion = "1.1.0";
     expect(validateDesktopReleaseManifest(rollback, { ajv: AcceptingAjv }).valid).toBe(false);
+    const boundary = stable(); boundary.proofBoundary.excludes = ["This is not a release candidate."]; expect(validateDesktopReleaseManifest(boundary, { ajv: AcceptingAjv }).valid).toBe(false);
   });
 });
