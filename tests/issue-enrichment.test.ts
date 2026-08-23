@@ -39,17 +39,17 @@ describe("label-event promotion consumer", () => {
       items: Array.from({ length: 500 }, () => ({ event: "labeled" })), rawCount: 500, truncated: true, overflow: true
     }) as BoundedGithubList<{ event?: string }>;
     const overflowIssue: GitHubRelatedIssueOrPull = {
-      number: 738, title: "overflow", state: "open", updated_at: "2026-08-24T00:01:00Z",
+      number: 738, title: "overflow", state: "open", updated_at: "2026-08-24T00:01:00.000Z",
       labels: [{ name: "upstream-intake" }, { name: "active-continuation" }], body: "fixture"
     };
     const ordinaryIssue: GitHubRelatedIssueOrPull = {
-      number: 739, title: "ordinary", state: "open", updated_at: "2026-08-24T00:01:00Z", labels: [], body: "fixture"
+      number: 739, title: "ordinary", state: "open", updated_at: "2026-08-24T00:01:00.000Z", labels: [], body: "fixture"
     };
-    state.recordIssueEnrichmentRepoWatermark({ repo: "owner/repo", activatedAt: "2026-08-24T00:00:00Z", lastCheckedAt: "2026-08-24T00:00:00Z", now: new Date("2026-08-24T00:00:00Z") });
+    state.recordIssueEnrichmentRepoWatermark({ repo: "owner/repo", activatedAt: "2026-08-24T00:00:00.000Z", lastCheckedAt: "2026-08-24T00:00:00.000Z", now: new Date("2026-08-24T00:00:00.000Z") });
     let posts = 0;
     try {
       const result = await runIssueEnrichmentCycle({
-        config: loadConfig(configPath), state, dryRun: false, includeExisting: true, checkedAt: "2026-08-24T00:02:00Z",
+        config: loadConfig(configPath), state, dryRun: false, includeExisting: true, checkedAt: "2026-08-24T00:02:00.000Z",
         licenseAdmission: admission, analyzeIssue: async () => analysis(),
         github: {
           listIssuesForEnrichment: async () => [overflowIssue, ordinaryIssue],
