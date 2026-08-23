@@ -527,7 +527,90 @@ struct BYOGitHubAppCredentialOnboardingTests {
         #expect(fixture.model.selectedAccountWorkspace == nil)
         #expect(fixture.model.selectedBotInstallation == nil)
         #expect(fixture.model.currentRepositoryActivationReady)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @Test func changingBYOReviewTargetClearsVisibilityProof() async {
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repositories: ["acme/api", "acme/demo"]),
+                    stderr: ""
+                )),
+                .success(doctorResult(readChecks: [
+                    doctorReadCheck(repo: "acme/api", visibility: "public"),
+                    doctorReadCheck(repo: "acme/demo", visibility: "unknown")
+                ].joined(separator: ","))),
+                .success(doctorResult(readChecks: [
+                    doctorReadCheck(repo: "acme/api", visibility: "public"),
+                    doctorReadCheck(repo: "acme/demo", visibility: "unknown")
+                ].joined(separator: ",")))
+            ],
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [
+            RepoMonitor(name: "acme/api", enabled: true),
+            RepoMonitor(name: "acme/demo", enabled: true)
+        ]
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+        fixture.model.selectBYOReviewRepository(fullName: "acme/api")
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+
+        #expect(fixture.model.byoGitHubCredentialsVerified)
+        fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+
+        #expect(fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.byoGitHubRepositoryVisibility == .unknown)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
+    }
+
+    @Test func accountProofExpiresAtFinalUsefulWorkBoundary() async {
+        let clock = TestClock(now: Date(timeIntervalSince1970: 10_000))
+        let fixture = ModelDependencyFixture(
+            now: clock.now,
+            cliOutcomes: [
+                .success(doctorResult(readChecks: doctorReadCheck(repo: "acme/demo"))),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: byoRepoPatchJSON(repository: "acme/demo"),
+                    stderr: ""
+                ))
+            ],
+            activationLicenseClient: ActiveBYOActivationClient(),
+            preferenceStrings: availableCLIPreference,
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.applyAccountWorkspaceCatalog(DesktopAccountWorkspaceCatalog.loaded([
+            workspaceWithBot(id: "account-a", configPath: nil)
+        ]))
+        fixture.model.selectBotInstallation("bot-account-a")
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.selectBYOReviewRepository(fullName: "acme/demo")
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        await waitForBYOVerification(fixture)
+        fixture.model.applyRepoAllowlistPatch()
+        await fixture.waitForConfigPatchToFinish()
+        fixture.model.pendingActivationKey = "NDL-FIXTURE-0123456789"
+        fixture.model.provideExistingActivationKey()
+        await fixture.model.submitActivation()
+
         #expect(fixture.model.productionUsefulWorkAvailable)
+        fixture.clock.advance(by: 301)
+        #expect(!fixture.model.productionUsefulWorkAvailable)
     }
 
     @Test func verificationFailsClosedUnlessDoctorChecksExactlyMatchEnabledRepositories() async throws {
@@ -741,6 +824,26 @@ private func fixtureWorkspace(id: String) -> DesktopAccountWorkspace {
     )
 }
 
+private func workspaceWithBot(id: String, configPath: String?) -> DesktopAccountWorkspace {
+    DesktopAccountWorkspace(
+        id: id,
+        kind: .organization,
+        name: id,
+        role: .admin,
+        entitlement: .internalAdmin,
+        bots: [DesktopBotInstallation(
+            id: "bot-\(id)",
+            appID: 123456,
+            appSlug: "neondiff-byo",
+            mode: .byo,
+            githubInstallationID: 42,
+            githubAccountLogin: "acme",
+            status: .verified,
+            localConfigPath: configPath
+        )]
+    )
+}
+
 private let availableCLIPreference = [
     "neondiff.cliPath": "/usr/bin/true"
 ]
@@ -772,12 +875,18 @@ private func doctorResult(
 private func doctorReadCheck(
     repo: String,
     skippedByPolicy: String? = nil,
-    ok: Bool = true
+    ok: Bool = true,
+    visibility: String = "public"
 ) -> String {
     let skippedField = skippedByPolicy.map {
         #","skippedByPolicy":"\#($0)""#
     } ?? ""
-    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
+    return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"\#(visibility)","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
+}
+
+private func byoRepoPatchJSON(repositories: [String]) -> String {
+    let repos = repositories.map { "\"\($0)\"" }.joined(separator: ",")
+    return #"{"ok":true,"command":"config patch","dryRun":false,"wrote":true,"revisionBefore":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","revisionAfter":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config":{"pilotRepos":[\#(repos)]}}"#
 }
 
 private let exactB0Boundary = DesktopProductionBoundary.resolve(infoDictionary: [

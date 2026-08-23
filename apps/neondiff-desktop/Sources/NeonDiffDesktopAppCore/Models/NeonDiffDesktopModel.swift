@@ -152,6 +152,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     @Published package var pendingBYOGitHubAppPrivateKey = ""
     @Published package private(set) var byoGitHubPrivateKeyStored = false
     @Published package private(set) var byoGitHubCredentialsVerified = false
+    @Published package private(set) var byoGitHubRepositoryVisibility: GitHubBrokerRepositoryVisibility?
     @Published package private(set) var isBYOGitHubVerificationInProgress = false
     @Published package private(set) var byoGitHubCredentialStatus = "Customer-owned GitHub App credentials are not stored."
     @Published package var pendingReviewPullNumber = "" {
@@ -218,6 +219,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     private var activationUpdateAuthorityVerifiedAt: Date?
     private var activationUpdateAuthorityValidUntil: Date?
     private var accountWorkspaceCatalogVerifiedAt: Date?
+    private var byoGitHubRepositoryProof: BYOGitHubRepositoryProof?
     private var activationVerifiedRepositoryThisLaunch: String?
     private var appliedRepoSelection: AppliedRepoSelection?
     private var scopedReviewTask: Task<Void, Never>?
@@ -383,6 +385,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return false
         }
         if dependencies.productionBoundary.byoGitHubEnabled {
+            guard let proof = byoGitHubRepositoryProof,
+                  currentAccountBindingVerified,
+                  proof.accountID == accountWorkspaceSelection.accountID,
+                  proof.botID == accountWorkspaceSelection.botID,
+                  proof.appID == selectedBotInstallation?.appID,
+                  proof.repository.caseInsensitiveCompare(selectedReviewRepository ?? "") == .orderedSame,
+                  proof.credentialRevision == byoGitHubCredentialRevision,
+                  proof.workspaceGeneration == workspaceContextGeneration,
+                  proof.visibility != .unknown
+            else {
+                return false
+            }
             if existingLocalBotReconciliationMode {
                 guard selectedAccountEntitlementSupportsCurrentPath else {
                     return false
@@ -861,6 +875,15 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package var selectedBotInstallation: DesktopBotInstallation? {
         guard let botID = accountWorkspaceSelection.botID else { return nil }
         return selectedAccountWorkspace?.bots.first { $0.id == botID }
+    }
+
+    private var currentAccountBindingVerified: Bool {
+        selectedAccountWorkspace != nil
+            && selectedBotInstallation != nil
+            && DesktopUpdateAccessPolicy.accountCatalogIsCurrent(
+                verifiedAt: accountWorkspaceCatalogVerifiedAt,
+                now: dependencies.clock.now
+            )
     }
 
     /// Setup truth for an existing worker is distinct from current-launch
@@ -1929,6 +1952,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
         managedGitHubRecovery = nil
         managedGitHubConnectionState = managedGitHubAvailable ? .disconnected : .quarantined
         byoGitHubCredentialsVerified = false
+        byoGitHubRepositoryVisibility = nil
+        byoGitHubRepositoryProof = nil
         providerVerificationStatus = "Verify the selected account's provider credential when ready."
         activationVerifiedThisLaunch = false
         activationVerifiedRepositoryThisLaunch = nil
@@ -3211,6 +3236,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         else {
             return
         }
+        invalidateBYOGitHubVerificationContext()
         invalidateScopedReviewApproval()
         invalidateActivationForRepositoryChange(fullReset: true)
         selectedBYOReviewRepository = repository.name
@@ -4183,6 +4209,32 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
 
+        let selectedTarget = selectedReviewRepository
+        let selectedReadCheck = selectedTarget.flatMap { target in
+            report.github.readChecks.first(where: {
+                $0.repo.caseInsensitiveCompare(target) == .orderedSame
+            })
+        }
+        let visibility = selectedReadCheck?.visibilityResult
+            .flatMap { GitHubBrokerRepositoryVisibility(rawValue: $0.lowercased()) }
+            ?? .unknown
+        byoGitHubRepositoryVisibility = visibility
+        if let selectedTarget,
+           let account = selectedAccountWorkspace,
+           let bot = selectedBotInstallation {
+            byoGitHubRepositoryProof = BYOGitHubRepositoryProof(
+                accountID: account.id,
+                botID: bot.id,
+                appID: bot.appID,
+                repository: selectedTarget,
+                visibility: visibility,
+                credentialRevision: expectedContext.credentialRevision,
+                workspaceGeneration: expectedContext.workspaceGeneration
+            )
+        } else {
+            byoGitHubRepositoryProof = nil
+        }
+
         let repositories = report.github.readChecks.map(\.repo).sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }.joined(separator: ", ")
@@ -4211,7 +4263,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
                 expectedContext.source == .keychainStdinExistingBot
                     && existingLocalAgentAccessAvailable
             ),
-           let readCheck = report.github.readChecks.first {
+           let target = selectedReviewRepository,
+           let readCheck = report.github.readChecks.first(where: {
+               $0.repo.caseInsensitiveCompare(target) == .orderedSame
+           }) {
             verifyExistingLocalAgentEntitlement(
                 expectedContext: expectedContext,
                 visibility: readCheck.visibilityResult
@@ -4479,6 +4534,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
 
     private func invalidateBYOGitHubVerificationContext() {
         invalidateScopedReviewApproval()
+        byoGitHubCredentialRevision &+= 1
+        byoGitHubRepositoryVisibility = nil
+        byoGitHubRepositoryProof = nil
         guard byoGitHubCredentialOnboardingAvailable else { return }
         byoGitHubCredentialsVerified = false
         guard !isBYOGitHubVerificationInProgress else { return }
@@ -6870,6 +6928,16 @@ private struct BYOGitHubVerificationContext: Equatable, Sendable {
     let cliPath: String
     let configPath: String
     let repositories: [String]
+    let workspaceGeneration: UInt64
+}
+
+private struct BYOGitHubRepositoryProof: Equatable, Sendable {
+    let accountID: String
+    let botID: String
+    let appID: Int64
+    let repository: String
+    let visibility: GitHubBrokerRepositoryVisibility
+    let credentialRevision: UInt64
     let workspaceGeneration: UInt64
 }
 
