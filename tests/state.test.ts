@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -100,6 +101,95 @@ describe("review state store", () => {
       .get("valid") as Record<string, unknown>;
     expect(raw).toEqual({ repo: validRepo, head_sha: validHead, repo_key: validRepo.toLowerCase(), head_sha_key: validHead.toLowerCase() });
     stableDb.close();
+  });
+
+  it("migrates a legacy queue schema without a duplicate column under two openers", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-review-queue-lease-migration-race-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const lockDb = new DatabaseSync(dbPath);
+    lockDb.exec(`
+      create table review_queue_jobs (
+        job_id text primary key,
+        attempt_id text not null unique,
+        source text not null,
+        lane text not null,
+        repo text not null,
+        org text not null,
+        pull_number integer not null,
+        head_sha text not null,
+        base_sha text,
+        provider_id text,
+        priority integer not null,
+        state text not null,
+        next_eligible_at text,
+        lease_id text,
+        session_id text,
+        comment_id integer,
+        review_url text,
+        last_error text,
+        created_at text not null,
+        updated_at text not null,
+        started_at text,
+        finished_at text
+      );
+      insert into review_queue_jobs
+        (job_id, attempt_id, source, lane, repo, org, pull_number, head_sha, priority, state, created_at, updated_at)
+      values ('legacy-job', 'legacy-attempt', 'automatic', 'background', 'owner/repo', 'owner', 1, 'legacy-head', 50, 'queued',
+        '2026-08-24T00:00:00.000Z', '2026-08-24T00:00:00.000Z');
+    `);
+    lockDb.exec("begin immediate");
+
+    const startPath = join(root, "start");
+    const openerScript = `
+      import { existsSync, writeFileSync } from "node:fs";
+      import { ReviewStateStore } from ${JSON.stringify(join(process.cwd(), "src/state.ts"))};
+      const wait = new Int32Array(new SharedArrayBuffer(4));
+      writeFileSync(process.env.READY_PATH, "ready");
+      while (!existsSync(process.env.START_PATH)) Atomics.wait(wait, 0, 0, 10);
+      const store = new ReviewStateStore(process.env.DB_PATH);
+      store.close();
+    `;
+    const launch = (readyPath: string) => new Promise<{ code: number | null; output: string }>((resolve) => {
+      const child = spawn(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e", openerScript], {
+        cwd: process.cwd(),
+        env: { ...process.env, DB_PATH: dbPath, READY_PATH: readyPath, START_PATH: startPath },
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      let output = "";
+      child.stdout.on("data", (chunk) => { output += chunk; });
+      child.stderr.on("data", (chunk) => { output += chunk; });
+      child.on("close", (code) => resolve({ code, output }));
+    });
+    const openerA = launch(join(root, "ready-a"));
+    const openerB = launch(join(root, "ready-b"));
+    const deadline = Date.now() + 5_000;
+    while (!existsSync(join(root, "ready-a")) || !existsSync(join(root, "ready-b"))) {
+      if (Date.now() > deadline) throw new Error("two-opener fixture did not become ready");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    writeFileSync(startPath, "go");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    lockDb.exec("commit");
+    lockDb.close();
+
+    const [resultA, resultB] = await Promise.all([openerA, openerB]);
+    expect(resultA.code, resultA.output).toBe(0);
+    expect(resultA.output).toBe("");
+    expect(resultB.code, resultB.output).toBe(0);
+    expect(resultB.output).toBe("");
+
+    const checkDb = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const columns = checkDb.prepare("pragma table_info(review_queue_jobs)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("lease_expires_at");
+      expect(columns.filter((column) => column.name === "lease_expires_at")).toHaveLength(1);
+      expect(checkDb.prepare("select count(*) as count from review_queue_jobs").get()).toEqual({ count: 1 });
+      expect(checkDb.prepare("select repo, head_sha from review_queue_jobs where job_id = ?").get("legacy-job"))
+        .toEqual({ repo: "owner/repo", head_sha: "legacy-head" });
+    } finally {
+      checkDb.close();
+    }
   });
 
   it("stores normalized issue enrichment public and private hashes and rejects invalid hashes", () => {

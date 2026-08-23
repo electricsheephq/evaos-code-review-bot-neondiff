@@ -3695,9 +3695,16 @@ export class ReviewStateStore {
   }
 
   private ensureReviewQueueJobColumns(): void {
-    const columns = this.db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === "lease_expires_at")) {
-      this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
+    this.db.exec("begin immediate");
+    try {
+      const columns = this.db.prepare("pragma table_info(review_queue_jobs)").all() as unknown as Array<{ name: string }>;
+      if (!columns.some((column) => column.name === "lease_expires_at")) {
+        this.db.exec("alter table review_queue_jobs add column lease_expires_at text");
+      }
+      this.db.exec("commit");
+    } catch (error) {
+      try { this.db.exec("rollback"); } catch { /* migration transaction did not start */ }
+      throw error;
     }
   }
 
