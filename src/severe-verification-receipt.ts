@@ -17,7 +17,7 @@ export interface SevereReceiptParseOptions { expectedRepo?: string; expectedPull
 export interface SerializedSevereVerificationReceipt { receipt: SevereVerificationReceipt; value: SevereVerificationReceipt; canonicalJson: string; canonical: string; sha256: string; digest: string; }
 
 const SHA40 = "^[a-f0-9]{40}$", SHA256 = "^[a-f0-9]{64}$";
-const PATH = "^(?!/)(?![A-Za-z]:)(?!.*[\\\\\\u0000-\\u001f\\u007f\\r\\n]).+$";
+const PATH = "^(?!/)(?![A-Za-z]:)(?!.*[\\\\\\u0000-\\u001f\\u007f\\u0080-\\u009f\\r\\n]).+$";
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const getLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength")!.get!;
 const getOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset")!.get!;
@@ -53,6 +53,7 @@ function decodeSerialized(input: unknown): string {
   if (typeof input === "string") { if (Buffer.byteLength(input) > MAX_SEVERE_VERIFICATION_RECEIPT_BYTES) fail("cap_exceeded", "serialized receipt exceeds byte cap"); bytes = Buffer.from(input); }
   else if (genuineBytes(input)) { const length = Reflect.apply(getLength, input, []); if (length > MAX_SEVERE_VERIFICATION_RECEIPT_BYTES) fail("cap_exceeded", "serialized receipt exceeds byte cap"); if (hostileOwnProperties(input)) return fail("serialized_input", "typed-array accessors and methods are not accepted"); bytes = Buffer.from(Reflect.apply(getBuffer, input, []) as ArrayBuffer, Reflect.apply(getOffset, input, []), length); }
   else return fail("serialized_input", "only a primitive string or genuine Uint8Array is accepted");
+  if (bytes.byteLength >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) fail("noncanonical", "UTF-8 BOM is not canonical");
   try { const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); if (typeof input === "string" && text !== input) fail("invalid_utf8", "string contains invalid UTF-8 code units"); return text; }
   catch { return fail("invalid_utf8", "serialized bytes are not valid UTF-8"); }
 }
@@ -73,7 +74,7 @@ function checkSemantics(r: SevereVerificationReceipt, expectedPath?: string): vo
   if (expectedPath !== undefined && (!safePath(expectedPath) || !paths.has(expectedPath))) fail("identity_mismatch", "expected evidence path is not covered");
 }
 function copyReceipt(r: SevereVerificationReceipt): SevereVerificationReceipt { const files = r.evidence.files.map((x) => ({ ...x })).sort((a, b) => compare(canonicalArrayItemKey(a), canonicalArrayItemKey(b))), omitted = r.evidence.omitted.map((x) => ({ ...x })).sort((a, b) => compare(canonicalArrayItemKey(a), canonicalArrayItemKey(b))); return { schemaVersion: r.schemaVersion, repo: r.repo, pullNumber: r.pullNumber, baseSha: r.baseSha, findingFingerprint: r.findingFingerprint, headSha: r.headSha, state: r.state, disposition: r.disposition, ...(r.confidence === undefined ? {} : { confidence: r.confidence }), ...(r.reasonCode === undefined ? {} : { reasonCode: r.reasonCode }), evidence: { files, omitted, complete: r.evidence.complete } }; }
-function safePath(path: string): boolean { return validUnicode(path) && path.length > 0 && Buffer.byteLength(path) <= 4096 && !path.startsWith("/") && !/^[A-Za-z]:/.test(path) && !/[\\\0-\u001f\u007f\r\n]/.test(path) && path.split("/").every((part) => part.length > 0 && part !== "." && part !== ".."); }
+function safePath(path: string): boolean { return validUnicode(path) && path.length > 0 && Buffer.byteLength(path) <= 4096 && !path.startsWith("/") && !/^[A-Za-z]:/.test(path) && !/[\\\0-\u001f\u007f\u0080-\u009f\r\n]/.test(path) && path.split("/").every((part) => part.length > 0 && part !== "." && part !== ".."); }
 function validUnicode(value: string): boolean { for (let i = 0; i < value.length; i++) { const code = value.charCodeAt(i); if (code >= 0xd800 && code <= 0xdbff) { const next = value.charCodeAt(i + 1); if (next < 0xdc00 || next > 0xdfff) return false; i++; } else if (code >= 0xdc00 && code <= 0xdfff) return false; } return true; }
 function compare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
 function canonicalJsonOf(value: unknown): string { if (Array.isArray(value)) { const items = value.map((item) => ({ item, text: canonicalJsonOf(item) })).sort((a, b) => compare(canonicalArrayItemKey(a.item), canonicalArrayItemKey(b.item)) || compare(a.text, b.text)); return `[${items.map((x) => x.text).join(",")}]`; } if (value && typeof value === "object") { const object = value as Record<string, unknown>; return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJsonOf(object[key])}`).join(",")}}`; } return JSON.stringify(value); }
