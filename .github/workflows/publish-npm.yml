@@ -120,6 +120,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The policy reads the exact desktop-only marker from the checked-out
+          # annotated tag before applying package/release compatibility gates.
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           RELEASE_LEVEL="$(node -p "require('./docs/public-release-manifest.json').releaseLevel")"
           SKIPPED_VERSIONS="$(node -p "JSON.stringify(require('./docs/public-release-manifest.json').packageArtifact?.skippedPublicPackageVersions ?? [])")"
@@ -137,6 +139,10 @@ jobs:
             --skipped-versions-json "$SKIPPED_VERSIONS" \
             "${RELEASE_METADATA_ARGS[@]}" \
             --github-output "$GITHUB_OUTPUT"
+
+      - name: Exit Desktop-only release without npm work
+        if: steps.package_release.outputs.release_kind == 'desktop-only'
+        run: echo "Desktop-only release; npm authentication, install, build, and publication are skipped."
 
       - name: Verify npm publish token is configured
         if: steps.package_release.outputs.should_publish == 'true'

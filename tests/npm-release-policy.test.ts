@@ -99,6 +99,101 @@ describe("npm release policy", () => {
     expect(JSON.parse(output)).toEqual({ shouldPublish: true, npmTag: "latest" });
   });
 
+  it("skips an annotated desktop-only RC before stable-package prerelease validation", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-desktop-only-rc-"));
+    roots.push(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "release-policy@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Release Policy Test"], { cwd: root });
+    writeFileSync(join(root, "release.txt"), "desktop release\n");
+    execFileSync("git", ["add", "release.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "desktop release"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["tag", "-a", "v1.1.0-rc.1", "-m", "NeonDiff-Release-Class: desktop-only"], { cwd: root });
+
+    const output = execFileSync(process.execPath, [
+      policyScript,
+      "classify",
+      "--event-name", "release",
+      "--release-prerelease", "true",
+      "--tag", "v1.1.0-rc.1",
+      "--package-version", "1.0.4",
+      "--release-level", "stable",
+      "--skipped-versions-json", "[]"
+    ], { cwd: root, encoding: "utf8" });
+
+    expect(JSON.parse(output)).toEqual({
+      shouldPublish: false,
+      npmTag: "latest",
+      releaseKind: "desktop-only"
+    });
+  });
+
+  it("does not classify an annotated RC without the desktop-only marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-unmarked-rc-"));
+    roots.push(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "release-policy@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Release Policy Test"], { cwd: root });
+    writeFileSync(join(root, "release.txt"), "release\n");
+    execFileSync("git", ["add", "release.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "release"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["tag", "-a", "v1.1.0-rc.1", "-m", "CLI release"], { cwd: root });
+
+    const result = spawnSync(process.execPath, [
+      policyScript,
+      "classify",
+      "--event-name", "release",
+      "--release-prerelease", "true",
+      "--tag", "v1.1.0-rc.1",
+      "--package-version", "1.0.4",
+      "--release-level", "stable",
+      "--skipped-versions-json", "[]"
+    ], { cwd: root, encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("stable npm packages require a non-prerelease GitHub Release");
+  });
+
+  it("keeps a true CLI beta release on the existing beta publish path", () => {
+    const output = execFileSync(process.execPath, [
+      policyScript,
+      "classify",
+      "--event-name", "release",
+      "--release-prerelease", "true",
+      "--tag", "v1.0.4-beta.1",
+      "--package-version", "1.0.4-beta.1",
+      "--release-level", "beta",
+      "--skipped-versions-json", "[]"
+    ], { encoding: "utf8" });
+
+    expect(JSON.parse(output)).toEqual({ shouldPublish: true, npmTag: "beta" });
+  });
+
+  it("rejects a lightweight desktop-only RC tag in verify-git", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-lightweight-rc-"));
+    roots.push(root);
+    execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "release-policy@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Release Policy Test"], { cwd: root });
+    writeFileSync(join(root, "release.txt"), "release\n");
+    execFileSync("git", ["add", "release.txt"], { cwd: root });
+    execFileSync("git", ["commit", "-m", "release"], { cwd: root, stdio: "ignore" });
+    const candidate = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+    execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: root });
+    execFileSync("git", ["tag", "v1.1.0-rc.1"], { cwd: root });
+
+    const result = spawnSync(process.execPath, [
+      policyScript,
+      "verify-git",
+      "--tag", "v1.1.0-rc.1",
+      "--candidate-head", candidate,
+      "--main-ref", "refs/remotes/origin/main"
+    ], { cwd: root, encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("release tag must be annotated");
+  });
+
   it("requires the release tag and declared candidate to be ancestors of protected main", () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-npm-release-policy-"));
     roots.push(root);
