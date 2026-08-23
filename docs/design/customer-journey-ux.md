@@ -5,6 +5,14 @@ visual contract), authored for the #610 customer-journey milestone. This is the 
 #519 (onboarding), #521 (shell/Home), #522 (repos/providers), #612 (activation), and #613 (GitHub
 connect) implement together.
 
+Boundary: this blueprint describes the later managed/native convenience
+journey and GA hardening target. It is not proof that the managed App path is
+available, and it is not the current paid-BYO beta setup guide. For the current
+`1.1.0` BYO candidate, use [docs/SETUP.md](../SETUP.md) and the
+[Mac GA release contract](../architecture/mac-ga-release-contract.md); the
+customer-owned GitHub App, activation, exact artifact, and runtime gates remain
+explicit. The CLI `v1.0.4` path remains a separate API-backed contract.
+
 ## Product sentence
 
 A normal person installs the app and gets their first useful PR review without touching a terminal —

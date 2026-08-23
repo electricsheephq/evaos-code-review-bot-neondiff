@@ -6,7 +6,18 @@ contains the real Sparkle controller and release-build configuration gate. No
 hosted appcast, signed update, installed update, rollback, or public release is
 proven by source alone.
 
-## Current Implementation — 2026-07-28
+## Current Source Contract
+
+The native candidate is on the separate `1.1.0` line. The CLI `v1.0.4`
+manifest remains the source-beta publication record; it is not an appcast or
+Desktop artifact manifest. The exact source, artifact, signing, notary, feed,
+site, billing, customer, runtime, and rollback fields live in the
+[versioned Desktop candidate manifest](release-candidates/v1.1.0-desktop-candidate-manifest.json)
+and its [schema](schema/desktop-candidate-manifest.schema.json).
+
+Evidence paths below are placeholders. Set `NEONDIFF_EVIDENCE_ROOT` to an
+operator-owned absolute directory before writing a packet; historical packet
+paths are not active runtime truth.
 
 - The native SwiftUI executable uses the existing Sparkle 2 dependency and
   standard updater UI in
@@ -43,14 +54,14 @@ re-update, immutable release assets, and live customer evidence.
 
 ## Durable Plan Contract
 
-- Goal: define the desktop auto-update channel contract for NeonDiff Desktop so
-  future implementation can choose Sparkle, Tauri updater, or an equivalent
-  signed updater without weakening release governance or license boundaries.
-- Resume identity: repo `electricsheephq/evaos-code-review-bot`, branch
-  `codex/116-desktop-autoupdate-plan`, base
-  `1e28bf8ee0bfe42d0a7f3cc47ed76508497efe96`, issue
-  https://github.com/electricsheephq/evaos-code-review-bot/issues/116, parent
-  tracker https://github.com/electricsheephq/evaos-code-review-bot/issues/103.
+- Goal: define the native Desktop Sparkle 2 channel contract without weakening
+  release governance or license boundaries. The implementation choice is
+  recorded in source; this document does not select a replacement updater.
+- Resume identity: repository
+  `electricsheephq/evaos-code-review-bot-neondiff`, current candidate source
+  ref and version in
+  `docs/release-candidates/v1.1.0-desktop-candidate-manifest.json`, issue #116,
+  parent tracker #103.
 - Tracking / source of truth: GitHub issues and PRs own implementation truth;
   `docs/release-governance.md`, `docs/license-boundary.md`, and
   `docs/public-release-manifest.json` own current release and license wording;
@@ -60,14 +71,13 @@ re-update, immutable release assets, and live customer evidence.
   selection, no signing/notarization setup, no private key material, no appcast
   publication, no installer distribution, no license API implementation, no
   launchd/runtime change, and no claim that desktop auto-update is shipped.
-- Current state: NeonDiff is a source-available beta; desktop update channels
-  are marked `post_1_0` and non-required in `docs/public-release-manifest.json`;
-  `docs/neondiff-desktop.md` describes a development-only unsigned desktop
-  scaffold; issue #111 owns license activation and issue #114 owns the legacy
-  desktop shell audit.
-- Exact next action: after desktop shell choice and license activation design
-  are settled, create an implementation issue or PR that wires a signed local or
-  static update-manifest dry run before any public appcast or artifact channel.
+- Current state: NeonDiff is source-available; the CLI `v1.0.4` channel is
+  separate from the native `1.1.0` candidate line. `docs/neondiff-desktop.md`
+  describes native development and contract boundaries; issue #111 owns
+  license activation and issue #114 owns the legacy desktop shell audit.
+- Exact next action: populate the pending manifest fields from one exact signed
+  candidate, then run the static appcast, signature-failure, entitlement, and
+  rollback fixtures before any public feed or artifact publication.
 - Critical invariants: every downloaded gated artifact must be entitlement
   checked before download, signature verified before install, tied to a channel
   manifest, rollbackable to a last-known-good release, and backed by public-safe
@@ -87,18 +97,19 @@ re-update, immutable release assets, and live customer evidence.
   - Dataset/scenario refs: issue #116 acceptance criteria, issue #111 license
     activation contract, issue #114 desktop shell audit, issue #112 release
     governance, and `docs/public-release-manifest.json`.
-  - Baseline/comparison: current `post_1_0` deferred desktop channel in
-    `docs/public-release-manifest.json`.
+  - Baseline/comparison: the separate CLI `v1.0.4` publication record in
+    `docs/public-release-manifest.json`; it must remain unchanged by Desktop
+    candidate work.
   - Metrics and thresholds: update check distinguishes no-update,
     update-available, blocked-by-license, network-error, and signature-error;
     invalid signatures never install; gated artifacts never download without a
     valid entitlement when policy requires one; rollback target resolves to a
     signed last-known-good release.
   - Runner/CI location: future GitHub Actions plus local evidence packet under
-    `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/`.
+    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/`.
   - Failure owner: desktop/update implementation owner for future PRs.
   - Eval evidence path:
-    `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/`.
+    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/`.
   - Trace feedback target: issue #116, the implementation PR, release notes,
     and the public release manifest.
   - Eval proof boundary: proves only planning readiness until implementation
@@ -109,13 +120,13 @@ re-update, immutable release assets, and live customer evidence.
   governance plan. It must not be cited as evidence that Sparkle, Tauri updater,
   signing, entitlement checks, rollback, installer distribution, or UI status
   handling is implemented.
-- Stop conditions: unresolved desktop shell choice; absent public-key strategy;
+- Stop conditions: absent public-key strategy;
   signing or notarization secrets requested in repo or docs; entitlement policy
   unclear for public/private/commercial repos; update metadata cannot express
   rollback; update status cannot distinguish license, network, and signature
   failures; docs or release notes claim shipped updater before fixture evidence.
 - Evidence path / packet:
-  `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/` plus
+  `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/` plus
   linked GitHub issue, PR, release, workflow run, and artifact identities.
 
 ## Channel Model
@@ -184,7 +195,7 @@ The desktop UI and any CLI status surface should use the same state names:
 Before #116 can close and the public manifest can claim a working desktop update
 channel, the release lane must provide evidence for:
 
-- desktop shell choice and updater technology
+- Sparkle 2 updater configuration and public-key strategy
 - signed artifact creation and public verification material
 - local/static manifest dry run
 - signature failure fixture
@@ -192,7 +203,7 @@ channel, the release lane must provide evidence for:
 - rollback manifest fixture resolving to a signed last-known-good artifact
 - release notes naming source commit, version, artifact identity, and rollback
   target
-- public-safe evidence packet under `/Volumes/LEXAR/Codex/evidence/`
+- public-safe evidence packet under `$NEONDIFF_EVIDENCE_ROOT`
 
 Until those gates exist, `docs/public-release-manifest.json` should keep desktop
 updates non-required and explicitly linked to issue #116.

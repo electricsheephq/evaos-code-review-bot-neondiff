@@ -1,17 +1,51 @@
-# evaOS Code Review Bot Beta Release Runbook
+# NeonDiff Beta and Mac release runbook
 
-This repository runs a live local beta worker through launchd. Treat each live
-update as a named beta release, not as an informal pull from `main`.
+The CLI/daemon beta and native Mac candidate are separate release lanes. Treat
+each update as a named release, not as an informal pull from `main`. For the
+native contract and GA gate, read [Mac GA release contract](architecture/mac-ga-release-contract.md).
 
 ## Release Boundary
 
-The beta release unit is:
+The CLI/daemon beta release unit is identified by operator-provided paths:
 
-- source checkout: `/Volumes/LEXAR/repos/evaos-code-review-bot`
+- source checkout: `$NEONDIFF_RELEASE_CHECKOUT`
 - launchd job: `com.electricsheephq.evaos-code-review-bot`
-- launchd config: `/Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json`
-- state DB: `/Volumes/LEXAR/Codex/evaos-code-review-bot/state/reviews-live.sqlite`
-- evidence root: `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
+- launchd config: `$NEONDIFF_RUNTIME_CONFIG`
+- state DB: adjacent to the operator's runtime config/state root
+- evidence root: `$NEONDIFF_EVIDENCE_ROOT`
+
+Before using the commands below, set an absolute clean checkout and active
+config. Do not copy paths from historical release packets or assume a
+particular external volume is mounted:
+
+```sh
+export NEONDIFF_RELEASE_CHECKOUT="${NEONDIFF_RELEASE_CHECKOUT:?absolute clean release checkout}"
+export NEONDIFF_RUNTIME_CONFIG="${NEONDIFF_RUNTIME_CONFIG:?absolute active config path}"
+export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/Codex/evidence/neondiff}"
+export NEONDIFF_LAUNCH_AGENT_PATH="${NEONDIFF_LAUNCH_AGENT_PATH:?absolute LaunchAgent plist path}"
+
+neondiff_release_preflight() {
+  local value origin
+  for value in "$NEONDIFF_RELEASE_CHECKOUT" "$NEONDIFF_RUNTIME_CONFIG" \
+    "$NEONDIFF_EVIDENCE_ROOT" "$NEONDIFF_LAUNCH_AGENT_PATH"; do
+    case "$value" in /*) ;; *) echo "release paths must be absolute" >&2; return 2;; esac
+  done
+  test -d "$NEONDIFF_RELEASE_CHECKOUT" || { echo "release checkout is missing" >&2; return 2; }
+  git -C "$NEONDIFF_RELEASE_CHECKOUT" rev-parse --show-toplevel >/dev/null || { echo "release checkout is not a Git repository" >&2; return 2; }
+  origin="$(git -C "$NEONDIFF_RELEASE_CHECKOUT" remote get-url origin 2>/dev/null)" || { echo "release checkout has no origin" >&2; return 2; }
+  case "$origin" in
+    https://github.com/electricsheephq/evaos-code-review-bot-neondiff.git|git@github.com:electricsheephq/evaos-code-review-bot-neondiff.git) ;;
+    *) echo "release checkout origin is not the NeonDiff repository" >&2; return 2 ;;
+  esac
+  test -f "$NEONDIFF_RUNTIME_CONFIG" || { echo "runtime config is missing" >&2; return 2; }
+  test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "evidence root is missing" >&2; return 2; }
+  test -f "$NEONDIFF_LAUNCH_AGENT_PATH" || { echo "LaunchAgent plist is missing" >&2; return 2; }
+  test -z "$(git -C "$NEONDIFF_RELEASE_CHECKOUT" status --porcelain)" || { echo "release checkout is dirty" >&2; return 2; }
+}
+
+# Hard stop: run before any cd, fetch, test, build, promotion, or launchctl command.
+neondiff_release_preflight
+```
 
 Packaged or non-source deployments must set
 `NEONDIFF_PROTECTED_CHECKOUT_ROOT` to the live operator checkout so
@@ -26,16 +60,15 @@ Public source-beta releases also include a compact manifest at
 for docs version alignment, license API readiness or explicit deferral, and
 update-channel readiness for CLI, daemon, website, and desktop surfaces.
 
-The 1.0 cut line is intentionally narrower than full desktop maturity:
-`1.0 is a usable local HTML installer/dashboard plus minimal Mac launcher, not
-full signed desktop maturity.` Keep release notes aligned to these public
-surface stages:
+The `v1.0.4` cut line remains the CLI/dashboard public release. Native Desktop
+uses the separate `1.1.0` candidate line and exact contract in the Mac GA
+release contract. Keep release notes aligned to these public surface stages:
 
-| Stage | Required For 1.0 | Allowed Claims | Forbidden Claims |
+| Stage | Required For CLI v1.0.4 | Allowed Claims | Forbidden Claims |
 | --- | --- | --- | --- |
 | CLI/dashboard GA | Yes | `npm install -g neondiff`; `neondiff dashboard` starts and opens a local HTML dashboard; dashboard supports first-run setup/status and redacted provider API-key verification. | Signed desktop artifacts, Sparkle appcast/auto-update readiness, native Swift desktop maturity. |
-| Minimal Mac launcher GA | Yes | A minimal Mac icon/app launcher opens the same local HTML dashboard. | Full native app maturity, signing/notarization, appcast, auto-update, or TCC readiness. |
-| Signed/appcast desktop | Post-launch unless owner-promoted | Signed/notarized desktop, Sparkle/appcast, updater, and native Swift polish only after #449/#116 proof. | Treating browser preview or unsigned launcher smoke as signed desktop release proof. |
+| Native Desktop candidate | Separate `1.1.0` line | Candidate identity, native BYO/managed contract, and pending gate state in the versioned Desktop manifest. | Treating source or unsigned bundle state as signed release proof. |
+| Signed/appcast desktop | Mac GA gate | Signed/notarized desktop, Sparkle/appcast, updater, and native evidence only after #449/#116/#524 proof. | Treating browser preview or CLI `v1.0.4` proof as native release proof. |
 
 Represent browser dashboard readiness separately from desktop readiness in
 `docs/public-release-manifest.json` when the distinction matters. The dashboard
@@ -92,19 +125,20 @@ tagged version.
 Run from a clean release checkout on `main`:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+neondiff_release_preflight
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git status --short
 git pull --ff-only
 npm test
 npm run build
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 sleep 5
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot \
   --require-coverage true
@@ -115,7 +149,7 @@ For public source-beta releases, run the same gate with manifest checks:
 ```bash
 PUBLIC_BETA_TAG=v0.4.24-beta.1
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -136,9 +170,10 @@ Public promotion evidence should include the strict variant after tags are
 fetched:
 
 ```bash
+neondiff_release_preflight
 git fetch origin --tags
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expected-head "$(git rev-parse HEAD)" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -470,7 +505,7 @@ from the eligible open-head set. Retire only the exact failed head:
 
 ```bash
 npx tsx src/cli.ts retire-failed \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --repo owner/repo \
   --pr 123 \
   --head-sha <failed-head-sha> \
@@ -540,7 +575,7 @@ Expired cooldown rows are actionable backlog. Run:
 
 ```bash
 npx tsx src/cli.ts retry-provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config "$NEONDIFF_RUNTIME_CONFIG" \
   --expired-only true \
   --dry-run false \
   --zcode true
@@ -557,7 +592,8 @@ Default rollback is to restart the existing launchd job after checking out the
 last known-good merge commit:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+neondiff_release_preflight
+cd "$NEONDIFF_RELEASE_CHECKOUT"
 git fetch origin
 git checkout main
 git reset --hard <last-known-good-merge-sha>
@@ -572,6 +608,7 @@ unrelated dirty work.
 To stop the live beta worker entirely:
 
 ```bash
+neondiff_release_preflight
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
 ```
 
@@ -601,7 +638,7 @@ For each beta promotion, record:
   tracking issue or `not in this release`.
 - next monitoring action or heartbeat.
 
-Keep raw evidence under `/Volumes/LEXAR/Codex/evaos-code-review-bot/evidence/`
+Keep raw evidence under `$NEONDIFF_EVIDENCE_ROOT`.
 or session notes. Do not paste secrets, private keys, tokens, cookies, raw
 customer data, or long logs into GitHub comments.
 

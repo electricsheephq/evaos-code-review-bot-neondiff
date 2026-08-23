@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "desktop-candidate-manifest.v1",
+  "product": "NeonDiff Desktop",
+  "version": "1.1.0-beta.87",
+  "releaseLevel": "candidate",
+  "channel": "beta",
+  "contract": {
+    "mode": "byo",
+    "paidBetaContract": "paid-mac-beta-byo-v1",
+    "byoGitHubEnabled": true,
+    "managedBrokerEnabled": false,
+    "brokerOrigin": null
+  },
+  "source": {
+    "repository": "electricsheephq/evaos-code-review-bot-neondiff",
+    "commit": "de00a1daf20c27b1d14fff5a5defb9b5597e71b5",
+    "ref": "de00a1daf20c27b1d14fff5a5defb9b5597e71b5",
+    "cleanCheckout": true,
+    "workflowRunRef": null,
+    "artifactRef": null
+  },
+  "artifact": {
+    "state": "pending",
+    "bundleId": "com.electricsheephq.NeonDiffDesktop",
+    "appPath": "apps/neondiff-desktop/dist/NeonDiff.app",
+    "archiveName": "NeonDiff-1.1.0-beta.87-build11091-macOS.zip",
+    "build": "11091",
+    "sha256": null,
+    "workflowRunRef": null,
+    "artifactRef": null,
+    "evidenceRefs": ["apps/neondiff-desktop/docs/mac-release-runbook.md"]
+  },
+  "signing": {
+    "state": "pending",
+    "identity": "Developer ID Application (owner-provided identity)",
+    "evidenceRefs": ["apps/neondiff-desktop/docs/mac-release-runbook.md#codesign"]
+  },
+  "notarization": {
+    "state": "pending",
+    "identity": "Apple notarization acceptance and stapled bundle",
+    "evidenceRefs": ["apps/neondiff-desktop/docs/mac-release-runbook.md#notarize-and-staple"]
+  },
+  "feed": {
+    "state": "pending",
+    "technology": "Sparkle 2",
+    "channel": "beta",
+    "feedUrl": null,
+    "publicKeyRef": null,
+    "artifactUrl": null,
+    "artifactSha256": null,
+    "signatureRef": null,
+    "rollbackRef": "apps/neondiff-desktop/fixtures/appcast/rollback.json",
+    "evidenceRefs": ["docs/desktop-auto-update-channel.md", "#116"]
+  },
+  "site": {
+    "state": "pending",
+    "productUrl": "https://www.neondiff.com/mac-beta",
+    "downloadUrl": null,
+    "releaseNotesUrl": null,
+    "artifactSha256": null,
+    "evidenceRefs": ["#103", "#610"]
+  },
+  "billing": {
+    "state": "pending",
+    "model": "paid-byo",
+    "authorityRef": "#610",
+    "activationRef": "#612",
+    "evidenceRefs": ["#562", "#633"]
+  },
+  "customer": {
+    "state": "pending",
+    "canaryRef": "#524",
+    "requiredScenarios": [
+      "clean install and launch",
+      "customer-owned GitHub App binding",
+      "provider verification and dry run before live review",
+      "entitlement loss and recovery",
+      "manual signed update and rollback with state preservation"
+    ],
+    "evidenceRefs": ["#524", "#615"]
+  },
+  "runtime": {
+    "state": "not-performed",
+    "launchdLabel": "com.electricsheephq.evaos-code-review-bot",
+    "workerVersion": null,
+    "configIdentitySha256": null,
+    "noDowntimeInvariant": "Stage and verify the replacement before switching the same worker slot; retain the prior candidate and prove post-switch status before declaring runtime safety.",
+    "evidenceRefs": ["#738"]
+  },
+  "rollback": {
+    "state": "pending",
+    "targetVersion": null,
+    "targetArtifactSha256": null,
+    "targetReleaseRef": "apps/neondiff-desktop/fixtures/appcast/rollback.json",
+    "statePreservationRequired": true,
+    "evidenceRefs": ["#116", "apps/neondiff-desktop/fixtures/appcast/rollback.json"]
+  },
+  "references": {
+    "roadmap": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103",
+    "execution": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/610",
+    "milestone": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/milestone/11",
+    "updater": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/116",
+    "desktopEvaluation": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/524",
+    "runtime": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/738",
+    "packaging": "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/806"
+  },
+  "proofBoundary": {
+    "allows": [
+      "public-safe identity and gate requirements for one native Desktop candidate",
+      "exact source and mutually exclusive BYO production contract recorded for the candidate",
+      "pending release, customer, runtime, and rollback gates remain explicit"
+    ],
+    "excludes": [
+      "signed or notarized artifact",
+      "hosted feed, site publication, billing, or customer canary proof",
+      "runtime safety, launchd promotion, or Mac GA readiness"
+    ]
+  }
+}

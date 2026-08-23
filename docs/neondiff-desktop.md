@@ -1,4 +1,4 @@
-# NeonDiff Desktop Dev MVP
+# NeonDiff Desktop architecture and local development
 
 The evaluation-first path from this development shell to a GA-quality native
 experience is specified in
@@ -6,10 +6,19 @@ experience is specified in
 and tracked by issue #514. Evaluation and layout stability land before broad
 visual redesign.
 
-NeonDiff Desktop is a SwiftPM macOS app scaffold for issue #115. It is a thin local control panel over the NeonDiff CLI and daemon contracts.
-For the 1.0 launch bar, the Mac app is intentionally a minimal launcher:
-opening the app shows local controls that can start `neondiff dashboard` or open
-the same local HTML dashboard used by the CLI.
+NeonDiff Desktop is the native macOS product surface for the `1.1.0` candidate
+line. It composes the existing CLI and daemon contracts through typed, bounded
+commands; it is not the `neondiff@1.0.4` package and does not change that
+package's activation or release identity. The local HTML dashboard remains the
+CLI/operator surface and is governed by the separate public release manifest.
+
+The exact native production contract is selected by release-only bundle
+markers. The current paid BYO contract is
+`paid-mac-beta-byo-v1` plus `NeonDiffBYOGitHubEnabled=true`; the managed broker
+contract is mutually exclusive and remains a later convenience path. Missing
+or mixed markers keep the bundle quarantined. See the
+[Mac GA release contract](architecture/mac-ga-release-contract.md) and the
+[versioned candidate manifest](release-candidates/v1.1.0-desktop-candidate-manifest.json).
 
 ## Boundaries
 
@@ -19,7 +28,10 @@ the same local HTML dashboard used by the CLI.
   implements native setup/status controls that write through existing CLI
   contracts. The local HTML dashboard is a diagnostic/operator surface for
   CLI-first and non-Mac setups, not the product UI.
-- No signing, notarization, Sparkle appcast, downloadable artifact, TCC, Mac-control, or customer-control proof is claimed here.
+- No signing, notarization, Sparkle appcast, downloadable artifact, TCC,
+  Mac-control, runtime, or customer-control proof is claimed by this
+  development document. Those are exact-artifact gates in the Mac release
+  contract and #116/#524.
 - Provider and license keys are stored in macOS Keychain under a NeonDiff-specific service and are never written to config files.
 - Native provider verification starts only from an explicit **Verify API Key** click. The stored provider key is read from Keychain for that operation and sent to the child CLI only through bounded standard input; it never enters argv, process environment, config, command previews, stdout/stderr, logs, screenshots, or evidence.
 
