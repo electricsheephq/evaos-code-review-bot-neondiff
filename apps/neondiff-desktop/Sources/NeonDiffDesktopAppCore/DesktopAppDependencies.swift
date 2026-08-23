@@ -9,6 +9,13 @@ package struct DesktopProductionBoundary: Sendable {
     package let accountLinkBrokerOrigin: URL?
     package let accountConnectURL: URL?
 
+    package var distributionPolicy: DesktopDistributionPolicy {
+        DesktopDistributionPolicyBoundary.resolve(
+            byoEnabled: byoGitHubEnabled,
+            managedBrokerConfigured: managedGitHubBrokerOrigin != nil
+        )
+    }
+
     package static let quarantined = DesktopProductionBoundary(
         nativeActivationBrokerVerified: false,
         byoGitHubEnabled: false,

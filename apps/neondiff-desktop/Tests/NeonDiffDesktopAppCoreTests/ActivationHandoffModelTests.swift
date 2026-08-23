@@ -129,7 +129,7 @@ import NeonDiffDesktopCore
     }
 
     @Test func publicPathSkipsWithoutLicenseUI() {
-        let model = makeModel()
+        let model = makeModel(productionBoundary: .testManaged)
         model.enterActivation(for: .publicReposOnly)
         #expect(model.activationState == .publicFreeSkip)
         #expect(model.activationPresentation.requiresKeyEntry == false)
@@ -357,7 +357,7 @@ import NeonDiffDesktopCore
     /// Thread 2: choosing Public Repos must skip the license wall, not sit at
     /// purchase_required.
     @Test func publicModeSyncSkipsLicenseWall() {
-        let model = makeModel()
+        let model = makeModel(productionBoundary: .testManaged)
         model.onboardingFlow.mode = .publicReposOnly
         #expect(model.activationState == .purchaseRequired)
         model.syncActivationEntryFromOnboardingMode()

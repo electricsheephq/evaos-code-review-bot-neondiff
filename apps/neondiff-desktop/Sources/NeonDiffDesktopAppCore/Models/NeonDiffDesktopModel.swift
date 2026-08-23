@@ -383,6 +383,20 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return false
         }
         if dependencies.productionBoundary.byoGitHubEnabled {
+            let byoProof = DesktopBYOActivationProof(
+                currentAccountBound: dependencies.productionBoundary.nativeActivationBrokerVerified,
+                githubAppVerified: byoGitHubCredentialsVerified,
+                repositoryBound: repositoryConfigurationReady && scopedReviewTargetReady,
+                apiEntitlementActive: currentRepositoryActivationReady
+            )
+            guard dependencies.productionBoundary.distributionPolicy == .byo,
+                  DesktopDistributionPolicyBoundary.evaluate(
+                      policy: .byo,
+                      proof: byoProof
+                  ) == .allowed
+            else {
+                return false
+            }
             if existingLocalBotReconciliationMode {
                 guard selectedAccountEntitlementSupportsCurrentPath else {
                     return false
@@ -4781,10 +4795,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         dependencies.preferences.set(next.rawValue, forKey: activationStateKey)
     }
 
-    /// Enter the activation branch from the chosen onboarding path. The public
-    /// path skips straight to a free, license-free state.
+    /// Only the managed broker policy may enter the future public-free state.
     package func enterActivation(for mode: OnboardingMode) {
-        applyActivationEvent(mode == .publicReposOnly ? .choosePublicPath : .choosePrivatePath)
+        let publicFree = mode == .publicReposOnly
+            && dependencies.productionBoundary.distributionPolicy == .managed
+        applyActivationEvent(publicFree ? .choosePublicPath : .choosePrivatePath)
     }
 
     /// Align the activation entry state with the onboarding mode when the flow
@@ -4794,7 +4809,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package func syncActivationEntryFromOnboardingMode() {
         switch activationState {
         case .purchaseRequired where onboardingFlow.mode == .publicReposOnly:
-            applyActivationEvent(.choosePublicPath)
+            enterActivation(for: .publicReposOnly)
         case .publicFreeSkip where onboardingFlow.mode == .privateRepos:
             applyActivationEvent(.choosePrivatePath)
         default:
