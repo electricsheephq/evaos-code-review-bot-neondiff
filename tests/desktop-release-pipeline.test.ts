@@ -2,6 +2,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   writeFileSync
@@ -16,9 +17,142 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+function immutableReleaseInputValidation(workflow: string): string {
+  const parsed = YAML.parse(workflow) as {
+    jobs?: Record<string, { steps?: Array<{ name?: string; run?: string }> }>;
+  };
+  const step = parsed.jobs?.["public-download-install-canary"]?.steps?.find(
+    (candidate) => candidate.name === "Validate immutable release input"
+  );
+  if (!step?.run) throw new Error("missing immutable release validation step");
+  return step.run;
+}
+
+function feedItemParser(workflow: string): string {
+  const parsed = YAML.parse(workflow) as {
+    jobs?: Record<string, { steps?: Array<{ name?: string; run?: string }> }>;
+  };
+  const step = parsed.jobs?.["public-download-install-canary"]?.steps?.find(
+    (candidate) => candidate.name === "Verify version build feed and Sparkle signature agreement"
+  );
+  const match = step?.run?.match(/python3 - [^\n]+ <<'PY'\n([\s\S]*?)\nPY/);
+  if (!match) throw new Error("missing exact feed XML parser");
+  return match[1];
+}
+
+function runImmutableReleaseInputValidation(
+  validationScript: string,
+  input: { releaseTag: string; artifactName: string; artifactSha256: string }
+) {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-release-input-"));
+  const outputPath = join(root, "github-output");
+  const bin = join(root, "bin");
+  const uname = join(bin, "uname");
+  mkdirSync(bin);
+  writeFileSync(uname, "#!/bin/sh\nprintf '%s\\n' arm64\n");
+  chmodSync(uname, 0o755);
+  const result = spawnSync("bash", ["-euo", "pipefail", "-c", validationScript], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      RELEASE_TAG: input.releaseTag,
+      ARTIFACT_NAME: input.artifactName,
+      ARTIFACT_SHA256: input.artifactSha256,
+      GITHUB_OUTPUT: outputPath
+    }
+  });
+  return { result, outputPath };
+}
+
 const retiredCoreChecksTarget = ["NeonDiffDesktopCore", "Checks"].join("");
 
 describe("NeonDiff desktop release-smoke pipeline", () => {
+  it("accepts exact beta and annotated-style RC identities while rejecting drift", () => {
+    const workflow = read(".github/workflows/paid-beta-public-download-canary.yml");
+    const validationScript = immutableReleaseInputValidation(workflow);
+    const digest = "a".repeat(64);
+
+    for (const input of [
+      {
+        releaseTag: "v1.1.0-beta.7",
+        artifactName: "NeonDiff-1.1.0-beta.7-build42-macOS.zip"
+      },
+      {
+        releaseTag: "v1.1.0-rc.1",
+        artifactName: "NeonDiff-1.1.0-rc.1-build42-macOS.zip"
+      }
+    ]) {
+      const { result, outputPath } = runImmutableReleaseInputValidation(validationScript, {
+        ...input,
+        artifactSha256: digest
+      });
+      expect(result.status, `${input.releaseTag} ${input.artifactName}: ${result.stderr}`).toBe(0);
+      expect(readFileSync(outputPath, "utf8")).toMatch(
+        /(?:release_channel|version|artifact_build)=/
+      );
+    }
+
+    for (const input of [
+      {
+        releaseTag: "v1.1.0-rc",
+        artifactName: "NeonDiff-1.1.0-rc-build42-macOS.zip"
+      },
+      {
+        releaseTag: "v1.1.0-rc.1",
+        artifactName: "NeonDiff-1.1.0-beta.1-build42-macOS.zip"
+      },
+      {
+        releaseTag: "v1.1.0-rc.1",
+        artifactName: "NeonDiff-1.1.0-rc.2-build42-macOS.zip"
+      },
+      {
+        releaseTag: "v1.1.0-rc.1",
+        artifactName: "NeonDiff-1.1.0-rc.1-macOS.zip"
+      },
+      {
+        releaseTag: "v1.1.0-rc.1",
+        artifactName: "NeonDiff-1.1.0-rc.1-build42-macOS.zip",
+        artifactSha256: "A".repeat(64)
+      }
+    ]) {
+      const { result } = runImmutableReleaseInputValidation(validationScript, {
+        ...input,
+        artifactSha256: input.artifactSha256 ?? digest
+      });
+      expect(result.status, `${input.releaseTag} ${input.artifactName}`).not.toBe(0);
+    }
+  });
+
+  it("binds feed metadata to one exact enclosure and rejects sibling or URL drift", () => {
+    const workflow = read(".github/workflows/paid-beta-public-download-canary.yml");
+    const parser = feedItemParser(workflow);
+    const root = mkdtempSync(join(tmpdir(), "neondiff-feed-fixture-"));
+    const feedPath = join(root, "appcast.xml");
+    const feedUrl = "https://www.neondiff.com/updates/beta/appcast.xml";
+    const artifactUrl = "https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/download/v1.1.0-rc.1/NeonDiff-1.1.0-rc.1-build42-macOS.zip";
+    const signature = Buffer.alloc(64, 7).toString("base64");
+    const publicKey = Buffer.alloc(32, 9).toString("base64");
+    const runParser = (xml: string) => {
+      writeFileSync(feedPath, xml);
+      return spawnSync(
+        "python3",
+        ["-", feedPath, artifactUrl, "42", "1.1.0-rc.1", feedUrl, publicKey],
+        { encoding: "utf8", input: parser }
+      );
+    };
+    try {
+      const valid = runParser(`<?xml version="1.0"?><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><link>${feedUrl}</link><item><description>${artifactUrl} sparkle:version="42"</description><enclosure url="https://stale.invalid/old.zip"/></item><item><enclosure url="${artifactUrl}" sparkle:version="42" sparkle:shortVersionString="1.1.0-rc.1" sparkle:edSignature="${signature}"/></item></channel></rss>`);
+      expect(valid.status, valid.stderr).toBe(0);
+      expect(valid.stdout.trim()).toBe(signature);
+
+      const wrongEnclosure = runParser(`<?xml version="1.0"?><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><link>${feedUrl}</link><item><description>${artifactUrl} sparkle:version="42" sparkle:edSignature="${signature}"</description><enclosure url="https://wrong.invalid/NeonDiff.zip" sparkle:version="42" sparkle:shortVersionString="1.1.0-rc.1" sparkle:edSignature="${signature}"/></item></channel></rss>`);
+      expect(wrongEnclosure.status).not.toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("defines a three-clean-Mac public download and install canary", () => {
     const workflowPath = ".github/workflows/paid-beta-public-download-canary.yml";
 
@@ -69,7 +203,19 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
       "spctl --assess --type execute",
       "/Applications/NeonDiff.app",
       'test "$(uname -m)" = "arm64"',
-      'test "$release_beta" = "$artifact_beta"'
+      'test "$release_channel" = "$artifact_channel"',
+      'test "$release_number" = "$artifact_number"',
+      "git/ref/tags",
+      "'.object.type'",
+      "sha256:$ARTIFACT_SHA256",
+      "CFBundleShortVersionString",
+      "CFBundleVersion",
+      "SUPublicEDKey",
+      "edSignature",
+      "xml.etree.ElementTree",
+      "len(matches) != 1",
+      "Curve25519.Signing.PublicKey",
+      "isValidSignature"
     ]) {
       expect(workflow).toContain(command);
     }
@@ -80,6 +226,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).not.toContain("spctl -a -vv");
     expect(workflow).not.toContain("open -n");
     expect(workflow).not.toContain("NeonDiffDesktop");
+    expect(workflow).toContain("https://www.neondiff.com/updates/beta/appcast.xml");
+    expect(workflow).not.toContain("grep -Fq \"<link>$PUBLIC_FEED_URL</link>\"");
+    expect(workflow).not.toMatch(/\[\[\s*"\$sparkle_key"\s*=~/);
   });
 
   it("defines an unsigned macOS release-smoke workflow with the required desktop gates", () => {
