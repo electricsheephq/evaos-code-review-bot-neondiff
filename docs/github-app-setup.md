@@ -11,8 +11,11 @@ one selected repository, and runs the explicit installation check from the
 wizard. No invitation is required when the versioned public GitHub prerelease is
 published and the neondiff.com purchase/download path is live. The managed B1
 path uses the official NeonDiff App and broker under #613; it is separate from
-B0. This document remains the operator/CLI reference for both paths' App
-identity, permission set, and install boundary. Matching public website
+B0, remains rollout-gated, and is not available from the customer-owned B0 path.
+Managed public-free remains milestone 20 and must not be inferred from a public
+repository or a successful customer-owned App check. This document remains the
+operator/CLI reference for both paths' App identity, permission set, and install
+boundary. Matching public website
 onboarding copy lives in the website repo under neon-diff-agent-website#52.
 
 ## Install URL
@@ -353,17 +356,21 @@ and fix App credentials before continuing.
 
 ## License Boundary
 
-The supported distribution requires live API-backed activation before public,
-private, internal, or unknown repository work. Legacy `publicReposFree` and
-`privateReposRequireEntitlement` values are migration inputs only and cannot
-weaken the production policy — a local visibility flag would trust the client's
-own claim.
+The customer-owned B0 path requires live API-backed activation before public,
+private, internal, or unknown repository work. The entitlement is bound
+to the exact selected repository and GitHub-authoritative visibility: public
+scope may cover a verified public target, private coverage is required for
+private/internal targets, and unknown visibility fails closed. Legacy `publicReposFree`
+and `privateReposRequireEntitlement` values are migration inputs only and cannot
+weaken this boundary. An App installation check proves
+only repository access; it does not by itself unlock review. Provider
+verification and a target-pinned dry run remain separate gates.
 
-Coming with the native app: public open-source repository review will be free
-with no NeonDiff Activation Key, while private/commercial review will require an
-active entitlement. This managed public-free/private-paid model ships with the
-native NeonDiff app and the server-side GitHub App broker (#614), which verifies
-repository visibility; it is not enforced by the current CLI.
+The managed public-free/private-paid model is a separate milestone 20 path using
+the official NeonDiff App and server-side broker (#614); it is not available in
+B0 BYO. Public open-source repository review will be free only on that future
+managed path, once its own release and runtime gates pass; this is not a B0
+availability claim.
 
 Private repo data stays local to the worker and GitHub App installation. Do not
 send private repository names, diffs, logs, private keys, provider keys, license

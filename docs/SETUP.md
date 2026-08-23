@@ -22,17 +22,20 @@ for the support-tier pricing contract.
 - npm
 - GitHub App credentials for the repos you want to review
 - a provider/model path available on the machine running the worker
-- NeonDiff license key for repository review (the current CLI requires
-  activation for every repository; public open-source review will be free in the
-  native app)
+- An API-backed NeonDiff entitlement for the exact selected repository (the
+  current CLI requires activation for every repository; the B0 BYO native path
+  is also activation-gated)
 
 The current CLI (v1.0.x) requires API-backed activation for every repository
 (public, private, internal, and unknown); unknown visibility fails closed, and
 GitHub-authoritative visibility (public, private, internal, and unknown) decides
-the tier. Coming with the native app: public open-source repositories will be
-free with no NeonDiff Activation Key, while private, internal, and commercial
-repositories will require an active entitlement (managed GitHub App broker #614;
-not enforced by the current CLI). Support
+the tier. The public paid B0 BYO native path is also activation-gated for the
+exact selected customer-owned repository: a public-scoped entitlement may cover
+that verified public target, while private/internal targets require private
+coverage. GitHub App access alone does not unlock review; provider verification
+and a target-pinned dry run remain separate gates. Managed public-free remains
+milestone 20, uses the official NeonDiff App and broker (#614), and is not
+available in B0 BYO. Support
 licenses cost $1/month or $10/year for
 individuals, or $100/year for organizations. Individual plans include a 7-day
 trial, organization plans include a 30-day trial, and legacy lifetime licenses
@@ -186,6 +189,13 @@ worktree prep, model/provider calls, or GitHub review posting unless live API
 validation returns an active entitlement covering that operation and visibility.
 Cached entitlement metadata is diagnostic only.
 
+An App installation check proves only current access to the exact selected
+repository. It does not by itself unlock review. Changing the selected target,
+account, bot, App, installation, or GitHub-reported visibility invalidates the
+previous proof; rerun the repository-scoped App check and entitlement
+verification before new work. Unknown, stale, mismatched, expired, revoked,
+malformed, or offline proof fails closed.
+
 Use this matrix when reading doctor or review evidence:
 
 | Repo visibility | License state | Provider state | Expected setup result |
@@ -222,6 +232,8 @@ broker uses it for an in-memory license lookup and never logs, reflects, or
 persists it. Public-repository token requests omit the key and do not call the
 license authority. This path is still rollout-disabled; these contracts do not
 prove production enablement or customer readiness.
+Managed public-free remains the separate milestone 20 path; B0 BYO activation
+must not be presented as managed public-free availability.
 
 The native source composition is also default-off. A release bundle must carry
 all three exact public Info.plist values before the app constructs the managed

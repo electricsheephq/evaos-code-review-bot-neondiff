@@ -185,6 +185,14 @@ show one of these access cues:
 - `INSUFFICIENT READ ACCESS` when GitHub reports that the user cannot read the
   repository.
 
+These cues describe the customer-owned B0 BYO path. `PUBLIC · LICENSE ACTIVE`
+means that an active public-scoped entitlement covers this exact selected
+repository; it is not managed public-free access. Managed public-free remains a
+separate milestone 20 path and is not available in B0 BYO. A successful App
+installation check proves only current repository access; it does not by itself
+unlock review. Provider verification and a target-pinned dry run remain separate
+gates. Unknown visibility fails closed.
+
 A stored license key is not treated as active entitlement. Repo selection still
 writes only the local allowlist; the worker's pre-checkout license and GitHub App
 gates remain authoritative for review execution.
@@ -200,7 +208,9 @@ reads the key only on that explicit action, supplies it to
 `doctor github` through bounded stdin, and accepts only typed App-installation
 proof for the exact configured repository. Changing the App credentials,
 CLI/config path, or allowlist invalidates that proof. This step does not run a
-provider, execute a review, or post to GitHub.
+provider, execute a review, or post to GitHub. Changing the selected repository,
+account, bot, App, installation, or reported visibility also invalidates prior
+proof; rerun the exact target checks before new work.
 
 ## Local Dashboard Launcher
 
