@@ -1,3 +1,4 @@
+import { types as nodeTypes } from "node:util";
 import {
   compileSevereVerificationReceiptSchema,
   type SevereVerificationReceipt
@@ -10,6 +11,7 @@ const ownKeys = Reflect.ownKeys;
 const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
 const getPrototypeOf = Object.getPrototypeOf;
 const defineProperty = Object.defineProperty;
+const isProxy = nodeTypes.isProxy;
 const reject = (): never => { throw new TypeError("severe_receipt_schema_invalid"); };
 
 /** Parser C: validate Parser B data and return an isolated plain-data receipt. */
@@ -25,6 +27,7 @@ function copyPlainData(input: unknown): unknown {
   if (kind === "string" || kind === "boolean") return input;
   if (kind === "number") return Number.isFinite(input) ? input : reject();
   if (kind !== "object") reject();
+  if (isProxy(input)) reject();
 
   let array: boolean;
   let prototype: object | null;

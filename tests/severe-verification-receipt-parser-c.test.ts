@@ -55,4 +55,15 @@ describe("severe receipt Parser C schema/copy boundary", () => {
     expect(() => parseSevereVerificationReceipt(iterator)).toThrow("schema_invalid");
     expect(touched).toBe(false);
   });
+
+  it("rejects transparent proxies before any proxy trap runs", () => {
+    let touched = false;
+    const traps = { get() { touched = true; throw new Error("trap"); }, ownKeys() { touched = true; throw new Error("trap"); }, getPrototypeOf() { touched = true; throw new Error("trap"); } };
+    const outer = new Proxy(receipt(), traps);
+    expect(() => parseSevereVerificationReceipt(outer)).toThrow("schema_invalid");
+    const nested = receipt();
+    nested.evidence.files[0] = new Proxy(nested.evidence.files[0], traps);
+    expect(() => parseSevereVerificationReceipt(nested)).toThrow("schema_invalid");
+    expect(touched).toBe(false);
+  });
 });
