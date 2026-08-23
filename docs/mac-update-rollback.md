@@ -29,10 +29,10 @@ set -euo pipefail
 case "$RELEASE_ROOT" in /*) ;; *) echo "release root must be absolute" >&2; exit 1;; esac
 test -d "$RELEASE_ROOT" || { echo "release root must already exist" >&2; exit 1; }
 RELEASE_ROOT="$(cd "$RELEASE_ROOT" && pwd -P)"
-if git rev-parse --show-toplevel >/dev/null 2>&1; then
-  CHECKOUT_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
-  case "$RELEASE_ROOT/" in "$CHECKOUT_ROOT/"*) echo "release root must be outside the checkout" >&2; exit 1;; esac
+if git -C "$RELEASE_ROOT" rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "release root must be outside every checkout" >&2; exit 1
 fi
+test -z "$(find "$RELEASE_ROOT" -mindepth 1 -maxdepth 1 -print -quit)" || { echo "release root must start empty" >&2; exit 1; }
 ARTIFACT="$RELEASE_ROOT/$ARTIFACT_NAME"
 MANIFEST="$RELEASE_ROOT/release-manifest.json"
 APPCAST="$RELEASE_ROOT/appcast.xml"
@@ -71,7 +71,7 @@ test -d "$APP"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$EXPECTED_VERSION"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")" = "$EXPECTED_BUILD"
 test "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$APP/Contents/Info.plist")" = "$EXPECTED_FEED_URL"
-test "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist" | shasum -a 256 | awk '{print $1}')" = "$EXPECTED_KEY_FINGERPRINT"
+test "$(printf '%s' "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist")" | shasum -a 256 | awk '{print $1}')" = "$EXPECTED_KEY_FINGERPRINT"
 codesign --verify --deep --strict --verbose=2 "$APP"
 xcrun notarytool info "$NOTARY_ID" --keychain-profile "$NOTARY_PROFILE" --output-format json | jq -e '.status == "Accepted"'
 xcrun stapler validate "$APP"
@@ -127,11 +127,6 @@ test -f "$BUNDLE_DIR/install-b0-worker-candidate.mjs"
 : "${WORKER_LABEL:?set the exact existing LaunchAgent label}"
 : "${MANIFEST_SHA256:?set the packet manifest SHA-256}"
 node --version
-node install-b0-worker-candidate.mjs first-install \
-  --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
-  --manifest-sha256 "$MANIFEST_SHA256" \
-  --tarball "$BUNDLE_DIR/neondiff-1.1.0-beta.N.tgz" \
-  --launchd-label "$WORKER_LABEL" --dry-run true
 node install-b0-worker-candidate.mjs update \
   --manifest "$BUNDLE_DIR/neondiff-1.1.0-beta.N-b0-candidate-manifest.json" \
   --manifest-sha256 "$MANIFEST_SHA256" \
