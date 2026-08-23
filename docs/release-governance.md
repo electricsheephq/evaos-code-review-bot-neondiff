@@ -32,84 +32,33 @@ workflow changes.
 
 ## Versioning And GA Line
 
-This is the owner-decided policy for the GA cutover. It records a decision,
-not a proposal; do not re-litigate it in a future release packet without a
-new explicit owner decision.
+The native Desktop GA is `v1.1.0`; it is an application bundle release, not an
+npm package release. The npm CLI lane remains `1.0.4` until its own bytes and
+release packet change. Do not use a repository-global `v1.1.0` tag for the CLI,
+or describe npm `latest` as Desktop evidence.
 
-### Semver Policy
+### Semver and channel policy
 
-- The GA version line target is `v1.0.0`.
-- Prereleases continue as `v0.4.x-beta.N` until the GA cutover. Do not jump
-  the tag train to `1.0.0-beta.N` or any other `1.x` prerelease shape before
-  GA; `docs/releases/v1.0.0-beta.1.md` is the historical example of exactly
-  that mistake (see the annotation at the top of that file), and
-  `v0.4.24-beta.1` is the release that corrected it.
-- Patch and minor beta tags keep following the existing convention in
-  [Version Names](#version-names) above: patch for runtime/reliability fixes,
-  minor for new reviewer behavior, policy shape, eval/capability expansion, or
-  operator-facing workflow changes.
-- The first stable tag after the GA cut is `v1.0.0`. Normal semver applies
-  from that point forward (`v1.0.1` patches, `v1.1.0` minors, and so on);
-  this runbook does not need a separate post-GA numbering scheme.
+- Desktop promotion consumes the accepted `v1.1.0` bundle packet described in
+  `docs/architecture/mac-ga-release-contract.md`.
+- The CLI package keeps its independent `1.0.4` identity and existing beta
+  dist-tag policy. A CLI tag or npm dist-tag never proves Desktop promotion.
+- Historical pre-Desktop-GA or npm-default-channel wording is obsolete. A
+  future CLI version requires a separate owner decision and changed bytes.
 
-### Dist-Tag Policy
+### What qualifies a native GA cut
 
-NeonDiff publishes to npm under two dist-tags:
+The pre- and post-release gates still apply to the CLI and public manifest, but
+Desktop GA additionally requires an immutable accepted artifact packet:
 
-- `beta`: tracks the active `0.4.x-beta.N` prerelease train. This is the
-  correct install target for anyone testing pre-GA builds.
-- `latest`: today, before GA, `latest` still points at a beta package
-  version. This is expected pre-GA state, not a packaging bug — document any
-  release packet that publishes a new beta as leaving `latest` on the prior
-  beta unless the packet explicitly repoints it. Do not assume `latest`
-  means stable while the project is pre-GA.
+- signed, notarized, stapled bundle digest and Gatekeeper assessment;
+- exact worker LaunchAgent contract, label, config identity, and Keychain mode;
+- review/CI evidence for the candidate and a named last-known-good packet;
+- operator evidence under a unique digest-named directory.
 
-At GA cutover, `latest` is repointed to the stable GA release so that a
-plain `npm install -g neondiff` (no tag suffix) installs GA, and `beta`
-keeps tracking whatever prerelease train is active after GA (for example, a
-`v1.1.0-beta.N` line preparing the next minor). The publish workflow should
-publish non-prerelease tags with the `latest` npm dist-tag. If the package was
-published through another path or the tag needs repair, the explicit cutover
-command is:
-
-```bash
-npm dist-tag add neondiff@<ga> latest
-```
-
-Replace `<ga>` with the exact published GA package version, e.g.
-`neondiff@1.0.0`. Run this only after the GA package itself is on the
-registry (`npm view neondiff versions` includes `<ga>`) and after the GA
-release has passed the same gates as any other release in this runbook.
-Do not repoint `latest` speculatively ahead of the GA package existing.
-
-### What Qualifies A GA Cut
-
-A GA cut is not a new gate system. It is the existing [Pre-Release
-Gate](#pre-release-gate) and [Post-Release Gate](#post-release-gate) machinery
-in this runbook, plus the existing `docs/public-release-manifest.json` and
-`release-status --public-release-manifest` surface, applied to a release that
-is tagged `v1.0.0` instead of a beta tag. Concretely, a GA cut requires:
-
-- Every condition in [Pre-Release Gate](#pre-release-gate) passes for the
-  candidate GA source SHA, including a `docs/releases/v1.0.0.md` packet with
-  source SHA, issue/PR links, validation commands, live config path, rollback
-  command, and known caveats.
-- `docs/public-release-manifest.json` is updated for the GA version and
-  passes `release-status --public-release-manifest
-  docs/public-release-manifest.json --expected-public-version v1.0.0`, with
-  every `requiredForThisRelease: true` channel healthy, not pending.
-- Every condition in [Post-Release Gate](#post-release-gate) is green against
-  the GA release, including coverage-audit, provider cooldowns, and durable
-  queue health.
-- The npm dist-tag cutover step above has run and `npm view neondiff
-  dist-tags` shows `latest` pointing at the GA version.
-- The CHANGELOG.md `[Unreleased]` section for the GA cut has been folded into
-  a dated `[1.0.0]` entry.
-
-This section intentionally does not invent new promotion gates beyond the
-existing release-status/public-release-manifest machinery; it only names the
-version string and dist-tag step that make a promotion a GA promotion instead
-of another beta promotion.
+Git checkout state, a local build, a source SHA, or `git reset` is never proof
+of the installed Desktop bytes. Promotion and rollback install only a packet's
+accepted bundle after the operator preflight passes.
 
 ## Cadence
 
@@ -342,7 +291,7 @@ unchanged and treat the package as quarantined.
 Create an annotated tag from the merged source SHA:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd /Users/m1/repos/evaos-code-review-bot
 git fetch origin main --tags
 git checkout main
 git pull --ff-only origin main
@@ -377,13 +326,13 @@ pass that file as `--notes-file` and include the tag name at the top.
 After the GitHub Release exists:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd /Users/m1/repos/evaos-code-review-bot
 git fetch origin main --tags
 git checkout main
 git pull --ff-only origin main
 test "$(git rev-parse HEAD)" = "<source-sha>"
-launchctl bootout gui/$(id -u) /Users/lume/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) /Users/lume/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
+launchctl bootout gui/$(id -u) /Users/m1/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) /Users/m1/Library/LaunchAgents/com.electricsheephq.evaos-code-review-bot.plist
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 ```
 
@@ -395,7 +344,7 @@ Run the status gate with App credentials set in the shell:
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
   --expected-head <source-sha> \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
@@ -406,7 +355,7 @@ For public source-beta or public beta releases, include the public manifest gate
 SOURCE_SHA=replace-with-release-source-sha
 PUBLIC_BETA_TAG=vX.Y.Z-beta.N
 npx tsx src/cli.ts release-status \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
   --expected-head "$SOURCE_SHA" \
   --public-release-manifest docs/public-release-manifest.json \
   --expected-public-version "$PUBLIC_BETA_TAG" \
@@ -424,9 +373,9 @@ Also run:
 
 ```bash
 npx tsx src/cli.ts coverage-audit \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json
+  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json
 npx tsx src/cli.ts provider-cooldowns \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
   --expired-only true
 ```
 
@@ -458,13 +407,13 @@ before calling the release green.
 Rollback is tag-first:
 
 ```bash
-cd /Volumes/LEXAR/repos/evaos-code-review-bot
+cd /Users/m1/repos/evaos-code-review-bot
 git fetch origin --tags
 git checkout main
 git reset --hard <previous-release-tag>
 launchctl kickstart -k gui/$(id -u)/com.electricsheephq.evaos-code-review-bot
 npm run release:status -- \
-  --config /Volumes/LEXAR/Codex/evaos-code-review-bot/config/active-installed-live.json \
+  --config /Users/m1/Codex/evaos-code-review-bot/config/active-installed-live.json \
   --expected-head "$(git rev-parse HEAD)" \
   --launchd-label com.electricsheephq.evaos-code-review-bot
 ```
