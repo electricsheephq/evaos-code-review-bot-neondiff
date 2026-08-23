@@ -1534,7 +1534,7 @@ export function assertEvalOutputDirSafe(outputDir: string): string {
     assertPathOutsideProtectedRoot({
       path: resolvedOutput,
       protectedRoot: undefined,
-      protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(resolvedOutput)],
+      protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(resolvedOutput) ?? ""],
       pathLabel: "outputDir",
       protectedRootLabel: "a protected checkout root"
     });

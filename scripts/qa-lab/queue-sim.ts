@@ -41,7 +41,7 @@ const resolvedEvidenceRoot = resolvePathFollowingExistingSymlinks(resolve(eviden
 assertPathOutsideProtectedRoot({
   path: resolvedEvidenceRoot,
   protectedRoot: undefined,
-  protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(resolvedEvidenceRoot)],
+  protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(resolvedEvidenceRoot) ?? ""],
   pathLabel: "NEONDIFF_EVIDENCE_ROOT",
   protectedRootLabel: "a protected checkout root"
 });
@@ -49,7 +49,7 @@ const EVIDENCE_DIR = join(resolvedEvidenceRoot, "neondiff-qa-lab", "risk-queue")
 assertPathOutsideProtectedRoot({
   path: resolvePathFollowingExistingSymlinks(EVIDENCE_DIR),
   protectedRoot: undefined,
-  protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(EVIDENCE_DIR)],
+  protectedRoots: [...getProtectedCheckoutRoots(), findGitCheckoutRoot(EVIDENCE_DIR) ?? ""],
   pathLabel: "NEONDIFF_EVIDENCE_ROOT",
   protectedRootLabel: "a protected checkout root"
 });
