@@ -121,6 +121,30 @@ describe("NeonDiff public community funnel", () => {
     }
   });
 
+  it("customer docs keep selected BYO scope separate from future managed public-free", () => {
+    const surfaces = {
+      readme: read("README.md"),
+      setup: read("docs/SETUP.md"),
+      githubApp: read("docs/github-app-setup.md"),
+      desktop: read("docs/neondiff-desktop.md")
+    };
+
+    for (const [name, text] of Object.entries(surfaces)) {
+      const normalized = text.replace(/\s+/g, " ");
+      expect(normalized, name).toMatch(/public paid B0 BYO|customer-owned.*App/i);
+      expect(normalized, name).toMatch(/exact (?:selected )?repository|one selected repository/i);
+      expect(normalized, name).toMatch(/public(?:-repo)? scope|public.*entitlement/i);
+      expect(normalized, name).toMatch(/private(?:\/internal|\/commercial)?.*(?:coverage|entitlement|required)/i);
+      expect(normalized, name).toMatch(/unknown.*fail(?:s|ed) closed/i);
+      expect(normalized, name).toMatch(/managed public-free.*milestone 20|milestone 20.*managed public-free/i);
+      expect(normalized, name).toMatch(/does not (?:by itself )?(?:unlock|prove).*review|remains a separate gate/i);
+    }
+
+    expect(surfaces.readme).not.toMatch(/This managed public-free\/private-paid model\s+ships with the native NeonDiff app/i);
+    expect(surfaces.setup).not.toMatch(/public open-source repositories? will be free with no NeonDiff Activation Key/i);
+    expect(surfaces.githubApp).not.toMatch(/Coming with the native app: public open-source repository review will be free/i);
+  });
+
   it("license boundary surfaces are canonical and avoid open-source claims", () => {
     const license = read("LICENSE.md");
     const boundary = read("docs/license-boundary.md");

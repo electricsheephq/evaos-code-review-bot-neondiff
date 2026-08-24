@@ -15,11 +15,18 @@ The current npm CLI (v1.0.x) requires API-backed activation for every repository
 (public, private, internal, and unknown); unknown visibility fails closed, and
 provider verification is required for all tiers.
 
-Coming with the native app: public open-source repositories will be free with no
-NeonDiff Activation Key, while private, internal, and commercial repositories
-will require an active entitlement. This managed public-free/private-paid model
-ships with the native NeonDiff app and the managed GitHub App broker (#614) and
-is not enforced by the current CLI. NeonDiff
+The public paid B0 BYO path is activation-gated for the exact selected
+customer-owned repository. A public-scoped entitlement may cover that verified
+public target; private or internal targets require private coverage, and
+unknown visibility fails closed. GitHub App access alone does not unlock review:
+provider verification and a target-pinned dry run remain separate gates.
+
+Managed public-free is a separate milestone 20 path using the official NeonDiff
+App and broker (#614). It is not available in the customer-owned B0 BYO build,
+and must not be inferred from a public repository or a successful App check.
+Public open-source repositories will be free only on that future managed path,
+once its release and runtime gates pass.
+NeonDiff
 support licenses cost $1/month or $10/year for individuals,
 or $100/year for organizations. Individual plans include a 7-day trial,
 organization plans include a 30-day trial, and legacy lifetime licenses remain
@@ -178,9 +185,12 @@ the server kill switch and every broker/entitlement decision still fail closed.
 The public paid B0 BYO beta build uses a separate exact
 `paid-mac-beta-byo-v1` release contract with `NeonDiffBYOGitHubEnabled=true` and
 no managed-broker fields. That contract enables the existing local direct/BYO
-path and API-backed native activation without a hidden defaults mutation. It
-is a paid path for every repository and does not claim the managed public-free
-model. The signed release app contains a sealed NeonDiff worker built from the
+path and API-backed native activation without a hidden defaults mutation. It is
+activation-gated for the exact selected repository: public scope may cover a
+verified public target, private coverage is required for private/internal
+targets, and unknown visibility fails closed. It does not make the managed
+public-free milestone 20 path available. The signed release app contains a
+sealed NeonDiff worker built from the
 exact reviewed source and a pinned, SHA-256-verified official Node runtime. A
 clean Mac therefore does not need a global CLI or separate worker install for
 the native setup and review path. The separate checksum-bound bundle remains
@@ -261,6 +271,10 @@ Useful work unlocks only when GitHub reports the exact repository visibility
 and the live API response returns an active entitlement covering that
 visibility; missing, unknown, expired, revoked, malformed, or offline proof
 fails closed.
+Changing the selected repository, account, bot, App, installation, or
+GitHub-reported visibility invalidates the previous proof. Rerun the exact
+repository-scoped GitHub check and entitlement verification before starting
+new work; a successful App-access check by itself does not unlock review.
 During launch it shows a bounded restoring state while that authorized
 account/bot/config intersection is checked; it does not flash empty first-run
 setup or claim that the existing configuration is missing.
