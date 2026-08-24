@@ -3,7 +3,11 @@ import { resolve } from "node:path";
 import { formatDaemonLog } from "./daemon-log.js";
 import { loadConfig } from "./config.js";
 import { GitHubApi } from "./github.js";
-import { runIssueEnrichmentCycle, type IssueEnrichmentCycleResult } from "./issue-enrichment.js";
+import {
+  DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS,
+  runIssueEnrichmentCycle,
+  type IssueEnrichmentCycleResult
+} from "./issue-enrichment.js";
 import { runScheduledCycle } from "./scheduler.js";
 import {
   isAuthenticProductionLicenseAdmission,
@@ -109,7 +113,11 @@ export function buildIssueEnrichmentLaneReceipt(
     hasValidIssueEnrichmentLaneSummary(summary) ? summary[key] : undefined
   );
   const malformed = result !== undefined && !hasValidIssueEnrichmentLaneSummary(summary);
-  const blocked = result?.status?.state === "blocked";
+  const dryRunIgnoredBlockers = result?.ok === true && result.dryRun && result.status?.state === "blocked" &&
+    result.status.blockers.length > 0 && result.status.blockers.every((blocker) =>
+      DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(blocker)
+    );
+  const blocked = result?.status?.state === "blocked" && !dryRunIgnoredBlockers;
   const leaseSkipped = result?.ok === true && counts.workerSkipped > 0;
   const ok = !malformed && !blocked && result?.ok === true && counts.readFailures === 0 && counts.failed === 0;
   const noCandidates = ok && counts.eligible === 0 && counts.wouldEnrich === 0 && counts.wouldComment === 0 &&

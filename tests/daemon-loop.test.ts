@@ -669,10 +669,14 @@ describe("daemon cycle resilience", () => {
       summary: { ...base.summary, issuesSeen: 0, eligible: 0, wouldEnrich: 0, wouldComment: 0, dryRunRecorded: 0 }
     };
     expect(buildIssueEnrichmentLaneReceipt(empty)).toMatchObject({ ok: true, code: "no_candidates" });
+    expect(buildIssueEnrichmentLaneReceipt({ ...base, dryRun: true,
+      status: { ...base.status, state: "blocked", blockers: ["issue_enrichment_model_runtime_required"] } }))
+      .toMatchObject({ ok: true, code: "completed", counts: { dryRunRecorded: 1 } });
     expect(buildIssueEnrichmentLaneReceipt({ ...empty, summary: { ...empty.summary, workerSkipped: 1 } }))
       .toMatchObject({ ok: true, code: "lease_skipped", reason: "worker_lease_held" });
     expect(buildIssueEnrichmentLaneReceipt({
       ...empty,
+      dryRun: true,
       ok: false,
       status: { ...empty.status, state: "blocked", blockers: ["issue_enrichment_allowlist_empty"] }
     })).toMatchObject({ ok: false, code: "blocked", reason: "issue_enrichment_allowlist_empty" });
