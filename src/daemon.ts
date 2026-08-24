@@ -46,7 +46,7 @@ export interface IssueEnrichmentLaneCounts {
   failed: number;
 }
 
-export type IssueEnrichmentLaneCode = "completed" | "no_candidates" | "result_not_ok" | "cycle_failed";
+export type IssueEnrichmentLaneCode = "completed" | "no_candidates" | "result_not_ok" | "cycle_failed" | "malformed_summary";
 
 export interface IssueEnrichmentLaneReceipt {
   ok: boolean;
@@ -66,17 +66,29 @@ function boundedLaneCount(value: unknown): number {
   return Math.min(1_000_000, Math.max(0, number));
 }
 
+function hasValidIssueEnrichmentLaneSummary(summary: unknown): summary is Record<string, unknown> {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) return false;
+  return ISSUE_ENRICHMENT_LANE_COUNT_KEYS.every((key) => {
+    const value = (summary as Record<string, unknown>)[key];
+    return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
+  });
+}
+
 export function buildIssueEnrichmentLaneReceipt(result?: IssueEnrichmentCycleResult): IssueEnrichmentLaneReceipt {
+  const summary: unknown = result?.summary;
   const counts = {} as IssueEnrichmentLaneCounts;
-  for (const key of ISSUE_ENRICHMENT_LANE_COUNT_KEYS) counts[key] = boundedLaneCount(result?.summary[key]);
-  const ok = result?.ok === true && counts.readFailures === 0 && counts.failed === 0;
+  for (const key of ISSUE_ENRICHMENT_LANE_COUNT_KEYS) counts[key] = boundedLaneCount(
+    hasValidIssueEnrichmentLaneSummary(summary) ? summary[key] : undefined
+  );
+  const malformed = result !== undefined && !hasValidIssueEnrichmentLaneSummary(summary);
+  const ok = !malformed && result?.ok === true && counts.readFailures === 0 && counts.failed === 0;
   const noCandidates = ok && counts.eligible === 0 && counts.wouldEnrich === 0 && counts.wouldComment === 0 &&
     counts.posted === 0 && counts.dryRunRecorded === 0 && counts.skippedRecorded === 0 &&
     counts.deferredRecorded === 0 && counts.alreadyProcessed === 0;
   return {
     ok,
     stage: "issue_enrichment",
-    code: result === undefined ? "cycle_failed" : !ok ? "result_not_ok" : noCandidates ? "no_candidates" : "completed",
+    code: result === undefined ? "cycle_failed" : malformed ? "malformed_summary" : !ok ? "result_not_ok" : noCandidates ? "no_candidates" : "completed",
     counts
   };
 }

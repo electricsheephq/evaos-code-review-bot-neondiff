@@ -744,6 +744,24 @@ describe("daemon cycle resilience", () => {
       })
     });
   });
+
+  it("rejects malformed issue summary counts before success classification", () => {
+    const base = successfulIssueEnrichmentCycleResult();
+    const malformed = [
+      { ...base, summary: { ...base.summary, failed: -1 } },
+      { ...base, summary: { ...base.summary, failed: Number.NaN } },
+      { ...base, summary: { ...base.summary, failed: "1" } },
+      { ...base, summary: Object.fromEntries(Object.entries(base.summary).filter(([key]) => key !== "failed")) }
+    ] as unknown as IssueEnrichmentCycleResult[];
+
+    for (const result of malformed) {
+      expect(buildIssueEnrichmentLaneReceipt(result)).toMatchObject({
+        ok: false,
+        stage: "issue_enrichment",
+        code: "malformed_summary"
+      });
+    }
+  });
 });
 
 function successfulRunOnceResult() {
