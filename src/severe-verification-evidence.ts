@@ -83,10 +83,10 @@ async function inspectFile(root: string, path: string, kind: "whole_file" | "mod
       cursor = join(cursor, part);
       if ((await lstat(cursor)).isSymbolicLink()) throw new Error("not_file");
     }
-    const stats = await lstat(candidate);
+    const stats = await lstat(actual);
     if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("not_file");
     if (stats.size > MAX_EVIDENCE_BYTES) return { omission: { path, code: "cap_exceeded" as const } };
-    const data = await readFile(candidate);
+    const data = await readFile(actual);
     if (data.length > MAX_EVIDENCE_BYTES) return { omission: { path, code: "cap_exceeded" as const } };
     try { decoder.decode(data); } catch { return { omission: { path, code: "evidence_incomplete" as const } }; }
     return { file: { path, kind, sha256: hash(data), bytes: data.length, complete: true } };
