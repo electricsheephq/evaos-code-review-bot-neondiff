@@ -115,7 +115,7 @@ describe("operator CLI summaries", () => {
       providerCooldowns: [], checkedAt: "2026-07-01T00:10:00.000Z"
     }));
     expect(human).toContain(
-      "heartbeat: active cycle=4 totalAgeMs=600000 progressAgeMs=30000 livenessAgeMs=30000"
+      "heartbeat: active cycle=4 event=daemon_cycle_progress totalAgeMs=600000 progressAgeMs=30000 livenessAgeMs=30000"
     );
   });
 

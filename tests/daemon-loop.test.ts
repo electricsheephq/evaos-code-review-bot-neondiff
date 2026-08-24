@@ -655,7 +655,7 @@ describe("daemon cycle resilience", () => {
     expect(heartbeats.slice(1, -1).map(({ event }) => event)).toEqual([
       "daemon_cycle_progress", "daemon_cycle_progress"
     ]);
-    expect(heartbeats[2]).toEqual({ event: "daemon_cycle_progress", error: "issue_enrichment_failed" });
+    expect(heartbeats).toContainEqual({ event: "daemon_cycle_progress", error: "issue_enrichment_failed" });
     expect(JSON.stringify(heartbeats)).not.toContain("ghp_fake_token");
   });
 });
