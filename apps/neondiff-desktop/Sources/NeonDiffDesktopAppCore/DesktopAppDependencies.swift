@@ -89,28 +89,18 @@ package struct DesktopProductionBoundary: Sendable {
 }
 
 /// Bundle-derived capability for native new-App verification.
-/// Requires exact BYO markers and sealed-worker proof; existing local-bot
-/// verification remains separate.
 package struct DesktopNativeVerificationCapability: Sendable {
     package let newAppNativeVerificationAvailable: Bool
-    package let trustedBundledWorker: DesktopLocalBotExecutionContext?
 
     package static let unavailable = DesktopNativeVerificationCapability(
-        newAppNativeVerificationAvailable: false,
-        trustedBundledWorker: nil
+        newAppNativeVerificationAvailable: false
     )
     package static let testAvailable = DesktopNativeVerificationCapability(
-        newAppNativeVerificationAvailable: true,
-        trustedBundledWorker: nil
+        newAppNativeVerificationAvailable: true
     )
 
-    private init(
-        newAppNativeVerificationAvailable: Bool,
-        trustedBundledWorker: DesktopLocalBotExecutionContext?
-    ) {
-        self.newAppNativeVerificationAvailable =
-            newAppNativeVerificationAvailable
-        self.trustedBundledWorker = trustedBundledWorker
+    private init(newAppNativeVerificationAvailable: Bool) {
+        self.newAppNativeVerificationAvailable = newAppNativeVerificationAvailable
     }
 
     /// Resolve from the produced bundle contract and platform proof callbacks.
@@ -138,33 +128,25 @@ package struct DesktopNativeVerificationCapability: Sendable {
         sealedFileIsValid: (URL) -> Bool
     ) -> Self {
         guard productionBoundary.byoGitHubEnabled,
-              let trustedBundledWorker =
-                DesktopTrustedBundledWorkerContract.executionContext(
-                    appBundleURL: appBundleURL,
-                    appSignatureIsValid: appSignatureIsValid,
-                    sealedFileIsValid: sealedFileIsValid
-                )
+              DesktopTrustedBundledWorkerContract.executionContext(
+                  appBundleURL: appBundleURL,
+                  appSignatureIsValid: appSignatureIsValid,
+                  sealedFileIsValid: sealedFileIsValid
+              ) != nil
         else {
             return .unavailable
         }
-        return DesktopNativeVerificationCapability(
-            newAppNativeVerificationAvailable: true,
-            trustedBundledWorker: trustedBundledWorker
-        )
+        return .testAvailable
     }
 
     package static func resolve(
         productionBoundary: DesktopProductionBoundary,
         trustedBundledWorker: DesktopLocalBotExecutionContext?
     ) -> Self {
-        guard productionBoundary.byoGitHubEnabled,
-              let trustedBundledWorker
-        else {
-            return .unavailable
-        }
         return DesktopNativeVerificationCapability(
-            newAppNativeVerificationAvailable: true,
-            trustedBundledWorker: trustedBundledWorker
+            newAppNativeVerificationAvailable:
+                productionBoundary.byoGitHubEnabled
+                && trustedBundledWorker != nil
         )
     }
 }

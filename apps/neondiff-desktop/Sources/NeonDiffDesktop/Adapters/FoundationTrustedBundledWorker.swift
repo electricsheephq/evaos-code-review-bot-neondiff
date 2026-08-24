@@ -19,18 +19,6 @@ enum FoundationTrustedBundledWorker {
         )
     }
 
-    static func nativeVerificationCapability(
-        bundle: Bundle = .main,
-        productionBoundary: DesktopProductionBoundary
-    ) -> DesktopNativeVerificationCapability {
-        DesktopNativeVerificationCapability.resolve(
-            productionBoundary: productionBoundary,
-            appBundleURL: bundle.bundleURL,
-            appSignatureIsValid: validateAppSignature,
-            sealedFileIsValid: isSafeSealedWorker
-        )
-    }
-
     static func runningProcessIsTrusted(
         _ processIdentifier: Int32,
         bundle: Bundle = .main

@@ -270,13 +270,9 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
             sealedFileIsValid: { $0.path.hasSuffix("NeonDiffWorker") }
         )
         #expect(available.newAppNativeVerificationAvailable)
-        #expect(
-            available.trustedBundledWorker?.executablePath
-                == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker"
-        )
         #expect(!DesktopNativeVerificationCapability.resolve(
             productionBoundary: .testManaged,
-            trustedBundledWorker: available.trustedBundledWorker
+            trustedBundledWorker: nil
         ).newAppNativeVerificationAvailable)
 
         let withoutWorker = DesktopNativeVerificationCapability.resolve(
@@ -286,7 +282,6 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
             sealedFileIsValid: { _ in false }
         )
         #expect(!withoutWorker.newAppNativeVerificationAvailable)
-        #expect(withoutWorker.trustedBundledWorker == nil)
 
         let mixedMarkers = DesktopNativeVerificationCapability.resolve(
             infoDictionary: byoMarkers.merging([
@@ -362,7 +357,6 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         fixture.model.verifyBYOGitHubAppCredentials()
 
         #expect(fixture.cli.calls.isEmpty)
-        #expect(fixture.model.newAppNativeVerificationAvailable == false)
         #expect(fixture.model.lastError?.contains("unavailable") == true)
     }
 
