@@ -59,7 +59,7 @@ Current ZCode behavior is intentionally narrower than a tool-using agent:
   `buildGitNexusContextPromptSection`.
 
 The portable source-defaults slice now uses `NEONDIFF_EVIDENCE_ROOT` for
-explicit external evidence roots and falls back to `$HOME/.neondiff/evidence`.
+explicit absolute external evidence roots and falls back to `$HOME/.neondiff/evidence`.
 The adapter remains offline/shadow-only; no source or runtime change in this
 document promotes it.
 

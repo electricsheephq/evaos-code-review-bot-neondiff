@@ -128,8 +128,11 @@ Keep historical packets immutable and never place secrets in the root or repo:
 
 ```sh
 export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
-RELEASE_EVIDENCE_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/<date>/<version>"
-mkdir -p "$RELEASE_EVIDENCE_DIR"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+RUN_ID="<caller-supplied-unique-run-id>"
+RELEASE_EVIDENCE_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/<date>/$RUN_ID"
+mkdir -p "$(dirname "$RELEASE_EVIDENCE_DIR")"
+mkdir "$RELEASE_EVIDENCE_DIR"
 ```
 
 ```sh
@@ -296,7 +299,7 @@ fabricate a real Sparkle signature.
 ```sh
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture apps/neondiff-desktop/fixtures/appcast/beta.json \
-  --output "$RELEASE_EVIDENCE_DIR/neondiff-beta-appcast.xml" \
+  --output "$RELEASE_EVIDENCE_DIR/appcast.xml" \
   --dry-run
 ```
 

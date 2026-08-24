@@ -48,7 +48,7 @@ bundle cannot establish release, installed-update, rollback, or GA readiness.
 
 ## Durable Plan Contract
 
-Set `NEONDIFF_EVIDENCE_ROOT` to an external directory outside the checkout for
+Set `NEONDIFF_EVIDENCE_ROOT` to an absolute external directory outside the checkout for
 local packets (the source default is `$HOME/.neondiff/evidence`). Do not put
 credentials, private keys, or customer data in that directory. Historical
 release/evidence packets are immutable and are not rewritten by this plan.
@@ -76,9 +76,9 @@ release/evidence packets are immutable and are not rewritten by this plan.
   The native source has a Sparkle 2 controller and Release configuration gate,
   but source/unsigned-bundle proof is not signed-feed or installed-update proof.
   Issue #111 owns license activation and #610 owns the Mac GA artifact boundary.
-- Exact next action: execute the owner-gated #116/#322/#323 release evidence
-  lane from an exact candidate once signing, notarization, hosting, entitlement,
-  and rollback inputs are available.
+- Exact next action: implement and test the single promotion, containment, and
+  rollback path required by `docs/architecture/mac-ga-release-contract.md`;
+  only then run owner-gated #116/#322/#323 evidence from an exact candidate.
 - Critical invariants: every downloaded gated artifact must be entitlement
   checked before download, signature verified before install, tied to a channel
   manifest, rollbackable to a last-known-good release, and backed by public-safe
@@ -106,10 +106,10 @@ release/evidence packets are immutable and are not rewritten by this plan.
     valid entitlement when policy requires one; rollback target resolves to a
     signed last-known-good release.
   - Runner/CI location: future GitHub Actions plus local evidence packet under
-    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/`.
+    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/<run-id>/`.
   - Failure owner: desktop/update implementation owner for future PRs.
   - Eval evidence path:
-    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/`.
+    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/<run-id>/`.
   - Trace feedback target: issue #116, the implementation PR, release notes,
     and the public release manifest.
   - Eval proof boundary: proves only planning readiness until implementation
@@ -126,7 +126,7 @@ release/evidence packets are immutable and are not rewritten by this plan.
   rollback; update status cannot distinguish license, network, and signature
   failures; docs or release notes claim shipped updater before fixture evidence.
 - Evidence path / packet:
-  `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/` plus
+  `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/<date>/<run-id>/` plus
   linked GitHub issue, PR, release, workflow run, and artifact identities.
 
 ## Channel Model
