@@ -92,12 +92,13 @@ enum NeonDiffDesktopCompositionRoot {
             }
         let keychainWorkerLaunchAgentManager:
             any DesktopKeychainWorkerLaunchAgentManaging
-        if let appExecutableURL = Bundle.main.executableURL,
-           let trustedBundledWorker {
+        if let appExecutableURL = Bundle.main.executableURL {
             keychainWorkerLaunchAgentManager =
                 FoundationKeychainWorkerLaunchAgentManager(
                     appExecutableURL: appExecutableURL,
-                    trustedBundledWorker: trustedBundledWorker
+                    trustedBundledWorker: {
+                        FoundationTrustedBundledWorker.executionContext()
+                    }
                 )
         } else {
             keychainWorkerLaunchAgentManager =

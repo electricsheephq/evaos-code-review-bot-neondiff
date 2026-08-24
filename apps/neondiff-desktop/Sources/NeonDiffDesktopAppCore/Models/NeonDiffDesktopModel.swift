@@ -2713,7 +2713,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
             .filter { !$0.isEmpty }
         newAppNativeVerificationAvailable =
             snapshot.nativeVerificationCapability.newAppNativeVerificationAvailable
-        if wasAvailable && !newAppNativeVerificationAvailable {
+        if wasAvailable && !newAppNativeVerificationAvailable && !existingLocalAgentAccessAvailable {
             byoGitHubCredentialRevision &+= 1
             invalidateBYOGitHubVerificationContext()
         }
