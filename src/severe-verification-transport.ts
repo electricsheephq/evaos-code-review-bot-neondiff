@@ -59,10 +59,10 @@ export function parseSevereVerificationTransport(
 /** Reduce provider/parser failures to fixed suppressing codes; unknown never confirms. */
 export function severeVerificationTransportFailure(error: unknown): SevereVerificationCode {
   const shape = error && typeof error === "object" ? error as { code?: unknown; name?: unknown } : {};
-  const text = [error instanceof Error ? error.message : typeof error === "string" ? error : "", shape.code, shape.name].join(" ").toLowerCase();
+  const text = [error instanceof Error ? error.message : typeof error === "string" ? error : "", providerField(shape.code), providerField(shape.name)].join(" ").toLowerCase();
   const providerClass = classifyProviderAdapterError(text);
   if (providerClass === "timeout" || /\baborterror\b/.test(text)) return "timeout";
-  if (providerClass === "network" || /\b(?:provider[_ -]?unavailable|unavailable|http 50[234])\b/.test(text)) return "unavailable";
+  if (providerClass === "network" || providerClass === "auth" || providerClass === "throttle" || /\b(?:provider[_ -]?unavailable|unavailable|http 50[234])\b/.test(text)) return "unavailable";
   if (/identity[_ -]?mismatch/.test(text)) return "identity_mismatch";
   if (/stale[_ -]?head/.test(text)) return "stale_head";
   if (/evidence[_ -]?incomplete/.test(text)) return "evidence_incomplete";
@@ -82,7 +82,7 @@ function verifyInput(input: SevereVerificationTransportInput): ExpectedEvidence 
   if (finding.why_this_matters !== undefined && !boundedContent(finding.why_this_matters)) reject("cap_exceeded");
   if (buildFindingFingerprint(finding) !== finding.fingerprint) reject("identity_mismatch");
   const evidence = input.evidence;
-  if (evidence?.complete !== true || evidence.changedHunk.complete !== true || !evidence.changedHunk.sha256 || evidence.omitted.length || evidence.files.length < 1 || evidence.files.length > MAX_FILES) reject("evidence_incomplete");
+  if (!evidence || !Array.isArray(evidence.omitted) || !Array.isArray(evidence.files) || evidence.complete !== true || evidence.changedHunk?.complete !== true || !evidence.changedHunk.sha256 || evidence.omitted.length || evidence.files.length < 1 || evidence.files.length > MAX_FILES) reject("evidence_incomplete");
   if (!matchesBytes(input.changedHunk, evidence.changedHunk.bytes, evidence.changedHunk.sha256)) reject("identity_mismatch");
   if (!Array.isArray(input.files) || input.files.length !== evidence.files.length) reject("evidence_incomplete");
   const byKey = new Map<string, SevereVerificationContent>(), seenPaths = new Set<string>();
@@ -100,6 +100,7 @@ function safePath(value: unknown): value is string { return typeof value === "st
 function validKind(value: unknown): value is "whole_file" | "module" { return value === "whole_file" || value === "module"; }
 function boundedText(value: unknown): value is string { return typeof value === "string" && value.length > 0 && boundedContent(value); }
 function boundedContent(value: unknown): value is string { return typeof value === "string" && Buffer.byteLength(value, "utf8") <= MAX_EVIDENCE_BYTES && ![...value].some((character) => { const code = character.codePointAt(0)!; return code >= 0xd800 && code <= 0xdfff; }); }
+function providerField(value: unknown): string { return typeof value === "string" || typeof value === "number" ? String(value) : ""; }
 function matchesBytes(value: string, bytes: number, sha256: string): boolean { const data = Buffer.from(value, "utf8"); return data.length === bytes && createHash("sha256").update(data).digest("hex") === sha256; }
 function copyFile(file: SevereVerificationEvidenceFile): SevereVerificationEvidenceFile { return { path: file.path, kind: file.kind, sha256: file.sha256, bytes: file.bytes, complete: file.complete }; }
 function compareFiles(a: Pick<SevereVerificationEvidenceFile, "path" | "kind">, b: Pick<SevereVerificationEvidenceFile, "path" | "kind">): number { return a.path < b.path ? -1 : a.path > b.path ? 1 : a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0; }

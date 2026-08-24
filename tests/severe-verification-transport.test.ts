@@ -52,12 +52,14 @@ describe("severe verification transport", () => {
     for (const raw of [JSON.stringify({ verified: true, confidence: 1 }), '{"schemaVersion":"severe-verifier-v1","schemaVersion":"x"}', "not json"]) expect(() => parseSevereVerificationTransport(raw, input)).toThrow();
     expect(() => buildSevereVerificationTransport({ ...input, evidence: { ...input.evidence, complete: false } })).toThrow("evidence_incomplete");
     const truthyFlags = { ...input, evidence: { ...input.evidence, complete: "false", changedHunk: { ...input.evidence.changedHunk, complete: "false" }, files: input.evidence.files.map((file) => ({ ...file, complete: "false" })) } } as unknown as SevereVerificationTransportInput; expect(() => buildSevereVerificationTransport(truthyFlags)).toThrow();
+    const nonArrayOmissions = { ...input, evidence: { ...input.evidence, omitted: "" } } as unknown as SevereVerificationTransportInput; expect(() => buildSevereVerificationTransport(nonArrayOmissions)).toThrow("evidence_incomplete");
     expect(() => buildSevereVerificationTransport({ ...input, finding: { ...input.finding, body: "x".repeat(65_537) } })).toThrow("cap_exceeded");
   });
 
   it("maps the established provider failure vocabulary and never confirms unknown failures", () => {
     for (const value of [new Error("timeout"), new Error("deadline exceeded"), { name: "AbortError" }, { code: "ETIMEDOUT" }]) expect(severeVerificationTransportFailure(value)).toBe("timeout");
-    for (const value of [new Error("provider unavailable"), { code: "ECONNREFUSED" }, { code: "ECONNRESET" }, { code: "EAI_AGAIN" }, new Error("fetch failed"), new Error("HTTP 503"), new Error("returned 503 network failure")]) expect(severeVerificationTransportFailure(value)).toBe("unavailable");
+    for (const value of [new Error("provider unavailable"), { code: "ECONNREFUSED" }, { code: "ECONNRESET" }, { code: "EAI_AGAIN" }, new Error("fetch failed"), new Error("HTTP 401 auth failed"), new Error("HTTP 429 rate limit"), new Error("HTTP 503"), new Error("returned 503 network failure")]) expect(severeVerificationTransportFailure(value)).toBe("unavailable");
+    expect(severeVerificationTransportFailure({ code: Symbol("malformed") })).toBe("receipt_invalid");
     expect(severeVerificationTransportFailure(new Error("severe_receipt_schema_invalid"))).toBe("schema_invalid"); expect(severeVerificationTransportFailure(new Error("mystery"))).toBe("receipt_invalid");
   });
 
