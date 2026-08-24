@@ -163,9 +163,20 @@ async function pipeVerifiedEntry(guarded, record, destination, aggregate) {
     if (aggregate.value > MAX_BYTES) return callback(new Error("expanded byte bound exceeded"));
     checksum = crc32(chunk, checksum); callback(null, chunk);
   } });
-  await pipeline(source, record.compressionMethod === 8 ? createInflateRaw() : new PassThrough(), verifier, destination);
+  await pipeline(source, record.compressionMethod === 8 ? createInflateRaw({ rejectGarbageAfterEnd: true }) : new PassThrough(), verifier, destination);
   if (actual !== record.uncompressedSize) fail("expanded entry size mismatch");
   if ((checksum >>> 0) !== record.crc32) fail("CRC-32 mismatch");
+}
+function verifyGraphSymlink(path, target, byPath, linkTargets) {
+  let candidate = posix.normalize(posix.join(posix.dirname(path), target)); const seen = new Set();
+  while (true) {
+    if (candidate !== "NeonDiff.app" && !candidate.startsWith("NeonDiff.app/")) fail("unsafe symlink target");
+    const parts = candidate.split("/"); let link = null, suffix = [];
+    for (let index = 1; index <= parts.length; index += 1) { const prefix = parts.slice(0, index).join("/"); if (linkTargets.has(prefix)) { link = prefix; suffix = parts.slice(index); break; } }
+    if (!link) { if (!byPath.has(candidate)) fail("missing symlink target"); return; }
+    if (seen.has(link)) fail("symlink cycle"); seen.add(link);
+    candidate = posix.normalize(posix.join(posix.dirname(link), linkTargets.get(link), ...suffix));
+  }
 }
 
 export async function withMaterializedClassicZipApp(artifactPath, consumer) {
@@ -181,18 +192,21 @@ export async function withMaterializedClassicZipApp(artifactPath, consumer) {
       await pipeVerifiedEntry(guarded, record, createWriteStream(destination, { flags: constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, mode: 0o600 }), aggregate);
       chmodSync(destination, record.mode & 0o777);
     }
-    for (const record of graph.records.filter((candidate) => candidate.type === "symlink")) {
+    const symlinks = graph.records.filter((candidate) => candidate.type === "symlink"), linkTargets = new Map();
+    for (const record of symlinks) {
       if (record.uncompressedSize > 4096) fail("symlink target too large");
       const chunks = []; await pipeVerifiedEntry(guarded, record, new Writable({ write(chunk, _encoding, callback) { chunks.push(Buffer.from(chunk)); callback(); } }), aggregate);
       const bytes = Buffer.concat(chunks); let target;
       try { target = UTF8.decode(bytes); } catch { fail("unsafe symlink target"); }
       if (!target || bytes.includes(0) || !Buffer.from(target, "utf8").equals(bytes) || posix.isAbsolute(target)) fail("unsafe symlink target");
-      const targetPath = posix.normalize(posix.join(posix.dirname(record.path), target));
-      if (targetPath !== "NeonDiff.app" && !targetPath.startsWith("NeonDiff.app/")) fail("unsafe symlink target");
-      if (!byPath.has(targetPath)) fail("missing symlink target");
-      symlinkSync(target, materializedPath(root, record.path));
+      linkTargets.set(record.path, target);
     }
+    for (const record of symlinks) verifyGraphSymlink(record.path, linkTargets.get(record.path), byPath, linkTargets);
+    for (const record of symlinks) symlinkSync(linkTargets.get(record.path), materializedPath(root, record.path));
     for (const record of [...directories].reverse()) chmodSync(materializedPath(root, record.path), record.mode & 0o777);
     return await consumer(materializedPath(root, "NeonDiff.app"), graph);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    for (const record of directories) { try { chmodSync(materializedPath(root, record.path), 0o700); } catch {} }
+    rmSync(root, { recursive: true, force: true });
+  }
 }

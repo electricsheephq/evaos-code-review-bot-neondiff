@@ -7,14 +7,14 @@ import { crc32, deflateRawSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildClassicZipMetadataGraph, guardClassicZipArchive, withMaterializedClassicZipApp } from "../scripts/lib/desktop-extracted-app-tree-proof.mjs";
 
-type Entry = { name: string; localName?: string; localOffset?: number; localExtra?: Buffer; type?: "file" | "directory" | "symlink"; data?: string | Buffer; flags?: number; method?: number; expanded?: number; crc?: number; descriptor?: boolean; extra?: number | Buffer; comment?: number; mode?: number };
+type Entry = { name: string; localName?: string; localOffset?: number; localExtra?: Buffer; type?: "file" | "directory" | "symlink"; data?: string | Buffer; trailing?: Buffer; flags?: number; method?: number; expanded?: number; crc?: number; descriptor?: boolean; extra?: number | Buffer; comment?: number; mode?: number };
 const roots: string[] = [];
 const u16 = (b: Buffer, p: number, n: number) => b.writeUInt16LE(n, p);
 const u32 = (b: Buffer, p: number, n: number) => b.writeUInt32LE(n, p);
 function classicZip(entries: Entry[]) {
   const locals: Buffer[] = [], central: Buffer[] = []; let offset = 0;
   for (const entry of entries) {
-    const name = Buffer.from(entry.name), localName = Buffer.from(entry.localName ?? entry.name), payload = Buffer.from(entry.data ?? ""), localExtra = entry.localExtra ?? Buffer.alloc(0), extra = Buffer.isBuffer(entry.extra) ? entry.extra : Buffer.alloc(entry.extra ?? 0), comment = Buffer.alloc(entry.comment ?? 0), flags = entry.flags ?? 0x800, method = entry.method ?? 0, data = method === 8 ? deflateRawSync(payload) : payload, expanded = entry.expanded ?? payload.length, checksum = entry.crc ?? crc32(payload), hasDescriptor = Boolean(flags & 0x8), descriptor = hasDescriptor && entry.descriptor !== false ? Buffer.alloc(16) : Buffer.alloc(0);
+    const name = Buffer.from(entry.name), localName = Buffer.from(entry.localName ?? entry.name), payload = Buffer.from(entry.data ?? ""), localExtra = entry.localExtra ?? Buffer.alloc(0), extra = Buffer.isBuffer(entry.extra) ? entry.extra : Buffer.alloc(entry.extra ?? 0), comment = Buffer.alloc(entry.comment ?? 0), flags = entry.flags ?? 0x800, method = entry.method ?? 0, encoded = method === 8 ? deflateRawSync(payload) : payload, data = entry.trailing ? Buffer.concat([encoded, entry.trailing]) : encoded, expanded = entry.expanded ?? payload.length, checksum = entry.crc ?? crc32(payload), hasDescriptor = Boolean(flags & 0x8), descriptor = hasDescriptor && entry.descriptor !== false ? Buffer.alloc(16) : Buffer.alloc(0);
     const type = entry.type ?? (entry.name.endsWith("/") ? "directory" : "file"), mode = entry.mode ?? ({ file: 0o100644, directory: 0o040755, symlink: 0o120777 })[type];
     if (descriptor.length) { u32(descriptor, 0, 0x08074b50); u32(descriptor, 4, checksum); u32(descriptor, 8, data.length); u32(descriptor, 12, expanded); }
     const local = Buffer.alloc(30 + localName.length + localExtra.length + data.length + descriptor.length); u32(local, 0, 0x04034b50); u16(local, 4, 20); u16(local, 6, flags); u16(local, 8, method); u32(local, 14, hasDescriptor ? 0 : checksum); u32(local, 18, hasDescriptor ? 0 : data.length); u32(local, 22, hasDescriptor ? 0 : expanded); u16(local, 26, localName.length); u16(local, 28, localExtra.length); localName.copy(local, 30); localExtra.copy(local, 30 + localName.length); data.copy(local, 30 + localName.length + localExtra.length); descriptor.copy(local, 30 + localName.length + localExtra.length + data.length); locals.push(local);
@@ -112,25 +112,27 @@ describe("bounded classic-ZIP metadata graph", () => {
 
 describe("graph-authoritative ZIP materialization", () => {
   it("materializes stored/deflated bytes, modes, and symlinks before one bounded consumer", async () => {
-    const value = fixture([{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Contents/Info.plist", data: "plist" }, { name: "NeonDiff.app/Contents/MacOS/NeonDiff", data: "binary", method: 8, flags: 0x808, mode: 0o100755 }, { name: "NeonDiff.app/Contents/Current", type: "symlink", data: "MacOS" }, { name: "__MACOSX/NeonDiff.app/Contents/._Info.plist", data: "appledouble", method: 8 }]); let materializedRoot = "";
+    const value = fixture([{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Contents/Info.plist", data: "plist" }, { name: "NeonDiff.app/Contents/MacOS/NeonDiff", data: "binary", method: 8, flags: 0x808, mode: 0o100755 }, { name: "NeonDiff.app/Contents/Current", type: "symlink", data: "MacOS" }, { name: "NeonDiff.app/Contents/Frameworks/Fixture.framework/Versions/A/Fixture", data: "framework" }, { name: "NeonDiff.app/Contents/Frameworks/Fixture.framework/Versions/Current", type: "symlink", data: "A" }, { name: "NeonDiff.app/Contents/Frameworks/Fixture.framework/Fixture", type: "symlink", data: "Versions/Current/Fixture" }, { name: "__MACOSX/NeonDiff.app/Contents/._Info.plist", data: "appledouble", method: 8 }]); let materializedRoot = "";
     const result = await withMaterializedClassicZipApp(value.artifact, async (appPath, graph) => {
       materializedRoot = dirname(appPath); writeFileSync(value.artifact, "changed after snapshot");
       expect(readFileSync(join(appPath, "Contents", "Info.plist"), "utf8")).toBe("plist"); expect(readFileSync(join(appPath, "Contents", "MacOS", "NeonDiff"), "utf8")).toBe("binary"); expect(readFileSync(join(materializedRoot, "__MACOSX", "NeonDiff.app", "Contents", "._Info.plist"), "utf8")).toBe("appledouble");
-      expect(statSync(join(appPath, "Contents", "MacOS", "NeonDiff")).mode & 0o777).toBe(0o755); expect(readlinkSync(join(appPath, "Contents", "Current"))).toBe("MacOS"); expect(Object.isFrozen(graph)).toBe(true); return "accepted";
+      expect(statSync(join(appPath, "Contents", "MacOS", "NeonDiff")).mode & 0o777).toBe(0o755); expect(readlinkSync(join(appPath, "Contents", "Current"))).toBe("MacOS"); expect(readFileSync(join(appPath, "Contents", "Frameworks", "Fixture.framework", "Fixture"), "utf8")).toBe("framework"); expect(Object.isFrozen(graph)).toBe(true); return "accepted";
     });
     expect(result).toBe("accepted"); expect(existsSync(materializedRoot)).toBe(false);
   });
   it("fails before the consumer on CRC, size, special-mode, and symlink invariant violations", async () => {
-    const cases: [Entry[], string][] = [
+    const cases: [Entry[], string | RegExp][] = [
       [[{ name: "NeonDiff.app/a", data: "bytes", crc: 0 }], "CRC-32 mismatch"],
       [[{ name: "NeonDiff.app/a", data: "expands", method: 8, expanded: 1 }], "expanded entry size mismatch"],
+      [[{ name: "NeonDiff.app/a", data: "bytes", method: 8, trailing: Buffer.from("garbage") }], /trailing|garbage/i],
       [[{ name: "NeonDiff.app/a", mode: 0o104755 }], "special permission bits unsupported"],
       [[{ name: "NeonDiff.app/link", type: "symlink", data: "" }], "unsafe symlink target"],
       [[{ name: "NeonDiff.app/link", type: "symlink", data: "bad\0target" }], "unsafe symlink target"],
       [[{ name: "NeonDiff.app/link", type: "symlink", data: "/tmp" }], "unsafe symlink target"],
       [[{ name: "NeonDiff.app/link", type: "symlink", data: Buffer.alloc(4097, 97) }], "symlink target too large"],
       [[{ name: "NeonDiff.app/link", type: "symlink", data: "../../escape" }], "unsafe symlink target"],
-      [[{ name: "NeonDiff.app/link", type: "symlink", data: "missing" }], "missing symlink target"]
+      [[{ name: "NeonDiff.app/link", type: "symlink", data: "missing" }], "missing symlink target"],
+      [[{ name: "NeonDiff.app/a", type: "symlink", data: "b" }, { name: "NeonDiff.app/b", type: "symlink", data: "a" }], "symlink cycle"]
     ];
     for (const [entries, message] of cases) {
       const value = fixture(entries), before = readdirSync(value.root).sort(), previous = process.env.TMPDIR; let called = false; process.env.TMPDIR = value.root;
@@ -143,5 +145,10 @@ describe("graph-authoritative ZIP materialization", () => {
     u32(bytes, hidden.length + central + 42, original.readUInt32LE(central + 42) + hidden.length); u32(bytes, bytes.length - 6, central + hidden.length); writeFileSync(value.artifact, bytes); let materializedRoot = "";
     await expect(withMaterializedClassicZipApp(value.artifact, (appPath) => { materializedRoot = dirname(appPath); expect(readFileSync(join(appPath, "a"), "utf8")).toBe("safe"); expect(existsSync(join(materializedRoot, "escape"))).toBe(false); throw new Error("consumer failed"); })).rejects.toThrow("consumer failed");
     expect(materializedRoot).not.toBe(""); expect(existsSync(materializedRoot)).toBe(false);
+  });
+  it("restores owner directory access before removing accepted restrictive modes", async () => {
+    const value = fixture([{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Locked/", type: "directory", mode: 0o040000 }, { name: "NeonDiff.app/Locked/file", data: "bytes" }]); let materializedRoot = "";
+    await expect(withMaterializedClassicZipApp(value.artifact, (appPath) => { materializedRoot = dirname(appPath); expect(statSync(join(appPath, "Locked")).mode & 0o777).toBe(0); return "clean"; })).resolves.toBe("clean");
+    expect(existsSync(materializedRoot)).toBe(false);
   });
 });
