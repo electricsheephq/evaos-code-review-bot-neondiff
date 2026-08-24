@@ -84,7 +84,15 @@ function isTargetChar(code: number): boolean {
 }
 
 function isRelationChar(code: number): boolean {
-  return code >= 0x21 && code <= 0x7e && code !== 0x22 && code !== 0x2c && code !== 0x3b;
+  return (
+    code >= 0x21 &&
+    code <= 0x7e &&
+    code !== 0x22 &&
+    code !== 0x2c &&
+    code !== 0x3b &&
+    code !== 0x3c &&
+    code !== 0x3e
+  );
 }
 
 function invalid(): never {

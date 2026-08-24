@@ -55,7 +55,9 @@ describe("strict issue-event Link framing", () => {
       `<${target},other>; rel=next`,
       `<${target}; rel=next`,
       `<${target}>; rel="next`,
-      `<${target}>; rel="next" junk`
+      `<${target}>; rel="next" junk`,
+      `<${target}>; rel=next>`,
+      `<${target}>; rel=<next`
     ];
     for (const value of invalid) expect(() => parseIssueEventLink(value)).toThrow();
   });
