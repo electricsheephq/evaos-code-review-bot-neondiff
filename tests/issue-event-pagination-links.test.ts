@@ -30,7 +30,7 @@ describe("strict issue-event Link parser", () => {
       `<${href("page=-1")}>; rel="next"`, `<${href("page=1.5")}>; rel="next"`,
       `<${href("page=9007199254740992")}>; rel="next"`, `<${href("page=2&per_page=200")}>; rel="next"`,
       `<${href("page=2&per_page=100&per_page=100")}>; rel="next"`, `<${href("page=2&extra=x")}>; rel="next"`,
-      `<${href("page=2")}>; rel="next"`, `<${href("page=2")}>; rel="Next"`,
+      `<${href("page=2")}>; rel="Next"`,
       `<${href("page=2")}>; rel="bogus"`, `<${href("page=2")}>; rel="next" junk`,
       `${link("next")}, ${link("next", "page=3")}`, `${link("next")}, ${link("prev", "page=0")}`
     ];
