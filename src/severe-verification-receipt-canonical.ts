@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import type { SerializedSevereVerificationInput } from "./severe-verification-receipt-parser-a.js";
+import { parseSevereVerificationReceiptJson } from "./severe-verification-receipt-parser-b.js";
 import { parseSevereVerificationReceipt } from "./severe-verification-receipt-parser-c.js";
 import type {
   SevereVerificationEvidenceFile,
@@ -13,8 +15,8 @@ export interface CanonicalSevereVerificationReceipt {
 }
 
 /** Revalidate, order, and hash a metadata-only severe-verification receipt. */
-export function canonicalizeSevereVerificationReceipt(input: unknown): CanonicalSevereVerificationReceipt {
-  const parsed = parseSevereVerificationReceipt(input);
+export function canonicalizeSevereVerificationReceipt(input: SerializedSevereVerificationInput): CanonicalSevereVerificationReceipt {
+  const parsed = parseSevereVerificationReceipt(parseSevereVerificationReceiptJson(input));
   const files = parsed.evidence.files.map(copyFile).sort(compareFiles);
   const omitted = parsed.evidence.omitted.map(copyOmission).sort(compareOmissions);
   const receipt: SevereVerificationReceipt = {
@@ -30,7 +32,7 @@ export function canonicalizeSevereVerificationReceipt(input: unknown): Canonical
     ...(parsed.reasonCode === undefined ? {} : { reasonCode: parsed.reasonCode }),
     evidence: { files, omitted, complete: parsed.evidence.complete }
   };
-  const canonicalJson = JSON.stringify(receipt);
+  const canonicalJson = serializeReceipt(receipt);
   return {
     receipt,
     canonicalJson,
@@ -56,5 +58,34 @@ function compareOmissions(a: SevereVerificationEvidenceOmission, b: SevereVerifi
 }
 
 function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+  let left = 0;
+  let right = 0;
+  while (left < a.length && right < b.length) {
+    const aCode = a.codePointAt(left)!;
+    const bCode = b.codePointAt(right)!;
+    if (aCode !== bCode) return aCode < bCode ? -1 : 1;
+    left += aCode > 0xffff ? 2 : 1;
+    right += bCode > 0xffff ? 2 : 1;
+  }
+  return a.length - b.length;
+}
+
+function serializeReceipt(receipt: SevereVerificationReceipt): string {
+  const quote = (value: string): string => JSON.stringify(value);
+  let output = `{"schemaVersion":${quote(receipt.schemaVersion)},"repo":${quote(receipt.repo)},"pullNumber":${receipt.pullNumber},"baseSha":${quote(receipt.baseSha)},"headSha":${quote(receipt.headSha)},"findingFingerprint":${quote(receipt.findingFingerprint)},"state":${quote(receipt.state)},"disposition":${quote(receipt.disposition)}`;
+  if (receipt.confidence !== undefined) output += `,"confidence":${JSON.stringify(receipt.confidence)}`;
+  if (receipt.reasonCode !== undefined) output += `,"reasonCode":${quote(receipt.reasonCode)}`;
+  output += `,"evidence":{"files":[`;
+  for (let index = 0; index < receipt.evidence.files.length; index += 1) {
+    if (index > 0) output += ",";
+    const file = receipt.evidence.files[index];
+    output += `{"path":${quote(file.path)},"kind":${quote(file.kind)},"sha256":${quote(file.sha256)},"bytes":${file.bytes},"complete":${file.complete}}`;
+  }
+  output += `],"omitted":[`;
+  for (let index = 0; index < receipt.evidence.omitted.length; index += 1) {
+    if (index > 0) output += ",";
+    const item = receipt.evidence.omitted[index];
+    output += `{"path":${quote(item.path)},"code":${quote(item.code)}}`;
+  }
+  return `${output}],"complete":${receipt.evidence.complete}}}`;
 }
