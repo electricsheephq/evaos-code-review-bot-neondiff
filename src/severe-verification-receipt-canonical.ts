@@ -21,6 +21,7 @@ export function canonicalizeSevereVerificationReceipt(input: SerializedSevereVer
   const parsed = parseSevereVerificationReceipt(parseSevereVerificationReceiptJson(input));
   const files = parsed.evidence.files.map(copyFile).sort(compareFiles);
   const omitted = parsed.evidence.omitted.map(copyOmission).sort(compareOmissions);
+  const changedHunk = parsed.evidence.changedHunk;
   const receipt: SevereVerificationReceipt = {
     schemaVersion: parsed.schemaVersion,
     repo: parsed.repo,
@@ -32,7 +33,7 @@ export function canonicalizeSevereVerificationReceipt(input: SerializedSevereVer
     disposition: parsed.disposition,
     ...(parsed.confidence === undefined ? {} : { confidence: parsed.confidence }),
     ...(parsed.reasonCode === undefined ? {} : { reasonCode: parsed.reasonCode }),
-    evidence: { files, omitted, complete: parsed.evidence.complete }
+    evidence: { ...(changedHunk ? { changedHunk: { sha256: changedHunk.sha256, bytes: changedHunk.bytes, complete: changedHunk.complete } } : {}), files, omitted, complete: parsed.evidence.complete }
   };
   const canonicalJson = serializeReceipt(receipt);
   return {
@@ -77,7 +78,9 @@ function serializeReceipt(receipt: SevereVerificationReceipt): string {
   let output = `{"schemaVersion":${quote(receipt.schemaVersion)},"repo":${quote(receipt.repo)},"pullNumber":${receipt.pullNumber},"baseSha":${quote(receipt.baseSha)},"headSha":${quote(receipt.headSha)},"findingFingerprint":${quote(receipt.findingFingerprint)},"state":${quote(receipt.state)},"disposition":${quote(receipt.disposition)}`;
   if (receipt.confidence !== undefined) output += `,"confidence":${intrinsicStringify(receipt.confidence)}`;
   if (receipt.reasonCode !== undefined) output += `,"reasonCode":${quote(receipt.reasonCode)}`;
-  output += `,"evidence":{"files":[`;
+  output += `,"evidence":{`;
+  if (receipt.evidence.changedHunk) output += `"changedHunk":{"sha256":${quote(receipt.evidence.changedHunk.sha256)},"bytes":${receipt.evidence.changedHunk.bytes},"complete":${receipt.evidence.changedHunk.complete}},`;
+  output += `"files":[`;
   for (let index = 0; index < receipt.evidence.files.length; index += 1) {
     if (index > 0) output += ",";
     const file = receipt.evidence.files[index];
