@@ -132,9 +132,14 @@ test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root f
 NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
 RELEASE_DATE="$(date +%F)"; RUN_ID="replace-with-unique-run-id"; case "$RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
-RELEASE_EVIDENCE_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/$RELEASE_DATE/$RUN_ID"
-mkdir -p "$(dirname "$RELEASE_EVIDENCE_DIR")"
-mkdir "$RELEASE_EVIDENCE_DIR" || exit
+RELEASE_PACKET_ROOT="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop"
+test -e "$RELEASE_PACKET_ROOT" || mkdir "$RELEASE_PACKET_ROOT" || exit 2
+RELEASE_PACKET_ROOT="$(cd "$RELEASE_PACKET_ROOT" && pwd -P)"; case "$RELEASE_PACKET_ROOT/" in "$REPO_ROOT/"*) echo "evidence packet root must be outside the checkout" >&2; exit 2 ;; esac
+RELEASE_EVIDENCE_PARENT="$RELEASE_PACKET_ROOT/$RELEASE_DATE"
+test -e "$RELEASE_EVIDENCE_PARENT" || mkdir "$RELEASE_EVIDENCE_PARENT" || exit 2
+RELEASE_EVIDENCE_PARENT="$(cd "$RELEASE_EVIDENCE_PARENT" && pwd -P)"; case "$RELEASE_EVIDENCE_PARENT/" in "$REPO_ROOT/"*) echo "evidence packet parent must be outside the checkout" >&2; exit 2 ;; esac
+RELEASE_EVIDENCE_DIR="$RELEASE_EVIDENCE_PARENT/$RUN_ID"
+mkdir "$RELEASE_EVIDENCE_DIR" || exit 2
 ```
 
 ```sh

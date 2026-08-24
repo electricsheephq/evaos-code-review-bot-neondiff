@@ -25,9 +25,14 @@ test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root f
 NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
 RELEASE_DATE="$(date +%F)"; RUN_ID="replace-with-unique-run-id"; case "$RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
-RUN_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/$RELEASE_DATE/$RUN_ID"
-mkdir -p "$(dirname "$RUN_DIR")"
-mkdir "$RUN_DIR" || exit
+PACKET_ROOT="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop"
+test -e "$PACKET_ROOT" || mkdir "$PACKET_ROOT" || exit 2
+PACKET_ROOT="$(cd "$PACKET_ROOT" && pwd -P)"; case "$PACKET_ROOT/" in "$REPO_ROOT/"*) echo "evidence packet root must be outside the checkout" >&2; exit 2 ;; esac
+RUN_PARENT="$PACKET_ROOT/$RELEASE_DATE"
+test -e "$RUN_PARENT" || mkdir "$RUN_PARENT" || exit 2
+RUN_PARENT="$(cd "$RUN_PARENT" && pwd -P)"; case "$RUN_PARENT/" in "$REPO_ROOT/"*) echo "evidence packet parent must be outside the checkout" >&2; exit 2 ;; esac
+RUN_DIR="$RUN_PARENT/$RUN_ID"
+mkdir "$RUN_DIR" || exit 2
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture fixtures/appcast/beta.json \
   --output "$RUN_DIR/appcast.xml" \
