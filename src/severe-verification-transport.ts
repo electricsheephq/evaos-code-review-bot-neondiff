@@ -78,7 +78,8 @@ function verifyInput(input: SevereVerificationTransportInput): ExpectedEvidence 
   const byKey = new Map<string, SevereVerificationContent>();
   for (let index = 0; index < input.files.length; index += 1) { const file = input.files[index]; const key = `${file.path}\0${file.kind}`; if (byKey.has(key) || !boundedText(file.content)) reject("identity_mismatch"); byKey.set(key, file); }
   const files: SevereVerificationEvidenceFile[] = [];
-  for (const metadata of evidence.files) { const content = byKey.get(`${metadata.path}\0${metadata.kind}`); if (!metadata.complete || !content || !matchesBytes(content.content, metadata.bytes, metadata.sha256)) reject("identity_mismatch"); files.push(copyFile(metadata)); }
+  for (const metadata of evidence.files) { const key = `${metadata.path}\0${metadata.kind}`, content = byKey.get(key); if (!metadata.complete || !content || !matchesBytes(content.content, metadata.bytes, metadata.sha256)) reject("identity_mismatch"); byKey.delete(key); files.push(copyFile(metadata)); }
+  if (byKey.size) reject("identity_mismatch");
   if (!files.some((file) => file.kind === "whole_file" && file.path === finding.path)) reject("identity_mismatch");
   return { files: files.sort(compareFiles), omitted: [], complete: true };
 }

@@ -51,5 +51,6 @@ describe("severe verification transport", () => {
   it("rejects raw-content and changed-hunk digest mismatches before transport", () => {
     expect(() => buildSevereVerificationTransport({ ...input, changedHunk: "+different();" })).toThrow("identity_mismatch");
     expect(() => buildSevereVerificationTransport({ ...input, files: [{ ...input.files[0], content: "tampered" }, input.files[1]] })).toThrow("identity_mismatch");
+    expect(() => buildSevereVerificationTransport({ ...input, evidence: { ...input.evidence, files: [input.evidence.files[0], input.evidence.files[0]] } })).toThrow("identity_mismatch");
   });
 });
