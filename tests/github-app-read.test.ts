@@ -351,11 +351,8 @@ describe("GitHub App read authentication", () => {
       installation_id_present: true,
       installation_id: 123,
       installation_account: "owner",
-      installation_account_id: 7,
-      installation_account_type: "Organization",
       app_id: 4184532,
       app_slug: "customer-review-app",
-      bot_login: "customer-review-app[bot]",
       app_can_read_metadata: true,
       app_can_read_pull_requests: true,
       openPullCount: 1
