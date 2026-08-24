@@ -2,6 +2,16 @@
 
 The offline eval harness creates read-only comparison packets for the v0.2 CodeRabbit-class reviewer work. It does not call GitHub, post PR comments, mutate repos, or change launchd state.
 
+Use an external evidence root for every run. The source default is
+`$HOME/.neondiff/evidence`; set `NEONDIFF_EVIDENCE_ROOT` for CI or another
+operator-owned location outside this checkout. These packets are offline,
+advisory evidence only and must not be presented as hosted, runtime, or GA
+proof.
+
+```bash
+export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
+```
+
 Run it with a local scenario file:
 
 ```bash
@@ -13,7 +23,7 @@ Run the checked-in local suite fixtures:
 ```bash
 npm run eval:suite -- \
   --input-dir tests/fixtures/eval-suite-scenarios \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/local-suite
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/local-suite"
 ```
 
 Run the paired sticky-vs-cold fixture:
@@ -21,7 +31,7 @@ Run the paired sticky-vs-cold fixture:
 ```bash
 npm run eval:sticky-vs-cold -- \
   --input tests/fixtures/sticky-vs-cold/seeded_quality_packet.json \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold-seeded-quality
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/sticky-vs-cold-seeded-quality"
 ```
 
 Run the repo-wiki context A/B gate with a fixture that contains baseline,
@@ -30,7 +40,7 @@ deterministic repo-wiki, and curated OpenWiki-derived findings:
 ```bash
 npx tsx src/cli.ts eval-repo-wiki-context-ab \
   --input /path/to/repo-wiki-context-ab.json \
-  --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/ab
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/eval-gates/ab"
 ```
 
 Run the suggest-only OpenWiki docs-drift gate:
@@ -38,7 +48,7 @@ Run the suggest-only OpenWiki docs-drift gate:
 ```bash
 npx tsx src/cli.ts eval-openwiki-docs-drift \
   --input /path/to/docs-drift.json \
-  --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/docs-drift
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/eval-gates/docs-drift"
 ```
 
 Both OpenWiki gates are offline evidence generators. They do not call a model,
@@ -52,7 +62,7 @@ Run the review-lenses dry-run comparison gate:
 ```bash
 npx tsx src/cli.ts review-lenses-eval \
   --input-dir tests/fixtures/review-lenses-eval \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) \
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S)" \
   --dry-run true
 ```
 
@@ -65,10 +75,11 @@ The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.
 
-By default, packets are written under:
+By default, packets are written under the external root selected by
+`NEONDIFF_EVIDENCE_ROOT` (or `$HOME/.neondiff/evidence` when unset):
 
 ```text
-/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/<date>/<run-id>/
+$NEONDIFF_EVIDENCE_ROOT/<date>/<run-id>/
 ```
 
 Use `--output-dir` for tests or scratch runs.
