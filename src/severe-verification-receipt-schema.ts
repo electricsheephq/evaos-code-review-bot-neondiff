@@ -14,12 +14,13 @@ export type SevereEvidenceKind = "whole_file" | "module";
 export interface SevereVerificationEvidenceFile {
   path: string; kind: SevereEvidenceKind; sha256: string; bytes: number; complete: boolean;
 }
+export interface SevereVerificationEvidenceHunk { sha256: string; bytes: number; complete: boolean; }
 export interface SevereVerificationEvidenceOmission { path: string; code: SevereVerificationCode; }
 export interface SevereVerificationReceipt {
   schemaVersion: "severe-verifier-v1"; repo: string; pullNumber: number; baseSha: string; headSha: string;
   findingFingerprint: string; state: SevereVerificationState; disposition: SevereVerificationDisposition;
   confidence?: number; reasonCode?: SevereVerificationCode;
-  evidence: { files: SevereVerificationEvidenceFile[]; omitted: SevereVerificationEvidenceOmission[]; complete: boolean };
+  evidence: { changedHunk?: SevereVerificationEvidenceHunk; files: SevereVerificationEvidenceFile[]; omitted: SevereVerificationEvidenceOmission[]; complete: boolean };
 }
 
 const SHA40 = "^[a-f0-9]{40}$";
@@ -50,6 +51,7 @@ export const SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA = {
     evidence: {
       type: "object", additionalProperties: false, required: ["files", "omitted", "complete"], noEvidencePathOverlap: true,
       properties: {
+        changedHunk: { type: "object", additionalProperties: false, required: ["sha256", "bytes", "complete"], properties: { sha256: { type: "string", pattern: SHA256 }, bytes: { type: "integer", minimum: 1, maximum: 65_536 }, complete: { type: "boolean" } } },
         files: { type: "array", maxItems: 64, uniqueItems: true, items: {
           type: "object", additionalProperties: false, required: ["path", "kind", "sha256", "bytes", "complete"],
           properties: { path, kind: { enum: ["whole_file", "module"] }, sha256: { type: "string", pattern: SHA256 }, bytes: { type: "integer", minimum: 0, maximum: 65_536 }, complete: { type: "boolean" } }
@@ -61,7 +63,7 @@ export const SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA = {
       },
       anyOf: [{ properties: { files: { type: "array", minItems: 1 } } }, { properties: { omitted: { type: "array", minItems: 1 } } }],
       allOf: [{ if: { properties: { complete: { const: true } }, required: ["complete"] }, then: { properties: {
-        files: { type: "array", minItems: 1, items: { type: "object", properties: { complete: { const: true } } } }, omitted: { type: "array", maxItems: 0 }
+        changedHunk: { type: "object", properties: { complete: { const: true } } }, files: { type: "array", minItems: 1, items: { type: "object", properties: { complete: { const: true } } } }, omitted: { type: "array", maxItems: 0 }
       } } }]
     }
   },
