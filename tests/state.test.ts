@@ -2495,6 +2495,72 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("rejects malformed approved dry-run revisions before consuming the receipt", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-revision-shape-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = {
+      repo: "owner/repo",
+      pullNumber: 977,
+      headSha: "a".repeat(40)
+    };
+    const malformedRevision = "not-a-sha";
+    store.recordProcessed({
+      ...head,
+      status: "dry_run",
+      configRevision: malformedRevision,
+      event: "COMMENT"
+    });
+
+    expect(() => store.tryClaimReviewHead({
+      ...head,
+      claimTtlMs: 60_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run",
+      requiredProcessedConfigRevisionForSupersession: malformedRevision,
+      consumeProcessedApprovalOnAcquire: true
+    })).toThrow("lowercase SHA-256");
+    expect(store.getProcessedReview(head.repo, head.pullNumber, head.headSha)).toMatchObject({
+      status: "dry_run",
+      configRevision: malformedRevision
+    });
+    store.close();
+  });
+
+  it("consumes one matching dry-run receipt before a concurrent claimant can proceed", () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-approved-receipt-race-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+    const head = {
+      repo: "owner/repo",
+      pullNumber: 977,
+      headSha: "b".repeat(40)
+    };
+    const revision = "b".repeat(64);
+    store.recordProcessed({ ...head, status: "dry_run", configRevision: revision, event: "COMMENT" });
+
+    const claimInput = {
+      ...head,
+      claimTtlMs: 60_000,
+      allowProcessedOwnerSupersession: true,
+      requiredProcessedStatusForSupersession: "dry_run" as const,
+      requiredProcessedConfigRevisionForSupersession: revision,
+      consumeProcessedApprovalOnAcquire: true
+    };
+    const first = store.tryClaimReviewHeadWithOutcome(claimInput);
+    const second = store.tryClaimReviewHeadWithOutcome(claimInput);
+
+    expect(first.status).toBe("acquired");
+    expect(second).toEqual({ status: "blocked", reason: "active_claim" });
+    expect(store.getProcessedReview(head.repo, head.pullNumber, head.headSha)).toMatchObject({
+      status: "skipped",
+      error: "approved_dry_run_consumed_for_live_post"
+    });
+    store.releaseReviewHeadClaim(first.status === "acquired" ? first.claim.claimId : "");
+    expect(store.tryClaimReviewHeadWithOutcome(claimInput)).toEqual({ status: "blocked", reason: "processed" });
+    store.close();
+  });
+
   it("grants an atomic per-head review claim to exactly one concurrent claimant (#295)", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-head-claim-"));
     roots.push(root);
