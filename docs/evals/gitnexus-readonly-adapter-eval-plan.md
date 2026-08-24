@@ -127,7 +127,7 @@ For EVAOS operator-local runs, write eval evidence under the default scratch
 root:
 
 ```text
-$NEONDIFF_EVIDENCE_ROOT/<date>/<run-id>/gitnexus-readonly-adapter/
+$NEONDIFF_EVIDENCE_ROOT/$EVAL_DATE/$EVAL_RUN_ID/gitnexus-readonly-adapter/
 ```
 
 Other operators and CI runners should configure an equivalent external evidence
