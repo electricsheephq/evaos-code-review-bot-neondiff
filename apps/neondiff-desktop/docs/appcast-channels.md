@@ -2,11 +2,14 @@
 
 This document covers the buildable appcast generation lane for NeonDiff Desktop.
 It does not prove hosted feeds, notarized artifacts, or real EdDSA signing.
+Sparkle 2 is the selected production updater, but #116 and #610 Mac GA artifact gates remain open.
 
 ## Channels
 
-- `beta`: early desktop builds for opted-in testers.
-- `stable`: signed release builds after the Mac release runbook has passed.
+- `beta`: early or signed candidate builds for opted-in testers; fixture output
+  is not a public or GA release.
+- `stable`: future signed release builds only after #116 and #610 signed-feed,
+  immutable-artifact, install, and rollback proof has passed.
 - Rollback is represented by a stable feed whose newest marker pins the channel
   latest to an earlier stable version via `rollback_to`; the generated appcast
   excludes the superseded newer build so Sparkle cannot select it.
@@ -16,11 +19,24 @@ It does not prove hosted feeds, notarized artifacts, or real EdDSA signing.
 Generate a local appcast from a committed fixture:
 
 ```sh
+: "${NEONDIFF_EVIDENCE_ROOT:?set an external evidence root outside this checkout}"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
+NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
+RUN_ID="replace-with-unique-run-id"; case "$RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
+RUN_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/$(date +%F)/$RUN_ID"
+mkdir -p "$(dirname "$RUN_DIR")"
+mkdir "$RUN_DIR"
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture fixtures/appcast/beta.json \
-  --output /Volumes/LEXAR/Codex/evidence/neondiff-desktop/neondiff-beta-appcast.xml \
+  --output "$RUN_DIR/appcast.xml" \
   --dry-run
 ```
+
+The output root is operator-owned, absolute, and external to the checkout; use
+a fresh `<date>/<run-id>/` directory for every packet. `mkdir` must fail on
+reuse. This command does not read credentials or private-key paths.
 
 Dry-run mode never signs, uploads, notarizes, or fabricates a real signature.
 The `sparkle:edSignature` attribute appears only when the manifest explicitly
@@ -44,8 +60,10 @@ The appcast core models these update outcomes for fixtures and release evidence:
 
 These statuses back both dry-run planning and the native updater UI. The source
 maps real Sparkle no-update, network/feed, signature/validation, cancellation,
-and generic failures into distinct customer states. A hosted signed appcast and
-installed-app run are still required before claiming runtime proof.
+and generic failures into distinct customer states. The current generator does
+not reject invalid or missing `rollback_to`; release validation must catch it
+before publishing. A hosted signed appcast and installed-app run are still
+required before claiming runtime or GA proof.
 
 ## Fixtures
 
