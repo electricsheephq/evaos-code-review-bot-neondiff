@@ -38,8 +38,12 @@ enum NeonDiffDesktopCompositionRoot {
         let cliWorkingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
         let localBotSnapshot =
             LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot()
+        let nativeVerificationCapability =
+            FoundationTrustedBundledWorker.nativeVerificationCapability(
+                productionBoundary: productionBoundary
+            )
         let trustedBundledWorker =
-            FoundationTrustedBundledWorker.executionContext()
+            nativeVerificationCapability.trustedBundledWorker
         let localBotConfigurations = localBotSnapshot.configurations
         let localBotExecutionContexts =
             localBotSnapshot.executionContexts
@@ -48,12 +52,8 @@ enum NeonDiffDesktopCompositionRoot {
             @Sendable () -> [DesktopLocalBotExecutionContext] = {
                 LaunchAgentLocalBotConfigurationDiscovery
                     .discoverExecutionContexts()
-                    + (
-                        FoundationTrustedBundledWorker
-                            .executionContext()
-                            .map { [$0] }
-                        ?? []
-                    )
+                    + (nativeVerificationCapability.trustedBundledWorker
+                        .map { [$0] } ?? [])
             }
         let localBotDiscoveryProvider:
             @Sendable (String) -> DesktopLocalBotDiscoverySnapshot = {
@@ -65,12 +65,8 @@ enum NeonDiffDesktopCompositionRoot {
                     configurations: snapshot.configurations,
                     executionContexts:
                         snapshot.executionContexts
-                        + (
-                            FoundationTrustedBundledWorker
-                                .executionContext()
-                                .map { [$0] }
-                            ?? []
-                        )
+                        + (nativeVerificationCapability.trustedBundledWorker
+                            .map { [$0] } ?? [])
                 )
             }
         let keychainWorkerLaunchAgentManager:
@@ -111,6 +107,7 @@ enum NeonDiffDesktopCompositionRoot {
             githubBroker: githubBroker,
             accountLink: accountLink,
             productionBoundary: productionBoundary,
+            nativeVerificationCapability: nativeVerificationCapability,
             localWorkerUpdateGuideURL: DesktopReleaseRouting.localWorkerUpdateGuideURL(
                 shortVersion: Bundle.main.object(
                     forInfoDictionaryKey: "CFBundleShortVersionString"

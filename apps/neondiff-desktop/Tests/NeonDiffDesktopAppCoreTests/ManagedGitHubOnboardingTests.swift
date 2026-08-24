@@ -256,6 +256,99 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         #expect(fixture.model.activationState != .active)
     }
 
+    @Test func newAppNativeVerificationRequiresExactBYOMarkersAndTrustedWorker() {
+        let appBundleURL = URL(filePath: "/Applications/NeonDiff.app")
+        let byoMarkers: [String: Any] = [
+            "NeonDiffPaidBetaContract": "paid-mac-beta-byo-v1",
+            "NeonDiffBYOGitHubEnabled": true
+        ]
+
+        let available = DesktopNativeVerificationCapability.resolve(
+            infoDictionary: byoMarkers,
+            appBundleURL: appBundleURL,
+            appSignatureIsValid: { $0 == appBundleURL },
+            sealedFileIsValid: { $0.path.hasSuffix("NeonDiffWorker") }
+        )
+        #expect(available.newAppNativeVerificationAvailable)
+        #expect(
+            available.trustedBundledWorker?.executablePath
+                == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker"
+        )
+
+        let withoutWorker = DesktopNativeVerificationCapability.resolve(
+            infoDictionary: byoMarkers,
+            appBundleURL: appBundleURL,
+            appSignatureIsValid: { _ in true },
+            sealedFileIsValid: { _ in false }
+        )
+        #expect(!withoutWorker.newAppNativeVerificationAvailable)
+        #expect(withoutWorker.trustedBundledWorker == nil)
+
+        let mixedMarkers = DesktopNativeVerificationCapability.resolve(
+            infoDictionary: byoMarkers.merging([
+                "NeonDiffManagedGitHubBrokerEnabled": true,
+                "NeonDiffGitHubBrokerOrigin": "https://neondiff-license.fly.dev"
+            ]) { _, new in new },
+            appBundleURL: appBundleURL,
+            appSignatureIsValid: { _ in true },
+            sealedFileIsValid: { _ in true }
+        )
+        #expect(!mixedMarkers.newAppNativeVerificationAvailable)
+
+        let wrongHelperPath = DesktopNativeVerificationCapability.resolve(
+            infoDictionary: byoMarkers,
+            appBundleURL: URL(filePath: "/Applications/Other.app"),
+            appSignatureIsValid: { _ in true },
+            sealedFileIsValid: { _ in true }
+        )
+        #expect(!wrongHelperPath.newAppNativeVerificationAvailable)
+
+        let wrongSignature = DesktopNativeVerificationCapability.resolve(
+            infoDictionary: byoMarkers,
+            appBundleURL: appBundleURL,
+            appSignatureIsValid: { _ in false },
+            sealedFileIsValid: { _ in true }
+        )
+        #expect(!wrongSignature.newAppNativeVerificationAvailable)
+
+        let wrongHelperProof = DesktopNativeVerificationCapability.resolve(
+            infoDictionary: byoMarkers,
+            appBundleURL: appBundleURL,
+            appSignatureIsValid: { _ in true },
+            sealedFileIsValid: { _ in false }
+        )
+        #expect(!wrongHelperProof.newAppNativeVerificationAvailable)
+
+        let preferenceOnly = DesktopNativeVerificationCapability.resolve(
+            infoDictionary: ["NeonDiffBYOGitHubEnabled": true],
+            appBundleURL: appBundleURL,
+            appSignatureIsValid: { _ in true },
+            sealedFileIsValid: { _ in true }
+        )
+        #expect(!preferenceOnly.newAppNativeVerificationAvailable)
+    }
+
+    @Test func compositionBindsNewAppWorkerToTheDerivedCapability() throws {
+        let compositionRoot = sourceBoundaryPackageRoot()
+            .appendingPathComponent(
+                "Sources/NeonDiffDesktop/App/NeonDiffDesktopCompositionRoot.swift"
+            )
+        let source = try sourceBoundaryText(at: compositionRoot)
+
+        #expect(source.contains(
+            "FoundationTrustedBundledWorker.nativeVerificationCapability"
+        ))
+        #expect(source.contains(
+            "let trustedBundledWorker =\n            nativeVerificationCapability.trustedBundledWorker"
+        ))
+        #expect(source.contains(
+            "nativeVerificationCapability: nativeVerificationCapability"
+        ))
+        #expect(!source.contains(
+            "FoundationTrustedBundledWorker.executionContext()"
+        ))
+    }
+
     @Test func managedConnectUsesBrokerAndKeychainIdentityWithoutLegacyUserTokenFallback() async throws {
         let broker = ScriptedGitHubBroker(repositories: [
             GitHubBrokerRepository(fullName: "electric/private", visibility: .private),
