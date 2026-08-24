@@ -134,7 +134,7 @@ case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be o
 RELEASE_DATE="$(date +%F)"; RUN_ID="replace-with-unique-run-id"; case "$RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
 RELEASE_EVIDENCE_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/$RELEASE_DATE/$RUN_ID"
 mkdir -p "$(dirname "$RELEASE_EVIDENCE_DIR")"
-mkdir "$RELEASE_EVIDENCE_DIR"
+mkdir "$RELEASE_EVIDENCE_DIR" || exit
 ```
 
 ```sh
