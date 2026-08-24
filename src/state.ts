@@ -1658,6 +1658,17 @@ export class ReviewStateStore {
     if (input.claimTtlMs < 1) throw new Error("claimTtlMs must be at least 1");
     const ownerPid = input.ownerPid ?? process.pid;
     if (!Number.isInteger(ownerPid) || ownerPid < 1) throw new Error("ownerPid must be a positive integer");
+    if (input.consumeProcessedApprovalOnAcquire) {
+      if (input.requiredProcessedStatusForSupersession !== "dry_run") {
+        throw new Error("consuming a processed approval requires dry_run status");
+      }
+      if (
+        !input.requiredProcessedConfigRevisionForSupersession ||
+        !/^[a-f0-9]{64}$/.test(input.requiredProcessedConfigRevisionForSupersession)
+      ) {
+        throw new Error("consuming a processed approval requires a lowercase SHA-256 configuration revision");
+      }
+    }
 
     const now = input.now ?? new Date();
     const claimId = randomUUID();
