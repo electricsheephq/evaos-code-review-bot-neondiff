@@ -2,8 +2,7 @@
 
 This document covers the buildable appcast generation lane for NeonDiff Desktop.
 It does not prove hosted feeds, notarized artifacts, or real EdDSA signing.
-Sparkle 2 is the selected production updater, but #116 and the #610 Mac GA
-artifact gates remain open.
+Sparkle 2 is the selected production updater, but #116 and #610 Mac GA artifact gates remain open.
 
 ## Channels
 
@@ -25,7 +24,7 @@ case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be
 test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
 NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
-RUN_ID="<caller-supplied-unique-run-id>"
+RUN_ID="replace-with-unique-run-id"; case "$RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
 RUN_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/$(date +%F)/$RUN_ID"
 mkdir -p "$(dirname "$RUN_DIR")"
 mkdir "$RUN_DIR"

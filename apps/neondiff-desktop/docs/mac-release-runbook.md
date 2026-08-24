@@ -8,9 +8,8 @@ Apple/Sparkle inputs are available.
 Proof boundary: this document closes the #322 documentation lane only. It does
 not prove a signed artifact exists, does not submit anything to Apple, does not
 publish an appcast, and does not make the desktop update channel GA-ready.
-Sparkle 2 remains the selected updater while #116 is open. #610 additionally
-requires immutable artifact/feed identity, signed hosted-feed evidence, an
-installed update, state-preserving rollback, and re-update before a Mac GA claim.
+Sparkle 2 remains selected while #116 is open. #610 also requires immutable artifact/feed identity,
+signed hosted-feed, installed update, state-preserving rollback, and re-update evidence before Mac GA.
 Parent issue #116 owns the signed auto-update channel, #323 owns appcast
 fixtures/dry-run generation, #324 owns credential naming/custody, #325 owns the
 desktop onboarding wizard, #327 owns production license-service deployment, and
@@ -132,7 +131,7 @@ case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be
 test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
 NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
-RUN_ID="<caller-supplied-unique-run-id>"
+RUN_ID="replace-with-unique-run-id"; case "$RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
 RELEASE_EVIDENCE_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/<date>/$RUN_ID"
 mkdir -p "$(dirname "$RELEASE_EVIDENCE_DIR")"
 mkdir "$RELEASE_EVIDENCE_DIR"
@@ -301,7 +300,7 @@ fabricate a real Sparkle signature.
 
 ```sh
 apps/neondiff-desktop/script/generate-appcast.sh \
-  --fixture apps/neondiff-desktop/fixtures/appcast/beta.json \
+  --fixture fixtures/appcast/beta.json \
   --output "$RELEASE_EVIDENCE_DIR/appcast.xml" \
   --dry-run
 ```

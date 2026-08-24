@@ -14,7 +14,7 @@ case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be
 test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
 NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
 case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
-EVAL_RUN_ID="<caller-supplied-unique-run-id>"
+EVAL_RUN_ID="replace-with-unique-run-id"; case "$EVAL_RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "EVAL_RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
 ```
 
 Run it with a local scenario file:
@@ -27,6 +27,7 @@ Run the checked-in local suite fixtures:
 
 ```bash
 EVAL_SUITE_ROOT="$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/$EVAL_RUN_ID/local-suite"
+mkdir -p "$(dirname "$EVAL_SUITE_ROOT")"
 mkdir "$EVAL_SUITE_ROOT"
 npm run eval:suite -- \
   --input-dir tests/fixtures/eval-suite-scenarios \
