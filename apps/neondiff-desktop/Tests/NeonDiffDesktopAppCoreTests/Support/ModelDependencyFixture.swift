@@ -254,6 +254,8 @@ struct ModelDependencyFixture {
         localBotConfigurations: [DesktopLocalBotConfiguration] = [],
         localBotExecutionContexts: [DesktopLocalBotExecutionContext] = [],
         localBotExecutionConfigPaths: [String] = [],
+        localBotDiscoveryProvider:
+            (@Sendable (String) -> DesktopLocalBotDiscoverySnapshot)? = nil,
         productionBoundary: DesktopProductionBoundary = .testVerified,
         nativeVerificationCapability: DesktopNativeVerificationCapability = .testAvailable,
         localWorkerUpdateGuideURL: URL = DesktopReleaseRouting.localWorkerUpdateGuideURL(
@@ -297,7 +299,8 @@ struct ModelDependencyFixture {
             localWorkerUpdateGuideURL: localWorkerUpdateGuideURL,
             localBotConfigurations: localBotConfigurations,
             localBotExecutionContexts: localBotExecutionContexts,
-            localBotExecutionConfigPaths: localBotExecutionConfigPaths
+            localBotExecutionConfigPaths: localBotExecutionConfigPaths,
+            localBotDiscoveryProvider: localBotDiscoveryProvider
         ), activationLicenseClient: activationLicenseClient)
     }
 
