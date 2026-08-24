@@ -10,6 +10,9 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
 type OmissionCode = SevereVerificationCode;
 
 export interface SevereVerificationEvidenceInput {
+  repo: string;
+  pullNumber: number;
+  baseSha: string;
   expectedHeadSha: string;
   worktreePath: string;
   findingPath: string;
@@ -26,6 +29,7 @@ export interface SevereVerificationEvidenceResult {
 
 /** Collect exact-head, bounded, metadata-only evidence. This module has no worker/provider call sites. */
 export async function collectSevereVerificationEvidence(input: SevereVerificationEvidenceInput): Promise<SevereVerificationEvidenceResult> {
+  verifyIdentity(input);
   verifyHead(input.expectedHeadSha, input.worktreePath);
   const root = await realpath(input.worktreePath).catch(() => { throw new Error("head_unavailable"); });
   const finding = safePath(input.findingPath);
@@ -44,6 +48,13 @@ export async function collectSevereVerificationEvidence(input: SevereVerificatio
   await add(finding, "whole_file");
   for (const path of [...modules].sort(compareText)) await add(path, "module");
   return { changedHunk, files, omitted, complete: changedHunk.complete && !omitted.length && files.length === modules.length + 1 };
+}
+
+function verifyIdentity(input: SevereVerificationEvidenceInput): void {
+  const repo = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9_.-]{1,100}$/;
+  if (!repo.test(input.repo) || !Number.isSafeInteger(input.pullNumber) || input.pullNumber < 1 || !/^[a-f0-9]{40}$/.test(input.baseSha)) {
+    throw new Error("invalid_identity");
+  }
 }
 
 function verifyHead(expected: string, worktree: string): void {

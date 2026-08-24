@@ -11,6 +11,7 @@ const finding = "src/π space.ts";
 const moduleA = "lib/alpha.ts";
 const moduleB = "lib/β.ts";
 const input = (relevantModulePaths: readonly string[], changedHunk: string | Uint8Array = "@@ -1 +1 @@\n+changed") => ({
+  repo: "owner/repo", pullNumber: 1040, baseSha: "b".repeat(40),
   expectedHeadSha: head, worktreePath: root, findingPath: finding, changedHunk, relevantModulePaths
 });
 
@@ -54,6 +55,7 @@ describe("exact-head severe evidence collection", () => {
     expect(capped.changedHunk).toMatchObject({ complete: false, code: "cap_exceeded" });
     await expect(collectSevereVerificationEvidence({ ...input([moduleA]), expectedHeadSha: "a".repeat(40), worktreePath: fixture }))
       .rejects.toThrow("stale_head");
+    await expect(collectSevereVerificationEvidence({ ...input([moduleA]), pullNumber: 0 })).rejects.toThrow("invalid_identity");
   });
 
   it("rejects unsafe paths, symlinks, directories, duplicate finding modules, and unbounded lists", async () => {
