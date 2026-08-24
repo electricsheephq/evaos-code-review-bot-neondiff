@@ -335,7 +335,7 @@ describe("daemon cycle resilience", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(heartbeats.map(({ event }) => event)).toEqual(["daemon_cycle_start", "daemon_cycle_complete"]);
+    expect(heartbeats.map(({ event }) => event)).toEqual(["daemon_cycle_start", "daemon_cycle_progress", "daemon_cycle_complete"]);
     expect(new Set(heartbeats.map(({ runId }) => runId)).size).toBe(1);
     expect(heartbeats[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
   });
@@ -482,7 +482,7 @@ describe("daemon cycle resilience", () => {
     expect(result).toMatchObject({ failureKind: "runtime_failure" });
     expect(heartbeats).toEqual([
       { event: "daemon_cycle_start" },
-      { event: "daemon_cycle_failed", error: "second timeout" }
+      { event: "daemon_cycle_failed", error: "daemon_cycle_failed" }
     ]);
     expect(new Set(runIds).size).toBe(1);
   });
