@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildClassicZipMetadataGraph, guardClassicZipArchive, withMaterializedClassicZipApp } from "../scripts/lib/desktop-extracted-app-tree-proof.mjs";
+import { buildClassicZipMetadataGraph, buildExtractedAppTreeProof, extractedAppTreeProofDigest, guardClassicZipArchive, serializeExtractedAppTreeProof, withMaterializedClassicZipApp } from "../scripts/lib/desktop-extracted-app-tree-proof.mjs";
 
 type Entry = { name: string; localName?: string; localOffset?: number; localExtra?: Buffer; type?: "file" | "directory" | "symlink"; data?: string | Buffer; trailing?: Buffer; flags?: number; method?: number; expanded?: number; crc?: number; descriptor?: boolean; extra?: number | Buffer; comment?: number; mode?: number };
 const roots: string[] = [];
@@ -26,6 +26,7 @@ function classicZip(entries: Entry[]) {
 }
 function unicodePathExtra(headerName: string, alternateName: string) { const alternate = Buffer.from(alternateName), field = Buffer.alloc(9 + alternate.length); u16(field, 0, 0x7075); u16(field, 2, 5 + alternate.length); field[4] = 1; u32(field, 5, crc32(Buffer.from(headerName))); alternate.copy(field, 9); return field; }
 function fixture(entries: Entry[]) { const root = mkdtempSync(join(tmpdir(), "neondiff-zip-")); roots.push(root); const artifact = join(root, "NeonDiff.zip"); writeFileSync(artifact, classicZip(entries)); return { root, artifact }; }
+function plist(version = "1.1.0-rc.9", extra = "") { return `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>11091</string>${extra}</dict></plist>`; }
 function eocdPatch(artifact: string, field: number, value: number) { const bytes = readFileSync(artifact); u32(bytes, bytes.length - 22 + field, value); writeFileSync(artifact, bytes); }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -150,5 +151,42 @@ describe("graph-authoritative ZIP materialization", () => {
     const value = fixture([{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Locked/", type: "directory", mode: 0o040000 }, { name: "NeonDiff.app/Locked/file", data: "bytes" }]); let materializedRoot = "";
     await expect(withMaterializedClassicZipApp(value.artifact, (appPath) => { materializedRoot = dirname(appPath); expect(statSync(join(appPath, "Locked")).mode & 0o777).toBe(0); return "clean"; })).resolves.toBe("clean");
     expect(existsSync(materializedRoot)).toBe(false);
+  });
+});
+
+describe("authenticated exact-ZIP app tree and plist proof", () => {
+  const sourceSHA = "0123456789abcdef0123456789abcdef01234567";
+  function proofFixture(version = "1.1.0-rc.9", extra = "", info: string | Buffer = plist(version, extra)) {
+    return fixture([{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Contents/Info.plist", data: info }, { name: "NeonDiff.app/Contents/MacOS/NeonDiffDesktop", data: "desktop", mode: 0o100755 }, { name: "NeonDiff.app/Contents/Resources/Current", type: "symlink", data: "../MacOS/NeonDiffDesktop" }, { name: "__MACOSX/NeonDiff.app/Contents/._Info.plist", data: "appledouble" }]);
+  }
+  it("derives one frozen canonical proof and binds explicit AppleDouble exclusion", async () => {
+    for (const version of ["1.1.0", "1.1.0-beta.87", "1.1.0-rc.9"]) {
+      const value = proofFixture(version), proof = await buildExtractedAppTreeProof(value.artifact, sourceSHA);
+      let canonicalTree: any;
+      await withMaterializedClassicZipApp(value.artifact, (appPath) => { canonicalTree = JSON.parse(execFileSync(process.execPath, [join(process.cwd(), "scripts/hash-desktop-bundle-tree.mjs"), appPath], { encoding: "utf8" })); });
+      expect(proof).toMatchObject({ schemaVersion: 1, kind: "neondiff.desktop.extracted-tree-proof-v1", verified: true, algorithm: "sha256-tree-v1", sourceSHA, treeSHA256: canonicalTree.sha256, bundleMarkers: { appPath: "NeonDiff.app", bundleID: "com.electricsheephq.NeonDiffDesktop", version, build: "11091" }, appleDouble: { policy: "artifact-bound-excluded-from-tree-v1", entryCount: 1 } });
+      expect(proof.artifactSHA256).toBe(createHash("sha256").update(readFileSync(value.artifact)).digest("hex")); expect(proof.records).toHaveLength(canonicalTree.entryCount);
+      expect(Object.isFrozen(proof) && Object.isFrozen(proof.records) && Object.isFrozen(proof.records[0]) && Object.isFrozen(proof.bundleMarkers) && Object.isFrozen(proof.appleDouble)).toBe(true);
+      expect(serializeExtractedAppTreeProof(proof)).toMatch(/\n$/); expect(extractedAppTreeProofDigest(proof)).toMatch(/^[a-f0-9]{64}$/);
+    }
+  });
+  it("fails closed on ambiguous plist bytes and invalid bundle markers", async () => {
+    const invalid = [
+      proofFixture("1.1.0", "<key>CFBundleName</key><string>A</string><key>CFBundleName</key><string>B</string>"),
+      proofFixture("1.1.0", "", Buffer.from("bplist00hostile")),
+      proofFixture("1.2.0"),
+      proofFixture("1.1.0", "", plist("1.1.0").replace("com.electricsheephq.NeonDiffDesktop", "com.example.Wrong")),
+      proofFixture("1.1.0", "", plist("1.1.0").replace("11091", "not-a-build"))
+    ];
+    for (const value of invalid) await expect(buildExtractedAppTreeProof(value.artifact, sourceSHA)).rejects.toThrow(/plist|marker/i);
+  });
+  it("accepts primitive authority only and rejects forged proof serialization without proxy reads", async () => {
+    const value = proofFixture(), proof = await buildExtractedAppTreeProof(value.artifact, sourceSHA); let proxyRead = false;
+    await expect(buildExtractedAppTreeProof(new Proxy({}, { get() { proxyRead = true; throw new Error("trap"); } }) as any, sourceSHA)).rejects.toThrow("artifact path"); expect(proxyRead).toBe(false);
+    expect(() => serializeExtractedAppTreeProof({ ...proof } as any)).toThrow("not produced");
+    expect(() => serializeExtractedAppTreeProof(new Proxy(proof, { get() { proxyRead = true; throw new Error("trap"); } }) as any)).toThrow("not produced"); expect(proxyRead).toBe(false);
+    const shadow = proofFixture(), previousPythonPath = process.env.PYTHONPATH; writeFileSync(join(shadow.root, "json.py"), "raise RuntimeError('shadow')"); writeFileSync(join(shadow.root, "plistlib.py"), "raise RuntimeError('shadow')");
+    try { process.env.PYTHONPATH = shadow.root; await expect(buildExtractedAppTreeProof(shadow.artifact, sourceSHA)).resolves.toMatchObject({ verified: true }); } finally { if (previousPythonPath === undefined) delete process.env.PYTHONPATH; else process.env.PYTHONPATH = previousPythonPath; }
+    await expect(buildExtractedAppTreeProof(fixture([{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Contents/Info.plist", data: plist() }, { name: "NeonDiff.app/Foo/a" }, { name: "NeonDiff.app/Ｆｏｏ/b" }]).artifact, sourceSHA)).rejects.toThrow("tree path collision");
   });
 });
