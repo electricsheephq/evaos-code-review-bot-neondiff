@@ -8,6 +8,8 @@ Apple/Sparkle inputs are available.
 Proof boundary: this document closes the #322 documentation lane only. It does
 not prove a signed artifact exists, does not submit anything to Apple, does not
 publish an appcast, and does not make the desktop update channel GA-ready.
+Sparkle 2 remains selected while #116 is open. #610 also requires immutable artifact/feed identity,
+signed hosted-feed, installed update, state-preserving rollback, and re-update evidence before Mac GA.
 Parent issue #116 owns the signed auto-update channel, #323 owns appcast
 fixtures/dry-run generation, #324 owns credential naming/custody, #325 owns the
 desktop onboarding wizard, #327 owns production license-service deployment, and
@@ -119,10 +121,36 @@ the wrong source SHA, or carries unrelated local changes. Do not sign whatever
 
 Before building, run the read-only credential doctor:
 
+Set the external evidence root once for this run. The source checkout default is
+`$HOME/.neondiff/evidence`; CI or another operator may set a different root.
+Keep historical packets immutable and never place secrets in the root or repo:
+
+```sh
+export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
+NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)" || { echo "cannot canonicalize evidence root" >&2; exit 2; }
+REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" || { echo "cannot canonicalize checkout root" >&2; exit 2; }
+case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
+RELEASE_DATE="$(date +%F)"; RUN_ID="replace-with-unique-run-id"; case "$RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
+RELEASE_PACKET_ROOT="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop"
+test -e "$RELEASE_PACKET_ROOT" || mkdir "$RELEASE_PACKET_ROOT" || exit 2
+RELEASE_PACKET_ROOT="$(cd "$RELEASE_PACKET_ROOT" && pwd -P)" || { echo "cannot canonicalize evidence packet root" >&2; exit 2; }
+case "$RELEASE_PACKET_ROOT/" in "$NEONDIFF_EVIDENCE_ROOT/"*) ;; *) echo "evidence packet root escaped evidence root" >&2; exit 2 ;; esac
+case "$RELEASE_PACKET_ROOT/" in "$REPO_ROOT/"*) echo "evidence packet root must be outside the checkout" >&2; exit 2 ;; esac
+RELEASE_EVIDENCE_PARENT="$RELEASE_PACKET_ROOT/$RELEASE_DATE"
+test -e "$RELEASE_EVIDENCE_PARENT" || mkdir "$RELEASE_EVIDENCE_PARENT" || exit 2
+RELEASE_EVIDENCE_PARENT="$(cd "$RELEASE_EVIDENCE_PARENT" && pwd -P)" || { echo "cannot canonicalize evidence packet parent" >&2; exit 2; }
+case "$RELEASE_EVIDENCE_PARENT/" in "$RELEASE_PACKET_ROOT/"*) ;; *) echo "evidence packet parent escaped packet root" >&2; exit 2 ;; esac
+case "$RELEASE_EVIDENCE_PARENT/" in "$REPO_ROOT/"*) echo "evidence packet parent must be outside the checkout" >&2; exit 2 ;; esac
+RELEASE_EVIDENCE_DIR="$RELEASE_EVIDENCE_PARENT/$RUN_ID"
+mkdir "$RELEASE_EVIDENCE_DIR" || exit 2
+```
+
 ```sh
 apps/neondiff-desktop/script/preflight-credentials.sh
 apps/neondiff-desktop/script/preflight-credentials.sh --json \
-  > /Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/credential-preflight.json
+  > "$RELEASE_EVIDENCE_DIR/credential-preflight.json"
 ```
 
 The doctor reports presence only. It does not sign, notarize, upload, fetch
@@ -145,7 +173,7 @@ Required owner/Codex inputs for a real signing run:
 - Sparkle public key as `NEONDIFF_SPARKLE_PUBLIC_ED_KEY`.
 - Sparkle feed URL as `NEONDIFF_SPARKLE_FEED_URL`.
 - Appcast hosting destination and rollback destination.
-- Evidence packet directory under `/Users/m1/Codex/evidence/`.
+- Evidence packet directory under `$NEONDIFF_EVIDENCE_ROOT/`.
 
 ## Build The Release App
 
@@ -230,7 +258,7 @@ the notarization paths documented in #324.
 ```sh
 cd apps/neondiff-desktop
 APP="dist/NeonDiff.app"
-ZIP="/Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/NeonDiff.zip"
+ZIP="$RELEASE_EVIDENCE_DIR/NeonDiff.zip"
 
 ditto -c -k --keepParent "$APP" "$ZIP"
 shasum -a 256 "$ZIP"
@@ -282,8 +310,8 @@ fabricate a real Sparkle signature.
 
 ```sh
 apps/neondiff-desktop/script/generate-appcast.sh \
-  --fixture apps/neondiff-desktop/fixtures/appcast/beta.json \
-  --output /Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/neondiff-beta-appcast.xml \
+  --fixture fixtures/appcast/beta.json \
+  --output "$RELEASE_EVIDENCE_DIR/appcast.xml" \
   --dry-run
 ```
 
@@ -323,7 +351,7 @@ License boundary:
 Create a public-safe packet under:
 
 ```text
-/Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/
+$RELEASE_EVIDENCE_DIR/
 ```
 
 Minimum files:
