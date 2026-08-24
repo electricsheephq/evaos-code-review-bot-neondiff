@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
-import { resolve } from "node:path";
+import { chmodSync, closeSync, constants, createWriteStream, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, posix, resolve } from "node:path";
+import { PassThrough, Readable, Transform, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createInflateRaw, crc32 } from "node:zlib";
 
 const MAX_BYTES = 512 * 1024 * 1024, MAX_RECORDS = 20_000, MAX_METADATA = 16 * 1024 * 1024, MAX_NODES = 20_000;
 const EOCD = 0x06054b50, LOCAL = 0x04034b50, CENTRAL = 0x02014b50, DATA_DESCRIPTOR = 0x08074b50, ZIP64 = "ZIP64 archive unsupported";
@@ -109,9 +113,8 @@ function parseMetadataRecords(guarded) {
   return records;
 }
 
-export function buildClassicZipMetadataGraph(artifactPath) {
-  if (typeof artifactPath !== "string" || !artifactPath) fail("artifact path is required");
-  const guarded = guardClassicZipArchive({ artifactPath }), nodes = new Map(), folded = new Map(); let expandedBytes = 0;
+function buildClassicZipMetadataGraphFromGuarded(guarded) {
+  const nodes = new Map(), folded = new Map(); let expandedBytes = 0;
   for (const entry of parseMetadataRecords(guarded)) {
     if (entry.type !== "directory" && (expandedBytes += entry.uncompressedSize) > MAX_BYTES) fail("expanded byte bound exceeded");
     let path = "", identity = "";
@@ -139,4 +142,71 @@ export function buildClassicZipMetadataGraph(artifactPath) {
   }
   const records = [...nodes.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0).map(({ parts: _parts, rangeEnd: _rangeEnd, ...record }) => Object.freeze(record));
   return Object.freeze({ kind: "neondiff.desktop.classic-zip-metadata-graph-v1", artifactSHA256: guarded.artifactSHA256, artifactByteLength: guarded.artifactBytes.length, expandedByteLength: expandedBytes, records: Object.freeze(records) });
+}
+
+export function buildClassicZipMetadataGraph(artifactPath) {
+  if (typeof artifactPath !== "string" || !artifactPath) fail("artifact path is required");
+  return buildClassicZipMetadataGraphFromGuarded(guardClassicZipArchive({ artifactPath }));
+}
+
+function materializedPath(root, path) {
+  const destination = resolve(root, path);
+  if (!destination.startsWith(`${root}/`)) fail("unsafe materialized path");
+  return destination;
+}
+async function pipeVerifiedEntry(guarded, record, destination, aggregate) {
+  let actual = 0, checksum = 0;
+  const end = record.dataOffset + record.compressedSize, source = Readable.from((function* () { for (let offset = record.dataOffset; offset < end; offset += 64 * 1024) yield guarded.artifactBytes.subarray(offset, Math.min(end, offset + 64 * 1024)); })());
+  const verifier = new Transform({ transform(chunk, _encoding, callback) {
+    actual += chunk.length; aggregate.value += chunk.length;
+    if (actual > record.uncompressedSize) return callback(new Error("expanded entry size mismatch"));
+    if (aggregate.value > MAX_BYTES) return callback(new Error("expanded byte bound exceeded"));
+    checksum = crc32(chunk, checksum); callback(null, chunk);
+  } });
+  await pipeline(source, record.compressionMethod === 8 ? createInflateRaw({ rejectGarbageAfterEnd: true }) : new PassThrough(), verifier, destination);
+  if (actual !== record.uncompressedSize) fail("expanded entry size mismatch");
+  if ((checksum >>> 0) !== record.crc32) fail("CRC-32 mismatch");
+}
+function verifyGraphSymlink(path, target, byPath, linkTargets) {
+  let candidate = posix.normalize(posix.join(posix.dirname(path), target)); const seen = new Set();
+  while (true) {
+    if (candidate !== "NeonDiff.app" && !candidate.startsWith("NeonDiff.app/")) fail("unsafe symlink target");
+    const parts = candidate.split("/"); let link = null, suffix = [];
+    for (let index = 1; index <= parts.length; index += 1) { const prefix = parts.slice(0, index).join("/"); if (linkTargets.has(prefix)) { link = prefix; suffix = parts.slice(index); break; } }
+    if (!link) { if (!byPath.has(candidate)) fail("missing symlink target"); return; }
+    if (seen.has(link)) fail("symlink cycle"); seen.add(link);
+    candidate = posix.normalize(posix.join(posix.dirname(link), linkTargets.get(link), ...suffix));
+  }
+}
+
+export async function withMaterializedClassicZipApp(artifactPath, consumer) {
+  if (typeof artifactPath !== "string" || !artifactPath || typeof consumer !== "function") fail("materialization inputs are malformed");
+  const guarded = guardClassicZipArchive({ artifactPath }), graph = buildClassicZipMetadataGraphFromGuarded(guarded), byPath = new Map(graph.records.map((record) => [record.path, record]));
+  if (graph.records.some((record) => record.mode & 0o7000)) fail("special permission bits unsupported");
+  const root = mkdtempSync(join(tmpdir(), "neondiff-materialized-")), directories = graph.records.filter((record) => record.type === "directory"), aggregate = { value: 0 };
+  chmodSync(root, 0o700);
+  try {
+    for (const record of directories) mkdirSync(materializedPath(root, record.path), { mode: 0o700 });
+    for (const record of graph.records.filter((candidate) => candidate.type === "file")) {
+      const destination = materializedPath(root, record.path);
+      await pipeVerifiedEntry(guarded, record, createWriteStream(destination, { flags: constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, mode: 0o600 }), aggregate);
+      chmodSync(destination, record.mode & 0o777);
+    }
+    const symlinks = graph.records.filter((candidate) => candidate.type === "symlink"), linkTargets = new Map();
+    for (const record of symlinks) {
+      if (record.uncompressedSize > 4096) fail("symlink target too large");
+      const chunks = []; await pipeVerifiedEntry(guarded, record, new Writable({ write(chunk, _encoding, callback) { chunks.push(Buffer.from(chunk)); callback(); } }), aggregate);
+      const bytes = Buffer.concat(chunks); let target;
+      try { target = UTF8.decode(bytes); } catch { fail("unsafe symlink target"); }
+      if (!target || bytes.includes(0) || !Buffer.from(target, "utf8").equals(bytes) || posix.isAbsolute(target)) fail("unsafe symlink target");
+      linkTargets.set(record.path, target);
+    }
+    for (const record of symlinks) verifyGraphSymlink(record.path, linkTargets.get(record.path), byPath, linkTargets);
+    for (const record of symlinks) symlinkSync(linkTargets.get(record.path), materializedPath(root, record.path));
+    for (const record of [...directories].reverse()) chmodSync(materializedPath(root, record.path), record.mode & 0o777);
+    return await consumer(materializedPath(root, "NeonDiff.app"), graph);
+  } finally {
+    for (const record of directories) { try { chmodSync(materializedPath(root, record.path), 0o700); } catch {} }
+    rmSync(root, { recursive: true, force: true });
+  }
 }
