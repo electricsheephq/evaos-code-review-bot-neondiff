@@ -10,6 +10,8 @@ proof.
 
 ```bash
 export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+EVAL_RUN_ID="<caller-supplied-unique-run-id>"
 ```
 
 Run it with a local scenario file:
@@ -23,7 +25,7 @@ Run the checked-in local suite fixtures:
 ```bash
 npm run eval:suite -- \
   --input-dir tests/fixtures/eval-suite-scenarios \
-  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/local-suite"
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/$EVAL_RUN_ID/local-suite"
 ```
 
 Run the paired sticky-vs-cold fixture:
@@ -31,7 +33,7 @@ Run the paired sticky-vs-cold fixture:
 ```bash
 npm run eval:sticky-vs-cold -- \
   --input tests/fixtures/sticky-vs-cold/seeded_quality_packet.json \
-  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/sticky-vs-cold-seeded-quality"
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/$EVAL_RUN_ID/sticky-vs-cold-seeded-quality"
 ```
 
 Run the repo-wiki context A/B gate with a fixture that contains baseline,
@@ -40,7 +42,7 @@ deterministic repo-wiki, and curated OpenWiki-derived findings:
 ```bash
 npx tsx src/cli.ts eval-repo-wiki-context-ab \
   --input /path/to/repo-wiki-context-ab.json \
-  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/eval-gates/ab"
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/$EVAL_RUN_ID/eval-gates/ab"
 ```
 
 Run the suggest-only OpenWiki docs-drift gate:
@@ -48,7 +50,7 @@ Run the suggest-only OpenWiki docs-drift gate:
 ```bash
 npx tsx src/cli.ts eval-openwiki-docs-drift \
   --input /path/to/docs-drift.json \
-  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/eval-gates/docs-drift"
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/$EVAL_RUN_ID/eval-gates/docs-drift"
 ```
 
 Both OpenWiki gates are offline evidence generators. They do not call a model,
@@ -62,7 +64,7 @@ Run the review-lenses dry-run comparison gate:
 ```bash
 npx tsx src/cli.ts review-lenses-eval \
   --input-dir tests/fixtures/review-lenses-eval \
-  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S)" \
+  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/$EVAL_RUN_ID/review-lenses-eval-gate" \
   --dry-run true
 ```
 

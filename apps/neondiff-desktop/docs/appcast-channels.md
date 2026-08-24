@@ -21,15 +21,20 @@ Generate a local appcast from a committed fixture:
 
 ```sh
 : "${NEONDIFF_EVIDENCE_ROOT:?set an external evidence root outside this checkout}"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+RUN_ID="<caller-supplied-unique-run-id>"
+RUN_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/$(date +%F)/$RUN_ID"
+mkdir -p "$(dirname "$RUN_DIR")"
+mkdir "$RUN_DIR"
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture fixtures/appcast/beta.json \
-  --output "$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/neondiff-beta-appcast.xml" \
+  --output "$RUN_DIR/appcast.xml" \
   --dry-run
 ```
 
-The output root is operator-owned and external to the checkout; this command
-does not read credentials or private-key paths. Historical packets remain
-immutable.
+The output root is operator-owned, absolute, and external to the checkout; use
+a fresh `<date>/<run-id>/` directory for every packet. `mkdir` must fail on
+reuse. This command does not read credentials or private-key paths.
 
 Dry-run mode never signs, uploads, notarizes, or fabricates a real signature.
 The `sparkle:edSignature` attribute appears only when the manifest explicitly
@@ -53,10 +58,10 @@ The appcast core models these update outcomes for fixtures and release evidence:
 
 These statuses back both dry-run planning and the native updater UI. The source
 maps real Sparkle no-update, network/feed, signature/validation, cancellation,
-and generic failures into distinct customer states. Invalid or missing
-`rollback_to` is a release-gate failure, not proof of installed rollback. A
-hosted signed appcast and installed-app run are still required before claiming
-runtime or GA proof.
+and generic failures into distinct customer states. The current generator does
+not reject invalid or missing `rollback_to`; release validation must catch it
+before publishing. A hosted signed appcast and installed-app run are still
+required before claiming runtime or GA proof.
 
 ## Fixtures
 
