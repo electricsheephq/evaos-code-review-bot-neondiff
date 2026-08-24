@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildIssueEnrichmentLaneReceipt,
   cleanupReviewWorktreesFromConfig,
   runDaemonCycle as runDaemonCycleImpl,
   shouldExitDaemonAfterFailedCycle,
@@ -517,8 +518,11 @@ describe("daemon cycle resilience", () => {
         event: "daemon_issue_enrichment",
         phase: "complete",
         cycle: 9,
-        result: expect.objectContaining({
-          summary: expect.objectContaining({
+        receipt: expect.objectContaining({
+          ok: true,
+          stage: "issue_enrichment",
+          code: "completed",
+          counts: expect.objectContaining({
             reposScanned: 1,
             dryRunRecorded: 1
           })
@@ -643,10 +647,102 @@ describe("daemon cycle resilience", () => {
     expect(failure).toMatchObject({
       event: "daemon_issue_enrichment_failed",
       level: "error",
-      cycle: 10
+      cycle: 10,
+      receipt: {
+        ok: false,
+        stage: "issue_enrichment",
+        code: "cycle_failed",
+        counts: expect.objectContaining({ failed: 0 })
+      }
     });
-    expect(failure.error).toContain("issue enrichment failed");
-    expect(failure.error).not.toContain("ghp_fake_token");
+    expect(failure.error).toBeUndefined();
+    expect(JSON.stringify(failure)).not.toContain("issue enrichment failed");
+    expect(JSON.stringify(failure)).not.toContain("ghp_fake_token");
+  });
+
+  it("reports an explicit non-success result without making the issue lane look healthy", async () => {
+    const stdout: string[] = [];
+    const result = await runDaemonCycle({
+      cycle: 13,
+      dryRun: false,
+      pilotRepos: [],
+      monitoredRepos: [],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewSchedulerEnabled: true,
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => successfulRunOnceResult(),
+      issueEnrichmentCycleImpl: async () => ({
+        ...successfulIssueEnrichmentCycleResult(),
+        ok: false,
+        summary: {
+          ...successfulIssueEnrichmentCycleResult().summary,
+          readFailures: 1,
+          failed: 1
+        },
+        items: [{
+          repo: "owner/repo",
+          issueNumber: 99,
+          state: "open",
+          action: "would_comment",
+          reason: "eligible",
+          error: "customer body and ghp_fake_token must never be logged",
+          recordStatus: "failed"
+        }]
+      }),
+      recordHeartbeatImpl: () => undefined,
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    expect(result.ok).toBe(true);
+    const enrichmentLog = stdout
+      .map((line) => JSON.parse(line))
+      .find((entry) => entry.event === "daemon_issue_enrichment");
+    expect(enrichmentLog).toMatchObject({
+      phase: "result",
+      receipt: {
+        ok: false,
+        stage: "issue_enrichment",
+        code: "result_not_ok",
+        counts: { readFailures: 1, failed: 1 }
+      }
+    });
+    expect(JSON.stringify(enrichmentLog)).not.toContain("customer body");
+    expect(JSON.stringify(enrichmentLog)).not.toContain("ghp_fake_token");
+  });
+
+  it("marks a successful zero-candidate issue cycle explicitly", () => {
+    const result = buildIssueEnrichmentLaneReceipt({
+      ...successfulIssueEnrichmentCycleResult(),
+      summary: {
+        ...successfulIssueEnrichmentCycleResult().summary,
+        issuesSeen: 0,
+        eligible: 0,
+        wouldEnrich: 0,
+        wouldComment: 0,
+        skipped: 0,
+        deferred: 0,
+        posted: 0,
+        dryRunRecorded: 0,
+        skippedRecorded: 0,
+        deferredRecorded: 0,
+        alreadyProcessed: 0,
+        failed: 0
+      }
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      stage: "issue_enrichment",
+      code: "no_candidates",
+      counts: expect.objectContaining({
+        issuesSeen: 0,
+        eligible: 0,
+        posted: 0,
+        failed: 0
+      })
+    });
   });
 });
 

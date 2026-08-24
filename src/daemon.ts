@@ -25,6 +25,62 @@ export type DaemonCycleResult =
   | { ok: true; result: RunOnceResult }
   | { ok: false; failureKind: "admission_denied" | "runtime_failure"; error: string };
 
+export interface IssueEnrichmentLaneCounts {
+  reposScanned: number;
+  reposSkipped: number;
+  readFailures: number;
+  issuesSeen: number;
+  eligible: number;
+  skipped: number;
+  wouldEnrich: number;
+  wouldComment: number;
+  deferred: number;
+  baselinedRepos: number;
+  truncatedRepos: number;
+  workerSkipped: number;
+  posted: number;
+  dryRunRecorded: number;
+  skippedRecorded: number;
+  deferredRecorded: number;
+  alreadyProcessed: number;
+  failed: number;
+}
+
+export type IssueEnrichmentLaneCode = "completed" | "no_candidates" | "result_not_ok" | "cycle_failed";
+
+export interface IssueEnrichmentLaneReceipt {
+  ok: boolean;
+  stage: "issue_enrichment";
+  code: IssueEnrichmentLaneCode;
+  counts: IssueEnrichmentLaneCounts;
+}
+
+const ISSUE_ENRICHMENT_LANE_COUNT_KEYS = [
+  "reposScanned", "reposSkipped", "readFailures", "issuesSeen", "eligible", "skipped",
+  "wouldEnrich", "wouldComment", "deferred", "baselinedRepos", "truncatedRepos", "workerSkipped",
+  "posted", "dryRunRecorded", "skippedRecorded", "deferredRecorded", "alreadyProcessed", "failed"
+] as const satisfies ReadonlyArray<keyof IssueEnrichmentLaneCounts>;
+
+function boundedLaneCount(value: unknown): number {
+  const number = typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : 0;
+  return Math.min(1_000_000, Math.max(0, number));
+}
+
+export function buildIssueEnrichmentLaneReceipt(result?: IssueEnrichmentCycleResult): IssueEnrichmentLaneReceipt {
+  const counts = {} as IssueEnrichmentLaneCounts;
+  for (const key of ISSUE_ENRICHMENT_LANE_COUNT_KEYS) counts[key] = boundedLaneCount(result?.summary[key]);
+  const ok = result?.ok === true && counts.readFailures === 0 && counts.failed === 0;
+  const noCandidates = ok && counts.eligible === 0 && counts.wouldEnrich === 0 && counts.wouldComment === 0 &&
+    counts.posted === 0 && counts.dryRunRecorded === 0 && counts.skippedRecorded === 0 &&
+    counts.deferredRecorded === 0 && counts.alreadyProcessed === 0;
+  return {
+    ok,
+    stage: "issue_enrichment",
+    code: result === undefined ? "cycle_failed" : !ok ? "result_not_ok" : noCandidates ? "no_candidates" : "completed",
+    counts
+  };
+}
+
 export function shouldExitDaemonAfterFailedCycle(result: DaemonCycleResult, runOnce: boolean): boolean {
   return !result.ok && (runOnce || result.failureKind === "admission_denied");
 }
@@ -284,21 +340,23 @@ async function runIssueEnrichmentLane(input: {
       dryRun: input.input.dryRun,
       ...(input.admissions ? { licenseAdmission: input.admissions.issueEnrichment } : {})
     });
+    const receipt = buildIssueEnrichmentLaneReceipt(issueEnrichment);
     input.stdout(formatDaemonLog({
       event: "daemon_issue_enrichment",
-      phase: "complete",
+      phase: receipt.ok ? "complete" : "result",
       cycle: input.input.cycle,
       dryRun: input.input.dryRun,
-      result: issueEnrichment
+      receipt
     }));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const receipt = buildIssueEnrichmentLaneReceipt();
     input.stderr(formatDaemonLog({
       event: "daemon_issue_enrichment_failed",
       level: "error",
+      phase: "failed",
       cycle: input.input.cycle,
       dryRun: input.input.dryRun,
-      error: message
+      receipt
     }));
   }
 }
