@@ -7,8 +7,8 @@ struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
     private let localBotExecutionContextProvider:
         @Sendable () -> [DesktopLocalBotExecutionContext]
     private let defaultWorkingDirectory: URL?
-    private let trustedBundledWorker:
-        DesktopLocalBotExecutionContext?
+    private let trustedBundledWorkerProvider:
+        @Sendable () -> DesktopLocalBotExecutionContext?
     private let trustedProcessValidator:
         @Sendable (Int32) -> Bool
 
@@ -19,8 +19,8 @@ struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
             (@Sendable () -> [DesktopLocalBotExecutionContext])? = nil,
         defaultWorkingDirectory: URL? =
             NeonDiffCLIResolver.defaultWorkingDirectory(),
-        trustedBundledWorker:
-            DesktopLocalBotExecutionContext? = nil,
+        trustedBundledWorkerProvider:
+            (@Sendable () -> DesktopLocalBotExecutionContext?)? = nil,
         trustedProcessValidator:
             @escaping @Sendable (Int32) -> Bool = { _ in false }
     ) {
@@ -28,7 +28,7 @@ struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
         self.localBotExecutionContextProvider =
             localBotExecutionContextProvider ?? { localBotExecutionContexts }
         self.defaultWorkingDirectory = defaultWorkingDirectory
-        self.trustedBundledWorker = trustedBundledWorker
+        self.trustedBundledWorkerProvider = trustedBundledWorkerProvider ?? { nil }
         self.trustedProcessValidator = trustedProcessValidator
     }
 
@@ -56,6 +56,7 @@ struct FoundationDesktopCLIExecutor: DesktopCLIExecuting {
         }
         let trustedContext: DesktopLocalBotExecutionContext?
         if requiresTrustedWorker {
+            let trustedBundledWorker = trustedBundledWorkerProvider()
             guard let trustedBundledWorker else {
                 throw NeonDiffCLIError.launchFailed(
                     "The signed bundled NeonDiff worker is unavailable"

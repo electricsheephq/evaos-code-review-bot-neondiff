@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { DEFAULT_CONTEXT_BUDGET_CONFIG, type ContextBudgetConfig } from "./context-budget.js";
 import type { EnrichmentConfig } from "./enrichment.js";
@@ -441,7 +442,7 @@ const DEFAULT_CONFIG: BotConfig = {
   skillPacks: {
     enabled: false,
     packetVersion: "skill-pack-context-packet-v0.1",
-    skillRoot: "/Volumes/LEXAR/Codex/evaos-code-review-bot/skills",
+    skillRoot: join(homedir(), ".neondiff", "skills"),
     allowlist: [],
     maxSkillBytes: 8_000,
     maxPacketBytes: 16_000
@@ -590,7 +591,7 @@ const DEFAULT_CONFIG: BotConfig = {
   },
   zcode: {
     cliPath: "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
-    appConfigPath: "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+    appConfigPath: join(homedir(), ".zcode", "v2", "config.json"),
     model: "GLM-5.2",
     timeoutMs: 180_000,
     maxPatchBytes: 80_000,

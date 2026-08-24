@@ -326,9 +326,9 @@
     }
   },
   "zcode": {
-    "_desktopPathComment": "Developer-machine defaults. Override cliPath and appConfigPath for any non-author workstation or packaged desktop install.",
+    "_desktopPathComment": "Legacy ZCode compatibility settings. Override both paths for a local install; native Codex reviews use codexRuntime and the existing CLI login.",
     "cliPath": "/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs",
-    "appConfigPath": "/Volumes/LEXAR/zcode/.zcode/v2/config.json",
+    "appConfigPath": "/path/to/zcode/config.json",
     "model": "GLM-5.2",
     "timeoutMs": 180000,
     "maxPatchBytes": 80000,
