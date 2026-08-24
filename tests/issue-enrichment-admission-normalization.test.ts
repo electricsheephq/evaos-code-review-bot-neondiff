@@ -38,7 +38,19 @@ describe("issue-enrichment admission normalization", () => {
   });
 
   it("rejects a legacy deferred row without an explicit current-cycle fallback", () => {
-    expect(() => normalizeIssueEnrichmentCandidates(input([{ ...item("a/repo", 1), action: "deferred" }], { fallbackIntendedAction: undefined }))).toThrow(/fallbackIntendedAction/);
+    expect(() => normalizeIssueEnrichmentCandidates(input([{ ...item("a/repo", 1), action: "deferred" }], { fallbackIntendedAction: undefined }))).toThrow("issue_enrichment_normalization_missing_intent:a/repo#1");
+  });
+
+  it("rejects duplicate persisted records independently of input order", () => {
+    const records = [{ repo: "a/repo", issueNumber: 1, status: "dry_run" }, { repo: "a/repo", issueNumber: 1, status: "posted" }] as const;
+    for (const ordered of [records, [...records].reverse()]) expect(() => normalizeIssueEnrichmentCandidates(input([item("a/repo", 1)], { records: ordered }))).toThrow("issue_enrichment_normalization_duplicate_record:a/repo#1");
+  });
+
+  it("rejects mutable non-plain extension values", () => {
+    for (const extension of [new Map([["x", 1]]), new Date(0)]) {
+      const record = { repo: "a/repo", issueNumber: 1, status: "posted", extension } as any;
+      expect(() => normalizeIssueEnrichmentCandidates(input([item("a/repo", 1)], { records: [record] }))).toThrow("issue_enrichment_normalization_non_plain_value");
+    }
   });
 
   it("keeps unknown timestamps unknown and applies deadline-only fallback", () => {

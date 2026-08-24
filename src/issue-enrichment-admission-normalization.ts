@@ -46,7 +46,12 @@ export function normalizeIssueEnrichmentCandidates(input: IssueEnrichmentNormali
   if (input.fallbackIntendedAction !== undefined && !isAction(input.fallbackIntendedAction)) {
     throw new Error("issue_enrichment_normalization_invalid_fallbackIntendedAction");
   }
-  const byKey = new Map(records.map((record) => [`${record.repo}#${record.issueNumber}`, record]));
+  const byKey = new Map<string, IssueEnrichmentNormalizationRecord>();
+  for (const record of records) {
+    const key = `${record.repo}#${record.issueNumber}`;
+    if (byKey.has(key)) throw new Error(`issue_enrichment_normalization_duplicate_record:${key}`);
+    byKey.set(key, record);
+  }
   const candidates: IssueEnrichmentNormalizationCandidate[] = [];
   const seen = new Set<string>();
   for (const repo of allowlist) for (const item of items) {
@@ -87,6 +92,7 @@ function parseTimestamp(value: string | undefined): string | undefined {
 }
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) throw new Error("issue_enrichment_normalization_non_plain_value");
     for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
     Object.freeze(value);
   }
