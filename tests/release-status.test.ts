@@ -6969,6 +6969,46 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
       detail: "active; active age 60000ms; max 420000ms; started cycle 6; last event daemon_cycle_complete; last cycle 5"
     });
   });
+
+  it("uses progress age for active liveness and keeps terminal rows in history", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-progress-heartbeat-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`create table processed_reviews (
+      repo text, pull_number integer, head_sha text, status text, error text, created_at text
+    ); create table daemon_heartbeat (
+      id integer primary key, cycle integer, event text, dry_run integer, recorded_at text,
+      error text, started_cycle integer, started_at text, run_id text,
+      last_progress_at text, completed_at text
+    )`);
+    db.prepare("insert into daemon_heartbeat values (1,?,?,?,?,?,?,?,?,?,?)").run(
+      7, "daemon_cycle_progress", 0, "2026-07-01T00:09:00.000Z", null, 7,
+      "2026-07-01T00:00:00.000Z", "run-7", "2026-07-01T00:09:00.000Z", null
+    );
+    db.close();
+
+    const active = collectReleaseStatus({
+      cwd: repoRoot, statePath: dbPath, configPath: join(root, "missing.json"), launchdLabel: "worker",
+      now: new Date("2026-07-01T00:10:00.000Z")
+    });
+    expect(active.heartbeat).toMatchObject({
+      status: "active", activeRunId: "run-7", activeProgressAgeMs: 60_000,
+      activeAgeMs: 60_000, activeTotalAgeMs: 600_000
+    });
+    expect(active.gates).toContainEqual(expect.objectContaining({ name: "daemon_heartbeat_recent", ok: true }));
+
+    const terminalDb = new DatabaseSync(dbPath);
+    terminalDb.prepare("update daemon_heartbeat set event = ?, recorded_at = ?, completed_at = ?")
+      .run("daemon_cycle_complete", "2026-07-01T00:09:30.000Z", "2026-07-01T00:09:30.000Z");
+    terminalDb.close();
+    const history = collectReleaseStatus({
+      cwd: repoRoot, statePath: dbPath, configPath: join(root, "missing.json"), launchdLabel: "worker",
+      now: new Date("2026-07-01T00:10:00.000Z")
+    });
+    expect(history.heartbeat).toMatchObject({ status: "fresh", completedAt: "2026-07-01T00:09:30.000Z" });
+    expect(history.heartbeat.activeRunId).toBeUndefined();
+  });
 });
 
 function freshHeartbeat() {

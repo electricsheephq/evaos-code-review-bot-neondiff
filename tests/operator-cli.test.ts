@@ -100,6 +100,25 @@ describe("operator CLI summaries", () => {
     expect(JSON.stringify(status)).not.toMatch(/ghp_|BEGIN RSA|PRIVATE KEY/);
   });
 
+  it("projects active heartbeat clocks without relabeling history as liveness", () => {
+    const release = releaseStatus({ ok: true });
+    release.heartbeat = {
+      status: "active", maxAgeMs: 120_000, activeMaxAgeMs: 420_000,
+      latestAt: "2026-07-01T00:09:30.000Z", ageMs: 30_000, cycle: 4,
+      event: "daemon_cycle_progress", dryRun: false, activeCycle: 4,
+      activeRunId: "run-4", activeStartedAt: "2026-07-01T00:00:00.000Z",
+      activeLastProgressAt: "2026-07-01T00:09:30.000Z", activeProgressAgeMs: 30_000,
+      activeTotalAgeMs: 600_000, activeAgeMs: 30_000
+    };
+    const human = formatRuntimeInventoryHuman(buildRuntimeInventory({
+      release, coverage: coverageReport({ ok: true }), agents: agentInventory({ ok: true }),
+      providerCooldowns: [], checkedAt: "2026-07-01T00:10:00.000Z"
+    }));
+    expect(human).toContain(
+      "heartbeat: active cycle=4 totalAgeMs=600000 progressAgeMs=30000 livenessAgeMs=30000"
+    );
+  });
+
   it("marks release monitoring coverage as not collected unless the release gate requests it", () => {
     const coverage = buildReleaseMonitoringCoverage({
       required: false,
