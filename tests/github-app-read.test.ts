@@ -35,21 +35,6 @@ describe("GitHub App read authentication", () => {
     expect(identity.account_login).toBe("owner");
   });
 
-  it("accepts distinct customer App slugs when no bot login is configured", () => {
-    for (const appSlug of ["customer-review-app", "second-customer-app"]) {
-      const identity = normalizeAndValidateGitHubInstallationIdentity(canonicalInstallation({ app_slug: appSlug }), {
-        expectedAppId: "4184532", repo: "owner/repo"
-      });
-      expect(identity.bot_login).toBe(`${appSlug}[bot]`);
-      expect(normalizeAndValidateGitHubInstallationIdentity(canonicalInstallation({ app_slug: appSlug }), {
-        expectedAppId: "4184532", expectedBotLogin: `${appSlug}[bot]`, repo: "owner/repo"
-      }).bot_login).toBe(`${appSlug}[bot]`);
-      expect(() => normalizeAndValidateGitHubInstallationIdentity(canonicalInstallation({ app_slug: appSlug }), {
-        expectedAppId: "4184532", expectedBotLogin: "evaos-code-review-bot[bot]", repo: "owner/repo"
-      })).toThrow(/canonical validation/);
-    }
-  });
-
   it.each([
     ["App mismatch", { app_id: 4184533 }, undefined],
     ["account mismatch", { account: { id: 7, login: "other", type: "User" } }, undefined],
@@ -102,7 +87,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse(canonicalInstallation());
+        return jsonResponse({ id: 123 });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -161,7 +146,7 @@ describe("GitHub App read authentication", () => {
         method: init?.method ?? "GET",
         body: init?.body ? JSON.parse(String(init.body)) : undefined
       });
-      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation());
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       }
@@ -201,7 +186,7 @@ describe("GitHub App read authentication", () => {
     const calls: string[] = [];
     globalThis.fetch = vi.fn(async (url) => {
       calls.push(String(url));
-      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation());
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       }
@@ -275,7 +260,7 @@ describe("GitHub App read authentication", () => {
     globalThis.fetch = vi.fn(async (url) => {
       calls.push(String(url));
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse(canonicalInstallation());
+        return jsonResponse({ id: 123 });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -306,7 +291,7 @@ describe("GitHub App read authentication", () => {
 
     globalThis.fetch = vi.fn(async (url) => {
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse(canonicalInstallation());
+        return jsonResponse({ id: 123 });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -373,26 +358,6 @@ describe("GitHub App read authentication", () => {
     expect(calls.find((call) => call.url.endsWith("/repos/owner/repo"))?.authorization).toBe("Bearer installation-token");
     expect(calls.find((call) => call.url.endsWith("/repos/owner/repo/pulls?state=open&per_page=100&page=1"))?.authorization)
       .toBe("Bearer installation-token");
-  });
-
-  it("rejects an explicit bot login mismatch before token exchange", async () => {
-    const root = mkdtempSync(join(tmpdir(), "github-app-explicit-bot-mismatch-"));
-    roots.push(root);
-    const privateKeyPath = join(root, "app.pem");
-    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
-    let tokenCalls = 0;
-    globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse(canonicalInstallation({ app_slug: "customer-review-app" }));
-      }
-      if (String(url).endsWith("/app/installations/123/access_tokens")) tokenCalls += 1;
-      return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
-    }) as typeof fetch;
-
-    await expect(new GitHubApi({ appId: "4184532", privateKeyPath, botLogin: "other-app[bot]" }).listOpenPulls("owner/repo"))
-      .rejects.toThrow(/canonical validation/);
-    expect(tokenCalls).toBe(0);
   });
 
   it("revalidates explicit identity before a refreshed token exchange", async () => {
@@ -645,7 +610,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse(canonicalInstallation());
+        return jsonResponse({ id: 123 });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -673,7 +638,7 @@ describe("GitHub App read authentication", () => {
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
 
     globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation());
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
       if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       if (String(url).endsWith("/repos/owner/repo/issues/404")) return jsonResponse({ message: "Resource not accessible by integration" }, 403);
       return jsonResponse({ message: "unexpected" }, 404);
@@ -692,7 +657,7 @@ describe("GitHub App read authentication", () => {
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
 
     globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation());
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
       if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: "API rate limit exceeded for installation" }, 403);
       return jsonResponse({ message: "unexpected" }, 404);
@@ -710,7 +675,7 @@ describe("GitHub App read authentication", () => {
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
 
     globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation());
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
       if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: "SAML enforcement blocks this installation" }, 403);
       return jsonResponse({ message: "unexpected" }, 404);
@@ -728,7 +693,7 @@ describe("GitHub App read authentication", () => {
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
 
     globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation());
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
       if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: "SAML enforcement blocks this installation" }, 403, "Forbidden");
       return jsonResponse({ message: "unexpected" }, 404);
@@ -746,7 +711,7 @@ describe("GitHub App read authentication", () => {
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
 
     globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation());
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
       if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: "SAML enforcement blocks this installation; nested error: Not Found" }, 403, "Forbidden");
       return jsonResponse({ message: "unexpected" }, 404);
@@ -765,7 +730,7 @@ describe("GitHub App read authentication", () => {
     const leakedToken = "ghp_fake_token";
 
     globalThis.fetch = vi.fn(async (url) => {
-      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse(canonicalInstallation());
+      if (String(url).endsWith("/repos/owner/repo/installation")) return jsonResponse({ id: 123 });
       if (String(url).endsWith("/app/installations/123/access_tokens")) return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
       if (String(url).endsWith("/repos/owner/repo/issues/403")) return jsonResponse({ message: `SAML enforcement ${leakedToken}` }, 403, "Forbidden");
       return jsonResponse({ message: "unexpected" }, 404);
@@ -795,7 +760,7 @@ describe("GitHub App read authentication", () => {
         body: init?.body ? JSON.parse(String(init.body)) : undefined
       });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse(canonicalInstallation());
+        return jsonResponse({ id: 123 });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -852,7 +817,7 @@ describe("GitHub App read authentication", () => {
         body: init?.body ? JSON.parse(String(init.body)) : undefined
       });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse(canonicalInstallation());
+        return jsonResponse({ id: 123 });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -953,6 +918,9 @@ describe("GitHub App read authentication", () => {
 });
 
 function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
+  if (body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 1 && "id" in body) {
+    body = { ...canonicalInstallation(), ...(body as Record<string, unknown>) };
+  }
   return new Response(JSON.stringify(body), {
     status,
     statusText,

@@ -8,9 +8,6 @@ import { redactSecrets } from "./secrets.js";
 import type { PullFilePatch, PullRequestSummary, PullReviewComment, RepositorySummary, ReviewComment, ReviewEvent } from "./types.js";
 import { buildApiUrl, normalizeHttpApiBaseUrl } from "./url-safety.js";
 
-/** The bot's own GitHub App login — single source of truth for "who am I" (#345 reuse). */
-export const DEFAULT_BOT_LOGIN = "evaos-code-review-bot[bot]";
-
 /**
  * Hard page cap for the bounded outcome-observation review-comment read (#371). At 100/page this bounds
  * a single PR's comment scan to 500, so a pathological thread count can't drive unbounded GitHub reads
@@ -143,6 +140,7 @@ export interface CanonicalGitHubInstallationIdentity {
 export interface GitHubInstallationIdentityExpectation {
   expectedAppId: string;
   expectedBotLogin?: string;
+  expectedOwner?: string;
   repo: string;
 }
 
@@ -190,6 +188,7 @@ export class GitHubApi {
   private readonly configuredBotLogin?: string;
   private botLogin?: string;
   private readonly requestTimeoutMs: number;
+  private readonly installationIdentities = new Map<string, CanonicalGitHubInstallationIdentity>();
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
 
@@ -208,6 +207,10 @@ export class GitHubApi {
 
   canPostAsApp(): boolean {
     return Boolean(this.appId && this.privateKey);
+  }
+
+  getCanonicalIdentity(repo: string): CanonicalGitHubInstallationIdentity | undefined {
+    return this.installationIdentities.get(repo);
   }
 
   async listOpenPulls(repo: string): Promise<PullRequestSummary[]> {
@@ -605,7 +608,7 @@ export class GitHubApi {
   }
 
   private isBotAuthoredComment(comment: IssueCommentSummary): boolean {
-    return comment.user?.type === "Bot" && comment.user.login === this.botLogin;
+    return Boolean(this.botLogin) && comment.user?.type === "Bot" && comment.user.login === this.botLogin;
   }
 
   private async getInstallationToken(repo: string): Promise<string> {
@@ -623,14 +626,26 @@ export class GitHubApi {
   ): Promise<CanonicalGitHubInstallationIdentity> {
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
     const jwt = createAppJwt(this.appId, this.privateKey);
+    let responseUrl = "";
     const response = await this.request<unknown>(`/repos/${repo}/installation`, {
       token: jwt,
-      followRedirects: options.followRedirects
+      followRedirects: options.followRedirects,
+      onResponse: (result) => { responseUrl = result.url; }
     });
-    const expected: GitHubInstallationIdentityExpectation = { expectedAppId: this.appId, repo };
+    const configuredOwner = repo.split("/")[0];
+    const canonicalOwner = responseUrl ? (() => {
+      try {
+        const url = new URL(responseUrl);
+        const match = /\/repos\/([^/]+)\/([^/]+)\/installation$/.exec(url.pathname);
+        return url.origin === this.apiBaseUrl.origin && match?.[2] === repo.split("/")[1] ? match[1] : undefined;
+      } catch { return undefined; }
+    })() : configuredOwner;
+    if (!canonicalOwner) throw new Error("GitHub installation redirect identity is ambiguous.");
+    const expected: GitHubInstallationIdentityExpectation = { expectedAppId: this.appId, expectedOwner: canonicalOwner, repo };
     if (this.configuredBotLogin !== undefined) expected.expectedBotLogin = this.configuredBotLogin;
     const identity = normalizeAndValidateGitHubInstallationIdentity(response, expected);
     this.botLogin = identity.bot_login;
+    this.installationIdentities.set(repo, identity);
     return identity;
   }
 
@@ -696,7 +711,7 @@ export class GitHubApi {
 
   private async request<T>(
     path: string,
-    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean } = {}
+    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean; onResponse?: (response: Response) => void } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
     const controller = new AbortController();
@@ -723,6 +738,7 @@ export class GitHubApi {
           responseText: text
         });
       }
+      options.onResponse?.(response);
       return (await response.json()) as T;
     } catch (error) {
       if (error instanceof GitHubApiRequestError) throw error;
@@ -792,14 +808,15 @@ export function normalizeAndValidateGitHubInstallationIdentity(
   const botLoginConfigured = expectedBotLoginValue !== MISSING_GITHUB_FIELD && expectedBotLoginValue !== undefined;
   const repo = readGitHubField(expected, "repo");
   const repoParts = typeof repo === "string" ? repo.split("/") : [];
-  const owner = repoParts.length === 2 && repoParts[1].length > 0 && !/\s/.test(repoParts[1])
+  const configuredOwner = repoParts.length === 2 && repoParts[1].length > 0 && !/\s/.test(repoParts[1])
     ? normalizeGitHubValue(repoParts[0], GITHUB_LOGIN_PATTERN) : undefined;
+  const expectedOwner = normalizeGitHubValue(readGitHubField(expected, "expectedOwner"), GITHUB_LOGIN_PATTERN) ?? configuredOwner;
   const botLogin = appSlug ? `${appSlug}[bot]` : undefined;
   const positiveInteger = (candidate: unknown): candidate is number =>
     typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0;
   if (!positiveInteger(id) || !positiveInteger(appId) || !positiveInteger(accountId)
       || typeof expectedAppId !== "string" || !/^\d+$/.test(expectedAppId.trim())
-      || String(appId) !== expectedAppId.trim() || !accountLogin || !owner || accountLogin !== owner
+      || String(appId) !== expectedAppId.trim() || !accountLogin || !expectedOwner || accountLogin !== expectedOwner
       || (accountType !== "User" && accountType !== "Organization") || !appSlug
       || !botLogin || (botLoginConfigured && botLogin !== expectedBotLogin)) {
     throw new Error("GitHub installation identity failed canonical validation.");

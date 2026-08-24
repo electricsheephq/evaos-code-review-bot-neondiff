@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isBotCommandComment } from "./commands.js";
-import { DEFAULT_BOT_LOGIN } from "./github.js";
 import { redactSecrets } from "./secrets.js";
 import { writeSecureFileSync } from "./temp-files.js";
 import type { ObserveScheduleConfig } from "./config.js";
@@ -231,13 +230,12 @@ function mergeLineMap(into: Map<string, Set<number>>, from: Map<string, Set<numb
 }
 
 function humanThreadTouchesFinding(comments: ObservedReviewComment[], findings: ObservedFinding[], botLogin?: string): boolean {
-  const effectiveBotLogin = botLogin ?? DEFAULT_BOT_LOGIN;
   for (const comment of comments) {
     // A human REPLY thread (in_reply_to_id set) is the dismissal signal; a bot author never counts.
     if (comment.in_reply_to_id === undefined || comment.in_reply_to_id === null) continue;
     // Reuse the shared bot-identity check (#149): excludes user.type === "Bot" OR the app bot login,
     // so a bot reply with a MISSING/variant type (only its login matches) is still not counted human.
-    if (comment.user && isBotCommandComment(comment.user, effectiveBotLogin)) continue;
+    if (!botLogin || (comment.user && isBotCommandComment(comment.user, botLogin))) continue;
     const path = comment.path;
     if (!path) continue;
     const line = typeof comment.line === "number" ? comment.line : comment.original_line;

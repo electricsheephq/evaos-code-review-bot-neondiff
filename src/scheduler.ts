@@ -13,7 +13,7 @@ import {
   type ReviewCommand
 } from "./commands.js";
 import { isFinishingTouchActionEnabled } from "./finishing-touches.js";
-import { DEFAULT_BOT_LOGIN, GitHubApi } from "./github.js";
+import { GitHubApi, type CanonicalGitHubInstallationIdentity } from "./github.js";
 import {
   authorizeAdmissionForVisibility,
   isAuthenticProductionLicenseAdmission,
@@ -107,6 +107,7 @@ export interface ScheduledRunResult extends RunOnceResult {
 }
 
 export interface SchedulerGitHubApi {
+  getCanonicalIdentity?(repo: string): CanonicalGitHubInstallationIdentity | undefined;
   listOpenPulls(repo: string): Promise<PullRequestSummary[]>;
   getPull(repo: string, pullNumber: number): Promise<PullRequestSummary>;
   listIssueComments(repo: string, issueNumber: number): Promise<IssueCommentCommandSource[]>;
@@ -416,6 +417,7 @@ export async function observeScheduledOutcomes(input: {
       const reviewComments = input.github.listPullReviewComments
         ? await input.github.listPullReviewComments(target.repo, target.pullNumber)
         : [];
+      const botLogin = input.config.github.botLogin ?? input.github.getCanonicalIdentity?.(target.repo)?.bot_login;
       return buildObservedPullOutcome({
         merged,
         mergedAt: pull.merged_at,
@@ -425,7 +427,7 @@ export async function observeScheduledOutcomes(input: {
         findings: target.findings,
         subsequentPulls,
         reviewComments,
-        ...(input.config.github.botLogin ? { botLogin: input.config.github.botLogin } : {})
+        ...(botLogin ? { botLogin } : {})
       });
     } catch (error) {
       // Fail-open per target: a deeper-read error degrades to the merge-state cut, never throwing into
@@ -1177,6 +1179,7 @@ async function resolveSchedulerCommandDecision(input: {
   // whether a command may enqueue a review; nothing downstream changes.
   const admittedPublic = admitPublicCommands({
     config: input.config,
+    github: input.github,
     state: input.state,
     repo: input.repo,
     pull: input.pull,
@@ -1267,6 +1270,7 @@ function latestPendingRequestChanges(input: {
 
 export function admitPublicCommands(input: {
   config: BotConfig;
+  github?: SchedulerGitHubApi;
   state: ReviewStateStore;
   repo: string;
   pull: PullRequestSummary;
@@ -1276,7 +1280,8 @@ export function admitPublicCommands(input: {
 }): ReviewCommand[] {
   const publicCommands = input.config.commands.publicCommands;
   if (!publicCommands?.enabled || input.publicEligible.length === 0) return [];
-  const botLogin = input.config.github.botLogin ?? DEFAULT_BOT_LOGIN;
+  const botLogin = input.config.github.botLogin ?? input.github?.getCanonicalIdentity?.(input.repo)?.bot_login;
+  if (!botLogin) return [];
   const commentsById = new Map(input.comments.map((comment) => [comment.id, comment]));
   const admitted: ReviewCommand[] = [];
   for (const command of input.publicEligible) {
@@ -1687,7 +1692,8 @@ async function repairProcessedHeadStatusCommentIfNeeded(input: {
     pullNumber: input.pull.number,
     headSha: input.pull.head.sha
   });
-  const botLogin = input.config.github.botLogin ?? DEFAULT_BOT_LOGIN;
+  const botLogin = input.config.github.botLogin ?? input.github.getCanonicalIdentity?.(input.repo)?.bot_login;
+  if (!botLogin) return;
   const existing = comments.find((comment) =>
     comment.body?.includes(marker) &&
     comment.user?.type === "Bot" &&

@@ -5205,7 +5205,7 @@ function schedulerConfig(root: string, repos: string[]): BotConfig {
       maxPatchBytes: 1,
       retryMaxRetries: 0
     },
-    github: {}
+    github: { botLogin: "evaos-code-review-bot[bot]" }
   };
 }
 
