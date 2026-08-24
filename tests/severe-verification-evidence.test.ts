@@ -29,6 +29,7 @@ describe("exact-head severe evidence collection", () => {
 
   it("accepts an explicit empty module set", async () => {
     const result = await collectSevereVerificationEvidence(input([])); expect(result.complete).toBe(true); expect(result.files.map((item) => item.kind)).toEqual(["whole_file"]);
+    const overridden = [moduleA]; Object.defineProperty(overridden, "map", { value: () => Array(MAX_MODULES + 1).fill(moduleA) }); expect((await collectSevereVerificationEvidence(input(overridden))).files.map((item) => item.path)).toEqual([finding, moduleA]);
   });
 
   it("rejects stale identity and caps hunks using intrinsic bytes before hashing", async () => {
@@ -55,5 +56,12 @@ describe("exact-head severe evidence collection", () => {
 
   it("records missing, invalid UTF-8, and capped blobs as omissions", async () => {
     const result = await collectSevereVerificationEvidence(input(["missing.ts", "bad.bin", "big.bin"])); expect(result.complete).toBe(false); expect(result.files.map((item) => item.path)).toEqual([finding]); expect(result.omitted).toEqual([{ path: "bad.bin", code: "evidence_incomplete" }, { path: "big.bin", code: "cap_exceeded" }, { path: "missing.ts", code: "not_read" }]);
+  });
+
+  it("does not lazily fetch missing partial-clone blobs", async () => {
+    const partial = await mkdtemp(join(root, ".severe-partial-"));
+    try { git(["config", "uploadpack.allowFilter", "true"]); execFileSync("git", ["clone", "--quiet", "--filter=blob:none", "--no-checkout", `file://${fixture}`, partial]); const partialHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: partial, encoding: "utf8" }).trim();
+      const result = await collectSevereVerificationEvidence({ ...input([]), expectedHeadSha: partialHead, worktreePath: partial }); expect(result.files).toEqual([]); expect(result.omitted).toEqual([{ path: finding, code: "not_read" }]);
+    } finally { await rm(partial, { recursive: true, force: true }); }
   });
 });

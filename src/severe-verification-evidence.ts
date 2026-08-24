@@ -29,8 +29,11 @@ export async function collectSevereVerificationEvidence(input: SevereVerificatio
   verifyIdentity(input);
   const gitDir = verifyHead(input.expectedHeadSha, input.worktreePath);
   const finding = safePath(input.findingPath);
-  if (!Array.isArray(input.relevantModulePaths) || input.relevantModulePaths.length > MAX_MODULES) throw new Error("module_list");
-  const modules = input.relevantModulePaths.map(safePath);
+  if (!Array.isArray(input.relevantModulePaths)) throw new Error("module_list");
+  const moduleCount = input.relevantModulePaths.length;
+  if (!Number.isSafeInteger(moduleCount) || moduleCount > MAX_MODULES) throw new Error("module_list");
+  const modules: string[] = [];
+  for (let index = 0; index < moduleCount; index += 1) modules.push(safePath(input.relevantModulePaths[index]));
   if (new Set(modules).size !== modules.length || modules.includes(finding)) throw new Error("module_list");
   const changedHunk = hunkMetadata(input.changedHunk);
   const files: SevereVerificationEvidenceFile[] = [], omitted: { path: string; code: OmissionCode }[] = [];
@@ -71,7 +74,8 @@ function inspectFile(gitDir: string, head: string, path: string, kind: "whole_fi
   try { entry = treeEntry(gitDir, head, path); } catch { return { omission: { path, code: "not_read" } }; }
   if (!entry) return { omission: { path, code: "not_read" } };
   if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755")) throw new Error("not_file");
-  if (!Number.isSafeInteger(entry.bytes) || entry.bytes > MAX_EVIDENCE_BYTES) return { omission: { path, code: "cap_exceeded" } };
+  if (!Number.isSafeInteger(entry.bytes) || entry.bytes < 0) return { omission: { path, code: "not_read" } };
+  if (entry.bytes > MAX_EVIDENCE_BYTES) return { omission: { path, code: "cap_exceeded" } };
   let data: Buffer;
   try { data = execFileSync("git", ["--git-dir", gitDir, "cat-file", "blob", entry.object], { env: gitEnvironment(), encoding: "buffer", maxBuffer: MAX_EVIDENCE_BYTES + 1, stdio: ["ignore", "pipe", "ignore"] }) as Buffer; }
   catch { return { omission: { path, code: "not_read" } }; }
@@ -116,4 +120,4 @@ function hunkMetadata(value: string | Uint8Array): ChangedHunkMetadata {
 
 function hash(data: Uint8Array): string { return createHash("sha256").update(data).digest("hex"); }
 function compareText(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
-function gitEnvironment(): NodeJS.ProcessEnv { const env: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" }; for (const key of REPOSITORY_ENV) delete env[key]; return env; }
+function gitEnvironment(): NodeJS.ProcessEnv { const env: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }; for (const key of REPOSITORY_ENV) delete env[key]; return env; }
