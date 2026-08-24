@@ -88,6 +88,69 @@ package struct DesktopProductionBoundary: Sendable {
     }
 }
 
+/// Bundle-derived capability for native new-App verification.
+package struct DesktopNativeVerificationCapability: Sendable {
+    package let newAppNativeVerificationAvailable: Bool
+
+    package static let unavailable = DesktopNativeVerificationCapability(
+        newAppNativeVerificationAvailable: false
+    )
+    package static let testAvailable = DesktopNativeVerificationCapability(
+        newAppNativeVerificationAvailable: true
+    )
+
+    private init(newAppNativeVerificationAvailable: Bool) {
+        self.newAppNativeVerificationAvailable = newAppNativeVerificationAvailable
+    }
+
+    /// Resolve from the produced bundle contract and platform proof callbacks.
+    /// Preferences, license state, and arbitrary contexts cannot grant it.
+    package static func resolve(
+        infoDictionary: [String: Any],
+        appBundleURL: URL,
+        appSignatureIsValid: (URL) -> Bool,
+        sealedFileIsValid: (URL) -> Bool
+    ) -> Self {
+        resolve(
+            productionBoundary: DesktopProductionBoundary.resolve(
+                infoDictionary: infoDictionary
+            ),
+            appBundleURL: appBundleURL,
+            appSignatureIsValid: appSignatureIsValid,
+            sealedFileIsValid: sealedFileIsValid
+        )
+    }
+
+    package static func resolve(
+        productionBoundary: DesktopProductionBoundary,
+        appBundleURL: URL,
+        appSignatureIsValid: (URL) -> Bool,
+        sealedFileIsValid: (URL) -> Bool
+    ) -> Self {
+        guard productionBoundary.byoGitHubEnabled,
+              DesktopTrustedBundledWorkerContract.executionContext(
+                  appBundleURL: appBundleURL,
+                  appSignatureIsValid: appSignatureIsValid,
+                  sealedFileIsValid: sealedFileIsValid
+              ) != nil
+        else {
+            return .unavailable
+        }
+        return .testAvailable
+    }
+
+    package static func resolve(
+        productionBoundary: DesktopProductionBoundary,
+        trustedBundledWorker: DesktopLocalBotExecutionContext?
+    ) -> Self {
+        return DesktopNativeVerificationCapability(
+            newAppNativeVerificationAvailable:
+                productionBoundary.byoGitHubEnabled
+                && trustedBundledWorker != nil
+        )
+    }
+}
+
 private let approvedManagedGitHubBrokerOrigin = URL(
     string: "https://neondiff-license.fly.dev"
 )!
@@ -134,6 +197,8 @@ package struct DesktopAppDependencies {
     package let githubBroker: (any GitHubBrokerConnecting)?
     package let accountLink: (any NeonDiffAccountLinkConnecting)?
     package let productionBoundary: DesktopProductionBoundary
+    package let nativeVerificationCapability:
+        DesktopNativeVerificationCapability
     package let localWorkerUpdateGuideURL: URL
     package let cliWorkingDirectory: URL?
     package let localBotConfigurations: [DesktopLocalBotConfiguration]
@@ -143,6 +208,10 @@ package struct DesktopAppDependencies {
         (@Sendable (String) -> DesktopLocalBotDiscoverySnapshot)?
     package let keychainWorkerLaunchAgentManager:
         any DesktopKeychainWorkerLaunchAgentManaging
+
+    package var newAppNativeVerificationAvailable: Bool {
+        nativeVerificationCapability.newAppNativeVerificationAvailable
+    }
 
     package init(
         clipboard: any DesktopClipboard,
@@ -158,6 +227,8 @@ package struct DesktopAppDependencies {
         githubBroker: (any GitHubBrokerConnecting)? = nil,
         accountLink: (any NeonDiffAccountLinkConnecting)? = nil,
         productionBoundary: DesktopProductionBoundary,
+        nativeVerificationCapability: DesktopNativeVerificationCapability =
+            .unavailable,
         localWorkerUpdateGuideURL: URL = DesktopReleaseRouting.localWorkerUpdateGuideURL(
             shortVersion: nil
         ),
@@ -184,6 +255,7 @@ package struct DesktopAppDependencies {
         self.githubBroker = githubBroker
         self.accountLink = accountLink
         self.productionBoundary = productionBoundary
+        self.nativeVerificationCapability = nativeVerificationCapability
         self.localWorkerUpdateGuideURL = localWorkerUpdateGuideURL
         self.cliWorkingDirectory = cliWorkingDirectory
         self.localBotConfigurations = localBotConfigurations
