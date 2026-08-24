@@ -1,13 +1,13 @@
 export type IssueEnrichmentAdmissionAction = "would_enrich" | "would_comment";
 export type IssueEnrichmentAdmissionProjection = IssueEnrichmentAdmissionAction | "deferred";
-export type IssueEnrichmentAdmissionReason = "eligible" | "already_recorded" | "released" | "repository_blocked" | "repo_max_issues_per_cycle" | "repo_max_comments_per_cycle" | "burst_threshold_exceeded" | "global_max_issues_per_cycle" | "global_max_comments_per_cycle";
+export type IssueEnrichmentAdmissionReason = "eligible" | "already_recorded" | "cooldown" | "released" | "repository_blocked" | "repo_max_issues_per_cycle" | "repo_max_comments_per_cycle" | "burst_threshold_exceeded" | "global_max_issues_per_cycle" | "global_max_comments_per_cycle";
 
-export interface IssueEnrichmentAdmissionScanItem { readonly repo: string; readonly issueNumber: number; readonly state: string; readonly action: IssueEnrichmentAdmissionAction | "skipped" | "deferred"; readonly issueUpdatedAt?: string; readonly url?: string; }
-export interface IssueEnrichmentAdmissionRecord { readonly repo: string; readonly issueNumber: number; readonly issueUpdatedAt?: string; readonly analysisInputHash?: string; readonly status: "dry_run" | "posted" | "deferred" | "failed" | "skipped"; }
+export interface IssueEnrichmentAdmissionScanItem { readonly repo: string; readonly issueNumber: number; readonly state: string; readonly action: IssueEnrichmentAdmissionAction | "skipped" | "deferred"; readonly intendedAction?: IssueEnrichmentAdmissionAction; readonly issueUpdatedAt?: string; readonly nextEligibleAt?: string; readonly url?: string; }
+export interface IssueEnrichmentAdmissionRecord { readonly repo: string; readonly issueNumber: number; readonly issueUpdatedAt?: string; readonly analysisInputHash?: string; readonly nextEligibleAt?: string; readonly status: "dry_run" | "posted" | "deferred" | "failed" | "skipped"; }
 export interface IssueEnrichmentAdmissionRepoLimits { readonly maxIssuesPerCycle: number; readonly maxCommentsPerCycle: number; readonly maxIssuesPerBurst: number; }
 export interface IssueEnrichmentAdmissionLimits { readonly globalMaxIssuesPerCycle: number; readonly globalMaxCommentsPerCycle: number; readonly repos: Readonly<Record<string, IssueEnrichmentAdmissionRepoLimits>>; }
 export interface IssueEnrichmentAdmissionInput { readonly allowlist: readonly string[]; readonly items: readonly IssueEnrichmentAdmissionScanItem[]; readonly records?: readonly IssueEnrichmentAdmissionRecord[]; readonly limits: IssueEnrichmentAdmissionLimits; readonly checkedAt: string; }
-export interface IssueEnrichmentAdmissionCandidate { readonly key: string; readonly repo: string; readonly issueNumber: number; readonly state: string; readonly issueUpdatedAt: string; readonly record?: IssueEnrichmentAdmissionRecord; readonly intendedAction: IssueEnrichmentAdmissionAction; readonly sourceDependent: boolean; readonly pending: boolean; readonly scanItem: Readonly<IssueEnrichmentAdmissionScanItem>; }
+export interface IssueEnrichmentAdmissionCandidate { readonly key: string; readonly repo: string; readonly issueNumber: number; readonly state: string; readonly issueUpdatedAt: string; readonly nextEligibleAt?: string; readonly cooldownActive: boolean; readonly record?: IssueEnrichmentAdmissionRecord; readonly intendedAction: IssueEnrichmentAdmissionAction; readonly sourceDependent: boolean; readonly pending: boolean; readonly scanItem: Readonly<IssueEnrichmentAdmissionScanItem>; }
 export interface IssueEnrichmentAdmissionDecision { readonly candidate: IssueEnrichmentAdmissionCandidate; readonly outputAction: IssueEnrichmentAdmissionProjection; readonly reason: IssueEnrichmentAdmissionReason; }
 export interface IssueEnrichmentAdmissionLedger { readonly candidates: readonly IssueEnrichmentAdmissionCandidate[]; next(): IssueEnrichmentAdmissionDecision | undefined; snapshot(): readonly IssueEnrichmentAdmissionDecision[]; release(candidate: IssueEnrichmentAdmissionCandidate): void; blockRepo(repo: string): void; }
 export interface IssueEnrichmentAdmission { readonly candidates: readonly IssueEnrichmentAdmissionCandidate[]; readonly ledger: IssueEnrichmentAdmissionLedger; }
@@ -19,13 +19,18 @@ export function createIssueEnrichmentAdmission(input: IssueEnrichmentAdmissionIn
   const records = new Map((input.records ?? []).map((record) => [`${record.repo}#${record.issueNumber}`, record]));
   const candidates: IssueEnrichmentAdmissionCandidate[] = [];
   for (const repo of input.allowlist) for (const item of input.items) {
-    if (item.repo !== repo || item.action === "skipped" || item.action === "deferred") continue;
+    if (item.repo !== repo || item.action === "skipped") continue;
     const key = `${repo}#${item.issueNumber}`;
     if (candidates.some((candidate) => candidate.key === key)) continue;
-    const record = records.get(key), intendedAction = item.action;
-    const pending = record?.status !== "skipped" && !(record?.status === "dry_run" && intendedAction === "would_enrich");
+    const record = records.get(key), intendedAction = item.action === "deferred" ? item.intendedAction : item.action;
+    if (!intendedAction) continue;
+    const issueUpdatedAt = canonicalDate(item.issueUpdatedAt ?? record?.issueUpdatedAt, input.checkedAt);
+    const nextEligibleAt = item.nextEligibleAt ?? record?.nextEligibleAt;
+    const cooldownActive = Boolean(nextEligibleAt && Date.parse(nextEligibleAt) > Date.parse(input.checkedAt));
+    const unchangedDryRun = record?.status === "dry_run" && intendedAction === "would_enrich" && canonicalDate(record.issueUpdatedAt, input.checkedAt) === issueUpdatedAt;
+    const pending = record?.status !== "skipped" && !cooldownActive && !unchangedDryRun;
     candidates.push(Object.freeze({ key, repo, issueNumber: item.issueNumber, state: item.state,
-      issueUpdatedAt: canonicalDate(item.issueUpdatedAt ?? record?.issueUpdatedAt, input.checkedAt),
+      issueUpdatedAt, ...(nextEligibleAt ? { nextEligibleAt } : {}), cooldownActive,
       ...(record ? { record: Object.freeze({ ...record }) } : {}), intendedAction,
       sourceDependent: record?.status === "posted", pending, scanItem: Object.freeze({ ...item }) }));
   }
@@ -34,6 +39,9 @@ export function createIssueEnrichmentAdmission(input: IssueEnrichmentAdmissionIn
 
 function makeLedger(candidates: readonly IssueEnrichmentAdmissionCandidate[], limits: IssueEnrichmentAdmissionLimits): IssueEnrichmentAdmissionLedger {
   const active = new Set<string>(), released = new Set<string>(), blocked = new Set<string>();
+  const burstCounts = new Map<string, number>();
+  for (const candidate of candidates) if (candidate.pending) burstCounts.set(candidate.repo, (burstCounts.get(candidate.repo) ?? 0) + 1);
+  const burstBlocked = new Set(candidates.filter((candidate) => candidate.pending && burstCounts.get(candidate.repo)! > (limits.repos[candidate.repo]?.maxIssuesPerBurst ?? 0)).map((candidate) => candidate.key));
   const usage = (): Usage => {
     const current: Usage = { repos: new Map(), globalIssues: 0, globalComments: 0 };
     for (const candidate of candidates) if (active.has(candidate.key)) add(current, candidate);
@@ -41,6 +49,7 @@ function makeLedger(candidates: readonly IssueEnrichmentAdmissionCandidate[], li
   };
   const reason = (candidate: IssueEnrichmentAdmissionCandidate, current: Usage): IssueEnrichmentAdmissionReason | undefined => {
     if (blocked.has(candidate.repo)) return "repository_blocked";
+    if (burstBlocked.has(candidate.key)) return "burst_threshold_exceeded";
     const cap = limits.repos[candidate.repo], repo = current.repos.get(candidate.repo) ?? { issues: 0, comments: 0, burst: 0 };
     if (!cap || repo.issues >= cap.maxIssuesPerCycle) return "repo_max_issues_per_cycle";
     if (candidate.intendedAction === "would_comment" && repo.comments >= cap.maxCommentsPerCycle) return "repo_max_comments_per_cycle";
@@ -49,7 +58,7 @@ function makeLedger(candidates: readonly IssueEnrichmentAdmissionCandidate[], li
     if (candidate.intendedAction === "would_comment" && current.globalComments >= limits.globalMaxCommentsPerCycle) return "global_max_comments_per_cycle";
   };
   const decide = (candidate: IssueEnrichmentAdmissionCandidate, current: Usage): IssueEnrichmentAdmissionDecision => {
-    if (!candidate.pending) return { candidate, outputAction: "deferred", reason: "already_recorded" };
+    if (!candidate.pending) return { candidate, outputAction: "deferred", reason: candidate.cooldownActive ? "cooldown" : "already_recorded" };
     if (released.has(candidate.key)) return { candidate, outputAction: "deferred", reason: "released" };
     if (active.has(candidate.key)) return { candidate, outputAction: candidate.intendedAction, reason: "eligible" };
     const blockedReason = reason(candidate, current);

@@ -14,7 +14,7 @@ const input = (items: IssueEnrichmentAdmissionInput["items"], extra: Partial<Iss
 describe("issue enrichment admission ledger", () => {
   it.each([
     ["repo and global caps", [item("a/repo", 1), item("a/repo", 2), item("b/repo", 3)], ["a/repo#1", "b/repo#3"]],
-    ["burst cap", [item("a/repo", 1, "would_enrich"), item("a/repo", 2, "would_enrich"), item("a/repo", 3, "would_enrich")], ["a/repo#1", "a/repo#2"]]
+    ["burst cap", [item("a/repo", 1, "would_enrich"), item("a/repo", 2, "would_enrich"), item("a/repo", 3, "would_enrich")], [undefined, undefined]]
   ])("admits stable candidates under %s", (_name, items, expected) => {
     const admission = createIssueEnrichmentAdmission(input(items as IssueEnrichmentAdmissionInput["items"]));
     expect(admission.candidates.map((candidate) => candidate.key)).toEqual((items as readonly { repo: string; issueNumber: number }[]).map((entry) => `${entry.repo}#${entry.issueNumber}`));
@@ -25,7 +25,7 @@ describe("issue enrichment admission ledger", () => {
     const admission = createIssueEnrichmentAdmission(input([item("a/repo", 1), item("a/repo", 2), item("b/repo", 3)], {
       records: [
         { repo: "a/repo", issueNumber: 1, status: "posted", analysisInputHash: "a" },
-        { repo: "a/repo", issueNumber: 2, status: "dry_run" },
+        { repo: "a/repo", issueNumber: 2, status: "dry_run", issueUpdatedAt: "2026-08-22T00:00:00Z" },
         { repo: "b/repo", issueNumber: 3, status: "posted" }
       ]
     }));
@@ -40,6 +40,13 @@ describe("issue enrichment admission ledger", () => {
       limits: limits({ repos: { ...limits().repos, "a/repo": { maxIssuesPerCycle: 2, maxCommentsPerCycle: 1, maxIssuesPerBurst: 1 } } })
     }));
     expect(admission.ledger.snapshot()[1]).toMatchObject({ outputAction: "deferred", reason: "burst_threshold_exceeded" });
+  });
+
+  it("holds deferred rows until nextEligibleAt", () => {
+    const deferred = { ...item("a/repo", 9), action: "deferred" as const, intendedAction: "would_comment" as const, nextEligibleAt: "2026-08-25T00:00:00Z" };
+    const future = input([deferred], { records: [{ repo: "a/repo", issueNumber: 9, status: "deferred", nextEligibleAt: "2026-08-25T00:00:00Z" }] });
+    expect(createIssueEnrichmentAdmission(future).ledger.next()).toBeUndefined();
+    expect(createIssueEnrichmentAdmission({ ...future, checkedAt: "2026-08-25T00:00:00Z" }).ledger.next()?.candidate.key).toBe("a/repo#9");
   });
 
   it("releases reservations and blocks repos without starving siblings", () => {
