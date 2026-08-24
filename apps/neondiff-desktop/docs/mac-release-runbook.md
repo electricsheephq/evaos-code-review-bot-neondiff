@@ -131,24 +131,24 @@ NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)" || { echo "ca
 REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" || { echo "cannot canonicalize checkout root" >&2; exit 2; }
 case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
 RELEASE_DATE="$(date +%F)" || { echo "cannot capture release date" >&2; exit 2; }; case "$RELEASE_DATE" in [0123456789][0123456789][0123456789][0123456789]-[0123456789][0123456789]-[0123456789][0123456789]) ;; *) echo "RELEASE_DATE must use YYYY-MM-DD" >&2; exit 2 ;; esac; : "${RUN_ID:?set a unique portable RUN_ID}"; case "$RUN_ID" in ""|"."|".."|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
-RELEASE_PACKET_ROOT="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop"
-test -e "$RELEASE_PACKET_ROOT" || mkdir "$RELEASE_PACKET_ROOT" || exit 2
-RELEASE_PACKET_ROOT="$(cd "$RELEASE_PACKET_ROOT" && pwd -P)" || { echo "cannot canonicalize evidence packet root" >&2; exit 2; }
-case "$RELEASE_PACKET_ROOT/" in "$NEONDIFF_EVIDENCE_ROOT/"*) ;; *) echo "evidence packet root escaped evidence root" >&2; exit 2 ;; esac
-case "$RELEASE_PACKET_ROOT/" in "$REPO_ROOT/"*) echo "evidence packet root must be outside the checkout" >&2; exit 2 ;; esac
-RELEASE_EVIDENCE_PARENT="$RELEASE_PACKET_ROOT/$RELEASE_DATE"
-test -e "$RELEASE_EVIDENCE_PARENT" || mkdir "$RELEASE_EVIDENCE_PARENT" || exit 2
-RELEASE_EVIDENCE_PARENT="$(cd "$RELEASE_EVIDENCE_PARENT" && pwd -P)" || { echo "cannot canonicalize evidence packet parent" >&2; exit 2; }
-case "$RELEASE_EVIDENCE_PARENT/" in "$RELEASE_PACKET_ROOT/"*) ;; *) echo "evidence packet parent escaped packet root" >&2; exit 2 ;; esac
-case "$RELEASE_EVIDENCE_PARENT/" in "$REPO_ROOT/"*) echo "evidence packet parent must be outside the checkout" >&2; exit 2 ;; esac
-RELEASE_EVIDENCE_DIR="$RELEASE_EVIDENCE_PARENT/$RUN_ID"
-mkdir "$RELEASE_EVIDENCE_DIR" || exit 2; cd "$REPO_ROOT" || exit 2
+PACKET_ROOT="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop"
+test -e "$PACKET_ROOT" || mkdir "$PACKET_ROOT" || exit 2
+PACKET_ROOT="$(cd "$PACKET_ROOT" && pwd -P)" || { echo "cannot canonicalize evidence packet root" >&2; exit 2; }
+case "$PACKET_ROOT/" in "$NEONDIFF_EVIDENCE_ROOT/"*) ;; *) echo "evidence packet root escaped evidence root" >&2; exit 2 ;; esac
+case "$PACKET_ROOT/" in "$REPO_ROOT/"*) echo "evidence packet root must be outside the checkout" >&2; exit 2 ;; esac
+RUN_PARENT="$PACKET_ROOT/$RELEASE_DATE"
+test -e "$RUN_PARENT" || mkdir "$RUN_PARENT" || exit 2
+RUN_PARENT="$(cd "$RUN_PARENT" && pwd -P)" || { echo "cannot canonicalize evidence packet parent" >&2; exit 2; }
+case "$RUN_PARENT/" in "$PACKET_ROOT/"*) ;; *) echo "evidence packet parent escaped packet root" >&2; exit 2 ;; esac
+case "$RUN_PARENT/" in "$REPO_ROOT/"*) echo "evidence packet parent must be outside the checkout" >&2; exit 2 ;; esac
+RUN_DIR="$RUN_PARENT/$RUN_ID"
+mkdir "$RUN_DIR" || exit 2; cd "$REPO_ROOT" || exit 2
 ```
 
 ```sh
 apps/neondiff-desktop/script/preflight-credentials.sh
 apps/neondiff-desktop/script/preflight-credentials.sh --json \
-  > "$RELEASE_EVIDENCE_DIR/credential-preflight.json"
+  > "$RUN_DIR/credential-preflight.json"
 ```
 
 The doctor reports presence only. It does not sign, notarize, upload, fetch
@@ -257,7 +257,7 @@ the notarization paths documented in #324.
 ```sh
 cd "$REPO_ROOT/apps/neondiff-desktop"
 APP="dist/NeonDiff.app"
-ZIP="$RELEASE_EVIDENCE_DIR/NeonDiff.zip"
+ZIP="$RUN_DIR/NeonDiff.zip"
 
 ditto -c -k --keepParent "$APP" "$ZIP"
 shasum -a 256 "$ZIP"
@@ -310,7 +310,7 @@ fabricate a real Sparkle signature.
 ```sh
 "$REPO_ROOT/apps/neondiff-desktop/script/generate-appcast.sh" \
   --fixture fixtures/appcast/beta.json \
-  --output "$RELEASE_EVIDENCE_DIR/appcast.xml" \
+  --output "$RUN_DIR/appcast.xml" \
   --dry-run
 ```
 
@@ -350,7 +350,7 @@ License boundary:
 Create a public-safe packet under:
 
 ```text
-$RELEASE_EVIDENCE_DIR/
+$RUN_DIR/
 ```
 
 Minimum files:

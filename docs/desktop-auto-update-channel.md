@@ -43,7 +43,7 @@ re-update, immutable release assets, and live customer evidence.
 
 ## Durable Plan Contract
 
-Use the initializer in `apps/neondiff-desktop/docs/appcast-channels.md` to set `NEONDIFF_EVIDENCE_ROOT`, `RELEASE_DATE`, `RUN_ID`, and reserved external immutable `RUN_DIR`; use that same `RUN_DIR` for every local packet path and never store secrets or customer data there.
+Use exactly one equivalent initializer in `apps/neondiff-desktop/docs/appcast-channels.md` or `apps/neondiff-desktop/docs/mac-release-runbook.md` to set `NEONDIFF_EVIDENCE_ROOT`, `RELEASE_DATE`, `RUN_ID`, and reserved external immutable `RUN_DIR`; never rerun it for the same ID, reuse that `RUN_DIR` for every local packet path, and never store secrets or customer data there.
 
 - Goal: define the desktop auto-update channel contract for NeonDiff Desktop using
   the selected Sparkle 2 path without weakening release governance or license boundaries.
