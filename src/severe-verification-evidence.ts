@@ -55,7 +55,7 @@ export function readSevereVerificationEvidenceContents(
   const expected = new Map<string, "whole_file" | "module">();
   expected.set(finding, "whole_file");
   for (const path of modules) expected.set(path, "module");
-  if (!evidence || !Array.isArray(evidence.files)) throw new Error("evidence_incomplete");
+  if (!evidence || evidence.complete !== true || !Array.isArray(evidence.files)) throw new Error("evidence_incomplete");
   const fileCount = evidence.files.length;
   if (!Number.isSafeInteger(fileCount) || fileCount > MAX_MODULES + 1) throw new Error("evidence_incomplete");
   const seen = new Set<string>(), contents: SevereVerificationEvidenceContent[] = [];
@@ -68,6 +68,7 @@ export function readSevereVerificationEvidenceContents(
     if (result.file.sha256 !== metadata.sha256 || result.file.bytes !== metadata.bytes || result.file.complete !== true || metadata.complete !== true) throw new Error("evidence_incomplete");
     contents.push({ path: metadata.path, kind: metadata.kind, content: contentDecoder.decode(result.data) });
   }
+  if (seen.size !== expected.size) throw new Error("evidence_incomplete");
   return contents.sort((a, b) => compareText(a.path, b.path) || compareText(a.kind, b.kind));
 }
 

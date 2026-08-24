@@ -4000,8 +4000,13 @@ async function applySelfConsistencyRecheck(input: {
         return parseSevereVerificationTransport(rawResponse, transportInput);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const code = message.includes("not_read") ? "not_read" : severeVerificationTransportFailure(error);
-        return severeVerificationFailureReceipt(context, comment.path, comment.fingerprint, code, evidence?.omitted.length ? evidence : undefined);
+        const evidenceCode = evidence?.complete === false
+          ? evidence.changedHunk.complete === false && evidence.changedHunk.code
+            ? evidence.changedHunk.code
+            : evidence.omitted.length === 1 ? evidence.omitted[0].code : undefined
+          : undefined;
+        const code = evidenceCode ?? (message.includes("not_read") ? "not_read" : severeVerificationTransportFailure(error));
+        return severeVerificationFailureReceipt(context, comment.path, comment.fingerprint, code, evidence);
       }
     }
   });

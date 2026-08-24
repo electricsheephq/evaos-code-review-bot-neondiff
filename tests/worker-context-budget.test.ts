@@ -711,6 +711,17 @@ describe("worker context budget preflight", () => {
     const transport = JSON.parse(JSON.parse(zcodePrompts.find((prompt) => prompt.includes("severe-verifier-input-v1"))!)[1].content);
     expect(transport.finding).toMatchObject({ category: "proof_gap", title: original.title, body: original.body });
     expect(createdReviews[0]?.comments).toHaveLength(1);
+
+    severeRawResponse.value = "";
+    const failedPull = pullSummary(432, head);
+    expect(await reviewPull({ config, github: githubForPull(failedPull, [file]), state, repo: "electricsheephq/WorldOS", pull: failedPull, dryRun: false, useZCode: true })).toBe("reviewed");
+    const failedEvidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${failedPull.number}`, head);
+    const failedSelfConsistency = JSON.parse(readFileSync(join(failedEvidenceDir, "self-consistency.json"), "utf8"));
+    expect(failedSelfConsistency.verdicts[0].receipt.evidence).toMatchObject({
+      files: [{ path: file.filename, kind: "whole_file", sha256: fileHash, bytes: fileBytes.length, complete: true }],
+      omitted: [],
+      complete: false
+    });
     state.close();
   });
 
@@ -728,7 +739,7 @@ describe("worker context budget preflight", () => {
     execFileSync("git", ["add", "."], { cwd: fixture });
     execFileSync("git", ["commit", "--quiet", "-m", "oversized"], { cwd: fixture });
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture, encoding: "utf8" }).trim();
-    const patch = `@@ -1 +1 @@\n+${"x".repeat(65_530)}`;
+    const patch = "@@ -1 +1 @@\n+x";
     const file = { filename, patch, status: "modified", additions: 1, deletions: 0, changes: 1 };
     severeCurrentWorktree.enabled = true;
     severeWorktreePath.value = fixture;

@@ -81,6 +81,8 @@ describe("exact-head severe evidence collection", () => {
 
   it("records missing, invalid UTF-8, and capped blobs as omissions", async () => {
     const result = await collectSevereVerificationEvidence(input(["missing.ts", "bad.bin", "big.bin"])); expect(result.complete).toBe(false); expect(result.files.map((item) => item.path)).toEqual([finding]); expect(result.omitted).toEqual([{ path: "bad.bin", code: "evidence_incomplete" }, { path: "big.bin", code: "cap_exceeded" }, { path: "missing.ts", code: "not_read" }]);
+    expect(() => readSevereVerificationEvidenceContents(input(["missing.ts", "bad.bin", "big.bin"]), result)).toThrow("evidence_incomplete");
+    expect(() => readSevereVerificationEvidenceContents(input([moduleA]), { ...result, complete: true, omitted: [] })).toThrow("evidence_incomplete");
   });
 
   it("does not lazily fetch missing partial-clone blobs", async () => {
