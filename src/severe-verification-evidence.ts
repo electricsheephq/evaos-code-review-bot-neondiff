@@ -6,7 +6,7 @@ import type { SevereVerificationCode, SevereVerificationEvidenceFile } from "./s
 export const MAX_EVIDENCE_BYTES = 65_536;
 export const MAX_MODULES = 16;
 const decoder = new TextDecoder("utf-8", { fatal: true });
-const REPOSITORY_ENV = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"] as const;
+const REPOSITORY_ENV = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_REPLACE_REF_BASE"] as const;
 type OmissionCode = SevereVerificationCode;
 
 export interface SevereVerificationEvidenceInput {
@@ -102,4 +102,4 @@ function hunkMetadata(value: string | Uint8Array): ChangedHunkMetadata {
 
 function hash(data: Uint8Array): string { return createHash("sha256").update(data).digest("hex"); }
 function compareText(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
-function gitEnvironment(): NodeJS.ProcessEnv { const env = { ...process.env }; for (const key of REPOSITORY_ENV) delete env[key]; return env; }
+function gitEnvironment(): NodeJS.ProcessEnv { const env: NodeJS.ProcessEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" }; for (const key of REPOSITORY_ENV) delete env[key]; return env; }

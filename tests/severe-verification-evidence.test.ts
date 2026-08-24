@@ -42,6 +42,13 @@ describe("exact-head severe evidence collection", () => {
     finally { if (prior === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prior; await rm(foreign, { recursive: true, force: true }); }
   });
 
+  it("reads the expected commit instead of replacement objects", async () => {
+    const expected = (await collectSevereVerificationEvidence(input([moduleA]))).files[0].sha256;
+    git(["add", finding]); const tree = git(["write-tree"]); const replacement = git(["commit-tree", tree, "-m", "replacement"]); git(["replace", head, replacement]);
+    try { expect((await collectSevereVerificationEvidence(input([moduleA]))).files[0].sha256).toBe(expected); }
+    finally { git(["replace", "-d", head]); }
+  });
+
   it("rejects unsafe paths, symlinks, non-files, duplicates, and unbounded lists", async () => {
     for (const path of ["/etc/passwd", "../outside.ts", "C:/outside.ts", "a\\b.ts", "a\u0000b.ts", "a\ud800b.ts", "src", "link.ts", finding]) await expect(collectSevereVerificationEvidence(input([path]))).rejects.toThrow();
     await expect(collectSevereVerificationEvidence(input(Array(MAX_MODULES + 1).fill(moduleA)))).rejects.toThrow("module_list");
