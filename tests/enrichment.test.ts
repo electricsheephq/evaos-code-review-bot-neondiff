@@ -14,6 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
+import type { BoundedGithubList } from "../src/github.js";
 import type { IssueAnalysis } from "../src/issue-analysis.js";
 import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
@@ -82,6 +83,46 @@ const pull: PullRequestSummary = {
 };
 
 describe("sticky enrichment comments", () => {
+  it("records terminal event-history overflow without cooldown, admission, posting, or watermark starvation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-event-history-terminal-"));
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = loadConfig();
+    config.issueEnrichment = { ...config.issueEnrichment!, enabled: true, postIssueComment: true, allowlist: ["owner/repo"], maxIssuesPerCycle: 3, maxCommentsPerCycle: 3, maxIssuesPerBurst: 3, processExistingOpenIssuesOnActivation: true, repos: { "owner/repo": { maxIssuesPerCycle: 3, maxCommentsPerCycle: 3, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 3, lookbackMs: 60_000, promotionMaintainers: [{ login: "trusted", validFrom: "2026-01-01T00:00:00Z" }] } } };
+    const overflowEvents = Object.assign([{ event: "labeled" }], { items: [], rawCount: 100, truncated: true, overflow: true }) as BoundedGithubList<{ event?: string }>;
+    const overflowIssue: GitHubRelatedIssueOrPull = { number: 970, title: "Unbounded history", state: "open", updated_at: "2026-08-24T00:00:00.000Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }], body: "fixture" };
+    const sibling: GitHubRelatedIssueOrPull = { number: 971, title: "Sibling", state: "open", updated_at: overflowIssue.updated_at, body: "fixture" };
+    let posts = 0;
+    state.recordIssueEnrichmentRepoWatermark({ repo: "owner/repo", activatedAt: "2026-08-24T00:00:00.000Z", lastCheckedAt: "2026-08-24T00:00:00.000Z", now: new Date("2026-08-24T00:00:00.000Z") });
+    const github = {
+      listIssuesForEnrichment: async () => [overflowIssue, sibling],
+      listIssueLabelEvents: async () => overflowEvents,
+      getCollaboratorPermission: async () => "maintain" as const,
+      canPostAsApp: () => true,
+      upsertIssueComment: async () => ({ action: "created" as const, id: ++posts, html_url: "https://github.test/comment" })
+    };
+    try {
+      const result = await runIssueEnrichmentCycle({
+        config,
+        state,
+        github,
+        dryRun: false,
+        includeExisting: true,
+        checkedAt: "2026-08-24T00:01:00.000Z"
+      });
+
+      expect(result.items.find((item) => item.issueNumber === 970)).toMatchObject({ action: "skipped", reason: "event_history_unbounded", recordStatus: "skipped" });
+      expect(result.items.find((item) => item.issueNumber === 970)?.nextEligibleAt).toBeUndefined();
+      expect(result.items.find((item) => item.issueNumber === 971)).toMatchObject({ action: "would_comment", recordStatus: "posted" });
+      expect(result.summary).toMatchObject({ skippedRecorded: 1, posted: 1, failed: 0, deferred: 0 });
+      expect(posts).toBe(1);
+      expect(state.getIssueEnrichmentRecord("owner/repo", 970)).toMatchObject({ status: "skipped", reason: "event_history_unbounded" });
+      expect(state.getIssueEnrichmentRepoWatermark("owner/repo")).toMatchObject({ lastCheckedAt: "2026-08-24T00:01:00.000Z" });
+    } finally {
+      state.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("blocks direct issue-enrichment cycles before reading state or GitHub without admission", async () => {
     await expect(runIssueEnrichmentCycleImpl({
       config: {},

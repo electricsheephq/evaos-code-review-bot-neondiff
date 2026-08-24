@@ -21,6 +21,10 @@ const MAX_REVIEW_COMMENT_PAGES = 5;
 const MAX_ISSUE_COMMENT_PAGES = 5;
 export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
+export interface GitHubIssueLabelEvent { id?: number | string; event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null; }
+
+export type BoundedIssueLabelEventRead = BoundedGithubList<GitHubIssueLabelEvent> & { pagesRead: number; uniqueCount: number; duplicateCount: number; lastPage?: number; terminal: "short_page" | "bounded_tail" | "event_history_unbounded" };
+
 /** Array-compatible metadata for bounded GitHub reads. `rawCount` is the count before downstream filters. */
 export type BoundedGithubList<T> = T[] & {
   items: T[];
@@ -434,26 +438,32 @@ export class GitHubApi {
     });
   }
 
-  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>> {
-    const events: Array<{
-      event?: string;
-      created_at?: string;
-      actor?: { login?: string | null } | null;
-      label?: { name?: string | null } | null;
-    }> = [];
-    for (let page = 1; ; page += 1) {
-      const chunk = await this.request<typeof events>(
-        `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`,
-        { token: await this.getReadToken(repo) }
-      );
-      events.push(...chunk);
-      if (chunk.length < 100) return events;
+  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedIssueLabelEventRead> {
+    const pathForPage = (page: number) => `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`;
+    let link: string | null = null;
+    const readPage = async (page: number) => this.request<GitHubIssueLabelEvent[]>(pathForPage(page), { token: await this.getReadToken(repo), onResponse: (response) => { if (page === 1) link = response.headers.get("link"); } });
+    const firstPage = await readPage(1);
+    const events: GitHubIssueLabelEvent[] = [];
+    const seen = new Set<string>();
+    let rawCount = 0;
+    let duplicateCount = 0;
+    const append = (chunk: GitHubIssueLabelEvent[]) => { rawCount += chunk.length; for (const event of chunk) { const identity = issueLabelEventIdentity(event); if (identity && seen.has(identity)) { duplicateCount += 1; continue; } if (identity) seen.add(identity); events.push(event); } };
+    append(firstPage);
+    if (firstPage.length < 100) return boundedIssueLabelEventRead(events, { pagesRead: 1, rawCount, duplicateCount, terminal: "short_page" });
+
+    const lastPage = parseLastPageFromLink(link);
+    if (lastPage === undefined) return boundedIssueLabelEventRead(events, { pagesRead: 1, rawCount, duplicateCount, terminal: "event_history_unbounded" });
+
+    const startPage = Math.max(1, lastPage - 4);
+    let pagesRead = 1;
+    for (let page = startPage; page <= lastPage; page += 1) {
+      if (page === 1) continue;
+      const response = await readPage(page);
+      pagesRead += 1;
+      append(response);
+      if (response.length < 100 && page < lastPage) return boundedIssueLabelEventRead(events, { pagesRead, rawCount, duplicateCount, lastPage, terminal: "event_history_unbounded" });
     }
+    return boundedIssueLabelEventRead(events, { pagesRead, rawCount, duplicateCount, lastPage, terminal: "bounded_tail" });
   }
 
   async getCollaboratorPermission(
@@ -695,7 +705,7 @@ export class GitHubApi {
 
   private async request<T>(
     path: string,
-    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean } = {}
+    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean; onResponse?: (response: Response) => void } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
     const controller = new AbortController();
@@ -713,6 +723,7 @@ export class GitHubApi {
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body)
       });
+      options.onResponse?.(response);
       if (!response.ok) {
         const text = await response.text();
         throw new GitHubApiRequestError({
@@ -734,6 +745,18 @@ export class GitHubApi {
     }
   }
 }
+
+function boundedIssueLabelEventRead(items: GitHubIssueLabelEvent[], metadata: Pick<BoundedIssueLabelEventRead, "pagesRead" | "rawCount" | "duplicateCount" | "lastPage" | "terminal">): BoundedIssueLabelEventRead {
+  const result = items as BoundedIssueLabelEventRead;
+  result.items = items.slice(); result.rawCount = metadata.rawCount; result.pagesRead = metadata.pagesRead; result.uniqueCount = items.length; result.duplicateCount = metadata.duplicateCount;
+  if (metadata.lastPage !== undefined) result.lastPage = metadata.lastPage;
+  result.terminal = metadata.terminal; result.truncated = metadata.terminal === "event_history_unbounded"; result.overflow = result.truncated;
+  return result;
+}
+
+function issueLabelEventIdentity(event: GitHubIssueLabelEvent): string | undefined { return typeof event.id === "number" && Number.isSafeInteger(event.id) ? `number:${event.id}` : typeof event.id === "string" && event.id.trim() ? `string:${event.id}` : undefined; }
+
+function parseLastPageFromLink(link: string | null): number | undefined { const parts = link?.split(",") ?? []; const lastEntries = parts.filter((part) => /(?:^|;)\s*rel\s*=\s*["']last["']/.test(part)); if (lastEntries.length !== 1) return undefined; const target = /^\s*<([^>]+)>/.exec(lastEntries[0]!); if (!target) return undefined; try { const page = new URL(target[1]!).searchParams.get("page"); const last = Number(page); if (!page || !/^\d+$/.test(page) || !Number.isSafeInteger(last) || last < 1) return undefined; const nextEntries = parts.filter((part) => /(?:^|;)\s*rel\s*=\s*["']next["']/.test(part)); const nextTarget = nextEntries.length === 1 && /^\s*<([^>]+)>/.exec(nextEntries[0]!); const nextPage = nextTarget ? new URL(nextTarget[1]!).searchParams.get("page") : undefined; return nextEntries.length > 1 || (nextTarget && (!nextPage || !/^\d+$/.test(nextPage) || Number(nextPage) > last)) ? undefined : last; } catch { return undefined; } }
 
 function normalizePullRequestSummary(pull: PullRequestSummary): PullRequestSummary {
   return {
