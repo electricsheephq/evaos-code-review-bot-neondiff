@@ -119,10 +119,36 @@ the wrong source SHA, or carries unrelated local changes. Do not sign whatever
 
 Before building, run the read-only credential doctor:
 
+Set the external evidence root once for this run (default `$HOME/.neondiff/evidence`).
+Keep packets immutable and secret-free. Run every following `sh` block in this
+same shell; sections anchor to `$REPO_ROOT`. If state is lost, restart with a new `RUN_ID`:
+
+```sh
+export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
+NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)" || { echo "cannot canonicalize evidence root" >&2; exit 2; }
+REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" || { echo "cannot canonicalize checkout root" >&2; exit 2; }
+case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
+RELEASE_DATE="$(date +%F)" || { echo "cannot capture release date" >&2; exit 2; }; case "$RELEASE_DATE" in [0123456789][0123456789][0123456789][0123456789]-[0123456789][0123456789]-[0123456789][0123456789]) ;; *) echo "RELEASE_DATE must use YYYY-MM-DD" >&2; exit 2 ;; esac; : "${RUN_ID:?set a unique portable RUN_ID}"; case "$RUN_ID" in ""|"."|".."|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz._-]*) echo "RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
+PACKET_ROOT="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop"
+test -e "$PACKET_ROOT" || mkdir "$PACKET_ROOT" || exit 2
+PACKET_ROOT="$(cd "$PACKET_ROOT" && pwd -P)" || { echo "cannot canonicalize evidence packet root" >&2; exit 2; }
+case "$PACKET_ROOT/" in "$NEONDIFF_EVIDENCE_ROOT/"*) ;; *) echo "evidence packet root escaped evidence root" >&2; exit 2 ;; esac
+case "$PACKET_ROOT/" in "$REPO_ROOT/"*) echo "evidence packet root must be outside the checkout" >&2; exit 2 ;; esac
+RUN_PARENT="$PACKET_ROOT/$RELEASE_DATE"
+test -e "$RUN_PARENT" || mkdir "$RUN_PARENT" || exit 2
+RUN_PARENT="$(cd "$RUN_PARENT" && pwd -P)" || { echo "cannot canonicalize evidence packet parent" >&2; exit 2; }
+case "$RUN_PARENT/" in "$PACKET_ROOT/"*) ;; *) echo "evidence packet parent escaped packet root" >&2; exit 2 ;; esac
+case "$RUN_PARENT/" in "$REPO_ROOT/"*) echo "evidence packet parent must be outside the checkout" >&2; exit 2 ;; esac
+RUN_DIR="$RUN_PARENT/$RUN_ID"
+mkdir "$RUN_DIR" || exit 2; cd "$REPO_ROOT" || exit 2
+```
+
 ```sh
 apps/neondiff-desktop/script/preflight-credentials.sh
 apps/neondiff-desktop/script/preflight-credentials.sh --json \
-  > /Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/credential-preflight.json
+  > "$RUN_DIR/credential-preflight.json"
 ```
 
 The doctor reports presence only. It does not sign, notarize, upload, fetch
@@ -138,6 +164,7 @@ release blocker until the owner provides the notarization input and
 Required owner/Codex inputs for a real signing run:
 
 - Exact release source SHA, version, build number, and channel.
+- Unique portable `RUN_ID` for this immutable evidence packet.
 - Developer ID Application identity name, for example
   `Developer ID Application: <Team Name> (<TEAMID>)`.
 - Notarization path: either `NEONDIFF_NOTARY_KEYCHAIN_PROFILE` or the App Store
@@ -145,7 +172,7 @@ Required owner/Codex inputs for a real signing run:
 - Sparkle public key as `NEONDIFF_SPARKLE_PUBLIC_ED_KEY`.
 - Sparkle feed URL as `NEONDIFF_SPARKLE_FEED_URL`.
 - Appcast hosting destination and rollback destination.
-- Evidence packet directory under `/Users/m1/Codex/evidence/`.
+- Evidence packet directory under `$NEONDIFF_EVIDENCE_ROOT/`.
 
 ## Build The Release App
 
@@ -154,7 +181,7 @@ The bundle id is `com.electricsheephq.NeonDiffDesktop`; the minimum supported
 macOS version is 14.0.
 
 ```sh
-cd apps/neondiff-desktop
+cd "$REPO_ROOT/apps/neondiff-desktop"
 export NEONDIFF_DESKTOP_VERSION="<version>"
 export NEONDIFF_DESKTOP_BUILD="<build>"
 export NEONDIFF_SPARKLE_PUBLIC_ED_KEY="<owner-provided-public-key>"
@@ -190,7 +217,7 @@ framework when it exists, and finally the outer app. Do not use `--deep` to
 replace the already-reviewed nested signatures.
 
 ```sh
-cd apps/neondiff-desktop
+cd "$REPO_ROOT/apps/neondiff-desktop"
 IDENTITY="Developer ID Application: <Team Name> (<TEAMID>)"
 APP="dist/NeonDiff.app"
 SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
@@ -228,9 +255,9 @@ Create a zip for Apple notarization with `ditto`, then submit it through one of
 the notarization paths documented in #324.
 
 ```sh
-cd apps/neondiff-desktop
+cd "$REPO_ROOT/apps/neondiff-desktop"
 APP="dist/NeonDiff.app"
-ZIP="/Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/NeonDiff.zip"
+ZIP="$RUN_DIR/NeonDiff.zip"
 
 ditto -c -k --keepParent "$APP" "$ZIP"
 shasum -a 256 "$ZIP"
@@ -281,9 +308,9 @@ model. The generator creates local XML only; it does not sign, upload, or
 fabricate a real Sparkle signature.
 
 ```sh
-apps/neondiff-desktop/script/generate-appcast.sh \
-  --fixture apps/neondiff-desktop/fixtures/appcast/beta.json \
-  --output /Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/neondiff-beta-appcast.xml \
+"$REPO_ROOT/apps/neondiff-desktop/script/generate-appcast.sh" \
+  --fixture fixtures/appcast/beta.json \
+  --output "$RUN_DIR/appcast.xml" \
   --dry-run
 ```
 
@@ -323,7 +350,7 @@ License boundary:
 Create a public-safe packet under:
 
 ```text
-/Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/
+$RUN_DIR/
 ```
 
 Minimum files:
