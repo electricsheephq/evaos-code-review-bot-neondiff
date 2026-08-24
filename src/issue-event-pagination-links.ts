@@ -14,7 +14,7 @@ export function parseIssueEventLink(input: {
 }): IssueEventLinkResult {
   if (typeof input.currentPage !== "number") invalid("current page");
   const currentPage = positivePage(input.currentPage, "current page");
-  if (input.link === undefined) return { kind: "absent" };
+  if (input.link === undefined || input.link === null) return { kind: "absent" };
   if (typeof input.link !== "string" || input.link.trim() === "") invalid("Link header");
   const origin = configuredOrigin(input.apiOrigin);
   if (typeof input.issueEventsPath !== "string" || !input.issueEventsPath.startsWith("/")) invalid("event path");

@@ -15,6 +15,7 @@ const parse = (value: unknown, currentPage = 1) => parseIssueEventLink({
 describe("strict issue-event Link parser", () => {
   it("distinguishes absent Link from present-invalid and normalizes safe metadata", () => {
     expect(parse(undefined)).toEqual({ kind: "absent" });
+    expect(parse(null)).toEqual({ kind: "absent" });
     expect(parse(link("next", "page=2&per_page=100"))).toEqual({ kind: "present", relations: { next: 2 } });
     expect(() => parse("")).toThrow();
   });
@@ -33,7 +34,7 @@ describe("strict issue-event Link parser", () => {
       `<${href("page=2")}>; rel="bogus"`, `<${href("page=2")}>; rel="next" junk`,
       `${link("next")}, ${link("next", "page=3")}`, `${link("next")}, ${link("prev", "page=0")}`
     ];
-    for (const value of [null, ...bad]) expect(() => parse(value)).toThrow();
+    for (const value of bad) expect(() => parse(value)).toThrow();
   });
 
   it("rejects contradictory local relation metadata", () => {
