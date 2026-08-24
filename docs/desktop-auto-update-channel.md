@@ -41,20 +41,17 @@ proof only. #116 remains open for real public-key/feed identity, EdDSA-signed
 appcast, exact signed/notarized installed update, state-preserving rollback and
 re-update, immutable release assets, and live customer evidence.
 
-Sparkle 2 is selected for the native SwiftUI path, but #116/#610 remain open; fixtures or an unsigned bundle cannot prove release, update, rollback, or GA.
-
 ## Durable Plan Contract
 
-Use the validated initializer in `apps/neondiff-desktop/docs/appcast-channels.md`
-to set `NEONDIFF_EVIDENCE_ROOT`, `RELEASE_DATE`, and `RUN_ID` before composing
-local packet paths. Keep that root external and packets immutable; never store
-credentials, private keys, or customer data there.
+Use the initializer in `apps/neondiff-desktop/docs/appcast-channels.md` to set
+`NEONDIFF_EVIDENCE_ROOT`, `RELEASE_DATE`, and `RUN_ID` before composing paths.
+Keep that root external and immutable; never store secrets or customer data there.
 
 - Goal: define the desktop auto-update channel contract for NeonDiff Desktop
   using the selected Sparkle 2 path without weakening release governance or
   license boundaries.
 - Resume identity: repo `electricsheephq/evaos-code-review-bot-neondiff`, branch
-  `codex/116-desktop-autoupdate-plan`, base
+  `main`, base
   `8de8840282657ffe457c78132ad0a31328695f68`, issue
   https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/116,
   parent tracker
