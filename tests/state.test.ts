@@ -1792,8 +1792,8 @@ describe("review state store", () => {
       store.recordDaemonHeartbeat({ cycle: 1, event, dryRun: false, runId, recordedAt: new Date(at), ...(error ? { error } : {}) });
     record("daemon_cycle_start", "run-a", "2026-07-01T00:00:00.000Z");
     record("daemon_cycle_start", "run-a", "2026-07-01T00:00:05.000Z");
+    record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z");
     record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z", "issue_enrichment_failed");
-    record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:30.000Z");
     record("daemon_cycle_progress", "run-b", "2026-07-01T00:02:00.000Z");
     record("daemon_cycle_complete", "run-a", "2026-07-01T00:03:00.000Z");
 
@@ -1806,7 +1806,7 @@ describe("review state store", () => {
       startedCycle: 1,
       startedAt: "2026-07-01T00:00:00.000Z",
       runId: "run-a",
-      lastProgressAt: "2026-07-01T00:01:30.000Z",
+      lastProgressAt: "2026-07-01T00:01:00.000Z",
       completedAt: "2026-07-01T00:03:00.000Z"
     });
     record("daemon_cycle_start", "run-b", "2026-07-01T01:00:00.000Z");
@@ -1840,7 +1840,7 @@ describe("review state store", () => {
         startedAt: "2026-07-01T00:00:00.000Z",
         completedAt: "2026-07-01T00:04:00.000Z"
       });
-      expect(store.getDaemonHeartbeat()?.lastProgressAt).toBeUndefined();
+      store.recordDaemonHeartbeat({ cycle: 4, event: "daemon_cycle_progress", dryRun: false, recordedAt: new Date("2026-07-01T00:05:00.000Z") }); store.recordDaemonHeartbeat({ cycle: 4, event: "daemon_cycle_complete", dryRun: false, recordedAt: new Date("2026-07-01T00:06:00.000Z") }); expect(store.getDaemonHeartbeat()).toMatchObject({ event: "daemon_cycle_failed", recordedAt: "2026-07-01T00:04:00.000Z", completedAt: "2026-07-01T00:04:00.000Z" }); expect(store.getDaemonHeartbeat()?.lastProgressAt).toBeUndefined();
       store.close();
     }
     const rollbackReader = new DatabaseSync(statePath, { readOnly: true });
@@ -1883,9 +1883,7 @@ describe("review state store", () => {
       event: "daemon_cycle_failed",
       error: "daemon_cycle_failed"
     });
-    const raw = new DatabaseSync(join(root, "state.sqlite"), { readOnly: true });
-    expect(raw.prepare("select error from daemon_heartbeat where id = 1").get()).toEqual({ error: "daemon_cycle_failed" });
-    raw.close();
+    const raw = new DatabaseSync(join(root, "state.sqlite"), { readOnly: true }); expect(raw.prepare("select error from daemon_heartbeat where id = 1").get()).toEqual({ error: "daemon_cycle_failed" }); raw.close();
     store.close();
   });
 

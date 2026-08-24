@@ -342,10 +342,7 @@ export interface ProviderCooldownReviewRecord extends StoredProcessedReviewRecor
 export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete" | "daemon_cycle_failed";
 export type DaemonHeartbeatFailureCode = "issue_enrichment_failed" | "daemon_cycle_failed";
 
-export function normalizeDaemonHeartbeatError(
-  event: DaemonHeartbeatEvent | string | null | undefined,
-  error: unknown
-): DaemonHeartbeatFailureCode | undefined {
+export function normalizeDaemonHeartbeatError(event: DaemonHeartbeatEvent | string | null | undefined, error: unknown): DaemonHeartbeatFailureCode | undefined {
   if (error === "issue_enrichment_failed") return "issue_enrichment_failed";
   if (error === "daemon_cycle_failed") return "daemon_cycle_failed";
   return event === "daemon_cycle_failed" && typeof error === "string" && error.length > 0
@@ -3350,8 +3347,9 @@ export class ReviewStateStore {
       this.db.prepare(
         `update daemon_heartbeat set
            cycle = ?, event = ?, dry_run = ?, recorded_at = ?, error = coalesce(?, error), last_progress_at = ?
-         where id = 1 and run_id is ? and completed_at is null and started_at is not null
-           and ? >= started_at and (last_progress_at is null or last_progress_at < ?)`
+         where id = 1 and (event is null or event not in ('daemon_cycle_complete', 'daemon_cycle_failed'))
+           and run_id is ? and completed_at is null and started_at is not null
+           and ? >= started_at and (last_progress_at is null or last_progress_at <= ?)`
       ).run(record.cycle, record.event, record.dryRun ? 1 : 0, recordedAt, error ?? null, recordedAt,
         record.runId ?? null, recordedAt, recordedAt);
       return;
@@ -3366,7 +3364,7 @@ export class ReviewStateStore {
            cycle = excluded.cycle, event = excluded.event, dry_run = excluded.dry_run,
            recorded_at = excluded.recorded_at, error = coalesce(excluded.error, daemon_heartbeat.error),
            completed_at = excluded.completed_at
-         where daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
+         where (daemon_heartbeat.event is null or daemon_heartbeat.event not in ('daemon_cycle_complete', 'daemon_cycle_failed')) and daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
            and excluded.completed_at >= daemon_heartbeat.started_at
            and (daemon_heartbeat.last_progress_at is null
              or excluded.completed_at >= daemon_heartbeat.last_progress_at)`
