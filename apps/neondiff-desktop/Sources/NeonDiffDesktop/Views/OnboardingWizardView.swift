@@ -386,6 +386,7 @@ struct OnboardingWizardView: View {
                 }
                 .disabled(
                     !model.byoGitHubCredentialsStored
+                        || !model.newAppNativeVerificationAvailable
                         || !model.localWorkerCLIAvailable
                         || model.repos.filter(\.enabled).count != 1
                         || !model.canEditProviderConfiguration

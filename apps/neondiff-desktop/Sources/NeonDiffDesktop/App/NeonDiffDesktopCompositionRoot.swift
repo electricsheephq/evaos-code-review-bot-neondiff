@@ -38,12 +38,13 @@ enum NeonDiffDesktopCompositionRoot {
         let cliWorkingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
         let localBotSnapshot =
             LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot()
-        let nativeVerificationCapability =
-            FoundationTrustedBundledWorker.nativeVerificationCapability(
-                productionBoundary: productionBoundary
-            )
         let trustedBundledWorker =
-            nativeVerificationCapability.trustedBundledWorker
+            FoundationTrustedBundledWorker.executionContext()
+        let nativeVerificationCapability =
+            DesktopNativeVerificationCapability.resolve(
+                productionBoundary: productionBoundary,
+                trustedBundledWorker: trustedBundledWorker
+            )
         let localBotConfigurations = localBotSnapshot.configurations
         let localBotExecutionContexts =
             localBotSnapshot.executionContexts
@@ -52,8 +53,12 @@ enum NeonDiffDesktopCompositionRoot {
             @Sendable () -> [DesktopLocalBotExecutionContext] = {
                 LaunchAgentLocalBotConfigurationDiscovery
                     .discoverExecutionContexts()
-                    + (nativeVerificationCapability.trustedBundledWorker
-                        .map { [$0] } ?? [])
+                    + (
+                        FoundationTrustedBundledWorker
+                            .executionContext()
+                            .map { [$0] }
+                        ?? []
+                    )
             }
         let localBotDiscoveryProvider:
             @Sendable (String) -> DesktopLocalBotDiscoverySnapshot = {
@@ -65,8 +70,12 @@ enum NeonDiffDesktopCompositionRoot {
                     configurations: snapshot.configurations,
                     executionContexts:
                         snapshot.executionContexts
-                        + (nativeVerificationCapability.trustedBundledWorker
-                            .map { [$0] } ?? [])
+                        + (
+                            FoundationTrustedBundledWorker
+                                .executionContext()
+                                .map { [$0] }
+                            ?? []
+                        )
                 )
             }
         let keychainWorkerLaunchAgentManager:

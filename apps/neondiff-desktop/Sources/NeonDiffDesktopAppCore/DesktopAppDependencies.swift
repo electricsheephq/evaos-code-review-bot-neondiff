@@ -99,6 +99,10 @@ package struct DesktopNativeVerificationCapability: Sendable {
         newAppNativeVerificationAvailable: false,
         trustedBundledWorker: nil
     )
+    package static let testAvailable = DesktopNativeVerificationCapability(
+        newAppNativeVerificationAvailable: true,
+        trustedBundledWorker: nil
+    )
 
     private init(
         newAppNativeVerificationAvailable: Bool,
@@ -140,6 +144,21 @@ package struct DesktopNativeVerificationCapability: Sendable {
                     appSignatureIsValid: appSignatureIsValid,
                     sealedFileIsValid: sealedFileIsValid
                 )
+        else {
+            return .unavailable
+        }
+        return DesktopNativeVerificationCapability(
+            newAppNativeVerificationAvailable: true,
+            trustedBundledWorker: trustedBundledWorker
+        )
+    }
+
+    package static func resolve(
+        productionBoundary: DesktopProductionBoundary,
+        trustedBundledWorker: DesktopLocalBotExecutionContext?
+    ) -> Self {
+        guard productionBoundary.byoGitHubEnabled,
+              let trustedBundledWorker
         else {
             return .unavailable
         }

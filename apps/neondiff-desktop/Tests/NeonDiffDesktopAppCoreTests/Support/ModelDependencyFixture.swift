@@ -255,6 +255,7 @@ struct ModelDependencyFixture {
         localBotExecutionContexts: [DesktopLocalBotExecutionContext] = [],
         localBotExecutionConfigPaths: [String] = [],
         productionBoundary: DesktopProductionBoundary = .testVerified,
+        nativeVerificationCapability: DesktopNativeVerificationCapability = .testAvailable,
         localWorkerUpdateGuideURL: URL = DesktopReleaseRouting.localWorkerUpdateGuideURL(
             shortVersion: "1.1.0-beta.37"
         )
@@ -292,6 +293,7 @@ struct ModelDependencyFixture {
             githubAuthenticator: githubAuthenticator,
             githubBroker: githubBroker,
             productionBoundary: productionBoundary,
+            nativeVerificationCapability: nativeVerificationCapability,
             localWorkerUpdateGuideURL: localWorkerUpdateGuideURL,
             localBotConfigurations: localBotConfigurations,
             localBotExecutionContexts: localBotExecutionContexts,

@@ -274,6 +274,10 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
             available.trustedBundledWorker?.executablePath
                 == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker"
         )
+        #expect(!DesktopNativeVerificationCapability.resolve(
+            productionBoundary: .testManaged,
+            trustedBundledWorker: available.trustedBundledWorker
+        ).newAppNativeVerificationAvailable)
 
         let withoutWorker = DesktopNativeVerificationCapability.resolve(
             infoDictionary: byoMarkers,
@@ -336,17 +340,30 @@ private struct ActiveManagedActivationClient: ActivationLicenseClienting {
         let source = try sourceBoundaryText(at: compositionRoot)
 
         #expect(source.contains(
-            "FoundationTrustedBundledWorker.nativeVerificationCapability"
+            "FoundationTrustedBundledWorker.executionContext()"
         ))
         #expect(source.contains(
-            "let trustedBundledWorker =\n            nativeVerificationCapability.trustedBundledWorker"
+            "DesktopNativeVerificationCapability.resolve"
+        ))
+        #expect(source.contains(
+            "trustedBundledWorker: trustedBundledWorker"
         ))
         #expect(source.contains(
             "nativeVerificationCapability: nativeVerificationCapability"
         ))
-        #expect(!source.contains(
-            "FoundationTrustedBundledWorker.executionContext()"
-        ))
+    }
+
+    @Test func newAppVerificationFailsClosedWithoutDerivedCapability() {
+        let fixture = ModelDependencyFixture(
+            preferenceStrings: ["neondiff.cliPath": "neondiff"],
+            productionBoundary: .testAccountLink,
+            nativeVerificationCapability: .unavailable
+        )
+        fixture.model.verifyBYOGitHubAppCredentials()
+
+        #expect(fixture.cli.calls.isEmpty)
+        #expect(fixture.model.newAppNativeVerificationAvailable == false)
+        #expect(fixture.model.lastError?.contains("unavailable") == true)
     }
 
     @Test func managedConnectUsesBrokerAndKeychainIdentityWithoutLegacyUserTokenFallback() async throws {

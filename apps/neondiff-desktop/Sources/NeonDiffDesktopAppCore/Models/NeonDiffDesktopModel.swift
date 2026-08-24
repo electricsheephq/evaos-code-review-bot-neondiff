@@ -592,6 +592,10 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && dependencies.productionBoundary.managedGitHubBrokerOrigin == nil
     }
 
+    package var newAppNativeVerificationAvailable: Bool {
+        dependencies.newAppNativeVerificationAvailable
+    }
+
     package var byoGitHubAppIdStored: Bool {
         storedBYOGitHubAppId != nil
     }
@@ -3826,6 +3830,11 @@ package final class NeonDiffDesktopModel: ObservableObject {
         guard !isSetupMutationBlocked else {
             lastError = "Retry account verification before verifying GitHub App setup."
             byoGitHubCredentialStatus = lastError ?? "Account check required"
+            return
+        }
+        guard source != .keychainStdin || newAppNativeVerificationAvailable else {
+            lastError = "Native new-App verification is unavailable in this signed build."
+            byoGitHubCredentialStatus = lastError ?? "Unavailable"
             return
         }
         guard requireLocalWorkerCLI() else {

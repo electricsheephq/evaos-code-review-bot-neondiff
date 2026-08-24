@@ -466,7 +466,11 @@ struct ReposView: View {
                             systemImage: "checkmark.shield"
                         )
                     }
-                    .disabled(!model.byoGitHubCredentialsStored || model.isBYOGitHubVerificationInProgress)
+                    .disabled(
+                        !model.byoGitHubCredentialsStored
+                            || !model.newAppNativeVerificationAvailable
+                            || model.isBYOGitHubVerificationInProgress
+                    )
                     .accessibilityIdentifier("neondiff-byo-github-verify")
                 }
 
