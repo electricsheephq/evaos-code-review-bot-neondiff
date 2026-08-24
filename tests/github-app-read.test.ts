@@ -321,7 +321,7 @@ describe("GitHub App read authentication", () => {
       const authorization = new Headers(init?.headers).get("authorization") ?? undefined;
       calls.push({ url: String(url), authorization });
       if (String(url).endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, account: { login: "owner" }, app_id: 999, app_slug: "customer-review-app" });
+        return jsonResponse({ id: 123, app_id: 4184532, account: { id: 7, login: "owner", type: "Organization" }, app_slug: "customer-review-app" });
       }
       if (String(url).endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -346,8 +346,11 @@ describe("GitHub App read authentication", () => {
       installation_id_present: true,
       installation_id: 123,
       installation_account: "owner",
-      app_id: 999,
+      installation_account_id: 7,
+      installation_account_type: "Organization",
+      app_id: 4184532,
       app_slug: "customer-review-app",
+      bot_login: "customer-review-app[bot]",
       app_can_read_metadata: true,
       app_can_read_pull_requests: true,
       openPullCount: 1
@@ -540,7 +543,7 @@ describe("GitHub App read authentication", () => {
       const redirect = init?.redirect;
       calls.push({ url: requestUrl, method, redirect });
       if (requestUrl.endsWith("/repos/owner/repo/installation")) {
-        return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
+        return jsonResponse({ id: 123, app_id: 4184532, account: { id: 7, login: "owner", type: "Organization" }, app_slug: "customer-review-app" });
       }
       if (requestUrl.endsWith("/app/installations/123/access_tokens")) {
         return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
@@ -824,6 +827,52 @@ describe("GitHub App read authentication", () => {
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
   });
 
+  it("keeps App comment ownership and cached tokens scoped to each repository", async () => {
+    const root = mkdtempSync(join(tmpdir(), "github-app-comment-repo-scope-"));
+    roots.push(root);
+    const privateKeyPath = join(root, "app.pem");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
+    const calls: Array<{ url: string; method: string }> = [];
+    globalThis.fetch = vi.fn(async (url, init) => {
+      const requestUrl = String(url);
+      const method = init?.method ?? "GET";
+      calls.push({ url: requestUrl, method });
+      const isA = requestUrl.toLowerCase().includes("/repos/owner-a/repo");
+      if (requestUrl.endsWith("/installation")) {
+        return jsonResponse(canonicalInstallation({
+          id: isA ? 101 : 202,
+          account: { id: isA ? 1 : 2, login: isA ? "owner-a" : "owner-b", type: "Organization" },
+          app_slug: isA ? "app-a" : "app-b"
+        }));
+      }
+      if (requestUrl.includes("/app/installations/101/access_tokens")) {
+        return jsonResponse({ token: "token-a", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (requestUrl.includes("/app/installations/202/access_tokens")) {
+        return jsonResponse({ token: "token-b", expires_at: "2999-01-01T00:00:00Z" });
+      }
+      if (requestUrl.endsWith("/issues/7/comments?per_page=100&page=1")) {
+        return jsonResponse([{ id: isA ? 71 : 72, body: "<!-- marker -->\nold", user: {
+          login: isA ? "app-a[bot]" : "app-b[bot]", type: "Bot"
+        } }]);
+      }
+      if (method === "PATCH") return jsonResponse({ id: isA ? 71 : 72, html_url: "https://github.test/comment" });
+      return jsonResponse({ message: "unexpected" }, 404);
+    }) as typeof fetch;
+    const github = new GitHubApi({ appId: "4184532", privateKeyPath });
+    const input = (repo: string) => ({ repo, issueNumber: 7, marker: "<!-- marker -->", body: "<!-- marker -->\nnew" });
+
+    await expect(github.upsertIssueComment(input("owner-a/repo"))).resolves.toMatchObject({ action: "updated", id: 71 });
+    await expect(github.upsertIssueComment(input("owner-b/repo"))).resolves.toMatchObject({ action: "updated", id: 72 });
+    await expect(github.upsertIssueComment(input("OWNER-A/REPO"))).resolves.toMatchObject({ action: "updated", id: 71 });
+    expect(calls.filter(({ url }) => url.includes("/access_tokens")).map(({ url }) => url)).toEqual([
+      expect.stringContaining("/app/installations/101/access_tokens"),
+      expect.stringContaining("/app/installations/202/access_tokens")
+    ]);
+    expect(calls.filter(({ method }) => method === "POST")).toHaveLength(2);
+  });
+
   it("listPullReviewComments is hard-capped: it stops paging after the cap even if pages stay full (#371 bounded read)", async () => {
     // Every page returns a FULL page (100) so the `chunk.length < 100` terminator never fires; only the
     // hard page cap can stop the loop. Assert it does — an unbounded loop would page forever here.
@@ -890,6 +939,9 @@ describe("GitHub App read authentication", () => {
 });
 
 function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
+  if (body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 1 && "id" in body) {
+    body = { ...canonicalInstallation(), ...(body as Record<string, unknown>) };
+  }
   return new Response(JSON.stringify(body), {
     status,
     statusText,
@@ -910,7 +962,7 @@ function canonicalInstallation(overrides: Record<string, unknown> = {}): Record<
 function installThenTokenThen(handler: (url: string) => Response): (url: string) => Response {
   return (url: string) => {
     if (url.endsWith("/repos/owner/repo/installation")) {
-      return jsonResponse({ id: 123, app_id: 4184532, account: { login: "owner" }, app_slug: "customer-review-app" });
+      return jsonResponse({ id: 123, app_id: 4184532, account: { id: 7, login: "owner", type: "Organization" }, app_slug: "customer-review-app" });
     }
     if (url.endsWith("/app/installations/123/access_tokens")) {
       return jsonResponse({ token: "installation-token", expires_at: "2999-01-01T00:00:00Z" });
