@@ -35,6 +35,13 @@ describe("exact-head severe evidence collection", () => {
     await expect(collectSevereVerificationEvidence({ ...input([moduleA]), expectedHeadSha: "a".repeat(40) })).rejects.toThrow("stale_head"); await expect(collectSevereVerificationEvidence({ ...input([moduleA]), pullNumber: 0 })).rejects.toThrow("invalid_identity");
   });
 
+  it("ignores inherited Git repository selectors", async () => {
+    const foreign = await mkdtemp(join(root, ".severe-foreign-")); execFileSync("git", ["init", "--quiet"], { cwd: foreign });
+    const prior = process.env.GIT_DIR;
+    try { process.env.GIT_DIR = join(foreign, ".git"); expect((await collectSevereVerificationEvidence(input([moduleA]))).complete).toBe(true); }
+    finally { if (prior === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = prior; await rm(foreign, { recursive: true, force: true }); }
+  });
+
   it("rejects unsafe paths, symlinks, non-files, duplicates, and unbounded lists", async () => {
     for (const path of ["/etc/passwd", "../outside.ts", "C:/outside.ts", "a\\b.ts", "a\u0000b.ts", "a\ud800b.ts", "src", "link.ts", finding]) await expect(collectSevereVerificationEvidence(input([path]))).rejects.toThrow();
     await expect(collectSevereVerificationEvidence(input(Array(MAX_MODULES + 1).fill(moduleA)))).rejects.toThrow("module_list");

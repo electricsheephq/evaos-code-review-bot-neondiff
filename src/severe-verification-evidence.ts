@@ -6,6 +6,7 @@ import type { SevereVerificationCode, SevereVerificationEvidenceFile } from "./s
 export const MAX_EVIDENCE_BYTES = 65_536;
 export const MAX_MODULES = 16;
 const decoder = new TextDecoder("utf-8", { fatal: true });
+const REPOSITORY_ENV = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"] as const;
 type OmissionCode = SevereVerificationCode;
 
 export interface SevereVerificationEvidenceInput {
@@ -47,7 +48,7 @@ function verifyHead(expected: string, worktree: string): string {
   if (!/^[a-f0-9]{40}$/.test(expected) || typeof worktree !== "string" || !isAbsolute(worktree)) throw new Error("invalid_head");
   let lines: string[];
   try {
-    const output = execFileSync("git", ["rev-parse", "--path-format=absolute", "HEAD", "--git-dir"], { cwd: worktree, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }) as Buffer;
+    const output = execFileSync("git", ["rev-parse", "--path-format=absolute", "HEAD", "--git-dir"], { cwd: worktree, env: gitEnvironment(), encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }) as Buffer;
     lines = output.toString("utf8").trimEnd().split("\n");
   } catch { throw new Error("head_unavailable"); }
   if (lines[0] !== expected) throw new Error("stale_head");
@@ -68,7 +69,7 @@ function inspectFile(gitDir: string, head: string, path: string, kind: "whole_fi
   if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755")) throw new Error("not_file");
   if (!Number.isSafeInteger(entry.bytes) || entry.bytes > MAX_EVIDENCE_BYTES) return { omission: { path, code: "cap_exceeded" } };
   let data: Buffer;
-  try { data = execFileSync("git", ["--git-dir", gitDir, "cat-file", "blob", entry.object], { encoding: "buffer", maxBuffer: MAX_EVIDENCE_BYTES + 1, stdio: ["ignore", "pipe", "ignore"] }) as Buffer; }
+  try { data = execFileSync("git", ["--git-dir", gitDir, "cat-file", "blob", entry.object], { env: gitEnvironment(), encoding: "buffer", maxBuffer: MAX_EVIDENCE_BYTES + 1, stdio: ["ignore", "pipe", "ignore"] }) as Buffer; }
   catch { return { omission: { path, code: "not_read" } };
   }
   if (data.length > MAX_EVIDENCE_BYTES) return { omission: { path, code: "cap_exceeded" } };
@@ -77,7 +78,7 @@ function inspectFile(gitDir: string, head: string, path: string, kind: "whole_fi
 }
 
 function treeEntry(gitDir: string, head: string, path: string): TreeEntry | undefined {
-  const raw = execFileSync("git", ["--git-dir", gitDir, "ls-tree", "--full-tree", "-z", "-l", head, "--", `:(literal)${path}`], { encoding: "buffer", maxBuffer: 16_384, stdio: ["ignore", "pipe", "ignore"] }) as Buffer;
+  const raw = execFileSync("git", ["--git-dir", gitDir, "ls-tree", "--full-tree", "-z", "-l", head, "--", `:(literal)${path}`], { env: gitEnvironment(), encoding: "buffer", maxBuffer: 16_384, stdio: ["ignore", "pipe", "ignore"] }) as Buffer;
   if (!raw.length) return undefined;
   const end = raw.indexOf(0), tab = raw.indexOf(9);
   if (end < 1 || tab < 1 || end !== raw.length - 1 || tab > end) throw new Error("not_file");
@@ -101,3 +102,4 @@ function hunkMetadata(value: string | Uint8Array): ChangedHunkMetadata {
 
 function hash(data: Uint8Array): string { return createHash("sha256").update(data).digest("hex"); }
 function compareText(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
+function gitEnvironment(): NodeJS.ProcessEnv { const env = { ...process.env }; for (const key of REPOSITORY_ENV) delete env[key]; return env; }
