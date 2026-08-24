@@ -6,7 +6,7 @@ contains the real Sparkle controller and release-build configuration gate. No
 hosted appcast, signed update, installed update, rollback, or public release is
 proven by source alone.
 
-## Current Implementation — 2026-07-28
+## Current Implementation — reconciled against `8de8840` (2026-08-24)
 
 - The native SwiftUI executable uses the existing Sparkle 2 dependency and
   standard updater UI in
@@ -41,33 +41,42 @@ proof only. #116 remains open for real public-key/feed identity, EdDSA-signed
 appcast, exact signed/notarized installed update, state-preserving rollback and
 re-update, immutable release assets, and live customer evidence.
 
+Sparkle 2 is selected for the native SwiftUI path, but #116/#610 remain open;
+fixtures or an unsigned bundle cannot prove release, update, rollback, or GA.
+
 ## Durable Plan Contract
 
-- Goal: define the desktop auto-update channel contract for NeonDiff Desktop so
-  future implementation can choose Sparkle, Tauri updater, or an equivalent
-  signed updater without weakening release governance or license boundaries.
-- Resume identity: repo `electricsheephq/evaos-code-review-bot`, branch
+Set `NEONDIFF_EVIDENCE_ROOT` to an absolute external directory outside the checkout for
+local packets (the source default is `$HOME/.neondiff/evidence`). Do not put
+credentials, private keys, or customer data in that directory. Historical
+release/evidence packets are immutable and are not rewritten by this plan.
+
+- Goal: define the desktop auto-update channel contract for NeonDiff Desktop
+  using the selected Sparkle 2 path without weakening release governance or
+  license boundaries.
+- Resume identity: repo `electricsheephq/evaos-code-review-bot-neondiff`, branch
   `codex/116-desktop-autoupdate-plan`, base
-  `1e28bf8ee0bfe42d0a7f3cc47ed76508497efe96`, issue
-  https://github.com/electricsheephq/evaos-code-review-bot/issues/116, parent
-  tracker https://github.com/electricsheephq/evaos-code-review-bot/issues/103.
+  `8de8840282657ffe457c78132ad0a31328695f68`, issue
+  https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/116,
+  parent tracker
+  https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103.
 - Tracking / source of truth: GitHub issues and PRs own implementation truth;
   `docs/release-governance.md`, `docs/license-boundary.md`, and
   `docs/public-release-manifest.json` own current release and license wording;
   Notion/Company OS remains architecture and evidence routing; no live runtime
   or roadmap state is changed by this document.
-- Scope / non-goals: no updater implementation, no Sparkle or Tauri dependency
-  selection, no signing/notarization setup, no private key material, no appcast
-  publication, no installer distribution, no license API implementation, no
-  launchd/runtime change, and no claim that desktop auto-update is shipped.
+- Scope / non-goals: no updater implementation, signing/notarization setup,
+  private key material, appcast publication, installer distribution, license API
+  implementation, launchd/runtime change, or claim that desktop auto-update is
+  shipped.
 - Current state: NeonDiff is a source-available beta; desktop update channels
-  are marked `post_1_0` and non-required in `docs/public-release-manifest.json`;
-  `docs/neondiff-desktop.md` describes a development-only unsigned desktop
-  scaffold; issue #111 owns license activation and issue #114 owns the legacy
-  desktop shell audit.
-- Exact next action: after desktop shell choice and license activation design
-  are settled, create an implementation issue or PR that wires a signed local or
-  static update-manifest dry run before any public appcast or artifact channel.
+  remain `post_1_0` and non-required in `docs/public-release-manifest.json`.
+  The native source has a Sparkle 2 controller and Release configuration gate,
+  but source/unsigned-bundle proof is not signed-feed or installed-update proof.
+  Issue #111 owns license activation and #610 owns the Mac GA artifact boundary.
+- Exact next action: implement and test the single promotion, containment, and
+  rollback path required by `docs/architecture/mac-ga-release-contract.md`;
+  only then run owner-gated #116/#322/#323 evidence from an exact candidate.
 - Critical invariants: every downloaded gated artifact must be entitlement
   checked before download, signature verified before install, tied to a channel
   manifest, rollbackable to a last-known-good release, and backed by public-safe
@@ -95,10 +104,10 @@ re-update, immutable release assets, and live customer evidence.
     valid entitlement when policy requires one; rollback target resolves to a
     signed last-known-good release.
   - Runner/CI location: future GitHub Actions plus local evidence packet under
-    `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/`.
+    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/$RELEASE_DATE/$RUN_ID/`.
   - Failure owner: desktop/update implementation owner for future PRs.
   - Eval evidence path:
-    `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/`.
+    `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/$RELEASE_DATE/$RUN_ID/`.
   - Trace feedback target: issue #116, the implementation PR, release notes,
     and the public release manifest.
   - Eval proof boundary: proves only planning readiness until implementation
@@ -115,7 +124,7 @@ re-update, immutable release assets, and live customer evidence.
   rollback; update status cannot distinguish license, network, and signature
   failures; docs or release notes claim shipped updater before fixture evidence.
 - Evidence path / packet:
-  `/Volumes/LEXAR/Codex/evidence/neondiff-desktop-auto-update/<date>/` plus
+  `$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop-auto-update/$RELEASE_DATE/$RUN_ID/` plus
   linked GitHub issue, PR, release, workflow run, and artifact identities.
 
 ## Channel Model
@@ -123,11 +132,12 @@ re-update, immutable release assets, and live customer evidence.
 The desktop channel should be explicit in update metadata rather than inferred
 from branch names, app names, or runtime config.
 
-- `beta`: pre-stable desktop channel for signed test artifacts and release
-  candidates. Beta may be license-gated and must remain rollbackable.
-- `stable`: future channel for public-ready signed artifacts after beta evidence
-  proves update checks, entitlement behavior, signature failure handling, and
-  rollback.
+- `beta`: pre-stable desktop channel for fixture or signed candidate artifacts.
+  Beta may be license-gated and must remain rollbackable; beta evidence never
+  implies a public or GA release.
+- `stable`: future channel for public-ready signed artifacts only after #116
+  and the #610 immutable artifact/feed/install/rollback gates pass. Stable must
+  not alias the beta feed.
 - `disabled`: server-side or static-manifest state that makes the desktop report
   a clear no-update or channel-disabled result without attempting a download.
 - `rollback`: pointer to the last-known-good signed version. Rollback metadata
@@ -192,16 +202,16 @@ channel, the release lane must provide evidence for:
 - rollback manifest fixture resolving to a signed last-known-good artifact
 - release notes naming source commit, version, artifact identity, and rollback
   target
-- public-safe evidence packet under `/Volumes/LEXAR/Codex/evidence/`
+- public-safe evidence packet under `$NEONDIFF_EVIDENCE_ROOT/`
 
 Until those gates exist, `docs/public-release-manifest.json` should keep desktop
 updates non-required and explicitly linked to issue #116.
 
 ## Tracking
 
-- Parent roadmap: https://github.com/electricsheephq/evaos-code-review-bot/issues/103
-- Release governance: https://github.com/electricsheephq/evaos-code-review-bot/issues/112
-- License activation: https://github.com/electricsheephq/evaos-code-review-bot/issues/111
-- Desktop shell audit: https://github.com/electricsheephq/evaos-code-review-bot/issues/114
-- Desktop app MVP: https://github.com/electricsheephq/evaos-code-review-bot/issues/115
-- This plan: https://github.com/electricsheephq/evaos-code-review-bot/issues/116
+- Parent roadmap: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103
+- Release governance: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/112
+- License activation: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/111
+- Desktop shell audit: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/114
+- Desktop app MVP: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/115
+- This plan: https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/116
