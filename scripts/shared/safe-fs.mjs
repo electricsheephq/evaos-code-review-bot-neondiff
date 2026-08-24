@@ -10,7 +10,7 @@ export function walkDescriptorTree(root, visitor) {
   try {
     output = execFileSync(
       "/usr/bin/python3",
-      [helper, "--root", resolve(root)],
+      ["-I", helper, "--root", resolve(root)],
       { encoding: "utf8", maxBuffer: maximumOutputBytes }
     );
   } catch (error) {

@@ -1,15 +1,56 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { chmodSync, closeSync, constants, createWriteStream, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, resolve } from "node:path";
 import { PassThrough, Readable, Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createInflateRaw, crc32 } from "node:zlib";
+import { walkDescriptorTree } from "../shared/safe-fs.mjs";
 
 const MAX_BYTES = 512 * 1024 * 1024, MAX_RECORDS = 20_000, MAX_METADATA = 16 * 1024 * 1024, MAX_NODES = 20_000;
 const EOCD = 0x06054b50, LOCAL = 0x04034b50, CENTRAL = 0x02014b50, DATA_DESCRIPTOR = 0x08074b50, ZIP64 = "ZIP64 archive unsupported";
 const UTF8 = new TextDecoder("utf-8", { fatal: true }), ALLOWED_FLAGS = 0x080e, TYPE_MASK = 0o170000, PATH_OVERRIDE_FIELDS = new Set([0x0008, 0x7075]);
 const fail = (message) => { throw new Error(message); };
+const SHA1 = /^[a-f0-9]{40}$/, SHA256 = /^[a-f0-9]{64}$/, TREE_KIND = "neondiff.desktop.extracted-tree-proof-v1";
+const TREE_FIELDS = ["schemaVersion", "kind", "verified", "algorithm", "sourceSHA", "artifactSHA256", "artifactByteLength", "treeSHA256", "records", "bundleMarkers", "appleDouble"];
+const authenticatedTreeProofs = new WeakSet();
+const PLIST_PARSER = String.raw`
+import json, plistlib, sys, xml.etree.ElementTree as ET
+raw = sys.stdin.buffer.read(1048577)
+if len(raw) > 1048576 or raw.startswith(b"bplist00") or b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+    raise ValueError("unsupported plist")
+root = ET.fromstring(raw)
+if root.tag != "plist" or len(root) != 1 or root[0].tag != "dict":
+    raise ValueError("invalid plist root")
+def unique(node):
+    if node.tag == "dict":
+        children = list(node)
+        if len(children) % 2:
+            raise ValueError("invalid plist dictionary")
+        seen = set()
+        for index in range(0, len(children), 2):
+            key, value = children[index], children[index + 1]
+            if key.tag != "key" or (key.text or "") in seen:
+                raise ValueError("duplicate or invalid plist key")
+            seen.add(key.text or "")
+            unique(value)
+    elif node.tag == "array":
+        for value in node:
+            unique(value)
+unique(root[0])
+value = plistlib.loads(raw)
+required = ("CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion")
+if not isinstance(value, dict):
+    raise ValueError("invalid plist dictionary")
+result = {}
+for key in required:
+    item = value.get(key)
+    if not isinstance(item, str) or not item or len(item.encode("utf-8")) > 128:
+        raise ValueError("invalid plist marker")
+    result[key] = item
+sys.stdout.write(json.dumps(result, separators=(",", ":")))
+`;
 function artifactBytes(descriptor) {
   const before = fstatSync(descriptor);
   if (!before.isFile() || before.size > MAX_BYTES) fail("artifact bytes exceed bound");
@@ -210,3 +251,66 @@ export async function withMaterializedClassicZipApp(artifactPath, consumer) {
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+function proofText(value, label) {
+  if (typeof value !== "string" || !value || /[\\\u0000-\u001f\u007f]/.test(value) || value.startsWith("/") || value.split("/").some((part) => !part || part === "." || part === "..")) fail(`${label} is malformed`);
+  for (let index = 0; index < value.length; index += 1) { const code = value.charCodeAt(index); if (code >= 0xd800 && code <= 0xdfff) { if (code > 0xdbff || index + 1 >= value.length || value.charCodeAt(index + 1) < 0xdc00 || value.charCodeAt(index + 1) > 0xdfff) fail(`${label} is malformed`); index += 1; } }
+  return value;
+}
+function proofTarget(value) {
+  if (typeof value !== "string" || !value || /[\\\u0000-\u001f\u007f]/.test(value)) fail("symlink target is malformed");
+  for (let index = 0; index < value.length; index += 1) { const code = value.charCodeAt(index); if (code >= 0xd800 && code <= 0xdfff) { if (code > 0xdbff || index + 1 >= value.length || value.charCodeAt(index + 1) < 0xdc00 || value.charCodeAt(index + 1) > 0xdfff) fail("symlink target is malformed"); index += 1; } }
+  return value;
+}
+function proofPathIdentity(path) {
+  return path.split("/").map((part) => { const normalized = part.normalize("NFKC"), lower = normalized.toLowerCase(); if (lower.toUpperCase().toLowerCase() !== lower) fail("unsupported caseless tree path"); return lower.normalize("NFKC"); }).join("/");
+}
+function treeDigest(records) {
+  const digest = createHash("sha256");
+  for (const record of records) { for (const part of record) { digest.update(String(part), "utf8"); digest.update("\0"); } digest.update("\n"); }
+  return digest.digest("hex");
+}
+function appTree(appPath) {
+  const records = [], directories = new Set([""]), identities = new Map(); let aggregate = 0, infoPlist;
+  walkDescriptorTree(appPath, (entry) => {
+    if (records.length >= MAX_NODES) fail("tree record bound exceeded");
+    const path = proofText(entry.relativePath, "tree path"), identity = proofPathIdentity(path), collision = identities.get(identity);
+    if (collision && collision !== path) fail("tree path collision"); identities.set(identity, path);
+    const slash = path.lastIndexOf("/"), parent = slash < 0 ? "" : path.slice(0, slash);
+    if (!directories.has(parent)) fail("tree parent topology is invalid");
+    if (entry.type === "directory") { directories.add(path); records.push(["dir", path]); return; }
+    if (entry.type === "symlink") {
+      const target = proofTarget(entry.target), destination = posix.normalize(posix.join(posix.dirname(path), target));
+      if (posix.isAbsolute(target) || destination === ".." || destination.startsWith("../")) fail("symlink target escapes app root");
+      records.push(["link", path, target]); return;
+    }
+    if (!Buffer.isBuffer(entry.data) || !Number.isSafeInteger(entry.stat.size) || entry.stat.size !== entry.data.length || (aggregate += entry.data.length) > MAX_BYTES) fail("tree file bytes are invalid");
+    const fileSHA = createHash("sha256").update(entry.data).digest("hex"); if (!SHA256.test(fileSHA)) fail("tree file digest is invalid");
+    records.push(["file", path, (entry.stat.mode & 0o111) === 0 ? "-" : "x", entry.stat.size, fileSHA]);
+    if (path === "Contents/Info.plist") { if (infoPlist) fail("desktop Info.plist is duplicated"); infoPlist = entry.data; }
+  });
+  if (!infoPlist) fail("desktop Info.plist is missing");
+  return { records, infoPlist };
+}
+function plistMarkers(bytes) {
+  const parsed = spawnSync("/usr/bin/python3", ["-I", "-c", PLIST_PARSER], { input: bytes, encoding: "utf8", maxBuffer: 4096 }); let value;
+  try { if (parsed.status !== 0) fail("desktop Info.plist is malformed"); value = JSON.parse(parsed.stdout); } catch { fail("desktop Info.plist is malformed"); }
+  const bundleID = value.CFBundleIdentifier, version = value.CFBundleShortVersionString, build = value.CFBundleVersion;
+  if (bundleID !== "com.electricsheephq.NeonDiffDesktop" || !/^1\.1\.0(?:-(?:beta|rc)\.[1-9][0-9]{0,15})?$/.test(version) || !/^[0-9]{1,32}$/.test(build)) fail("bundle markers are not canonical");
+  return { appPath: "NeonDiff.app", bundleID, version, build };
+}
+function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value)) deepFreeze(child); Object.freeze(value); } return value; }
+
+export async function buildExtractedAppTreeProof(artifactPath, sourceSHA) {
+  if (typeof artifactPath !== "string" || !artifactPath) fail("artifact path is malformed");
+  if (typeof sourceSHA !== "string" || !SHA1.test(sourceSHA)) fail("source SHA is malformed");
+  return withMaterializedClassicZipApp(artifactPath, (appPath, graph) => {
+    const { records, infoPlist } = appTree(appPath), proof = { schemaVersion: 1, kind: TREE_KIND, verified: true, algorithm: "sha256-tree-v1", sourceSHA, artifactSHA256: graph.artifactSHA256, artifactByteLength: graph.artifactByteLength, treeSHA256: treeDigest(records), records, bundleMarkers: plistMarkers(infoPlist), appleDouble: { policy: "artifact-bound-excluded-from-tree-v1", entryCount: graph.records.filter((record) => typeof record.sidecarTarget === "string").length } };
+    authenticatedTreeProofs.add(proof); return deepFreeze(proof);
+  });
+}
+export function serializeExtractedAppTreeProof(proof) {
+  if (!authenticatedTreeProofs.has(proof)) fail("proof was not produced by the extracted-tree producer");
+  return `${JSON.stringify(Object.fromEntries(TREE_FIELDS.map((field) => [field, proof[field]])))}\n`;
+}
+export function extractedAppTreeProofDigest(proof) { return createHash("sha256").update(serializeExtractedAppTreeProof(proof), "utf8").digest("hex"); }
