@@ -170,6 +170,7 @@ package final class NeonDiffDesktopModel: ObservableObject {
         [DesktopLocalBotConfiguration] = []
     @Published package private(set) var currentLocalBotExecutionConfigPaths:
         [String] = []
+    @Published package private(set) var newAppNativeVerificationAvailable = false
     @Published package private(set)
         var isKeychainWorkerLaunchAgentOperationInProgress = false
     @Published package private(set) var keychainWorkerLaunchAgentStatus =
@@ -592,10 +593,6 @@ package final class NeonDiffDesktopModel: ObservableObject {
             && dependencies.productionBoundary.managedGitHubBrokerOrigin == nil
     }
 
-    package var newAppNativeVerificationAvailable: Bool {
-        dependencies.newAppNativeVerificationAvailable
-    }
-
     package var byoGitHubAppIdStored: Bool {
         storedBYOGitHubAppId != nil
     }
@@ -793,6 +790,8 @@ package final class NeonDiffDesktopModel: ObservableObject {
     package init(dependencies: DesktopAppDependencies, activationLicenseClient: (any ActivationLicenseClienting)? = nil) {
         self.dependencies = dependencies
         self.activationLicenseClientOverride = activationLicenseClient
+        self.newAppNativeVerificationAvailable =
+            dependencies.newAppNativeVerificationAvailable
         self.currentLocalWorkerExecutionContexts =
             dependencies.localBotExecutionContexts
         self.currentLocalBotConfigurations =
@@ -2706,11 +2705,18 @@ package final class NeonDiffDesktopModel: ObservableObject {
             return
         }
         let snapshot = provider(launchdLabel)
+        let wasAvailable = newAppNativeVerificationAvailable
         currentLocalBotConfigurations = snapshot.configurations
         currentLocalWorkerExecutionContexts = snapshot.executionContexts
         currentLocalBotExecutionConfigPaths = snapshot.executionContexts
             .map(\.configPath)
             .filter { !$0.isEmpty }
+        newAppNativeVerificationAvailable =
+            snapshot.nativeVerificationCapability.newAppNativeVerificationAvailable
+        if wasAvailable && !newAppNativeVerificationAvailable {
+            byoGitHubCredentialRevision &+= 1
+            invalidateBYOGitHubVerificationContext()
+        }
     }
 
     private var runtimeCredentialsForReviewRequired: Bool {
@@ -3831,6 +3837,9 @@ package final class NeonDiffDesktopModel: ObservableObject {
             lastError = "Retry account verification before verifying GitHub App setup."
             byoGitHubCredentialStatus = lastError ?? "Account check required"
             return
+        }
+        if source == .keychainStdin {
+            refreshLocalBotDiscovery()
         }
         guard source != .keychainStdin || newAppNativeVerificationAvailable else {
             lastError = "Native new-App verification is unavailable in this signed build."

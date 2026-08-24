@@ -35,11 +35,14 @@ enum NeonDiffDesktopCompositionRoot {
         if productionBoundary.managedGitHubBrokerOrigin != nil, githubBroker == nil {
             productionBoundary = .quarantined
         }
+        let discoveryProductionBoundary = productionBoundary
         let cliWorkingDirectory = NeonDiffCLIResolver.defaultWorkingDirectory()
-        let localBotSnapshot =
-            LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot()
         let trustedBundledWorker =
             FoundationTrustedBundledWorker.executionContext()
+        let localBotSnapshot =
+            LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot(
+                trustedBundledWorker: trustedBundledWorker
+            )
         let nativeVerificationCapability =
             DesktopNativeVerificationCapability.resolve(
                 productionBoundary: productionBoundary,
@@ -63,18 +66,27 @@ enum NeonDiffDesktopCompositionRoot {
         let localBotDiscoveryProvider:
             @Sendable (String) -> DesktopLocalBotDiscoverySnapshot = {
                 label in
+                let trustedBundledWorker =
+                    FoundationTrustedBundledWorker.executionContext()
                 let snapshot =
                     LaunchAgentLocalBotConfigurationDiscovery
-                        .discoverSnapshot(label: label)
+                        .discoverSnapshot(
+                            label: label,
+                            trustedBundledWorker: trustedBundledWorker
+                        )
                 return DesktopLocalBotDiscoverySnapshot(
                     configurations: snapshot.configurations,
                     executionContexts:
                         snapshot.executionContexts
                         + (
-                            FoundationTrustedBundledWorker
-                                .executionContext()
+                            trustedBundledWorker
                                 .map { [$0] }
                             ?? []
+                        ),
+                    nativeVerificationCapability:
+                        DesktopNativeVerificationCapability.resolve(
+                            productionBoundary: discoveryProductionBoundary,
+                            trustedBundledWorker: trustedBundledWorker
                         )
                 )
             }
@@ -100,7 +112,9 @@ enum NeonDiffDesktopCompositionRoot {
                 localBotExecutionContextProvider:
                     localBotExecutionContextProvider,
                 defaultWorkingDirectory: cliWorkingDirectory,
-                trustedBundledWorker: trustedBundledWorker,
+                trustedBundledWorkerProvider: {
+                    FoundationTrustedBundledWorker.executionContext()
+                },
                 trustedProcessValidator: {
                     FoundationTrustedBundledWorker
                         .runningProcessIsTrusted($0)

@@ -12,7 +12,8 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
 
     static func discoverSnapshot(
         label: String = defaultLabel,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        trustedBundledWorker: DesktopLocalBotExecutionContext? = nil
     ) -> Snapshot {
         let launchAgentURL = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
@@ -60,7 +61,8 @@ enum LaunchAgentLocalBotConfigurationDiscovery {
            ),
            let appID = Int64(request.appID),
            let sealedContext =
-                FoundationTrustedBundledWorker.executionContext() {
+                trustedBundledWorker
+                    ?? FoundationTrustedBundledWorker.executionContext() {
             return Snapshot(
                 configurations: [
                     DesktopLocalBotConfiguration(

@@ -3,6 +3,14 @@ import Testing
 @testable import NeonDiffDesktopAppCore
 import NeonDiffDesktopCore
 
+private final class DiscoverySnapshotBox: @unchecked Sendable {
+    var snapshot: DesktopLocalBotDiscoverySnapshot
+
+    init(_ snapshot: DesktopLocalBotDiscoverySnapshot) {
+        self.snapshot = snapshot
+    }
+}
+
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct BYOGitHubAppCredentialOnboardingTests {
@@ -125,6 +133,83 @@ struct BYOGitHubAppCredentialOnboardingTests {
         fixture.model.refreshStatus()
 
         #expect(fixture.model.localWorkerCLIAvailable)
+    }
+
+    @Test func refreshStatusPublishesMissingWorkerBeforeOneDaemonRead() async {
+        let snapshots = DiscoverySnapshotBox(discoverySnapshot(.testAvailable))
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [
+                .success(doctorResult(
+                    readChecks: doctorReadCheck(repo: "acme/demo")
+                )),
+                .success(CLIRunResult(
+                    exitCode: 0,
+                    stdout: #"{"ok":true,"command":"daemon status","state":"running"}"#,
+                    stderr: ""
+                ))
+            ],
+            preferenceStrings: [
+                "neondiff.cliPath": "neondiff",
+                "neondiff.configPath":
+                    "/Users/test/Library/Application Support/NeonDiffDesktop/Accounts/account/Bots/new/config.local.json"
+            ],
+            localBotDiscoveryProvider: { _ in snapshots.snapshot },
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.repos = [RepoMonitor(name: "acme/demo", enabled: true)]
+        fixture.model.pendingBYOGitHubAppId = "123456"
+        fixture.model.pendingBYOGitHubAppPrivateKey = fixturePrivateKey
+        fixture.model.storeBYOGitHubAppCredentials()
+        fixture.model.verifyBYOGitHubAppCredentials()
+        #expect(fixture.model.localWorkerCLIAvailable)
+        await waitForBYOVerification(fixture)
+        #expect(fixture.model.byoGitHubCredentialsVerified)
+
+        snapshots.snapshot = discoverySnapshot(.unavailable)
+        fixture.model.refreshStatus()
+        await fixture.cli.waitUntilCallCount(2)
+
+        #expect(!fixture.model.newAppNativeVerificationAvailable)
+        #expect(!fixture.model.byoGitHubCredentialsVerified)
+        #expect(fixture.model.currentLocalWorkerExecutionContexts.isEmpty)
+        #expect(fixture.cli.calls.count == 2)
+        #expect(fixture.cli.calls[1].arguments.prefix(2) == ["daemon", "status"])
+    }
+
+    @Test func refreshStatusPublishesNewWorkerBeforeOneDaemonRead() async {
+        let snapshots = DiscoverySnapshotBox(discoverySnapshot(.unavailable))
+        let fixture = ModelDependencyFixture(
+            cliOutcomes: [.success(CLIRunResult(
+                exitCode: 0,
+                stdout: #"{"ok":true,"command":"daemon status","state":"running"}"#,
+                stderr: ""
+            ))],
+            localBotDiscoveryProvider: { _ in snapshots.snapshot },
+            productionBoundary: exactB0Boundary,
+            nativeVerificationCapability: .unavailable
+        )
+        snapshots.snapshot = discoverySnapshot(.testAvailable)
+
+        fixture.model.refreshStatus()
+        await fixture.cli.waitUntilCallCount(1)
+
+        #expect(fixture.model.newAppNativeVerificationAvailable)
+        #expect(fixture.model.currentLocalWorkerExecutionContexts.count == 1)
+        #expect(fixture.cli.calls.count == 1)
+    }
+
+    @Test func newAppVerificationRefreshesAndRefusesRemovedWorkerBeforeCLI() {
+        let snapshots = DiscoverySnapshotBox(discoverySnapshot(.unavailable))
+        let fixture = ModelDependencyFixture(
+            preferenceStrings: ["neondiff.cliPath": "neondiff"],
+            localBotDiscoveryProvider: { _ in snapshots.snapshot },
+            productionBoundary: exactB0Boundary
+        )
+        fixture.model.verifyBYOGitHubAppCredentials()
+
+        #expect(!fixture.model.newAppNativeVerificationAvailable)
+        #expect(fixture.cli.calls.isEmpty)
+        #expect(fixture.model.lastError?.contains("unavailable") == true)
     }
 
     @Test func cleanInstallInitializationUsesNonDestructiveCLIInit() async {
@@ -778,6 +863,23 @@ private func doctorReadCheck(
         #","skippedByPolicy":"\#($0)""#
     } ?? ""
     return #"{"repo":"\#(repo)","ok":\#(ok),"visibility_result":"public","installation_id_present":true,"app_can_read_metadata":true,"app_can_read_pull_requests":true\#(skippedField)}"#
+}
+
+private func discoverySnapshot(
+    _ capability: DesktopNativeVerificationCapability
+) -> DesktopLocalBotDiscoverySnapshot {
+    DesktopLocalBotDiscoverySnapshot(
+        configurations: [],
+        executionContexts: capability.newAppNativeVerificationAvailable
+            ? [DesktopLocalBotExecutionContext(
+                configPath: "",
+                executablePath:
+                    "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
+                environmentOverrides: [:]
+            )]
+            : [],
+        nativeVerificationCapability: capability
+    )
 }
 
 private let exactB0Boundary = DesktopProductionBoundary.resolve(infoDictionary: [
