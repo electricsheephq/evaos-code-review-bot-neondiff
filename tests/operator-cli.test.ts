@@ -105,7 +105,7 @@ describe("operator CLI summaries", () => {
     release.heartbeat = {
       status: "active", maxAgeMs: 120_000, activeMaxAgeMs: 420_000,
       latestAt: "2026-07-01T00:09:30.000Z", ageMs: 30_000, cycle: 4,
-      event: "daemon_cycle_progress", dryRun: false, activeCycle: 4,
+      event: "daemon_cycle_progress", error: "issue_enrichment_failed", dryRun: false, activeCycle: 4,
       activeRunId: "run-4", activeStartedAt: "2026-07-01T00:00:00.000Z",
       activeLastProgressAt: "2026-07-01T00:09:30.000Z", activeProgressAgeMs: 30_000,
       activeTotalAgeMs: 600_000, activeAgeMs: 30_000
@@ -115,7 +115,7 @@ describe("operator CLI summaries", () => {
       providerCooldowns: [], checkedAt: "2026-07-01T00:10:00.000Z"
     }));
     expect(human).toContain(
-      "heartbeat: active cycle=4 event=daemon_cycle_progress totalAgeMs=600000 progressAgeMs=30000 livenessAgeMs=30000"
+      "heartbeat: active cycle=4 event=daemon_cycle_progress error=issue_enrichment_failed totalAgeMs=600000 progressAgeMs=30000 livenessAgeMs=30000"
     );
   });
 

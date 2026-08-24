@@ -3336,10 +3336,10 @@ export class ReviewStateStore {
     if (record.event === "daemon_cycle_progress") {
       this.db.prepare(
         `update daemon_heartbeat set
-           cycle = ?, event = ?, dry_run = ?, recorded_at = ?, error = null, last_progress_at = ?
+           cycle = ?, event = ?, dry_run = ?, recorded_at = ?, error = coalesce(?, error), last_progress_at = ?
          where id = 1 and run_id is ? and completed_at is null and started_at is not null
            and ? >= started_at and (last_progress_at is null or last_progress_at < ?)`
-      ).run(record.cycle, record.event, record.dryRun ? 1 : 0, recordedAt, recordedAt,
+      ).run(record.cycle, record.event, record.dryRun ? 1 : 0, recordedAt, record.error ? redactSecrets(record.error) : null, recordedAt,
         record.runId ?? null, recordedAt, recordedAt);
       return;
     }
@@ -3351,7 +3351,7 @@ export class ReviewStateStore {
          values (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(id) do update set
            cycle = excluded.cycle, event = excluded.event, dry_run = excluded.dry_run,
-           recorded_at = excluded.recorded_at, error = excluded.error,
+           recorded_at = excluded.recorded_at, error = coalesce(excluded.error, daemon_heartbeat.error),
            completed_at = excluded.completed_at
          where daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
            and excluded.completed_at >= daemon_heartbeat.started_at

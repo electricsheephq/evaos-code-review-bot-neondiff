@@ -104,6 +104,7 @@ export interface ReleaseHeartbeatStatus {
   ageMs?: number;
   cycle?: number;
   event?: string;
+  error?: string;
   dryRun?: boolean;
   activeCycle?: number;
   activeRunId?: string;
@@ -2999,7 +3000,7 @@ function readHeartbeatStatus(
     const completedAtSelect = columns.has("completed_at") ? "completed_at" : "null as completed_at";
     const row = db
       .prepare(
-        `select cycle, event, dry_run, recorded_at, ${startedCycleSelect}, ${startedAtSelect},
+        `select cycle, event, dry_run, recorded_at, error, ${startedCycleSelect}, ${startedAtSelect},
                 ${runIdSelect}, ${progressAtSelect}, ${completedAtSelect}
          from daemon_heartbeat
          where id = 1
@@ -3008,6 +3009,7 @@ function readHeartbeatStatus(
       .get() as {
         cycle: number | null;
         event: string | null;
+        error: string | null;
         dry_run: number | null;
         recorded_at: string | null;
         started_cycle: number | null;
@@ -3022,27 +3024,31 @@ function readHeartbeatStatus(
     const activeStartedTime = row.started_at ? Date.parse(row.started_at) : NaN;
     const progressTime = row.last_progress_at ? Date.parse(row.last_progress_at) : NaN;
     const completedTime = row.completed_at ? Date.parse(row.completed_at) : NaN;
-    const legacyTerminal = !columns.has("completed_at") &&
-      (row.event === "daemon_cycle_complete" || row.event === "daemon_cycle_failed");
+    const terminalEvent = row.event === "daemon_cycle_complete" || row.event === "daemon_cycle_failed";
+    const fallbackTerminal = terminalEvent && row.completed_at === null;
+    const effectiveCompletedTime = Number.isFinite(completedTime) ? completedTime : fallbackTerminal ? latestTime : NaN;
     const completedAt = Number.isFinite(completedTime)
       ? row.completed_at!
-      : legacyTerminal && Number.isFinite(latestTime) ? row.recorded_at! : undefined;
-    const invalidCompletion = (row.completed_at !== null && !Number.isFinite(completedTime)) ||
-      (legacyTerminal && !Number.isFinite(latestTime)) ||
-      (columns.has("completed_at") && (row.event === "daemon_cycle_complete" || row.event === "daemon_cycle_failed") && row.completed_at === null) ||
-      (!completedAt && columns.has("completed_at") && (!Number.isFinite(activeStartedTime) || activeStartedTime > now.getTime()));
+      : fallbackTerminal && Number.isFinite(latestTime) ? row.recorded_at! : undefined;
     const validStart = Number.isFinite(activeStartedTime) && activeStartedTime <= now.getTime();
     const validProgress = Number.isFinite(progressTime) && validStart &&
       progressTime >= activeStartedTime && progressTime <= now.getTime();
+    const invalidProgress = row.last_progress_at !== null && !validProgress;
+    const invalidCompletion = (row.completed_at !== null || terminalEvent) &&
+      (!Number.isFinite(effectiveCompletedTime) || effectiveCompletedTime > now.getTime() ||
+        (row.started_at !== null && !validStart) || (validStart && effectiveCompletedTime < activeStartedTime) ||
+        invalidProgress || (validProgress && effectiveCompletedTime < progressTime)) ||
+      (completedAt !== undefined && !terminalEvent) || (!completedAt && !terminalEvent && columns.has("completed_at") && !validStart);
     const common = {
       maxAgeMs,
       ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
       ...(Number.isFinite(latestTime) ? { ageMs: Math.max(0, now.getTime() - latestTime) } : {}),
       ...(row.cycle !== null ? { cycle: row.cycle } : {}),
       ...(row.event ? { event: row.event } : {}),
+      ...(row.error ? { error: row.error } : {}),
       dryRun: row.dry_run === 1
     };
-    if (!completedAt && !invalidCompletion && validStart) {
+    if (!completedAt && !invalidCompletion && !invalidProgress && validStart) {
       const livenessTime = validProgress ? progressTime : activeStartedTime;
       const activeAgeMs = Math.max(0, now.getTime() - livenessTime);
       return {
@@ -3070,7 +3076,7 @@ function readHeartbeatStatus(
       };
     }
     return {
-      status: !invalidCompletion && Number.isFinite(latestTime) && now.getTime() - latestTime <= maxAgeMs ? "fresh" : "stale",
+      status: !invalidCompletion && !invalidProgress && Number.isFinite(latestTime) && now.getTime() - latestTime <= maxAgeMs ? "fresh" : "stale",
       ...common,
       ...(completedAt ? { completedAt } : {})
     };
@@ -3081,13 +3087,14 @@ function readHeartbeatStatus(
 
 function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
   if (heartbeat.status === "missing") return `missing heartbeat row; max age ${heartbeat.maxAgeMs}ms`;
+  const errorSuffix = heartbeat.error ? `; error ${heartbeat.error}` : "";
   if (heartbeat.status === "active") {
     const activeAge = heartbeat.activeAgeMs === undefined ? "unknown" : `${heartbeat.activeAgeMs}ms`;
     if (heartbeat.activeTotalAgeMs === undefined && heartbeat.activeProgressAgeMs === undefined) {
       return (
         `active; active age ${activeAge}; max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; ` +
         `started cycle ${heartbeat.activeCycle ?? "unknown"}; last event ${heartbeat.event ?? "unknown"}; ` +
-        `last cycle ${heartbeat.cycle ?? "unknown"}`
+        `last cycle ${heartbeat.cycle ?? "unknown"}${errorSuffix}`
       );
     }
     const totalAge = heartbeat.activeTotalAgeMs === undefined ? "unknown" : `${heartbeat.activeTotalAgeMs}ms`;
@@ -3096,7 +3103,7 @@ function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
       `active; total age ${totalAge}; progress age ${progressAge}; liveness age ${activeAge}; ` +
       `max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; ` +
       `started cycle ${heartbeat.activeCycle ?? "unknown"}; last event ${heartbeat.event ?? "unknown"}; ` +
-      `last cycle ${heartbeat.cycle ?? "unknown"}`
+      `last cycle ${heartbeat.cycle ?? "unknown"}${errorSuffix}`
     );
   }
   const age = heartbeat.ageMs === undefined ? "unknown" : `${heartbeat.ageMs}ms`;
@@ -3108,7 +3115,7 @@ function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
         `progress age ${heartbeat.activeProgressAgeMs === undefined ? "unknown" : `${heartbeat.activeProgressAgeMs}ms`}; ` +
         `liveness age ${heartbeat.activeAgeMs}ms`;
   const completedSuffix = heartbeat.completedAt ? `; completed at ${heartbeat.completedAt}` : "";
-  return `${heartbeat.status}; age ${age}; max ${heartbeat.maxAgeMs}ms; event ${heartbeat.event ?? "unknown"}; cycle ${heartbeat.cycle ?? "unknown"}${activeSuffix}${completedSuffix}`;
+  return `${heartbeat.status}; age ${age}; max ${heartbeat.maxAgeMs}ms; event ${heartbeat.event ?? "unknown"}; cycle ${heartbeat.cycle ?? "unknown"}${activeSuffix}${completedSuffix}${errorSuffix}`;
 }
 
 interface ChangelogHeadStatus {

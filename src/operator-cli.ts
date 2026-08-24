@@ -855,6 +855,7 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
     `heartbeat: ${inventory.summary.heartbeatStatus}` +
       (inventory.release.heartbeat.cycle !== undefined ? ` cycle=${inventory.release.heartbeat.cycle}` : "") +
       (inventory.release.heartbeat.event ? ` event=${inventory.release.heartbeat.event}` : "") +
+      (heartbeat.error ? ` error=${heartbeat.error}` : "") +
       heartbeatClocks +
       (heartbeat.completedAt ? ` completedAt=${heartbeat.completedAt}` : ""),
     `repo: ${inventory.release.repo.branch}@${inventory.release.repo.head}` +
