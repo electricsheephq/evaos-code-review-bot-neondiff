@@ -8,6 +8,8 @@ import type {
   SevereVerificationReceipt
 } from "./severe-verification-receipt-schema.js";
 
+const intrinsicStringify = JSON.stringify;
+
 export interface CanonicalSevereVerificationReceipt {
   receipt: SevereVerificationReceipt;
   canonicalJson: string;
@@ -71,9 +73,9 @@ function compareText(a: string, b: string): number {
 }
 
 function serializeReceipt(receipt: SevereVerificationReceipt): string {
-  const quote = (value: string): string => JSON.stringify(value);
+  const quote = (value: string): string => intrinsicStringify(value);
   let output = `{"schemaVersion":${quote(receipt.schemaVersion)},"repo":${quote(receipt.repo)},"pullNumber":${receipt.pullNumber},"baseSha":${quote(receipt.baseSha)},"headSha":${quote(receipt.headSha)},"findingFingerprint":${quote(receipt.findingFingerprint)},"state":${quote(receipt.state)},"disposition":${quote(receipt.disposition)}`;
-  if (receipt.confidence !== undefined) output += `,"confidence":${JSON.stringify(receipt.confidence)}`;
+  if (receipt.confidence !== undefined) output += `,"confidence":${intrinsicStringify(receipt.confidence)}`;
   if (receipt.reasonCode !== undefined) output += `,"reasonCode":${quote(receipt.reasonCode)}`;
   output += `,"evidence":{"files":[`;
   for (let index = 0; index < receipt.evidence.files.length; index += 1) {

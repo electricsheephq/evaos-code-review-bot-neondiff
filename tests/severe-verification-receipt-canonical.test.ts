@@ -88,4 +88,17 @@ describe("severe verification receipt canonicalization", () => {
     expect(canonicalizeSevereVerificationReceipt(serialized(value)).receipt.evidence.files.map((item) => item.path))
       .toEqual(["src/.ts", "src/😀.ts"]);
   });
+
+  it("uses the captured primitive JSON encoder", () => {
+    const input = serialized(receipt());
+    const previous = JSON.stringify;
+    let touched = 0;
+    JSON.stringify = (() => { touched += 1; return "\"evil\""; }) as typeof JSON.stringify;
+    try {
+      expect(canonicalizeSevereVerificationReceipt(input).canonicalJson).not.toContain("evil");
+      expect(touched).toBe(0);
+    } finally {
+      JSON.stringify = previous;
+    }
+  });
 });
