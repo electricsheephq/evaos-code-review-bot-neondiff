@@ -630,6 +630,7 @@ export class GitHubApi {
     const response = await this.request<unknown>(`/repos/${repo}/installation`, {
       token: jwt,
       followRedirects: options.followRedirects,
+      allowRedirectResponse: options.followRedirects !== false,
       onResponse: (result) => { responseUrl = result.url; }
     });
     const configuredOwner = repo.split("/")[0];
@@ -711,7 +712,7 @@ export class GitHubApi {
 
   private async request<T>(
     path: string,
-    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean; onResponse?: (response: Response) => void } = {}
+    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean; allowRedirectResponse?: boolean; onResponse?: (response: Response) => void } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
     const controller = new AbortController();
@@ -729,7 +730,8 @@ export class GitHubApi {
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body)
       });
-      if (!response.ok) {
+      options.onResponse?.(response);
+      if (!response.ok && !(options.allowRedirectResponse && response.status >= 300 && response.status < 400)) {
         const text = await response.text();
         throw new GitHubApiRequestError({
           status: response.status,
@@ -738,7 +740,6 @@ export class GitHubApi {
           responseText: text
         });
       }
-      options.onResponse?.(response);
       return (await response.json()) as T;
     } catch (error) {
       if (error instanceof GitHubApiRequestError) throw error;

@@ -235,7 +235,7 @@ function humanThreadTouchesFinding(comments: ObservedReviewComment[], findings: 
     if (comment.in_reply_to_id === undefined || comment.in_reply_to_id === null) continue;
     // Reuse the shared bot-identity check (#149): excludes user.type === "Bot" OR the app bot login,
     // so a bot reply with a MISSING/variant type (only its login matches) is still not counted human.
-    if (!botLogin || (comment.user && isBotCommandComment(comment.user, botLogin))) continue;
+    if (!comment.user || (botLogin ? isBotCommandComment(comment.user, botLogin) : comment.user.type !== "User")) continue;
     const path = comment.path;
     if (!path) continue;
     const line = typeof comment.line === "number" ? comment.line : comment.original_line;
