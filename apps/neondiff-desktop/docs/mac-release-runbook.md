@@ -8,6 +8,9 @@ Apple/Sparkle inputs are available.
 Proof boundary: this document closes the #322 documentation lane only. It does
 not prove a signed artifact exists, does not submit anything to Apple, does not
 publish an appcast, and does not make the desktop update channel GA-ready.
+Sparkle 2 remains the selected updater while #116 is open. #610 additionally
+requires immutable artifact/feed identity, signed hosted-feed evidence, an
+installed update, state-preserving rollback, and re-update before a Mac GA claim.
 Parent issue #116 owns the signed auto-update channel, #323 owns appcast
 fixtures/dry-run generation, #324 owns credential naming/custody, #325 owns the
 desktop onboarding wizard, #327 owns production license-service deployment, and
@@ -119,10 +122,20 @@ the wrong source SHA, or carries unrelated local changes. Do not sign whatever
 
 Before building, run the read-only credential doctor:
 
+Set the external evidence root once for this run. The source checkout default is
+`$HOME/.neondiff/evidence`; CI or another operator may set a different root.
+Keep historical packets immutable and never place secrets in the root or repo:
+
+```sh
+export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
+RELEASE_EVIDENCE_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/<date>/<version>"
+mkdir -p "$RELEASE_EVIDENCE_DIR"
+```
+
 ```sh
 apps/neondiff-desktop/script/preflight-credentials.sh
 apps/neondiff-desktop/script/preflight-credentials.sh --json \
-  > /Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/credential-preflight.json
+  > "$RELEASE_EVIDENCE_DIR/credential-preflight.json"
 ```
 
 The doctor reports presence only. It does not sign, notarize, upload, fetch
@@ -145,7 +158,7 @@ Required owner/Codex inputs for a real signing run:
 - Sparkle public key as `NEONDIFF_SPARKLE_PUBLIC_ED_KEY`.
 - Sparkle feed URL as `NEONDIFF_SPARKLE_FEED_URL`.
 - Appcast hosting destination and rollback destination.
-- Evidence packet directory under `/Users/m1/Codex/evidence/`.
+- Evidence packet directory under `$NEONDIFF_EVIDENCE_ROOT/`.
 
 ## Build The Release App
 
@@ -230,7 +243,7 @@ the notarization paths documented in #324.
 ```sh
 cd apps/neondiff-desktop
 APP="dist/NeonDiff.app"
-ZIP="/Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/NeonDiff.zip"
+ZIP="$RELEASE_EVIDENCE_DIR/NeonDiff.zip"
 
 ditto -c -k --keepParent "$APP" "$ZIP"
 shasum -a 256 "$ZIP"
@@ -283,7 +296,7 @@ fabricate a real Sparkle signature.
 ```sh
 apps/neondiff-desktop/script/generate-appcast.sh \
   --fixture apps/neondiff-desktop/fixtures/appcast/beta.json \
-  --output /Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/neondiff-beta-appcast.xml \
+  --output "$RELEASE_EVIDENCE_DIR/neondiff-beta-appcast.xml" \
   --dry-run
 ```
 
@@ -323,7 +336,7 @@ License boundary:
 Create a public-safe packet under:
 
 ```text
-/Users/m1/Codex/evidence/neondiff-desktop/<date>/<version>/
+$RELEASE_EVIDENCE_DIR/
 ```
 
 Minimum files:
