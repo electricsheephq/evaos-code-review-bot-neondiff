@@ -28,7 +28,7 @@ wrapper-owned designs.
 ## Current Source Behavior
 
 This research is based on direct source inspection at the accepted current main
-commit `1e4b54d1d14f35fb2b22464c474f74cf1fa20b35`.
+commit `8de8840282657ffe457c78132ad0a31328695f68`.
 
 Current GitNexus behavior is packet-only:
 

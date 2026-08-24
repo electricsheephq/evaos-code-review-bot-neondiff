@@ -129,6 +129,9 @@ Keep historical packets immutable and never place secrets in the root or repo:
 ```sh
 export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
 case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
+NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
 RUN_ID="<caller-supplied-unique-run-id>"
 RELEASE_EVIDENCE_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/<date>/$RUN_ID"
 mkdir -p "$(dirname "$RELEASE_EVIDENCE_DIR")"

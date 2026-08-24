@@ -11,6 +11,9 @@ proof.
 ```bash
 export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
 case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
+NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
 EVAL_RUN_ID="<caller-supplied-unique-run-id>"
 ```
 
@@ -23,9 +26,11 @@ npm run eval:offline -- --input /path/to/scenario.json
 Run the checked-in local suite fixtures:
 
 ```bash
+EVAL_SUITE_ROOT="$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/$EVAL_RUN_ID/local-suite"
+mkdir "$EVAL_SUITE_ROOT"
 npm run eval:suite -- \
   --input-dir tests/fixtures/eval-suite-scenarios \
-  --output-root "$NEONDIFF_EVIDENCE_ROOT/$(date +%F)/$EVAL_RUN_ID/local-suite"
+  --output-root "$EVAL_SUITE_ROOT"
 ```
 
 Run the paired sticky-vs-cold fixture:

@@ -6,7 +6,7 @@ contains the real Sparkle controller and release-build configuration gate. No
 hosted appcast, signed update, installed update, rollback, or public release is
 proven by source alone.
 
-## Current Implementation — source main `1e4b54d` (2026-08-24)
+## Current Implementation — source main `8de8840` (2026-08-24)
 
 - The native SwiftUI executable uses the existing Sparkle 2 dependency and
   standard updater UI in

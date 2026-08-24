@@ -22,6 +22,9 @@ Generate a local appcast from a committed fixture:
 ```sh
 : "${NEONDIFF_EVIDENCE_ROOT:?set an external evidence root outside this checkout}"
 case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
+NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)"; REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
 RUN_ID="<caller-supplied-unique-run-id>"
 RUN_DIR="$NEONDIFF_EVIDENCE_ROOT/neondiff-desktop/$(date +%F)/$RUN_ID"
 mkdir -p "$(dirname "$RUN_DIR")"
