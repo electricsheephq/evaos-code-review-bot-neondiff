@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
 import {
@@ -53,6 +54,7 @@ import {
   resolveRepoProfile
 } from "./repo-policy.js";
 import { applyDeterministicReviewGate, type RepoMemoryFalsePositiveEntry } from "./review-gate.js";
+import { buildFindingFingerprint } from "./findings.js";
 import {
   buildReviewEnsembleLeafPrompt,
   buildReviewEnsemblePlan,
@@ -126,12 +128,20 @@ import {
   isZCodeSchemaFailureError,
   mergeReviewModelSummaries,
   reviewPromptForbiddenFragments,
+  runZCodeRawJson,
   runZCodeReview,
   type ReviewModelSummary,
   type ZCodeReviewResult
 } from "./zcode.js";
-import { runCodexReview } from "./codex-runtime.js";
+import { runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
+import { collectSevereVerificationEvidence } from "./severe-verification-evidence.js";
+import {
+  buildSevereVerificationTransport, parseSevereVerificationTransport, severeVerificationTransportFailure,
+  type SevereVerificationTransportInput
+} from "./severe-verification-transport.js";
+import { canonicalizeSevereVerificationReceipt } from "./severe-verification-receipt-canonical.js";
+import { SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, type SevereVerificationCode } from "./severe-verification-receipt-schema.js";
 import type { DeterministicReviewGateResult } from "./review-gate.js";
 import { formatZCodeTimeoutFailureError } from "./zcode-timeout.js";
 import type { DroppedFinding, Finding, PullFilePatch, PullRequestSummary, RepositorySummary, ReviewComment, ReviewEvent, ReviewPlan, ReviewProviderMetadata } from "./types.js";
@@ -2068,10 +2078,15 @@ export async function reviewPull(input: ReviewPullInput): Promise<ReviewPullResu
     try {
       selfConsistency = await applySelfConsistencyRecheck({
         config,
+        github,
+        repo,
+        pull,
+        findings: gatedFindings,
         gate,
         files: reviewFiles,
         worktreePath: worktree.path,
-        evidenceDir
+        evidenceDir,
+        assertProviderConfigCurrent: assertApprovedProviderConfigCurrent
       });
     } finally {
       startShadowLeaves?.();
@@ -3907,10 +3922,15 @@ function providerCooldownJitterMs(
 
 async function applySelfConsistencyRecheck(input: {
   config: BotConfig;
+  github: GitHubApi;
+  repo: string;
+  pull: PullRequestSummary;
+  findings: Finding[];
   gate: DeterministicReviewGateResult;
   files: PullFilePatch[];
   worktreePath: string;
   evidenceDir: string;
+  assertProviderConfigCurrent?: () => void;
 }): Promise<{ comments: DeterministicReviewGateResult["comments"]; event: DeterministicReviewGateResult["event"]; runtimeNote?: string }> {
   const selfConsistencyConfig = input.config.reviewGate?.selfConsistency;
   if (!selfConsistencyConfig?.enabled) {
@@ -3923,6 +3943,7 @@ async function applySelfConsistencyRecheck(input: {
     comments: input.gate.comments,
     files: input.files,
     config: selfConsistencyConfig,
+    reviewContext: { repo: input.repo, pullNumber: input.pull.number, baseSha: input.pull.base.sha, headSha: input.pull.head.sha },
     ...(input.config.reviewGate?.requestChangesConfidenceFloors
       ? { requestChangesConfidenceFloors: input.config.reviewGate.requestChangesConfidenceFloors }
       : {}),
@@ -3930,36 +3951,49 @@ async function applySelfConsistencyRecheck(input: {
       ? { categoryPrecisionFloors: input.config.reviewGate.categoryPrecisionFloors }
       : {}),
     secondDraw: async ({ comment, hunk }) => {
-      const prompt = buildSelfConsistencyPrompt(comment, hunk);
-      const draw = backend.useCodex
-        ? await runConfiguredReview({
-            config: input.config,
-            worktreePath: input.worktreePath,
-            prompt,
-            evidenceDir: join(
-              input.evidenceDir,
-              "self-consistency-codex",
-              createHash("sha256")
-                .update(comment.path)
-                .update("\0")
-                .update(String(comment.line))
-                .update("\0")
-                .update(comment.title)
-                .digest("hex")
-                .slice(0, 16)
-            )
-          })
-        : await runZCodeReview({
-            cwd: input.worktreePath,
-            prompt,
-            cliPath: input.config.zcode.cliPath,
-            appConfigPath: input.config.zcode.appConfigPath,
-            model: input.config.zcode.model,
-            ...(providerId ? { providerId } : {}),
-            timeoutMs: input.config.zcode.timeoutMs,
-            retryMaxRetries: input.config.zcode.retryMaxRetries
-          });
-      return parseSelfConsistencyVerdict(draw.rawResponse);
+      const context = { repo: input.repo, pullNumber: input.pull.number, baseSha: input.pull.base.sha, headSha: input.pull.head.sha };
+      const original = input.findings.find((finding) => buildFindingFingerprint(finding) === comment.fingerprint);
+      if (!original) return severeVerificationFailureReceipt(context, comment.path, comment.fingerprint, "identity_mismatch");
+      const finding: SevereVerificationTransportInput["finding"] = {
+        path: original.path, line: original.line, severity: original.severity as "P0" | "P1", title: original.title, body: original.body,
+        ...(original.category ? { category: original.category } : {}), ...(original.why_this_matters ? { why_this_matters: original.why_this_matters } : {}),
+        fingerprint: comment.fingerprint
+      };
+      try {
+        input.assertProviderConfigCurrent?.();
+        const livePull = await input.github.getPull(input.repo, input.pull.number);
+        if (detectStalePullHead({ expected: input.pull, live: livePull, phase: "before_review" })) {
+          return severeVerificationFailureReceipt(context, comment.path, comment.fingerprint, "stale_head");
+        }
+        const evidence = await collectSevereVerificationEvidence({
+          ...context,
+          worktreePath: input.worktreePath,
+          expectedHeadSha: context.headSha,
+          findingPath: comment.path,
+          changedHunk: hunk,
+          relevantModulePaths: []
+        });
+        const contents = evidence.files.map((file) => ({ ...file, content: readFileSync(join(input.worktreePath, file.path), "utf8") }));
+        const transportInput: SevereVerificationTransportInput = { ...context, finding, changedHunk: hunk, evidence, files: contents };
+        const messages = buildSevereVerificationTransport(transportInput);
+        input.assertProviderConfigCurrent?.();
+        const rawResponse = backend.useCodex
+          ? await runSevereCodexRawJson(input.config, input.worktreePath, JSON.stringify(messages))
+          : await runZCodeRawJson({
+              cwd: input.worktreePath,
+              prompt: JSON.stringify(messages),
+              cliPath: input.config.zcode.cliPath,
+              appConfigPath: input.config.zcode.appConfigPath,
+              model: input.config.zcode.model,
+              ...(providerId ? { providerId } : {}),
+              timeoutMs: input.config.zcode.timeoutMs,
+              retryMaxRetries: input.config.zcode.retryMaxRetries
+            });
+        return parseSevereVerificationTransport(rawResponse, transportInput);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return severeVerificationFailureReceipt(context, comment.path, comment.fingerprint, message.includes("not_read") ? "not_read" : severeVerificationTransportFailure(error));
+      }
     }
   });
 
@@ -3972,13 +4006,41 @@ async function applySelfConsistencyRecheck(input: {
   });
 
   const agreed = result.verdicts.filter((verdict) => verdict.agreed === true).length;
-  const refuted = result.verdicts.filter((verdict) => verdict.refuted === true).length;
-  const failed = result.verdicts.filter((verdict) => verdict.error !== undefined).length;
+  const capped = result.verdicts.filter((verdict) => verdict.error === "severe_verifier_cap_exceeded").length;
+  const redrawn = result.verdicts.length - capped;
+  const suppressed = result.verdicts.filter((verdict) => verdict.refuted === true && verdict.error !== "severe_verifier_cap_exceeded").length;
+  const failed = result.verdicts.filter((verdict) => verdict.error !== undefined && verdict.error !== "severe_verifier_cap_exceeded").length;
   const runtimeNote = result.verdicts.length
-    ? `Self-consistency re-check (#303): ${result.verdicts.length} P0/P1 finding(s) re-drawn — ${agreed} agreed, ${refuted} refuted (downgraded/ineligible), ${failed} second-draw failure(s) left untouched.`
+    ? `Self-consistency re-check (#303): ${redrawn} actual P0/P1 redraw(s) — ${agreed} retained, ${suppressed} suppressed (${failed} failure(s)), ${capped} capped candidate(s). Suppression is fail-closed and is not a provider refutation.`
     : undefined;
 
   return { comments: result.comments, event: result.event, ...(runtimeNote ? { runtimeNote } : {}) };
+}
+
+function severeVerificationFailureReceipt(
+  context: { repo: string; pullNumber: number; baseSha: string; headSha: string }, path: string, findingFingerprint: string, code: SevereVerificationCode
+) {
+  const state = code === "timeout" ? "timeout" : code === "unavailable" ? "unavailable" : code === "provider_unavailable" ? "failed"
+    : code === "stale_head" || code === "identity_mismatch" ? "stale_head"
+      : code === "incomplete" || code === "not_read" || code === "evidence_incomplete" || code === "cap_exceeded" ? "incomplete" : "malformed";
+  return canonicalizeSevereVerificationReceipt(JSON.stringify({
+    schemaVersion: "severe-verifier-v1", ...context, findingFingerprint, state,
+    disposition: "suppress", reasonCode: code, evidence: { files: [], omitted: [{ path, code }], complete: false }
+  }));
+}
+
+async function runSevereCodexRawJson(config: BotConfig, cwd: string, prompt: string): Promise<string> {
+  const runtime = config.codexRuntime!;
+  const scratch = mkdtempSync(join(tmpdir(), "neondiff-severe-verifier-"));
+  try {
+    return (await runCodexStructuredOutput<unknown>({
+      cwd, prompt, cliPath: runtime.cliPath, model: runtime.model, reasoningEffort: runtime.reasoningEffort,
+      evidenceDir: scratch, timeoutMs: runtime.timeoutMs, maxOutputBytes: runtime.maxOutputBytes,
+      artifactPrefix: "severe-verifier", schema: SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA, parse: (value) => value
+    })).rawResponse;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 export function resolveSelfConsistencyBackend(
