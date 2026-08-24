@@ -308,7 +308,7 @@ model. The generator creates local XML only; it does not sign, upload, or
 fabricate a real Sparkle signature.
 
 ```sh
-script/generate-appcast.sh \
+"$REPO_ROOT/apps/neondiff-desktop/script/generate-appcast.sh" \
   --fixture fixtures/appcast/beta.json \
   --output "$RELEASE_EVIDENCE_DIR/appcast.xml" \
   --dry-run
