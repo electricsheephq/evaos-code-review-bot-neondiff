@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 const MAX_BYTES = 512 * 1024 * 1024, MAX_RECORDS = 20_000, MAX_METADATA = 16 * 1024 * 1024, MAX_NODES = 20_000;
 const EOCD = 0x06054b50, LOCAL = 0x04034b50, CENTRAL = 0x02014b50, DATA_DESCRIPTOR = 0x08074b50, ZIP64 = "ZIP64 archive unsupported";
-const UTF8 = new TextDecoder("utf-8", { fatal: true }), ALLOWED_FLAGS = 0x080e, TYPE_MASK = 0o170000;
+const UTF8 = new TextDecoder("utf-8", { fatal: true }), ALLOWED_FLAGS = 0x080e, TYPE_MASK = 0o170000, PATH_OVERRIDE_FIELDS = new Set([0x0008, 0x7075]);
 const fail = (message) => { throw new Error(message); };
 function artifactBytes(descriptor) {
   const before = fstatSync(descriptor);
@@ -68,6 +68,15 @@ function caseless(part) {
   if (lower.toUpperCase().toLowerCase() !== lower) fail("unsupported caseless archive path");
   return lower.normalize("NFC");
 }
+function rejectPathOverrideFields(bytes, offset, length) {
+  const end = offset + length;
+  while (offset < end) {
+    if (offset + 4 > end) fail("malformed ZIP extra field");
+    const id = bytes.readUInt16LE(offset), size = bytes.readUInt16LE(offset + 2); offset += 4;
+    if (size > end - offset) fail("malformed ZIP extra field");
+    if (PATH_OVERRIDE_FIELDS.has(id)) fail("path-overriding ZIP extra field"); offset += size;
+  }
+}
 function parseMetadataRecords(guarded) {
   const { artifactBytes: bytes, centralDirectoryOffset: start, eocdOffset: end, recordCount } = guarded, records = [];
   let cursor = start;
@@ -80,6 +89,7 @@ function parseMetadataRecords(guarded) {
     if (method === 0 && compressedSize !== uncompressedSize) fail("stored entry size mismatch");
     if (type === "directory" && (compressedSize !== 0 || uncompressedSize !== 0)) fail("directory entry contains data");
     const nameBytes = bytes.subarray(cursor + 46, cursor + 46 + nameLength), localFlags = bytes.readUInt16LE(localOffset + 6), localMethod = bytes.readUInt16LE(localOffset + 8), localCRC = bytes.readUInt32LE(localOffset + 14), localCompressed = bytes.readUInt32LE(localOffset + 18), localExpanded = bytes.readUInt32LE(localOffset + 22), localNameLength = bytes.readUInt16LE(localOffset + 26), localExtraLength = bytes.readUInt16LE(localOffset + 28), localName = bytes.subarray(localOffset + 30, localOffset + 30 + localNameLength);
+    rejectPathOverrideFields(bytes, cursor + 46 + nameLength, extraLength); rejectPathOverrideFields(bytes, localOffset + 30 + localNameLength, localExtraLength);
     const descriptor = Boolean(flags & 0x8), localIdentityMismatch = descriptor ? localCRC !== 0 || localCompressed !== 0 || localExpanded !== 0 : localCRC !== crc32 || localCompressed !== compressedSize || localExpanded !== uncompressedSize;
     if (localFlags !== flags || localMethod !== method || !localName.equals(nameBytes) || localIdentityMismatch) fail("local/central metadata mismatch");
     const { path, parts } = entryPath(nameBytes, flags, type), dataOffset = localOffset + 30 + localNameLength + localExtraLength;
