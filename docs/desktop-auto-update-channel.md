@@ -58,7 +58,7 @@ release/evidence packets are immutable and are not rewritten by this plan.
   license boundaries.
 - Resume identity: repo `electricsheephq/evaos-code-review-bot-neondiff`, branch
   `codex/116-desktop-autoupdate-plan`, base
-  `1e4b54d1d14f35fb2b22464c474f74cf1fa20b35`, issue
+  `8de8840282657ffe457c78132ad0a31328695f68`, issue
   https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/116,
   parent tracker
   https://github.com/electricsheephq/evaos-code-review-bot-neondiff/issues/103.
