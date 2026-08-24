@@ -1526,9 +1526,9 @@ exit 1
       if (request.method === "GET" && url.pathname === "/repos/acme/demo/installation") {
         response.end(JSON.stringify({
           id: 42,
-          account: { login: "acme" },
+          account: { id: 7, login: "acme", type: "Organization" },
           app_id: 12345,
-          app_slug: "customer-review-app"
+          app_slug: "evaos-code-review-bot"
         }));
         return;
       }
@@ -1644,7 +1644,7 @@ exit 1
               installation_id: 42,
               installation_account: "acme",
               app_id: 12345,
-              app_slug: "customer-review-app",
+              app_slug: "evaos-code-review-bot",
               app_can_read_metadata: true,
               app_can_read_pull_requests: true,
               license_gate_decision: "active_public_entitlement_required",
@@ -1785,8 +1785,8 @@ exit 1
         response.end(JSON.stringify({
           id: 42,
           app_id: 12345,
-          account: { login: "acme" },
-          app_slug: "customer-review-app"
+          account: { id: 7, login: "acme", type: "Organization" },
+          app_slug: "evaos-code-review-bot"
         }));
         return;
       }
