@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildIssueEnrichmentLaneReceipt,
   classifyIssueEnrichmentReceipt,
   ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS,
   ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP,
@@ -21,7 +22,7 @@ const classify = (value: unknown): ReturnType<typeof classifyIssueEnrichmentRece
 
 describe("issue-enrichment receipt precedence", () => {
   it.each([
-    ["thrown raw sentinel", { kind: "thrown", error: new Error("ghp_fake_token issue_enrichment_model_runtime_required") }, "cycle_failed", "issue_enrichment_model_runtime_required"],
+    ["thrown raw sentinel", { kind: "thrown", error: new Error("issue_enrichment_model_runtime_required; ghp_fake_token") }, "cycle_failed", "issue_enrichment_model_runtime_required"],
     ["lease overrides disabled", { kind: "result", result: result({ summary: summary({ workerSkipped: 1 }), status: { state: "disabled", blockers: [] } }) }, "lease_skipped", "worker_lease_held"],
     ["disabled", { kind: "result", result: result({ status: { state: "disabled", blockers: [] }, summary: summary({ issuesSeen: 5 }) }) }, "disabled", undefined],
     ["dry-run ignored blocker does not mask read failure", { kind: "result", result: result({ dryRun: true, ok: false, status: { state: "blocked", blockers: ["issue_enrichment_model_runtime_required"] }, summary: summary({ readFailures: 1 }) }) }, "result_not_ok", "read_failure"],
@@ -57,5 +58,13 @@ describe("issue-enrichment receipt precedence", () => {
     expect(receipt).not.toHaveProperty("blockers");
     expect(JSON.stringify(receipt)).not.toContain("ghp_secret");
     expect(JSON.stringify(receipt)).not.toContain("example.test");
+  });
+
+  it("hardens hostile compatibility, messages, codes, and blocker arrays", () => {
+    expect(buildIssueEnrichmentLaneReceipt(undefined)).toMatchObject({ code: "malformed_summary" });
+    const hostile = summary(); let reads = 0; Object.defineProperty(hostile, "failed", { get: () => ++reads === 1 ? 0 : -1 }); expect(classify({ kind: "result", result: result({ summary: hostile }) }).code).toBe("no_candidates");
+    expect(classify({ kind: "thrown", error: "owner/issue_enrichment_model_runtime_required" }).reason).toBe("unknown_failure");
+    const error = new Error(); Object.defineProperty(error, "message", { value: 42 }); expect(classify({ kind: "thrown", error }).reason).toBe("unknown_failure");
+    const blockers: unknown[] = []; blockers.length = 2_000_000_000; expect(classify({ kind: "result", result: result({ ok: false, status: { state: "blocked", blockers } }) }).reason).toBe("unknown_failure");
   });
 });

@@ -42,24 +42,31 @@ function zeroCounts(): IssueEnrichmentReceiptCounts {
   return Object.fromEntries(ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, 0])) as IssueEnrichmentReceiptCounts;
 }
 
-function validSummary(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.every((key) => {
-    const count = value[key];
-    return typeof count === "number" && Number.isFinite(count) && Number.isInteger(count) && count >= 0;
-  });
-}
-
-function boundedCounts(summary: Record<string, unknown>): IssueEnrichmentReceiptCounts {
+function snapshotSummary(value: unknown): IssueEnrichmentReceiptCounts | undefined {
+  if (!isRecord(value)) return undefined;
   const counts = zeroCounts();
-  for (const key of ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS) {
-    counts[key] = Math.min(ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP, summary[key] as number);
+  try {
+    for (const key of ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS) {
+      const count = value[key];
+      if (typeof count !== "number" || !Number.isFinite(count) || !Number.isInteger(count) || count < 0) return undefined;
+      counts[key] = Math.min(ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP, count);
+    }
+  } catch {
+    return undefined;
   }
   return counts;
 }
 
 function safeThrownReason(error: unknown): IssueEnrichmentLaneReason {
-  const text = typeof error === "string" ? error : isRecord(error) && typeof error.message === "string" ? error.message : error instanceof Error ? error.message : "";
-  const blocker = [...BLOCKERS].find((candidate) => text.includes(candidate));
+  let text = "";
+  try {
+    const message = typeof error === "string" ? error : isRecord(error) ? error.message : undefined;
+    text = typeof message === "string" ? message.trim() : "";
+  } catch {
+    return "unknown_failure";
+  }
+  const blocker = [...BLOCKERS].find((candidate) => text === candidate ||
+    (text.startsWith(candidate) && !/[A-Za-z0-9_]/.test(text[candidate.length] ?? "")));
   return blocker ?? "unknown_failure";
 }
 
@@ -69,16 +76,29 @@ function safeBlockedReason(value: unknown, dryRun: boolean): IssueEnrichmentLane
   return dryRun && DRY_RUN_IGNORED_ISSUE_ENRICHMENT_BLOCKERS.has(blocker) ? undefined : blocker;
 }
 
+function firstBlockedReason(value: unknown, dryRun: boolean): IssueEnrichmentLaneReason | undefined {
+  if (!Array.isArray(value)) return undefined;
+  try {
+    const blockers = value as unknown[];
+    for (let index = 0, limit = Math.min(blockers.length, 32); index < limit; index++) {
+      const reason = safeBlockedReason(blockers[index], dryRun);
+      if (reason) return reason;
+    }
+  } catch { /* malformed hostile arrays fail closed */ }
+  return undefined;
+}
+
 export function classifyIssueEnrichmentReceipt(input: IssueEnrichmentReceiptInput): IssueEnrichmentLaneReceipt {
   if (input.kind === "thrown") {
     return { ok: false, stage: "issue_enrichment", code: "cycle_failed", counts: zeroCounts(), reason: safeThrownReason(input.error) };
   }
   const result = isRecord(input.result) ? input.result : undefined;
-  const summary = result?.summary;
-  if (!validSummary(summary)) {
+  let summary: unknown;
+  try { summary = result?.summary; } catch { summary = undefined; }
+  const counts = snapshotSummary(summary);
+  if (!counts) {
     return { ok: false, stage: "issue_enrichment", code: "malformed_summary", counts: zeroCounts(), reason: "malformed_summary" };
   }
-  const counts = boundedCounts(summary);
   if (counts.workerSkipped > 0) {
     return { ok: true, stage: "issue_enrichment", code: "lease_skipped", counts, reason: "worker_lease_held" };
   }
@@ -90,8 +110,9 @@ export function classifyIssueEnrichmentReceipt(input: IssueEnrichmentReceiptInpu
     return { ok: false, stage: "issue_enrichment", code: "result_not_ok", counts, reason: counts.readFailures > 0 ? "read_failure" : "item_failure" };
   }
   const dryRun = result?.dryRun === true;
-  const blockers = Array.isArray(status?.blockers) ? status.blockers : [];
-  const blockedReason = status?.state === "blocked" ? blockers.map((blocker) => safeBlockedReason(blocker, dryRun)).find(Boolean) : undefined;
+  let blockers: unknown;
+  try { blockers = status?.blockers; } catch { blockers = undefined; }
+  const blockedReason = status?.state === "blocked" ? firstBlockedReason(blockers, dryRun) : undefined;
   const hasScanEvidence = ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.some((key) => counts[key] > 0);
   if (blockedReason && !hasScanEvidence) {
     return { ok: false, stage: "issue_enrichment", code: "blocked", counts, reason: blockedReason };
@@ -105,5 +126,5 @@ export function classifyIssueEnrichmentReceipt(input: IssueEnrichmentReceiptInpu
 
 /** Compatibility shape for the parent daemon integration; classification remains discriminated internally. */
 export function buildIssueEnrichmentLaneReceipt(result?: unknown, failure?: unknown): IssueEnrichmentLaneReceipt {
-  return classifyIssueEnrichmentReceipt(result === undefined ? { kind: "thrown", error: failure } : { kind: "result", result });
+  return classifyIssueEnrichmentReceipt(arguments.length !== 1 ? { kind: "thrown", error: failure } : { kind: "result", result });
 }
