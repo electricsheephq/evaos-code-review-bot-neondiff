@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
-const BETA_FEED = "https://www.neondiff.com/updates/beta/appcast.xml";
+const BETA_FEED = "https://www.neondiff.com/updates/beta/appcast.xml", STABLE_FEED = "https://www.neondiff.com/updates/stable/appcast.xml";
 const MAX_SAFE = "9007199254740991";
 const { default: Ajv } = createRequire(import.meta.url)("ajv/dist/2020.js");
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -45,7 +45,7 @@ function readRawRegular(path) {
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     if (!fstatSync(fd).isFile()) fail(`non-regular file: ${path}`);
     const raw = readFileSync(fd, "utf8");
-    if (/(?:"build"|"sequence")\s*:\s*(?!"[0-9]+")/.test(raw)) fail("identity fields must be quoted decimal text");
+    if (/(?:"build"\s*:\s*(?!"[0-9]+")|"sequence"\s*:\s*(?!"[0-9]+"|null))/.test(raw)) fail("identity fields must be quoted decimal text or null sequence");
     rejectDuplicateKeys(raw);
     return raw;
   } catch (error) { if (error?.code === "ELOOP") fail(`symlink or non-regular file: ${path}`); throw error; }
@@ -110,15 +110,18 @@ function main() {
     const declarations = index.declarationPaths.map((name) => [name, readRegular(pathIn(directory, name))]);
     for (const [name, declaration] of declarations) {
       check(declaration, validateDeclaration, `declaration ${name}`);
-      const match = declaration.version.match(/^1\.1\.0-(beta|rc)\.([1-9][0-9]{0,15})$/), sequence = match?.[2] ?? "";
-      if (!match || declaration.tag !== `v${declaration.version}` || name !== `${declaration.tag}.json` || declaration.channel !== match[1] || declaration.sequence !== sequence || sequence.length > 15 && sequence > MAX_SAFE) fail(`mixed declaration identity: ${name}`);
-      if (declaration.distribution.artifactName !== `NeonDiff-${declaration.version}-build${declaration.build}-macOS.zip` || declaration.distribution.origins.feed !== BETA_FEED) fail(`unsupported channel/feed identity: ${name}`);
+      const match = declaration.version.match(/^1\.1\.0(?:-(beta|rc)\.([1-9][0-9]{0,15}))?$/), channel = match?.[1] ?? "stable", sequence = match?.[2] ?? null;
+      if (!match || declaration.tag !== `v${declaration.version}` || name !== `${declaration.tag}.json` || declaration.channel !== channel || declaration.sequence !== sequence || sequence !== null && sequence.length > 15 && BigInt(sequence) > BigInt(MAX_SAFE)) fail(`mixed declaration identity: ${name}`);
+      const feed = channel === "stable" ? STABLE_FEED : BETA_FEED;
+      if (declaration.distribution.artifactName !== `NeonDiff-${declaration.version}-build${declaration.build}-macOS.zip` || declaration.distribution.origins.feed !== feed) fail(`unsupported channel/feed identity: ${name}`);
     }
     const ordered = [...declarations].sort((a, b) => buildCompare(a[1].build, b[1].build) || a[0].localeCompare(b[0]));
     if (ordered.some((item, i) => i && buildCompare(item[1].build, ordered[i - 1][1].build) <= 0)) fail("retained builds must be unique and strictly increasing");
     if (JSON.stringify(index.declarationPaths) !== JSON.stringify(ordered.map(([name]) => name))) fail("declarationPaths must be deterministic build order");
-    const lastSequence = new Map(); let seenRC = false;
+    const lastSequence = new Map(); let seenRC = false, seenStable = false;
     for (const [name, declaration] of ordered) {
+      if (declaration.channel === "stable") { if (seenStable) fail(`duplicate stable declaration: ${name}`); seenStable = true; continue; }
+      if (seenStable) fail(`pre-release cannot follow stable: ${name}`);
       if (declaration.channel === "beta" && seenRC) fail(`beta cannot follow RC: ${name}`);
       if (declaration.channel === "rc") seenRC = true;
       const previous = lastSequence.get(declaration.channel);
