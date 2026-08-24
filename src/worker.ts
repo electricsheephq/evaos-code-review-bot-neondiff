@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isPreActivationExistingPull } from "./activation-policy.js";
@@ -135,7 +135,7 @@ import {
 } from "./zcode.js";
 import { runCodexReview, runCodexStructuredOutput } from "./codex-runtime.js";
 import { runSelfConsistencyRecheck, type SelfConsistencySecondDrawResult } from "./self-consistency.js";
-import { collectSevereVerificationEvidence } from "./severe-verification-evidence.js";
+import { collectSevereVerificationEvidence, readSevereVerificationEvidenceContents } from "./severe-verification-evidence.js";
 import {
   buildSevereVerificationTransport, parseSevereVerificationTransport, severeVerificationTransportFailure,
   type SevereVerificationTransportInput
@@ -3959,13 +3959,14 @@ async function applySelfConsistencyRecheck(input: {
         ...(original.category ? { category: original.category } : {}), ...(original.why_this_matters ? { why_this_matters: original.why_this_matters } : {}),
         fingerprint: comment.fingerprint
       };
+      let evidence: Awaited<ReturnType<typeof collectSevereVerificationEvidence>> | undefined;
       try {
         input.assertProviderConfigCurrent?.();
         const livePull = await input.github.getPull(input.repo, input.pull.number);
         if (detectStalePullHead({ expected: input.pull, live: livePull, phase: "before_review" })) {
           return severeVerificationFailureReceipt(context, comment.path, comment.fingerprint, "stale_head");
         }
-        const evidence = await collectSevereVerificationEvidence({
+        evidence = await collectSevereVerificationEvidence({
           ...context,
           worktreePath: input.worktreePath,
           expectedHeadSha: context.headSha,
@@ -3973,7 +3974,14 @@ async function applySelfConsistencyRecheck(input: {
           changedHunk: hunk,
           relevantModulePaths: []
         });
-        const contents = evidence.files.map((file) => ({ ...file, content: readFileSync(join(input.worktreePath, file.path), "utf8") }));
+        const contents = readSevereVerificationEvidenceContents({
+          ...context,
+          worktreePath: input.worktreePath,
+          expectedHeadSha: context.headSha,
+          findingPath: comment.path,
+          changedHunk: hunk,
+          relevantModulePaths: []
+        }, evidence);
         const transportInput: SevereVerificationTransportInput = { ...context, finding, changedHunk: hunk, evidence, files: contents };
         const messages = buildSevereVerificationTransport(transportInput);
         input.assertProviderConfigCurrent?.();
@@ -3992,7 +4000,8 @@ async function applySelfConsistencyRecheck(input: {
         return parseSevereVerificationTransport(rawResponse, transportInput);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return severeVerificationFailureReceipt(context, comment.path, comment.fingerprint, message.includes("not_read") ? "not_read" : severeVerificationTransportFailure(error));
+        const code = message.includes("not_read") ? "not_read" : severeVerificationTransportFailure(error);
+        return severeVerificationFailureReceipt(context, comment.path, comment.fingerprint, code, evidence?.omitted.length ? evidence : undefined);
       }
     }
   });
@@ -4018,14 +4027,16 @@ async function applySelfConsistencyRecheck(input: {
 }
 
 function severeVerificationFailureReceipt(
-  context: { repo: string; pullNumber: number; baseSha: string; headSha: string }, path: string, findingFingerprint: string, code: SevereVerificationCode
+  context: { repo: string; pullNumber: number; baseSha: string; headSha: string }, path: string, findingFingerprint: string, code: SevereVerificationCode,
+  evidence?: Pick<Awaited<ReturnType<typeof collectSevereVerificationEvidence>>, "files" | "omitted">
 ) {
   const state = code === "timeout" ? "timeout" : code === "unavailable" ? "unavailable" : code === "provider_unavailable" ? "failed"
     : code === "stale_head" || code === "identity_mismatch" ? "stale_head"
       : code === "incomplete" || code === "not_read" || code === "evidence_incomplete" || code === "cap_exceeded" ? "incomplete" : "malformed";
+  const failureEvidence = evidence ?? { files: [], omitted: [{ path, code }] };
   return canonicalizeSevereVerificationReceipt(JSON.stringify({
     schemaVersion: "severe-verifier-v1", ...context, findingFingerprint, state,
-    disposition: "suppress", reasonCode: code, evidence: { files: [], omitted: [{ path, code }], complete: false }
+    disposition: "suppress", reasonCode: code, evidence: { ...failureEvidence, complete: false }
   }));
 }
 

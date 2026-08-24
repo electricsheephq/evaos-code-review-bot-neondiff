@@ -695,7 +695,7 @@ describe("worker context budget preflight", () => {
     const original: Finding = { ...p1Finding(file.filename, "Proof gap with 95% confidence"), body: "The confidence is 95%; inspect this exact proof gap.", category: "proof_gap" };
     zcodeFindingsByPath.set(file.filename, [original]);
     const hunkHash = createHash("sha256").update(file.patch, "utf8").digest("hex");
-    const fileBytes = readFileSync(join(process.cwd(), file.filename));
+    const fileBytes = execFileSync("git", ["show", `${head}:${file.filename}`]);
     const fileHash = createHash("sha256").update(fileBytes).digest("hex");
     severeRawResponse.value = JSON.stringify({
       schemaVersion: "severe-verifier-v1", repo: "electricsheephq/WorldOS", pullNumber: pull.number,

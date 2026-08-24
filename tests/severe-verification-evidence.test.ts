@@ -2,9 +2,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { collectSevereVerificationEvidence, MAX_EVIDENCE_BYTES, MAX_MODULES } from "../src/severe-verification-evidence.js";
+import { buildFindingFingerprint } from "../src/findings.js";
+import { buildSevereVerificationTransport } from "../src/severe-verification-transport.js";
+import { collectSevereVerificationEvidence, MAX_EVIDENCE_BYTES, MAX_MODULES, readSevereVerificationEvidenceContents } from "../src/severe-verification-evidence.js";
 
-const root = process.cwd(), finding = "src/π space.ts", moduleA = "lib/alpha.ts", moduleB = "lib/β.ts";
+const root = process.cwd(), finding = "src/π space.ts", moduleA = "lib/alpha.ts", moduleB = "lib/β.ts", bomFile = "lib/bom.ts";
 let fixture = "", head = "";
 const git = (args: string[]) => execFileSync("git", args, { cwd: fixture, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 const input = (relevantModulePaths: readonly string[], changedHunk: string | Uint8Array = "@@ -1 +1 @@\n+changed") => ({
@@ -14,7 +16,7 @@ const input = (relevantModulePaths: readonly string[], changedHunk: string | Uin
 
 beforeAll(async () => {
   fixture = await mkdtemp(join(root, ".severe-evidence-")); await mkdir(join(fixture, "src")); await mkdir(join(fixture, "lib"));
-  await writeFile(join(fixture, finding), "const π = 'finding';\n"); await writeFile(join(fixture, moduleA), "export const alpha = true;\n"); await writeFile(join(fixture, moduleB), "export const beta = true;\n");
+  await writeFile(join(fixture, finding), "const π = 'finding';\n"); await writeFile(join(fixture, moduleA), "export const alpha = true;\n"); await writeFile(join(fixture, moduleB), "export const beta = true;\n"); await writeFile(join(fixture, bomFile), Buffer.from([0xef, 0xbb, 0xbf, 0x65, 0x78, 0x70, 0x6f, 0x72, 0x74, 0x20, 0x63, 0x6f, 0x6e, 0x73, 0x74, 0x20, 0x62, 0x6f, 0x6d, 0x20, 0x3d, 0x20, 0x74, 0x72, 0x75, 0x65, 0x3b, 0x0a]));
   await writeFile(join(fixture, "bad.bin"), Buffer.from([0xff, 0xfe])); await writeFile(join(fixture, "big.bin"), Buffer.alloc(MAX_EVIDENCE_BYTES + 1, 65)); await symlink("src/π space.ts", join(fixture, "link.ts"));
   execFileSync("git", ["init", "--quiet"], { cwd: fixture }); git(["config", "user.email", "test@example.invalid"]); git(["config", "user.name", "NeonDiff test"]); git(["add", "."]); git(["commit", "--quiet", "-m", "fixture"]); head = git(["rev-parse", "HEAD"]);
 });
@@ -25,6 +27,29 @@ describe("exact-head severe evidence collection", () => {
     const result = await collectSevereVerificationEvidence(input([moduleB, moduleA]));
     expect(result.complete).toBe(true); expect(result.files.map((item) => [item.path, item.kind])).toEqual([[finding, "whole_file"], [moduleA, "module"], [moduleB, "module"]]); expect(result.omitted).toEqual([]); expect(JSON.stringify(result)).not.toContain("const π");
     const digest = result.files[0].sha256; await writeFile(join(fixture, finding), "tampered\n"); expect((await collectSevereVerificationEvidence(input([moduleA, moduleB]))).files[0].sha256).toBe(digest);
+  });
+
+  it("transports immutable blob content when the filtered worktree differs", async () => {
+    const evidence = await collectSevereVerificationEvidence(input([]));
+    await writeFile(join(fixture, finding), "tampered transport content\n");
+    const findingFields = { path: finding, line: 1, severity: "P1" as const, title: "Immutable verifier input", body: "Use the exact committed blob.", category: "security_boundary" as const, why_this_matters: "The verifier must not trust the filtered worktree." };
+    const messages = buildSevereVerificationTransport({
+      repo: "owner/repo", pullNumber: 1040, baseSha: "b".repeat(40), headSha: head,
+      finding: { ...findingFields, fingerprint: buildFindingFingerprint(findingFields) }, changedHunk: "@@ -1 +1 @@\n+changed",
+      evidence, files: readSevereVerificationEvidenceContents(input([]), evidence)
+    });
+    const payload = JSON.parse(messages[1].content);
+    expect(payload.data.files[0].content).toBe("const π = 'finding';\n");
+    expect(payload.data.files[0].content).not.toContain("tampered transport content");
+  });
+
+  it("preserves UTF-8 BOM bytes when decoding immutable content", async () => {
+    const evidence = await collectSevereVerificationEvidence(input([bomFile]));
+    const contents = readSevereVerificationEvidenceContents(input([bomFile]), evidence);
+    const bom = contents.find((file) => file.path === bomFile);
+    expect(bom?.content.codePointAt(0)).toBe(0xfeff);
+    expect(Buffer.from(bom?.content ?? "", "utf8").subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]));
+    expect(bom?.content).toContain("export const bom = true;");
   });
 
   it("accepts an explicit empty module set", async () => {

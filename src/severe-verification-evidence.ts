@@ -6,6 +6,7 @@ import type { SevereVerificationCode, SevereVerificationEvidenceFile } from "./s
 export const MAX_EVIDENCE_BYTES = 65_536;
 export const MAX_MODULES = 16;
 const decoder = new TextDecoder("utf-8", { fatal: true });
+const contentDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const typedArrayBuffer = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")!.get!;
 const typedArrayByteOffset = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteOffset")!.get!;
@@ -22,19 +23,16 @@ export interface SevereVerificationEvidenceResult {
   changedHunk: ChangedHunkMetadata; files: SevereVerificationEvidenceFile[];
   omitted: { path: string; code: OmissionCode }[]; complete: boolean;
 }
+export interface SevereVerificationEvidenceContent { path: string; kind: "whole_file" | "module"; content: string; }
 type TreeEntry = { mode: string; type: string; object: string; bytes: number };
+type InspectedFile = { file: SevereVerificationEvidenceFile; data: Buffer };
 
 /** Exact-head, bounded, metadata-only evidence; source bytes come only from immutable Git blobs. */
 export async function collectSevereVerificationEvidence(input: SevereVerificationEvidenceInput): Promise<SevereVerificationEvidenceResult> {
   verifyIdentity(input);
   const gitDir = verifyHead(input.expectedHeadSha, input.worktreePath);
   const finding = safePath(input.findingPath);
-  if (!Array.isArray(input.relevantModulePaths)) throw new Error("module_list");
-  const moduleCount = input.relevantModulePaths.length;
-  if (!Number.isSafeInteger(moduleCount) || moduleCount > MAX_MODULES) throw new Error("module_list");
-  const modules: string[] = [];
-  for (let index = 0; index < moduleCount; index += 1) modules.push(safePath(input.relevantModulePaths[index]));
-  if (new Set(modules).size !== modules.length || modules.includes(finding)) throw new Error("module_list");
+  const modules = normalizeModules(input.relevantModulePaths, finding);
   const changedHunk = hunkMetadata(input.changedHunk);
   const files: SevereVerificationEvidenceFile[] = [], omitted: { path: string; code: OmissionCode }[] = [];
   const add = (path: string, kind: "whole_file" | "module") => {
@@ -44,6 +42,33 @@ export async function collectSevereVerificationEvidence(input: SevereVerificatio
   add(finding, "whole_file");
   for (const path of [...modules].sort(compareText)) add(path, "module");
   return { changedHunk, files, omitted, complete: changedHunk.complete && !omitted.length && files.length === modules.length + 1 };
+}
+
+/** Read the exact blob bytes represented by metadata without consulting filtered worktree files. */
+export function readSevereVerificationEvidenceContents(
+  input: SevereVerificationEvidenceInput, evidence: SevereVerificationEvidenceResult
+): SevereVerificationEvidenceContent[] {
+  verifyIdentity(input);
+  const gitDir = verifyHead(input.expectedHeadSha, input.worktreePath);
+  const finding = safePath(input.findingPath);
+  const modules = normalizeModules(input.relevantModulePaths, finding);
+  const expected = new Map<string, "whole_file" | "module">();
+  expected.set(finding, "whole_file");
+  for (const path of modules) expected.set(path, "module");
+  if (!evidence || !Array.isArray(evidence.files)) throw new Error("evidence_incomplete");
+  const fileCount = evidence.files.length;
+  if (!Number.isSafeInteger(fileCount) || fileCount > MAX_MODULES + 1) throw new Error("evidence_incomplete");
+  const seen = new Set<string>(), contents: SevereVerificationEvidenceContent[] = [];
+  for (let index = 0; index < fileCount; index += 1) {
+    const metadata = evidence.files[index];
+    if (!metadata || !safePath(metadata.path) || (metadata.kind !== "whole_file" && metadata.kind !== "module") || seen.has(metadata.path) || expected.get(metadata.path) !== metadata.kind) throw new Error("evidence_incomplete");
+    seen.add(metadata.path);
+    const result = inspectFile(gitDir, input.expectedHeadSha, metadata.path, metadata.kind);
+    if (!("file" in result)) throw new Error(result.omission.code);
+    if (result.file.sha256 !== metadata.sha256 || result.file.bytes !== metadata.bytes || result.file.complete !== true || metadata.complete !== true) throw new Error("evidence_incomplete");
+    contents.push({ path: metadata.path, kind: metadata.kind, content: contentDecoder.decode(result.data) });
+  }
+  return contents.sort((a, b) => compareText(a.path, b.path) || compareText(a.kind, b.kind));
 }
 
 function verifyIdentity(input: SevereVerificationEvidenceInput): void {
@@ -69,7 +94,7 @@ function safePath(value: string): string {
 }
 
 function inspectFile(gitDir: string, head: string, path: string, kind: "whole_file" | "module"):
-  { file: SevereVerificationEvidenceFile } | { omission: { path: string; code: OmissionCode } } {
+  InspectedFile | { omission: { path: string; code: OmissionCode } } {
   let entry: TreeEntry | undefined;
   try { entry = treeEntry(gitDir, head, path); } catch { return { omission: { path, code: "not_read" } }; }
   if (!entry) return { omission: { path, code: "not_read" } };
@@ -81,7 +106,15 @@ function inspectFile(gitDir: string, head: string, path: string, kind: "whole_fi
   catch { return { omission: { path, code: "not_read" } }; }
   if (data.length > MAX_EVIDENCE_BYTES) return { omission: { path, code: "cap_exceeded" } };
   try { decoder.decode(data); } catch { return { omission: { path, code: "evidence_incomplete" } }; }
-  return { file: { path, kind, sha256: hash(data), bytes: data.length, complete: true } };
+  return { file: { path, kind, sha256: hash(data), bytes: data.length, complete: true }, data };
+}
+
+function normalizeModules(paths: readonly string[], finding: string): string[] {
+  if (!Array.isArray(paths) || !Number.isSafeInteger(paths.length) || paths.length > MAX_MODULES) throw new Error("module_list");
+  const modules: string[] = [];
+  for (let index = 0; index < paths.length; index += 1) modules.push(safePath(paths[index]));
+  if (new Set(modules).size !== modules.length || modules.includes(finding)) throw new Error("module_list");
+  return modules;
 }
 
 function treeEntry(gitDir: string, head: string, path: string): TreeEntry | undefined {
