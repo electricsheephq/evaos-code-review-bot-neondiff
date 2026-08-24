@@ -565,13 +565,16 @@ package struct UnavailableDesktopKeychainWorkerLaunchAgentManager:
 package struct DesktopLocalBotDiscoverySnapshot: Sendable {
     package let configurations: [DesktopLocalBotConfiguration]
     package let executionContexts: [DesktopLocalBotExecutionContext]
+    package let nativeVerificationCapability: DesktopNativeVerificationCapability
 
     package init(
         configurations: [DesktopLocalBotConfiguration],
-        executionContexts: [DesktopLocalBotExecutionContext]
+        executionContexts: [DesktopLocalBotExecutionContext],
+        nativeVerificationCapability: DesktopNativeVerificationCapability = .unavailable
     ) {
         self.configurations = configurations
         self.executionContexts = executionContexts
+        self.nativeVerificationCapability = nativeVerificationCapability
     }
 }
 
