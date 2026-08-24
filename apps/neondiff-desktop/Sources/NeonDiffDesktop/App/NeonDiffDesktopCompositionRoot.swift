@@ -40,6 +40,11 @@ enum NeonDiffDesktopCompositionRoot {
             LaunchAgentLocalBotConfigurationDiscovery.discoverSnapshot()
         let trustedBundledWorker =
             FoundationTrustedBundledWorker.executionContext()
+        let nativeVerificationCapability =
+            DesktopNativeVerificationCapability.resolve(
+                productionBoundary: productionBoundary,
+                trustedBundledWorker: trustedBundledWorker
+            )
         let localBotConfigurations = localBotSnapshot.configurations
         let localBotExecutionContexts =
             localBotSnapshot.executionContexts
@@ -111,6 +116,7 @@ enum NeonDiffDesktopCompositionRoot {
             githubBroker: githubBroker,
             accountLink: accountLink,
             productionBoundary: productionBoundary,
+            nativeVerificationCapability: nativeVerificationCapability,
             localWorkerUpdateGuideURL: DesktopReleaseRouting.localWorkerUpdateGuideURL(
                 shortVersion: Bundle.main.object(
                     forInfoDictionaryKey: "CFBundleShortVersionString"
