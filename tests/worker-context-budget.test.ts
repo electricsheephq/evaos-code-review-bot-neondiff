@@ -20,6 +20,7 @@ const zcodeBarriersByPath = vi.hoisted(() => new Map<string, Promise<void>>());
 const zcodeFirstFailuresByPath = vi.hoisted(() => new Map<string, { message: string; beforeThrow?: () => void }>());
 const severeRawResponse = vi.hoisted(() => ({ value: "" }));
 const severeCurrentWorktree = vi.hoisted(() => ({ enabled: false }));
+const severeWorktreePath = vi.hoisted(() => ({ value: "" }));
 const createdReviews = vi.hoisted((): Array<{
   repo: string;
   pullNumber: number;
@@ -41,7 +42,7 @@ vi.mock("../src/git.js", async (importOriginal) => {
   return {
     ...actual,
     preparePullWorktree: vi.fn((input: { workRoot: string; expectedHeadSha: string }) => {
-      const path = severeCurrentWorktree.enabled ? process.cwd() : join(input.workRoot, "mock-worktree");
+      const path = severeWorktreePath.value || (severeCurrentWorktree.enabled ? process.cwd() : join(input.workRoot, "mock-worktree"));
       mkdirSync(path, { recursive: true });
       return { path, headSha: input.expectedHeadSha };
     }),
@@ -173,6 +174,7 @@ describe("worker context budget preflight", () => {
     zcodeFirstFailuresByPath.clear();
     severeRawResponse.value = "";
     severeCurrentWorktree.enabled = false;
+    severeWorktreePath.value = "";
     createdReviews.length = 0;
     walkthroughBuildEvents.length = 0;
     delete reviewPostControl.error;
@@ -709,6 +711,51 @@ describe("worker context budget preflight", () => {
     const transport = JSON.parse(JSON.parse(zcodePrompts.find((prompt) => prompt.includes("severe-verifier-input-v1"))!)[1].content);
     expect(transport.finding).toMatchObject({ category: "proof_gap", title: original.title, body: original.body });
     expect(createdReviews[0]?.comments).toHaveLength(1);
+    state.close();
+  });
+
+  it("suppresses oversized immutable evidence without throwing a malformed receipt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-severe-worker-oversized-evidence-"));
+    roots.push(root);
+    const fixture = join(root, "worktree");
+    mkdirSync(join(fixture, "src"), { recursive: true });
+    const filename = "src/oversized.ts";
+    const blob = `${"x".repeat(65_536)}\n`;
+    writeFileSync(join(fixture, filename), blob);
+    execFileSync("git", ["init", "--quiet"], { cwd: fixture });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: fixture });
+    execFileSync("git", ["config", "user.name", "NeonDiff test"], { cwd: fixture });
+    execFileSync("git", ["add", "."], { cwd: fixture });
+    execFileSync("git", ["commit", "--quiet", "-m", "oversized"], { cwd: fixture });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture, encoding: "utf8" }).trim();
+    const patch = `@@ -1 +1 @@\n+${"x".repeat(65_530)}`;
+    const file = { filename, patch, status: "modified", additions: 1, deletions: 0, changes: 1 };
+    severeCurrentWorktree.enabled = true;
+    severeWorktreePath.value = fixture;
+    const config = minimalConfig(root);
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(431, head);
+    zcodeFindingsByPath.set(filename, [p1Finding(filename, "Oversized severe candidate")]);
+
+    const result = await reviewPull({ config, github: githubForPull(pull, [file]), state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true });
+
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, head);
+    expect(result).toBe("reviewed");
+    expect(createdReviews[0]?.comments).toHaveLength(0);
+    expect(zcodePrompts.some((prompt) => prompt.includes("severe-verifier-input-v1"))).toBe(false);
+    const selfConsistency = JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8"));
+    expect(selfConsistency.verdicts[0]).toMatchObject({
+      path: filename,
+      refuted: true,
+      receipt: {
+        state: "incomplete",
+        disposition: "suppress",
+        reasonCode: "cap_exceeded",
+        evidence: { files: [], omitted: [{ path: filename, code: "cap_exceeded" }], complete: false }
+      }
+    });
+    expect(JSON.stringify(selfConsistency)).not.toContain(blob);
     state.close();
   });
 

@@ -4033,7 +4033,7 @@ function severeVerificationFailureReceipt(
   const state = code === "timeout" ? "timeout" : code === "unavailable" ? "unavailable" : code === "provider_unavailable" ? "failed"
     : code === "stale_head" || code === "identity_mismatch" ? "stale_head"
       : code === "incomplete" || code === "not_read" || code === "evidence_incomplete" || code === "cap_exceeded" ? "incomplete" : "malformed";
-  const failureEvidence = evidence ?? { files: [], omitted: [{ path, code }] };
+  const failureEvidence = evidence ? { files: evidence.files, omitted: evidence.omitted } : { files: [], omitted: [{ path, code }] };
   return canonicalizeSevereVerificationReceipt(JSON.stringify({
     schemaVersion: "severe-verifier-v1", ...context, findingFingerprint, state,
     disposition: "suppress", reasonCode: code, evidence: { ...failureEvidence, complete: false }
