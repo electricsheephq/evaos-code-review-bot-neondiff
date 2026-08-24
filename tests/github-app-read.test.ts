@@ -828,8 +828,7 @@ describe("GitHub App read authentication", () => {
   });
 
   it("keeps App comment ownership and cached tokens scoped to each repository", async () => {
-    const root = mkdtempSync(join(tmpdir(), "github-app-comment-repo-scope-"));
-    roots.push(root);
+    const root = mkdtempSync(join(tmpdir(), "github-app-comment-repo-scope-")); roots.push(root);
     const privateKeyPath = join(root, "app.pem");
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     writeFileSync(privateKeyPath, privateKey.export({ type: "pkcs1", format: "pem" }));
@@ -939,9 +938,7 @@ describe("GitHub App read authentication", () => {
 });
 
 function jsonResponse(body: unknown, status = 200, statusText = ""): Response {
-  if (body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 1 && "id" in body) {
-    body = { ...canonicalInstallation(), ...(body as Record<string, unknown>) };
-  }
+  if (body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 1 && "id" in body) body = { ...canonicalInstallation(), ...(body as Record<string, unknown>) };
   return new Response(JSON.stringify(body), {
     status,
     statusText,
