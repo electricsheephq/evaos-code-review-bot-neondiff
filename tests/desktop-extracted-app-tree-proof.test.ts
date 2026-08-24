@@ -28,7 +28,7 @@ function classicZip(entries: Entry[]) {
 function unicodePathExtra(headerName: string, alternateName: string) { const alternate = Buffer.from(alternateName), field = Buffer.alloc(9 + alternate.length); u16(field, 0, 0x7075); u16(field, 2, 5 + alternate.length); field[4] = 1; u32(field, 5, crc32(Buffer.from(headerName))); alternate.copy(field, 9); return field; }
 function fixture(entries: Entry[]) { const root = mkdtempSync(join(tmpdir(), "neondiff-zip-")); roots.push(root); const artifact = join(root, "NeonDiff.zip"); writeFileSync(artifact, classicZip(entries)); return { root, artifact }; }
 const stableFeed = "https://www.neondiff.com/updates/stable/appcast.xml", betaFeed = "https://www.neondiff.com/updates/beta/appcast.xml", defaultPublicKey = Buffer.alloc(32, 1).toString("base64");
-function plist(version = "1.1.0-rc.9", extra = "", publicKey = defaultPublicKey) { const stable = version === "1.1.0", feed = stable ? stableFeed : betaFeed, contract = stable ? "paid-mac-ga-byo-v1" : "paid-mac-beta-byo-v1"; return `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>11091</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>NeonDiffPaidBetaContract</key><string>${contract}</string><key>NeonDiffBYOGitHubEnabled</key><true/><key>SUFeedURL</key><string>${feed}</string><key>SUPublicEDKey</key><string>${publicKey}</string>${extra}</dict></plist>`; }
+function plist(version = "1.1.0-rc.9", extra = "", publicKey = defaultPublicKey) { const feed = version === "1.1.0" ? stableFeed : betaFeed; return `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>11091</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>SUFeedURL</key><string>${feed}</string><key>SUPublicEDKey</key><string>${publicKey}</string>${extra}</dict></plist>`; }
 function eocdPatch(artifact: string, field: number, value: number) { const bytes = readFileSync(artifact); u32(bytes, bytes.length - 22 + field, value); writeFileSync(artifact, bytes); }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -178,8 +178,7 @@ describe("authenticated exact-ZIP app tree and plist proof", () => {
       proofFixture("1.1.0", "", Buffer.from("bplist00hostile")),
       proofFixture("1.2.0"),
       proofFixture("1.1.0", "", plist("1.1.0").replace("com.electricsheephq.NeonDiffDesktop", "com.example.Wrong")),
-      proofFixture("1.1.0", "", plist("1.1.0").replace("11091", "not-a-build")),
-      proofFixture("1.1.0", "", plist("1.1.0").replace("paid-mac-ga-byo-v1", "paid-mac-beta-byo-v1"))
+      proofFixture("1.1.0", "", plist("1.1.0").replace("11091", "not-a-build"))
     ];
     for (const value of invalid) await expect(buildExtractedAppTreeProof(value.artifact, sourceSHA)).rejects.toThrow(/plist|marker/i);
   });

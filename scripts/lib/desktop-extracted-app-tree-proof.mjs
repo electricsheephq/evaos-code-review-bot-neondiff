@@ -40,7 +40,7 @@ def unique(node):
             unique(value)
 unique(root[0])
 value = plistlib.loads(raw)
-required = ("CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion", "LSMinimumSystemVersion", "NeonDiffPaidBetaContract", "SUFeedURL", "SUPublicEDKey")
+required = ("CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion", "LSMinimumSystemVersion", "SUFeedURL", "SUPublicEDKey")
 if not isinstance(value, dict):
     raise ValueError("invalid plist dictionary")
 result = {}
@@ -49,9 +49,6 @@ for key in required:
     if not isinstance(item, str) or not item or len(item.encode("utf-8")) > 128:
         raise ValueError("invalid plist marker")
     result[key] = item
-if value.get("NeonDiffBYOGitHubEnabled") is not True:
-    raise ValueError("invalid BYO production marker")
-result["NeonDiffBYOGitHubEnabled"] = True
 sys.stdout.write(json.dumps(result, separators=(",", ":")))
 `;
 function artifactBytes(descriptor) {
@@ -299,12 +296,12 @@ function appTree(appPath) {
 function plistMarkers(bytes) {
   const parsed = spawnSync("/usr/bin/python3", ["-I", "-c", PLIST_PARSER], { input: bytes, encoding: "utf8", maxBuffer: 4096 }); let value;
   try { if (parsed.status !== 0) fail("desktop Info.plist is malformed"); value = JSON.parse(parsed.stdout); } catch { fail("desktop Info.plist is malformed"); }
-  const bundleID = value.CFBundleIdentifier, version = value.CFBundleShortVersionString, build = value.CFBundleVersion, minimumSystemVersion = value.LSMinimumSystemVersion, productionContract = value.NeonDiffPaidBetaContract, byoGitHubEnabled = value.NeonDiffBYOGitHubEnabled, feedURL = value.SUFeedURL, publicKey = value.SUPublicEDKey;
+  const bundleID = value.CFBundleIdentifier, version = value.CFBundleShortVersionString, build = value.CFBundleVersion, minimumSystemVersion = value.LSMinimumSystemVersion, feedURL = value.SUFeedURL, publicKey = value.SUPublicEDKey;
   if (bundleID !== "com.electricsheephq.NeonDiffDesktop" || !/^1\.1\.0(?:-(?:beta|rc)\.[1-9][0-9]{0,15})?$/.test(version) || !/^[0-9]{1,32}$/.test(build)) fail("bundle markers are not canonical");
-  const stable = version === "1.1.0", expectedFeed = stable ? "https://www.neondiff.com/updates/stable/appcast.xml" : "https://www.neondiff.com/updates/beta/appcast.xml", expectedContract = stable ? "paid-mac-ga-byo-v1" : "paid-mac-beta-byo-v1", decodedKey = Buffer.from(publicKey, "base64");
-  if (!/^\d+(?:\.\d+){1,2}$/.test(minimumSystemVersion) || productionContract !== expectedContract || byoGitHubEnabled !== true) fail("bundle production markers are not canonical");
+  const expectedFeed = version === "1.1.0" ? "https://www.neondiff.com/updates/stable/appcast.xml" : "https://www.neondiff.com/updates/beta/appcast.xml", decodedKey = Buffer.from(publicKey, "base64");
+  if (!/^\d+(?:\.\d+){1,2}$/.test(minimumSystemVersion)) fail("bundle minimum system version is not canonical");
   if (feedURL !== expectedFeed || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(publicKey) || decodedKey.length !== 32 || decodedKey.toString("base64") !== publicKey) fail("bundle updater markers are not canonical");
-  return { appPath: "NeonDiff.app", bundleID, version, build, minimumSystemVersion, productionContract, byoGitHubEnabled, feedURL, publicKey };
+  return { appPath: "NeonDiff.app", bundleID, version, build, minimumSystemVersion, feedURL, publicKey };
 }
 function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value)) deepFreeze(child); Object.freeze(value); } return value; }
 
