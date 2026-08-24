@@ -118,16 +118,21 @@ Regression caps:
 
 ## Evidence Packet
 
+Set `NEONDIFF_EVIDENCE_ROOT` to an operator- or CI-owned absolute directory outside the
+checkout before a local run. The CLI default is `$HOME/.neondiff/evidence`;
+CI may inject another external root. Historical packets are immutable evidence
+and must not be moved, rewritten, or used to infer a current release state.
+
 For EVAOS operator-local runs, write eval evidence under the default scratch
 root:
 
 ```text
-/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/<date>/gitnexus-readonly-adapter-<run-id>/
+$NEONDIFF_EVIDENCE_ROOT/<date>/<run-id>/gitnexus-readonly-adapter/
 ```
 
-Other operators and CI runners should configure an equivalent environment-local
-evidence root and preserve the same per-run packet shape. The Lexar path is the
-current EVAOS workstation default, not a portable hard requirement.
+Other operators and CI runners should configure an equivalent external evidence
+root and preserve the same per-run packet shape. This plan never grants hosted,
+runtime, release, or GA proof from an offline adapter packet.
 
 Each scenario should include:
 

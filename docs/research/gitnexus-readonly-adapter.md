@@ -27,8 +27,8 @@ wrapper-owned designs.
 
 ## Current Source Behavior
 
-This research is based on local source inspection at `origin/main` commit
-`0f5be870ce303259f1ba6d7227b98704ecf5a81b`.
+This research is based on direct source inspection at the accepted reconciliation
+base `8de8840282657ffe457c78132ad0a31328695f68`; recheck `origin/main` before reuse.
 
 Current GitNexus behavior is packet-only:
 
@@ -57,6 +57,11 @@ Current ZCode behavior is intentionally narrower than a tool-using agent:
 - Tool concurrency is capped at `1`.
 - ZCode receives GitNexus only as advisory prompt text through
   `buildGitNexusContextPromptSection`.
+
+The portable source-defaults slice now uses `NEONDIFF_EVIDENCE_ROOT` for
+explicit absolute external evidence roots and falls back to `$HOME/.neondiff/evidence`.
+The adapter remains offline/shadow-only; no source or runtime change in this
+document promotes it.
 
 Release notes for the GitNexus packet feature preserve the same boundary:
 GitNexus context stayed disabled in live config by default, and the release did
@@ -239,7 +244,7 @@ The issue should require:
 - No raw ZCode GitNexus access.
 - No index writes.
 - Evidence packets under the configured eval evidence root. For EVAOS
-  operator-local runs, the current default is
-  `/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/`; other environments should
-  configure an equivalent local/runner path.
+  operator-local runs, the current default is `$HOME/.neondiff/evidence`;
+  other environments should configure `NEONDIFF_EVIDENCE_ROOT` to an equivalent
+  external local/runner path. Historical packets remain immutable.
 - A promotion decision that can still choose packet-only.
