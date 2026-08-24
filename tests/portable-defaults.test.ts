@@ -69,6 +69,10 @@ describe("portable defaults and supported LaunchAgent example", () => {
     expect(plist).toContain("--runtime-credentials-stdin true");
     expect(plist).toContain("Contents/Helpers/NeonDiffWorker");
     expect(plist).toContain("Keychain-only");
+    expect(plist).toContain("Desktop Preview Start");
+    expect(plist).toContain("gated generated installation");
+    expect(plist).toMatch(/<key>RunAtLoad<\/key>\s*<false\/>/);
+    expect(plist).toMatch(/<key>KeepAlive<\/key>\s*<false\/>/);
     expect(plist).not.toContain("EnvironmentVariables");
     expect(plist).not.toMatch(/node_modules|tsx|private-key|secret|token/i);
   });

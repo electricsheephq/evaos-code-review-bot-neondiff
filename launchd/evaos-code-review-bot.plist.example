@@ -8,6 +8,8 @@
   with daemon --runtime-credentials-stdin true --dry-run false. Credentials are
   Keychain-only and are delivered through bounded stdin; this plist has no
   credential environment.
+  Do not load this fixture directly. Use Desktop Preview Start for a dry run,
+  then approve gated generated installation to write the selected LaunchAgent.
 -->
 <plist version="1.0">
 <dict>
@@ -27,9 +29,9 @@
     <string>REPLACE_WITH_KEYCHAIN_DEVICE_ID</string>
   </array>
   <key>RunAtLoad</key>
-  <true/>
+  <false/>
   <key>KeepAlive</key>
-  <true/>
+  <false/>
   <key>ProcessType</key>
   <string>Background</string>
   <key>LimitLoadToSessionType</key>
