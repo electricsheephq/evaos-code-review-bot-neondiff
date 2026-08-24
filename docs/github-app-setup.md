@@ -130,11 +130,13 @@ integration proof under #630.
 5. Confirm the permissions above.
 6. Save the generated private key outside this repository.
 7. Until the signed Desktop 1.1.0 artifact and `/mac` promotion gates are live,
-   the public paid B0 BYO path remains current. Launch NeonDiff, store the
-   customer-owned App ID/private-key PEM in Keychain, and if the worker command
-   is unavailable choose **Install / Update Local Worker**. From the verified
+   the public paid B0 BYO path remains current. Launch NeonDiff and store the
+   customer-owned App ID/private-key PEM in Keychain. On a clean install with no
+   existing worker, LaunchAgent, marker, or state, if the worker command is
+   unavailable choose **Install / Update Local Worker**. From the verified
    extracted bundle, use Node.js 26 or newer through `/opt/homebrew/bin/node` or
-   `/usr/local/bin/node`, then preview and confirm the checksum-bound install:
+   `/usr/local/bin/node`, then preview and confirm the checksum-bound
+   `first-install`:
 
    ```bash
    BUNDLE_DIR="$(pwd -P)"
@@ -147,8 +149,13 @@ integration proof under #630.
    ```
 
    Inspect the preview, then repeat with `--dry-run false --confirm true`.
-   This installs only the verified CLI and a credential-free marker; it creates
-   or loads no LaunchAgent, starts no daemon, and reads or writes no credentials.
+   This clean-install command installs only the verified CLI and a
+   credential-free marker; it creates or loads no LaunchAgent, starts no daemon,
+   and reads or writes no credentials. It refuses an existing LaunchAgent,
+   worker, marker, or state. If NeonDiff detects any existing or stale worker
+   state, do not run `first-install`; choose **Install / Update Local Worker**
+   and follow the [existing-worker update flow](SETUP.md#update-an-existing-local-worker)
+   with the existing LaunchAgent label.
    Return to NeonDiff and choose **Install / Update Local Worker** once more to
    refresh discovery, then choose **Initialize Local Config**, **Add Repository**,
    and **Apply Repository**. Choose **Verify App Access** for a new App or
@@ -253,13 +260,18 @@ not GitHub approval of the public App.
 
 ## Verify Installation
 
-For the promoted signed Desktop 1.1.0 journey, use **Verify App Access** for a new
-customer-owned App or **Verify Existing Access** for a compatible existing agent in
-the UI; before promotion, the shell command below is CLI/operator diagnostics only:
+For the current public paid B0 BYO beta, use native **Verify App Access** for a new
+customer-owned App or **Verify Existing Access** for a compatible existing agent
+after the selected repository is applied. These native actions are the supported
+B0 verification path; they use the account- and bot-selected config created by
+NeonDiff. The shell command below is optional CLI/operator diagnostics only. If
+you use it for native B0 troubleshooting, set `SELECTED_CONFIG` to the exact
+selected config path shown by NeonDiff (under its account-scoped Application
+Support directory), not the checkout-local `config.local.json`:
 
 ```bash
-CLI_CONFIG="config.local.json"
-neondiff doctor github --config "$CLI_CONFIG" --repo owner/repo --json
+SELECTED_CONFIG="/absolute/path/from-NeonDiff-to-the-selected-bot/config.local.json"
+neondiff doctor github --config "$SELECTED_CONFIG" --repo owner/repo --json
 ```
 
 CLI-first and non-Mac setups may instead use the checkout-local path documented

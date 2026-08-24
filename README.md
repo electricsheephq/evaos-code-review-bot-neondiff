@@ -102,12 +102,19 @@ package. To preview without changing your machine:
 curl -fsSL https://www.neondiff.com/install | sh -s -- --dry-run
 ```
 
-**Legacy CLI/operator recovery only — not signed Desktop 1.1.0 setup:** the
-separate checksum-bound worker bundle is
+**Current beta.87 B0 BYO worker path — not signed Desktop 1.1.0 GA setup:** the
+separate checksum-bound worker bundle remains required for the current public
+paid B0 path before native initialization. It is
 the same immutable GitHub prerelease as the app rather than an unpublished npm
 version or an unpinned source checkout. No invitation is required when the
 versioned public GitHub prerelease is published and the neondiff.com
 purchase/download path is live.
+For a clean B0 install with no existing worker, LaunchAgent, marker, or state,
+choose **Install / Update Local Worker** and use the checksum-bound `first-install`
+preview followed by the confirmed install before **Initialize Local Config**. An
+existing worker or LaunchAgent, including a stale or broken one, must use the
+`update` flow instead; `first-install` refuses existing state. Follow the
+[existing-worker update steps](docs/SETUP.md#update-an-existing-local-worker).
 The worker installer requires Node.js 26 or newer resolving through the
 approved stable path `/opt/homebrew/bin/node` or `/usr/local/bin/node`.
 When the app reports **Worker update required**, choose **Install / Update Local
