@@ -44,8 +44,9 @@ describe("canonical raw Desktop appcast", () => {
     expect(() => parseRawDesktopAppcast(raw as Uint8Array)).toThrow();
   });
 
-  it("rejects oversized input before copying it", () => {
+  it("rejects oversized input before copying even when byteLength is shadowed", () => {
     const oversized = new Uint8Array(4 * 1024 * 1024 + 1), originalFrom = Buffer.from;
+    Object.defineProperty(oversized, "byteLength", { value: 1 });
     let error;
     try { Buffer.from = (() => { throw new Error("oversized input was copied"); }) as typeof Buffer.from; try { parseRawDesktopAppcast(oversized); } catch (caught) { error = caught; } }
     finally { Buffer.from = originalFrom; }

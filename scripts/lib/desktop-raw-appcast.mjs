@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 
 const MAX_INPUT = 4 * 1024 * 1024;
+const INTRINSIC_BYTE_LENGTH = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "byteLength").get;
 const PARSER = String.raw`
 import json,sys,xml.etree.ElementTree as ET
 text = sys.stdin.buffer.read().decode("utf-8")
@@ -30,7 +31,8 @@ function deepFreeze(value) {
 
 function canonicalUTF8(input) {
   if (!(input instanceof Uint8Array)) fail("raw appcast must be bytes");
-  if (input.byteLength === 0 || input.byteLength > MAX_INPUT) fail("raw appcast is not bounded");
+  const byteLength = Reflect.apply(INTRINSIC_BYTE_LENGTH, input, []);
+  if (byteLength === 0 || byteLength > MAX_INPUT) fail("raw appcast is not bounded");
   const raw = Buffer.from(input);
   let text;
   try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw); }
