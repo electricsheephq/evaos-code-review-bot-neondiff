@@ -23,7 +23,6 @@ export interface SelfConsistencyReviewContext {
   pullNumber: number;
   baseSha: string;
   headSha: string;
-  findingFingerprint?: string;
 }
 
 /** The injected runner must return the canonical result produced by transport parsing. */
@@ -150,7 +149,6 @@ function parseCanonicalResult(value: unknown): SelfConsistencyCanonicalResult | 
 
 function retainsSevereFinding(receipt: SevereVerificationReceipt, comment: ReviewComment, context: SelfConsistencyReviewContext | undefined): boolean {
   if (!context || receipt.state !== "confirmed" || receipt.disposition !== "retain") return false;
-  if (context.findingFingerprint !== undefined && context.findingFingerprint !== comment.fingerprint) return false;
   return receipt.repo === context.repo && receipt.pullNumber === context.pullNumber && receipt.baseSha === context.baseSha && receipt.headSha === context.headSha && receipt.findingFingerprint === comment.fingerprint && hasCompleteEvidence(receipt, comment.path);
 }
 

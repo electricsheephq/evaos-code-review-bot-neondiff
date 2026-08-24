@@ -177,8 +177,9 @@ describe("self-consistency re-check (#303)", () => {
   });
 
   it("retains #204, suppresses false-severe #225, and leaves clean #209 advisory", async () => {
-    const secondDraw = vi.fn(({ comment: finding }: { comment: ReviewComment }) => receipt(finding.title.includes("225") ? "refuted" : "confirmed"));
-    const result = await runSelfConsistencyRecheck({ comments: [comment({ severity: "P1", line: 2, title: "#225 false severe", confidence: 0.9 }), comment({ severity: "P1", line: 3, title: "#204 confirmed severe", confidence: 0.9 }), comment({ severity: "P2", line: 4, title: "#209 clean", category: "runtime_correctness", confidence: 0.9 })], files, config: { enabled: true }, reviewContext, secondDraw });
+    const legacyContext = { ...reviewContext, findingFingerprint: `finding:${"0".repeat(64)}` };
+    const secondDraw = vi.fn(({ comment: finding }: { comment: ReviewComment }) => { const draw = receipt(finding.title.includes("225") ? "refuted" : "confirmed"); return canonicalizeSevereVerificationReceipt(JSON.stringify({ ...draw.receipt, findingFingerprint: finding.fingerprint })); });
+    const result = await runSelfConsistencyRecheck({ comments: [comment({ severity: "P1", line: 2, title: "#225 false severe", confidence: 0.9 }), comment({ severity: "P1", line: 3, title: "#204 confirmed severe", confidence: 0.9, fingerprint: `finding:${"1".repeat(64)}` }), comment({ severity: "P2", line: 4, title: "#209 clean", category: "runtime_correctness", confidence: 0.9 })], files, config: { enabled: true }, reviewContext: legacyContext, secondDraw });
     expect(result.comments.map(({ title }) => title)).toEqual(["#204 confirmed severe", "#209 clean"]);
     expect(secondDraw).toHaveBeenCalledTimes(2);
     expect(result.event).toBe("REQUEST_CHANGES");
