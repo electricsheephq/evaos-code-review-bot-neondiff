@@ -80,12 +80,13 @@ enum NeonDiffDesktopCompositionRoot {
             }
         let keychainWorkerLaunchAgentManager:
             any DesktopKeychainWorkerLaunchAgentManaging
-        if let appExecutableURL = Bundle.main.executableURL,
-           let trustedBundledWorker {
+        if let appExecutableURL = Bundle.main.executableURL {
             keychainWorkerLaunchAgentManager =
                 FoundationKeychainWorkerLaunchAgentManager(
                     appExecutableURL: appExecutableURL,
-                    trustedBundledWorker: trustedBundledWorker
+                    trustedBundledWorker: {
+                        FoundationTrustedBundledWorker.executionContext()
+                    }
                 )
         } else {
             keychainWorkerLaunchAgentManager =
@@ -100,7 +101,9 @@ enum NeonDiffDesktopCompositionRoot {
                 localBotExecutionContextProvider:
                     localBotExecutionContextProvider,
                 defaultWorkingDirectory: cliWorkingDirectory,
-                trustedBundledWorker: trustedBundledWorker,
+                trustedBundledWorkerProvider: {
+                    FoundationTrustedBundledWorker.executionContext()
+                },
                 trustedProcessValidator: {
                     FoundationTrustedBundledWorker
                         .runningProcessIsTrusted($0)
