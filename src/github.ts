@@ -21,6 +21,9 @@ const MAX_REVIEW_COMMENT_PAGES = 5;
 const MAX_ISSUE_COMMENT_PAGES = 5;
 export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 
+export type GitHubIssueLabelEvent = { id?: number | string; event?: string; created_at?: string; actor?: { login?: string | null } | null; label?: { name?: string | null } | null };
+export type BoundedIssueLabelEventRead = BoundedGithubList<GitHubIssueLabelEvent> & { pagesRead: number; uniqueCount: number; duplicateCount: number; lastPage?: number; terminal: "short_page" | "bounded_tail" | "event_history_unbounded" };
+
 /** Array-compatible metadata for bounded GitHub reads. `rawCount` is the count before downstream filters. */
 export type BoundedGithubList<T> = T[] & {
   items: T[];
@@ -434,26 +437,49 @@ export class GitHubApi {
     });
   }
 
-  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<Array<{
-    event?: string;
-    created_at?: string;
-    actor?: { login?: string | null } | null;
-    label?: { name?: string | null } | null;
-  }>> {
-    const events: Array<{
-      event?: string;
-      created_at?: string;
-      actor?: { login?: string | null } | null;
-      label?: { name?: string | null } | null;
-    }> = [];
-    for (let page = 1; ; page += 1) {
-      const chunk = await this.request<typeof events>(
-        `/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`,
-        { token: await this.getReadToken(repo) }
-      );
-      events.push(...chunk);
-      if (chunk.length < 100) return events;
+  async listIssueLabelEvents(repo: string, issueNumber: number): Promise<BoundedIssueLabelEventRead> {
+    const events: GitHubIssueLabelEvent[] = [];
+    const seen = new Set<string>();
+    let pagesRead = 0;
+    let rawCount = 0;
+    let duplicateCount = 0;
+    const append = (chunk: GitHubIssueLabelEvent[]) => {
+      rawCount += chunk.length;
+      for (const event of chunk) {
+        const id = typeof event.id === "number" || (typeof event.id === "string" && event.id.trim()) ? String(event.id) : undefined;
+        if (id && seen.has(id)) { duplicateCount += 1; continue; }
+        if (id) seen.add(id);
+        events.push(event);
+      }
+    };
+    const readPage = async (page: number) => {
+      let link: string | null = null;
+      const chunk = await this.request<GitHubIssueLabelEvent[]>(`/repos/${repo}/issues/${issueNumber}/events?per_page=100&page=${page}`, { token: await this.getReadToken(repo), onResponse: (response) => { link = response.headers.get("link"); } });
+      pagesRead += 1;
+      return { chunk, links: parseIssueEventLinks(link, this.apiBaseUrl.origin) };
+    };
+    const finish = (terminal: BoundedIssueLabelEventRead["terminal"], lastPage?: number) =>
+      boundedIssueLabelEventRead(events, { pagesRead, rawCount, duplicateCount, ...(lastPage === undefined ? {} : { lastPage }), terminal });
+    const first = await readPage(1);
+    append(first.chunk);
+    if (first.chunk.length < 100) return finish("short_page");
+    if (first.links.invalid) return finish("event_history_unbounded");
+    const lastPage = first.links.lastPage;
+    if (lastPage === undefined || lastPage === 1) {
+      const probe = await readPage(2);
+      if (probe.links.invalid) return finish("event_history_unbounded", lastPage);
+      append(probe.chunk);
+      return finish(probe.chunk.length < 100 ? "short_page" : "event_history_unbounded", lastPage);
     }
+    if (first.links.nextPage !== 2) return finish("event_history_unbounded", lastPage);
+    const startPage = Math.max(1, lastPage - 4);
+    for (let page = startPage; page <= lastPage; page += 1) {
+      if (page === 1) continue;
+      const response = await readPage(page);
+      if (response.links.invalid || (response.links.lastPage !== undefined && response.links.lastPage !== lastPage) || (page < lastPage && response.links.nextPage === undefined) || (response.links.nextPage !== undefined && (response.links.nextPage <= page || response.links.nextPage > lastPage)) || (page === lastPage && response.links.nextPage !== undefined) || (response.chunk.length < 100 && page < lastPage)) return finish("event_history_unbounded", lastPage);
+      append(response.chunk);
+    }
+    return finish("bounded_tail", lastPage);
   }
 
   async getCollaboratorPermission(
@@ -695,7 +721,7 @@ export class GitHubApi {
 
   private async request<T>(
     path: string,
-    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean } = {}
+    options: { method?: string; token?: string; body?: unknown; followRedirects?: boolean; onResponse?: (response: Response) => void } = {}
   ): Promise<T> {
     const token = options.token ?? this.token;
     const controller = new AbortController();
@@ -713,6 +739,7 @@ export class GitHubApi {
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body)
       });
+      options.onResponse?.(response);
       if (!response.ok) {
         const text = await response.text();
         throw new GitHubApiRequestError({
@@ -733,6 +760,41 @@ export class GitHubApi {
       clearTimeout(timeout);
     }
   }
+}
+
+function boundedIssueLabelEventRead(
+  items: GitHubIssueLabelEvent[],
+  metadata: Pick<BoundedIssueLabelEventRead, "pagesRead" | "rawCount" | "duplicateCount" | "lastPage" | "terminal">
+): BoundedIssueLabelEventRead {
+  const result = items as BoundedIssueLabelEventRead;
+  Object.assign(result, { items: items.slice(), rawCount: metadata.rawCount, pagesRead: metadata.pagesRead, uniqueCount: items.length, duplicateCount: metadata.duplicateCount, terminal: metadata.terminal, truncated: metadata.terminal === "event_history_unbounded", overflow: metadata.terminal === "event_history_unbounded" });
+  if (metadata.lastPage !== undefined) result.lastPage = metadata.lastPage;
+  return result;
+}
+
+function parseIssueEventLinks(value: string | null, origin: string): { lastPage?: number; nextPage?: number; invalid: boolean } {
+  if (!value) return { invalid: false };
+  const seen = new Set<string>();
+  let lastPage: number | undefined;
+  let nextPage: number | undefined;
+  for (const part of value.split(",")) {
+    const match = /^\s*<([^>]+)>\s*;\s*(.*)$/.exec(part); if (!match) return { invalid: true };
+    let target: URL; try { target = new URL(match[1]!); } catch { return { invalid: true }; }
+    if (target.origin !== origin) return { invalid: true };
+    const relMatch = /(?:^|;)\s*rel\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i.exec(match[2]!); if (!relMatch) return { invalid: true };
+    for (const rawRel of (relMatch[1] ?? relMatch[2] ?? relMatch[3]!).split(/\s+/)) {
+      const rel = rawRel.toLowerCase();
+      if (!["first", "prev", "next", "last"].includes(rel)) continue;
+      if (seen.has(rel)) return { invalid: true };
+      seen.add(rel);
+      const page = target.searchParams.get("page");
+      if (!page || !/^\d+$/.test(page)) return { invalid: true };
+      const number = Number(page);
+      if (!Number.isSafeInteger(number) || number < 1) return { invalid: true };
+      if (rel === "last") lastPage = number; else if (rel === "next") nextPage = number;
+    }
+  }
+  return { lastPage, nextPage, invalid: false };
 }
 
 function normalizePullRequestSummary(pull: PullRequestSummary): PullRequestSummary {

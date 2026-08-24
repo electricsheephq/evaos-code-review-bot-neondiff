@@ -82,6 +82,12 @@ const pull: PullRequestSummary = {
 };
 
 describe("sticky enrichment comments", () => {
+  it("counts terminal event skips without consuming enrichment caps", async () => {
+    const config = loadConfig(); config.issueEnrichment = { ...config.issueEnrichment!, enabled: true, postIssueComment: true, allowlist: ["owner/repo"], maxIssuesPerBurst: 1 };
+    const result = await collectIssueEnrichmentScan({ config, dryRun: true, includeExisting: true, reader: { listIssuesForEnrichment: async () => Object.assign([{ number: 970, title: "overflow", state: "open" }], { scanReasons: { 970: "event_history_unbounded" as const } }) } });
+    expect(result.items[0]).toMatchObject({ action: "skipped", reason: "event_history_unbounded" }); expect(result.summary).toMatchObject({ skipped: 1, eligible: 0, wouldComment: 0 });
+  });
+
   it("blocks direct issue-enrichment cycles before reading state or GitHub without admission", async () => {
     await expect(runIssueEnrichmentCycleImpl({
       config: {},
