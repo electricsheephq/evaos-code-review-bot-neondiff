@@ -14,6 +14,7 @@ import {
   postEnrichmentComment
 } from "../src/enrichment.js";
 import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js";
+import type { BoundedGithubList } from "../src/github.js";
 import type { IssueAnalysis } from "../src/issue-analysis.js";
 import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
@@ -82,6 +83,68 @@ const pull: PullRequestSummary = {
 };
 
 describe("sticky enrichment comments", () => {
+  it("keeps overflow deadlines truthful across first-run, dry/live reruns, expiry, and recovery", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-label-overflow-v3-"));
+    const state = new ReviewStateStore(join(root, "state.sqlite"));
+    const config = loadConfig();
+    config.issueEnrichment = { ...config.issueEnrichment!, enabled: true, postIssueComment: true, allowlist: ["owner/repo"], maxIssuesPerCycle: 3, maxCommentsPerCycle: 3, maxIssuesPerBurst: 1, processExistingOpenIssuesOnActivation: true, repos: { "owner/repo": { maxIssuesPerCycle: 3, maxCommentsPerCycle: 3, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 1, lookbackMs: 60_000, promotionMaintainers: [{ login: "trusted", validFrom: "2026-01-01T00:00:00Z" }] } } };
+    const overflowIssue: GitHubRelatedIssueOrPull = { number: 738, title: "Overflow", state: "open", updated_at: "2026-08-24T00:00:00.000Z", labels: [{ name: "upstream-intake" }, { name: "active-continuation" }], body: "fixture" };
+    const sibling: GitHubRelatedIssueOrPull = { number: 739, title: "Sibling", state: "open", updated_at: overflowIssue.updated_at, body: "fixture" };
+    const overflowEvents = Object.assign(Array.from({ length: 500 }, () => ({ event: "labeled" })), { items: [], rawCount: 500, truncated: true, overflow: true }) as BoundedGithubList<{ event?: string }>;
+    const resolvedEvents = [{ event: "labeled", created_at: "2026-08-24T00:00:00.000Z", actor: { login: "trusted" }, label: { name: "active-continuation" } }];
+    let resolved = false;
+    let posts = 0;
+    state.recordIssueEnrichmentRepoWatermark({ repo: "owner/repo", activatedAt: "2026-08-24T00:00:00.000Z", lastCheckedAt: "2026-08-24T00:00:00.000Z", now: new Date("2026-08-24T00:00:00.000Z") });
+    const github = {
+      listIssuesForEnrichment: async () => [overflowIssue, sibling],
+      listIssueLabelEvents: async (_repo: string, issueNumber: number) => issueNumber === 738 ? (resolved ? resolvedEvents : overflowEvents) : [],
+      getCollaboratorPermission: async () => "maintain" as const,
+      canPostAsApp: () => true,
+      upsertIssueComment: async () => ({ action: "created" as const, id: ++posts, html_url: "https://github.test/comment" })
+    };
+    const run = (dryRun: boolean, checkedAt: string) => runIssueEnrichmentCycle({ config, state, github, dryRun, includeExisting: true, checkedAt });
+    try {
+      const first = await run(false, "2026-08-24T00:00:30.000Z");
+      expect(first.summary).toMatchObject({ eligible: 1, deferred: 1, deferredRecorded: 1, posted: 1, failed: 0 });
+      expect(first.items.find((item) => item.issueNumber === 738)).toMatchObject({ action: "deferred", nextEligibleAt: "2026-08-24T00:01:30.000Z", recordStatus: "deferred" });
+      expect(posts).toBe(1);
+      expect(state.getIssueEnrichmentRepoWatermark("owner/repo")).toMatchObject({ lastCheckedAt: "2026-08-24T00:00:00.000Z" });
+      state.recordIssueEnrichment({ repo: "owner/repo", issueNumber: 738, issueUpdatedAt: overflowIssue.updated_at!, status: "posted", now: new Date("2026-08-24T00:00:30.000Z") });
+      const sameTimestamp = await run(false, "2026-08-24T00:00:30.000Z");
+      const dryBeforeExpiry = await run(true, "2026-08-24T00:01:00.000Z");
+      expect(sameTimestamp.items.find((item) => item.issueNumber === 738)).toMatchObject({ nextEligibleAt: "2026-08-24T00:01:30.000Z", recordStatus: "deferred" });
+      expect(dryBeforeExpiry.items.find((item) => item.issueNumber === 738)).toMatchObject({ nextEligibleAt: "2026-08-24T00:01:30.000Z" });
+      expect(state.getIssueEnrichmentRecord("owner/repo", 738)).toMatchObject({ status: "deferred", nextEligibleAt: "2026-08-24T00:01:30.000Z" });
+      const exactExpiry = await run(false, "2026-08-24T00:01:30.000Z");
+      expect(exactExpiry.items.find((item) => item.issueNumber === 738)).toMatchObject({ nextEligibleAt: "2026-08-24T00:02:30.000Z" });
+      resolved = true;
+      const recovered = await run(false, "2026-08-24T00:02:31.000Z");
+      expect(recovered.items.find((item) => item.issueNumber === 738)).toMatchObject({ action: "would_comment", recordStatus: "posted" });
+      expect(state.getIssueEnrichmentRecord("owner/repo", 738)).toMatchObject({ status: "posted" });
+      expect(state.getIssueEnrichmentRepoWatermark("owner/repo")).toMatchObject({ lastCheckedAt: "2026-08-24T00:02:31.000Z" });
+      expect(posts).toBe(2);
+    } finally { state.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("excludes overflow from burst accounting while preserving the global comment cap", async () => {
+    const config = loadConfig();
+    config.issueEnrichment = { ...config.issueEnrichment!, enabled: true, postIssueComment: true, allowlist: ["owner/repo"], maxIssuesPerCycle: 3, maxCommentsPerCycle: 3, maxIssuesPerBurst: 2, globalMaxCommentsPerCycle: 1 };
+    const scan = await collectIssueEnrichmentScan({
+      config, dryRun: true, includeExisting: true, checkedAt: "2026-08-24T00:00:00.000Z",
+      reader: { listIssuesForEnrichment: async () => Object.assign([
+        { number: 738, title: "Overflow", state: "open", body: "fixture" },
+        { number: 739, title: "Sibling one", state: "open", body: "fixture" },
+        { number: 740, title: "Sibling two", state: "open", body: "fixture" }
+      ], { scanReasons: { 738: "issue_label_event_overflow" as const } }) }
+    });
+    expect(scan.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ issueNumber: 738, action: "deferred", reason: "issue_label_event_overflow" }),
+      expect.objectContaining({ issueNumber: 739, action: "would_comment", reason: "eligible" }),
+      expect.objectContaining({ issueNumber: 740, action: "deferred", reason: "global_max_comments_per_cycle" })
+    ]));
+    expect(scan.summary).toMatchObject({ eligible: 2, wouldComment: 1, deferred: 2 });
+  });
+
   it("blocks direct issue-enrichment cycles before reading state or GitHub without admission", async () => {
     await expect(runIssueEnrichmentCycleImpl({
       config: {},
