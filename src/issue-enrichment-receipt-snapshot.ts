@@ -2,11 +2,11 @@ import { buildIssueEnrichmentStatus, DEFAULT_ISSUE_ENRICHMENT_CONFIG, type Issue
 export const ISSUE_ENRICHMENT_RECEIPT_COUNT_CAP = 1_000_000;
 export const ISSUE_ENRICHMENT_RECEIPT_BLOCKER_LIMIT = 32;
 export const ISSUE_ENRICHMENT_RECEIPT_MESSAGE_LIMIT = 256;
-export const ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS = [
+export const ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS = Object.freeze([
   "reposScanned", "reposSkipped", "readFailures", "issuesSeen", "eligible", "skipped", "wouldEnrich",
   "wouldComment", "deferred", "baselinedRepos", "truncatedRepos", "workerSkipped", "posted", "dryRunRecorded",
   "skippedRecorded", "deferredRecorded", "alreadyProcessed", "failed"
-] as const;
+] as const);
 export type IssueEnrichmentReceiptCounts = { readonly [K in typeof ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS[number]]: number };
 export type IssueEnrichmentReceiptReason = IssueEnrichmentBlocker | "unknown_failure";
 export type IssueEnrichmentReceiptInput = { kind: "result"; result: unknown } | { kind: "thrown"; error: unknown };
@@ -59,9 +59,9 @@ function snapshotSummary(value: unknown): Readonly<{ valid: false }> | Readonly<
 }
 function snapshotBlockers(value: unknown): IssueEnrichmentBlockersSnapshot {
   try {
-    if (!Array.isArray(value)) return frozen({ readable: false, complete: false, reasons: [] });
+    if (!Array.isArray(value)) return frozen({ readable: false, complete: false, reasons: frozen([]) });
     const length = (value as unknown[]).length;
-    if (!Number.isSafeInteger(length) || length < 0) return frozen({ readable: false, complete: false, reasons: [] });
+    if (!Number.isSafeInteger(length) || length < 0) return frozen({ readable: false, complete: false, reasons: frozen([]) });
     const reasons: IssueEnrichmentBlocker[] = [];
     let readable = true;
     let complete = length <= ISSUE_ENRICHMENT_RECEIPT_BLOCKER_LIMIT;
@@ -69,12 +69,12 @@ function snapshotBlockers(value: unknown): IssueEnrichmentBlockersSnapshot {
       try {
         const present = Object.prototype.hasOwnProperty.call(value, index);
         const blocker = (value as unknown[])[index];
-        if (!present || blocker === undefined) complete = false;
-        else if (typeof blocker === "string" && BLOCKERS.has(blocker as IssueEnrichmentBlocker)) reasons.push(blocker as IssueEnrichmentBlocker);
+        if (!present || typeof blocker !== "string" || !BLOCKERS.has(blocker as IssueEnrichmentBlocker)) complete = false;
+        else reasons.push(blocker as IssueEnrichmentBlocker);
       } catch { readable = false; complete = false; }
     }
     return frozen({ readable, complete, reasons: frozen(reasons) });
-  } catch { return frozen({ readable: false, complete: false, reasons: [] }); }
+  } catch { return frozen({ readable: false, complete: false, reasons: frozen([]) }); }
 }
 function snapshotThrown(error: unknown): IssueEnrichmentReceiptSnapshot {
   let message: unknown;
@@ -115,6 +115,7 @@ export function snapshotIssueEnrichmentReceipt(input: IssueEnrichmentReceiptInpu
     try { error = (input as { kind: "thrown"; error: unknown }).error; } catch { /* fail closed */ }
     return snapshotThrown(error);
   }
+  if (kind !== "result") return frozen({ kind: "thrown", reason: "unknown_failure" });
   let result: unknown;
   try { result = (input as { kind: "result"; result: unknown }).result; } catch { /* malformed result */ }
   return snapshotResult(result);

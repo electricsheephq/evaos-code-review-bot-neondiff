@@ -4,12 +4,8 @@ import {
   snapshotIssueEnrichmentReceipt,
   type IssueEnrichmentReceiptSnapshot
 } from "../src/issue-enrichment-receipt-snapshot.js";
-const summary = (overrides: Record<string, unknown> = {}) => Object.fromEntries(
-  ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, overrides[key] ?? 0])
-);
-const result = (overrides: Record<string, unknown> = {}) => ({
-  summary: summary(), status: { state: "ready", blockers: [] }, dryRun: false, ok: true, ...overrides
-});
+const summary = (overrides: Record<string, unknown> = {}) => Object.fromEntries(ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS.map((key) => [key, overrides[key] ?? 0]));
+const result = (overrides: Record<string, unknown> = {}) => ({ summary: summary(), status: { state: "ready", blockers: [] }, dryRun: false, ok: true, ...overrides });
 const snap = (input: unknown): IssueEnrichmentReceiptSnapshot =>
   snapshotIssueEnrichmentReceipt(input as never);
 describe("issue-enrichment hostile receipt snapshot", () => {
@@ -19,6 +15,7 @@ describe("issue-enrichment hostile receipt snapshot", () => {
     expect(value.kind).toBe("result");
     expect(value.summary.valid).toBe(false);
     expect(value.status).toMatchObject({ readable: false, state: "unreadable" });
+    expect(Object.isFrozen(value.status.blockers.reasons)).toBe(true);
     expect(JSON.stringify(value)).not.toContain("proxy");
     const hostile = result(); for (const key of ["summary", "status", "dryRun", "ok"]) Object.defineProperty(hostile, key, { get: () => { throw new Error("hostile"); } });
     expect(snap({ kind: "result", result: hostile })).toMatchObject({ summary: { valid: false }, dryRun: "unreadable", ok: "unreadable" });
@@ -61,6 +58,7 @@ describe("issue-enrichment hostile receipt snapshot", () => {
     const value = snap({ kind: "result", result: result({ status: { state: "blocked", blockers } }) });
     expect(reads).toBe(32);
     expect(value.status.blockers).toMatchObject({ readable: true, complete: false });
+    expect(snap({ kind: "result", result: result({ status: { state: "blocked", blockers: ["future_blocker", 1] } }) }).status.blockers.complete).toBe(false);
     const revoked = Proxy.revocable([], {}); revoked.revoke();
     expect(snap({ kind: "result", result: result({ status: { state: "blocked", blockers: revoked.proxy } }) })
       .status.blockers).toMatchObject({ readable: false, complete: false, reasons: [] });
@@ -73,5 +71,7 @@ describe("issue-enrichment hostile receipt snapshot", () => {
     expect(snap({ kind: "thrown", error: `${" ".repeat(300)}${token}` })).toMatchObject({ reason: "unknown_failure" });
     const error = {}; Object.defineProperty(error, "message", { get: () => { throw new Error("revoked"); } });
     expect(snap({ kind: "thrown", error })).toMatchObject({ reason: "unknown_failure" });
+    expect(snap({ kind: "oops", result: result() })).toMatchObject({ kind: "thrown", reason: "unknown_failure" });
+    expect(Object.isFrozen(ISSUE_ENRICHMENT_RECEIPT_COUNT_KEYS)).toBe(true);
   });
 });
