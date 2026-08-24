@@ -25,6 +25,115 @@ export type DaemonCycleResult =
   | { ok: true; result: RunOnceResult }
   | { ok: false; failureKind: "admission_denied" | "runtime_failure"; error: string };
 
+export interface IssueEnrichmentLaneCounts {
+  reposScanned: number;
+  reposSkipped: number;
+  readFailures: number;
+  issuesSeen: number;
+  eligible: number;
+  skipped: number;
+  wouldEnrich: number;
+  wouldComment: number;
+  deferred: number;
+  baselinedRepos: number;
+  truncatedRepos: number;
+  workerSkipped: number;
+  posted: number;
+  dryRunRecorded: number;
+  skippedRecorded: number;
+  deferredRecorded: number;
+  alreadyProcessed: number;
+  failed: number;
+}
+
+export type IssueEnrichmentLaneCode =
+  | "completed" | "no_candidates" | "lease_skipped" | "blocked" | "result_not_ok" | "cycle_failed" | "malformed_summary";
+export type IssueEnrichmentLaneReason =
+  | "worker_lease_held" | "unknown_failure" | "malformed_summary"
+  | IssueEnrichmentCycleResult["status"]["blockers"][number];
+
+export interface IssueEnrichmentLaneReceipt {
+  ok: boolean;
+  stage: "issue_enrichment";
+  code: IssueEnrichmentLaneCode;
+  counts: IssueEnrichmentLaneCounts;
+  reason?: IssueEnrichmentLaneReason;
+}
+
+const ISSUE_ENRICHMENT_LANE_COUNT_KEYS = [
+  "reposScanned", "reposSkipped", "readFailures", "issuesSeen", "eligible", "skipped",
+  "wouldEnrich", "wouldComment", "deferred", "baselinedRepos", "truncatedRepos", "workerSkipped",
+  "posted", "dryRunRecorded", "skippedRecorded", "deferredRecorded", "alreadyProcessed", "failed"
+] as const satisfies ReadonlyArray<keyof IssueEnrichmentLaneCounts>;
+
+function boundedLaneCount(value: unknown): number {
+  const number = typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : 0;
+  return Math.min(1_000_000, Math.max(0, number));
+}
+
+function hasValidIssueEnrichmentLaneSummary(summary: unknown): summary is Record<string, unknown> {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) return false;
+  return ISSUE_ENRICHMENT_LANE_COUNT_KEYS.every((key) => {
+    const value = (summary as Record<string, unknown>)[key];
+    return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0;
+  });
+}
+
+const ISSUE_ENRICHMENT_LANE_BLOCKERS = [
+  "issue_enrichment_disabled", "issue_enrichment_allowlist_empty", "issue_enrichment_live_posting_disabled",
+  "github_app_credentials_required_for_live_issue_comments", "github_app_issues_permission_required",
+  "issue_enrichment_live_repo_thresholds_required", "issue_enrichment_model_runtime_required"
+] as const;
+
+function safeIssueEnrichmentLaneReason(value: unknown): IssueEnrichmentLaneReason {
+  return value === "worker_lease_held" || value === "unknown_failure" || value === "malformed_summary" ||
+    (typeof value === "string" && (ISSUE_ENRICHMENT_LANE_BLOCKERS as readonly string[]).includes(value))
+    ? value as IssueEnrichmentLaneReason
+    : "unknown_failure";
+}
+
+function thrownIssueEnrichmentLaneReason(error: unknown): IssueEnrichmentLaneReason {
+  const message = error instanceof Error ? error.message : "";
+  return safeIssueEnrichmentLaneReason(
+    ISSUE_ENRICHMENT_LANE_BLOCKERS.find((blocker) => message.includes(blocker))
+  );
+}
+
+export function buildIssueEnrichmentLaneReceipt(
+  result?: IssueEnrichmentCycleResult,
+  failure?: unknown
+): IssueEnrichmentLaneReceipt {
+  const summary: unknown = result?.summary;
+  const counts = {} as IssueEnrichmentLaneCounts;
+  for (const key of ISSUE_ENRICHMENT_LANE_COUNT_KEYS) counts[key] = boundedLaneCount(
+    hasValidIssueEnrichmentLaneSummary(summary) ? summary[key] : undefined
+  );
+  const malformed = result !== undefined && !hasValidIssueEnrichmentLaneSummary(summary);
+  const blocked = result?.status?.state === "blocked";
+  const leaseSkipped = result?.ok === true && counts.workerSkipped > 0;
+  const ok = !malformed && !blocked && result?.ok === true && counts.readFailures === 0 && counts.failed === 0;
+  const noCandidates = ok && counts.eligible === 0 && counts.wouldEnrich === 0 && counts.wouldComment === 0 &&
+    counts.posted === 0 && counts.dryRunRecorded === 0 && counts.skippedRecorded === 0 &&
+    counts.deferredRecorded === 0 && counts.alreadyProcessed === 0 && !leaseSkipped;
+  const reason = result === undefined
+    ? thrownIssueEnrichmentLaneReason(failure)
+    : malformed
+      ? "malformed_summary"
+      : leaseSkipped
+        ? "worker_lease_held"
+        : blocked
+          ? safeIssueEnrichmentLaneReason(result.status?.blockers?.[0])
+          : !ok ? "unknown_failure" : undefined;
+  return {
+    ok,
+    stage: "issue_enrichment",
+    code: result === undefined ? "cycle_failed" : malformed ? "malformed_summary" : leaseSkipped ? "lease_skipped" :
+      blocked ? "blocked" : !ok ? "result_not_ok" : noCandidates ? "no_candidates" : "completed",
+    counts,
+    ...(reason ? { reason } : {})
+  };
+}
+
 export function shouldExitDaemonAfterFailedCycle(result: DaemonCycleResult, runOnce: boolean): boolean {
   return !result.ok && (runOnce || result.failureKind === "admission_denied");
 }
@@ -284,21 +393,23 @@ async function runIssueEnrichmentLane(input: {
       dryRun: input.input.dryRun,
       ...(input.admissions ? { licenseAdmission: input.admissions.issueEnrichment } : {})
     });
+    const receipt = buildIssueEnrichmentLaneReceipt(issueEnrichment);
     input.stdout(formatDaemonLog({
       event: "daemon_issue_enrichment",
-      phase: "complete",
+      phase: receipt.ok ? "complete" : "result",
       cycle: input.input.cycle,
       dryRun: input.input.dryRun,
-      result: issueEnrichment
+      receipt
     }));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const receipt = buildIssueEnrichmentLaneReceipt(undefined, error);
     input.stderr(formatDaemonLog({
       event: "daemon_issue_enrichment_failed",
       level: "error",
+      phase: "failed",
       cycle: input.input.cycle,
       dryRun: input.input.dryRun,
-      error: message
+      receipt
     }));
   }
 }

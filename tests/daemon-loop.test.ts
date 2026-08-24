@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildIssueEnrichmentLaneReceipt,
   cleanupReviewWorktreesFromConfig,
   runDaemonCycle as runDaemonCycleImpl,
   shouldExitDaemonAfterFailedCycle,
@@ -517,8 +518,11 @@ describe("daemon cycle resilience", () => {
         event: "daemon_issue_enrichment",
         phase: "complete",
         cycle: 9,
-        result: expect.objectContaining({
-          summary: expect.objectContaining({
+        receipt: expect.objectContaining({
+          ok: true,
+          stage: "issue_enrichment",
+          code: "completed",
+          counts: expect.objectContaining({
             reposScanned: 1,
             dryRunRecorded: 1
           })
@@ -643,10 +647,50 @@ describe("daemon cycle resilience", () => {
     expect(failure).toMatchObject({
       event: "daemon_issue_enrichment_failed",
       level: "error",
-      cycle: 10
+      phase: "failed",
+      cycle: 10,
+      receipt: {
+        ok: false,
+        stage: "issue_enrichment",
+        code: "cycle_failed",
+        reason: "unknown_failure",
+        counts: expect.objectContaining({ failed: 0 })
+      }
     });
-    expect(failure.error).toContain("issue enrichment failed");
-    expect(failure.error).not.toContain("ghp_fake_token");
+    expect(failure.error).toBeUndefined();
+    expect(JSON.stringify(failure)).not.toContain("issue enrichment failed");
+    expect(JSON.stringify(failure)).not.toContain("ghp_fake_token");
+  });
+
+  it("distinguishes empty, leased, blocked, and non-success issue receipts", () => {
+    const base = successfulIssueEnrichmentCycleResult();
+    const empty = {
+      ...base,
+      summary: { ...base.summary, issuesSeen: 0, eligible: 0, wouldEnrich: 0, wouldComment: 0, dryRunRecorded: 0 }
+    };
+    expect(buildIssueEnrichmentLaneReceipt(empty)).toMatchObject({ ok: true, code: "no_candidates" });
+    expect(buildIssueEnrichmentLaneReceipt({ ...empty, summary: { ...empty.summary, workerSkipped: 1 } }))
+      .toMatchObject({ ok: true, code: "lease_skipped", reason: "worker_lease_held" });
+    expect(buildIssueEnrichmentLaneReceipt({
+      ...empty,
+      ok: false,
+      status: { ...empty.status, state: "blocked", blockers: ["issue_enrichment_allowlist_empty"] }
+    })).toMatchObject({ ok: false, code: "blocked", reason: "issue_enrichment_allowlist_empty" });
+    expect(buildIssueEnrichmentLaneReceipt({ ...empty, ok: false, summary: { ...empty.summary, failed: 1 } }))
+      .toMatchObject({ ok: false, code: "result_not_ok", reason: "unknown_failure" });
+    expect(buildIssueEnrichmentLaneReceipt(undefined, new Error("issue_enrichment_model_runtime_required; secret")))
+      .toMatchObject({ ok: false, code: "cycle_failed", reason: "issue_enrichment_model_runtime_required" });
+  });
+
+  it("rejects missing, negative, nonfinite, string, null, array, and non-object summaries", () => {
+    const base = successfulIssueEnrichmentCycleResult();
+    const missing = Object.fromEntries(Object.entries(base.summary).filter(([key]) => key !== "failed"));
+    const summaries: unknown[] = [missing, { ...base.summary, failed: -1 }, { ...base.summary, failed: Number.NaN },
+      { ...base.summary, failed: "1" }, null, [], "summary"];
+    for (const summary of summaries) {
+      expect(buildIssueEnrichmentLaneReceipt({ ...base, summary } as IssueEnrichmentCycleResult))
+        .toMatchObject({ ok: false, code: "malformed_summary" });
+    }
   });
 });
 
