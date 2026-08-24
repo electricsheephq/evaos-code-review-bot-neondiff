@@ -335,7 +335,7 @@ describe("daemon cycle resilience", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(heartbeats.map(({ event }) => event)).toEqual(["daemon_cycle_start", "daemon_cycle_complete"]);
+    expect(heartbeats.map(({ event }) => event)).toEqual(["daemon_cycle_start", "daemon_cycle_progress", "daemon_cycle_complete"]);
     expect(new Set(heartbeats.map(({ runId }) => runId)).size).toBe(1);
     expect(heartbeats[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
   });
@@ -482,7 +482,7 @@ describe("daemon cycle resilience", () => {
     expect(result).toMatchObject({ failureKind: "runtime_failure" });
     expect(heartbeats).toEqual([
       { event: "daemon_cycle_start" },
-      { event: "daemon_cycle_failed", error: "second timeout" }
+      { event: "daemon_cycle_failed", error: "daemon_cycle_failed" }
     ]);
     expect(new Set(runIds).size).toBe(1);
   });
@@ -618,6 +618,7 @@ describe("daemon cycle resilience", () => {
 
   it("keeps the daemon cycle healthy when issue enrichment fails", async () => {
     const stderr: string[] = [];
+    const heartbeats: Array<{ event: string; error?: string }> = [];
 
     const result = await runDaemonCycle({
       cycle: 10,
@@ -632,7 +633,7 @@ describe("daemon cycle resilience", () => {
       issueEnrichmentCycleImpl: async () => {
         throw new Error("issue enrichment failed with ghp_fake_token");
       },
-      recordHeartbeatImpl: () => undefined,
+      recordHeartbeatImpl: (event, error) => heartbeats.push({ event, ...(error ? { error } : {}) }),
       stdout: () => undefined,
       stderr: (line) => stderr.push(line)
     });
@@ -647,6 +648,7 @@ describe("daemon cycle resilience", () => {
     });
     expect(failure.error).toContain("issue enrichment failed");
     expect(failure.error).not.toContain("ghp_fake_token");
+    expect(heartbeats).toContainEqual({ event: "daemon_cycle_progress", error: "issue_enrichment_failed" });
   });
 });
 

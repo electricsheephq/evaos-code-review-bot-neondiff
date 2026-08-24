@@ -1788,12 +1788,12 @@ describe("review state store", () => {
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
 
-    const record = (event: "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete", runId: string, at: string) =>
-      store.recordDaemonHeartbeat({ cycle: 1, event, dryRun: false, runId, recordedAt: new Date(at) });
+    const record = (event: "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete", runId: string, at: string, error?: string) =>
+      store.recordDaemonHeartbeat({ cycle: 1, event, dryRun: false, runId, recordedAt: new Date(at), ...(error ? { error } : {}) });
     record("daemon_cycle_start", "run-a", "2026-07-01T00:00:00.000Z");
     record("daemon_cycle_start", "run-a", "2026-07-01T00:00:05.000Z");
-    record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z");
-    record("daemon_cycle_progress", "run-a", "2026-07-01T00:00:30.000Z");
+    record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z", "issue_enrichment_failed");
+    record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:30.000Z");
     record("daemon_cycle_progress", "run-b", "2026-07-01T00:02:00.000Z");
     record("daemon_cycle_complete", "run-a", "2026-07-01T00:03:00.000Z");
 
@@ -1801,11 +1801,12 @@ describe("review state store", () => {
       cycle: 1,
       event: "daemon_cycle_complete",
       dryRun: false,
+      error: "issue_enrichment_failed",
       recordedAt: "2026-07-01T00:03:00.000Z",
       startedCycle: 1,
       startedAt: "2026-07-01T00:00:00.000Z",
       runId: "run-a",
-      lastProgressAt: "2026-07-01T00:01:00.000Z",
+      lastProgressAt: "2026-07-01T00:01:30.000Z",
       completedAt: "2026-07-01T00:03:00.000Z"
     });
     record("daemon_cycle_start", "run-b", "2026-07-01T01:00:00.000Z");
@@ -1880,8 +1881,11 @@ describe("review state store", () => {
     expect(store.getDaemonHeartbeat()).toMatchObject({
       cycle: 2,
       event: "daemon_cycle_failed",
-      error: "request failed with [redacted-secret]"
+      error: "daemon_cycle_failed"
     });
+    const raw = new DatabaseSync(join(root, "state.sqlite"), { readOnly: true });
+    expect(raw.prepare("select error from daemon_heartbeat where id = 1").get()).toEqual({ error: "daemon_cycle_failed" });
+    raw.close();
     store.close();
   });
 

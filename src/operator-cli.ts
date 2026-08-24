@@ -840,6 +840,12 @@ export function filterBotProcessRows(
 }
 
 export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string {
+  const heartbeat = inventory.release.heartbeat;
+  const heartbeatClocks = heartbeat.status === "active" || heartbeat.activeAgeMs !== undefined
+    ? ` totalAgeMs=${heartbeat.activeTotalAgeMs ?? "unknown"}` +
+      ` progressAgeMs=${heartbeat.activeProgressAgeMs ?? "unknown"}` +
+      ` livenessAgeMs=${heartbeat.activeAgeMs ?? "unknown"}`
+    : heartbeat.ageMs !== undefined ? ` ageMs=${heartbeat.ageMs}` : "";
   const lines = [
     `runtime: ${inventory.classification} (${inventory.ok ? "ok" : "blocked"})`,
     `checkedAt: ${inventory.checkedAt}`,
@@ -847,8 +853,11 @@ export function formatRuntimeInventoryHuman(inventory: RuntimeInventory): string
       (inventory.release.launchd.pid ? ` pid=${inventory.release.launchd.pid}` : "") +
       (inventory.release.launchd.configPath ? ` config=${inventory.release.launchd.configPath}` : ""),
     `heartbeat: ${inventory.summary.heartbeatStatus}` +
-      (inventory.release.heartbeat.cycle !== undefined ? ` cycle=${inventory.release.heartbeat.cycle}` : "") +
-      (inventory.release.heartbeat.ageMs !== undefined ? ` ageMs=${inventory.release.heartbeat.ageMs}` : ""),
+      (heartbeat.cycle !== undefined ? ` cycle=${heartbeat.cycle}` : "") +
+      (heartbeat.event ? ` event=${heartbeat.event}` : "") +
+      (heartbeat.error ? ` error=${heartbeat.error}` : "") +
+      heartbeatClocks +
+      (heartbeat.completedAt ? ` completedAt=${heartbeat.completedAt}` : ""),
     `repo: ${inventory.release.repo.branch}@${inventory.release.repo.head}` +
       (inventory.release.repo.dirtyFiles.length > 0 ? ` dirty=${inventory.release.repo.dirtyFiles.length}` : " clean"),
     `queue: active=${inventory.summary.activeQueueJobs} queued=${inventory.summary.queuedJobs}` +
