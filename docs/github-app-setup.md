@@ -158,8 +158,10 @@ integration proof under #630.
    with the existing LaunchAgent label.
    Return to NeonDiff and choose **Install / Update Local Worker** once more to
    refresh discovery, then choose **Initialize Local Config**, **Add Repository**,
-   and **Apply Repository**. Choose **Verify App Access** for a new App or
-   **Verify Existing Access** for an existing agent.
+   and **Apply Repository**. For a compatible existing local bot, choose
+   **Verify Existing Access**. **Verify App Access** for a new App belongs to
+   the signed Desktop 1.1.0 path after its trusted bundled worker and promotion
+   gates are live; do not treat the checksum-bound beta worker as that GA path.
 
    After those promotion gates are live, move the signed Desktop 1.1.0 app to
    `/Applications/NeonDiff.app` for the promoted native journey; the
@@ -260,14 +262,15 @@ not GitHub approval of the public App.
 
 ## Verify Installation
 
-For the current public paid B0 BYO beta, use native **Verify App Access** for a new
-customer-owned App or **Verify Existing Access** for a compatible existing agent
-after the selected repository is applied. These native actions are the supported
-B0 verification path; they use the account- and bot-selected config created by
-NeonDiff. The shell command below is optional CLI/operator diagnostics only. If
-you use it for native B0 troubleshooting, set `SELECTED_CONFIG` to the exact
-selected config path shown by NeonDiff (under its account-scoped Application
-Support directory), not the checkout-local `config.local.json`:
+For the current public paid B0 BYO beta, native **Verify Existing Access** is
+supported for a compatible existing local bot after the selected repository is
+applied. Native **Verify App Access** for a new customer-owned App requires the
+signed Desktop 1.1.0 trusted bundled-worker path and is not a current beta
+claim; use it only after the GA artifact and promotion gates are live. The shell
+command below is optional CLI/operator diagnostics only. If you use it for B0
+troubleshooting, set `SELECTED_CONFIG` to the exact selected config path shown
+by NeonDiff (under its account-scoped Application Support directory), not the
+checkout-local `config.local.json`:
 
 ```bash
 SELECTED_CONFIG="/absolute/path/from-NeonDiff-to-the-selected-bot/config.local.json"
