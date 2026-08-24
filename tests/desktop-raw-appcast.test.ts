@@ -31,7 +31,6 @@ describe("canonical raw Desktop appcast", () => {
   it.each([
     ["primitive text", feed],
     ["empty bytes", Buffer.alloc(0)],
-    ["oversized bytes", Buffer.alloc(4 * 1024 * 1024 + 1)],
     ["malformed UTF-8", Buffer.from([0xc3, 0x28])],
     ["UTF-8 BOM", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(feed)])],
     ["declared alternate encoding", Buffer.from(feed.replace("UTF-8", "UTF-16"))],
@@ -43,6 +42,14 @@ describe("canonical raw Desktop appcast", () => {
     ["case-folded DTD/entity", Buffer.from(hostile.toLowerCase())]
   ])("rejects %s before XML acceptance", (_label, raw) => {
     expect(() => parseRawDesktopAppcast(raw as Uint8Array)).toThrow();
+  });
+
+  it("rejects oversized input before copying it", () => {
+    const oversized = new Uint8Array(4 * 1024 * 1024 + 1), originalFrom = Buffer.from;
+    let error;
+    try { Buffer.from = (() => { throw new Error("oversized input was copied"); }) as typeof Buffer.from; try { parseRawDesktopAppcast(oversized); } catch (caught) { error = caught; } }
+    finally { Buffer.from = originalFrom; }
+    expect(error).toMatchObject({ message: "raw appcast is not bounded" });
   });
 
   it.each([

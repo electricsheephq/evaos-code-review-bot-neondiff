@@ -30,8 +30,8 @@ function deepFreeze(value) {
 
 function canonicalUTF8(input) {
   if (!(input instanceof Uint8Array)) fail("raw appcast must be bytes");
+  if (input.byteLength === 0 || input.byteLength > MAX_INPUT) fail("raw appcast is not bounded");
   const raw = Buffer.from(input);
-  if (raw.length === 0 || raw.length > MAX_INPUT) fail("raw appcast is not bounded");
   let text;
   try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw); }
   catch { fail("raw appcast is not canonical UTF-8"); }
