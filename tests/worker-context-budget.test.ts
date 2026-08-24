@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +8,7 @@ import type { BotConfig } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { Finding, PullRequestSummary } from "../src/types.js";
+import { buildFindingFingerprint } from "../src/findings.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 const zcodePrompts = vi.hoisted((): string[] => []);
@@ -15,6 +18,8 @@ const zcodeFailuresByPath = vi.hoisted(() => new Map<string, string>());
 const zcodeDelaysByPath = vi.hoisted(() => new Map<string, number>());
 const zcodeBarriersByPath = vi.hoisted(() => new Map<string, Promise<void>>());
 const zcodeFirstFailuresByPath = vi.hoisted(() => new Map<string, { message: string; beforeThrow?: () => void }>());
+const severeRawResponse = vi.hoisted(() => ({ value: "" }));
+const severeCurrentWorktree = vi.hoisted(() => ({ enabled: false }));
 const createdReviews = vi.hoisted((): Array<{
   repo: string;
   pullNumber: number;
@@ -36,7 +41,7 @@ vi.mock("../src/git.js", async (importOriginal) => {
   return {
     ...actual,
     preparePullWorktree: vi.fn((input: { workRoot: string; expectedHeadSha: string }) => {
-      const path = join(input.workRoot, "mock-worktree");
+      const path = severeCurrentWorktree.enabled ? process.cwd() : join(input.workRoot, "mock-worktree");
       mkdirSync(path, { recursive: true });
       return { path, headSha: input.expectedHeadSha };
     }),
@@ -73,7 +78,8 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
         attempts: 1,
         degradedRecovery: false
       };
-    })
+    }),
+    runZCodeRawJson: vi.fn(async ({ prompt }: { prompt: string }) => (zcodePrompts.push(prompt), severeRawResponse.value))
   };
 });
 
@@ -165,6 +171,8 @@ describe("worker context budget preflight", () => {
     zcodeDelaysByPath.clear();
     zcodeBarriersByPath.clear();
     zcodeFirstFailuresByPath.clear();
+    severeRawResponse.value = "";
+    severeCurrentWorktree.enabled = false;
     createdReviews.length = 0;
     walkthroughBuildEvents.length = 0;
     delete reviewPostControl.error;
@@ -650,10 +658,11 @@ describe("worker context budget preflight", () => {
     const config = minimalConfig(root);
     config.reviewEnsemble = { enabled: true, mode: "shadow" };
     config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    severeCurrentWorktree.enabled = true;
     const state = new ReviewStateStore(config.statePath);
-    const pull = pullSummary(426, "4".repeat(40));
-    const files = [pullFile("src/a.ts", 200)];
-    zcodeFindingsByPath.set("src/a.ts", [p1Finding("src/a.ts", "Canonical blocking finding")]);
+    const pull = pullSummary(426, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+    const files = [pullFile("src/severe-verification-evidence.ts", 200)];
+    zcodeFindingsByPath.set("src/severe-verification-evidence.ts", [p1Finding("src/severe-verification-evidence.ts", "Canonical blocking finding")]);
 
     const result = await reviewPull({
       config,
@@ -666,10 +675,40 @@ describe("worker context budget preflight", () => {
     });
 
     expect(result).toBe("reviewed");
-    const selfConsistencyIndex = zcodePrompts.findIndex((prompt) => prompt.includes("re-checking a SINGLE prior"));
+    const selfConsistencyIndex = zcodePrompts.findIndex((prompt) => prompt.includes("severe-verifier-input-v1"));
     const firstShadowIndex = zcodePrompts.findIndex((prompt) => prompt.includes("State and lifecycle review"));
     expect(selfConsistencyIndex).toBeGreaterThan(0);
     expect(firstShadowIndex).toBeGreaterThan(selfConsistencyIndex);
+    state.close();
+  });
+
+  it("binds severe verification to original finding fields after public normalization", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-severe-worker-original-finding-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    severeCurrentWorktree.enabled = true;
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    const state = new ReviewStateStore(config.statePath);
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const pull = pullSummary(430, head);
+    const file = pullFile("src/severe-verification-evidence.ts", 40);
+    const original: Finding = { ...p1Finding(file.filename, "Proof gap with 95% confidence"), body: "The confidence is 95%; inspect this exact proof gap.", category: "proof_gap" };
+    zcodeFindingsByPath.set(file.filename, [original]);
+    const hunkHash = createHash("sha256").update(file.patch, "utf8").digest("hex");
+    const fileBytes = readFileSync(join(process.cwd(), file.filename));
+    const fileHash = createHash("sha256").update(fileBytes).digest("hex");
+    severeRawResponse.value = JSON.stringify({
+      schemaVersion: "severe-verifier-v1", repo: "electricsheephq/WorldOS", pullNumber: pull.number,
+      baseSha: pull.base.sha, headSha: head, findingFingerprint: buildFindingFingerprint(original),
+      state: "confirmed", disposition: "retain", confidence: 0.8,
+      evidence: { changedHunk: { sha256: hunkHash, bytes: Buffer.byteLength(file.patch), complete: true },
+        files: [{ path: file.filename, kind: "whole_file", sha256: fileHash, bytes: fileBytes.length, complete: true }], omitted: [], complete: true }
+    });
+    const result = await reviewPull({ config, github: githubForPull(pull, [file]), state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true });
+    expect(result).toBe("reviewed");
+    const transport = JSON.parse(JSON.parse(zcodePrompts.find((prompt) => prompt.includes("severe-verifier-input-v1"))!)[1].content);
+    expect(transport.finding).toMatchObject({ category: "proof_gap", title: original.title, body: original.body });
+    expect(createdReviews[0]?.comments).toHaveLength(1);
     state.close();
   });
 

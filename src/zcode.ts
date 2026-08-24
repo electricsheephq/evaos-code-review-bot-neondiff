@@ -407,6 +407,14 @@ export async function runZCodeReview(input: {
   );
 }
 
+export async function runZCodeRawJson(input: { cwd: string; prompt: string; cliPath: string; appConfigPath: string; model: string; providerId?: string; timeoutMs?: number; retryMaxRetries?: number }): Promise<string> {
+  const zcodeEnv = resolveZCodeProviderEnv({ appConfigPath: input.appConfigPath, model: input.model, providerId: input.providerId });
+  const result = await withTemporaryZCodeReviewPolicy(input.cwd, undefined, () => runZCodeProcess(process.execPath, [input.cliPath, "--cwd", input.cwd, "--mode", "plan", "--json", "--no-browser", "--prompt", input.prompt], { env: buildZCodeRuntimeEnv({ baseEnv: process.env, providerEnv: zcodeEnv, retryMaxRetries: input.retryMaxRetries ?? 0 }), maxBuffer: 20 * 1024 * 1024, timeout: input.timeoutMs ?? 180_000 }));
+  const stdout = redactSecrets(result.stdout.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]")); const stderr = redactSecrets(result.stderr.replaceAll(zcodeEnv.ZCODE_API_KEY, "[redacted-secret]"));
+  if (result.error) throw enrichZCodeProcessError({ error: new Error(`ZCode failed before completion: ${result.error.message}`), originalError: result.error, signal: result.signal, status: result.status });
+  if (result.status !== 0) throw new Error(`ZCode failed with status ${result.status}: ${stderr || stdout.slice(0, 1000)}`); return extractZCodeResponse(stdout);
+}
+
 function buildStrictJsonRetryPrompt(originalPrompt: string): string {
   return [
     "Your previous review output was rejected because it was not valid JSON.",
