@@ -922,25 +922,7 @@ export async function runIssueEnrichmentCycle(input: {
 
     const sourceSnapshots = new Map<string, PreparedWorktree>();
     const defaultBranches = new Map<string, string>();
-    if (shouldCollectModelEvidence) {
-      if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
-      if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
-      for (const repo of reposToScan) {
-        const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
-        if (!policy.allowed) continue;
-        const metadata = await input.github.getRepo(repo);
-        const defaultBranch = metadata.default_branch?.trim();
-        if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${repo}`);
-        sourceSnapshots.set(repo.toLowerCase(), await prepareBranchWorktree({
-          repo,
-          branch: defaultBranch,
-          ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}),
-          workRoot: input.config.workRoot,
-          protectedCheckoutRoots: getProtectedCheckoutRoots()
-        }));
-        defaultBranches.set(repo.toLowerCase(), defaultBranch);
-      }
-    }
+    const sourcePreparationFailures = new Map<string, string>();
 
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
     const issueEvidenceContextByIssue = new Map<string, IssueAnalysisEvidenceContext>();
@@ -1000,7 +982,7 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const analysisInputHash = issue && shouldCompareIssueEnrichmentAnalysisInputHash(existing)
+      const analysisInputHash = !shouldCollectModelEvidence && issue && shouldCompareIssueEnrichmentAnalysisInputHash(existing)
         ? plannedAnalysisInputHashForItem(item)
         : undefined;
       return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action));
@@ -1021,15 +1003,6 @@ export async function runIssueEnrichmentCycle(input: {
                 });
                 prepared.push(promotion.issue);
                 issuesByKey.set(issueKey(repo, issue.number), promotion.issue);
-                if (shouldCollectModelEvidence) {
-                  issueEvidenceContextByIssue.set(issueKey(repo, issue.number), await buildIssueEvidenceContext({
-                    repo,
-                    issue: promotion.issue,
-                    github: input.github,
-                    defaultBranch: defaultBranches.get(repo.toLowerCase()) ?? "unknown",
-                    headSha: sourceSnapshots.get(repo.toLowerCase())?.headSha ?? "0".repeat(40)
-                  }));
-                }
                 if (promotion.evidence) {
                   promotionEvidenceByIssue.set(issueKey(repo, issue.number), promotion.evidence);
                 }
@@ -1057,6 +1030,7 @@ export async function runIssueEnrichmentCycle(input: {
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
         };
+
     applyGlobalIssueEnrichmentCaps({
       items: scanned.items,
       repoScans: scanned.repos,
@@ -1064,6 +1038,51 @@ export async function runIssueEnrichmentCycle(input: {
       checkedAt,
       shouldCountItem
     });
+    if (shouldCollectModelEvidence) {
+      const selectedRepos = [...new Set(
+        scanned.items
+          .filter((item) => isIssueEnrichmentCommentAction(item.action))
+          .map((item) => item.repo)
+      )];
+      const preparationFailure = (error: unknown): string => redactSecrets(error instanceof Error ? error.message : String(error));
+      for (const repo of selectedRepos) {
+        const key = repo.toLowerCase();
+        try {
+          if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
+          if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
+          const metadata = await input.github.getRepo(repo);
+          const defaultBranch = metadata.default_branch?.trim();
+          if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${repo}`);
+          sourceSnapshots.set(key, await prepareBranchWorktree({
+            repo,
+            branch: defaultBranch,
+            ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}),
+            workRoot: input.config.workRoot,
+            protectedCheckoutRoots: getProtectedCheckoutRoots()
+          }));
+          defaultBranches.set(key, defaultBranch);
+        } catch (error) {
+          sourcePreparationFailures.set(key, preparationFailure(error));
+        }
+      }
+      for (const item of scanned.items.filter((candidate) => isIssueEnrichmentCommentAction(candidate.action))) {
+        const key = item.repo.toLowerCase();
+        if (sourcePreparationFailures.has(key)) continue;
+        const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
+        if (!issue) continue;
+        try {
+          issueEvidenceContextByIssue.set(issueKey(item.repo, item.issueNumber), await buildIssueEvidenceContext({
+            repo: item.repo,
+            issue,
+            github: input.github,
+            defaultBranch: defaultBranches.get(key) ?? "unknown",
+            headSha: sourceSnapshots.get(key)?.headSha ?? "0".repeat(40)
+          }));
+        } catch (error) {
+          sourcePreparationFailures.set(key, preparationFailure(error));
+        }
+      }
+    }
     const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
     const scan: IssueEnrichmentScanResult = {
@@ -1085,6 +1104,16 @@ export async function runIssueEnrichmentCycle(input: {
 
     for (const item of scan.items) {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
+      const sourcePreparationFailure = sourcePreparationFailures.get(item.repo.toLowerCase());
+      if (sourcePreparationFailure) {
+        if (isIssueEnrichmentCommentAction(item.action)) summary.failed += 1;
+        items.push({
+          ...item,
+          ...(isIssueEnrichmentCommentAction(item.action) ? { recordStatus: "failed" as const } : {}),
+          error: sourcePreparationFailure
+        });
+        continue;
+      }
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
       const analysisInputHash = shouldCompareIssueEnrichmentAnalysisInputHash(existing) ||
