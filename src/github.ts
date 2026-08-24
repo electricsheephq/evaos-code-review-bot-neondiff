@@ -118,27 +118,16 @@ export interface GitHubRepositoryAccessProof {
   installation_id_present: boolean;
   installation_id?: number;
   installation_account?: string;
+  installation_account_id?: number;
+  installation_account_type?: "User" | "Organization";
   app_slug?: string;
+  bot_login?: string;
   app_can_read_metadata: boolean;
   app_can_read_pull_requests: boolean;
   openPullCount?: number;
   github_api_status?: number;
   github_api_error_class?: GitHubRepositoryAccessErrorClass;
   github_api_error?: string;
-}
-
-interface GitHubInstallationIdentity {
-  id: number;
-  app_id: number;
-  account_login: string;
-  app_slug: string;
-}
-
-interface GitHubInstallationResponse {
-  id: number;
-  app_id?: number;
-  account?: { login?: string };
-  app_slug?: string;
 }
 
 export interface CanonicalGitHubInstallationIdentity {
@@ -153,7 +142,7 @@ export interface CanonicalGitHubInstallationIdentity {
 
 export interface GitHubInstallationIdentityExpectation {
   expectedAppId: string;
-  expectedBotLogin: string;
+  expectedBotLogin?: string;
   repo: string;
 }
 
@@ -198,7 +187,8 @@ export class GitHubApi {
   private readonly privateKey?: string;
   private readonly token?: string;
   private readonly apiBaseUrl: URL;
-  private readonly botLogin: string;
+  private readonly configuredBotLogin?: string;
+  private botLogin?: string;
   private readonly requestTimeoutMs: number;
   private installationTokens = new Map<string, { token: string; expiresAt: number }>();
   private repoInstallationTokens = new Map<string, { installationId: number; token: string; expiresAt: number }>();
@@ -211,7 +201,8 @@ export class GitHubApi {
     this.privateKey = options.privateKey ?? (options.privateKeyPath ? readFileSync(options.privateKeyPath, "utf8") : undefined);
     this.token = options.token;
     this.apiBaseUrl = normalizeHttpApiBaseUrl(options.apiBaseUrl, "github.apiBaseUrl", "https://api.github.com");
-    this.botLogin = options.botLogin ?? DEFAULT_BOT_LOGIN;
+    this.configuredBotLogin = options.botLogin;
+    this.botLogin = options.botLogin;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
   }
 
@@ -262,11 +253,9 @@ export class GitHubApi {
       };
     }
 
-    let installation: GitHubInstallationIdentity;
+    let installation: CanonicalGitHubInstallationIdentity;
     try {
-      installation = parseGitHubInstallationIdentity(
-        await this.getInstallation(repo, { followRedirects: false })
-      );
+      installation = await this.getInstallation(repo, { followRedirects: false });
     } catch (error) {
       return { ...base, ...describeGitHubAccessError(error) };
     }
@@ -274,13 +263,16 @@ export class GitHubApi {
       installation_id_present: true,
       installation_id: installation.id,
       installation_account: installation.account_login,
+      installation_account_id: installation.account_id,
+      installation_account_type: installation.account_type,
       app_id: installation.app_id,
-      app_slug: installation.app_slug
+      app_slug: installation.app_slug,
+      bot_login: installation.bot_login
     };
 
     let token: string;
     try {
-      token = await this.getInstallationTokenForId(repo, installation.id);
+      token = await this.getInstallationTokenForId(repo, installation);
     } catch (error) {
       return { ...base, ...installationProof, ...describeGitHubAccessError(error) };
     }
@@ -622,22 +614,31 @@ export class GitHubApi {
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
 
     const installation = await this.getInstallation(repo);
-    return this.getInstallationTokenForId(repo, installation.id);
+    return this.getInstallationTokenForId(repo, installation);
   }
 
   private async getInstallation(
     repo: string,
     options: { followRedirects?: boolean } = {}
-  ): Promise<GitHubInstallationResponse> {
+  ): Promise<CanonicalGitHubInstallationIdentity> {
     if (!this.appId || !this.privateKey) throw new Error("Missing GitHub App credentials.");
     const jwt = createAppJwt(this.appId, this.privateKey);
-    return this.request<GitHubInstallationResponse>(`/repos/${repo}/installation`, {
+    const response = await this.request<unknown>(`/repos/${repo}/installation`, {
       token: jwt,
       followRedirects: options.followRedirects
     });
+    const expected: GitHubInstallationIdentityExpectation = { expectedAppId: this.appId, repo };
+    if (this.configuredBotLogin !== undefined) expected.expectedBotLogin = this.configuredBotLogin;
+    const identity = normalizeAndValidateGitHubInstallationIdentity(response, expected);
+    this.botLogin = identity.bot_login;
+    return identity;
   }
 
-  private async getInstallationTokenForId(repo: string, installationId: number): Promise<string> {
+  private async getInstallationTokenForId(
+    repo: string,
+    installation: CanonicalGitHubInstallationIdentity
+  ): Promise<string> {
+    const installationId = installation.id;
     const repoCached = this.repoInstallationTokens.get(repo);
     if (repoCached && repoCached.installationId === installationId && repoCached.expiresAt > Date.now() + 60_000) {
       return repoCached.token;
@@ -786,7 +787,9 @@ export function normalizeAndValidateGitHubInstallationIdentity(
   const accountType = readGitHubField(account, "type");
   const appSlug = normalizeGitHubAppSlug(readGitHubField(value, "app_slug"));
   const expectedAppId = readGitHubField(expected, "expectedAppId");
-  const expectedBotLogin = normalizeGitHubBotLogin(readGitHubField(expected, "expectedBotLogin"));
+  const expectedBotLoginValue = readGitHubField(expected, "expectedBotLogin");
+  const expectedBotLogin = normalizeGitHubBotLogin(expectedBotLoginValue);
+  const botLoginConfigured = expectedBotLoginValue !== MISSING_GITHUB_FIELD && expectedBotLoginValue !== undefined;
   const repo = readGitHubField(expected, "repo");
   const repoParts = typeof repo === "string" ? repo.split("/") : [];
   const owner = repoParts.length === 2 && repoParts[1].length > 0 && !/\s/.test(repoParts[1])
@@ -798,7 +801,7 @@ export function normalizeAndValidateGitHubInstallationIdentity(
       || typeof expectedAppId !== "string" || !/^\d+$/.test(expectedAppId.trim())
       || String(appId) !== expectedAppId.trim() || !accountLogin || !owner || accountLogin !== owner
       || (accountType !== "User" && accountType !== "Organization") || !appSlug
-      || !botLogin || botLogin !== expectedBotLogin) {
+      || !botLogin || (botLoginConfigured && botLogin !== expectedBotLogin)) {
     throw new Error("GitHub installation identity failed canonical validation.");
   }
   return Object.freeze({
@@ -830,28 +833,6 @@ function normalizeGitHubValue(value: unknown, pattern: RegExp): string | undefin
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toLowerCase();
   return pattern.test(normalized) ? normalized : undefined;
-}
-
-function parseGitHubInstallationIdentity(value: unknown): GitHubInstallationIdentity {
-  const installation = value as {
-    id?: unknown;
-    app_id?: unknown;
-    account?: { login?: unknown } | null;
-    app_slug?: unknown;
-  } | null;
-  const positiveInteger = (candidate: unknown): candidate is number =>
-    typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0;
-  const accountLogin = installation?.account?.login;
-  const appSlug = installation?.app_slug;
-  const accountLoginValid = typeof accountLogin === "string"
-    && /^(?!-)(?!.*--)[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(accountLogin);
-  const appSlugValid = typeof appSlug === "string"
-    && /^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$/.test(appSlug);
-  if (!positiveInteger(installation?.id) || !positiveInteger(installation?.app_id)
-      || !accountLoginValid || !appSlugValid) {
-    throw new Error("GitHub installation response is missing canonical identity fields.");
-  }
-  return { id: installation.id, app_id: installation.app_id, account_login: accountLogin, app_slug: appSlug };
 }
 
 function describeGitHubAccessError(error: unknown): Pick<

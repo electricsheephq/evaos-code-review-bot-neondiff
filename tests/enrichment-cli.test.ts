@@ -1400,7 +1400,12 @@ function routeMockGitHub(
     (request.url === "/repos/owner/issue-repo/installation" ||
       request.url === "/repos/owner/second-issue-repo/installation")
   ) {
-    respondJson(response, 200, { id: 123 });
+    respondJson(response, 200, {
+      id: 123,
+      app_id: 4184532,
+      account: { id: 7, login: "owner", type: "Organization" },
+      app_slug: "evaos-code-review-bot"
+    });
     return;
   }
   if (request.method === "POST" && request.url === "/app/installations/123/access_tokens") {
