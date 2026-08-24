@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import {
   buildEnrichmentComment,
@@ -17,9 +17,15 @@ import type { GitHubRelatedIssueOrPull } from "../src/github-related-context.js"
 import type { IssueAnalysis } from "../src/issue-analysis.js";
 import { parseMarkerLifecycleFields } from "../src/marker-lifecycle.js";
 import { buildIssueEnrichmentStatus, collectIssueEnrichmentScan, resolveIssueEnrichmentRepoPolicy, runIssueEnrichmentCycle as runIssueEnrichmentCycleImpl } from "../src/issue-enrichment.js";
-import { ReviewStateStore } from "../src/state.js";
+import { ReviewStateStore, type IssueEnrichmentRecord } from "../src/state.js";
 import type { PullFilePatch, PullRequestSummary } from "../src/types.js";
 import { createTestLicenseAdmission } from "./helpers/license-admission.js";
+
+const { prepareBranchWorktreeMock } = vi.hoisted(() => ({ prepareBranchWorktreeMock: vi.fn() }));
+vi.mock("../src/git.js", async () => ({
+  ...(await vi.importActual<typeof import("../src/git.js")>("../src/git.js")),
+  prepareBranchWorktree: prepareBranchWorktreeMock
+}));
 
 const issueEnrichmentTestAdmission = await createTestLicenseAdmission({ operation: "issue_enrichment" });
 const fixtureIssueAnalysis = (issue: GitHubRelatedIssueOrPull): IssueAnalysis => ({
@@ -69,6 +75,29 @@ const runIssueEnrichmentCycle = (input: Parameters<typeof runIssueEnrichmentCycl
 const HEAD_A = "a".repeat(40);
 const HEAD_B = "b".repeat(40);
 
+const liveIssueEnrichmentConfig = (workRoot: string, repos: string[], globalCap = 1) => {
+  const repoPolicy = { maxIssuesPerCycle: 1, maxCommentsPerCycle: 1, cooldownMs: 60_000, burstWindowMs: 60_000, maxIssuesPerBurst: 2, lookbackMs: 60_000, processExistingOpenIssuesOnActivation: true };
+  return { workRoot, evidenceDir: join(workRoot, "evidence"), codexRuntime: { enabled: true, cliPath: "/definitely/missing/codex", model: "gpt-5.6-luna", reasoningEffort: "max" as const, timeoutMs: 1_000, maxOutputBytes: 64_000 }, issueEnrichment: {
+    enabled: true, postIssueComment: true, allowlist: repos, allowedLabels: [], allowedReviewers: [], maxIssuesPerCycle: 1, maxCommentsPerCycle: 1,
+    globalMaxIssuesPerCycle: globalCap, globalMaxCommentsPerCycle: globalCap, maxActiveRuns: 1, leaseTtlMs: 60_000, cooldownMs: 60_000,
+    burstWindowMs: 60_000, maxIssuesPerBurst: 2, lookbackMs: 60_000, processExistingOpenIssuesOnActivation: true,
+    repos: Object.fromEntries(repos.map((repo) => [repo, repoPolicy]))
+  }};
+};
+
+function buildCycleState(existing: IssueEnrichmentRecord[] = []) {
+  const existingByKey = new Map(existing.map((record) => [`${record.repo}#${record.issueNumber}`, record]));
+  const records: Array<Parameters<ReviewStateStore["recordIssueEnrichment"]>[0]> = [];
+  const state = {
+    getIssueEnrichmentRecord: (repo: string, issueNumber: number) => existingByKey.get(`${repo}#${issueNumber}`),
+    recordIssueEnrichment: (record: Parameters<ReviewStateStore["recordIssueEnrichment"]>[0]) => (records.push(record), record as ReturnType<ReviewStateStore["recordIssueEnrichment"]>),
+    getIssueEnrichmentRepoWatermark: () => undefined, recordIssueEnrichmentRepoWatermark: () => undefined as never,
+    tryAcquireIssueEnrichmentRunLease: () => ({ leaseId: "test-lease", expiresAt: "2026-08-24T02:00:00.000Z", ownerPid: process.pid }),
+    releaseIssueEnrichmentRunLease: () => undefined
+  };
+  return { records, state };
+}
+
 const pull: PullRequestSummary = {
   number: 77,
   title: "Harden review queue #22",
@@ -89,6 +118,91 @@ describe("sticky enrichment comments", () => {
       github: {} as never,
       dryRun: true
     })).rejects.toThrow("production license admission is required");
+  });
+
+  it("counts hash-bearing reruns inside global caps before source preparation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-hash-cap-"));
+    try {
+      const emptyRepos = Array.from({ length: 53 }, (_value, index) => `owner/empty-${index + 1}`);
+      const rerunRepo = "owner/hash-rerun";
+      const siblingRepo = "owner/sibling";
+      const issueUpdatedAt = "2026-08-24T00:00:00.000Z";
+      const { state } = buildCycleState([{
+        repo: rerunRepo,
+        issueNumber: 971,
+        issueUpdatedAt,
+        analysisInputHash: "f".repeat(64),
+        status: "posted",
+        createdAt: issueUpdatedAt,
+        updatedAt: issueUpdatedAt
+      }]);
+      const repos = [...emptyRepos, rerunRepo, siblingRepo];
+      prepareBranchWorktreeMock.mockReset().mockResolvedValue({ path: process.cwd(), headSha: HEAD_A });
+      const result = await runIssueEnrichmentCycleImpl({
+        config: liveIssueEnrichmentConfig(join(root, "work"), repos),
+        state,
+        github: {
+          listIssuesForEnrichment: async (repo) => {
+            return [rerunRepo, siblingRepo].includes(repo)
+              ? [{ number: repo === rerunRepo ? 971 : 972, title: `Candidate for ${repo}`, state: "open", updated_at: issueUpdatedAt, body: "Acceptance criteria and owner." }]
+              : [];
+          },
+          getRepo: async () => ({ default_branch: "main", clone_url: process.cwd() }),
+          canPostAsApp: () => true,
+          upsertIssueComment: async () => { throw new Error("fixture must not post"); }
+        },
+        dryRun: false, includeExisting: true, checkedAt: "2026-08-24T01:00:00.000Z", licenseAdmission: issueEnrichmentTestAdmission
+      });
+
+      expect(result.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ repo: rerunRepo, issueNumber: 971, action: "would_comment" }),
+        expect.objectContaining({ repo: siblingRepo, issueNumber: 972, action: "deferred", reason: "global_max_issues_per_cycle" })
+      ]));
+      expect(prepareBranchWorktreeMock).toHaveBeenCalledTimes(1);
+      expect(prepareBranchWorktreeMock.mock.calls[0]?.[0]).toMatchObject({ repo: rerunRepo });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("backfills a healthy sibling after a selected source preparation failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "issue-enrichment-source-failure-"));
+    try {
+      const failingRepo = "owner/source-fails";
+      const siblingRepo = "owner/sibling";
+      const { state, records } = buildCycleState();
+      prepareBranchWorktreeMock.mockReset().mockImplementation(async ({ repo }: { repo: string }) => {
+        if (repo === failingRepo) throw new Error("mirror unavailable");
+        return { path: process.cwd(), headSha: HEAD_A };
+      });
+      const result = await runIssueEnrichmentCycleImpl({
+        config: liveIssueEnrichmentConfig(join(root, "work"), [failingRepo, siblingRepo], 1),
+        state,
+        github: {
+          listIssuesForEnrichment: async (repo) => [{
+            number: repo === failingRepo ? 971 : 972,
+            title: `Candidate for ${repo}`,
+            state: "open",
+            updated_at: "2026-08-24T00:00:00.000Z",
+            body: "Acceptance criteria and owner."
+          }],
+          getRepo: async () => ({ default_branch: "main", clone_url: process.cwd() }),
+          canPostAsApp: () => true,
+          upsertIssueComment: async () => { throw new Error("fixture must not post"); }
+        },
+        dryRun: false, includeExisting: true, checkedAt: "2026-08-24T01:00:00.000Z", licenseAdmission: issueEnrichmentTestAdmission
+      });
+
+      expect(prepareBranchWorktreeMock.mock.calls.map((call: [{ repo?: string }]) => call[0]?.repo)).toEqual([failingRepo, siblingRepo]);
+      expect(result.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ repo: failingRepo, issueNumber: 971, action: "would_comment", recordStatus: "failed" }),
+        expect.objectContaining({ repo: siblingRepo, issueNumber: 972, action: "would_comment" })
+      ]));
+      expect(result.items.find((item) => item.repo === failingRepo)?.error).toContain("mirror unavailable");
+      expect(records.some((record) => record.repo === failingRepo)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("loads default-off enrichment config", () => {

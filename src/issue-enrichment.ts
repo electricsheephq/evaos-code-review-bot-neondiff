@@ -921,26 +921,7 @@ export async function runIssueEnrichmentCycle(input: {
     }
 
     const sourceSnapshots = new Map<string, PreparedWorktree>();
-    const defaultBranches = new Map<string, string>();
-    if (shouldCollectModelEvidence) {
-      if (!input.config.workRoot) throw new Error("issue_enrichment_model_runtime_paths_required");
-      if (!input.github.getRepo) throw new Error("issue_enrichment_repository_metadata_required");
-      for (const repo of reposToScan) {
-        const policy = resolveIssueEnrichmentRepoPolicy(config, repo);
-        if (!policy.allowed) continue;
-        const metadata = await input.github.getRepo(repo);
-        const defaultBranch = metadata.default_branch?.trim();
-        if (!defaultBranch) throw new Error(`issue_enrichment_default_branch_missing: ${repo}`);
-        sourceSnapshots.set(repo.toLowerCase(), await prepareBranchWorktree({
-          repo,
-          branch: defaultBranch,
-          ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}),
-          workRoot: input.config.workRoot,
-          protectedCheckoutRoots: getProtectedCheckoutRoots()
-        }));
-        defaultBranches.set(repo.toLowerCase(), defaultBranch);
-      }
-    }
+    const sourcePreparationFailures = new Map<string, string>();
 
     const issuesByKey = new Map<string, GitHubRelatedIssueOrPull>();
     const issueEvidenceContextByIssue = new Map<string, IssueAnalysisEvidenceContext>();
@@ -1000,7 +981,8 @@ export async function runIssueEnrichmentCycle(input: {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
-      const analysisInputHash = issue && shouldCompareIssueEnrichmentAnalysisInputHash(existing)
+      if (shouldCollectModelEvidence && existing?.status === "posted" && existing.analysisInputHash) return true;
+      const analysisInputHash = !shouldCollectModelEvidence && issue && shouldCompareIssueEnrichmentAnalysisInputHash(existing)
         ? plannedAnalysisInputHashForItem(item)
         : undefined;
       return !(existing && shouldSkipIssueEnrichmentRecord(existing, issueUpdatedAt, checkedAt, analysisInputHash, item.action));
@@ -1021,15 +1003,6 @@ export async function runIssueEnrichmentCycle(input: {
                 });
                 prepared.push(promotion.issue);
                 issuesByKey.set(issueKey(repo, issue.number), promotion.issue);
-                if (shouldCollectModelEvidence) {
-                  issueEvidenceContextByIssue.set(issueKey(repo, issue.number), await buildIssueEvidenceContext({
-                    repo,
-                    issue: promotion.issue,
-                    github: input.github,
-                    defaultBranch: defaultBranches.get(repo.toLowerCase()) ?? "unknown",
-                    headSha: sourceSnapshots.get(repo.toLowerCase())?.headSha ?? "0".repeat(40)
-                  }));
-                }
                 if (promotion.evidence) {
                   promotionEvidenceByIssue.set(issueKey(repo, issue.number), promotion.evidence);
                 }
@@ -1057,12 +1030,50 @@ export async function runIssueEnrichmentCycle(input: {
           items: [],
           recommendedActions: buildScanRecommendedActions(status, summarizeScan([]))
         };
+    applyGlobalIssueEnrichmentCaps({ items: scanned.items, repoScans: scanned.repos, config, checkedAt, shouldCountItem });
+    if (shouldCollectModelEvidence) {
+      const prepareRepos = async (repos: string[]) => {
+        for (const repo of repos) {
+          const key = repo.toLowerCase();
+          try {
+            if (!input.config.workRoot || !input.github.getRepo) throw new Error(!input.config.workRoot ? "issue_enrichment_model_runtime_paths_required" : "issue_enrichment_repository_metadata_required");
+            const metadata = await input.github.getRepo(repo), branch = metadata.default_branch?.trim();
+            if (!branch) throw new Error(`issue_enrichment_default_branch_missing: ${repo}`);
+            sourceSnapshots.set(key, await prepareBranchWorktree({ repo, branch, ...(metadata.clone_url ? { repoUrl: metadata.clone_url } : {}), workRoot: input.config.workRoot, protectedCheckoutRoots: getProtectedCheckoutRoots() }));
+            for (const item of scanned.items.filter((candidate) => candidate.repo === repo && isIssueEnrichmentCommentAction(candidate.action) && shouldCountItem(candidate))) {
+              const issue = issuesByKey.get(issueKey(repo, item.issueNumber));
+              if (issue) issueEvidenceContextByIssue.set(issueKey(repo, item.issueNumber), await buildIssueEvidenceContext({ repo, issue, github: input.github, defaultBranch: branch, headSha: sourceSnapshots.get(key)!.headSha }));
+            }
+          } catch (error) {
+            sourcePreparationFailures.set(key, redactSecrets(error instanceof Error ? error.message : String(error)));
+          }
+        }
+      };
+      const selectedRepos = [...new Set(scanned.items.filter((item) => isIssueEnrichmentCommentAction(item.action) && shouldCountItem(item)).map((item) => item.repo))];
+      await prepareRepos(selectedRepos);
+      const attemptedRepos = new Set(selectedRepos.map((repo) => repo.toLowerCase()));
+      while (true) {
+        let issues = scanned.items.filter((item) => isIssueEnrichmentCommentAction(item.action) && shouldCountItem(item) && !sourcePreparationFailures.has(item.repo.toLowerCase())).length;
+        let comments = scanned.items.filter((item) => item.action === "would_comment" && shouldCountItem(item) && !sourcePreparationFailures.has(item.repo.toLowerCase())).length;
+        const admittedRepos = new Set<string>();
+        for (const item of scanned.items) {
+          const key = item.repo.toLowerCase();
+          if (item.action !== "deferred" || !item.reason.startsWith("global_") || sourcePreparationFailures.has(key) || !shouldCountItem(item)) continue;
+          if (issues >= config.globalMaxIssuesPerCycle || (config.postIssueComment && comments >= config.globalMaxCommentsPerCycle)) continue;
+          item.action = config.postIssueComment ? "would_comment" : "would_enrich"; item.reason = "eligible"; issues += 1; if (config.postIssueComment) comments += 1;
+          admittedRepos.add(item.repo);
+        }
+        const freshRepos = [...admittedRepos].filter((repo) => !attemptedRepos.has(repo.toLowerCase()));
+        if (freshRepos.length === 0) break;
+        freshRepos.forEach((repo) => attemptedRepos.add(repo.toLowerCase())); await prepareRepos(freshRepos);
+      }
+    }
     applyGlobalIssueEnrichmentCaps({
       items: scanned.items,
       repoScans: scanned.repos,
       config,
       checkedAt,
-      shouldCountItem
+      shouldCountItem: (item) => !sourcePreparationFailures.has(item.repo.toLowerCase()) && shouldCountItem(item)
     });
     const combinedRepos = [...baselineRepos, ...scanned.repos];
     const combinedSummary = summarizeScan(combinedRepos);
@@ -1085,6 +1096,12 @@ export async function runIssueEnrichmentCycle(input: {
 
     for (const item of scan.items) {
       const issue = issuesByKey.get(issueKey(item.repo, item.issueNumber));
+      const sourcePreparationFailure = sourcePreparationFailures.get(item.repo.toLowerCase());
+      if (sourcePreparationFailure && isIssueEnrichmentCommentAction(item.action) && shouldCountItem(item)) {
+        summary.failed += 1;
+        items.push({ ...item, recordStatus: "failed", error: sourcePreparationFailure });
+        continue;
+      }
       const issueUpdatedAt = canonicalIssueUpdatedAt(issue, checkedAt);
       const existing = input.state.getIssueEnrichmentRecord(item.repo, item.issueNumber);
       const analysisInputHash = shouldCompareIssueEnrichmentAnalysisInputHash(existing) ||
