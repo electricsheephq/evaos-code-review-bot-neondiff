@@ -91,7 +91,8 @@ function isRelationChar(code: number): boolean {
     code !== 0x2c &&
     code !== 0x3b &&
     code !== 0x3c &&
-    code !== 0x3e
+    code !== 0x3e &&
+    code !== 0x5c
   );
 }
 
