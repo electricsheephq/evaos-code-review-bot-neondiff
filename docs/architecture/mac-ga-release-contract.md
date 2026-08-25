@@ -174,6 +174,19 @@ overwrite, delete, or rotate retained evidence. Exceptional deletion is a
 separately reviewed repository-administrator action and permanently retires the
 immutable tag; any approved successor uses a new fixed identity.
 
+Protected transition authority is retained only below
+`docs/releases/desktop/accepted-targets`. The empty repository convention is
+one zero-byte `.gitkeep`; the first append removes it. Packet filenames bind to
+the SHA-256 of exact canonical packet bytes, and target-receipt filenames bind
+to the SHA-256 of exact canonical receipt bytes. Every receipt resolves its
+target, current, and optional previous packet inside that fixed directory, and
+all shared release, source, tag-object, artifact, and tree identities must equal
+the parsed referenced packets. Invalid UTF-8, duplicate or extra keys, lossy
+numeric build tokens, missing references, symlinks, oversized inputs, or a
+content-address mismatch fail closed. Pull-request and protected-main transition
+validation preserves every prior packet and receipt byte exactly; the
+verifier-backed producer and action derivation remain a separate accepted gate.
+
 ## Gates and single implementation path
 
 Mac promotion requires one tested implementation path owning preflight,
