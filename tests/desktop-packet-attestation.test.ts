@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -38,6 +38,15 @@ process.stdout.write(JSON.stringify([{ verificationResult: { statement: { predic
   return { root, output, packetName, packet, bundle, bytes, capture, run };
 }
 
+function storedFile(path: string) {
+  const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const before = fstatSync(descriptor), bytes = readFileSync(descriptor), after = fstatSync(descriptor);
+    if (!before.isFile() || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || bytes.length !== before.size) throw new Error("stored file changed during read");
+    return { bytes, mode: before.mode & 0o777 };
+  } finally { closeSync(descriptor); }
+}
+
 describe("trusted Desktop accepted-packet attestation", () => {
   it("verifies one exact content-addressed packet under fixed canonical identity", () => {
     const value = fixture(), result = value.run(); expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ verified: true, packetSHA256: value.packetSHA256, repository, signerWorkflow, sourceRef });
@@ -57,9 +66,9 @@ describe("trusted Desktop accepted-packet attestation", () => {
 
   it("retains one bounded content-addressed bundle bound to the exact packet", () => {
     const value = bundleFixture(), result = value.run(); expect(result.status).toBe(0); const receipt = JSON.parse(result.stdout), expectedDigest = createHash("sha256").update(value.bytes).digest("hex"), target = join(value.output, `${expectedDigest}.attestation.json`);
-    expect(receipt).toEqual({ bundleSHA256: expectedDigest, bundleFileName: `${expectedDigest}.attestation.json` }); expect(readFileSync(target)).toEqual(value.bytes); expect(statSync(target).mode & 0o777).toBe(0o600);
+    const stored = storedFile(target); expect(receipt).toEqual({ bundleSHA256: expectedDigest, bundleFileName: `${expectedDigest}.attestation.json` }); expect(stored.bytes).toEqual(value.bytes); expect(stored.mode).toBe(0o600);
     const args = JSON.parse(readFileSync(value.capture, "utf8")); expect(args.slice(0, 2)).toEqual(["attestation", "verify"]); expect(basename(args[2])).toBe(value.packetName); expect(args[2]).not.toBe(value.packet); expect(args[3]).toBe("--bundle"); expect(args[4]).not.toBe(value.bundle); expect(args.slice(5)).toEqual(["--repo", repository, "--signer-workflow", signerWorkflow, "--source-ref", sourceRef, "--deny-self-hosted-runners", "--format", "json"]);
-    expect(bundleFixture().run("fail").status).not.toBe(0); expect(value.run().status).not.toBe(0); expect(readFileSync(target)).toEqual(value.bytes);
+    expect(bundleFixture().run("fail").status).not.toBe(0); expect(value.run().status).not.toBe(0); expect(storedFile(target).bytes).toEqual(value.bytes);
     expect(bundleFixture("malformed").run().status).not.toBe(0); expect(bundleFixture("wrong-subject").run().status).not.toBe(0);
     const linked = bundleFixture(), alias = join(linked.root, "alias.json"); symlinkSync(linked.bundle, alias); expect(linked.run("success", ["--bundle", alias, "--packet", linked.packet, "--output-directory", linked.output]).status).not.toBe(0);
     const alternate = bundleFixture(); expect(alternate.run("success", ["--bundle", alternate.bundle, "--packet", alternate.packet, "--output-directory", alternate.output, "--repo", "attacker/example"]).status).not.toBe(0);
