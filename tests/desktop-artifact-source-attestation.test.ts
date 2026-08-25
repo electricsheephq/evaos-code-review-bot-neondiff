@@ -26,14 +26,14 @@ function classicZip() {
   return Buffer.concat([local, central, eocd]);
 }
 
-function fixture(attestedSourceSHA: string) {
+function fixture(attestedSourceSHA: string, releaseTag = "v1.1.0", lightweightTag = false) {
   const root = mkdtempSync(join(tmpdir(), "neondiff-artifact-attestation-")); roots.push(root);
-  const artifactName = "NeonDiff-1.1.0-build11091-macOS.zip", artifact = join(root, artifactName), artifactBytes = classicZip(), artifactSHA256 = createHash("sha256").update(artifactBytes).digest("hex"); writeFileSync(artifact, artifactBytes);
+  const version = releaseTag.slice(1), artifactName = `NeonDiff-${version}-build11091-macOS.zip`, artifact = join(root, artifactName), artifactBytes = classicZip(), artifactSHA256 = createHash("sha256").update(artifactBytes).digest("hex"); writeFileSync(artifact, artifactBytes);
   const tagRef = join(root, "tag-ref.json"), tagObject = join(root, "tag-object.json"), release = join(root, "release.json"), bundle = join(root, "bundle.json"), output = join(root, "retained"), capture = join(root, "capture.json"); mkdirSync(output);
-  writeFileSync(tagRef, JSON.stringify({ ref: "refs/tags/v1.1.0", object: { type: "tag", sha: tagObjectSHA } }));
-  writeFileSync(tagObject, JSON.stringify({ sha: tagObjectSHA, tag: "v1.1.0", object: { type: "commit", sha: sourceSHA } }));
-  writeFileSync(release, JSON.stringify({ tag_name: "v1.1.0", draft: false, prerelease: false, immutable: true, assets: [{ name: artifactName, size: artifactBytes.length, digest: `sha256:${artifactSHA256}`, browser_download_url: `https://github.com/${repository}/releases/download/v1.1.0/${artifactName}` }] }));
-  const predicate = { schemaVersion: 1, claimClass: "neondiff.desktop.artifact-source-promotion.v1", repository, signerWorkflow: workflow, workflowSourceRef: sourceRef, workflowSourceSHA: workflowSHA, releaseTag: "v1.1.0", artifactSourceSHA: attestedSourceSHA, acceptedPacketSHA256, developerIDTeamID: "TC6MS3T6NN" };
+  writeFileSync(tagRef, JSON.stringify({ ref: `refs/tags/${releaseTag}`, object: { type: lightweightTag ? "commit" : "tag", sha: lightweightTag ? sourceSHA : tagObjectSHA } }));
+  writeFileSync(tagObject, JSON.stringify(lightweightTag ? { sha: sourceSHA } : { sha: tagObjectSHA, tag: releaseTag, object: { type: "commit", sha: sourceSHA } }));
+  writeFileSync(release, JSON.stringify({ tag_name: releaseTag, draft: false, prerelease: releaseTag !== "v1.1.0", immutable: true, assets: [{ name: artifactName, size: artifactBytes.length, digest: `sha256:${artifactSHA256}`, browser_download_url: `https://github.com/${repository}/releases/download/${releaseTag}/${artifactName}` }] }));
+  const predicate = { schemaVersion: 1, claimClass: "neondiff.desktop.artifact-source-promotion.v1", repository, signerWorkflow: workflow, workflowSourceRef: sourceRef, workflowSourceSHA: workflowSHA, releaseTag, artifactSourceSHA: attestedSourceSHA, acceptedPacketSHA256, developerIDTeamID: "TC6MS3T6NN" };
   const statement = { _type: "https://in-toto.io/Statement/v1", subject: [{ name: artifactName, digest: { sha256: artifactSHA256 } }], predicateType, predicate };
   const bundleDocument = { mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json", verificationMaterial: { tlogEntries: [{}] }, dsseEnvelope: { payload: Buffer.from(JSON.stringify(statement)).toString("base64"), payloadType: "application/vnd.in-toto+json", signatures: [{ sig: Buffer.alloc(64, 1).toString("base64") }] } }, bundleBytes = Buffer.from(JSON.stringify(bundleDocument)); writeFileSync(bundle, bundleBytes);
   const fakeGh = join(root, "gh"); writeFileSync(fakeGh, `#!/usr/bin/env node
@@ -46,7 +46,8 @@ if (process.env.FAKE_GH_MODE === "wrong-result-subject") statement.subject[0].di
 if (process.env.FAKE_GH_MODE === "wrong-result-packet") statement.predicate.acceptedPacketSHA256 = "8".repeat(64);
 process.stdout.write(JSON.stringify([{ verificationResult: { statement } }]));
 `); chmodSync(fakeGh, 0o755);
-  const run = (mode = "success", env: Record<string, string> = {}, args = ["--artifact", artifact, "--bundle", bundle, "--tag-ref", tagRef, "--tag-object", tagObject, "--release", release, "--output-directory", output]) => spawnSync(process.execPath, ["scripts/verify-desktop-artifact-source-attestation.mjs", ...args], { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CAPTURE_PATH: capture, FAKE_GH_MODE: mode, GITHUB_ACTIONS: "true", GITHUB_REPOSITORY: repository, GITHUB_REF: sourceRef, GITHUB_SHA: workflowSHA, GITHUB_WORKFLOW_REF: `${workflow}@${sourceRef}`, RUNNER_ENVIRONMENT: "github-hosted", ...env } });
+  const defaultArgs = ["--artifact", artifact, "--bundle", bundle, "--tag-ref", tagRef, "--tag-object", tagObject, "--release", release, "--output-directory", output, ...(releaseTag === "v1.1.0" ? [] : ["--release-tag", releaseTag])];
+  const run = (mode = "success", env: Record<string, string> = {}, args = defaultArgs) => spawnSync(process.execPath, ["scripts/verify-desktop-artifact-source-attestation.mjs", ...args], { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CAPTURE_PATH: capture, FAKE_GH_MODE: mode, GITHUB_ACTIONS: "true", GITHUB_REPOSITORY: repository, GITHUB_REF: sourceRef, GITHUB_SHA: workflowSHA, GITHUB_WORKFLOW_REF: `${workflow}@${sourceRef}`, RUNNER_ENVIRONMENT: "github-hosted", ...env } });
   return { root, artifact, tagRef, tagObject, release, bundle, bundleBytes, capture, output, artifactName, artifactSHA256, run };
 }
 
@@ -68,6 +69,10 @@ describe("Desktop artifact-source promotion attestation", () => {
     expect(result.stdout).not.toContain(value.root);
   });
 
+  it("verifies a beta lightweight tag under the same fixed signer identity", () => {
+    const value = fixture(sourceSHA, "v1.1.0-beta.87", true), result = value.run(); expect(result.status).toBe(0); expect(JSON.parse(result.stdout).artifactSourceSHA).toBe(sourceSHA);
+  });
+
   it("fails closed for untrusted verification output, runner identity, and unsafe evidence", () => {
     expect(fixture(sourceSHA).run("fail").status).not.toBe(0);
     expect(fixture(sourceSHA).run("wrong-result-source").status).not.toBe(0);
@@ -84,7 +89,7 @@ describe("Desktop artifact-source promotion attestation", () => {
 
   it("keeps promotion authority fixed and verifies before packet construction", () => {
     const workflowSource = readFileSync(".github/workflows/desktop-accepted-release-packet.yml", "utf8"), verifierSource = readFileSync("scripts/lib/desktop-artifact-source-attestation.mjs", "utf8"), builderSource = readFileSync("scripts/build-desktop-accepted-release-packet.mjs", "utf8");
-    expect(workflowSource).toMatch(/workflow_dispatch:\s*\n/); expect(workflowSource).not.toMatch(/workflow_dispatch:\s*\n\s+inputs:/); expect(workflowSource).not.toMatch(/^permissions:/m); expect(workflowSource).toContain("  promote-stable-artifact:\n    name: Verify source binding and build accepted packet\n    needs: resolve-retained-evidence\n    permissions:\n      contents: read\n      id-token: write\n      attestations: write"); expect(workflowSource).toContain("npm ci --ignore-scripts --omit=dev"); expect(workflowSource).not.toMatch(/run: npm ci\s*$/m); expect(workflowSource).not.toContain("cache: npm"); expect(workflowSource).toContain("github.ref == 'refs/heads/main'"); expect(workflowSource).toContain("runs-on: macos-15"); expect(workflowSource).not.toMatch(/runs-on:\s*\[[^\]]*self-hosted|runs-on:\s*self-hosted/); expect(workflowSource).toContain('test "$GITHUB_SHA" = "$(git rev-parse origin/main)"'); expect(workflowSource).toContain('test "$GITHUB_SHA" = "$CURRENT_MAIN_SHA"');
+    expect(workflowSource).toMatch(/workflow_dispatch:\s*\n\s+inputs:\s*\n\s+release_tag:/); expect(workflowSource).not.toMatch(/^permissions:/m); expect(workflowSource).toContain("  promote-accepted-artifact:\n    name: Verify source binding and build accepted packet\n    needs: resolve-retained-evidence\n    permissions:\n      contents: read\n      id-token: write\n      attestations: write"); expect(workflowSource).toContain("npm ci --ignore-scripts --omit=dev"); expect(workflowSource).not.toMatch(/run: npm ci\s*$/m); expect(workflowSource).not.toContain("cache: npm"); expect(workflowSource).toContain("github.ref == 'refs/heads/main'"); expect(workflowSource).toContain("runs-on: macos-15"); expect(workflowSource).not.toMatch(/runs-on:\s*\[[^\]]*self-hosted|runs-on:\s*self-hosted/); expect(workflowSource).toContain('test "$GITHUB_SHA" = "$(git rev-parse origin/main)"'); expect(workflowSource).toContain('test "$GITHUB_SHA" = "$CURRENT_MAIN_SHA"');
     expect(workflowSource).toContain("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4"); expect(workflowSource).not.toContain("actions/attest-build-provenance"); expect(workflowSource).toContain(`PREDICATE_TYPE: ${predicateType}`); expect(workflowSource).toContain("TeamIdentifier=$DEVELOPER_ID_TEAM_ID"); expect(workflowSource).toMatch(/codesign --verify/); expect(workflowSource).toMatch(/stapler validate/); expect(workflowSource).toMatch(/spctl --assess/); expect(workflowSource).toContain("Print :NeonDiffSourceSHA");
     expect(workflowSource).toContain("acceptedPacketSHA256:$acceptedPacketSHA256");
     expect(verifierSource).toContain('"--repo", REPOSITORY'); expect(verifierSource).toContain('"--signer-workflow", SIGNER_WORKFLOW'); expect(verifierSource).toContain('"--predicate-type", DESKTOP_ARTIFACT_SOURCE_PREDICATE_TYPE'); expect(verifierSource).toContain('"--source-ref", SOURCE_REF'); expect(verifierSource).toContain('"--source-digest", workflowSHA'); expect(verifierSource).toContain('"--deny-self-hosted-runners"');

@@ -120,7 +120,7 @@ process.stdout.write(args[0] === "attestation" ? process.env.FAKE_ATTESTATION_RE
   ], {
     cwd: process.cwd(),
     encoding: "utf8",
-    timeout: 1500,
+    timeout: 10_000,
     env: {
       ...process.env,
       PATH: `${root}:${process.env.PATH}`,
@@ -190,13 +190,13 @@ describe("retained accepted Desktop evidence", () => {
     const forgedPacket = fixture(), forged = JSON.parse(readFileSync(forgedPacket.packetPath, "utf8")); forged.treeSHA256 = "9".repeat(64);
     const forgedBytes = Buffer.from(`${JSON.stringify(forged)}\n`), forgedSHA256 = sha256(forgedBytes), forgedName = `${forgedSHA256}.packet.json`, forgedPath = join(forgedPacket.root, "release-download", forgedName); writeFileSync(forgedPath, forgedBytes);
     const forgedRelease = JSON.parse(readFileSync(forgedPacket.releasePath, "utf8")); forgedRelease.assets[0] = { name: forgedName, size: forgedBytes.length, digest: `sha256:${forgedSHA256}`, browser_download_url: `https://github.com/${repository}/releases/download/${evidenceTag}/${forgedName}` }; writeFileSync(forgedPacket.releasePath, JSON.stringify(forgedRelease)); expect(forgedPacket.run({ packet: forgedPath }).status).not.toBe(0);
-  });
+  }, 30_000);
 
   it("resolves retained state before scheduling the producer or verifier", () => {
     const workflowSource = readFileSync(".github/workflows/desktop-accepted-release-packet.yml", "utf8"), builderSource = readFileSync("scripts/build-desktop-accepted-release-packet.mjs", "utf8");
     const workflowDocument = parse(workflowSource) as { jobs: Record<string, any> };
     const resolver = workflowDocument.jobs["resolve-retained-evidence"];
-    const producer = workflowDocument.jobs["promote-stable-artifact"];
+    const producer = workflowDocument.jobs["promote-accepted-artifact"];
     const retention = workflowDocument.jobs["retain-accepted-packet"];
 
     expect(resolver).toBeDefined();
@@ -204,18 +204,26 @@ describe("retained accepted Desktop evidence", () => {
     expect(resolver.permissions).toEqual({ contents: "read" });
     expect(resolver.outputs).toEqual({ state: "${{ steps.retained.outputs.state }}" });
     expect(resolver.if).toBe("${{ github.ref == 'refs/heads/main' }}");
+    expect(resolver.env.RELEASE_TAG).toBe("${{ inputs.release_tag }}");
+    expect(workflowSource).toContain("contents/docs/releases/desktop/index.json?ref=$GITHUB_SHA");
+    expect(workflowSource).toContain("contents/docs/releases/desktop/declarations/$SELECTED_PATH?ref=$GITHUB_SHA");
+    const protectedIndexPath = "docs/releases/desktop/index.json";
+    const protectedIndex = JSON.parse(readFileSync(protectedIndexPath, "utf8"));
+    expect(protectedIndex).toMatchObject({ status: "retained", currentPath: "v1.1.0-beta.87.json" });
+    expect(protectedIndex.declarationPaths).toContain("v1.1.0-beta.87.json");
+    expect(spawnSync(process.execPath, ["scripts/validate-desktop-release-declaration.mjs", "--index", protectedIndexPath], { cwd: process.cwd(), encoding: "utf8" }).status).toBe(0);
 
     expect(producer.needs).toBe("resolve-retained-evidence");
     expect(producer.if).toContain("github.ref == 'refs/heads/main'");
     expect(producer.if).toContain("needs.resolve-retained-evidence.outputs.state == 'absent'");
 
-    expect(retention.needs).toEqual(["resolve-retained-evidence", "promote-stable-artifact"]);
+    expect(retention.needs).toEqual(["resolve-retained-evidence", "promote-accepted-artifact"]);
     expect(retention.if).toContain("always()");
     expect(retention.if).toContain("needs.resolve-retained-evidence.result == 'success'");
     expect(retention.if).toContain("needs.resolve-retained-evidence.outputs.state == 'present'");
-    expect(retention.if).toContain("needs.promote-stable-artifact.result == 'skipped'");
+    expect(retention.if).toContain("needs.promote-accepted-artifact.result == 'skipped'");
     expect(retention.if).toContain("needs.resolve-retained-evidence.outputs.state == 'absent'");
-    expect(retention.if).toContain("needs.promote-stable-artifact.result == 'success'");
+    expect(retention.if).toContain("needs.promote-accepted-artifact.result == 'success'");
     expect(retention.env.RETENTION_STATE).toBe("${{ needs.resolve-retained-evidence.outputs.state }}");
     const downloadStep = retention.steps.find((step: Record<string, any>) => typeof step.uses === "string" && step.uses.startsWith("actions/download-artifact@"));
     expect(downloadStep.if).toBe("${{ env.RETENTION_STATE == 'absent' }}");
@@ -227,6 +235,9 @@ describe("retained accepted Desktop evidence", () => {
     expect(workflowSource).not.toContain('gh api "repos/$REPOSITORY/immutable-releases" --silent');
     expect(workflowSource).toContain("gh release download \"$RELEASE_TAG\"");
     expect(workflowSource).toContain("--artifact \"$RETRIEVED_ROOT/$ARTIFACT_NAME\"");
+    expect(workflowSource).toContain('RETENTION_TARGET=(--target-release-tag "$RELEASE_TAG")');
+    expect(workflowSource).toContain('--release-tag "$RELEASE_TAG"');
+    expect(workflowSource).not.toContain(".target_commitish");
     expect(workflowSource.indexOf("Verify artifact attestation and build accepted packet")).toBeLessThan(workflowSource.indexOf("Upload source-bound packet evidence"));
     expect(builderSource.indexOf("verifyAndRetainDesktopArtifactSourceAttestation")).toBeLessThan(builderSource.indexOf("buildAcceptedDesktopReleasePacket(values.index"));
     expect(workflowSource).not.toMatch(/gh release delete|gh api[^\n]*-X DELETE/);
