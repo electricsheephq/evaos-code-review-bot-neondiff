@@ -1,0 +1,174 @@
+name: Desktop accepted release packet
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: desktop-accepted-release-packet-v1.1.0
+  cancel-in-progress: false
+
+jobs:
+  attest-stable-packet:
+    name: Build and attest stable packet
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: v1.1.0
+      REPOSITORY: electricsheephq/evaos-code-review-bot-neondiff
+      STABLE_FEED_URL: https://www.neondiff.com/updates/stable/appcast.xml
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Build accepted stable packet
+        id: packet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+          PACKET_ROOT="$RUNNER_TEMP/desktop-accepted-release-packet"
+          DECLARATION_DIRECTORY="$PACKET_ROOT/declarations"
+          EXTRACT_DIRECTORY="$PACKET_ROOT/extracted"
+          mkdir -p "$DECLARATION_DIRECTORY" "$EXTRACT_DIRECTORY"
+
+          gh api "repos/$REPOSITORY/git/ref/tags/$RELEASE_TAG" > "$PACKET_ROOT/tag-ref.json"
+          TAG_OBJECT_SHA="$(jq -er '.object.sha' "$PACKET_ROOT/tag-ref.json")"
+          gh api "repos/$REPOSITORY/git/tags/$TAG_OBJECT_SHA" > "$PACKET_ROOT/tag-object.json"
+          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$PACKET_ROOT/release.json"
+          SOURCE_SHA="$(jq -er '.object.sha' "$PACKET_ROOT/tag-object.json")"
+          test "$TAG_OBJECT_SHA" = "$(git rev-parse "${RELEASE_TAG}^{tag}")"
+          test "$SOURCE_SHA" = "$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
+
+          ASSET_FILTER='[.assets[] | select(.name | test("^NeonDiff-1\\.1\\.0-build[0-9]+-macOS\\.zip$"))]'
+          test "$(jq "$ASSET_FILTER | length" "$PACKET_ROOT/release.json")" = "1"
+          ARTIFACT_NAME="$(jq -er "$ASSET_FILTER | .[0].name" "$PACKET_ROOT/release.json")"
+          ASSET_API_URL="$(jq -er "$ASSET_FILTER | .[0].url" "$PACKET_ROOT/release.json")"
+          ARTIFACT_PATH="$PACKET_ROOT/$ARTIFACT_NAME"
+          gh api -H "Accept: application/octet-stream" "$ASSET_API_URL" > "$ARTIFACT_PATH"
+
+          node --input-type=module - "$ARTIFACT_PATH" <<'NODE'
+          import { guardClassicZipArchive } from "./scripts/lib/desktop-extracted-app-tree-proof.mjs";
+          guardClassicZipArchive({ artifactPath: process.argv[2] });
+          NODE
+          ditto -x -k "$ARTIFACT_PATH" "$EXTRACT_DIRECTORY"
+          APP_PATH="$EXTRACT_DIRECTORY/NeonDiff.app"
+          INFO_PLIST="$APP_PATH/Contents/Info.plist"
+          test -d "$APP_PATH"
+          test -f "$INFO_PLIST"
+          codesign --verify --deep --strict "$APP_PATH"
+          codesign -d --verbose=4 "$APP_PATH" 2> "$PACKET_ROOT/codesign-metadata.txt"
+          grep -q '^Authority=Developer ID Application:' "$PACKET_ROOT/codesign-metadata.txt"
+          grep -q 'TeamIdentifier=TC6MS3T6NN' "$PACKET_ROOT/codesign-metadata.txt"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")"
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+          BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO_PLIST")"
+          FEED_URL="$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$INFO_PLIST")"
+          SPARKLE_PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$INFO_PLIST")"
+          test "$BUNDLE_ID" = "com.electricsheephq.NeonDiffDesktop"
+          test "$VERSION" = "1.1.0"
+          test "$FEED_URL" = "$STABLE_FEED_URL"
+          test "$ARTIFACT_NAME" = "NeonDiff-1.1.0-build${BUILD}-macOS.zip"
+          ACCEPTED_PUBLIC_KEY="$PACKET_ROOT/accepted-sparkle-public-key.txt"
+          printf '%s' "$SPARKLE_PUBLIC_KEY" > "$ACCEPTED_PUBLIC_KEY"
+          node - "$ACCEPTED_PUBLIC_KEY" <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const value = readFileSync(process.argv[2], "utf8"), decoded = Buffer.from(value, "base64");
+          if (decoded.length !== 32 || decoded.toString("base64") !== value) process.exit(1);
+          NODE
+
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --max-time 60 "$STABLE_FEED_URL" > "$PACKET_ROOT/appcast.xml"
+          jq -n \
+            --arg build "$BUILD" \
+            --arg artifact "$ARTIFACT_NAME" \
+            --arg feed "$STABLE_FEED_URL" \
+            '{schemaVersion:1,product:"neondiff-desktop",version:"1.1.0",tag:"v1.1.0",channel:"stable",sequence:null,build:$build,predecessor:null,contract:"paid-mac-ga-byo-v1",distribution:{bundleId:"com.electricsheephq.NeonDiffDesktop",appPath:"NeonDiff.app",artifactName:$artifact,releaseClass:"desktop-only",origins:{github:"https://github.com/electricsheephq/evaos-code-review-bot-neondiff",site:"https://www.neondiff.com",feed:$feed}}}' \
+            > "$DECLARATION_DIRECTORY/v1.1.0.json"
+          jq -n \
+            '{schemaVersion:1,status:"retained",declarationDirectory:"declarations",declarationPaths:["v1.1.0.json"],currentPath:"v1.1.0.json"}' \
+            > "$PACKET_ROOT/index.json"
+
+          BUILD_RESULT="$(node scripts/build-desktop-accepted-release-packet.mjs \
+            --index "$PACKET_ROOT/index.json" \
+            --artifact "$ARTIFACT_PATH" \
+            --feed "$PACKET_ROOT/appcast.xml" \
+            --tag-ref "$PACKET_ROOT/tag-ref.json" \
+            --tag-object "$PACKET_ROOT/tag-object.json" \
+            --release "$PACKET_ROOT/release.json" \
+            --accepted-public-key "$ACCEPTED_PUBLIC_KEY" \
+            --output "$PACKET_ROOT/packet.pending.json")"
+          PACKET_SHA256="$(jq -er '.packetSHA256 | select(test("^[a-f0-9]{64}$"))' <<< "$BUILD_RESULT")"
+          PACKET_NAME="$(jq -er '.packetFileName' <<< "$BUILD_RESULT")"
+          test "$PACKET_NAME" = "$PACKET_SHA256.packet.json"
+          PACKET_PATH="$PACKET_ROOT/$PACKET_NAME"
+          test ! -e "$PACKET_PATH"
+          mv "$PACKET_ROOT/packet.pending.json" "$PACKET_PATH"
+          test "$PACKET_SHA256" = "$(shasum -a 256 "$PACKET_PATH" | awk '{print $1}')"
+          {
+            printf 'packet_path=%s\n' "$PACKET_PATH"
+            printf 'packet_name=%s\n' "$PACKET_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest exact accepted packet
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ steps.packet.outputs.packet_path }}
+
+      - name: Retain content-addressed attestation bundle
+        id: bundle
+        env:
+          BUNDLE_SOURCE: ${{ steps.attest.outputs.bundle-path }}
+          EXPECTED_PACKET_NAME: ${{ steps.packet.outputs.packet_name }}
+          PACKET_DIRECTORY: ${{ runner.temp }}/desktop-accepted-release-packet
+        run: |
+          set -euo pipefail
+          BUNDLE_RESULT="$(node scripts/retain-desktop-packet-attestation.mjs \
+            --bundle "$BUNDLE_SOURCE" \
+            --packet-name "$EXPECTED_PACKET_NAME" \
+            --output-directory "$PACKET_DIRECTORY")"
+          BUNDLE_SHA256="$(jq -er '.bundleSHA256 | select(test("^[a-f0-9]{64}$"))' <<< "$BUNDLE_RESULT")"
+          BUNDLE_NAME="$(jq -er '.bundleFileName' <<< "$BUNDLE_RESULT")"
+          test "$BUNDLE_NAME" = "$BUNDLE_SHA256.attestation.json"
+          BUNDLE_PATH="$PACKET_DIRECTORY/$BUNDLE_NAME"
+          test "$BUNDLE_SHA256" = "$(shasum -a 256 "$BUNDLE_PATH" | awk '{print $1}')"
+          {
+            printf 'bundle_path=%s\n' "$BUNDLE_PATH"
+            printf 'bundle_name=%s\n' "$BUNDLE_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload packet and retained attestation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-accepted-packet-v1.1.0-${{ github.sha }}
+          path: |
+            ${{ steps.packet.outputs.packet_path }}
+            ${{ steps.bundle.outputs.bundle_path }}
+          if-no-files-found: error
+          retention-days: 30
