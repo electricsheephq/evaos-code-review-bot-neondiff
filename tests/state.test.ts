@@ -1788,12 +1788,12 @@ describe("review state store", () => {
     roots.push(root);
     const store = new ReviewStateStore(join(root, "state.sqlite"));
 
-    const record = (event: "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete", runId: string, at: string) =>
-      store.recordDaemonHeartbeat({ cycle: 1, event, dryRun: false, runId, recordedAt: new Date(at) });
+    const record = (event: "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete", runId: string, at: string, error?: string) =>
+      store.recordDaemonHeartbeat({ cycle: 1, event, dryRun: false, runId, recordedAt: new Date(at), ...(error ? { error } : {}) });
     record("daemon_cycle_start", "run-a", "2026-07-01T00:00:00.000Z");
     record("daemon_cycle_start", "run-a", "2026-07-01T00:00:05.000Z");
     record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z");
-    record("daemon_cycle_progress", "run-a", "2026-07-01T00:00:30.000Z");
+    record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z", "issue_enrichment_failed"); record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z"); record("daemon_cycle_progress", "run-a", "2026-07-01T00:01:00.000Z", "issue_enrichment_failed");
     record("daemon_cycle_progress", "run-b", "2026-07-01T00:02:00.000Z");
     record("daemon_cycle_complete", "run-a", "2026-07-01T00:03:00.000Z");
 
@@ -1801,6 +1801,7 @@ describe("review state store", () => {
       cycle: 1,
       event: "daemon_cycle_complete",
       dryRun: false,
+      error: "issue_enrichment_failed",
       recordedAt: "2026-07-01T00:03:00.000Z",
       startedCycle: 1,
       startedAt: "2026-07-01T00:00:00.000Z",
@@ -1815,6 +1816,36 @@ describe("review state store", () => {
     record("daemon_cycle_progress", "run-b", "2026-07-01T01:03:00.000Z");
     expect(store.getDaemonHeartbeat()).toMatchObject({ runId: "run-b", startedAt: "2026-07-01T01:00:00.000Z",
       lastProgressAt: "2026-07-01T01:03:00.000Z" });
+    store.close();
+  });
+
+  it("persists the held PR lane with daemon liveness", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-held-lane-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordDaemonHeartbeat({
+      cycle: 2,
+      event: "daemon_cycle_start",
+      dryRun: false,
+      reviewLane: "held",
+      runId: "run-held",
+      recordedAt: new Date("2026-07-01T00:00:00.000Z")
+    });
+    store.recordDaemonHeartbeat({
+      cycle: 2,
+      event: "daemon_cycle_complete",
+      dryRun: false,
+      reviewLane: "held",
+      runId: "run-held",
+      recordedAt: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(store.getDaemonHeartbeat()).toMatchObject({
+      event: "daemon_cycle_complete",
+      reviewLane: "held",
+      recordedAt: "2026-07-01T00:01:00.000Z"
+    });
     store.close();
   });
 
@@ -1839,7 +1870,7 @@ describe("review state store", () => {
         startedAt: "2026-07-01T00:00:00.000Z",
         completedAt: "2026-07-01T00:04:00.000Z"
       });
-      expect(store.getDaemonHeartbeat()?.lastProgressAt).toBeUndefined();
+      store.recordDaemonHeartbeat({ cycle: 4, event: "daemon_cycle_progress", dryRun: false, recordedAt: new Date("2026-07-01T00:05:00.000Z") }); store.recordDaemonHeartbeat({ cycle: 4, event: "daemon_cycle_complete", dryRun: false, recordedAt: new Date("2026-07-01T00:06:00.000Z") }); expect(store.getDaemonHeartbeat()).toMatchObject({ event: "daemon_cycle_failed", recordedAt: "2026-07-01T00:04:00.000Z", completedAt: "2026-07-01T00:04:00.000Z" }); expect(store.getDaemonHeartbeat()?.lastProgressAt).toBeUndefined();
       store.close();
     }
     const rollbackReader = new DatabaseSync(statePath, { readOnly: true });
@@ -1880,7 +1911,7 @@ describe("review state store", () => {
     expect(store.getDaemonHeartbeat()).toMatchObject({
       cycle: 2,
       event: "daemon_cycle_failed",
-      error: "request failed with [redacted-secret]"
+      error: "daemon_cycle_failed"
     });
     store.close();
   });

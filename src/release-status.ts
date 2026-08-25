@@ -6,7 +6,13 @@ import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "./config.js";
 import { buildReviewBudgetStatus, type ReviewBudgetStatus } from "./review-budget.js";
 import { containsSecretLikeText } from "./secrets.js";
-import { parseProviderCooldownError, PROVIDER_COOLDOWN_ERROR_PREFIX } from "./state.js";
+import {
+  normalizeDaemonHeartbeatError,
+  normalizeDaemonReviewLane,
+  parseProviderCooldownError,
+  PROVIDER_COOLDOWN_ERROR_PREFIX,
+  type DaemonReviewLane
+} from "./state.js";
 import { buildZCodeTimeoutInspectCommand, summarizeZCodeTimeoutErrors } from "./zcode-timeout.js";
 import type { BotConfig } from "./config.js";
 import type { ReviewQueueJobRecord } from "./state.js";
@@ -104,10 +110,17 @@ export interface ReleaseHeartbeatStatus {
   ageMs?: number;
   cycle?: number;
   event?: string;
+  error?: string;
   dryRun?: boolean;
+  reviewLane?: DaemonReviewLane | "unknown";
   activeCycle?: number;
+  activeRunId?: string;
   activeStartedAt?: string;
+  activeLastProgressAt?: string;
+  activeProgressAgeMs?: number;
+  activeTotalAgeMs?: number;
   activeAgeMs?: number;
+  completedAt?: string;
 }
 
 export interface ReleaseStatusInput {
@@ -301,6 +314,7 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
     (input.database.retryableProviderDeferredReviewQueueJobCount ?? 0);
   const retryableDeferredQueueJobsOk = actionableProviderDeferredQueueJobs === 0;
   const heartbeatOk = input.heartbeat.status === "fresh" || input.heartbeat.status === "active";
+  const reviewLane = input.heartbeat.reviewLane ?? "unknown";
   const retryProviderCooldownCommand =
     `npx tsx src/cli.ts retry-provider-cooldowns --config ${input.configPath} ` +
     "--expired-only true --dry-run false --zcode true";
@@ -392,6 +406,11 @@ export function buildReleaseStatus(input: ReleaseStatusInput): ReleaseStatus {
       name: "daemon_heartbeat_recent",
       ok: heartbeatOk,
       detail: describeHeartbeat(input.heartbeat)
+    },
+    {
+      name: "background_pr_lane",
+      ok: reviewLane === "held",
+      detail: describeBackgroundPrLane(reviewLane)
     }
   ];
   const publicReleaseGates = input.publicRelease
@@ -2975,23 +2994,29 @@ function readHeartbeatStatus(
   activeMaxAgeMs: number,
   now: Date
 ): ReleaseHeartbeatStatus {
-  if (!existsSync(statePath)) return { status: "missing", maxAgeMs };
+  if (!existsSync(statePath)) return { status: "missing", maxAgeMs, reviewLane: "unknown" };
   const db = new DatabaseSync(statePath, { readOnly: true });
   try {
     const table = db
       .prepare("select 1 from sqlite_master where type = 'table' and name = 'daemon_heartbeat' limit 1")
       .get();
-    if (!table) return { status: "missing", maxAgeMs };
+    if (!table) return { status: "missing", maxAgeMs, reviewLane: "unknown" };
 
     const columns = new Set(
       (db.prepare("pragma table_info(daemon_heartbeat)").all() as unknown as Array<{ name: string }>)
         .map((column) => column.name)
     );
+    const errorSelect = columns.has("error") ? "error" : "null as error";
     const startedCycleSelect = columns.has("started_cycle") ? "started_cycle" : "null as started_cycle";
     const startedAtSelect = columns.has("started_at") ? "started_at" : "null as started_at";
+    const runIdSelect = columns.has("run_id") ? "run_id" : "null as run_id";
+    const progressAtSelect = columns.has("last_progress_at") ? "last_progress_at" : "null as last_progress_at";
+    const completedAtSelect = columns.has("completed_at") ? "completed_at" : "null as completed_at";
+    const reviewLaneSelect = columns.has("review_lane") ? "review_lane" : "null as review_lane";
     const row = db
       .prepare(
-        `select cycle, event, dry_run, recorded_at, ${startedCycleSelect}, ${startedAtSelect}
+        `select cycle, event, dry_run, recorded_at, ${errorSelect}, ${startedCycleSelect}, ${startedAtSelect},
+                ${runIdSelect}, ${progressAtSelect}, ${completedAtSelect}, ${reviewLaneSelect}
          from daemon_heartbeat
          where id = 1
          limit 1`
@@ -2999,54 +3024,88 @@ function readHeartbeatStatus(
       .get() as {
         cycle: number | null;
         event: string | null;
+        error: string | null;
         dry_run: number | null;
         recorded_at: string | null;
         started_cycle: number | null;
         started_at: string | null;
+        run_id: string | null;
+        last_progress_at: string | null;
+        completed_at: string | null;
+        review_lane: string | null;
       } | undefined;
-    if (!row) return { status: "missing", maxAgeMs };
+    if (!row) return { status: "missing", maxAgeMs, reviewLane: "unknown" };
 
     const latestTime = row.recorded_at ? Date.parse(row.recorded_at) : NaN;
     const activeStartedTime = row.started_at ? Date.parse(row.started_at) : NaN;
-    const hasActiveCycle =
-      Number.isFinite(activeStartedTime) &&
-      (!Number.isFinite(latestTime) || activeStartedTime > latestTime);
-    if (hasActiveCycle) {
-      const activeAgeMs = Math.max(0, now.getTime() - activeStartedTime);
+    const progressTime = row.last_progress_at ? Date.parse(row.last_progress_at) : NaN;
+    const completedTime = row.completed_at ? Date.parse(row.completed_at) : NaN;
+    const terminalEvent = row.event === "daemon_cycle_complete" || row.event === "daemon_cycle_failed";
+    const validLatest = row.recorded_at === null || Number.isFinite(latestTime) && latestTime <= now.getTime();
+    const validStartClock = Number.isFinite(activeStartedTime) && activeStartedTime <= now.getTime();
+    const newerActiveStart = validStartClock && Number.isFinite(latestTime) && activeStartedTime > latestTime && (terminalEvent || row.event === null);
+    const validStart = validStartClock && (newerActiveStart || row.recorded_at === null || !Number.isFinite(latestTime) || latestTime >= activeStartedTime);
+    const activeStart = validStart && (row.recorded_at === null || !Number.isFinite(latestTime) || !terminalEvent || newerActiveStart);
+    const fallbackTerminal = terminalEvent && row.completed_at === null && !newerActiveStart;
+    const effectiveCompletedTime = Number.isFinite(completedTime) ? completedTime : fallbackTerminal ? latestTime : NaN;
+    const completedAt = Number.isFinite(completedTime)
+      ? row.completed_at!
+      : fallbackTerminal && Number.isFinite(latestTime) ? row.recorded_at! : undefined;
+    const validProgress = row.last_progress_at !== null && Number.isFinite(progressTime) && validStart &&
+      progressTime >= activeStartedTime && progressTime <= now.getTime() && Number.isFinite(latestTime) && latestTime >= progressTime;
+    const invalidProgress = row.last_progress_at !== null && !validProgress;
+    const hasCompletion = row.completed_at !== null || fallbackTerminal;
+    const invalidCompletion = (hasCompletion &&
+      (!Number.isFinite(effectiveCompletedTime) || effectiveCompletedTime > now.getTime() ||
+        (row.started_at !== null && !validStart) || (validStart && effectiveCompletedTime < activeStartedTime) ||
+        (validProgress && effectiveCompletedTime < progressTime) ||
+        (Number.isFinite(latestTime) && effectiveCompletedTime > latestTime) || invalidProgress)) ||
+      (completedAt !== undefined && !terminalEvent);
+    const error = normalizeDaemonHeartbeatError(row.event, row.error);
+    const reviewLane: DaemonReviewLane | "unknown" =
+      normalizeDaemonReviewLane(row.review_lane) ?? "unknown";
+    const common: Omit<ReleaseHeartbeatStatus, "status"> = {
+      maxAgeMs,
+      ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
+      ...(Number.isFinite(latestTime) ? { ageMs: Math.max(0, now.getTime() - latestTime) } : {}),
+      ...(row.cycle !== null ? { cycle: row.cycle } : {}),
+      ...(row.event ? { event: row.event } : {}),
+      ...(error ? { error } : {}),
+      dryRun: row.dry_run === 1,
+      reviewLane
+    };
+    if (!completedAt && !invalidCompletion && !invalidProgress && activeStart && validLatest) {
+      const livenessTime = validProgress ? progressTime : activeStartedTime;
+      const activeAgeMs = Math.max(0, now.getTime() - livenessTime);
       return {
         status: activeAgeMs <= activeMaxAgeMs ? "active" : "stale",
-        maxAgeMs,
         activeMaxAgeMs,
-        ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
-        ...(Number.isFinite(latestTime) ? { ageMs: Math.max(0, now.getTime() - latestTime) } : {}),
-        ...(row.cycle !== null ? { cycle: row.cycle } : {}),
-        ...(row.event ? { event: row.event } : {}),
-        dryRun: row.dry_run === 1,
+        ...common,
         ...(row.started_cycle !== null ? { activeCycle: row.started_cycle } : {}),
+        ...(row.run_id ? { activeRunId: row.run_id } : {}),
         ...(row.started_at ? { activeStartedAt: row.started_at } : {}),
+        ...(validProgress && row.last_progress_at ? { activeLastProgressAt: row.last_progress_at } : {}),
+        ...(validProgress ? { activeProgressAgeMs: Math.max(0, now.getTime() - progressTime) } : {}),
+        activeTotalAgeMs: Math.max(0, now.getTime() - activeStartedTime),
         activeAgeMs
       };
     }
 
-    if (!Number.isFinite(latestTime)) {
+    const validTerminal = terminalEvent && !newerActiveStart && !invalidCompletion && !invalidProgress && validLatest && Number.isFinite(latestTime);
+    if (!completedAt && !Number.isFinite(latestTime)) {
       return {
         status: "stale",
-        maxAgeMs,
-        ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
-        ...(row.cycle !== null ? { cycle: row.cycle } : {}),
-        ...(row.event ? { event: row.event } : {}),
-        dryRun: row.dry_run === 1
+        ...common,
+        ...(row.started_cycle !== null ? { activeCycle: row.started_cycle } : {}),
+        ...(row.run_id ? { activeRunId: row.run_id } : {}),
+        ...(row.started_at ? { activeStartedAt: row.started_at } : {}),
+        ...(completedAt ? { completedAt } : {})
       };
     }
-    const ageMs = Math.max(0, now.getTime() - latestTime);
     return {
-      status: ageMs <= maxAgeMs ? "fresh" : "stale",
-      maxAgeMs,
-      ...(row.recorded_at ? { latestAt: row.recorded_at } : {}),
-      ageMs,
-      ...(row.cycle !== null ? { cycle: row.cycle } : {}),
-      ...(row.event ? { event: row.event } : {}),
-      dryRun: row.dry_run === 1
+      status: validTerminal && now.getTime() - latestTime <= maxAgeMs ? "fresh" : "stale",
+      ...common,
+      ...(completedAt ? { completedAt } : {})
     };
   } finally {
     db.close();
@@ -3054,20 +3113,49 @@ function readHeartbeatStatus(
 }
 
 function describeHeartbeat(heartbeat: ReleaseHeartbeatStatus): string {
-  if (heartbeat.status === "missing") return `missing heartbeat row; max age ${heartbeat.maxAgeMs}ms`;
+  const reviewLaneSuffix = heartbeat.reviewLane ? `; review lane ${heartbeat.reviewLane}` : "";
+  if (heartbeat.status === "missing") {
+    return `missing heartbeat row; max age ${heartbeat.maxAgeMs}ms${reviewLaneSuffix}`;
+  }
+  const errorSuffix = heartbeat.error ? `; error ${heartbeat.error}` : "";
   if (heartbeat.status === "active") {
     const activeAge = heartbeat.activeAgeMs === undefined ? "unknown" : `${heartbeat.activeAgeMs}ms`;
+    if (heartbeat.activeTotalAgeMs === undefined && heartbeat.activeProgressAgeMs === undefined) {
+      return (
+        `active; active age ${activeAge}; max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; ` +
+        `started cycle ${heartbeat.activeCycle ?? "unknown"}; last event ${heartbeat.event ?? "unknown"}; ` +
+        `last cycle ${heartbeat.cycle ?? "unknown"}${reviewLaneSuffix}${errorSuffix}`
+      );
+    }
+    const totalAge = heartbeat.activeTotalAgeMs === undefined ? "unknown" : `${heartbeat.activeTotalAgeMs}ms`;
+    const progressAge = heartbeat.activeProgressAgeMs === undefined ? "unknown" : `${heartbeat.activeProgressAgeMs}ms`;
     return (
-      `active; active age ${activeAge}; max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; ` +
+      `active; total age ${totalAge}; progress age ${progressAge}; liveness age ${activeAge}; ` +
+      `max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; ` +
       `started cycle ${heartbeat.activeCycle ?? "unknown"}; last event ${heartbeat.event ?? "unknown"}; ` +
-      `last cycle ${heartbeat.cycle ?? "unknown"}`
+      `last cycle ${heartbeat.cycle ?? "unknown"}${reviewLaneSuffix}${errorSuffix}`
     );
   }
   const age = heartbeat.ageMs === undefined ? "unknown" : `${heartbeat.ageMs}ms`;
   const activeSuffix = heartbeat.activeAgeMs === undefined
     ? ""
-    : `; active age ${heartbeat.activeAgeMs}ms; active max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; active cycle ${heartbeat.activeCycle ?? "unknown"}`;
-  return `${heartbeat.status}; age ${age}; max ${heartbeat.maxAgeMs}ms; event ${heartbeat.event ?? "unknown"}; cycle ${heartbeat.cycle ?? "unknown"}${activeSuffix}`;
+    : heartbeat.activeTotalAgeMs === undefined && heartbeat.activeProgressAgeMs === undefined
+      ? `; active age ${heartbeat.activeAgeMs}ms; active max ${heartbeat.activeMaxAgeMs ?? heartbeat.maxAgeMs}ms; active cycle ${heartbeat.activeCycle ?? "unknown"}`
+      : `; total age ${heartbeat.activeTotalAgeMs === undefined ? "unknown" : `${heartbeat.activeTotalAgeMs}ms`}; ` +
+        `progress age ${heartbeat.activeProgressAgeMs === undefined ? "unknown" : `${heartbeat.activeProgressAgeMs}ms`}; ` +
+        `liveness age ${heartbeat.activeAgeMs}ms`;
+  const completedSuffix = heartbeat.completedAt ? `; completed at ${heartbeat.completedAt}` : "";
+  return `${heartbeat.status}; age ${age}; max ${heartbeat.maxAgeMs}ms; event ${heartbeat.event ?? "unknown"}; cycle ${heartbeat.cycle ?? "unknown"}${activeSuffix}${completedSuffix}${reviewLaneSuffix}${errorSuffix}`;
+}
+
+function describeBackgroundPrLane(reviewLane: DaemonReviewLane | "unknown"): string {
+  if (reviewLane === "held") {
+    return "held; live PR posts require separate exact scoped review-pr proof";
+  }
+  if (reviewLane === "active") {
+    return "active background PR lane is not permitted; use exact scoped review-pr";
+  }
+  return "unknown background PR lane; wait for a classified heartbeat";
 }
 
 interface ChangelogHeadStatus {

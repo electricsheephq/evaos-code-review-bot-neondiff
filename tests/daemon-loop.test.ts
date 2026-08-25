@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -278,7 +278,7 @@ describe("daemon cycle resilience", () => {
   });
 
   it("records start and completion heartbeat events for successful cycles", async () => {
-    const heartbeats: Array<{ event: string; runId?: string }> = [];
+    const heartbeats: Array<{ event: string; runId?: string; reviewLane?: string }> = [];
 
     const result = await runDaemonCycle({
       cycle: 2,
@@ -329,14 +329,17 @@ describe("daemon cycle resilience", () => {
           other: 0
         }
       }),
-      recordHeartbeatImpl: (event, _error, runId) => heartbeats.push({ event, runId }),
+      recordHeartbeatImpl: (event, _error, runId, reviewLane) => {
+        heartbeats.push({ event, runId, reviewLane });
+      },
       stdout: () => undefined,
       stderr: () => undefined
     });
 
     expect(result.ok).toBe(true);
-    expect(heartbeats.map(({ event }) => event)).toEqual(["daemon_cycle_start", "daemon_cycle_complete"]);
+    expect(heartbeats.map(({ event }) => event)).toEqual(["daemon_cycle_start", "daemon_cycle_progress", "daemon_cycle_complete"]);
     expect(new Set(heartbeats.map(({ runId }) => runId)).size).toBe(1);
+    expect(new Set(heartbeats.map(({ reviewLane }) => reviewLane))).toEqual(new Set(["active"]));
     expect(heartbeats[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
@@ -482,7 +485,7 @@ describe("daemon cycle resilience", () => {
     expect(result).toMatchObject({ failureKind: "runtime_failure" });
     expect(heartbeats).toEqual([
       { event: "daemon_cycle_start" },
-      { event: "daemon_cycle_failed", error: "second timeout" }
+      { event: "daemon_cycle_failed", error: "daemon_cycle_failed" }
     ]);
     expect(new Set(runIds).size).toBe(1);
   });
@@ -525,6 +528,90 @@ describe("daemon cycle resilience", () => {
         })
       })
     ]));
+  });
+
+  it("holds PR review work while preserving live issue enrichment", async () => {
+    const stdout: string[] = [];
+    const calls = { review: 0, retry: 0, enrichment: 0 };
+    const heartbeatReviewLanes: Array<string | undefined> = [];
+
+    const result = await runDaemonCycle({
+      cycle: 13,
+      dryRun: false,
+      pilotRepos: ["electricsheephq/WorldOS"],
+      monitoredRepos: ["electricsheephq/WorldOS"],
+      canaryPulls: [],
+      commandsEnabled: false,
+      reviewLane: "held",
+      issueEnrichmentEnabled: true,
+      runOnceImpl: async () => {
+        calls.review += 1;
+        throw new Error("held PR review lane must not run");
+      },
+      retryProviderCooldownsImpl: async () => {
+        calls.retry += 1;
+        throw new Error("held PR retry lane must not run");
+      },
+      issueEnrichmentCycleImpl: async (options) => {
+        calls.enrichment += 1;
+        expect(options.dryRun).toBe(false);
+        return successfulIssueEnrichmentCycleResult();
+      },
+      recordHeartbeatImpl: (_event, _error, _runId, reviewLane) => {
+        heartbeatReviewLanes.push(reviewLane);
+      },
+      stdout: (line) => stdout.push(line),
+      stderr: () => undefined
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        reposScanned: 0,
+        pullsSeen: 0,
+        reviewed: 0,
+        failed: 0,
+        skippedDraft: 0,
+        skippedCanary: 0,
+        skippedPolicy: 0,
+        skippedLicenseGate: 0,
+        skippedCommandStop: 0,
+        skippedCommandExplain: 0,
+        skippedFinishingTouchDraft: 0,
+        commandReviewRequested: 0,
+        skippedProcessed: 0,
+        skippedCapacity: 0,
+        skippedContextBudget: 0,
+        skippedProviderCooldown: 0,
+        skippedStaleHead: 0,
+        baselinedExisting: 0,
+        policySkips: []
+      }
+    });
+    expect(calls).toEqual({ review: 0, retry: 0, enrichment: 1 });
+    expect(new Set(heartbeatReviewLanes)).toEqual(new Set(["held"]));
+    expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: "daemon_review_lane_held",
+        cycle: 13,
+        dryRun: false,
+        reason: "scoped_review_required"
+      }),
+      expect.objectContaining({ event: "daemon_issue_enrichment", phase: "complete", cycle: 13 }),
+      expect.objectContaining({ event: "daemon_cycle_complete", cycle: 13 })
+    ]));
+  });
+
+  it("pins the raw daemon to the held PR lane without an argv override", () => {
+    const cliSource = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    const start = cliSource.indexOf("async function runRawDaemon");
+    const end = cliSource.indexOf("\nasync function resolveCLIReviewRuntimeCredentials", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const rawDaemonSource = cliSource.slice(start, end);
+    expect(rawDaemonSource).toContain('reviewLane: "held"');
+    expect(rawDaemonSource).not.toMatch(/args\[(?:"|')review-lane(?:"|')\]/);
   });
 
   it("starts issue enrichment while the review batch is still unresolved", async () => {

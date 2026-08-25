@@ -1526,7 +1526,7 @@ exit 1
       if (request.method === "GET" && url.pathname === "/repos/acme/demo/installation") {
         response.end(JSON.stringify({
           id: 42,
-          account: { login: "acme" },
+          account: { id: 7, login: "acme", type: "Organization" },
           app_id: 12345,
           app_slug: "customer-review-app"
         }));
@@ -1785,7 +1785,7 @@ exit 1
         response.end(JSON.stringify({
           id: 42,
           app_id: 12345,
-          account: { login: "acme" },
+          account: { id: 7, login: "acme", type: "Organization" },
           app_slug: "customer-review-app"
         }));
         return;

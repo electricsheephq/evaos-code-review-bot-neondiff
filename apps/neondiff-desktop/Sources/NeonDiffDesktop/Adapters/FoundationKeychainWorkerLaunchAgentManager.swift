@@ -9,12 +9,13 @@ struct FoundationKeychainWorkerLaunchAgentManager:
     private let appExecutableURL: URL
     private let homeDirectory: URL
     private let trustedBundledWorker:
-        DesktopLocalBotExecutionContext
+        @Sendable () -> DesktopLocalBotExecutionContext?
 
     init(
         appExecutableURL: URL,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        trustedBundledWorker: DesktopLocalBotExecutionContext
+        trustedBundledWorker:
+            @escaping @Sendable () -> DesktopLocalBotExecutionContext?
     ) {
         self.appExecutableURL = appExecutableURL.standardizedFileURL
         self.homeDirectory = homeDirectory.standardizedFileURL
@@ -25,7 +26,7 @@ struct FoundationKeychainWorkerLaunchAgentManager:
         request: DesktopKeychainWorkerLaunchAgentRequest,
         preservedRepositoryCount: Int
     ) async throws -> String {
-        try validate(request)
+        let trustedBundledWorker = try validate(request)
         guard let sealedWorkerPath = trustedBundledWorker.executablePath else {
             throw WorkerLaunchAgentRuntimeError.invalidCoordinates
         }
@@ -42,7 +43,7 @@ struct FoundationKeychainWorkerLaunchAgentManager:
         request: DesktopKeychainWorkerLaunchAgentRequest
     ) async throws -> String {
         try await Task.detached {
-            try validate(request)
+            _ = try validate(request)
             let data =
                 try DesktopKeychainWorkerLaunchAgentContract.propertyListData(
                     request: request,
@@ -105,14 +106,15 @@ struct FoundationKeychainWorkerLaunchAgentManager:
                 }
                 throw error
             }
-            return "Installed and started the Keychain-backed local review worker without placing its private key in the LaunchAgent."
+            return "Installed and started the Keychain-backed background worker with its PR review lane held. Live PR posts still require an exact scoped dry review and same-head confirmation."
         }.value
     }
 
     private func validate(
         _ request: DesktopKeychainWorkerLaunchAgentRequest
-    ) throws {
-        guard isSafeAppExecutable(appExecutableURL),
+    ) throws -> DesktopLocalBotExecutionContext {
+        guard let trustedBundledWorker = trustedBundledWorker(),
+              isSafeAppExecutable(appExecutableURL),
               isSafeConfig(URL(filePath: request.configPath)),
               trustedBundledWorker.executablePath
                 == "/Applications/NeonDiff.app/Contents/Helpers/NeonDiffWorker",
@@ -121,6 +123,7 @@ struct FoundationKeychainWorkerLaunchAgentManager:
         else {
             throw WorkerLaunchAgentRuntimeError.invalidCoordinates
         }
+        return trustedBundledWorker
     }
 
     private func isSafeAppExecutable(_ url: URL) -> Bool {

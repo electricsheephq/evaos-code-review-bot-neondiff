@@ -124,5 +124,6 @@ private let currentDaemonWorkerGateNames: Set<String> = [
     "queue_no_zcode_timeout_failed_jobs",
     "queue_no_stale_review_leases",
     "queue_no_retryable_provider_deferred_jobs",
-    "daemon_heartbeat_recent"
+    "daemon_heartbeat_recent",
+    "background_pr_lane"
 ]

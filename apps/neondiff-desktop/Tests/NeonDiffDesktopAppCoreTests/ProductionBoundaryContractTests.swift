@@ -212,6 +212,68 @@ import Testing
         }
     }
 
+    @Test func credentialBearingCLIResolvesTheTrustedWorkerAtActionTime() throws {
+        let source = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot().appendingPathComponent(
+                "Sources/NeonDiffDesktop/Adapters/FoundationDesktopCLIExecutor.swift"
+            )
+        )
+
+        #expect(source.contains(
+            "private let trustedBundledWorkerProvider:\n        @Sendable () -> DesktopLocalBotExecutionContext?"
+        ))
+        #expect(source.contains(
+            "trustedBundledWorkerProvider:\n            (@Sendable () -> DesktopLocalBotExecutionContext?)? = nil"
+        ))
+        #expect(source.contains(
+            "let trustedBundledWorker = trustedBundledWorkerProvider()"
+        ))
+        #expect(!source.contains(
+            "private let trustedBundledWorker:\n        DesktopLocalBotExecutionContext?"
+        ))
+        #expect(!source.contains("trustedBundledWorker: trustedBundledWorker"))
+    }
+
+    @Test func launchAgentManagerResolvesTheTrustedWorkerForEachAction() throws {
+        let source = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot().appendingPathComponent(
+                "Sources/NeonDiffDesktop/Adapters/FoundationKeychainWorkerLaunchAgentManager.swift"
+            )
+        )
+
+        #expect(source.contains(
+            "private let trustedBundledWorker:\n        @Sendable () -> DesktopLocalBotExecutionContext?"
+        ))
+        #expect(source.contains(
+            "trustedBundledWorker:\n            @escaping @Sendable () -> DesktopLocalBotExecutionContext?"
+        ))
+        #expect(source.contains(
+            "guard let trustedBundledWorker = trustedBundledWorker(),"
+        ))
+        #expect(!source.contains(
+            "private let trustedBundledWorker:\n        DesktopLocalBotExecutionContext"
+        ))
+    }
+
+    @Test func compositionRootDoesNotGateTheManagerOnLaunchTimeWorkerPresence() throws {
+        let source = try sourceBoundaryText(
+            at: sourceBoundaryPackageRoot().appendingPathComponent(
+                "Sources/NeonDiffDesktop/App/NeonDiffDesktopCompositionRoot.swift"
+            )
+        )
+
+        #expect(source.contains("trustedBundledWorkerProvider: {"))
+        #expect(source.contains(
+            "trustedBundledWorker: {\n                        FoundationTrustedBundledWorker.executionContext()"
+        ))
+        #expect(!source.contains(
+            "if let appExecutableURL = Bundle.main.executableURL,\n           let trustedBundledWorker"
+        ))
+        #expect(!source.contains(
+            "FoundationKeychainWorkerLaunchAgentManager(\n                    appExecutableURL: appExecutableURL,\n                    trustedBundledWorker: trustedBundledWorker"
+        ))
+    }
+
     @Test func updaterUsesSignedFeedAndRevalidatesEntitlementBeforeEachCheck() throws {
         let updaterSource = sourceBoundaryPackageRoot()
             .appendingPathComponent("Sources/NeonDiffDesktop/Support/NeonUpdateController.swift")

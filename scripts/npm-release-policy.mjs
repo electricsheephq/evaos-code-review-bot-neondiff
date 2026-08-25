@@ -2,6 +2,7 @@
 
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { hasDesktopOnlyTagAnnotation } from "./lib/desktop-only-release-policy.mjs";
 
 const V104_PROVENANCE_RECOVERY = Object.freeze({
   package: "neondiff",
@@ -15,7 +16,6 @@ const V104_PROVENANCE_RECOVERY = Object.freeze({
 });
 const DESKTOP_ONLY_RC_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-rc\.(?:[1-9]\d*)$/;
 const DESKTOP_ONLY_FINAL_TAG = "v1.1.0";
-const DESKTOP_ONLY_TAG_ANNOTATION = "NeonDiff-Release-Class: desktop-only";
 
 function fail(message) {
   console.error(message);
@@ -70,7 +70,7 @@ function isDesktopOnlyTag(tag) {
     const messageStart = rawTag.indexOf("\n\n");
     if (messageStart < 0) return false;
     const annotation = rawTag.slice(messageStart + 2);
-    return annotation.split("\n").filter((line) => line === DESKTOP_ONLY_TAG_ANNOTATION).length === 1;
+    return hasDesktopOnlyTagAnnotation(tag, annotation);
   } catch {
     return false;
   }

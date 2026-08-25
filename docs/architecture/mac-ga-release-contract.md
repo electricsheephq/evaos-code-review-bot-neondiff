@@ -65,6 +65,12 @@ extracted contract, exclusive marker set, and managed origin. Markers select
 composition only; Keychain, GitHub visibility, and current entitlement remain
 authoritative.
 
+Every release bundle also records one lowercase 40-hex `NeonDiffSourceSHA`
+derived from the exact clean release checkout before signing. The authenticated
+tree proof and accepted packet retain that marker and reject it unless it equals
+the peeled annotated-tag commit; this is a signed source binding, not standalone
+build provenance.
+
 Authority is layered:
 
 1. Source, pull request, review, and CI establish what was proposed and tested.
@@ -114,6 +120,103 @@ that archive into fresh staging, computes the tree identity, and rejects any
 mismatch, unavailable/changed reference, untrusted location, or changed config.
 It contains references to secrets rather than secret values.
 
+For every accepted Desktop `1.1.0` beta, RC, or stable release, the retained
+location is an immutable evidence-only GitHub prerelease/tag named
+`neondiff-accepted-packet-<release-tag>`, excluded from latest selection and
+targeted at the packet artifact-source commit. Each location contains exactly
+the content-addressed accepted packet and its content-addressed verified
+artifact-source-attestation bundle. The canonical stable location remains
+`neondiff-accepted-packet-v1.1.0`. The 30-day Actions artifact is transit for
+first publication only and is never the authority for a later read.
+
+The fixed product release tag, not caller-supplied metadata, determines source
+identity. RC and stable require a distinct annotated tag object. An immutable
+beta release may instead use a lightweight tag that points directly to the
+exact source commit; in that case the packet's tag-object SHA equals its source
+SHA by construction. No other channel may use that equality, and every channel
+still revalidates the fixed tag ref, source, immutable release, artifact, and
+feed. The product release's `target_commitish` is creation metadata rather than
+source authority; the fetched tag ref and its peeled commit are authoritative.
+An RC's product channel remains `rc`, while its exact retained appcast enclosure
+and enclosure-proof channel remain the observed `beta` feed ring.
+
+The workflow first runs a read-only resolver against the fixed canonical
+repository and evidence tag. It validates the canonical `main` and workflow
+identity, reports only `absent` or `present`, and fails closed on partial state.
+Before resolving prerelease evidence it also requires the exact selector in the
+protected append-only declaration history at the current `main` SHA.
+The canonical producer depends on that resolver and runs only for `absent`; it
+cryptographically verifies the exact artifact-source bundle before it emits
+either content-addressed name. The retention job has separate contents-write
+and attestations-read authority and evaluates after both jobs even when the
+producer is skipped. A `present` branch requires resolver success plus a skipped
+producer, while an `absent` branch requires resolver success plus producer
+success.
+
+On first publication, retention requires the current producer names,
+artifact-source SHA, and signer-workflow SHA, creates the fixed release once,
+then reloads and verifies the published assets. On a later dispatch it never
+uses the mutable live appcast, a current artifact, a current Actions artifact,
+or producer outputs. It discovers the prior exact pair from the immutable
+release's only two assets, reloads the exact packet-named product artifact, and
+cryptographically verifies the retained bundle against that artifact and the
+stored fixed signer workflow/ref/SHA. The signed predicate also carries the
+accepted packet SHA-256, which must match the retained content-addressed packet.
+It also validates the tag, target commit, names, bytes, digests, sizes, URLs,
+and GitHub release/asset attestations. Thus a principal with contents-write
+authority cannot substitute self-declared signer claims or pair a genuine
+artifact proof with a fabricated packet, and a later `main` SHA cannot replace
+or invalidate the accepted historical pair.
+
+A missing release and tag permits first publication; both present permits only
+verification. Partial or mismatched state fails closed. No workflow may
+overwrite, delete, or rotate retained evidence. Exceptional deletion is a
+separately reviewed repository-administrator action and permanently retires the
+immutable tag; any approved successor uses a new fixed identity.
+
+Protected transition authority is retained only below
+`docs/releases/desktop/accepted-targets`. The empty repository convention is
+one zero-byte `.gitkeep`; the first append removes it. Packet filenames bind to
+the SHA-256 of exact canonical packet bytes, and target-receipt filenames bind
+to the SHA-256 of exact canonical receipt bytes. Every receipt resolves its
+target, current, and optional previous packet inside that fixed directory, and
+all shared release, source, tag-object, artifact, and tree identities must equal
+the parsed referenced packets. Invalid UTF-8, duplicate or extra keys, lossy
+numeric build tokens, missing references, symlinks, oversized inputs, or a
+content-address mismatch fail closed. Pull-request and protected-main transition
+validation preserves every prior packet and receipt byte exactly; the
+verifier-backed producer and action derivation remain a separate accepted gate.
+
+That producer runs only in the fixed GitHub-hosted repository, workflow,
+`refs/heads/main`, and exact protected-main workspace/SHA context. It invokes
+the retained-evidence verifier for the selected target and treats current and
+optional previous packet paths only as selectors for exact content-addressed
+blobs already present in the protected target-history tree. Selected declaration
+position and build derive direction; `currentPath` identifies the newest
+declaration but is not a requirement that every installed current or selected
+intermediate target still be newest. A first forward update requires a later,
+higher-build target not yet retained in target history and no previous selector.
+A re-update requires that same later/higher target to be an exact retained blob
+and the previous selector to equal it. A rollback requires an earlier,
+lower-build target and that exact previous selector. Omitting the selector for
+a retained target, relabeling any derived action, or selecting identical or
+mutable history fails closed.
+
+Receipts form a reusable append-only set of transition authorities, not a
+chronological log of one installation. Installed current/prior state and actual
+event ordering are independently authenticated by the later preflight/runtime
+gate. The producer emits only one canonical content-addressed public-safe
+receipt through exclusive create; it does not install, update, restart, publish,
+or mutate protected history.
+
+The dry transition preflight treats that protected receipt and caller action as
+selectors only. It reloads the exact protected receipt, target/current packets,
+declaration order, retained evidence, artifact tree, appcast, and enclosure
+proof under the same fixed protected-main workflow identity, then independently
+derives update, rollback, or re-update. It emits only a redacted fixed-step plan
+and performs no entitlement, quiescence, staging, swap, restart, feed, runtime,
+or customer mutation.
+
 ## Gates and single implementation path
 
 Mac promotion requires one tested implementation path owning preflight,
@@ -131,6 +234,14 @@ blocks, or alternate checkout instructions. Advisory review and exact-head
 dry-before-live checks are required gates, but they are not installed-runtime
 proof. A checked-out tree, local build, or mutable channel pointer never
 supplies the accepted runtime bytes.
+
+The BYO Mac LaunchAgent's background PR review lane remains held. Its heartbeat
+proves service liveness only; issue-enrichment success requires lane-specific
+result evidence. The independently admitted issue-enrichment lane may run, but
+neither its admission nor the heartbeat authorizes a PR review or post. Native
+live PR posting uses only the exact scoped `review-pr` dry review plus explicit
+same-head confirmation; the matching approval is consumed atomically, and
+install/start/restart cannot create it.
 
 The tested promotion and rollback implementation is not yet established for
 this contract. Its absence is an active Mac GA release blocker, not an implied

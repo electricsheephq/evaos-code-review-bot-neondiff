@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseFindings } from "./findings.js";
 import { containsSecretLikeText, redactSecrets } from "./secrets.js";
@@ -1491,7 +1492,14 @@ function buildLabelEvidence(finding: Finding | EvalLabelInput): Record<string, s
 
 function defaultEvalOutputDir(input: Pick<EvalScenarioInput, "runId">, now: Date): string {
   const date = now.toISOString().slice(0, 10);
-  return join("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review", date, sanitizePathSegment(input.runId));
+  return join(defaultEvalEvidenceRoot(), date, sanitizePathSegment(input.runId));
+}
+
+function defaultEvalEvidenceRoot(): string {
+  const configured = process.env.NEONDIFF_EVIDENCE_ROOT?.trim();
+  return configured && configured.length > 0
+    ? resolve(configured)
+    : join(homedir(), ".neondiff", "evidence");
 }
 
 function sanitizePathSegment(value: string): string {
@@ -1526,7 +1534,7 @@ export function assertEvalOutputDirSafe(outputDir: string): string {
   const realGitRoot = realpathSync(gitRoot);
   const relation = relative(realGitRoot, realOutput);
   if (relation === "" || (!relation.startsWith("..") && !isAbsolute(relation))) {
-    throw new Error("outputDir must not be inside the current git checkout; write eval packets under /Volumes/LEXAR/Codex/evals or a temp directory");
+    throw new Error("outputDir must not be inside the current git checkout; use an explicit external evidence root or a temp directory");
   }
   return resolvedOutput;
 }
@@ -1602,7 +1610,7 @@ function roundMetric(value: number): number {
 
 function defaultStickyVsColdOutputRoot(input: Pick<StickyVsColdScenarioInput, "runId">, now: Date): string {
   const date = now.toISOString().slice(0, 10);
-  return join("/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review", date, sanitizePathSegment(input.runId));
+  return join(defaultEvalEvidenceRoot(), date, sanitizePathSegment(input.runId));
 }
 
 function validateStickyVsColdInput(input: StickyVsColdScenarioInput): void {

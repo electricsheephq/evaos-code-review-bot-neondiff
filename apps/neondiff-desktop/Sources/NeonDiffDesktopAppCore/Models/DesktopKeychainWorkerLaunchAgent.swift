@@ -290,13 +290,15 @@ package enum DesktopKeychainWorkerLaunchAgentContract {
             : "repositories"
 
         return """
-        Ready to install and start the secret-free local review worker.
+        Ready to install and start the secret-free background worker.
         LaunchAgent: \(plistPath)
         Program: \(appExecutableURL.standardizedFileURL.path)
         ProgramArguments: \(redactedArguments)
         Sealed worker: \(sealedWorkerPath)
         EnvironmentVariables: none
         Launch policy: RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua; stdout=/dev/null; stderr=/dev/null.
+        Background PR review lane: held.
+        Live PR posting: exact scoped review-pr dry review plus explicit same-head confirmation only.
         Credentials: Keychain-only at runtime; no secret values in the plist, arguments, or environment.
         Repository allowlist: preserved unchanged (\(preservedRepositoryCount) configured \(repositoryLabel)); no config write.
         Mutation: write only the selected user LaunchAgent, then restart that exact service.
@@ -565,13 +567,16 @@ package struct UnavailableDesktopKeychainWorkerLaunchAgentManager:
 package struct DesktopLocalBotDiscoverySnapshot: Sendable {
     package let configurations: [DesktopLocalBotConfiguration]
     package let executionContexts: [DesktopLocalBotExecutionContext]
+    package let nativeVerificationCapability: DesktopNativeVerificationCapability
 
     package init(
         configurations: [DesktopLocalBotConfiguration],
-        executionContexts: [DesktopLocalBotExecutionContext]
+        executionContexts: [DesktopLocalBotExecutionContext],
+        nativeVerificationCapability: DesktopNativeVerificationCapability = .unavailable
     ) {
         self.configurations = configurations
         self.executionContexts = executionContexts
+        self.nativeVerificationCapability = nativeVerificationCapability
     }
 }
 

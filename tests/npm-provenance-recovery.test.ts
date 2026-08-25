@@ -52,7 +52,7 @@ describe("v1.0.4 npm provenance recovery workflow", () => {
     const candidateHead = "42db7c8ff7dba6ceac813238dcebfb54dc83851f";
     const policyScript = resolve("scripts/npm-release-policy.mjs");
     mkdirSync(join(root, "scripts"), { recursive: true });
-    mkdirSync(join(root, ".recovery-policy", "scripts"), { recursive: true });
+    mkdirSync(join(root, ".recovery-policy", "scripts", "lib"), { recursive: true });
     mkdirSync(join(root, "docs"), { recursive: true });
     mkdirSync(join(root, "evidence"), { recursive: true });
     mkdirSync(join(root, "neondiff-reviewed-pack"), { recursive: true });
@@ -79,6 +79,7 @@ describe("v1.0.4 npm provenance recovery workflow", () => {
       if (process.env.FAIL_STAGE === "readiness") process.exit(41);
     `);
     copyFileSync(policyScript, join(root, ".recovery-policy", "scripts", "npm-release-policy.mjs"));
+    copyFileSync(resolve("scripts/lib/desktop-only-release-policy.mjs"), join(root, ".recovery-policy", "scripts", "lib", "desktop-only-release-policy.mjs"));
     const provenanceVerifier = join(root, ".recovery-policy", "scripts", "verify-npm-provenance.mjs");
     writeFileSync(provenanceVerifier, `
       if (process.env.FAIL_STAGE === "provenance") process.exit(42);

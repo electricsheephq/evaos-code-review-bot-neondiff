@@ -35,8 +35,8 @@ function validateEnclosure(enclosure) {
   const version = text(value.version, "enclosure.version"), build = text(value.build, "enclosure.build"), shortVersionString = text(value.shortVersionString, "enclosure.shortVersionString");
   const channel = value.channel, artifactNameInput = text(value.artifactName, "enclosure.artifactName"), artifactSHA256 = text(value.artifactSHA256, "enclosure.artifactSHA256"), edSignature = text(value.edSignature, "enclosure.edSignature");
   if (!/^\d+\.\d+\.\d+(?:-(?:beta|rc)\.[1-9]\d{0,15})?$/.test(version) || !/^\d+$/.test(build)) fail("enclosure version/build is malformed");
-  const prerelease = version.match(/-(beta|rc)\./)?.[1] ?? null;
-  if (shortVersionString !== version || !["beta", "rc", "stable"].includes(channel) || (prerelease ?? "stable") !== channel) fail("enclosure identity is malformed");
+  const prerelease = version.match(/-(beta|rc)\./)?.[1] ?? null, feedChannel = prerelease === "rc" ? "beta" : prerelease ?? "stable";
+  if (shortVersionString !== version || !["beta", "stable"].includes(channel) || feedChannel !== channel) fail("enclosure identity is malformed");
   const artifactName = `NeonDiff-${version}-build${build}-macOS.zip`;
   if (artifactNameInput !== artifactName) fail("enclosure artifact name is not canonical");
   const path = url.pathname;

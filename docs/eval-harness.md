@@ -2,18 +2,45 @@
 
 The offline eval harness creates read-only comparison packets for the v0.2 CodeRabbit-class reviewer work. It does not call GitHub, post PR comments, mutate repos, or change launchd state.
 
+Use an external evidence root for every run. The source default is
+`$HOME/.neondiff/evidence`; set `NEONDIFF_EVIDENCE_ROOT` for CI or another
+operator-owned location outside this checkout. These packets are offline,
+advisory evidence only and must not be presented as hosted, runtime, or GA
+proof.
+
+```bash
+export NEONDIFF_EVIDENCE_ROOT="${NEONDIFF_EVIDENCE_ROOT:-$HOME/.neondiff/evidence}"
+case "$NEONDIFF_EVIDENCE_ROOT" in /*) ;; *) echo "NEONDIFF_EVIDENCE_ROOT must be absolute" >&2; exit 2 ;; esac
+test -d "$NEONDIFF_EVIDENCE_ROOT" || { echo "create the external evidence root first" >&2; exit 2; }
+NEONDIFF_EVIDENCE_ROOT="$(cd "$NEONDIFF_EVIDENCE_ROOT" && pwd -P)" || { echo "cannot canonicalize evidence root" >&2; exit 2; }
+REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)" || { echo "cannot canonicalize checkout root" >&2; exit 2; }
+case "$NEONDIFF_EVIDENCE_ROOT/" in "$REPO_ROOT/"*) echo "evidence root must be outside the checkout" >&2; exit 2 ;; esac
+EVAL_DATE="$(date +%F)"; EVAL_RUN_ID="replace-with-unique-run-id"; case "$EVAL_RUN_ID" in ""|"."|".."|*[!A-Za-z0-9._-]*) echo "EVAL_RUN_ID must be a portable path segment" >&2; exit 2 ;; esac
+EVAL_DATE_ROOT="$NEONDIFF_EVIDENCE_ROOT/$EVAL_DATE"; test -e "$EVAL_DATE_ROOT" || mkdir "$EVAL_DATE_ROOT" || exit 2
+EVAL_DATE_ROOT="$(cd "$EVAL_DATE_ROOT" && pwd -P)" || { echo "cannot canonicalize eval date root" >&2; exit 2; }
+case "$EVAL_DATE_ROOT/" in "$NEONDIFF_EVIDENCE_ROOT/"*) ;; *) echo "eval date root escaped evidence root" >&2; exit 2 ;; esac
+case "$EVAL_DATE_ROOT/" in "$REPO_ROOT/"*) echo "eval date root must be outside the checkout" >&2; exit 2 ;; esac
+EVAL_PACKET_ROOT="$EVAL_DATE_ROOT/$EVAL_RUN_ID"; mkdir "$EVAL_PACKET_ROOT" || exit 2
+EVAL_PACKET_ROOT="$(cd "$EVAL_PACKET_ROOT" && pwd -P)" || { echo "cannot canonicalize eval packet root" >&2; exit 2; }
+case "$EVAL_PACKET_ROOT/" in "$EVAL_DATE_ROOT/"*) ;; *) echo "eval packet root escaped date root" >&2; exit 2 ;; esac
+case "$EVAL_PACKET_ROOT/" in "$REPO_ROOT/"*) echo "eval packet root must be outside the checkout" >&2; exit 2 ;; esac
+```
+
 Run it with a local scenario file:
 
 ```bash
-npm run eval:offline -- --input /path/to/scenario.json
+npm run eval:offline -- --input /path/to/scenario.json \
+  --output-dir "$EVAL_PACKET_ROOT/offline"
 ```
 
 Run the checked-in local suite fixtures:
 
 ```bash
+EVAL_SUITE_ROOT="$EVAL_PACKET_ROOT/local-suite"
+mkdir "$EVAL_SUITE_ROOT" || exit 2
 npm run eval:suite -- \
   --input-dir tests/fixtures/eval-suite-scenarios \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/local-suite
+  --output-root "$EVAL_SUITE_ROOT"
 ```
 
 Run the paired sticky-vs-cold fixture:
@@ -21,7 +48,7 @@ Run the paired sticky-vs-cold fixture:
 ```bash
 npm run eval:sticky-vs-cold -- \
   --input tests/fixtures/sticky-vs-cold/seeded_quality_packet.json \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/sticky-vs-cold-seeded-quality
+  --output-root "$EVAL_PACKET_ROOT/sticky-vs-cold-seeded-quality"
 ```
 
 Run the repo-wiki context A/B gate with a fixture that contains baseline,
@@ -30,7 +57,7 @@ deterministic repo-wiki, and curated OpenWiki-derived findings:
 ```bash
 npx tsx src/cli.ts eval-repo-wiki-context-ab \
   --input /path/to/repo-wiki-context-ab.json \
-  --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/ab
+  --output-root "$EVAL_PACKET_ROOT/eval-gates/ab"
 ```
 
 Run the suggest-only OpenWiki docs-drift gate:
@@ -38,7 +65,7 @@ Run the suggest-only OpenWiki docs-drift gate:
 ```bash
 npx tsx src/cli.ts eval-openwiki-docs-drift \
   --input /path/to/docs-drift.json \
-  --output-root /Volumes/LEXAR/Codex/neondiff-openwiki-context/$(date +%F)/eval-gates/docs-drift
+  --output-root "$EVAL_PACKET_ROOT/eval-gates/docs-drift"
 ```
 
 Both OpenWiki gates are offline evidence generators. They do not call a model,
@@ -52,7 +79,7 @@ Run the review-lenses dry-run comparison gate:
 ```bash
 npx tsx src/cli.ts review-lenses-eval \
   --input-dir tests/fixtures/review-lenses-eval \
-  --output-root /Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/$(date +%F)/review-lenses-eval-gate-$(date +%H%M%S) \
+  --output-root "$EVAL_PACKET_ROOT/review-lenses-eval-gate" \
   --dry-run true
 ```
 
@@ -65,10 +92,11 @@ The suite command exits non-zero when any scenario fails, when two scenarios use
 the same `runId`, when a `runId` is not a safe path segment, or when any required
 suite is missing from the input directory.
 
-By default, packets are written under:
+By default, packets are written under the external root selected by
+`NEONDIFF_EVIDENCE_ROOT` (or `$HOME/.neondiff/evidence` when unset):
 
 ```text
-/Volumes/LEXAR/Codex/evals/zcode-glm-pr-review/<date>/<run-id>/
+$NEONDIFF_EVIDENCE_ROOT/$EVAL_DATE/$EVAL_RUN_ID/
 ```
 
 Use `--output-dir` for tests or scratch runs.

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +8,7 @@ import type { BotConfig } from "../src/config.js";
 import type { GitHubApi } from "../src/github.js";
 import { ReviewStateStore } from "../src/state.js";
 import type { Finding, PullRequestSummary } from "../src/types.js";
+import { buildFindingFingerprint } from "../src/findings.js";
 import { testLicenseAdmission } from "./helpers/license-admission.js";
 
 const zcodePrompts = vi.hoisted((): string[] => []);
@@ -15,6 +18,9 @@ const zcodeFailuresByPath = vi.hoisted(() => new Map<string, string>());
 const zcodeDelaysByPath = vi.hoisted(() => new Map<string, number>());
 const zcodeBarriersByPath = vi.hoisted(() => new Map<string, Promise<void>>());
 const zcodeFirstFailuresByPath = vi.hoisted(() => new Map<string, { message: string; beforeThrow?: () => void }>());
+const severeRawResponse = vi.hoisted(() => ({ value: "" }));
+const severeCurrentWorktree = vi.hoisted(() => ({ enabled: false }));
+const severeWorktreePath = vi.hoisted(() => ({ value: "" }));
 const createdReviews = vi.hoisted((): Array<{
   repo: string;
   pullNumber: number;
@@ -36,7 +42,7 @@ vi.mock("../src/git.js", async (importOriginal) => {
   return {
     ...actual,
     preparePullWorktree: vi.fn((input: { workRoot: string; expectedHeadSha: string }) => {
-      const path = join(input.workRoot, "mock-worktree");
+      const path = severeWorktreePath.value || (severeCurrentWorktree.enabled ? process.cwd() : join(input.workRoot, "mock-worktree"));
       mkdirSync(path, { recursive: true });
       return { path, headSha: input.expectedHeadSha };
     }),
@@ -73,7 +79,8 @@ vi.mock("../src/zcode.js", async (importOriginal) => {
         attempts: 1,
         degradedRecovery: false
       };
-    })
+    }),
+    runZCodeRawJson: vi.fn(async ({ prompt }: { prompt: string }) => (zcodePrompts.push(prompt), severeRawResponse.value))
   };
 });
 
@@ -165,6 +172,9 @@ describe("worker context budget preflight", () => {
     zcodeDelaysByPath.clear();
     zcodeBarriersByPath.clear();
     zcodeFirstFailuresByPath.clear();
+    severeRawResponse.value = "";
+    severeCurrentWorktree.enabled = false;
+    severeWorktreePath.value = "";
     createdReviews.length = 0;
     walkthroughBuildEvents.length = 0;
     delete reviewPostControl.error;
@@ -650,10 +660,11 @@ describe("worker context budget preflight", () => {
     const config = minimalConfig(root);
     config.reviewEnsemble = { enabled: true, mode: "shadow" };
     config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    severeCurrentWorktree.enabled = true;
     const state = new ReviewStateStore(config.statePath);
-    const pull = pullSummary(426, "4".repeat(40));
-    const files = [pullFile("src/a.ts", 200)];
-    zcodeFindingsByPath.set("src/a.ts", [p1Finding("src/a.ts", "Canonical blocking finding")]);
+    const pull = pullSummary(426, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+    const files = [pullFile("src/severe-verification-evidence.ts", 200)];
+    zcodeFindingsByPath.set("src/severe-verification-evidence.ts", [p1Finding("src/severe-verification-evidence.ts", "Canonical blocking finding")]);
 
     const result = await reviewPull({
       config,
@@ -666,10 +677,96 @@ describe("worker context budget preflight", () => {
     });
 
     expect(result).toBe("reviewed");
-    const selfConsistencyIndex = zcodePrompts.findIndex((prompt) => prompt.includes("re-checking a SINGLE prior"));
+    const selfConsistencyIndex = zcodePrompts.findIndex((prompt) => prompt.includes("severe-verifier-input-v1"));
     const firstShadowIndex = zcodePrompts.findIndex((prompt) => prompt.includes("State and lifecycle review"));
     expect(selfConsistencyIndex).toBeGreaterThan(0);
     expect(firstShadowIndex).toBeGreaterThan(selfConsistencyIndex);
+    state.close();
+  });
+
+  it("binds severe verification to original finding fields after public normalization", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-severe-worker-original-finding-"));
+    roots.push(root);
+    const config = minimalConfig(root);
+    severeCurrentWorktree.enabled = true;
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    const state = new ReviewStateStore(config.statePath);
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const pull = pullSummary(430, head);
+    const file = pullFile("src/severe-verification-evidence.ts", 40);
+    const original: Finding = { ...p1Finding(file.filename, "Proof gap with 95% confidence"), body: "The confidence is 95%; inspect this exact proof gap.", category: "proof_gap" };
+    zcodeFindingsByPath.set(file.filename, [original]);
+    const hunkHash = createHash("sha256").update(file.patch, "utf8").digest("hex");
+    const fileBytes = execFileSync("git", ["show", `${head}:${file.filename}`]);
+    const fileHash = createHash("sha256").update(fileBytes).digest("hex");
+    severeRawResponse.value = JSON.stringify({
+      schemaVersion: "severe-verifier-v1", repo: "electricsheephq/WorldOS", pullNumber: pull.number,
+      baseSha: pull.base.sha, headSha: head, findingFingerprint: buildFindingFingerprint(original),
+      state: "confirmed", disposition: "retain", confidence: 0.8,
+      evidence: { changedHunk: { sha256: hunkHash, bytes: Buffer.byteLength(file.patch), complete: true },
+        files: [{ path: file.filename, kind: "whole_file", sha256: fileHash, bytes: fileBytes.length, complete: true }], omitted: [], complete: true }
+    });
+    const result = await reviewPull({ config, github: githubForPull(pull, [file]), state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true });
+    expect(result).toBe("reviewed");
+    const transport = JSON.parse(JSON.parse(zcodePrompts.find((prompt) => prompt.includes("severe-verifier-input-v1"))!)[1].content);
+    expect(transport.finding).toMatchObject({ category: "proof_gap", title: original.title, body: original.body });
+    expect(createdReviews[0]?.comments).toHaveLength(1);
+
+    severeRawResponse.value = "";
+    const failedPull = pullSummary(432, head);
+    expect(await reviewPull({ config, github: githubForPull(failedPull, [file]), state, repo: "electricsheephq/WorldOS", pull: failedPull, dryRun: false, useZCode: true })).toBe("reviewed");
+    const failedEvidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${failedPull.number}`, head);
+    const failedSelfConsistency = JSON.parse(readFileSync(join(failedEvidenceDir, "self-consistency.json"), "utf8"));
+    expect(failedSelfConsistency.verdicts[0].receipt.evidence).toMatchObject({
+      files: [{ path: file.filename, kind: "whole_file", sha256: fileHash, bytes: fileBytes.length, complete: true }],
+      omitted: [],
+      complete: false
+    });
+    state.close();
+  });
+
+  it("suppresses oversized immutable evidence without throwing a malformed receipt", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-severe-worker-oversized-evidence-"));
+    roots.push(root);
+    const fixture = join(root, "worktree");
+    mkdirSync(join(fixture, "src"), { recursive: true });
+    const filename = "src/oversized.ts";
+    const blob = `${"x".repeat(65_536)}\n`;
+    writeFileSync(join(fixture, filename), blob);
+    execFileSync("git", ["init", "--quiet"], { cwd: fixture });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: fixture });
+    execFileSync("git", ["config", "user.name", "NeonDiff test"], { cwd: fixture });
+    execFileSync("git", ["add", "."], { cwd: fixture });
+    execFileSync("git", ["commit", "--quiet", "-m", "oversized"], { cwd: fixture });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture, encoding: "utf8" }).trim();
+    const patch = "@@ -1 +1 @@\n+x";
+    const file = { filename, patch, status: "modified", additions: 1, deletions: 0, changes: 1 };
+    severeCurrentWorktree.enabled = true;
+    severeWorktreePath.value = fixture;
+    const config = minimalConfig(root);
+    config.reviewGate = { maxInlineComments: 25, selfConsistency: { enabled: true } };
+    const state = new ReviewStateStore(config.statePath);
+    const pull = pullSummary(431, head);
+    zcodeFindingsByPath.set(filename, [p1Finding(filename, "Oversized severe candidate")]);
+
+    const result = await reviewPull({ config, github: githubForPull(pull, [file]), state, repo: "electricsheephq/WorldOS", pull, dryRun: false, useZCode: true });
+
+    const evidenceDir = join(root, "evidence", localDateFolder(), "electricsheephq__WorldOS", `pr-${pull.number}`, head);
+    expect(result).toBe("reviewed");
+    expect(createdReviews[0]?.comments).toHaveLength(0);
+    expect(zcodePrompts.some((prompt) => prompt.includes("severe-verifier-input-v1"))).toBe(false);
+    const selfConsistency = JSON.parse(readFileSync(join(evidenceDir, "self-consistency.json"), "utf8"));
+    expect(selfConsistency.verdicts[0]).toMatchObject({
+      path: filename,
+      refuted: true,
+      receipt: {
+        state: "incomplete",
+        disposition: "suppress",
+        reasonCode: "cap_exceeded",
+        evidence: { files: [], omitted: [{ path: filename, code: "cap_exceeded" }], complete: false }
+      }
+    });
+    expect(JSON.stringify(selfConsistency)).not.toContain(blob);
     state.close();
   });
 
@@ -709,6 +806,12 @@ describe("worker context budget preflight", () => {
     expect(createdReviews).toHaveLength(0);
     state.close();
   });
+  it("keeps allowed receipt paths and passes the strict Codex receipt schema", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-severe-zcode-raw-")); roots.push(root);
+    const script = join(root, "zcode.cjs"); writeFileSync(script, `process.stdout.write(${JSON.stringify(JSON.stringify({ response: JSON.stringify({ path: "src/person@example.com" }) }))});`);
+    const app = join(root, "app.json"); writeFileSync(app, '{"provider":{"zcode-glm":{"enabled":true,"options":{"apiKey":"fixture","baseURL":"https://example.invalid"},"models":{"GLM-5.2":{}}}}}');
+    const zcode = await vi.importActual<typeof import("../src/zcode.js")>("../src/zcode.js");
+    expect(await zcode.runZCodeRawJson({ cwd: root, prompt: "", cliPath: script, appConfigPath: app, model: "GLM-5.2" })).toContain("src/person@example.com"); expect(readFileSync(join(process.cwd(), "src/worker.ts"), "utf8")).toContain("schema: SEVERE_VERIFICATION_RECEIPT_JSON_SCHEMA"); });
 
   it("writes a shadow packet when a chunked anchor aborts", async () => {
     const root = mkdtempSync(join(tmpdir(), "neondiff-review-ensemble-anchor-abort-"));

@@ -789,7 +789,8 @@ import NeonDiffDesktopCore
             preferenceStrings: [
                 "neondiff.cliPath": "/usr/bin/true"
             ],
-            productionBoundary: .testAccountLink
+            productionBoundary: .testAccountLink,
+            nativeVerificationCapability: .unavailable
         )
         fixture.model.pendingBYOGitHubAppId = "4184532"
         fixture.model.pendingBYOGitHubAppPrivateKey =

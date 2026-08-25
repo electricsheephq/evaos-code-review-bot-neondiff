@@ -159,6 +159,33 @@ if [ "$MODE" = "production-contract-check" ]; then
   exit 0
 fi
 
+derive_release_source_sha() {
+  if [[ "$SHORT_VERSION" =~ ^1\.1\.0(-(beta|rc)\.[1-9][0-9]{0,15})?$ ]] \
+    && git -C "$REPO_ROOT" symbolic-ref -q HEAD >/dev/null; then
+    echo "release candidates require a detached source checkout" >&2
+    return 2
+  fi
+  if ! git -C "$REPO_ROOT" diff --quiet --ignore-submodules -- \
+    || ! git -C "$REPO_ROOT" diff --cached --quiet --ignore-submodules -- \
+    || [ -n "$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" ]; then
+    echo "release builds require an exact clean source checkout" >&2
+    return 2
+  fi
+  local value
+  value="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  if [[ ! "$value" =~ ^[a-f0-9]{40}$ ]] \
+    || ! git -C "$REPO_ROOT" cat-file -e "$value^{commit}"; then
+    echo "release source identity is not canonical" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+
+RELEASE_SOURCE_SHA=""
+if [ "$BUILD_CONFIGURATION" = "release" ]; then
+  RELEASE_SOURCE_SHA="$(derive_release_source_sha)"
+fi
+
 if [ -x "$APP_BINARY" ]; then
   while IFS= read -r pid; do
     [ -n "$pid" ] || continue
@@ -251,6 +278,14 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
+if [ "$BUILD_CONFIGURATION" = "release" ]; then
+  if [ "$(derive_release_source_sha)" != "$RELEASE_SOURCE_SHA" ]; then
+    echo "release source identity changed during build" >&2
+    exit 2
+  fi
+  /usr/libexec/PlistBuddy -c "Add :NeonDiffSourceSHA string $RELEASE_SOURCE_SHA" "$INFO_PLIST"
+fi
+
 case "$PRODUCTION_CONTRACT_MODE" in
   managed)
     /usr/libexec/PlistBuddy -c "Add :NeonDiffPaidBetaContract string $PAID_BETA_CONTRACT" "$INFO_PLIST"
@@ -310,6 +345,7 @@ case "$MODE" in
       "$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"
       test -x "$APP_HELPERS/NeonDiffWorker"
       test "$("$APP_HELPERS/NeonDiffWorker" --version)" = "1.0.4"
+      test "$(/usr/libexec/PlistBuddy -c 'Print :NeonDiffSourceSHA' "$INFO_PLIST")" = "$RELEASE_SOURCE_SHA"
     fi
     INVALID_BUNDLE_ROOT_ENTRIES="$(find "$APP_BUNDLE" -mindepth 1 -maxdepth 1 ! -name Contents -print)"
     if [ -n "$INVALID_BUNDLE_ROOT_ENTRIES" ]; then

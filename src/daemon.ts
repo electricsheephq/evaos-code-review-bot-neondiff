@@ -12,7 +12,7 @@ import {
   type DaemonCycleAdmissions,
   type ProductionLicenseAdmission
 } from "./license-admission.js";
-import { ReviewStateStore, type DaemonHeartbeatEvent } from "./state.js";
+import { ReviewStateStore, type DaemonHeartbeatEvent, type DaemonReviewLane } from "./state.js";
 import { retryProviderCooldowns, runOnce, type RetryProviderCooldownsResult, type RunOnceResult } from "./worker.js";
 import {
   cleanupStaleReviewWorktrees,
@@ -32,6 +32,7 @@ export function shouldExitDaemonAfterFailedCycle(result: DaemonCycleResult, runO
 export interface RunDaemonCycleOptions {
   cycle: number;
   dryRun: boolean;
+  reviewLane?: DaemonReviewLane;
   configPath?: string;
   pilotRepos: string[];
   monitoredRepos: string[];
@@ -55,7 +56,12 @@ export interface RunDaemonCycleOptions {
     licenseAdmission?: ProductionLicenseAdmission;
   }) => Promise<IssueEnrichmentCycleResult>;
   cleanupReviewWorktreesImpl?: (options: { configPath?: string; dryRun: boolean }) => ReviewWorktreeCleanupSummary;
-  recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string, runId?: string) => void;
+  recordHeartbeatImpl?: (
+    event: DaemonHeartbeatEvent,
+    error?: string,
+    runId?: string,
+    reviewLane?: DaemonReviewLane
+  ) => void;
   admitDaemonCycleImpl?: (configPath?: string) => Promise<DaemonCycleAdmissions | void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -84,10 +90,16 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     return { ok: false, failureKind: "admission_denied", error: message };
   }
   const schedulerEnabled = input.reviewSchedulerEnabled === true;
+  const reviewLane: DaemonReviewLane = input.reviewLane === "held" ? "held" : "active";
   const heartbeatRunId = randomUUID();
   const runOnceImpl = input.runOnceImpl ?? (schedulerEnabled ? runScheduledCycle : runOnce);
   const retryProviderCooldownsImpl = input.retryProviderCooldownsImpl ?? retryProviderCooldowns;
-  const recordHeartbeat = input.recordHeartbeatImpl ?? ((event: DaemonHeartbeatEvent, error?: string, runId?: string) => {
+  const recordHeartbeatImpl = input.recordHeartbeatImpl ?? ((
+    event: DaemonHeartbeatEvent,
+    error?: string,
+    runId?: string,
+    heartbeatReviewLane?: DaemonReviewLane
+  ) => {
     recordDaemonHeartbeatFromConfig({
       configPath: input.configPath,
       cycle: input.cycle,
@@ -95,9 +107,13 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       event,
       error,
       runId,
+      reviewLane: heartbeatReviewLane,
       stderr
     });
   });
+  const recordHeartbeat = (event: DaemonHeartbeatEvent, error?: string, runId?: string) => {
+    recordHeartbeatImpl(event, error, runId, reviewLane);
+  };
 
   if (input.worktreeCleanupDue === true) {
     try {
@@ -130,12 +146,32 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     pilotRepos: input.pilotRepos,
     monitoredRepos: input.monitoredRepos,
     canaryPulls: input.canaryPulls,
-    commandsEnabled: input.commandsEnabled
+    commandsEnabled: input.commandsEnabled,
+    reviewLane
   }));
 
   const issueEnrichmentPromise = input.issueEnrichmentEnabled === true
-    ? runIssueEnrichmentLane({ input, admissions, stdout, stderr })
+    ? runIssueEnrichmentLane({ input, admissions, stdout, stderr, recordHeartbeat, heartbeatRunId })
     : Promise.resolve();
+
+  if (reviewLane === "held") {
+    stdout(formatDaemonLog({
+      event: "daemon_review_lane_held",
+      cycle: input.cycle,
+      dryRun: input.dryRun,
+      reason: "scoped_review_required"
+    }));
+    await issueEnrichmentPromise;
+    const result = emptyRunOnceResult();
+    stdout(formatDaemonLog({
+      event: "daemon_cycle_complete",
+      cycle: input.cycle,
+      dryRun: input.dryRun,
+      result
+    }));
+    recordHeartbeat("daemon_cycle_complete", undefined, heartbeatRunId);
+    return { ok: true, result };
+  }
 
   try {
     const result = await runOnceImpl({
@@ -143,6 +179,7 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       ...(admissions ? { licenseAdmission: admissions.reviewDiscovery } : {})
     });
+    recordHeartbeat("daemon_cycle_progress", undefined, heartbeatRunId);
     try {
       if (schedulerEnabled) {
         stdout(formatDaemonLog({
@@ -196,9 +233,33 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       dryRun: input.dryRun,
       error: message
     }));
-    recordHeartbeat("daemon_cycle_failed", message, heartbeatRunId);
+    recordHeartbeat("daemon_cycle_failed", "daemon_cycle_failed", heartbeatRunId);
     return { ok: false, failureKind: "runtime_failure", error: message };
   }
+}
+
+function emptyRunOnceResult(): RunOnceResult {
+  return {
+    reposScanned: 0,
+    pullsSeen: 0,
+    reviewed: 0,
+    failed: 0,
+    skippedDraft: 0,
+    skippedCanary: 0,
+    skippedPolicy: 0,
+    skippedLicenseGate: 0,
+    skippedCommandStop: 0,
+    skippedCommandExplain: 0,
+    skippedFinishingTouchDraft: 0,
+    commandReviewRequested: 0,
+    skippedProcessed: 0,
+    skippedCapacity: 0,
+    skippedContextBudget: 0,
+    skippedProviderCooldown: 0,
+    skippedStaleHead: 0,
+    baselinedExisting: 0,
+    policySkips: []
+  };
 }
 
 export function cleanupReviewWorktreesFromConfig(input: {
@@ -271,6 +332,8 @@ async function runIssueEnrichmentLane(input: {
   admissions: DaemonCycleAdmissions | void;
   stdout: (line: string) => void;
   stderr: (line: string) => void;
+  recordHeartbeat: (event: DaemonHeartbeatEvent, error?: string, runId?: string) => void;
+  heartbeatRunId: string;
 }): Promise<void> {
   const issueEnrichmentCycleImpl = input.input.issueEnrichmentCycleImpl ?? runIssueEnrichmentCycleFromConfig;
   input.stdout(formatDaemonLog({
@@ -284,6 +347,7 @@ async function runIssueEnrichmentLane(input: {
       dryRun: input.input.dryRun,
       ...(input.admissions ? { licenseAdmission: input.admissions.issueEnrichment } : {})
     });
+    input.recordHeartbeat("daemon_cycle_progress", undefined, input.heartbeatRunId);
     input.stdout(formatDaemonLog({
       event: "daemon_issue_enrichment",
       phase: "complete",
@@ -293,6 +357,7 @@ async function runIssueEnrichmentLane(input: {
     }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    input.recordHeartbeat("daemon_cycle_progress", "issue_enrichment_failed", input.heartbeatRunId);
     input.stderr(formatDaemonLog({
       event: "daemon_issue_enrichment_failed",
       level: "error",
@@ -353,6 +418,7 @@ function recordDaemonHeartbeatFromConfig(input: {
   event: DaemonHeartbeatEvent;
   error?: string;
   runId?: string;
+  reviewLane?: DaemonReviewLane;
   stderr: (line: string) => void;
 }): void {
   try {
@@ -363,6 +429,7 @@ function recordDaemonHeartbeatFromConfig(input: {
         cycle: input.cycle,
         dryRun: input.dryRun,
         event: input.event,
+        ...(input.reviewLane ? { reviewLane: input.reviewLane } : {}),
         ...(input.runId ? { runId: input.runId } : {}),
         ...(input.error ? { error: input.error } : {})
       });

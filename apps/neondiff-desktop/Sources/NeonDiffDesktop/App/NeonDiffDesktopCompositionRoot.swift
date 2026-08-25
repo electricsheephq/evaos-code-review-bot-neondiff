@@ -60,9 +60,12 @@ enum NeonDiffDesktopCompositionRoot {
                         ?? []
                     )
             }
+        let discoveryProductionBoundary = productionBoundary
         let localBotDiscoveryProvider:
             @Sendable (String) -> DesktopLocalBotDiscoverySnapshot = {
                 label in
+                let trustedBundledWorker =
+                    FoundationTrustedBundledWorker.executionContext()
                 let snapshot =
                     LaunchAgentLocalBotConfigurationDiscovery
                         .discoverSnapshot(label: label)
@@ -71,21 +74,26 @@ enum NeonDiffDesktopCompositionRoot {
                     executionContexts:
                         snapshot.executionContexts
                         + (
-                            FoundationTrustedBundledWorker
-                                .executionContext()
+                            trustedBundledWorker
                                 .map { [$0] }
                             ?? []
+                        ),
+                    nativeVerificationCapability:
+                        DesktopNativeVerificationCapability.resolve(
+                            productionBoundary: discoveryProductionBoundary,
+                            trustedBundledWorker: trustedBundledWorker
                         )
                 )
             }
         let keychainWorkerLaunchAgentManager:
             any DesktopKeychainWorkerLaunchAgentManaging
-        if let appExecutableURL = Bundle.main.executableURL,
-           let trustedBundledWorker {
+        if let appExecutableURL = Bundle.main.executableURL {
             keychainWorkerLaunchAgentManager =
                 FoundationKeychainWorkerLaunchAgentManager(
                     appExecutableURL: appExecutableURL,
-                    trustedBundledWorker: trustedBundledWorker
+                    trustedBundledWorker: {
+                        FoundationTrustedBundledWorker.executionContext()
+                    }
                 )
         } else {
             keychainWorkerLaunchAgentManager =
@@ -100,7 +108,9 @@ enum NeonDiffDesktopCompositionRoot {
                 localBotExecutionContextProvider:
                     localBotExecutionContextProvider,
                 defaultWorkingDirectory: cliWorkingDirectory,
-                trustedBundledWorker: trustedBundledWorker,
+                trustedBundledWorkerProvider: {
+                    FoundationTrustedBundledWorker.executionContext()
+                },
                 trustedProcessValidator: {
                     FoundationTrustedBundledWorker
                         .runningProcessIsTrusted($0)
