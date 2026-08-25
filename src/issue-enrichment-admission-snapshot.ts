@@ -1,3 +1,4 @@
+import { types as utilTypes } from "node:util";
 export type IssueEnrichmentAdmissionAction = "would_enrich" | "would_comment";
 export type IssueEnrichmentAdmissionScanAction = IssueEnrichmentAdmissionAction | "deferred" | "skipped";
 export type IssueEnrichmentAdmissionRecordStatus = "dry_run" | "posted" | "skipped" | "deferred" | "failed";
@@ -16,7 +17,7 @@ export function snapshotIssueEnrichmentAdmission(input: IssueEnrichmentAdmission
       !raw.limits || typeof raw.limits !== "object" || Array.isArray(raw.limits)) fail("input_shape");
   const checkedAt = timestamp(raw.checkedAt) ?? fail("invalid_checkedAt");
   const allowlist = raw.allowlist.map((repo: unknown) => text(repo, "allowlist"));
-  const duplicateRepos = duplicates(allowlist);
+  const duplicateRepos = duplicates(allowlist.map((repo) => repo.toLowerCase()));
   if (duplicateRepos.length) fail(`duplicate_allowlist:${duplicateRepos.join(",")}`);
   const fallback = raw.fallbackIntendedAction;
   if (fallback !== undefined && !ACTIONS.has(fallback)) fail("invalid_fallback_intent");
@@ -30,13 +31,13 @@ export function snapshotIssueEnrichmentAdmission(input: IssueEnrichmentAdmission
   const recordByKey = new Map<string, IssueEnrichmentAdmissionRecord>(records.map((record: IssueEnrichmentAdmissionRecord) => [key(record.repo, record.issueNumber), record]));
   const candidates: IssueEnrichmentAdmissionCandidate[] = [];
   for (const repo of allowlist) for (const item of items) {
-    if (item.repo !== repo) continue;
+    if (item.repo.toLowerCase() !== repo.toLowerCase()) continue;
     const intendedAction = intentFor(item, fallback);
     const candidate: IssueEnrichmentAdmissionCandidate = {
       ...item,
       key: key(item.repo, item.issueNumber),
       ...(intendedAction ? { intendedAction } : {}),
-      ...(recordByKey.has(key(item.repo, item.issueNumber)) ? { record: recordByKey.get(key(item.repo, item.issueNumber)) } : {})
+      record: recordByKey.get(key(item.repo, item.issueNumber))
     };
     candidates.push(candidate);
   }
@@ -47,8 +48,7 @@ export function snapshotIssueEnrichmentAdmission(input: IssueEnrichmentAdmission
   return freezeDeep(snapshot);
 }
 
-export const buildIssueEnrichmentAdmissionSnapshot = snapshotIssueEnrichmentAdmission;
-export const snapshotIssueEnrichmentAdmissionInputs = snapshotIssueEnrichmentAdmission;
+export const buildIssueEnrichmentAdmissionSnapshot = snapshotIssueEnrichmentAdmission, snapshotIssueEnrichmentAdmissionInputs = snapshotIssueEnrichmentAdmission;
 
 function normalizeItem(value: unknown, index: number): IssueEnrichmentAdmissionScanItem {
   const item = plainRecord(value, `items[${index}]`);
@@ -101,10 +101,10 @@ function clonePlain(value: unknown, label: string, active = new WeakSet<object>(
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null && !Array.isArray(value)) fail(`non_plain:${label}`);
   for (const descriptor of Object.values(descriptors)) if (!("value" in descriptor)) fail(`accessor:${label}`);
-  try { structuredClone(value); } catch { fail(`non_plain:${label}`); }
+  if (utilTypes.isProxy(value)) fail(`non_plain:${label}`);
   active.add(value);
   let copy: any;
-  if (Array.isArray(value)) {
+  if (Array.isArray(value)) { if (prototype !== Array.prototype || Reflect.ownKeys(descriptors).length !== value.length + 1) fail(`non_plain:${label}`);
     copy = new Array(value.length);
     for (const name of Reflect.ownKeys(descriptors)) {
       if (name === "length") continue;
@@ -134,7 +134,7 @@ function plainRecord(value: unknown, label: string): Record<string, any> {
 }
 function text(value: unknown, label: string): string { if (typeof value !== "string" || value.length === 0) fail(label); return value; }
 function positiveInteger(value: unknown, label: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) fail(label); return value as number; }
-function timestamp(value: unknown): string | undefined { if (typeof value !== "string") return undefined; const parsed = Date.parse(value); return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined; }
-function key(repo: string, issueNumber: number): string { return `${repo}#${issueNumber}`; }
+function timestamp(value: unknown): string | undefined { if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return undefined; const parsed = Date.parse(value); return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined; }
+function key(repo: string, issueNumber: number): string { return `${repo.toLowerCase()}#${issueNumber}`; }
 function duplicates(values: readonly string[]): string[] { const counts = new Map<string, number>(); for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1); return [...counts].filter(([, count]) => count > 1).map(([value]) => value).sort(); }
 function fail(label: string): never { throw new Error(`issue_enrichment_admission_snapshot_${label}`); }

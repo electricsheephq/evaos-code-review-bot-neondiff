@@ -43,14 +43,14 @@ describe("issue-enrichment admission input snapshots", () => {
     expect(() => snapshotIssueEnrichmentAdmission(base([item("a/repo", 1)], { limits: { extension: value } }))).toThrow(/non_plain|cycle/);
   });
 
-  it("rejects accessors and cycles while allowing an empty snapshot", () => {
-    const accessor = {} as Record<string, unknown>;
-    Object.defineProperty(accessor, "allowlist", { get: () => ["a/repo"], enumerable: true });
-    expect(() => snapshotIssueEnrichmentAdmission(accessor as unknown as Input)).toThrow(/accessor|non_plain/);
-    const cycle: any = {}; cycle.self = cycle;
-    expect(() => snapshotIssueEnrichmentAdmission(base([], { limits: cycle }))).toThrow(/cycle/);
-    const empty = snapshotIssueEnrichmentAdmission(base([]));
-    expect(empty.candidates).toEqual([]);
-    expect(Object.isFrozen(empty)).toBe(true);
+  it("fails closed over reserved fields, sparse and aliased identity, local time, accessors, and cycles", () => {
+    const spoofed = snapshotIssueEnrichmentAdmission(base([{ ...item("a/repo", 1), record: { status: "posted" } }])); expect.soft(spoofed.candidates[0]!.record).toBeUndefined();
+    const sparse: string[] = []; sparse.length = 1; expect.soft(() => snapshotIssueEnrichmentAdmission(base([], { allowlist: sparse }))).toThrow(/non_plain/);
+    expect.soft(() => snapshotIssueEnrichmentAdmission(base([], { allowlist: ["Owner/Repo", "owner/repo"] }))).toThrow(/duplicate_allowlist/); expect.soft(() => snapshotIssueEnrichmentAdmission(base([], { checkedAt: "2026-08-24T00:00:00" }))).toThrow(/invalid_checkedAt/);
+    let calls = 0; const nested: Record<string, unknown> = {}; Object.defineProperty(nested, "value", { get: () => { calls += 1; return 1; }, enumerable: true });
+    expect.soft(() => snapshotIssueEnrichmentAdmission(base([], { limits: { nested } }))).toThrow(/accessor/); expect.soft(calls).toBe(0);
+    const accessor = {} as Record<string, unknown>; Object.defineProperty(accessor, "allowlist", { get: () => ["a/repo"], enumerable: true }); expect.soft(() => snapshotIssueEnrichmentAdmission(accessor as unknown as Input)).toThrow(/accessor|non_plain/);
+    const cycle: any = {}; cycle.self = cycle; expect.soft(() => snapshotIssueEnrichmentAdmission(base([], { limits: cycle }))).toThrow(/cycle/);
+    const empty = snapshotIssueEnrichmentAdmission(base([])); expect.soft(empty.candidates).toEqual([]); expect.soft(Object.isFrozen(empty)).toBe(true);
   });
 });
