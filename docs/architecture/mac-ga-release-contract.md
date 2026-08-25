@@ -120,12 +120,21 @@ that archive into fresh staging, computes the tree identity, and rejects any
 mismatch, unavailable/changed reference, untrusted location, or changed config.
 It contains references to secrets rather than secret values.
 
-For Desktop `1.1.0`, the retained location is the immutable evidence-only
-GitHub prerelease/tag `neondiff-accepted-packet-v1.1.0`, excluded from latest
-selection and targeted at the packet artifact-source commit. It contains
-exactly the content-addressed accepted packet and its content-addressed verified
-artifact-source-attestation bundle. The 30-day Actions artifact is transit for
+For every accepted Desktop `1.1.0` beta, RC, or stable release, the retained
+location is an immutable evidence-only GitHub prerelease/tag named
+`neondiff-accepted-packet-<release-tag>`, excluded from latest selection and
+targeted at the packet artifact-source commit. Each location contains exactly
+the content-addressed accepted packet and its content-addressed verified
+artifact-source-attestation bundle. The canonical stable location remains
+`neondiff-accepted-packet-v1.1.0`. The 30-day Actions artifact is transit for
 first publication only and is never the authority for a later read.
+
+The fixed product release tag, not caller-supplied metadata, determines source
+identity. RC and stable require a distinct annotated tag object. An immutable
+beta release may instead use a lightweight tag that points directly to the
+exact source commit; in that case the packet's tag-object SHA equals its source
+SHA by construction. No other channel may use that equality, and every channel
+still revalidates the fixed tag ref, source, release target, artifact, and feed.
 
 The workflow first runs a read-only resolver against the fixed canonical
 repository and evidence tag. It validates the canonical `main` and workflow
@@ -143,7 +152,7 @@ artifact-source SHA, and signer-workflow SHA, creates the fixed release once,
 then reloads and verifies the published assets. On a later dispatch it never
 uses the mutable live appcast, a current artifact, a current Actions artifact,
 or producer outputs. It discovers the prior exact pair from the immutable
-release's only two assets, reloads the exact packet-named stable artifact, and
+release's only two assets, reloads the exact packet-named product artifact, and
 cryptographically verifies the retained bundle against that artifact and the
 stored fixed signer workflow/ref/SHA. The signed predicate also carries the
 accepted packet SHA-256, which must match the retained content-addressed packet.
