@@ -78,18 +78,54 @@ ensure_clean_source_tree() {
   fi
 }
 
+validate_source_ref() {
+  local value="$1"
+  local resolved type
+  case "$value" in
+    refs/tags/*)
+      if ! git -C "$REPO_ROOT" show-ref --verify --quiet "$value"; then
+        echo "provided source identity does not match the exact checkout" >&2
+        return 2
+      fi
+      type="$(git -C "$REPO_ROOT" cat-file -t "$value")"
+      if [ "$type" != "tag" ]; then
+        echo "release source tag must be annotated" >&2
+        return 2
+      fi
+      resolved="$(git -C "$REPO_ROOT" rev-parse --verify "$value^{commit}")"
+      ;;
+    *)
+      if [[ "$value" =~ ^[a-f0-9]{40}$ ]]; then
+        resolved="$value"
+      else
+        echo "source ref must be a canonical SHA or fully qualified tag" >&2
+        return 2
+      fi
+      ;;
+  esac
+  if [ "$resolved" != "$DERIVED_SOURCE_SHA" ]; then
+    echo "provided source identity does not match the exact checkout" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+
 derive_source_ref() {
   local symbolic tags
   symbolic="$(git -C "$REPO_ROOT" symbolic-ref -q HEAD || true)"
   if [ -n "$symbolic" ]; then
-    printf '%s\n' "$symbolic"
+    echo "release proof requires a detached source checkout" >&2
+    return 2
+  fi
+  if [ "$SOURCE_REF_PROVIDED" -eq 1 ]; then
+    validate_source_ref "$SOURCE_REF"
     return
   fi
   tags="$(git -C "$REPO_ROOT" tag --points-at "$DERIVED_SOURCE_SHA")"
   case "$tags" in
     "") printf '%s\n' "$DERIVED_SOURCE_SHA" ;;
     *$'\n'*) echo "source ref is ambiguous" >&2; return 2 ;;
-    *) printf 'refs/tags/%s\n' "$tags" ;;
+    *) validate_source_ref "refs/tags/$tags" ;;
   esac
 }
 
@@ -123,18 +159,17 @@ if [[ ! "$DERIVED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] \
   echo "release source identity is not canonical" >&2
   exit 2
 fi
-DERIVED_SOURCE_REF="$(derive_source_ref)"
 if [ "$SOURCE_SHA_PROVIDED" -eq 1 ]; then
   if [ -z "$SOURCE_SHA" ] || [ -z "$SOURCE_REF" ]; then
     echo "SOURCE_SHA and SOURCE_REF must be non-empty when provided" >&2
     exit 2
   fi
-  if [ "$SOURCE_SHA" != "$DERIVED_SOURCE_SHA" ] \
-    || [ "$SOURCE_REF" != "$DERIVED_SOURCE_REF" ]; then
+  if [ "$SOURCE_SHA" != "$DERIVED_SOURCE_SHA" ]; then
     echo "provided source identity does not match the exact checkout" >&2
     exit 2
   fi
 fi
+DERIVED_SOURCE_REF="$(derive_source_ref)"
 SOURCE_SHA="$DERIVED_SOURCE_SHA"
 SOURCE_REF="$DERIVED_SOURCE_REF"
 
