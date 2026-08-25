@@ -53,6 +53,12 @@ function trackedAtHead(context, evidence, label) {
   const blob = git(context.workspace, ["show", `${context.head}:${name}`]);
   if (!Buffer.isBuffer(blob) || !blob.equals(evidence.bytes)) fail(`${label} is not the protected-head blob`);
 }
+function targetRetainedAtHead(context, target) {
+  const name = relative(context.workspace, join(context.targetDirectory, `${target.digest}.packet.json`)), listed = git(context.workspace, ["ls-tree", "--name-only", context.head, "--", name], "utf8").trim();
+  if (!listed) return false;
+  if (listed !== name) fail("protected target packet history is ambiguous");
+  const blob = git(context.workspace, ["show", `${context.head}:${name}`]); if (!Buffer.isBuffer(blob) || !blob.equals(target.bytes)) fail("protected target packet disagrees with verified evidence"); return true;
+}
 function exactPacket(path, label) {
   const evidence = boundedBytes(path, label), packet = parseAcceptedDesktopReleasePacket(evidence.bytes);
   if (basename(evidence.path) !== `${evidence.digest}.packet.json`) fail(`${label} content address is invalid`);
@@ -85,9 +91,9 @@ function protectedHistory(context, target, current, previous, requestedAction) {
     }
     declarationIdentity(packetEvidence.packet, records.get(name).declaration, "accepted packet");
   }
-  const targetRecord = records.get(`${target.packet.tag}.json`), currentRecord = records.get(`${current.packet.tag}.json`);
+  const targetRecord = records.get(`${target.packet.tag}.json`), currentRecord = records.get(`${current.packet.tag}.json`), targetRetained = targetRetainedAtHead(context, target);
   const targetBuild = BigInt(target.packet.build), currentBuild = BigInt(current.packet.build); let action;
-  if (targetRecord.position > currentRecord.position && targetRecord.name === index.currentPath && targetBuild > currentBuild) action = previous === null ? "update" : previous.digest === target.digest ? "reupdate" : undefined;
+  if (targetRecord.position > currentRecord.position && targetRecord.name === index.currentPath && targetBuild > currentBuild) action = targetRetained ? previous?.digest === target.digest ? "reupdate" : undefined : previous === null ? "update" : undefined;
   else if (targetRecord.position < currentRecord.position && currentRecord.name === index.currentPath && targetBuild < currentBuild && previous?.digest === target.digest) action = "rollback";
   if (!action) fail("protected history does not permit the transition");
   if (action !== requestedAction) fail("requested action does not match protected history");
