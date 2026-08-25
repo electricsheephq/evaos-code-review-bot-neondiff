@@ -45,7 +45,7 @@ function boundedBytes(input, label, maximum) {
   if (typeof input !== "string" || !input) fail(`${label} path is invalid`);
   const path = resolve(input); let descriptor;
   try {
-    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    descriptor = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
     const before = fstatSync(descriptor, { bigint: true });
     if (!before.isFile() || before.size < 1n || before.size > BigInt(maximum)) fail(`${label} must be a bounded regular file`);
     const bytes = readFileSync(descriptor), after = fstatSync(descriptor, { bigint: true });

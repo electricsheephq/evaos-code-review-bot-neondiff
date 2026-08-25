@@ -145,6 +145,7 @@ process.stdout.write("{}\\n");
   ], {
     cwd: process.cwd(),
     encoding: "utf8",
+    timeout: 1500,
     env: {
       ...process.env,
       PATH: `${root}:${process.env.PATH}`,
@@ -195,6 +196,11 @@ describe("retained accepted Desktop evidence", () => {
     const packetLink = join(linkedRoot, linked.packetName);
     symlinkSync(linked.packetPath, packetLink);
     expect(linked.run({ packet: packetLink }).status).not.toBe(0);
+
+    const fifo = fixture(), fifoPath = join(fifo.root, fifo.packetName);
+    expect(spawnSync("mkfifo", [fifoPath]).status).toBe(0);
+    const fifoResult = fifo.run({ packet: fifoPath });
+    expect(fifoResult.error).toBeUndefined(); expect(fifoResult.status).not.toBe(0);
 
     const oversized = fixture(); truncateSync(oversized.bundlePath, 4 * 1024 * 1024 + 1);
     expect(oversized.run().status).not.toBe(0);
