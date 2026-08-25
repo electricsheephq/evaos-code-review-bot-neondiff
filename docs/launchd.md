@@ -15,8 +15,18 @@ Recommended first review proof:
 cd /path/to/neondiff
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
-npm run run-once -- --config /absolute/path/to/config.local.json --dry-run true --repo owner/repo --pr 123
+npm run cli -- review-pr \
+  --config /absolute/path/to/config.local.json \
+  --repo owner/repo \
+  --pr 123 \
+  --expected-config-revision <verified-config-revision> \
+  --dry-run true \
+  --zcode true
 ```
+
+Use the exact `configRevision` from the successful provider verification. The
+returned exact head and this scoped dry receipt are prerequisites for the
+separate same-head live confirmation.
 
 After the GitHub App is installed, use app credentials and keep `--dry-run true` for the first observation window:
 

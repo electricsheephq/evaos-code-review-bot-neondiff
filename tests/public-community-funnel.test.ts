@@ -141,6 +141,13 @@ describe("NeonDiff public community funnel", () => {
         /issue-enrichment success requires lane-specific/i
       );
     }
+
+    const launchd = read("docs/launchd.md");
+    expect(launchd).toContain("npm run cli -- review-pr");
+    expect(launchd).toContain(
+      "--expected-config-revision <verified-config-revision>"
+    );
+    expect(launchd).not.toContain("npm run run-once");
   });
 
   it("license boundary surfaces are canonical and avoid open-source claims", () => {
