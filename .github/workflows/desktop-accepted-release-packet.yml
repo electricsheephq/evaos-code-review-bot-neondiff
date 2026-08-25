@@ -19,6 +19,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     env:
+      # SHA-256 of SUPublicEDKey from immutable, notarized beta.87 artifact a90f77f5a1dbebd52de2fa19c37bf10d465fc58f7ad622dd12c289accde368a1.
+      EXPECTED_SPARKLE_PUBLIC_KEY_SHA256: 550933d363765a39fb62610776e4b73fbedfe678cd43b667a4e606eae9028e31
       RELEASE_TAG: v1.1.0
       REPOSITORY: electricsheephq/evaos-code-review-bot-neondiff
       STABLE_FEED_URL: https://www.neondiff.com/updates/stable/appcast.xml
@@ -102,6 +104,8 @@ jobs:
           const value = readFileSync(process.argv[2], "utf8"), decoded = Buffer.from(value, "base64");
           if (decoded.length !== 32 || decoded.toString("base64") !== value) process.exit(1);
           NODE
+          SPARKLE_PUBLIC_KEY_SHA256="$(shasum -a 256 "$ACCEPTED_PUBLIC_KEY" | awk '{print $1}')"
+          test "$SPARKLE_PUBLIC_KEY_SHA256" = "$EXPECTED_SPARKLE_PUBLIC_KEY_SHA256"
 
           curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --max-time 60 "$STABLE_FEED_URL" > "$PACKET_ROOT/appcast.xml"
           jq -n \
@@ -145,13 +149,13 @@ jobs:
         id: bundle
         env:
           BUNDLE_SOURCE: ${{ steps.attest.outputs.bundle-path }}
-          EXPECTED_PACKET_NAME: ${{ steps.packet.outputs.packet_name }}
+          PACKET_SOURCE: ${{ steps.packet.outputs.packet_path }}
           PACKET_DIRECTORY: ${{ runner.temp }}/desktop-accepted-release-packet
         run: |
           set -euo pipefail
           BUNDLE_RESULT="$(node scripts/retain-desktop-packet-attestation.mjs \
             --bundle "$BUNDLE_SOURCE" \
-            --packet-name "$EXPECTED_PACKET_NAME" \
+            --packet "$PACKET_SOURCE" \
             --output-directory "$PACKET_DIRECTORY")"
           BUNDLE_SHA256="$(jq -er '.bundleSHA256 | select(test("^[a-f0-9]{64}$"))' <<< "$BUNDLE_RESULT")"
           BUNDLE_NAME="$(jq -er '.bundleFileName' <<< "$BUNDLE_RESULT")"

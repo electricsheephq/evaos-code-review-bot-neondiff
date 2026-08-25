@@ -24,11 +24,18 @@ process.stdout.write(JSON.stringify([{ verificationResult: { statement: { predic
 }
 
 function bundleFixture(mode: "valid" | "wrong-subject" | "malformed" = "valid") {
-  const root = mkdtempSync(join(tmpdir(), "neondiff-packet-bundle-")); roots.push(root); const output = join(root, "retained"); mkdirSync(output);
-  const packetSHA256 = "a".repeat(64), packetName = `${packetSHA256}.packet.json`, statement = { _type: "https://in-toto.io/Statement/v1", predicateType: "https://slsa.dev/provenance/v1", subject: [{ name: packetName, digest: { sha256: mode === "wrong-subject" ? "b".repeat(64) : packetSHA256 } }], predicate: {} };
-  const bundle = join(root, "attestation.json"), bytes = mode === "malformed" ? Buffer.from("{") : Buffer.from(`${JSON.stringify({ mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json", verificationMaterial: {}, dsseEnvelope: { payload: Buffer.from(JSON.stringify(statement)).toString("base64"), payloadType: "application/vnd.in-toto+json", signatures: [{ sig: "synthetic" }] } })}\n`); writeFileSync(bundle, bytes);
-  const run = (args = ["--bundle", bundle, "--packet-name", packetName, "--output-directory", output]) => spawnSync(process.execPath, [retainer, ...args], { cwd: process.cwd(), encoding: "utf8" });
-  return { root, output, packetName, bundle, bytes, run };
+  const root = mkdtempSync(join(tmpdir(), "neondiff-packet-bundle-")); roots.push(root); const output = join(root, "retained"), capture = join(root, "args.json"); mkdirSync(output);
+  const packetBytes = Buffer.from('{"kind":"synthetic-accepted-packet"}\n'), packetSHA256 = createHash("sha256").update(packetBytes).digest("hex"), packetName = `${packetSHA256}.packet.json`, packet = join(root, packetName), statement = { _type: "https://in-toto.io/Statement/v1", predicateType: "https://slsa.dev/provenance/v1", subject: [{ name: packetName, digest: { sha256: mode === "wrong-subject" ? "b".repeat(64) : packetSHA256 } }], predicate: {} };
+  const bundle = join(root, "attestation.json"), bytes = mode === "malformed" ? Buffer.from("{") : Buffer.from(`${JSON.stringify({ mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json", verificationMaterial: { tlogEntries: [{}] }, dsseEnvelope: { payload: Buffer.from(JSON.stringify(statement)).toString("base64"), payloadType: "application/vnd.in-toto+json", signatures: [{ sig: Buffer.alloc(64, 1).toString("base64") }] } })}\n`); writeFileSync(packet, packetBytes); writeFileSync(bundle, bytes);
+  writeFileSync(join(root, "gh"), `#!/usr/bin/env node
+const { createHash } = require("node:crypto"), { readFileSync, writeFileSync } = require("node:fs"), { basename } = require("node:path");
+const args = process.argv.slice(2), packet = args[2]; writeFileSync(process.env.CAPTURE_PATH, JSON.stringify(args));
+if (process.env.FAKE_GH_MODE === "fail") { process.stderr.write("invalid bundle signature"); process.exit(1); }
+const digest = createHash("sha256").update(readFileSync(packet)).digest("hex");
+process.stdout.write(JSON.stringify([{ verificationResult: { statement: { predicateType: "https://slsa.dev/provenance/v1", subject: [{ name: basename(packet), digest: { sha256: digest } }] } } }]));
+`); chmodSync(join(root, "gh"), 0o755);
+  const run = (ghMode = "success", args = ["--bundle", bundle, "--packet", packet, "--output-directory", output]) => spawnSync(process.execPath, [retainer, ...args], { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CAPTURE_PATH: capture, FAKE_GH_MODE: ghMode } });
+  return { root, output, packetName, packet, bundle, bytes, capture, run };
 }
 
 describe("trusted Desktop accepted-packet attestation", () => {
@@ -51,9 +58,11 @@ describe("trusted Desktop accepted-packet attestation", () => {
   it("retains one bounded content-addressed bundle bound to the exact packet", () => {
     const value = bundleFixture(), result = value.run(); expect(result.status).toBe(0); const receipt = JSON.parse(result.stdout), expectedDigest = createHash("sha256").update(value.bytes).digest("hex"), target = join(value.output, `${expectedDigest}.attestation.json`);
     expect(receipt).toEqual({ bundleSHA256: expectedDigest, bundleFileName: `${expectedDigest}.attestation.json` }); expect(readFileSync(target)).toEqual(value.bytes); expect(statSync(target).mode & 0o777).toBe(0o600);
+    const args = JSON.parse(readFileSync(value.capture, "utf8")); expect(args.slice(0, 2)).toEqual(["attestation", "verify"]); expect(basename(args[2])).toBe(value.packetName); expect(args[2]).not.toBe(value.packet); expect(args[3]).toBe("--bundle"); expect(args[4]).not.toBe(value.bundle); expect(args.slice(5)).toEqual(["--repo", repository, "--signer-workflow", signerWorkflow, "--source-ref", sourceRef, "--deny-self-hosted-runners", "--format", "json"]);
+    expect(bundleFixture().run("fail").status).not.toBe(0); expect(value.run().status).not.toBe(0); expect(readFileSync(target)).toEqual(value.bytes);
     expect(bundleFixture("malformed").run().status).not.toBe(0); expect(bundleFixture("wrong-subject").run().status).not.toBe(0);
-    const linked = bundleFixture(), alias = join(linked.root, "alias.json"); symlinkSync(linked.bundle, alias); expect(linked.run(["--bundle", alias, "--packet-name", linked.packetName, "--output-directory", linked.output]).status).not.toBe(0);
-    const alternate = bundleFixture(); expect(alternate.run(["--bundle", alternate.bundle, "--packet-name", alternate.packetName, "--output-directory", alternate.output, "--repo", "attacker/example"]).status).not.toBe(0);
+    const linked = bundleFixture(), alias = join(linked.root, "alias.json"); symlinkSync(linked.bundle, alias); expect(linked.run("success", ["--bundle", alias, "--packet", linked.packet, "--output-directory", linked.output]).status).not.toBe(0);
+    const alternate = bundleFixture(); expect(alternate.run("success", ["--bundle", alternate.bundle, "--packet", alternate.packet, "--output-directory", alternate.output, "--repo", "attacker/example"]).status).not.toBe(0);
   });
 
   it("keeps the canonical builder and attester on protected main with no authority inputs", () => {
@@ -61,6 +70,7 @@ describe("trusted Desktop accepted-packet attestation", () => {
     expect(workflow).toMatch(/workflow_dispatch:\s*\n/); expect(workflow).not.toMatch(/workflow_dispatch:\s*\n\s+inputs:/); expect(workflow).toMatch(/contents:\s*read[\s\S]*id-token:\s*write[\s\S]*attestations:\s*write/);
     expect(workflow).toContain("github.ref == 'refs/heads/main'"); expect(workflow).toContain("runs-on: macos-15"); expect(workflow).not.toContain("self-hosted"); expect(workflow).toContain('RELEASE_TAG: v1.1.0'); expect(workflow).toContain('test "$GITHUB_SHA" = "$(git rev-parse HEAD)"');
     expect(workflow).toContain("TeamIdentifier=TC6MS3T6NN"); expect(workflow).toMatch(/codesign --verify/); expect(workflow).toMatch(/stapler validate/); expect(workflow).toMatch(/spctl --assess/); expect(workflow).toContain("build-desktop-accepted-release-packet.mjs");
+    expect(workflow).toContain("EXPECTED_SPARKLE_PUBLIC_KEY_SHA256: 550933d363765a39fb62610776e4b73fbedfe678cd43b667a4e606eae9028e31"); expect(workflow).toContain('test "$SPARKLE_PUBLIC_KEY_SHA256" = "$EXPECTED_SPARKLE_PUBLIC_KEY_SHA256"');
     expect(workflow).toContain("actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3"); expect(workflow).toContain("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4");
     expect(workflow).toContain("steps.attest.outputs.bundle-path"); expect(workflow).toContain("retain-desktop-packet-attestation.mjs");
     expect(producer).toContain("buildAcceptedDesktopReleasePacket"); expect(producer).toContain("serializeAcceptedDesktopReleasePacket"); expect(producer).toContain("acceptedDesktopReleasePacketDigest"); expect(producer).toMatch(/O_EXCL/); expect(producer).not.toMatch(/private.?key|token|secret/i);
