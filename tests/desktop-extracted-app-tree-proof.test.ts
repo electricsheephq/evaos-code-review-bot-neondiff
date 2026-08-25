@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildClassicZipMetadataGraph, buildExtractedAppTreeProof, extractedAppTreeProofDigest, guardClassicZipArchive, serializeExtractedAppTreeProof, withMaterializedClassicZipApp } from "../scripts/lib/desktop-extracted-app-tree-proof.mjs";
+import { acceptedDesktopReleasePacketDigest, buildAcceptedDesktopReleasePacket, serializeAcceptedDesktopReleasePacket } from "../scripts/lib/desktop-accepted-release-packet.mjs";
 
 type Entry = { name: string; localName?: string; localOffset?: number; localExtra?: Buffer; type?: "file" | "directory" | "symlink"; data?: string | Buffer; trailing?: Buffer; flags?: number; method?: number; expanded?: number; crc?: number; descriptor?: boolean; extra?: number | Buffer; comment?: number; mode?: number };
 const roots: string[] = [];
@@ -26,7 +27,8 @@ function classicZip(entries: Entry[]) {
 }
 function unicodePathExtra(headerName: string, alternateName: string) { const alternate = Buffer.from(alternateName), field = Buffer.alloc(9 + alternate.length); u16(field, 0, 0x7075); u16(field, 2, 5 + alternate.length); field[4] = 1; u32(field, 5, crc32(Buffer.from(headerName))); alternate.copy(field, 9); return field; }
 function fixture(entries: Entry[]) { const root = mkdtempSync(join(tmpdir(), "neondiff-zip-")); roots.push(root); const artifact = join(root, "NeonDiff.zip"); writeFileSync(artifact, classicZip(entries)); return { root, artifact }; }
-function plist(version = "1.1.0-rc.9", extra = "") { return `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>11091</string>${extra}</dict></plist>`; }
+const stableFeed = "https://www.neondiff.com/updates/stable/appcast.xml", betaFeed = "https://www.neondiff.com/updates/beta/appcast.xml", defaultPublicKey = Buffer.alloc(32, 1).toString("base64"), plistDoctype = '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">';
+function plist(version = "1.1.0-rc.9", extra = "", publicKey = defaultPublicKey) { const feed = version === "1.1.0" ? stableFeed : betaFeed; return `<?xml version="1.0" encoding="UTF-8"?>${plistDoctype}<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>11091</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>SUFeedURL</key><string>${feed}</string><key>SUPublicEDKey</key><string>${publicKey}</string>${extra}</dict></plist>`; }
 function eocdPatch(artifact: string, field: number, value: number) { const bytes = readFileSync(artifact); u32(bytes, bytes.length - 22 + field, value); writeFileSync(artifact, bytes); }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -56,6 +58,49 @@ describe("raw bounded classic-ZIP archive guard", () => {
     expect(() => guardClassicZipArchive({ artifactPath: alias })).toThrow();
     const oversized = join(value.root, "oversized.zip"); writeFileSync(oversized, ""); truncateSync(oversized, 512 * 1024 * 1024 + 1);
     expect(() => guardClassicZipArchive({ artifactPath: oversized })).toThrow("artifact bytes exceed bound");
+  });
+});
+
+describe("canonical accepted Desktop release packet", () => {
+  const sourceSHA = "1".repeat(40), tagObjectSHA = "2".repeat(40), tag = "v1.1.0", version = "1.1.0", build = "11091", artifactName = `NeonDiff-${version}-build${build}-macOS.zip`;
+  function packetFixture(sidecar = false, inAppSidecar = false) {
+    const root = mkdtempSync(join(tmpdir(), "neondiff-packet-")); roots.push(root);
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519"), acceptedPublicKey = Buffer.from(publicKey.export({ format: "der", type: "spki" })).subarray(-32).toString("base64"), artifactPath = join(root, artifactName);
+    const entries: Entry[] = [{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Contents/Info.plist", data: plist(version, "", acceptedPublicKey) }, { name: "NeonDiff.app/Contents/MacOS/NeonDiffDesktop", data: "desktop", mode: 0o100755 }]; if (sidecar) entries.push({ name: "__MACOSX/NeonDiff.app/Contents/._Info.plist", data: "appledouble" }); if (inAppSidecar) entries.push({ name: "NeonDiff.app/Contents/._Info.plist", data: Buffer.from([0x00, 0x05, 0x16, 0x07]) });
+    writeFileSync(artifactPath, classicZip(entries)); const artifact = readFileSync(artifactPath), artifactSHA256 = createHash("sha256").update(artifact).digest("hex"), url = `https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/download/${tag}/${artifactName}`, edSignature = sign(null, artifact, privateKey).toString("base64"), declarationDirectory = join(root, "declarations"); mkdirSync(declarationDirectory);
+    const indexPath = join(root, "index.json"), feedPath = join(root, "appcast.xml"), tagRefPath = join(root, "tag-ref.json"), tagObjectPath = join(root, "tag-object.json"), releasePath = join(root, "release.json"), acceptedPublicKeyPath = join(root, "accepted-sparkle-public-key.txt"), declarationPath = join(declarationDirectory, `${tag}.json`);
+    const declaration = { schemaVersion: 1, product: "neondiff-desktop", version, tag, channel: "stable", sequence: null, build, predecessor: null, contract: "paid-mac-ga-byo-v1", distribution: { bundleId: "com.electricsheephq.NeonDiffDesktop", appPath: "NeonDiff.app", artifactName, releaseClass: "desktop-only", origins: { github: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff", site: "https://www.neondiff.com", feed: stableFeed } } };
+    const tagRef = { ref: `refs/tags/${tag}`, object: { type: "tag", sha: tagObjectSHA } }, tagObject = { sha: tagObjectSHA, tag, message: `NeonDiff ${version}\n\nNeonDiff-Release-Class: desktop-only\n`, object: { type: "commit", sha: sourceSHA } }, release = { tag_name: tag, draft: false, prerelease: false, immutable: true, assets: [{ name: artifactName, size: artifact.length, digest: `sha256:${artifactSHA256}`, browser_download_url: url }] };
+    writeFileSync(indexPath, JSON.stringify({ schemaVersion: 1, status: "retained", declarationDirectory: "declarations", declarationPaths: [`${tag}.json`], currentPath: `${tag}.json` })); writeFileSync(declarationPath, JSON.stringify(declaration)); writeFileSync(tagRefPath, JSON.stringify(tagRef)); writeFileSync(tagObjectPath, JSON.stringify(tagObject)); writeFileSync(releasePath, JSON.stringify(release)); writeFileSync(acceptedPublicKeyPath, acceptedPublicKey); writeFileSync(feedPath, `<?xml version="1.0"?><rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><title>NeonDiff Desktop stable</title><link>${stableFeed}</link><description>NeonDiff Desktop stable appcast</description><item><title>NeonDiff ${version}</title><pubDate>Sun, 24 Aug 2026 00:00:00 +0000</pubDate><sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion><enclosure url="${url}" length="${artifact.length}" type="application/octet-stream" sparkle:version="${build}" sparkle:shortVersionString="${version}" sparkle:minimumSystemVersion="14.0" sparkle:edSignature="${edSignature}" /></item></channel></rss>`);
+    return { paths: [indexPath, artifactPath, feedPath, tagRefPath, tagObjectPath, releasePath, acceptedPublicKeyPath] as const, indexPath, feedPath, tagRefPath, tagObjectPath, releasePath, acceptedPublicKeyPath, declarationPath, declaration, tagRef, tagObject, release };
+  }
+  it("derives one frozen exact-source/artifact/tree/feed/enclosure/npm packet", async () => {
+    const value = packetFixture(), packet = await buildAcceptedDesktopReleasePacket(...value.paths);
+    expect(packet).toMatchObject({ schemaVersion: 1, kind: "neondiff.desktop.accepted-release-packet-v1", channel: "stable", version, build, tag, sourceSHA, tagObjectSHA, artifactName, npmReleaseClass: "desktop-only" });
+    expect(packet.artifactSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.treeSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.feedSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.enclosureProofSHA256).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.isFrozen(packet) && Object.isFrozen(packet.feedEntry)).toBe(true); expect(serializeAcceptedDesktopReleasePacket(packet)).toMatch(/\n$/); expect(acceptedDesktopReleasePacketDigest(packet)).toMatch(/^[a-f0-9]{64}$/);
+    let read = false; expect(() => serializeAcceptedDesktopReleasePacket({ ...packet } as any)).toThrow("not produced"); expect(() => serializeAcceptedDesktopReleasePacket(new Proxy(packet, { get() { read = true; throw new Error("trap"); } }) as any)).toThrow("not produced"); expect(read).toBe(false);
+  });
+  it("rejects cross-release, raw-feed, metadata, artifact, and caller substitutions", async () => {
+    const cases: Array<(value: ReturnType<typeof packetFixture>) => void> = [
+      (value) => writeFileSync(value.tagObjectPath, JSON.stringify({ ...value.tagObject, object: { type: "commit", sha: tagObjectSHA } })),
+      (value) => writeFileSync(value.releasePath, JSON.stringify({ ...value.release, tag_name: "v1.1.0-rc.1" })),
+      (value) => writeFileSync(value.releasePath, JSON.stringify({ ...value.release, assets: [{ ...value.release.assets[0], digest: `sha256:${"a".repeat(64)}` }] })),
+      (value) => writeFileSync(value.declarationPath, JSON.stringify({ ...value.declaration, build: "11092" })),
+      (value) => writeFileSync(value.feedPath, readFileSync(value.feedPath, "utf8").replace('sparkle:version="11091"', 'sparkle:version="11092"')),
+      (value) => { const raw = readFileSync(value.feedPath, "utf8"), item = raw.match(/<item>.*<\/item>/s)?.[0] ?? ""; writeFileSync(value.feedPath, raw.replace("</channel>", `${item}</channel>`)); },
+      (value) => writeFileSync(value.feedPath, '<!DOCTYPE rss [<!ENTITY x "hostile">]><rss>&x;</rss>'),
+      (value) => writeFileSync(value.feedPath, Buffer.from('<?xml version="1.0" encoding="UTF-16"?><rss/>', "utf16le")),
+      (value) => writeFileSync(value.tagRefPath, `{"ref":"refs/tags/v1.1.0","ref":"refs/tags/v1.1.0-rc.1","object":{"type":"tag","sha":"${tagObjectSHA}"}}`)
+    ];
+    for (const mutate of cases) { const value = packetFixture(); mutate(value); await expect(buildAcceptedDesktopReleasePacket(...value.paths)).rejects.toThrow(); }
+    await expect(buildAcceptedDesktopReleasePacket(...packetFixture(true).paths)).rejects.toThrow(/AppleDouble/i);
+    let read = false; const paths = packetFixture().paths; await expect(buildAcceptedDesktopReleasePacket(new Proxy({}, { get() { read = true; throw new Error("trap"); } }) as any, ...paths.slice(1))).rejects.toThrow("primitive"); expect(read).toBe(false);
+  });
+  it("rejects untrusted updater keys, bundle/feed OS drift, and in-app AppleDouble", async () => {
+    const wrongKey = packetFixture(); writeFileSync(wrongKey.acceptedPublicKeyPath, Buffer.alloc(32, 9).toString("base64")); await expect(buildAcceptedDesktopReleasePacket(...wrongKey.paths)).rejects.toThrow(/release authority/i);
+    const wrongMinimum = packetFixture(); writeFileSync(wrongMinimum.feedPath, readFileSync(wrongMinimum.feedPath, "utf8").replaceAll("14.0", "13.0")); await expect(buildAcceptedDesktopReleasePacket(...wrongMinimum.paths)).rejects.toThrow(/enclosure identity/i);
+    await expect(buildAcceptedDesktopReleasePacket(...packetFixture(false, true).paths)).rejects.toThrow(/AppleDouble/i);
   });
 });
 
@@ -174,6 +219,10 @@ describe("authenticated exact-ZIP app tree and plist proof", () => {
     const invalid = [
       proofFixture("1.1.0", "<key>CFBundleName</key><string>A</string><key>CFBundleName</key><string>B</string>"),
       proofFixture("1.1.0", "", Buffer.from("bplist00hostile")),
+      proofFixture("1.1.0", "", plist("1.1.0").replace(plistDoctype, '<!DOCTYPE plist [<!ENTITY x "hostile">]>')),
+      proofFixture("1.1.0", "", Buffer.from(plist("1.1.0"), "utf16le")),
+      proofFixture("1.1.0", "", plist("1.1.0").replace('encoding="UTF-8"', 'encoding="ISO-8859-1"')),
+      proofFixture("1.1.0", "", plist("1.1.0").replace('encoding="UTF-8"', 'encoding="windows-1252"')),
       proofFixture("1.2.0"),
       proofFixture("1.1.0", "", plist("1.1.0").replace("com.electricsheephq.NeonDiffDesktop", "com.example.Wrong")),
       proofFixture("1.1.0", "", plist("1.1.0").replace("11091", "not-a-build"))

@@ -16,11 +16,22 @@ const SHA1 = /^[a-f0-9]{40}$/, SHA256 = /^[a-f0-9]{64}$/, TREE_KIND = "neondiff.
 const TREE_FIELDS = ["schemaVersion", "kind", "verified", "algorithm", "sourceSHA", "artifactSHA256", "artifactByteLength", "treeSHA256", "records", "bundleMarkers", "appleDouble"];
 const authenticatedTreeProofs = new WeakSet();
 const PLIST_PARSER = String.raw`
-import json, plistlib, sys, xml.etree.ElementTree as ET
+import json, plistlib, re, sys, xml.etree.ElementTree as ET
 raw = sys.stdin.buffer.read(1048577)
-if len(raw) > 1048576 or raw.startswith(b"bplist00") or b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+if len(raw) > 1048576 or raw.startswith(b"bplist00"):
     raise ValueError("unsupported plist")
-root = ET.fromstring(raw)
+try:
+    text = raw.decode("utf-8")
+except UnicodeDecodeError:
+    raise ValueError("unsupported plist encoding")
+declaration = re.match(r"^\s*<\?xml\s+[^?]*\?>", text, re.IGNORECASE)
+encoding = re.search(r"\bencoding\s*=\s*(['\"])([^'\"]+)\1", declaration.group(0), re.IGNORECASE) if declaration else None
+if encoding and encoding.group(2).lower() != "utf-8":
+    raise ValueError("unsupported plist encoding")
+doctype = '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+if text.startswith("\ufeff") or "\x00" in text or "<!ENTITY" in text or ("<!DOCTYPE" in text and (text.count("<!DOCTYPE") != 1 or text.count(doctype) != 1)):
+    raise ValueError("unsupported plist declaration")
+root = ET.fromstring(text)
 if root.tag != "plist" or len(root) != 1 or root[0].tag != "dict":
     raise ValueError("invalid plist root")
 def unique(node):
@@ -40,7 +51,7 @@ def unique(node):
             unique(value)
 unique(root[0])
 value = plistlib.loads(raw)
-required = ("CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion")
+required = ("CFBundleIdentifier", "CFBundleShortVersionString", "CFBundleVersion", "LSMinimumSystemVersion", "SUFeedURL", "SUPublicEDKey")
 if not isinstance(value, dict):
     raise ValueError("invalid plist dictionary")
 result = {}
@@ -275,6 +286,7 @@ function appTree(appPath) {
   walkDescriptorTree(appPath, (entry) => {
     if (records.length >= MAX_NODES) fail("tree record bound exceeded");
     const path = proofText(entry.relativePath, "tree path"), identity = proofPathIdentity(path), collision = identities.get(identity);
+    if (path.split("/").some((part) => part.startsWith("._"))) fail("AppleDouble sidecars are unsupported inside the app tree");
     if (collision && collision !== path) fail("tree path collision"); identities.set(identity, path);
     const slash = path.lastIndexOf("/"), parent = slash < 0 ? "" : path.slice(0, slash);
     if (!directories.has(parent)) fail("tree parent topology is invalid");
@@ -295,9 +307,12 @@ function appTree(appPath) {
 function plistMarkers(bytes) {
   const parsed = spawnSync("/usr/bin/python3", ["-I", "-c", PLIST_PARSER], { input: bytes, encoding: "utf8", maxBuffer: 4096 }); let value;
   try { if (parsed.status !== 0) fail("desktop Info.plist is malformed"); value = JSON.parse(parsed.stdout); } catch { fail("desktop Info.plist is malformed"); }
-  const bundleID = value.CFBundleIdentifier, version = value.CFBundleShortVersionString, build = value.CFBundleVersion;
+  const bundleID = value.CFBundleIdentifier, version = value.CFBundleShortVersionString, build = value.CFBundleVersion, minimumSystemVersion = value.LSMinimumSystemVersion, feedURL = value.SUFeedURL, publicKey = value.SUPublicEDKey;
   if (bundleID !== "com.electricsheephq.NeonDiffDesktop" || !/^1\.1\.0(?:-(?:beta|rc)\.[1-9][0-9]{0,15})?$/.test(version) || !/^[0-9]{1,32}$/.test(build)) fail("bundle markers are not canonical");
-  return { appPath: "NeonDiff.app", bundleID, version, build };
+  const expectedFeed = version === "1.1.0" ? "https://www.neondiff.com/updates/stable/appcast.xml" : "https://www.neondiff.com/updates/beta/appcast.xml", decodedKey = Buffer.from(publicKey, "base64");
+  if (!/^\d+(?:\.\d+){1,2}$/.test(minimumSystemVersion)) fail("bundle minimum system version is not canonical");
+  if (feedURL !== expectedFeed || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(publicKey) || decodedKey.length !== 32 || decodedKey.toString("base64") !== publicKey) fail("bundle updater markers are not canonical");
+  return { appPath: "NeonDiff.app", bundleID, version, build, minimumSystemVersion, feedURL, publicKey };
 }
 function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value)) deepFreeze(child); Object.freeze(value); } return value; }
 
