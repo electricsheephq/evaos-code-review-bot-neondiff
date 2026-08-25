@@ -187,6 +187,28 @@ content-address mismatch fail closed. Pull-request and protected-main transition
 validation preserves every prior packet and receipt byte exactly; the
 verifier-backed producer and action derivation remain a separate accepted gate.
 
+That producer runs only in the fixed GitHub-hosted repository, workflow,
+`refs/heads/main`, and exact protected-main workspace/SHA context. It invokes
+the retained-evidence verifier for the selected target and treats current and
+optional previous packet paths only as selectors for exact content-addressed
+blobs already present in the protected target-history tree. Selected declaration
+position and build derive direction; `currentPath` identifies the newest
+declaration but is not a requirement that every installed current or selected
+intermediate target still be newest. A first forward update requires a later,
+higher-build target not yet retained in target history and no previous selector.
+A re-update requires that same later/higher target to be an exact retained blob
+and the previous selector to equal it. A rollback requires an earlier,
+lower-build target and that exact previous selector. Omitting the selector for
+a retained target, relabeling any derived action, or selecting identical or
+mutable history fails closed.
+
+Receipts form a reusable append-only set of transition authorities, not a
+chronological log of one installation. Installed current/prior state and actual
+event ordering are independently authenticated by the later preflight/runtime
+gate. The producer emits only one canonical content-addressed public-safe
+receipt through exclusive create; it does not install, update, restart, publish,
+or mutate protected history.
+
 ## Gates and single implementation path
 
 Mac promotion requires one tested implementation path owning preflight,
