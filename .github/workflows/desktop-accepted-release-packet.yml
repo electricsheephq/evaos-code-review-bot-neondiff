@@ -142,8 +142,15 @@ jobs:
 
           jq -n --arg build "$BUILD" --arg artifact "$ARTIFACT_NAME" --arg feed "$STABLE_FEED_URL" '{schemaVersion:1,product:"neondiff-desktop",version:"1.1.0",tag:"v1.1.0",channel:"stable",sequence:null,build:$build,predecessor:null,contract:"paid-mac-ga-byo-v1",distribution:{bundleId:"com.electricsheephq.NeonDiffDesktop",appPath:"NeonDiff.app",artifactName:$artifact,releaseClass:"desktop-only",origins:{github:"https://github.com/electricsheephq/evaos-code-review-bot-neondiff",site:"https://www.neondiff.com",feed:$feed}}}' > "$DECLARATION_DIRECTORY/v1.1.0.json"
           jq -n '{schemaVersion:1,status:"retained",declarationDirectory:"declarations",declarationPaths:["v1.1.0.json"],currentPath:"v1.1.0.json"}' > "$PACKET_ROOT/index.json"
+          PACKET_SHA256="$(node --input-type=module - "$PACKET_ROOT/index.json" "$ARTIFACT_PATH" "$PACKET_ROOT/appcast.xml" "$PACKET_ROOT/tag-ref.json" "$PACKET_ROOT/tag-object.json" "$PACKET_ROOT/release.json" "$ACCEPTED_PUBLIC_KEY" <<'NODE'
+          import { acceptedDesktopReleasePacketDigest, buildAcceptedDesktopReleasePacket } from "./scripts/lib/desktop-accepted-release-packet.mjs";
+          const packet = await buildAcceptedDesktopReleasePacket(...process.argv.slice(2));
+          process.stdout.write(acceptedDesktopReleasePacketDigest(packet));
+          NODE
+          )"
+          [[ "$PACKET_SHA256" =~ ^[a-f0-9]{64}$ ]]
           PREDICATE_PATH="$PACKET_ROOT/artifact-source-promotion-predicate.json"
-          jq -n --arg claimClass "$CLAIM_CLASS" --arg repository "$REPOSITORY" --arg signerWorkflow "$SIGNER_WORKFLOW" --arg workflowSourceRef "$SOURCE_REF" --arg workflowSourceSHA "$GITHUB_SHA" --arg releaseTag "$RELEASE_TAG" --arg artifactSourceSHA "$SOURCE_SHA" --arg developerIDTeamID "$DEVELOPER_ID_TEAM_ID" '{schemaVersion:1,claimClass:$claimClass,repository:$repository,signerWorkflow:$signerWorkflow,workflowSourceRef:$workflowSourceRef,workflowSourceSHA:$workflowSourceSHA,releaseTag:$releaseTag,artifactSourceSHA:$artifactSourceSHA,developerIDTeamID:$developerIDTeamID}' > "$PREDICATE_PATH"
+          jq -n --arg claimClass "$CLAIM_CLASS" --arg repository "$REPOSITORY" --arg signerWorkflow "$SIGNER_WORKFLOW" --arg workflowSourceRef "$SOURCE_REF" --arg workflowSourceSHA "$GITHUB_SHA" --arg releaseTag "$RELEASE_TAG" --arg artifactSourceSHA "$SOURCE_SHA" --arg acceptedPacketSHA256 "$PACKET_SHA256" --arg developerIDTeamID "$DEVELOPER_ID_TEAM_ID" '{schemaVersion:1,claimClass:$claimClass,repository:$repository,signerWorkflow:$signerWorkflow,workflowSourceRef:$workflowSourceRef,workflowSourceSHA:$workflowSourceSHA,releaseTag:$releaseTag,artifactSourceSHA:$artifactSourceSHA,acceptedPacketSHA256:$acceptedPacketSHA256,developerIDTeamID:$developerIDTeamID}' > "$PREDICATE_PATH"
           {
             printf 'packet_root=%s\n' "$PACKET_ROOT"
             printf 'artifact_path=%s\n' "$ARTIFACT_PATH"

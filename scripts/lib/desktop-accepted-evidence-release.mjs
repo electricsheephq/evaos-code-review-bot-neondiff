@@ -15,7 +15,7 @@ const SHA1 = /^[a-f0-9]{40}$/, SHA256 = /^[a-f0-9]{64}$/, ARTIFACT_NAME = /^Neon
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024, MAX_PACKET_BYTES = 1024 * 1024, MAX_BUNDLE_BYTES = 4 * 1024 * 1024, MAX_METADATA_BYTES = 1024 * 1024;
 const INPUT_FIELDS = ["artifactPath", "packetPath", "bundlePath", "releasePath", "tagRefPath"];
 const PACKET_FIELDS = ["schemaVersion", "kind", "verified", "channel", "version", "build", "tag", "sourceSHA", "artifactSourceSHA", "tagObjectSHA", "artifactURL", "artifactName", "artifactByteLength", "artifactSHA256", "treeSHA256", "feedSHA256", "feedEntry", "enclosureProofSHA256", "releaseContract", "productionContract", "npmReleaseClass"];
-const PREDICATE_FIELDS = ["schemaVersion", "claimClass", "repository", "signerWorkflow", "workflowSourceRef", "workflowSourceSHA", "releaseTag", "artifactSourceSHA", "developerIDTeamID"];
+const PREDICATE_FIELDS = ["schemaVersion", "claimClass", "repository", "signerWorkflow", "workflowSourceRef", "workflowSourceSHA", "releaseTag", "artifactSourceSHA", "acceptedPacketSHA256", "developerIDTeamID"];
 const STRICT_JSON = String.raw`
 import json,sys
 def pairs(values):
@@ -59,7 +59,8 @@ function exactPacket(path) {
   if (packet.artifactURL !== artifactURL || packet.feedEntry.url !== artifactURL || basename(evidence.path) !== `${evidence.digest}.packet.json`) fail("accepted packet content address is not canonical");
   return { ...evidence, packet, name: basename(evidence.path) };
 }
-function exactBundle(path, packet) {
+function exactBundle(path, accepted) {
+  const packet = accepted.packet;
   const evidence = boundedBytes(path, "artifact-source attestation bundle", MAX_BUNDLE_BYTES);
   if (basename(evidence.path) !== `${evidence.digest}.artifact-source-attestation.json`) fail("artifact-source attestation content address is not canonical");
   const bundle = strictJSON(evidence.bytes, "artifact-source attestation bundle"), payload = bundle?.dsseEnvelope?.payload, signatures = bundle?.dsseEnvelope?.signatures;
@@ -68,7 +69,7 @@ function exactBundle(path, packet) {
   const statement = strictJSON(decoded, "artifact-source attestation statement"), subject = statement?.subject, predicate = statement?.predicate;
   exactObject(statement, ["_type", "subject", "predicateType", "predicate"], "artifact-source attestation statement"); exactObject(predicate, PREDICATE_FIELDS, "artifact-source attestation predicate");
   if (statement._type !== "https://in-toto.io/Statement/v1" || statement.predicateType !== PREDICATE_TYPE || !Array.isArray(subject) || subject.length !== 1 || subject[0]?.name !== packet.artifactName || subject[0]?.digest?.sha256 !== packet.artifactSHA256 || Object.keys(subject[0] ?? {}).length !== 2 || Object.keys(subject[0]?.digest ?? {}).length !== 1) fail("artifact-source attestation subject is not canonical");
-  const expected = { schemaVersion: 1, claimClass: CLAIM_CLASS, repository: DESKTOP_ACCEPTED_EVIDENCE_REPOSITORY, signerWorkflow: SIGNER_WORKFLOW, workflowSourceRef: SOURCE_REF, releaseTag: STABLE_TAG, artifactSourceSHA: packet.sourceSHA, developerIDTeamID: TEAM_ID };
+  const expected = { schemaVersion: 1, claimClass: CLAIM_CLASS, repository: DESKTOP_ACCEPTED_EVIDENCE_REPOSITORY, signerWorkflow: SIGNER_WORKFLOW, workflowSourceRef: SOURCE_REF, releaseTag: STABLE_TAG, artifactSourceSHA: packet.sourceSHA, acceptedPacketSHA256: accepted.digest, developerIDTeamID: TEAM_ID };
   if (!SHA1.test(predicate.workflowSourceSHA ?? "") || Object.keys(expected).some((field) => predicate[field] !== expected[field])) fail("artifact-source attestation predicate is not canonical");
   return { ...evidence, name: basename(evidence.path), statement, workflowSourceSHA: predicate.workflowSourceSHA };
 }
@@ -95,7 +96,7 @@ function githubVerify(paths, retained) {
 
 export function verifyRetainedDesktopAcceptedEvidence(input) {
   exactObject(input, INPUT_FIELDS, "retained evidence input"); for (const field of INPUT_FIELDS) if (typeof input[field] !== "string" || !input[field]) fail("retained evidence input is not canonical"); canonicalContext();
-  const packet = exactPacket(input.packetPath), bundle = exactBundle(input.bundlePath, packet.packet), artifact = exactArtifact(input.artifactPath, packet.packet); if (dirname(packet.path) !== dirname(bundle.path) || dirname(packet.path) !== dirname(artifact.path)) fail("retained evidence files must share one release download directory");
+  const packet = exactPacket(input.packetPath), bundle = exactBundle(input.bundlePath, packet), artifact = exactArtifact(input.artifactPath, packet.packet); if (dirname(packet.path) !== dirname(bundle.path) || dirname(packet.path) !== dirname(artifact.path)) fail("retained evidence files must share one release download directory");
   exactRelease(input.releasePath, input.tagRefPath, packet.packet, [packet, bundle]); githubVerify({ artifact: artifact.path, packet: packet.path, bundle: bundle.path }, bundle);
   return Object.freeze({ retained: true, repository: DESKTOP_ACCEPTED_EVIDENCE_REPOSITORY, releaseTag: DESKTOP_ACCEPTED_EVIDENCE_TAG, artifactSourceSHA: packet.packet.sourceSHA, workflowSourceSHA: bundle.workflowSourceSHA, packetSHA256: packet.digest, packetFileName: packet.name, artifactAttestationBundleSHA256: bundle.digest, artifactAttestationBundleFileName: bundle.name });
 }

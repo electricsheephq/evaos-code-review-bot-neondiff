@@ -18,7 +18,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const ARTIFACT_NAME = /^NeonDiff-1\.1\.0-build[0-9]+-macOS\.zip$/;
 const MAX_EVIDENCE_BYTES = 4 * 1024 * 1024;
 const INPUT_FIELDS = ["artifactPath", "bundlePath", "tagRefPath", "tagObjectPath", "releasePath", "outputDirectory"];
-const PREDICATE_FIELDS = ["schemaVersion", "claimClass", "repository", "signerWorkflow", "workflowSourceRef", "workflowSourceSHA", "releaseTag", "artifactSourceSHA", "developerIDTeamID"];
+const PREDICATE_FIELDS = ["schemaVersion", "claimClass", "repository", "signerWorkflow", "workflowSourceRef", "workflowSourceSHA", "releaseTag", "artifactSourceSHA", "acceptedPacketSHA256", "developerIDTeamID"];
 const STATEMENT_FIELDS = ["_type", "subject", "predicateType", "predicate"];
 const STRICT_JSON = String.raw`
 import json,sys
@@ -87,7 +87,7 @@ function canonicalContext() {
 function exactPredicate(predicate, sourceSHA, workflowSHA) {
   if (!predicate || typeof predicate !== "object" || Array.isArray(predicate) || Object.keys(predicate).length !== PREDICATE_FIELDS.length || PREDICATE_FIELDS.some((field) => !Object.hasOwn(predicate, field))) fail("artifact source promotion predicate is not canonical");
   const expected = { schemaVersion: 1, claimClass: DESKTOP_ARTIFACT_SOURCE_CLAIM_CLASS, repository: REPOSITORY, signerWorkflow: SIGNER_WORKFLOW, workflowSourceRef: SOURCE_REF, workflowSourceSHA: workflowSHA, releaseTag: RELEASE_TAG, artifactSourceSHA: sourceSHA, developerIDTeamID: TEAM_ID };
-  if (PREDICATE_FIELDS.some((field) => predicate[field] !== expected[field])) fail("artifact source promotion predicate is not canonical");
+  if (!SHA256.test(predicate.acceptedPacketSHA256 ?? "") || Object.keys(expected).some((field) => predicate[field] !== expected[field])) fail("artifact source promotion predicate is not canonical");
 }
 function exactStatement(statement, artifact, sourceSHA, workflowSHA) {
   const subject = statement?.subject;
@@ -130,6 +130,6 @@ function retainBundle(directoryPath, bytes) {
 
 export function verifyAndRetainDesktopArtifactSourceAttestation(input) {
   const values = exactInput(input), context = canonicalContext(), artifact = exactArtifact(values.artifactPath), release = canonicalRelease(values.tagRefPath, values.tagObjectPath, values.releasePath, artifact), bundle = boundedBytes(values.bundlePath, "attestation bundle");
-  exactBundle(bundle.bytes, artifact, release.sourceSHA, context.workflowSHA); cryptographicallyVerify(artifact, bundle, release.sourceSHA, context.workflowSHA); const retained = retainBundle(values.outputDirectory, bundle.bytes);
-  return Object.freeze({ verified: true, artifactName: artifact.name, artifactSHA256: artifact.digest, artifactByteLength: artifact.bytes.length, artifactSourceSHA: release.sourceSHA, workflowSourceSHA: context.workflowSHA, predicateType: DESKTOP_ARTIFACT_SOURCE_PREDICATE_TYPE, ...retained });
+  const statement = exactBundle(bundle.bytes, artifact, release.sourceSHA, context.workflowSHA); cryptographicallyVerify(artifact, bundle, release.sourceSHA, context.workflowSHA); const retained = retainBundle(values.outputDirectory, bundle.bytes);
+  return Object.freeze({ verified: true, artifactName: artifact.name, artifactSHA256: artifact.digest, artifactByteLength: artifact.bytes.length, artifactSourceSHA: release.sourceSHA, workflowSourceSHA: context.workflowSHA, acceptedPacketSHA256: statement.predicate.acceptedPacketSHA256, predicateType: DESKTOP_ARTIFACT_SOURCE_PREDICATE_TYPE, ...retained });
 }

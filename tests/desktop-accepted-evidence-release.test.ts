@@ -76,7 +76,7 @@ function fixture() {
   const packetBytes = Buffer.from(`${JSON.stringify(packet)}\n`), packetSHA256 = sha256(packetBytes), packetName = `${packetSHA256}.packet.json`, packetPath = join(releaseDownload, packetName);
   writeFileSync(packetPath, packetBytes);
 
-  const predicate = { schemaVersion: 1, claimClass: "neondiff.desktop.artifact-source-promotion.v1", repository, signerWorkflow: workflow, workflowSourceRef: sourceRef, workflowSourceSHA: storedWorkflowSHA, releaseTag: "v1.1.0", artifactSourceSHA: sourceSHA, developerIDTeamID: "TC6MS3T6NN" };
+  const predicate = { schemaVersion: 1, claimClass: "neondiff.desktop.artifact-source-promotion.v1", repository, signerWorkflow: workflow, workflowSourceRef: sourceRef, workflowSourceSHA: storedWorkflowSHA, releaseTag: "v1.1.0", artifactSourceSHA: sourceSHA, acceptedPacketSHA256: packetSHA256, developerIDTeamID: "TC6MS3T6NN" };
   const statement = { _type: "https://in-toto.io/Statement/v1", subject: [{ name: artifactName, digest: { sha256: artifactSHA256 } }], predicateType: "https://neondiff.com/attestations/desktop-artifact-source-promotion/v1", predicate };
   const bundle = { mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json", verificationMaterial: { tlogEntries: [{}] }, dsseEnvelope: { payload: Buffer.from(JSON.stringify(statement)).toString("base64"), payloadType: "application/vnd.in-toto+json", signatures: [{ sig: Buffer.alloc(64, 1).toString("base64") }] } };
   const bundleBytes = Buffer.from(JSON.stringify(bundle)), bundleSHA256 = sha256(bundleBytes), bundleName = `${bundleSHA256}.artifact-source-attestation.json`, bundlePath = join(releaseDownload, bundleName);
@@ -186,6 +186,9 @@ describe("retained accepted Desktop evidence", () => {
     expect(fixture().run({}, { FAKE_GH_FAIL: "attestation verify" }).status).not.toBe(0);
     expect(fixture().run({}, { FAKE_ATTESTATION_RESULT: "[]" }).status).not.toBe(0);
     const changedArtifact = fixture(); writeFileSync(changedArtifact.artifactPath, Buffer.alloc(4096, 9)); expect(changedArtifact.run().status).not.toBe(0);
+    const forgedPacket = fixture(), forged = JSON.parse(readFileSync(forgedPacket.packetPath, "utf8")); forged.treeSHA256 = "9".repeat(64);
+    const forgedBytes = Buffer.from(`${JSON.stringify(forged)}\n`), forgedSHA256 = sha256(forgedBytes), forgedName = `${forgedSHA256}.packet.json`, forgedPath = join(forgedPacket.root, "release-download", forgedName); writeFileSync(forgedPath, forgedBytes);
+    const forgedRelease = JSON.parse(readFileSync(forgedPacket.releasePath, "utf8")); forgedRelease.assets[0] = { name: forgedName, size: forgedBytes.length, digest: `sha256:${forgedSHA256}`, browser_download_url: `https://github.com/${repository}/releases/download/${evidenceTag}/${forgedName}` }; writeFileSync(forgedPacket.releasePath, JSON.stringify(forgedRelease)); expect(forgedPacket.run({ packet: forgedPath }).status).not.toBe(0);
   });
 
   it("uses current outputs only for first publication and authenticates the bundle upstream", () => {
