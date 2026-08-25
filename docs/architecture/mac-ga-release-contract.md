@@ -209,6 +209,14 @@ gate. The producer emits only one canonical content-addressed public-safe
 receipt through exclusive create; it does not install, update, restart, publish,
 or mutate protected history.
 
+The dry transition preflight treats that protected receipt and caller action as
+selectors only. It reloads the exact protected receipt, target/current packets,
+declaration order, retained evidence, artifact tree, appcast, and enclosure
+proof under the same fixed protected-main workflow identity, then independently
+derives update, rollback, or re-update. It emits only a redacted fixed-step plan
+and performs no entitlement, quiescence, staging, swap, restart, feed, runtime,
+or customer mutation.
+
 ## Gates and single implementation path
 
 Mac promotion requires one tested implementation path owning preflight,
