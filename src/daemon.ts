@@ -12,7 +12,7 @@ import {
   type DaemonCycleAdmissions,
   type ProductionLicenseAdmission
 } from "./license-admission.js";
-import { ReviewStateStore, type DaemonHeartbeatEvent } from "./state.js";
+import { ReviewStateStore, type DaemonHeartbeatEvent, type DaemonReviewLane } from "./state.js";
 import { retryProviderCooldowns, runOnce, type RetryProviderCooldownsResult, type RunOnceResult } from "./worker.js";
 import {
   cleanupStaleReviewWorktrees,
@@ -32,7 +32,7 @@ export function shouldExitDaemonAfterFailedCycle(result: DaemonCycleResult, runO
 export interface RunDaemonCycleOptions {
   cycle: number;
   dryRun: boolean;
-  reviewLane?: "active" | "held";
+  reviewLane?: DaemonReviewLane;
   configPath?: string;
   pilotRepos: string[];
   monitoredRepos: string[];
@@ -56,7 +56,12 @@ export interface RunDaemonCycleOptions {
     licenseAdmission?: ProductionLicenseAdmission;
   }) => Promise<IssueEnrichmentCycleResult>;
   cleanupReviewWorktreesImpl?: (options: { configPath?: string; dryRun: boolean }) => ReviewWorktreeCleanupSummary;
-  recordHeartbeatImpl?: (event: DaemonHeartbeatEvent, error?: string, runId?: string) => void;
+  recordHeartbeatImpl?: (
+    event: DaemonHeartbeatEvent,
+    error?: string,
+    runId?: string,
+    reviewLane?: DaemonReviewLane
+  ) => void;
   admitDaemonCycleImpl?: (configPath?: string) => Promise<DaemonCycleAdmissions | void>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -85,10 +90,16 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     return { ok: false, failureKind: "admission_denied", error: message };
   }
   const schedulerEnabled = input.reviewSchedulerEnabled === true;
+  const reviewLane: DaemonReviewLane = input.reviewLane === "held" ? "held" : "active";
   const heartbeatRunId = randomUUID();
   const runOnceImpl = input.runOnceImpl ?? (schedulerEnabled ? runScheduledCycle : runOnce);
   const retryProviderCooldownsImpl = input.retryProviderCooldownsImpl ?? retryProviderCooldowns;
-  const recordHeartbeat = input.recordHeartbeatImpl ?? ((event: DaemonHeartbeatEvent, error?: string, runId?: string) => {
+  const recordHeartbeatImpl = input.recordHeartbeatImpl ?? ((
+    event: DaemonHeartbeatEvent,
+    error?: string,
+    runId?: string,
+    heartbeatReviewLane?: DaemonReviewLane
+  ) => {
     recordDaemonHeartbeatFromConfig({
       configPath: input.configPath,
       cycle: input.cycle,
@@ -96,9 +107,13 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
       event,
       error,
       runId,
+      reviewLane: heartbeatReviewLane,
       stderr
     });
   });
+  const recordHeartbeat = (event: DaemonHeartbeatEvent, error?: string, runId?: string) => {
+    recordHeartbeatImpl(event, error, runId, reviewLane);
+  };
 
   if (input.worktreeCleanupDue === true) {
     try {
@@ -131,14 +146,15 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     pilotRepos: input.pilotRepos,
     monitoredRepos: input.monitoredRepos,
     canaryPulls: input.canaryPulls,
-    commandsEnabled: input.commandsEnabled
+    commandsEnabled: input.commandsEnabled,
+    reviewLane
   }));
 
   const issueEnrichmentPromise = input.issueEnrichmentEnabled === true
     ? runIssueEnrichmentLane({ input, admissions, stdout, stderr, recordHeartbeat, heartbeatRunId })
     : Promise.resolve();
 
-  if (input.reviewLane === "held") {
+  if (reviewLane === "held") {
     stdout(formatDaemonLog({
       event: "daemon_review_lane_held",
       cycle: input.cycle,
@@ -402,6 +418,7 @@ function recordDaemonHeartbeatFromConfig(input: {
   event: DaemonHeartbeatEvent;
   error?: string;
   runId?: string;
+  reviewLane?: DaemonReviewLane;
   stderr: (line: string) => void;
 }): void {
   try {
@@ -412,6 +429,7 @@ function recordDaemonHeartbeatFromConfig(input: {
         cycle: input.cycle,
         dryRun: input.dryRun,
         event: input.event,
+        ...(input.reviewLane ? { reviewLane: input.reviewLane } : {}),
         ...(input.runId ? { runId: input.runId } : {}),
         ...(input.error ? { error: input.error } : {})
       });

@@ -1819,6 +1819,36 @@ describe("review state store", () => {
     store.close();
   });
 
+  it("persists the held PR lane with daemon liveness", () => {
+    const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-held-lane-"));
+    roots.push(root);
+    const store = new ReviewStateStore(join(root, "state.sqlite"));
+
+    store.recordDaemonHeartbeat({
+      cycle: 2,
+      event: "daemon_cycle_start",
+      dryRun: false,
+      reviewLane: "held",
+      runId: "run-held",
+      recordedAt: new Date("2026-07-01T00:00:00.000Z")
+    });
+    store.recordDaemonHeartbeat({
+      cycle: 2,
+      event: "daemon_cycle_complete",
+      dryRun: false,
+      reviewLane: "held",
+      runId: "run-held",
+      recordedAt: new Date("2026-07-01T00:01:00.000Z")
+    });
+
+    expect(store.getDaemonHeartbeat()).toMatchObject({
+      event: "daemon_cycle_complete",
+      reviewLane: "held",
+      recordedAt: "2026-07-01T00:01:00.000Z"
+    });
+    store.close();
+  });
+
   it("migrates legacy heartbeat storage idempotently without inventing progress", () => {
     const root = mkdtempSync(join(tmpdir(), "evaos-daemon-heartbeat-legacy-"));
     roots.push(root);

@@ -103,6 +103,10 @@ import NeonDiffDesktopCore
               {
                 "name": "daemon_heartbeat_recent",
                 "ok": true
+              },
+              {
+                "name": "background_pr_lane",
+                "ok": true
               }
             ]
           }
@@ -152,7 +156,8 @@ import NeonDiffDesktopCore
               {"name": "queue_no_zcode_timeout_failed_jobs", "ok": 1},
               {"name": "queue_no_stale_review_leases", "ok": 1},
               {"name": "queue_no_retryable_provider_deferred_jobs", "ok": 1},
-              {"name": "daemon_heartbeat_recent", "ok": 1}
+              {"name": "daemon_heartbeat_recent", "ok": 1},
+              {"name": "background_pr_lane", "ok": true}
             ]
           }
         }
@@ -202,7 +207,8 @@ import NeonDiffDesktopCore
               {"name": "queue_no_zcode_timeout_failed_jobs", "ok": true},
               {"name": "queue_no_stale_review_leases", "ok": true},
               {"name": "queue_no_retryable_provider_deferred_jobs", "ok": true},
-              {"name": "daemon_heartbeat_recent", "ok": true}
+              {"name": "daemon_heartbeat_recent", "ok": true},
+              {"name": "background_pr_lane", "ok": true}
             ]
           }
         }
@@ -248,7 +254,8 @@ import NeonDiffDesktopCore
               {"name": "queue_no_zcode_timeout_failed_jobs", "ok": true},
               {"name": "queue_no_stale_review_leases", "ok": true},
               {"name": "queue_no_retryable_provider_deferred_jobs", "ok": true},
-              {"name": "daemon_heartbeat_recent", "ok": true}
+              {"name": "daemon_heartbeat_recent", "ok": true},
+              {"name": "background_pr_lane", "ok": true}
             ]
           }
         }
@@ -268,6 +275,55 @@ import NeonDiffDesktopCore
         #expect(fixture.model.statusRefreshFailureMessage == nil)
         #expect(fixture.model.customerSurfaceStatus == "WORKER READY")
         #expect(fixture.model.customerLocalWorkerStatusDetail == "Running and ready")
+    }
+
+    @Test func currentDaemonStatusRejectsActiveOrUnknownBackgroundPrLane() {
+        for detail in [
+            "active background PR lane is not permitted; use exact scoped review-pr",
+            "unknown background PR lane; wait for a classified heartbeat"
+        ] {
+            let fixture = ModelDependencyFixture(suspendCLIRuns: true)
+            fixture.model.isOnboardingPresented = false
+            let response = """
+            {
+              "ok": false,
+              "command": "daemon status",
+              "operation": "status",
+              "status": {
+                "ok": false,
+                "launchd": {
+                  "state": "running"
+                },
+                "gates": [
+                  {"name": "launchd_running", "ok": true},
+                  {"name": "launchd_config", "ok": true},
+                  {"name": "launchd_node_system_ca", "ok": true},
+                  {"name": "live_db_no_errors", "ok": true},
+                  {"name": "provider_cooldown_backlog", "ok": true},
+                  {"name": "queue_no_failed_jobs", "ok": true},
+                  {"name": "queue_no_zcode_timeout_failed_jobs", "ok": true},
+                  {"name": "queue_no_stale_review_leases", "ok": true},
+                  {"name": "queue_no_retryable_provider_deferred_jobs", "ok": true},
+                  {"name": "daemon_heartbeat_recent", "ok": true},
+                  {"name": "background_pr_lane", "ok": false, "detail": "\(detail)"}
+                ]
+              }
+            }
+            """
+
+            fixture.model.applyCLIResultForTesting(
+                CLIRunResult(exitCode: 1, stdout: response, stderr: ""),
+                fallbackCommand: "neondiff daemon status",
+                configPath: fixture.model.configPath,
+                launchdLabel: fixture.model.launchdLabel,
+                isConfigInspectCommand: false,
+                isDaemonStatusCommand: true
+            )
+
+            #expect(fixture.model.status.runtimeOk == false)
+            #expect(fixture.model.status.healthState == "runtime_blocked")
+            #expect(fixture.model.customerSurfaceStatus == "WORKER ATTENTION")
+        }
     }
 
     @Test func malformedCurrentStatusEnvelopeFailsClosed() {
