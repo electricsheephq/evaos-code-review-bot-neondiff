@@ -18,8 +18,9 @@ async function main() {
   const values = parseArguments(process.argv.slice(2));
   const attestation = verifyAndRetainDesktopArtifactSourceAttestation({ artifactPath: values.artifact, bundlePath: values["artifact-attestation"], tagRefPath: values["tag-ref"], tagObjectPath: values["tag-object"], releasePath: values.release, outputDirectory: values["attestation-output-directory"] });
   const packet = await buildAcceptedDesktopReleasePacket(values.index, values.artifact, values.feed, values["tag-ref"], values["tag-object"], values.release, values["accepted-public-key"]);
-  if (packet.artifactName !== attestation.artifactName || packet.artifactSHA256 !== attestation.artifactSHA256 || packet.artifactByteLength !== attestation.artifactByteLength || packet.sourceSHA !== attestation.artifactSourceSHA || packet.artifactSourceSHA !== attestation.artifactSourceSHA) fail("accepted packet does not match verified artifact source attestation");
-  const serialized = serializeAcceptedDesktopReleasePacket(packet), packetSHA256 = acceptedDesktopReleasePacketDigest(packet), bytes = Buffer.from(serialized, "utf8"); let descriptor, created = false;
+  const serialized = serializeAcceptedDesktopReleasePacket(packet), packetSHA256 = acceptedDesktopReleasePacketDigest(packet);
+  if (packet.artifactName !== attestation.artifactName || packet.artifactSHA256 !== attestation.artifactSHA256 || packet.artifactByteLength !== attestation.artifactByteLength || packet.sourceSHA !== attestation.artifactSourceSHA || packet.artifactSourceSHA !== attestation.artifactSourceSHA || packetSHA256 !== attestation.acceptedPacketSHA256) fail("accepted packet does not match verified artifact source attestation");
+  const bytes = Buffer.from(serialized, "utf8"); let descriptor, created = false;
   try {
     descriptor = openSync(values.output, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600); created = true; writeFileSync(descriptor, bytes); fsyncSync(descriptor); const stored = fstatSync(descriptor); if (!stored.isFile() || stored.size !== bytes.length) fail("packet output was not written exactly");
   } catch (error) {

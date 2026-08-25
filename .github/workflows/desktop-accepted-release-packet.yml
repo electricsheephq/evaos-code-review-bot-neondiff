@@ -8,13 +8,62 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve-retained-evidence:
+    name: Resolve immutable accepted evidence state
+    permissions:
+      contents: read
+    outputs:
+      state: ${{ steps.retained.outputs.state }}
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      REPOSITORY: electricsheephq/evaos-code-review-bot-neondiff
+      REPOSITORY_OWNER: electricsheephq
+      REPOSITORY_NAME: evaos-code-review-bot-neondiff
+      SOURCE_REF: refs/heads/main
+      SIGNER_WORKFLOW: electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/desktop-accepted-release-packet.yml
+      EVIDENCE_TAG: neondiff-accepted-packet-v1.1.0
+    steps:
+      - name: Resolve immutable evidence state
+        id: retained
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_ACTIONS" = "true"
+          test "$RUNNER_ENVIRONMENT" = "github-hosted"
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REF" = "$SOURCE_REF"
+          test "$GITHUB_WORKFLOW_REF" = "$SIGNER_WORKFLOW@$SOURCE_REF"
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          CURRENT_MAIN_SHA="$(gh api "repos/$REPOSITORY/commits/main" --jq '.sha | select(test("^[a-f0-9]{40}$"))')"
+          test "$GITHUB_SHA" = "$CURRENT_MAIN_SHA"
+          PRESENCE_PATH="$RUNNER_TEMP/desktop-accepted-evidence-presence.json"
+          # GraphQL variables must remain literal for gh.
+          # shellcheck disable=SC2016
+          gh api graphql \
+            -f query='query($owner:String!,$name:String!,$tag:String!,$ref:String!){repository(owner:$owner,name:$name){release(tagName:$tag){tagName} ref(qualifiedName:$ref){target{oid}}}}' \
+            -f owner="$REPOSITORY_OWNER" \
+            -f name="$REPOSITORY_NAME" \
+            -f tag="$EVIDENCE_TAG" \
+            -f ref="refs/tags/$EVIDENCE_TAG" > "$PRESENCE_PATH"
+          STATE="$(jq -er 'if (.data.repository.release == null and .data.repository.ref == null) then "absent" elif (.data.repository.release != null and .data.repository.ref != null) then "present" else "partial" end' "$PRESENCE_PATH")"
+          test "$STATE" != "partial"
+          printf 'state=%s\n' "$STATE" >> "$GITHUB_OUTPUT"
+
   promote-stable-artifact:
     name: Verify source binding and build accepted packet
+    needs: resolve-retained-evidence
     permissions:
       contents: read
       id-token: write
       attestations: write
-    if: ${{ github.ref == 'refs/heads/main' }}
+    outputs:
+      artifact_source_sha: ${{ steps.release.outputs.artifact_source_sha }}
+      packet_name: ${{ steps.packet.outputs.packet_name }}
+      bundle_name: ${{ steps.packet.outputs.bundle_name }}
+    if: ${{ github.ref == 'refs/heads/main' && needs.resolve-retained-evidence.outputs.state == 'absent' }}
     runs-on: macos-15
     timeout-minutes: 30
     env:
@@ -138,12 +187,20 @@ jobs:
 
           jq -n --arg build "$BUILD" --arg artifact "$ARTIFACT_NAME" --arg feed "$STABLE_FEED_URL" '{schemaVersion:1,product:"neondiff-desktop",version:"1.1.0",tag:"v1.1.0",channel:"stable",sequence:null,build:$build,predecessor:null,contract:"paid-mac-ga-byo-v1",distribution:{bundleId:"com.electricsheephq.NeonDiffDesktop",appPath:"NeonDiff.app",artifactName:$artifact,releaseClass:"desktop-only",origins:{github:"https://github.com/electricsheephq/evaos-code-review-bot-neondiff",site:"https://www.neondiff.com",feed:$feed}}}' > "$DECLARATION_DIRECTORY/v1.1.0.json"
           jq -n '{schemaVersion:1,status:"retained",declarationDirectory:"declarations",declarationPaths:["v1.1.0.json"],currentPath:"v1.1.0.json"}' > "$PACKET_ROOT/index.json"
+          PACKET_SHA256="$(node --input-type=module - "$PACKET_ROOT/index.json" "$ARTIFACT_PATH" "$PACKET_ROOT/appcast.xml" "$PACKET_ROOT/tag-ref.json" "$PACKET_ROOT/tag-object.json" "$PACKET_ROOT/release.json" "$ACCEPTED_PUBLIC_KEY" <<'NODE'
+          import { acceptedDesktopReleasePacketDigest, buildAcceptedDesktopReleasePacket } from "./scripts/lib/desktop-accepted-release-packet.mjs";
+          const packet = await buildAcceptedDesktopReleasePacket(...process.argv.slice(2));
+          process.stdout.write(acceptedDesktopReleasePacketDigest(packet));
+          NODE
+          )"
+          [[ "$PACKET_SHA256" =~ ^[a-f0-9]{64}$ ]]
           PREDICATE_PATH="$PACKET_ROOT/artifact-source-promotion-predicate.json"
-          jq -n --arg claimClass "$CLAIM_CLASS" --arg repository "$REPOSITORY" --arg signerWorkflow "$SIGNER_WORKFLOW" --arg workflowSourceRef "$SOURCE_REF" --arg workflowSourceSHA "$GITHUB_SHA" --arg releaseTag "$RELEASE_TAG" --arg artifactSourceSHA "$SOURCE_SHA" --arg developerIDTeamID "$DEVELOPER_ID_TEAM_ID" '{schemaVersion:1,claimClass:$claimClass,repository:$repository,signerWorkflow:$signerWorkflow,workflowSourceRef:$workflowSourceRef,workflowSourceSHA:$workflowSourceSHA,releaseTag:$releaseTag,artifactSourceSHA:$artifactSourceSHA,developerIDTeamID:$developerIDTeamID}' > "$PREDICATE_PATH"
+          jq -n --arg claimClass "$CLAIM_CLASS" --arg repository "$REPOSITORY" --arg signerWorkflow "$SIGNER_WORKFLOW" --arg workflowSourceRef "$SOURCE_REF" --arg workflowSourceSHA "$GITHUB_SHA" --arg releaseTag "$RELEASE_TAG" --arg artifactSourceSHA "$SOURCE_SHA" --arg acceptedPacketSHA256 "$PACKET_SHA256" --arg developerIDTeamID "$DEVELOPER_ID_TEAM_ID" '{schemaVersion:1,claimClass:$claimClass,repository:$repository,signerWorkflow:$signerWorkflow,workflowSourceRef:$workflowSourceRef,workflowSourceSHA:$workflowSourceSHA,releaseTag:$releaseTag,artifactSourceSHA:$artifactSourceSHA,acceptedPacketSHA256:$acceptedPacketSHA256,developerIDTeamID:$developerIDTeamID}' > "$PREDICATE_PATH"
           {
             printf 'packet_root=%s\n' "$PACKET_ROOT"
             printf 'artifact_path=%s\n' "$ARTIFACT_PATH"
             printf 'predicate_path=%s\n' "$PREDICATE_PATH"
+            printf 'artifact_source_sha=%s\n' "$SOURCE_SHA"
           } >> "$GITHUB_OUTPUT"
 
       - name: Attest exact signed artifact source binding
@@ -179,6 +236,8 @@ jobs:
           {
             printf 'packet_path=%s\n' "$PACKET_PATH"
             printf 'bundle_path=%s\n' "$BUNDLE_PATH"
+            printf 'packet_name=%s\n' "$PACKET_NAME"
+            printf 'bundle_name=%s\n' "$BUNDLE_NAME"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload source-bound packet evidence
@@ -190,3 +249,105 @@ jobs:
             ${{ steps.packet.outputs.bundle_path }}
           if-no-files-found: error
           retention-days: 30
+
+  retain-accepted-packet:
+    name: Retain exact accepted packet in immutable release
+    needs: [resolve-retained-evidence, promote-stable-artifact]
+    permissions:
+      contents: write
+      attestations: read
+    if: ${{ always() && github.ref == 'refs/heads/main' && needs.resolve-retained-evidence.result == 'success' && ((needs.resolve-retained-evidence.outputs.state == 'present' && needs.promote-stable-artifact.result == 'skipped') || (needs.resolve-retained-evidence.outputs.state == 'absent' && needs.promote-stable-artifact.result == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REPOSITORY: electricsheephq/evaos-code-review-bot-neondiff
+      RELEASE_TAG: v1.1.0
+      SOURCE_REF: refs/heads/main
+      SIGNER_WORKFLOW: electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/desktop-accepted-release-packet.yml
+      EVIDENCE_TAG: neondiff-accepted-packet-v1.1.0
+      EVIDENCE_RELEASE_NAME: NeonDiff accepted packet evidence v1.1.0
+      RETENTION_STATE: ${{ needs.resolve-retained-evidence.outputs.state }}
+      CURRENT_ARTIFACT_SOURCE_SHA: ${{ needs.promote-stable-artifact.outputs.artifact_source_sha }}
+      CURRENT_PACKET_NAME: ${{ needs.promote-stable-artifact.outputs.packet_name }}
+      CURRENT_BUNDLE_NAME: ${{ needs.promote-stable-artifact.outputs.bundle_name }}
+    steps:
+      - name: Checkout exact retention verifier
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+
+      - name: Download current-run accepted evidence for first publication
+        if: ${{ env.RETENTION_STATE == 'absent' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: desktop-source-bound-packet-v1.1.0-${{ github.sha }}
+          path: ${{ runner.temp }}/desktop-source-bound-packet
+
+      - name: Publish once or verify the retained pair
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          METADATA_ROOT="$RUNNER_TEMP/desktop-accepted-evidence-metadata"
+          RETRIEVED_ROOT="$RUNNER_TEMP/desktop-accepted-evidence-retrieved"
+          mkdir -p "$METADATA_ROOT" "$RETRIEVED_ROOT"
+
+          if test "$RETENTION_STATE" = "absent"; then
+            [[ "$CURRENT_ARTIFACT_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+            [[ "$CURRENT_PACKET_NAME" =~ ^[a-f0-9]{64}\.packet\.json$ ]]
+            [[ "$CURRENT_BUNDLE_NAME" =~ ^[a-f0-9]{64}\.artifact-source-attestation\.json$ ]]
+            TRANSIT_ROOT="$RUNNER_TEMP/desktop-source-bound-packet"
+            PACKET_PATH="$TRANSIT_ROOT/$CURRENT_PACKET_NAME"
+            BUNDLE_PATH="$TRANSIT_ROOT/$CURRENT_BUNDLE_NAME"
+            test -f "$PACKET_PATH"
+            test -f "$BUNDLE_PATH"
+            gh release create "$EVIDENCE_TAG" "$PACKET_PATH" "$BUNDLE_PATH" \
+              --repo "$REPOSITORY" \
+              --target "$CURRENT_ARTIFACT_SOURCE_SHA" \
+              --title "$EVIDENCE_RELEASE_NAME" \
+              --notes "Immutable retained evidence for the accepted NeonDiff Desktop 1.1.0 packet. This is evidence, not a product release." \
+              --prerelease \
+              --latest=false
+          else
+            test "$RETENTION_STATE" = "present"
+          fi
+
+          gh api "repos/$REPOSITORY/releases/tags/$EVIDENCE_TAG" > "$METADATA_ROOT/release.json"
+          gh api "repos/$REPOSITORY/git/ref/tags/$EVIDENCE_TAG" > "$METADATA_ROOT/tag-ref.json"
+          test "$(jq -er '.assets | length' "$METADATA_ROOT/release.json")" = "2"
+          PACKET_NAME="$(jq -er '[.assets[].name | select(test("^[a-f0-9]{64}\\.packet\\.json$"))] | if length == 1 then .[0] else error("one retained packet is required") end' "$METADATA_ROOT/release.json")"
+          BUNDLE_NAME="$(jq -er '[.assets[].name | select(test("^[a-f0-9]{64}\\.artifact-source-attestation\\.json$"))] | if length == 1 then .[0] else error("one retained bundle is required") end' "$METADATA_ROOT/release.json")"
+          gh release download "$EVIDENCE_TAG" \
+            --repo "$REPOSITORY" \
+            --dir "$RETRIEVED_ROOT" \
+            --pattern "$PACKET_NAME" \
+            --pattern "$BUNDLE_NAME"
+          ARTIFACT_NAME="$(jq -er '.artifactName | select(test("^NeonDiff-1\\.1\\.0-build[0-9]+-macOS\\.zip$"))' "$RETRIEVED_ROOT/$PACKET_NAME")"
+          gh release download "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --dir "$RETRIEVED_ROOT" \
+            --pattern "$ARTIFACT_NAME"
+          RETENTION_RESULT="$(node scripts/verify-desktop-accepted-evidence-release.mjs \
+            --artifact "$RETRIEVED_ROOT/$ARTIFACT_NAME" \
+            --packet "$RETRIEVED_ROOT/$PACKET_NAME" \
+            --bundle "$RETRIEVED_ROOT/$BUNDLE_NAME" \
+            --release "$METADATA_ROOT/release.json" \
+            --tag-ref "$METADATA_ROOT/tag-ref.json")"
+          test "$(jq -er '.retained' <<< "$RETENTION_RESULT")" = "true"
+          test "$(jq -er '.packetFileName' <<< "$RETENTION_RESULT")" = "$PACKET_NAME"
+          test "$(jq -er '.artifactAttestationBundleFileName' <<< "$RETENTION_RESULT")" = "$BUNDLE_NAME"
+          if test "$RETENTION_STATE" = "absent"; then
+            test "$(jq -er '.artifactSourceSHA' <<< "$RETENTION_RESULT")" = "$CURRENT_ARTIFACT_SOURCE_SHA"
+            test "$(jq -er '.workflowSourceSHA' <<< "$RETENTION_RESULT")" = "$GITHUB_SHA"
+            test "$PACKET_NAME" = "$CURRENT_PACKET_NAME"
+            test "$BUNDLE_NAME" = "$CURRENT_BUNDLE_NAME"
+          fi
+          printf '%s\n' "$RETENTION_RESULT"

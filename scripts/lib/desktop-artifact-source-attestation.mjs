@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdtempSync, openSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { guardClassicZipArchive } from "./desktop-extracted-app-tree-proof.mjs";
 
 export const DESKTOP_ARTIFACT_SOURCE_PREDICATE_TYPE = "https://neondiff.com/attestations/desktop-artifact-source-promotion/v1";
@@ -18,7 +19,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const ARTIFACT_NAME = /^NeonDiff-1\.1\.0-build[0-9]+-macOS\.zip$/;
 const MAX_EVIDENCE_BYTES = 4 * 1024 * 1024;
 const INPUT_FIELDS = ["artifactPath", "bundlePath", "tagRefPath", "tagObjectPath", "releasePath", "outputDirectory"];
-const PREDICATE_FIELDS = ["schemaVersion", "claimClass", "repository", "signerWorkflow", "workflowSourceRef", "workflowSourceSHA", "releaseTag", "artifactSourceSHA", "developerIDTeamID"];
+const PREDICATE_FIELDS = ["schemaVersion", "claimClass", "repository", "signerWorkflow", "workflowSourceRef", "workflowSourceSHA", "releaseTag", "artifactSourceSHA", "acceptedPacketSHA256", "developerIDTeamID"];
 const STATEMENT_FIELDS = ["_type", "subject", "predicateType", "predicate"];
 const STRICT_JSON = String.raw`
 import json,sys
@@ -87,7 +88,7 @@ function canonicalContext() {
 function exactPredicate(predicate, sourceSHA, workflowSHA) {
   if (!predicate || typeof predicate !== "object" || Array.isArray(predicate) || Object.keys(predicate).length !== PREDICATE_FIELDS.length || PREDICATE_FIELDS.some((field) => !Object.hasOwn(predicate, field))) fail("artifact source promotion predicate is not canonical");
   const expected = { schemaVersion: 1, claimClass: DESKTOP_ARTIFACT_SOURCE_CLAIM_CLASS, repository: REPOSITORY, signerWorkflow: SIGNER_WORKFLOW, workflowSourceRef: SOURCE_REF, workflowSourceSHA: workflowSHA, releaseTag: RELEASE_TAG, artifactSourceSHA: sourceSHA, developerIDTeamID: TEAM_ID };
-  if (PREDICATE_FIELDS.some((field) => predicate[field] !== expected[field])) fail("artifact source promotion predicate is not canonical");
+  if (!SHA256.test(predicate.acceptedPacketSHA256 ?? "") || Object.keys(expected).some((field) => predicate[field] !== expected[field])) fail("artifact source promotion predicate is not canonical");
 }
 function exactStatement(statement, artifact, sourceSHA, workflowSHA) {
   const subject = statement?.subject;
@@ -114,7 +115,7 @@ function cryptographicallyVerify(artifact, bundle, sourceSHA, workflowSHA) {
   if (result.error || result.signal || result.status !== 0) fail("canonical artifact attestation verification failed");
   let verification; try { verification = strictJSON(Buffer.from(result.stdout, "utf8"), "canonical artifact attestation verification"); } catch { fail("canonical artifact attestation verification failed"); }
   if (!Array.isArray(verification) || verification.length !== 1) fail("canonical artifact attestation verification failed");
-  exactStatement(verification[0]?.verificationResult?.statement, artifact, sourceSHA, workflowSHA);
+  const statement = verification[0]?.verificationResult?.statement; exactStatement(statement, artifact, sourceSHA, workflowSHA); return statement;
 }
 function retainBundle(directoryPath, bytes) {
   const directory = resolve(directoryPath), digest = sha256(bytes), fileName = `${digest}.artifact-source-attestation.json`, path = join(directory, fileName); let directoryDescriptor, outputDescriptor, created = false;
@@ -130,6 +131,6 @@ function retainBundle(directoryPath, bytes) {
 
 export function verifyAndRetainDesktopArtifactSourceAttestation(input) {
   const values = exactInput(input), context = canonicalContext(), artifact = exactArtifact(values.artifactPath), release = canonicalRelease(values.tagRefPath, values.tagObjectPath, values.releasePath, artifact), bundle = boundedBytes(values.bundlePath, "attestation bundle");
-  exactBundle(bundle.bytes, artifact, release.sourceSHA, context.workflowSHA); cryptographicallyVerify(artifact, bundle, release.sourceSHA, context.workflowSHA); const retained = retainBundle(values.outputDirectory, bundle.bytes);
-  return Object.freeze({ verified: true, artifactName: artifact.name, artifactSHA256: artifact.digest, artifactByteLength: artifact.bytes.length, artifactSourceSHA: release.sourceSHA, workflowSourceSHA: context.workflowSHA, predicateType: DESKTOP_ARTIFACT_SOURCE_PREDICATE_TYPE, ...retained });
+  const statement = exactBundle(bundle.bytes, artifact, release.sourceSHA, context.workflowSHA), verifiedStatement = cryptographicallyVerify(artifact, bundle, release.sourceSHA, context.workflowSHA); if (!isDeepStrictEqual(statement, verifiedStatement)) fail("cryptographically verified attestation statement mismatch"); const retained = retainBundle(values.outputDirectory, bundle.bytes);
+  return Object.freeze({ verified: true, artifactName: artifact.name, artifactSHA256: artifact.digest, artifactByteLength: artifact.bytes.length, artifactSourceSHA: release.sourceSHA, workflowSourceSHA: context.workflowSHA, acceptedPacketSHA256: statement.predicate.acceptedPacketSHA256, predicateType: DESKTOP_ARTIFACT_SOURCE_PREDICATE_TYPE, ...retained });
 }

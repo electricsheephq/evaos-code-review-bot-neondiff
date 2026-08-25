@@ -120,6 +120,45 @@ that archive into fresh staging, computes the tree identity, and rejects any
 mismatch, unavailable/changed reference, untrusted location, or changed config.
 It contains references to secrets rather than secret values.
 
+For Desktop `1.1.0`, the retained location is the immutable evidence-only
+GitHub prerelease/tag `neondiff-accepted-packet-v1.1.0`, excluded from latest
+selection and targeted at the packet artifact-source commit. It contains
+exactly the content-addressed accepted packet and its content-addressed verified
+artifact-source-attestation bundle. The 30-day Actions artifact is transit for
+first publication only and is never the authority for a later read.
+
+The workflow first runs a read-only resolver against the fixed canonical
+repository and evidence tag. It validates the canonical `main` and workflow
+identity, reports only `absent` or `present`, and fails closed on partial state.
+The canonical producer depends on that resolver and runs only for `absent`; it
+cryptographically verifies the exact artifact-source bundle before it emits
+either content-addressed name. The retention job has separate contents-write
+and attestations-read authority and evaluates after both jobs even when the
+producer is skipped. A `present` branch requires resolver success plus a skipped
+producer, while an `absent` branch requires resolver success plus producer
+success.
+
+On first publication, retention requires the current producer names,
+artifact-source SHA, and signer-workflow SHA, creates the fixed release once,
+then reloads and verifies the published assets. On a later dispatch it never
+uses the mutable live appcast, a current artifact, a current Actions artifact,
+or producer outputs. It discovers the prior exact pair from the immutable
+release's only two assets, reloads the exact packet-named stable artifact, and
+cryptographically verifies the retained bundle against that artifact and the
+stored fixed signer workflow/ref/SHA. The signed predicate also carries the
+accepted packet SHA-256, which must match the retained content-addressed packet.
+It also validates the tag, target commit, names, bytes, digests, sizes, URLs,
+and GitHub release/asset attestations. Thus a principal with contents-write
+authority cannot substitute self-declared signer claims or pair a genuine
+artifact proof with a fabricated packet, and a later `main` SHA cannot replace
+or invalidate the accepted historical pair.
+
+A missing release and tag permits first publication; both present permits only
+verification. Partial or mismatched state fails closed. No workflow may
+overwrite, delete, or rotate retained evidence. Exceptional deletion is a
+separately reviewed repository-administrator action and permanently retires the
+immutable tag; any approved successor uses a new fixed identity.
+
 ## Gates and single implementation path
 
 Mac promotion requires one tested implementation path owning preflight,
