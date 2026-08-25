@@ -203,8 +203,13 @@ Record the bundle metadata and checksum:
 /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" dist/NeonDiff.app/Contents/Info.plist
 /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/NeonDiff.app/Contents/Info.plist
 /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" dist/NeonDiff.app/Contents/Info.plist
+/usr/libexec/PlistBuddy -c "Print :NeonDiffSourceSHA" dist/NeonDiff.app/Contents/Info.plist
 shasum -a 256 dist/NeonDiff.app/Contents/MacOS/NeonDiffDesktop
 ```
+
+The printed `NeonDiffSourceSHA` must equal the detached checkout's exact
+`git rev-parse HEAD`. The release build derives it internally and fails on a
+dirty checkout; never supply or patch this marker as caller text.
 
 Do not ship a dev/ad-hoc artifact from this step. The build is only a candidate
 until the signing, notarization, stapling, Gatekeeper, and appcast evidence below

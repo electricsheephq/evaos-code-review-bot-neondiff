@@ -65,17 +65,32 @@ assert_byo_production_contract() {
 
 ensure_clean_source_tree() {
   if ! git -C "$REPO_ROOT" diff --quiet --ignore-submodules --; then
-    echo "source tree has unstaged changes; set SOURCE_SHA and SOURCE_REF explicitly or commit/stash before release proof" >&2
+    echo "source tree has unstaged changes; commit or stash before release proof" >&2
     exit 2
   fi
   if ! git -C "$REPO_ROOT" diff --cached --quiet --ignore-submodules --; then
-    echo "source tree has staged changes; set SOURCE_SHA and SOURCE_REF explicitly or commit/stash before release proof" >&2
+    echo "source tree has staged changes; commit or stash before release proof" >&2
     exit 2
   fi
   if [ -n "$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" ]; then
-    echo "source tree has untracked files; set SOURCE_SHA and SOURCE_REF explicitly or clean before release proof" >&2
+    echo "source tree has untracked files; clean before release proof" >&2
     exit 2
   fi
+}
+
+derive_source_ref() {
+  local symbolic tags
+  symbolic="$(git -C "$REPO_ROOT" symbolic-ref -q HEAD || true)"
+  if [ -n "$symbolic" ]; then
+    printf '%s\n' "$symbolic"
+    return
+  fi
+  tags="$(git -C "$REPO_ROOT" tag --points-at "$DERIVED_SOURCE_SHA")"
+  case "$tags" in
+    "") printf '%s\n' "$DERIVED_SOURCE_SHA" ;;
+    *$'\n'*) echo "source ref is ambiguous" >&2; return 2 ;;
+    *) printf 'refs/tags/%s\n' "$tags" ;;
+  esac
 }
 
 verify_existing_app_launch() {
@@ -101,18 +116,27 @@ if [ "$SOURCE_SHA_PROVIDED" -ne "$SOURCE_REF_PROVIDED" ]; then
   exit 2
 fi
 
+ensure_clean_source_tree
+DERIVED_SOURCE_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+if [[ ! "$DERIVED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] \
+  || ! git -C "$REPO_ROOT" cat-file -e "$DERIVED_SOURCE_SHA^{commit}"; then
+  echo "release source identity is not canonical" >&2
+  exit 2
+fi
+DERIVED_SOURCE_REF="$(derive_source_ref)"
 if [ "$SOURCE_SHA_PROVIDED" -eq 1 ]; then
   if [ -z "$SOURCE_SHA" ] || [ -z "$SOURCE_REF" ]; then
     echo "SOURCE_SHA and SOURCE_REF must be non-empty when provided" >&2
     exit 2
   fi
-  SOURCE_SHA="$SOURCE_SHA"
-  SOURCE_REF="$SOURCE_REF"
-else
-  ensure_clean_source_tree
-  SOURCE_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-  SOURCE_REF="$(git -C "$REPO_ROOT" symbolic-ref -q --short HEAD || git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  if [ "$SOURCE_SHA" != "$DERIVED_SOURCE_SHA" ] \
+    || [ "$SOURCE_REF" != "$DERIVED_SOURCE_REF" ]; then
+    echo "provided source identity does not match the exact checkout" >&2
+    exit 2
+  fi
 fi
+SOURCE_SHA="$DERIVED_SOURCE_SHA"
+SOURCE_REF="$DERIVED_SOURCE_REF"
 
 if [ ! -d "$SOURCE_APP_BUNDLE" ]; then
   echo "missing app bundle: $SOURCE_APP_BUNDLE" >&2
@@ -129,6 +153,11 @@ rm -rf "$APP_BUNDLE"
 rm -f "$ARTIFACT_PATH" "$METADATA_PATH"
 ditto "$SOURCE_APP_BUNDLE" "$APP_BUNDLE"
 assert_byo_production_contract "$INFO_PLIST"
+ARTIFACT_SOURCE_SHA="$(/usr/libexec/PlistBuddy -c "Print :NeonDiffSourceSHA" "$INFO_PLIST" 2>/dev/null || true)"
+if [ "$ARTIFACT_SOURCE_SHA" != "$SOURCE_SHA" ]; then
+  echo "artifact source identity does not match the exact checkout" >&2
+  exit 1
+fi
 
 if [ "$UI_LAUNCH" = "true" ]; then
   verify_existing_app_launch
@@ -138,6 +167,12 @@ UI_LAUNCH_JSON="$(normalize_bool "$UI_LAUNCH" "NEONDIFF_DESKTOP_UI_LAUNCH")"
 VISUAL_SMOKE_REQUIRED_JSON="$(normalize_bool "$VISUAL_SMOKE_REQUIRED" "NEONDIFF_DESKTOP_VISUAL_SMOKE_REQUIRED")"
 
 ditto -c -k --keepParent "$APP_BUNDLE" "$ARTIFACT_PATH"
+
+ensure_clean_source_tree
+if [ "$(git -C "$REPO_ROOT" rev-parse HEAD)" != "$SOURCE_SHA" ]; then
+  echo "source identity changed during release proof" >&2
+  exit 2
+fi
 
 ARTIFACT_SHA256="$(shasum -a 256 "$ARTIFACT_PATH" | awk '{print $1}')"
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")"
@@ -158,6 +193,7 @@ jq -n \
   --arg artifact_sha256 "$ARTIFACT_SHA256" \
   --arg artifact_classification "$ARTIFACT_CLASSIFICATION" \
   --arg source_sha "$SOURCE_SHA" \
+  --arg artifact_source_sha "$ARTIFACT_SOURCE_SHA" \
   --arg source_ref "$SOURCE_REF" \
   --arg app_bundle_path "apps/neondiff-desktop/dist/release-smoke/$APP_NAME.app" \
   --arg bundle_id "$BUNDLE_ID" \
@@ -175,6 +211,7 @@ jq -n \
     artifact_sha256: $artifact_sha256,
     artifact_classification: $artifact_classification,
     source_sha: $source_sha,
+    artifact_source_sha: $artifact_source_sha,
     source_ref: $source_ref,
     app_bundle_path: $app_bundle_path,
     bundle_id: $bundle_id,

@@ -27,8 +27,8 @@ function classicZip(entries: Entry[]) {
 }
 function unicodePathExtra(headerName: string, alternateName: string) { const alternate = Buffer.from(alternateName), field = Buffer.alloc(9 + alternate.length); u16(field, 0, 0x7075); u16(field, 2, 5 + alternate.length); field[4] = 1; u32(field, 5, crc32(Buffer.from(headerName))); alternate.copy(field, 9); return field; }
 function fixture(entries: Entry[]) { const root = mkdtempSync(join(tmpdir(), "neondiff-zip-")); roots.push(root); const artifact = join(root, "NeonDiff.zip"); writeFileSync(artifact, classicZip(entries)); return { root, artifact }; }
-const stableFeed = "https://www.neondiff.com/updates/stable/appcast.xml", betaFeed = "https://www.neondiff.com/updates/beta/appcast.xml", defaultPublicKey = Buffer.alloc(32, 1).toString("base64"), plistDoctype = '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">', byoProductionMarkers = "<key>NeonDiffPaidBetaContract</key><string>paid-mac-beta-byo-v1</string><key>NeonDiffBYOGitHubEnabled</key><true/>";
-function plist(version = "1.1.0-rc.9", extra = "", publicKey = defaultPublicKey, productionMarkers = byoProductionMarkers) { const feed = version === "1.1.0" ? stableFeed : betaFeed; return `<?xml version="1.0" encoding="UTF-8"?>${plistDoctype}<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>11091</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>SUFeedURL</key><string>${feed}</string><key>SUPublicEDKey</key><string>${publicKey}</string>${productionMarkers}${extra}</dict></plist>`; }
+const stableFeed = "https://www.neondiff.com/updates/stable/appcast.xml", betaFeed = "https://www.neondiff.com/updates/beta/appcast.xml", defaultPublicKey = Buffer.alloc(32, 1).toString("base64"), defaultSourceSHA = "0123456789abcdef0123456789abcdef01234567", plistDoctype = '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">', byoProductionMarkers = "<key>NeonDiffPaidBetaContract</key><string>paid-mac-beta-byo-v1</string><key>NeonDiffBYOGitHubEnabled</key><true/>";
+function plist(version = "1.1.0-rc.9", extra = "", publicKey = defaultPublicKey, productionMarkers = byoProductionMarkers, artifactSourceSHA = defaultSourceSHA) { const feed = version === "1.1.0" ? stableFeed : betaFeed, sourceMarker = artifactSourceSHA ? `<key>NeonDiffSourceSHA</key><string>${artifactSourceSHA}</string>` : ""; return `<?xml version="1.0" encoding="UTF-8"?>${plistDoctype}<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>11091</string><key>LSMinimumSystemVersion</key><string>14.0</string><key>SUFeedURL</key><string>${feed}</string><key>SUPublicEDKey</key><string>${publicKey}</string>${sourceMarker}${productionMarkers}${extra}</dict></plist>`; }
 function eocdPatch(artifact: string, field: number, value: number) { const bytes = readFileSync(artifact); u32(bytes, bytes.length - 22 + field, value); writeFileSync(artifact, bytes); }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -63,10 +63,10 @@ describe("raw bounded classic-ZIP archive guard", () => {
 
 describe("canonical accepted Desktop release packet", () => {
   const sourceSHA = "1".repeat(40), tagObjectSHA = "2".repeat(40), tag = "v1.1.0", version = "1.1.0", build = "11091", artifactName = `NeonDiff-${version}-build${build}-macOS.zip`;
-  function packetFixture(sidecar = false, inAppSidecar = false, productionMarkers = byoProductionMarkers) {
+  function packetFixture(sidecar = false, inAppSidecar = false, productionMarkers = byoProductionMarkers, artifactSourceSHA = sourceSHA) {
     const root = mkdtempSync(join(tmpdir(), "neondiff-packet-")); roots.push(root);
     const { publicKey, privateKey } = generateKeyPairSync("ed25519"), acceptedPublicKey = Buffer.from(publicKey.export({ format: "der", type: "spki" })).subarray(-32).toString("base64"), artifactPath = join(root, artifactName);
-    const entries: Entry[] = [{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Contents/Info.plist", data: plist(version, "", acceptedPublicKey, productionMarkers) }, { name: "NeonDiff.app/Contents/MacOS/NeonDiffDesktop", data: "desktop", mode: 0o100755 }]; if (sidecar) entries.push({ name: "__MACOSX/NeonDiff.app/Contents/._Info.plist", data: "appledouble" }); if (inAppSidecar) entries.push({ name: "NeonDiff.app/Contents/._Info.plist", data: Buffer.from([0x00, 0x05, 0x16, 0x07]) });
+    const entries: Entry[] = [{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Contents/Info.plist", data: plist(version, "", acceptedPublicKey, productionMarkers, artifactSourceSHA) }, { name: "NeonDiff.app/Contents/MacOS/NeonDiffDesktop", data: "desktop", mode: 0o100755 }]; if (sidecar) entries.push({ name: "__MACOSX/NeonDiff.app/Contents/._Info.plist", data: "appledouble" }); if (inAppSidecar) entries.push({ name: "NeonDiff.app/Contents/._Info.plist", data: Buffer.from([0x00, 0x05, 0x16, 0x07]) });
     writeFileSync(artifactPath, classicZip(entries)); const artifact = readFileSync(artifactPath), artifactSHA256 = createHash("sha256").update(artifact).digest("hex"), url = `https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/download/${tag}/${artifactName}`, edSignature = sign(null, artifact, privateKey).toString("base64"), declarationDirectory = join(root, "declarations"); mkdirSync(declarationDirectory);
     const indexPath = join(root, "index.json"), feedPath = join(root, "appcast.xml"), tagRefPath = join(root, "tag-ref.json"), tagObjectPath = join(root, "tag-object.json"), releasePath = join(root, "release.json"), acceptedPublicKeyPath = join(root, "accepted-sparkle-public-key.txt"), declarationPath = join(declarationDirectory, `${tag}.json`);
     const declaration = { schemaVersion: 1, product: "neondiff-desktop", version, tag, channel: "stable", sequence: null, build, predecessor: null, contract: "paid-mac-ga-byo-v1", distribution: { bundleId: "com.electricsheephq.NeonDiffDesktop", appPath: "NeonDiff.app", artifactName, releaseClass: "desktop-only", origins: { github: "https://github.com/electricsheephq/evaos-code-review-bot-neondiff", site: "https://www.neondiff.com", feed: stableFeed } } };
@@ -76,9 +76,9 @@ describe("canonical accepted Desktop release packet", () => {
   }
   it("derives one frozen exact-source/artifact/tree/feed/enclosure/npm packet", async () => {
     const value = packetFixture(), packet = await buildAcceptedDesktopReleasePacket(...value.paths);
-    expect(packet).toMatchObject({ schemaVersion: 2, kind: "neondiff.desktop.accepted-release-packet-v2", channel: "stable", version, build, tag, sourceSHA, tagObjectSHA, artifactName, releaseContract: "paid-mac-ga-byo-v1", productionContract: { contract: "paid-mac-beta-byo-v1", byoGitHubEnabled: true, managedGitHubBrokerEnabledPresent: false, githubBrokerOriginPresent: false }, npmReleaseClass: "desktop-only" });
+    expect(packet).toMatchObject({ schemaVersion: 3, kind: "neondiff.desktop.accepted-release-packet-v3", channel: "stable", version, build, tag, sourceSHA, artifactSourceSHA: sourceSHA, tagObjectSHA, artifactName, releaseContract: "paid-mac-ga-byo-v1", productionContract: { contract: "paid-mac-beta-byo-v1", byoGitHubEnabled: true, managedGitHubBrokerEnabledPresent: false, githubBrokerOriginPresent: false }, npmReleaseClass: "desktop-only" });
     expect(packet.artifactSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.treeSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.feedSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.enclosureProofSHA256).toMatch(/^[a-f0-9]{64}$/);
-    expect(Object.isFrozen(packet) && Object.isFrozen(packet.feedEntry) && Object.isFrozen(packet.productionContract)).toBe(true); const serialized = serializeAcceptedDesktopReleasePacket(packet); expect(serialized).toMatch(/\n$/); expect(JSON.parse(serialized).productionContract).toEqual(packet.productionContract); expect(acceptedDesktopReleasePacketDigest(packet)).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.isFrozen(packet) && Object.isFrozen(packet.feedEntry) && Object.isFrozen(packet.productionContract)).toBe(true); const serialized = serializeAcceptedDesktopReleasePacket(packet), serializedPacket = JSON.parse(serialized); expect(serialized).toMatch(/\n$/); expect(serializedPacket.productionContract).toEqual(packet.productionContract); expect(serializedPacket.artifactSourceSHA).toBe(sourceSHA); expect(acceptedDesktopReleasePacketDigest(packet)).toMatch(/^[a-f0-9]{64}$/);
     let read = false; expect(() => serializeAcceptedDesktopReleasePacket({ ...packet } as any)).toThrow("not produced"); expect(() => serializeAcceptedDesktopReleasePacket(new Proxy(packet, { get() { read = true; throw new Error("trap"); } }) as any)).toThrow("not produced"); expect(read).toBe(false);
   });
   it("rejects cross-release, raw-feed, metadata, artifact, and caller substitutions", async () => {
@@ -95,6 +95,7 @@ describe("canonical accepted Desktop release packet", () => {
     ];
     for (const mutate of cases) { const value = packetFixture(); mutate(value); await expect(buildAcceptedDesktopReleasePacket(...value.paths)).rejects.toThrow(); }
     await expect(buildAcceptedDesktopReleasePacket(...packetFixture(true).paths)).rejects.toThrow(/AppleDouble/i);
+    await expect(buildAcceptedDesktopReleasePacket(...packetFixture(false, false, byoProductionMarkers, "3".repeat(40)).paths)).rejects.toThrow(/source/i);
     let read = false; const paths = packetFixture().paths; await expect(buildAcceptedDesktopReleasePacket(new Proxy({}, { get() { read = true; throw new Error("trap"); } }) as any, ...paths.slice(1))).rejects.toThrow("primitive"); expect(read).toBe(false);
   });
   it("rejects untrusted updater keys, bundle/feed OS drift, and in-app AppleDouble", async () => {
@@ -201,7 +202,7 @@ describe("graph-authoritative ZIP materialization", () => {
 });
 
 describe("authenticated exact-ZIP app tree and plist proof", () => {
-  const sourceSHA = "0123456789abcdef0123456789abcdef01234567";
+  const sourceSHA = defaultSourceSHA;
   function proofFixture(version = "1.1.0-rc.9", extra = "", info: string | Buffer = plist(version, extra)) {
     return fixture([{ name: "NeonDiff.app/", type: "directory" }, { name: "NeonDiff.app/Contents/Info.plist", data: info }, { name: "NeonDiff.app/Contents/MacOS/NeonDiffDesktop", data: "desktop", mode: 0o100755 }, { name: "NeonDiff.app/Contents/Resources/Current", type: "symlink", data: "../MacOS/NeonDiffDesktop" }, { name: "__MACOSX/NeonDiff.app/Contents/._Info.plist", data: "appledouble" }]);
   }
@@ -210,10 +211,10 @@ describe("authenticated exact-ZIP app tree and plist proof", () => {
       const value = proofFixture(version), proof = await buildExtractedAppTreeProof(value.artifact, sourceSHA);
       let canonicalTree: any;
       await withMaterializedClassicZipApp(value.artifact, (appPath) => { canonicalTree = JSON.parse(execFileSync(process.execPath, [join(process.cwd(), "scripts/hash-desktop-bundle-tree.mjs"), appPath], { encoding: "utf8" })); });
-      expect(proof).toMatchObject({ schemaVersion: 2, kind: "neondiff.desktop.extracted-tree-proof-v2", verified: true, algorithm: "sha256-tree-v1", sourceSHA, treeSHA256: canonicalTree.sha256, bundleMarkers: { appPath: "NeonDiff.app", bundleID: "com.electricsheephq.NeonDiffDesktop", version, build: "11091", productionContract: { contract: "paid-mac-beta-byo-v1", byoGitHubEnabled: true, managedGitHubBrokerEnabledPresent: false, githubBrokerOriginPresent: false } }, appleDouble: { policy: "artifact-bound-excluded-from-tree-v1", entryCount: 1 } });
+      expect(proof).toMatchObject({ schemaVersion: 3, kind: "neondiff.desktop.extracted-tree-proof-v3", verified: true, algorithm: "sha256-tree-v1", sourceSHA, treeSHA256: canonicalTree.sha256, bundleMarkers: { appPath: "NeonDiff.app", bundleID: "com.electricsheephq.NeonDiffDesktop", version, build: "11091", sourceSHA, productionContract: { contract: "paid-mac-beta-byo-v1", byoGitHubEnabled: true, managedGitHubBrokerEnabledPresent: false, githubBrokerOriginPresent: false } }, appleDouble: { policy: "artifact-bound-excluded-from-tree-v1", entryCount: 1 } });
       expect(proof.artifactSHA256).toBe(createHash("sha256").update(readFileSync(value.artifact)).digest("hex")); expect(proof.records).toHaveLength(canonicalTree.entryCount);
       expect(Object.isFrozen(proof) && Object.isFrozen(proof.records) && Object.isFrozen(proof.records[0]) && Object.isFrozen(proof.bundleMarkers) && Object.isFrozen(proof.bundleMarkers.productionContract) && Object.isFrozen(proof.appleDouble)).toBe(true);
-      const serialized = serializeExtractedAppTreeProof(proof); expect(serialized).toMatch(/\n$/); expect(JSON.parse(serialized).bundleMarkers.productionContract).toEqual(proof.bundleMarkers.productionContract); expect(extractedAppTreeProofDigest(proof)).toMatch(/^[a-f0-9]{64}$/);
+      const serialized = serializeExtractedAppTreeProof(proof), serializedProof = JSON.parse(serialized); expect(serialized).toMatch(/\n$/); expect(serializedProof.bundleMarkers.productionContract).toEqual(proof.bundleMarkers.productionContract); expect(serializedProof.bundleMarkers.sourceSHA).toBe(sourceSHA); expect(extractedAppTreeProofDigest(proof)).toMatch(/^[a-f0-9]{64}$/);
     }
   });
   it("fails closed on ambiguous plist bytes and invalid bundle markers", async () => {
@@ -245,6 +246,15 @@ describe("authenticated exact-ZIP app tree and plist proof", () => {
     for (const info of invalid) await expect(buildExtractedAppTreeProof(proofFixture("1.1.0", "", info).artifact, sourceSHA)).rejects.toThrow(/production contract/i);
     const duplicateBYO = `${byoProductionMarkers}<key>NeonDiffBYOGitHubEnabled</key><true/>`;
     await expect(buildExtractedAppTreeProof(proofFixture("1.1.0", "", plist("1.1.0", "", defaultPublicKey, duplicateBYO)).artifact, sourceSHA)).rejects.toThrow(/plist/i);
+  });
+  it("rejects missing, malformed, duplicate, or mismatched artifact source identity", async () => {
+    const invalid = [
+      plist("1.1.0", "", defaultPublicKey, byoProductionMarkers, ""),
+      plist("1.1.0", "", defaultPublicKey, byoProductionMarkers, sourceSHA.toUpperCase()),
+      plist("1.1.0", "", defaultPublicKey, byoProductionMarkers, "f".repeat(40)),
+      plist("1.1.0", `<key>NeonDiffSourceSHA</key><string>${sourceSHA}</string>`)
+    ];
+    for (const info of invalid) await expect(buildExtractedAppTreeProof(proofFixture("1.1.0", "", info).artifact, sourceSHA)).rejects.toThrow(/source|plist/i);
   });
   it("accepts primitive authority only and rejects forged proof serialization without proxy reads", async () => {
     const value = proofFixture(), proof = await buildExtractedAppTreeProof(value.artifact, sourceSHA); let proxyRead = false;

@@ -65,6 +65,12 @@ extracted contract, exclusive marker set, and managed origin. Markers select
 composition only; Keychain, GitHub visibility, and current entitlement remain
 authoritative.
 
+Every release bundle also records one lowercase 40-hex `NeonDiffSourceSHA`
+derived from the exact clean release checkout before signing. The authenticated
+tree proof and accepted packet retain that marker and reject it unless it equals
+the peeled annotated-tag commit; this is a signed source binding, not standalone
+build provenance.
+
 Authority is layered:
 
 1. Source, pull request, review, and CI establish what was proposed and tested.

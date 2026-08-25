@@ -185,6 +185,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     for (const field of [
       "artifact_sha256",
       "source_sha",
+      "artifact_source_sha",
       "source_ref",
       "app_bundle_path",
       "bundle_id",
@@ -207,6 +208,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(script).toContain("ensure_clean_source_tree");
     expect(script).toContain("verify_existing_app_launch");
     expect(script).toContain("SOURCE_SHA_PROVIDED");
+    expect(script).toContain("DERIVED_SOURCE_SHA");
+    expect(script).toContain("provided source identity does not match the exact checkout");
+    expect(script).toContain("artifact source identity does not match the exact checkout");
     expect(script).toContain('git -C "$REPO_ROOT" diff --quiet');
     expect(script).toContain("ls-files --others --exclude-standard");
     expect(script).toContain("jq -n");
@@ -229,6 +233,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(bundler).toContain('"$SCRIPT_DIR/release-rpaths.sh" sanitize "$APP_BINARY"');
     expect(bundler).toContain('"$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"');
     expect(bundler).toContain("build-desktop-sealed-worker.mjs");
+    expect(bundler).toContain("NeonDiffSourceSHA");
+    expect(bundler).toContain("derive_release_source_sha");
+    expect(bundler).toContain("release candidates require a detached source checkout");
     expect(bundler).toContain('"$APP_HELPERS/NeonDiffWorker" --version');
   });
 
