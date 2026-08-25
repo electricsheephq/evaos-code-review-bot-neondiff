@@ -6,8 +6,9 @@ For the BYO Mac path, the LaunchAgent's background PR review lane remains held,
 including when the daemon runs with `--dry-run false`. That live daemon mode may
 run the independently admitted issue-enrichment lane. A heartbeat proves service
 liveness only; issue-enrichment success requires lane-specific result evidence.
-Neither its admission nor the heartbeat authorizes PR work. Live PR posting uses
-only the exact scoped `review-pr` dry review plus explicit same-head confirmation.
+Neither its admission nor the heartbeat authorizes PR work. Native live PR
+posting uses only the exact scoped `review-pr` dry review plus explicit
+same-head confirmation.
 
 Recommended first review proof:
 

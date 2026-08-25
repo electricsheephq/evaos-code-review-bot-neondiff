@@ -228,9 +228,9 @@ For the signed BYO Mac LaunchAgent, the background PR review lane remains held.
 A heartbeat proves service liveness only; issue-enrichment success requires
 lane-specific result evidence. The independently admitted issue-enrichment lane
 may run, but neither its admission nor the heartbeat supplies review authority.
-Live PR posting uses only the exact scoped `review-pr` dry review plus explicit
-same-head confirmation; installing, starting, or restarting the background
-service cannot manufacture that approval.
+Native live PR posting uses only the exact scoped `review-pr` dry review plus
+explicit same-head confirmation; installing, starting, or restarting the
+background service cannot manufacture that approval.
 
 If this matched local worker reports **Worker update required**, choose
 **Install / Update Local Worker** and use only the checksum-bound B0 bundle

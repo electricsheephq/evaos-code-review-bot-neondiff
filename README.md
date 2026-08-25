@@ -201,8 +201,9 @@ Review and daemon readiness remain separate gates. The LaunchAgent's background
 PR review lane remains held: the daemon may run the independently admitted
 issue-enrichment lane, but a heartbeat proves service liveness only and never
 authorizes a PR post. Issue-enrichment success requires lane-specific result
-evidence. Live PR posting uses only the exact scoped `review-pr` dry review plus
-explicit same-head confirmation; the matching approval is consumed atomically.
+evidence. Native live PR posting uses only the exact scoped `review-pr` dry
+review plus explicit same-head confirmation; the matching approval is consumed
+atomically.
 The immutable published prerelease and clean-Mac artifact proof remain
 distribution gates. Unsigned development builds still require an executable
 global or checksum-managed worker before native first run

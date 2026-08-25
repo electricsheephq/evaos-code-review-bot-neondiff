@@ -134,7 +134,7 @@ describe("NeonDiff public community funnel", () => {
       const normalized = text.replace(/\s+/g, " ");
       expect(normalized).toMatch(/background PR review lane (?:is|remains) held/i);
       expect(normalized).toMatch(
-        /live PR posting.*exact scoped `?review-pr`?.*dry review.*explicit same-head confirmation/i
+        /native live PR posting.*exact scoped `?review-pr`?.*dry review.*explicit same-head confirmation/i
       );
       expect(normalized).toMatch(/heartbeat proves service liveness only/i);
       expect(normalized).toMatch(

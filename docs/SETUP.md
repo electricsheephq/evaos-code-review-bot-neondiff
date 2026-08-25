@@ -366,8 +366,9 @@ The installed LaunchAgent's background PR review lane remains held. A heartbeat
 proves service liveness only; issue-enrichment success requires lane-specific
 result evidence. The independently admitted issue-enrichment lane may run, but
 neither its admission nor the daemon heartbeat authorizes a PR review or post.
-Live PR posting uses only the exact scoped `review-pr` dry review plus explicit
-same-head confirmation, and that matching approval is consumed atomically.
+Native live PR posting uses only the exact scoped `review-pr` dry review plus
+explicit same-head confirmation, and that matching approval is consumed
+atomically.
 **Install & Start** and **Start/Restart** therefore manage the background
 service; they do not bypass the separate **Run Dry Review** and **Post Live
 Review** controls.
