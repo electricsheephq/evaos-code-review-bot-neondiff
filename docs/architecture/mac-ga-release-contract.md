@@ -120,6 +120,31 @@ that archive into fresh staging, computes the tree identity, and rejects any
 mismatch, unavailable/changed reference, untrusted location, or changed config.
 It contains references to secrets rather than secret values.
 
+For Desktop `1.1.0`, the retained location is the immutable evidence-only
+GitHub prerelease/tag `neondiff-accepted-packet-v1.1.0`, excluded from latest
+selection and targeted at the packet artifact-source commit. It contains
+exactly the content-addressed accepted packet and its content-addressed verified
+artifact-source-attestation bundle. The 30-day Actions artifact is transit for
+first publication only and is never the authority for a later read.
+
+The canonical producer cryptographically verifies the exact artifact-source
+bundle before it emits either content-addressed name. The dependent retention
+job has separate contents-write and attestations-read authority. On first
+publication it requires those current producer names, artifact-source SHA, and
+signer-workflow SHA, creates the fixed release once, then reloads and verifies
+the published assets. On a later dispatch it ignores the new producer names and
+workflow SHA, discovers the prior exact pair from the immutable release's only
+two assets, and validates the stored fixed signer workflow/source facts, tag,
+target commit, names, bytes, digests, sizes, URLs, and GitHub release/asset
+attestations. Thus a later `main` SHA cannot replace or invalidate the accepted
+historical pair.
+
+A missing release and tag permits first publication; both present permits only
+verification. Partial or mismatched state fails closed. No workflow may
+overwrite, delete, or rotate retained evidence. Exceptional deletion is a
+separately reviewed repository-administrator action and permanently retires the
+immutable tag; any approved successor uses a new fixed identity.
+
 ## Gates and single implementation path
 
 Mac promotion requires one tested implementation path owning preflight,
