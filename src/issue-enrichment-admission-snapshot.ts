@@ -95,13 +95,13 @@ function clonePlain(value: unknown, label: string, active = new WeakSet<object>(
   if (value === null || typeof value === "string" || typeof value === "boolean" || value === undefined) return value;
   if (typeof value === "number") { if (!Number.isFinite(value)) fail(`non_plain:${label}`); return value; }
   if (typeof value !== "object") fail(`non_plain:${label}`);
-  if (active.has(value)) fail(`cycle:${label}`);
+  if (utilTypes.isProxy(value)) fail(`non_plain:${label}`);
   let descriptors: PropertyDescriptorMap;
   try { descriptors = Object.getOwnPropertyDescriptors(value); } catch { fail(`non_plain:${label}`); }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null && !Array.isArray(value)) fail(`non_plain:${label}`);
   for (const descriptor of Object.values(descriptors)) if (!("value" in descriptor)) fail(`accessor:${label}`);
-  if (utilTypes.isProxy(value)) fail(`non_plain:${label}`);
+  if (active.has(value)) fail(`cycle:${label}`);
   active.add(value);
   let copy: any;
   if (Array.isArray(value)) { if (prototype !== Array.prototype || Reflect.ownKeys(descriptors).length !== value.length + 1) fail(`non_plain:${label}`);
