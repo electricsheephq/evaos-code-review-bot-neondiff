@@ -31,14 +31,14 @@ function sha256(bytes: Buffer) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function fixture() {
+function fixture(build = "11091") {
   const root = mkdtempSync(join(tmpdir(), "neondiff-retained-evidence-"));
   roots.push(root);
   const releaseDownload = join(root, "release-download");
   const actionsArtifact = join(root, "expired-actions-artifact");
   mkdirSync(releaseDownload);
 
-  const artifactName = "NeonDiff-1.1.0-build11091-macOS.zip";
+  const artifactName = `NeonDiff-1.1.0-build${build}-macOS.zip`;
   const artifactBytes = Buffer.alloc(4096, 4), artifactSHA256 = sha256(artifactBytes), artifactPath = join(releaseDownload, artifactName);
   writeFileSync(artifactPath, artifactBytes);
   const packet = {
@@ -47,7 +47,7 @@ function fixture() {
     verified: true,
     channel: "stable",
     version: "1.1.0",
-    build: "11091",
+    build,
     tag: "v1.1.0",
     sourceSHA,
     artifactSourceSHA: sourceSHA,
@@ -63,7 +63,7 @@ function fixture() {
       length: 4096,
       type: "application/octet-stream",
       version: "1.1.0",
-      build: "11091",
+      build,
       shortVersionString: "1.1.0",
       minimumSystemVersion: "13.0",
       channel: "stable",
@@ -190,6 +190,8 @@ describe("retained accepted Desktop evidence", () => {
     const forgedPacket = fixture(), forged = JSON.parse(readFileSync(forgedPacket.packetPath, "utf8")); forged.treeSHA256 = "9".repeat(64);
     const forgedBytes = Buffer.from(`${JSON.stringify(forged)}\n`), forgedSHA256 = sha256(forgedBytes), forgedName = `${forgedSHA256}.packet.json`, forgedPath = join(forgedPacket.root, "release-download", forgedName); writeFileSync(forgedPath, forgedBytes);
     const forgedRelease = JSON.parse(readFileSync(forgedPacket.releasePath, "utf8")); forgedRelease.assets[0] = { name: forgedName, size: forgedBytes.length, digest: `sha256:${forgedSHA256}`, browser_download_url: `https://github.com/${repository}/releases/download/${evidenceTag}/${forgedName}` }; writeFileSync(forgedPacket.releasePath, JSON.stringify(forgedRelease)); expect(forgedPacket.run({ packet: forgedPath }).status).not.toBe(0);
+    expect(fixture("0").run().status).not.toBe(0);
+    expect(fixture("00011091").run().status).not.toBe(0);
   });
 
   it("resolves retained state before scheduling the producer or verifier", () => {

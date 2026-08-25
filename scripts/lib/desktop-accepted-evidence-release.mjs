@@ -53,7 +53,7 @@ function canonicalContext() {
   if (process.env.GITHUB_ACTIONS !== "true" || process.env.GITHUB_REPOSITORY !== DESKTOP_ACCEPTED_EVIDENCE_REPOSITORY || process.env.GITHUB_REF !== SOURCE_REF || !SHA1.test(process.env.GITHUB_SHA ?? "") || process.env.GITHUB_WORKFLOW_REF !== `${SIGNER_WORKFLOW}@${SOURCE_REF}` || process.env.RUNNER_ENVIRONMENT !== "github-hosted") fail("canonical GitHub-hosted workflow identity is required");
 }
 function exactPacket(path, stableOnly) {
-  const evidence = boundedBytes(path, "accepted packet", MAX_PACKET_BYTES), packet = parseAcceptedDesktopReleasePacket(evidence.bytes); if (packet.artifactByteLength > MAX_ARTIFACT_BYTES || stableOnly && (packet.channel !== "stable" || packet.version !== "1.1.0" || packet.tag !== STABLE_TAG)) fail("accepted packet identity is not canonical");
+  const evidence = boundedBytes(path, "accepted packet", MAX_PACKET_BYTES), packet = parseAcceptedDesktopReleasePacket(evidence.bytes); if (packet.artifactByteLength > MAX_ARTIFACT_BYTES || stableOnly && (packet.channel !== "stable" || packet.version !== "1.1.0" || packet.tag !== STABLE_TAG || !/^[1-9][0-9]*$/.test(packet.build))) fail("accepted packet identity is not canonical");
   if (basename(evidence.path) !== `${evidence.digest}.packet.json`) fail("accepted packet content address is not canonical"); const evidenceTag = `neondiff-accepted-packet-${packet.tag}`, evidenceReleaseName = `NeonDiff accepted packet evidence ${packet.tag}`;
   return { ...evidence, packet, name: basename(evidence.path), evidenceTag, evidenceReleaseName };
 }
