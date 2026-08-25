@@ -12,7 +12,7 @@ const MAX_BYTES = 512 * 1024 * 1024, MAX_RECORDS = 20_000, MAX_METADATA = 16 * 1
 const EOCD = 0x06054b50, LOCAL = 0x04034b50, CENTRAL = 0x02014b50, DATA_DESCRIPTOR = 0x08074b50, ZIP64 = "ZIP64 archive unsupported";
 const UTF8 = new TextDecoder("utf-8", { fatal: true }), ALLOWED_FLAGS = 0x080e, TYPE_MASK = 0o170000, PATH_OVERRIDE_FIELDS = new Set([0x0008, 0x7075]);
 const fail = (message) => { throw new Error(message); };
-const SHA1 = /^[a-f0-9]{40}$/, SHA256 = /^[a-f0-9]{64}$/, TREE_KIND = "neondiff.desktop.extracted-tree-proof-v1";
+const SHA1 = /^[a-f0-9]{40}$/, SHA256 = /^[a-f0-9]{64}$/, TREE_KIND = "neondiff.desktop.extracted-tree-proof-v2";
 const TREE_FIELDS = ["schemaVersion", "kind", "verified", "algorithm", "sourceSHA", "artifactSHA256", "artifactByteLength", "treeSHA256", "records", "bundleMarkers", "appleDouble"];
 const authenticatedTreeProofs = new WeakSet();
 const PLIST_PARSER = String.raw`
@@ -314,10 +314,11 @@ function plistMarkers(bytes) {
   const bundleID = value.CFBundleIdentifier, version = value.CFBundleShortVersionString, build = value.CFBundleVersion, minimumSystemVersion = value.LSMinimumSystemVersion, feedURL = value.SUFeedURL, publicKey = value.SUPublicEDKey;
   if (bundleID !== "com.electricsheephq.NeonDiffDesktop" || !/^1\.1\.0(?:-(?:beta|rc)\.[1-9][0-9]{0,15})?$/.test(version) || !/^[0-9]{1,32}$/.test(build)) fail("bundle markers are not canonical");
   if (value.productionContract !== "paid-mac-beta-byo-v1" || value.byoGitHubEnabled !== true || value.hasManagedGitHubBrokerEnabled !== false || value.hasGitHubBrokerOrigin !== false) fail("bundle production contract is not canonical");
+  const productionContract = { contract: value.productionContract, byoGitHubEnabled: value.byoGitHubEnabled, managedGitHubBrokerEnabledPresent: value.hasManagedGitHubBrokerEnabled, githubBrokerOriginPresent: value.hasGitHubBrokerOrigin };
   const expectedFeed = version === "1.1.0" ? "https://www.neondiff.com/updates/stable/appcast.xml" : "https://www.neondiff.com/updates/beta/appcast.xml", decodedKey = Buffer.from(publicKey, "base64");
   if (!/^\d+(?:\.\d+){1,2}$/.test(minimumSystemVersion)) fail("bundle minimum system version is not canonical");
   if (feedURL !== expectedFeed || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(publicKey) || decodedKey.length !== 32 || decodedKey.toString("base64") !== publicKey) fail("bundle updater markers are not canonical");
-  return { appPath: "NeonDiff.app", bundleID, version, build, minimumSystemVersion, feedURL, publicKey };
+  return { appPath: "NeonDiff.app", bundleID, version, build, minimumSystemVersion, feedURL, publicKey, productionContract };
 }
 function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value)) deepFreeze(child); Object.freeze(value); } return value; }
 
@@ -325,7 +326,7 @@ export async function buildExtractedAppTreeProof(artifactPath, sourceSHA) {
   if (typeof artifactPath !== "string" || !artifactPath) fail("artifact path is malformed");
   if (typeof sourceSHA !== "string" || !SHA1.test(sourceSHA)) fail("source SHA is malformed");
   return withMaterializedClassicZipApp(artifactPath, (appPath, graph) => {
-    const { records, infoPlist } = appTree(appPath), proof = { schemaVersion: 1, kind: TREE_KIND, verified: true, algorithm: "sha256-tree-v1", sourceSHA, artifactSHA256: graph.artifactSHA256, artifactByteLength: graph.artifactByteLength, treeSHA256: treeDigest(records), records, bundleMarkers: plistMarkers(infoPlist), appleDouble: { policy: "artifact-bound-excluded-from-tree-v1", entryCount: graph.records.filter((record) => typeof record.sidecarTarget === "string").length } };
+    const { records, infoPlist } = appTree(appPath), proof = { schemaVersion: 2, kind: TREE_KIND, verified: true, algorithm: "sha256-tree-v1", sourceSHA, artifactSHA256: graph.artifactSHA256, artifactByteLength: graph.artifactByteLength, treeSHA256: treeDigest(records), records, bundleMarkers: plistMarkers(infoPlist), appleDouble: { policy: "artifact-bound-excluded-from-tree-v1", entryCount: graph.records.filter((record) => typeof record.sidecarTarget === "string").length } };
     authenticatedTreeProofs.add(proof); return deepFreeze(proof);
   });
 }

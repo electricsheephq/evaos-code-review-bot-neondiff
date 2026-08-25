@@ -76,9 +76,9 @@ describe("canonical accepted Desktop release packet", () => {
   }
   it("derives one frozen exact-source/artifact/tree/feed/enclosure/npm packet", async () => {
     const value = packetFixture(), packet = await buildAcceptedDesktopReleasePacket(...value.paths);
-    expect(packet).toMatchObject({ schemaVersion: 1, kind: "neondiff.desktop.accepted-release-packet-v1", channel: "stable", version, build, tag, sourceSHA, tagObjectSHA, artifactName, npmReleaseClass: "desktop-only" });
+    expect(packet).toMatchObject({ schemaVersion: 2, kind: "neondiff.desktop.accepted-release-packet-v2", channel: "stable", version, build, tag, sourceSHA, tagObjectSHA, artifactName, releaseContract: "paid-mac-ga-byo-v1", productionContract: { contract: "paid-mac-beta-byo-v1", byoGitHubEnabled: true, managedGitHubBrokerEnabledPresent: false, githubBrokerOriginPresent: false }, npmReleaseClass: "desktop-only" });
     expect(packet.artifactSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.treeSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.feedSHA256).toMatch(/^[a-f0-9]{64}$/); expect(packet.enclosureProofSHA256).toMatch(/^[a-f0-9]{64}$/);
-    expect(Object.isFrozen(packet) && Object.isFrozen(packet.feedEntry)).toBe(true); expect(serializeAcceptedDesktopReleasePacket(packet)).toMatch(/\n$/); expect(acceptedDesktopReleasePacketDigest(packet)).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.isFrozen(packet) && Object.isFrozen(packet.feedEntry) && Object.isFrozen(packet.productionContract)).toBe(true); const serialized = serializeAcceptedDesktopReleasePacket(packet); expect(serialized).toMatch(/\n$/); expect(JSON.parse(serialized).productionContract).toEqual(packet.productionContract); expect(acceptedDesktopReleasePacketDigest(packet)).toMatch(/^[a-f0-9]{64}$/);
     let read = false; expect(() => serializeAcceptedDesktopReleasePacket({ ...packet } as any)).toThrow("not produced"); expect(() => serializeAcceptedDesktopReleasePacket(new Proxy(packet, { get() { read = true; throw new Error("trap"); } }) as any)).toThrow("not produced"); expect(read).toBe(false);
   });
   it("rejects cross-release, raw-feed, metadata, artifact, and caller substitutions", async () => {
@@ -210,10 +210,10 @@ describe("authenticated exact-ZIP app tree and plist proof", () => {
       const value = proofFixture(version), proof = await buildExtractedAppTreeProof(value.artifact, sourceSHA);
       let canonicalTree: any;
       await withMaterializedClassicZipApp(value.artifact, (appPath) => { canonicalTree = JSON.parse(execFileSync(process.execPath, [join(process.cwd(), "scripts/hash-desktop-bundle-tree.mjs"), appPath], { encoding: "utf8" })); });
-      expect(proof).toMatchObject({ schemaVersion: 1, kind: "neondiff.desktop.extracted-tree-proof-v1", verified: true, algorithm: "sha256-tree-v1", sourceSHA, treeSHA256: canonicalTree.sha256, bundleMarkers: { appPath: "NeonDiff.app", bundleID: "com.electricsheephq.NeonDiffDesktop", version, build: "11091" }, appleDouble: { policy: "artifact-bound-excluded-from-tree-v1", entryCount: 1 } });
+      expect(proof).toMatchObject({ schemaVersion: 2, kind: "neondiff.desktop.extracted-tree-proof-v2", verified: true, algorithm: "sha256-tree-v1", sourceSHA, treeSHA256: canonicalTree.sha256, bundleMarkers: { appPath: "NeonDiff.app", bundleID: "com.electricsheephq.NeonDiffDesktop", version, build: "11091", productionContract: { contract: "paid-mac-beta-byo-v1", byoGitHubEnabled: true, managedGitHubBrokerEnabledPresent: false, githubBrokerOriginPresent: false } }, appleDouble: { policy: "artifact-bound-excluded-from-tree-v1", entryCount: 1 } });
       expect(proof.artifactSHA256).toBe(createHash("sha256").update(readFileSync(value.artifact)).digest("hex")); expect(proof.records).toHaveLength(canonicalTree.entryCount);
-      expect(Object.isFrozen(proof) && Object.isFrozen(proof.records) && Object.isFrozen(proof.records[0]) && Object.isFrozen(proof.bundleMarkers) && Object.isFrozen(proof.appleDouble)).toBe(true);
-      expect(serializeExtractedAppTreeProof(proof)).toMatch(/\n$/); expect(extractedAppTreeProofDigest(proof)).toMatch(/^[a-f0-9]{64}$/);
+      expect(Object.isFrozen(proof) && Object.isFrozen(proof.records) && Object.isFrozen(proof.records[0]) && Object.isFrozen(proof.bundleMarkers) && Object.isFrozen(proof.bundleMarkers.productionContract) && Object.isFrozen(proof.appleDouble)).toBe(true);
+      const serialized = serializeExtractedAppTreeProof(proof); expect(serialized).toMatch(/\n$/); expect(JSON.parse(serialized).bundleMarkers.productionContract).toEqual(proof.bundleMarkers.productionContract); expect(extractedAppTreeProofDigest(proof)).toMatch(/^[a-f0-9]{64}$/);
     }
   });
   it("fails closed on ambiguous plist bytes and invalid bundle markers", async () => {
