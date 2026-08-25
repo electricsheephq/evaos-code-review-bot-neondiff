@@ -8,7 +8,7 @@ import { buildFeedEnclosureProof, feedEnclosureProofDigest } from "./desktop-fee
 import { classifyDesktopOnlyRelease } from "./desktop-only-release-policy.mjs";
 import { parseRawDesktopAppcast } from "./desktop-raw-appcast.mjs";
 
-const KIND = "neondiff.desktop.accepted-release-packet-v1", SHA1 = /^[a-f0-9]{40}$/, MAX_INPUT = 4 * 1024 * 1024;
+const KIND = "neondiff.desktop.accepted-release-packet-v1", SHA1 = /^[a-f0-9]{40}$/, SHA256 = /^[a-f0-9]{64}$/, MAX_INPUT = 4 * 1024 * 1024;
 const FIELDS = ["schemaVersion", "kind", "verified", "channel", "version", "build", "tag", "sourceSHA", "tagObjectSHA", "artifactURL", "artifactName", "artifactByteLength", "artifactSHA256", "treeSHA256", "feedSHA256", "feedEntry", "enclosureProofSHA256", "npmReleaseClass"];
 const ENTRY_FIELDS = ["url", "length", "type", "version", "build", "shortVersionString", "minimumSystemVersion", "channel", "edSignature"], authenticatedPackets = new WeakSet(), validator = fileURLToPath(new URL("../validate-desktop-release-declaration.mjs", import.meta.url));
 const fail = (message) => { throw new Error(message); }, sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -32,6 +32,7 @@ function boundedBytes(input, label) {
 }
 function parseIsolated(raw, script, label) { const result = spawnSync("/usr/bin/python3", ["-I", "-c", script], { input: raw, encoding: "utf8", maxBuffer: MAX_INPUT }); try { if (result.status !== 0) fail(`${label} is malformed`); return JSON.parse(result.stdout); } catch { fail(`${label} is malformed`); } }
 function strictJSON(raw, label) { return parseIsolated(raw, STRICT_JSON, label); }
+function exactObject(value, fields, label) { if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== fields.length || Object.keys(value).some((key) => !fields.includes(key))) fail(`${label} shape is invalid`); return value; }
 function currentDeclaration(indexPath) {
   const indexRaw = boundedBytes(indexPath, "declaration index"), index = strictJSON(indexRaw, "declaration index");
   if (index?.declarationDirectory !== "declarations" || typeof index.currentPath !== "string" || !/^v1\.1\.0(?:-(?:beta\.[1-9][0-9]{0,3}|rc\.[1-9][0-9]{0,15}))?\.json$/.test(index.currentPath)) fail("declaration index has no canonical current path");
@@ -64,6 +65,16 @@ export async function buildAcceptedDesktopReleasePacket(indexPath, artifactPath,
   const enclosure = buildFeedEnclosureProof({ url: entry.url, version: entry.version, build: entry.build, shortVersionString: entry.shortVersionString, channel: entry.channel, artifactName, artifactSHA256: guarded.artifactSHA256, edSignature: entry.edSignature }, { acceptedPublicKey, signedContent: guarded.artifactBytes });
   const packet = { schemaVersion: 1, kind: KIND, verified: true, channel: declaration.channel, version: declaration.version, build: declaration.build, tag: declaration.tag, sourceSHA, tagObjectSHA, artifactURL, artifactName, artifactByteLength: guarded.artifactBytes.length, artifactSHA256: guarded.artifactSHA256, treeSHA256: tree.treeSHA256, feedSHA256: sha256(rawFeed), feedEntry: Object.fromEntries(ENTRY_FIELDS.map((field) => [field, field === "length" ? length : entry[field]])), enclosureProofSHA256: feedEnclosureProofDigest(enclosure), npmReleaseClass: policy.releaseKind };
   authenticatedPackets.add(packet); return deepFreeze(packet);
+}
+export function parseAcceptedDesktopReleasePacket(input) {
+  if (!(input instanceof Uint8Array)) fail("accepted packet must be bytes"); const raw = Buffer.from(input); if (!raw.length || raw.length > MAX_INPUT) fail("accepted packet is not bounded");
+  const packet = exactObject(strictJSON(raw, "accepted packet"), FIELDS, "accepted packet"), entry = exactObject(packet.feedEntry, ENTRY_FIELDS, "accepted packet feed entry"), canonical = Buffer.from(`${JSON.stringify(Object.fromEntries(FIELDS.map((field) => [field, packet[field]])))}\n`);
+  if (!raw.equals(canonical)) fail("accepted packet bytes are not canonical"); const prerelease = typeof packet.version === "string" ? packet.version.match(/^1\.1\.0-(beta|rc)\.[1-9][0-9]{0,15}$/)?.[1] : undefined, channel = prerelease ?? (packet.version === "1.1.0" ? "stable" : undefined);
+  if (packet.schemaVersion !== 1 || packet.kind !== KIND || packet.verified !== true || packet.channel !== channel || packet.tag !== `v${packet.version}` || !/^(?:0|[1-9][0-9]{0,15})$/.test(packet.build ?? "") || !SHA1.test(packet.sourceSHA ?? "") || !SHA1.test(packet.tagObjectSHA ?? "") || packet.sourceSHA === packet.tagObjectSHA) fail("accepted packet identity is invalid");
+  const artifactName = `NeonDiff-${packet.version}-build${packet.build}-macOS.zip`, artifactURL = `https://github.com/electricsheephq/evaos-code-review-bot-neondiff/releases/download/${packet.tag}/${artifactName}`;
+  if (packet.artifactName !== artifactName || packet.artifactURL !== artifactURL || !Number.isSafeInteger(packet.artifactByteLength) || packet.artifactByteLength < 1 || [packet.artifactSHA256, packet.treeSHA256, packet.feedSHA256, packet.enclosureProofSHA256].some((value) => !SHA256.test(value ?? "")) || packet.npmReleaseClass !== (channel === "stable" ? "desktop-only" : "paid-beta")) fail("accepted packet evidence identity is invalid");
+  if (entry.url !== artifactURL || entry.length !== packet.artifactByteLength || entry.type !== "application/octet-stream" || entry.version !== packet.version || entry.build !== packet.build || entry.shortVersionString !== packet.version || entry.channel !== channel || typeof entry.minimumSystemVersion !== "string" || !entry.minimumSystemVersion || typeof entry.edSignature !== "string" || !entry.edSignature) fail("accepted packet feed identity is invalid");
+  return deepFreeze(packet);
 }
 export function serializeAcceptedDesktopReleasePacket(packet) { if (!authenticatedPackets.has(packet)) fail("packet was not produced by the accepted release producer"); return `${JSON.stringify(Object.fromEntries(FIELDS.map((field) => [field, packet[field]])))}\n`; }
 export function acceptedDesktopReleasePacketDigest(packet) { return sha256(Buffer.from(serializeAcceptedDesktopReleasePacket(packet), "utf8")); }
