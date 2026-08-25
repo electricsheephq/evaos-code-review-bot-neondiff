@@ -134,7 +134,7 @@ function plainRecord(value: unknown, label: string): Record<string, any> {
 }
 function text(value: unknown, label: string): string { if (typeof value !== "string" || value.length === 0) fail(label); return value; }
 function positiveInteger(value: unknown, label: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) fail(label); return value as number; }
-function timestamp(value: unknown): string | undefined { if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return undefined; const parsed = Date.parse(value); return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined; }
+function timestamp(value: unknown): string | undefined { if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return undefined; const local = new Date(`${value.slice(0, 19)}Z`); if (!Number.isFinite(local.getTime()) || local.toISOString().slice(0, 19) !== value.slice(0, 19).toUpperCase()) return undefined; const parsed = Date.parse(value); return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined; }
 function key(repo: string, issueNumber: number): string { return `${repo.toLowerCase()}#${issueNumber}`; }
 function duplicates(values: readonly string[]): string[] { const counts = new Map<string, number>(); for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1); return [...counts].filter(([, count]) => count > 1).map(([value]) => value).sort(); }
 function fail(label: string): never { throw new Error(`issue_enrichment_admission_snapshot_${label}`); }
