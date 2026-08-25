@@ -60,6 +60,10 @@ for key in required:
     if not isinstance(item, str) or not item or len(item.encode("utf-8")) > 128:
         raise ValueError("invalid plist marker")
     result[key] = item
+result["productionContract"] = value.get("NeonDiffPaidBetaContract")
+result["byoGitHubEnabled"] = value.get("NeonDiffBYOGitHubEnabled")
+result["hasManagedGitHubBrokerEnabled"] = "NeonDiffManagedGitHubBrokerEnabled" in value
+result["hasGitHubBrokerOrigin"] = "NeonDiffGitHubBrokerOrigin" in value
 sys.stdout.write(json.dumps(result, separators=(",", ":")))
 `;
 function artifactBytes(descriptor) {
@@ -309,6 +313,7 @@ function plistMarkers(bytes) {
   try { if (parsed.status !== 0) fail("desktop Info.plist is malformed"); value = JSON.parse(parsed.stdout); } catch { fail("desktop Info.plist is malformed"); }
   const bundleID = value.CFBundleIdentifier, version = value.CFBundleShortVersionString, build = value.CFBundleVersion, minimumSystemVersion = value.LSMinimumSystemVersion, feedURL = value.SUFeedURL, publicKey = value.SUPublicEDKey;
   if (bundleID !== "com.electricsheephq.NeonDiffDesktop" || !/^1\.1\.0(?:-(?:beta|rc)\.[1-9][0-9]{0,15})?$/.test(version) || !/^[0-9]{1,32}$/.test(build)) fail("bundle markers are not canonical");
+  if (value.productionContract !== "paid-mac-beta-byo-v1" || value.byoGitHubEnabled !== true || value.hasManagedGitHubBrokerEnabled !== false || value.hasGitHubBrokerOrigin !== false) fail("bundle production contract is not canonical");
   const expectedFeed = version === "1.1.0" ? "https://www.neondiff.com/updates/stable/appcast.xml" : "https://www.neondiff.com/updates/beta/appcast.xml", decodedKey = Buffer.from(publicKey, "base64");
   if (!/^\d+(?:\.\d+){1,2}$/.test(minimumSystemVersion)) fail("bundle minimum system version is not canonical");
   if (feedURL !== expectedFeed || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(publicKey) || decodedKey.length !== 32 || decodedKey.toString("base64") !== publicKey) fail("bundle updater markers are not canonical");
