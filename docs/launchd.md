@@ -2,7 +2,13 @@
 
 Launchd should stay disabled until GitHub App installation is complete and a real ZCode dry-run succeeds without rate limiting.
 
-Recommended first live command:
+For the BYO Mac path, the LaunchAgent's background PR review lane remains held,
+including when the daemon runs with `--dry-run false`. That live daemon mode may
+run the independently admitted issue-enrichment lane, but its heartbeat never
+authorizes PR work. Live PR posting uses only the exact scoped `review-pr` dry
+review plus explicit same-head confirmation.
+
+Recommended first review proof:
 
 ```bash
 cd /path/to/neondiff
@@ -41,7 +47,9 @@ Minimum LaunchAgent environment block:
 </dict>
 ```
 
-Only switch to `--dry-run false` after:
+Switch the long-running daemon to `--dry-run false` only for its independently
+governed issue-enrichment work; the background PR review lane stays held. Before
+that transition:
 
 - current-head duplicate reruns post nothing,
 - review-plan JSON contains only valid current-diff lines,

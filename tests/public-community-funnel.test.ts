@@ -121,6 +121,24 @@ describe("NeonDiff public community funnel", () => {
     }
   });
 
+  it("public Mac setup names the held background PR lane and exact live authority", () => {
+    const surfaces = [
+      read("README.md"),
+      read("docs/SETUP.md"),
+      read("docs/github-app-setup.md"),
+      read("docs/architecture/mac-ga-release-contract.md"),
+      read("docs/launchd.md")
+    ];
+
+    for (const text of surfaces) {
+      const normalized = text.replace(/\s+/g, " ");
+      expect(normalized).toMatch(/background PR review lane (?:is|remains) held/i);
+      expect(normalized).toMatch(
+        /live PR posting.*exact scoped `?review-pr`?.*dry review.*explicit same-head confirmation/i
+      );
+    }
+  });
+
   it("license boundary surfaces are canonical and avoid open-source claims", () => {
     const license = read("LICENSE.md");
     const boundary = read("docs/license-boundary.md");
