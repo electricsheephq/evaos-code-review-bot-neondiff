@@ -1,6 +1,8 @@
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -16,9 +18,216 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+function runFixture(
+  root: string,
+  command: string,
+  args: string[],
+  values: Record<string, string> = {}
+) {
+  const env = { ...process.env };
+  delete env.SOURCE_SHA;
+  delete env.SOURCE_REF;
+  return spawnSync(command, args, {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...env, ...values }
+  });
+}
+
+function sourceIdentityFixture() {
+  const root = mkdtempSync(join(tmpdir(), "neondiff-source-identity-"));
+  const scriptDirectory = join(root, "apps/neondiff-desktop/script");
+  mkdirSync(scriptDirectory, { recursive: true });
+  copyFileSync(
+    "apps/neondiff-desktop/script/build_and_run.sh",
+    join(scriptDirectory, "build_and_run.sh")
+  );
+  copyFileSync(
+    "apps/neondiff-desktop/script/release-proof.sh",
+    join(scriptDirectory, "release-proof.sh")
+  );
+  writeFileSync(join(root, ".gitignore"), "apps/neondiff-desktop/dist/\n");
+  for (const args of [
+    ["init", "--quiet"],
+    ["config", "user.name", "NeonDiff Test"],
+    ["config", "user.email", "neondiff-test@example.invalid"],
+    ["add", "."],
+    ["commit", "--quiet", "-m", "fixture"]
+  ]) {
+    const result = runFixture(root, "git", args);
+    if (result.status !== 0) throw new Error(result.stderr);
+  }
+  const sha = runFixture(root, "git", ["rev-parse", "HEAD"]).stdout.trim();
+  return {
+    root,
+    sha,
+    buildScript: join(scriptDirectory, "build_and_run.sh"),
+    proofScript: join(scriptDirectory, "release-proof.sh")
+  };
+}
+
+function releasePlist(sourceSHA: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.electricsheephq.NeonDiffDesktop</string>
+<key>CFBundleShortVersionString</key><string>1.1.0</string>
+<key>CFBundleVersion</key><string>11091</string>
+<key>NeonDiffPaidBetaContract</key><string>paid-mac-beta-byo-v1</string>
+<key>NeonDiffBYOGitHubEnabled</key><true/>
+<key>NeonDiffSourceSHA</key><string>${sourceSHA}</string>
+</dict></plist>\n`;
+}
+
 const retiredCoreChecksTarget = ["NeonDiffDesktopCore", "Checks"].join("");
 
 describe("NeonDiff desktop release-smoke pipeline", () => {
+  it("executes exact-checkout source identity gates in isolated repositories", () => {
+    const fixture = sourceIdentityFixture();
+    const releaseBuildEnv = {
+      NEONDIFF_DESKTOP_BUILD_CONFIGURATION: "release",
+      NEONDIFF_DESKTOP_VERSION: "1.1.0",
+      NEONDIFF_SPARKLE_FEED_URL: "https://ci.invalid/neondiff/appcast.xml",
+      NEONDIFF_SPARKLE_PUBLIC_ED_KEY: "CI_ONLY_NOT_A_RELEASE_KEY"
+    };
+    try {
+      const attachedBuild = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.buildScript, "release-build"],
+        releaseBuildEnv
+      );
+      expect(attachedBuild.status).toBe(2);
+      expect(attachedBuild.stderr).toContain(
+        "release candidates require a detached source checkout"
+      );
+
+      const attachedProof = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.proofScript]
+      );
+      expect(attachedProof.status).toBe(2);
+      expect(attachedProof.stderr).toContain(
+        "release proof requires a detached source checkout"
+      );
+
+      expect(
+        runFixture(fixture.root, "git", ["checkout", "--quiet", "--detach", "HEAD"])
+          .status
+      ).toBe(0);
+      writeFileSync(join(fixture.root, "dirty.txt"), "dirty\n");
+      const dirtyBuild = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.buildScript, "release-build"],
+        releaseBuildEnv
+      );
+      expect(dirtyBuild.status).toBe(2);
+      expect(dirtyBuild.stderr).toContain(
+        "release builds require an exact clean source checkout"
+      );
+      const dirtyProof = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.proofScript]
+      );
+      expect(dirtyProof.status).toBe(2);
+      expect(dirtyProof.stderr).toContain("source tree has untracked files");
+      rmSync(join(fixture.root, "dirty.txt"));
+
+      expect(runFixture(fixture.root, "git", ["tag", "v1.1.0-lightweight"]).status).toBe(0);
+      const lightweightTag = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.proofScript],
+        { SOURCE_SHA: fixture.sha, SOURCE_REF: "refs/tags/v1.1.0-lightweight" }
+      );
+      expect(lightweightTag.status).toBe(2);
+      expect(lightweightTag.stderr).toContain("release source tag must be annotated");
+      expect(runFixture(fixture.root, "git", ["tag", "--delete", "v1.1.0-lightweight"]).status).toBe(0);
+
+      for (const tag of ["v1.1.0-rc.1", "v1.1.0"]) {
+        expect(
+          runFixture(fixture.root, "git", ["tag", "-a", tag, "-m", tag]).status
+        ).toBe(0);
+      }
+      const loneRef = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.proofScript],
+        { SOURCE_REF: "refs/tags/v1.1.0" }
+      );
+      expect(loneRef.status).toBe(2);
+      expect(loneRef.stderr).toContain("SOURCE_SHA and SOURCE_REF must be provided together");
+
+      const wrongSHA = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.proofScript],
+        { SOURCE_SHA: "0".repeat(40), SOURCE_REF: "refs/tags/v1.1.0" }
+      );
+      expect(wrongSHA.status).toBe(2);
+      expect(wrongSHA.stderr).toContain(
+        "provided source identity does not match the exact checkout"
+      );
+
+      const ambiguousTags = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.proofScript]
+      );
+      expect(ambiguousTags.status).toBe(2);
+      expect(ambiguousTags.stderr).toContain("source ref is ambiguous");
+
+      const exactTriggeredTag = runFixture(
+        fixture.root,
+        "/bin/bash",
+        [fixture.proofScript],
+        { SOURCE_SHA: fixture.sha, SOURCE_REF: "refs/tags/v1.1.0" }
+      );
+      expect(exactTriggeredTag.status).toBe(1);
+      expect(exactTriggeredTag.stderr).toContain("missing app bundle");
+      expect(exactTriggeredTag.stderr).not.toContain("source ref is ambiguous");
+
+      if (process.platform === "darwin") {
+        const contents = join(
+          fixture.root,
+          "apps/neondiff-desktop/dist/NeonDiff.app/Contents"
+        );
+        mkdirSync(contents, { recursive: true });
+        const infoPlist = join(contents, "Info.plist");
+        writeFileSync(infoPlist, releasePlist(fixture.sha));
+        const valid = runFixture(
+          fixture.root,
+          "/bin/bash",
+          [fixture.proofScript],
+          { SOURCE_SHA: fixture.sha, SOURCE_REF: "refs/tags/v1.1.0" }
+        );
+        expect(valid.status).toBe(0);
+        expect(JSON.parse(valid.stdout)).toMatchObject({
+          source_sha: fixture.sha,
+          artifact_source_sha: fixture.sha,
+          source_ref: "refs/tags/v1.1.0"
+        });
+
+        writeFileSync(infoPlist, releasePlist("0".repeat(40)));
+        const wrongMarker = runFixture(
+          fixture.root,
+          "/bin/bash",
+          [fixture.proofScript],
+          { SOURCE_SHA: fixture.sha, SOURCE_REF: "refs/tags/v1.1.0" }
+        );
+        expect(wrongMarker.status).toBe(1);
+        expect(wrongMarker.stderr).toContain(
+          "artifact source identity does not match the exact checkout"
+        );
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("defines a three-clean-Mac public download and install canary", () => {
     const workflowPath = ".github/workflows/paid-beta-public-download-canary.yml";
 
@@ -121,6 +330,10 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     const job = parsed.jobs?.["unsigned-desktop-release-smoke"];
     expect(job?.["runs-on"]).toBe("macos-15");
     expect(job?.defaults?.run?.["working-directory"]).toBe("apps/neondiff-desktop");
+    const checkout = job?.steps?.find((step) => step.name === "Checkout");
+    expect(checkout?.with?.ref).toBe(
+      "${{ startsWith(github.ref, 'refs/tags/') && github.ref || github.sha }}"
+    );
 
     for (const command of [
       "node-version: 26",
@@ -163,6 +376,13 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).toMatch(/persist-credentials:\s*false/);
     expect(workflow).toMatch(/SOURCE_SHA:/);
     expect(workflow).toMatch(/SOURCE_REF:/);
+    const packageStep = job?.steps?.find(
+      (step) => step.name === "Package unsigned app bundle and metadata"
+    );
+    expect(packageStep?.env?.SOURCE_SHA).toBe("${{ github.sha }}");
+    expect(packageStep?.env?.SOURCE_REF).toBe(
+      "${{ startsWith(github.ref, 'refs/tags/') && github.ref || github.sha }}"
+    );
     expect(workflow).toMatch(/actions\/upload-artifact@[0-9a-f]{40}/);
     expect(workflow).not.toMatch(/actions\/checkout@v4/);
     expect(workflow).not.toMatch(/actions\/upload-artifact@v4/);
@@ -185,6 +405,7 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     for (const field of [
       "artifact_sha256",
       "source_sha",
+      "artifact_source_sha",
       "source_ref",
       "app_bundle_path",
       "bundle_id",
@@ -207,6 +428,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(script).toContain("ensure_clean_source_tree");
     expect(script).toContain("verify_existing_app_launch");
     expect(script).toContain("SOURCE_SHA_PROVIDED");
+    expect(script).toContain("DERIVED_SOURCE_SHA");
+    expect(script).toContain("provided source identity does not match the exact checkout");
+    expect(script).toContain("artifact source identity does not match the exact checkout");
     expect(script).toContain('git -C "$REPO_ROOT" diff --quiet');
     expect(script).toContain("ls-files --others --exclude-standard");
     expect(script).toContain("jq -n");
@@ -229,6 +453,9 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(bundler).toContain('"$SCRIPT_DIR/release-rpaths.sh" sanitize "$APP_BINARY"');
     expect(bundler).toContain('"$SCRIPT_DIR/release-rpaths.sh" assert "$APP_BINARY"');
     expect(bundler).toContain("build-desktop-sealed-worker.mjs");
+    expect(bundler).toContain("NeonDiffSourceSHA");
+    expect(bundler).toContain("derive_release_source_sha");
+    expect(bundler).toContain("release candidates require a detached source checkout");
     expect(bundler).toContain('"$APP_HELPERS/NeonDiffWorker" --version');
   });
 
