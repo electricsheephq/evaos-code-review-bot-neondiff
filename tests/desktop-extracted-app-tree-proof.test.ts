@@ -7,6 +7,7 @@ import { crc32, deflateRawSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildClassicZipMetadataGraph, buildExtractedAppTreeProof, extractedAppTreeProofDigest, guardClassicZipArchive, serializeExtractedAppTreeProof, withMaterializedClassicZipApp } from "../scripts/lib/desktop-extracted-app-tree-proof.mjs";
 import { acceptedDesktopReleasePacketDigest, buildAcceptedDesktopReleasePacket, parseAcceptedDesktopReleasePacket, serializeAcceptedDesktopReleasePacket } from "../scripts/lib/desktop-accepted-release-packet.mjs";
+import { buildFeedEnclosureProof, feedEnclosureProofDigest } from "../scripts/lib/desktop-feed-enclosure-proof.mjs";
 
 type Entry = { name: string; localName?: string; localOffset?: number; localExtra?: Buffer; type?: "file" | "directory" | "symlink"; data?: string | Buffer; trailing?: Buffer; flags?: number; method?: number; expanded?: number; crc?: number; descriptor?: boolean; extra?: number | Buffer; comment?: number; mode?: number };
 const roots: string[] = [];
@@ -106,9 +107,16 @@ const args = process.argv.slice(2); process.stdout.write(args[0] === "attestatio
     const packet = await buildAcceptedDesktopReleasePacket(...value.paths);
     expect(packet).toMatchObject({ channel: "rc", version: "1.1.0-rc.1", tag: "v1.1.0-rc.1", sourceSHA, tagObjectSHA, releaseContract: "paid-mac-beta-byo-v1", npmReleaseClass: "desktop-only" });
     expect(packet.feedEntry.channel).toBe("beta");
+    const exactEnclosure = buildFeedEnclosureProof({ url: packet.feedEntry.url, version: packet.feedEntry.version, build: packet.feedEntry.build, shortVersionString: packet.feedEntry.shortVersionString, channel: packet.feedEntry.channel, artifactName: packet.artifactName, artifactSHA256: packet.artifactSHA256, edSignature: packet.feedEntry.edSignature }, { acceptedPublicKey: readFileSync(value.acceptedPublicKeyPath, "utf8"), signedContent: readFileSync(value.artifactPath) });
+    expect(packet.enclosureProofSHA256).toBe(feedEnclosureProofDigest(exactEnclosure));
     expect(parseAcceptedDesktopReleasePacket(Buffer.from(serializeAcceptedDesktopReleasePacket(packet)))).toEqual(packet);
     const retained = verifyRetainedTarget(value, packet); expect(retained.status).toBe(0); expect(JSON.parse(retained.stdout).releaseTag).toBe("neondiff-accepted-packet-v1.1.0-rc.1");
   }, 30_000);
+  it("uses the exact prerelease tag ref when product release target_commitish names main", async () => {
+    const value = packetFixture(false, false, byoProductionMarkers, sourceSHA, { version: "1.1.0-rc.1", channel: "rc", sequence: "1" });
+    writeFileSync(value.releasePath, JSON.stringify({ ...value.release, target_commitish: "main" }));
+    await expect(buildAcceptedDesktopReleasePacket(...value.paths)).resolves.toMatchObject({ tag: "v1.1.0-rc.1", sourceSHA });
+  });
   it("admits one exact artifact attestation before writing a content-addressed packet", async () => {
     const value = packetFixture(), repository = "electricsheephq/evaos-code-review-bot-neondiff", workflow = `${repository}/.github/workflows/desktop-accepted-release-packet.yml`, sourceRef = "refs/heads/main", workflowSHA = "4".repeat(40), predicateType = "https://neondiff.com/attestations/desktop-artifact-source-promotion/v1", bundlePath = join(value.root, "artifact-attestation.json"), retained = join(value.root, "retained"), output = join(value.root, "packet.pending.json"), capture = join(value.root, "gh-args.json"); mkdirSync(retained);
     const acceptedPacketSHA256 = acceptedDesktopReleasePacketDigest(await buildAcceptedDesktopReleasePacket(...value.paths));

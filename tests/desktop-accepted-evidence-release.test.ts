@@ -207,6 +207,11 @@ describe("retained accepted Desktop evidence", () => {
     expect(resolver.env.RELEASE_TAG).toBe("${{ inputs.release_tag }}");
     expect(workflowSource).toContain("contents/docs/releases/desktop/index.json?ref=$GITHUB_SHA");
     expect(workflowSource).toContain("contents/docs/releases/desktop/declarations/$SELECTED_PATH?ref=$GITHUB_SHA");
+    const protectedIndexPath = "docs/releases/desktop/index.json";
+    const protectedIndex = JSON.parse(readFileSync(protectedIndexPath, "utf8"));
+    expect(protectedIndex).toMatchObject({ status: "retained", currentPath: "v1.1.0-beta.87.json" });
+    expect(protectedIndex.declarationPaths).toContain("v1.1.0-beta.87.json");
+    expect(spawnSync(process.execPath, ["scripts/validate-desktop-release-declaration.mjs", "--index", protectedIndexPath], { cwd: process.cwd(), encoding: "utf8" }).status).toBe(0);
 
     expect(producer.needs).toBe("resolve-retained-evidence");
     expect(producer.if).toContain("github.ref == 'refs/heads/main'");
@@ -232,6 +237,7 @@ describe("retained accepted Desktop evidence", () => {
     expect(workflowSource).toContain("--artifact \"$RETRIEVED_ROOT/$ARTIFACT_NAME\"");
     expect(workflowSource).toContain('RETENTION_TARGET=(--target-release-tag "$RELEASE_TAG")');
     expect(workflowSource).toContain('--release-tag "$RELEASE_TAG"');
+    expect(workflowSource).not.toContain(".target_commitish");
     expect(workflowSource.indexOf("Verify artifact attestation and build accepted packet")).toBeLessThan(workflowSource.indexOf("Upload source-bound packet evidence"));
     expect(builderSource.indexOf("verifyAndRetainDesktopArtifactSourceAttestation")).toBeLessThan(builderSource.indexOf("buildAcceptedDesktopReleasePacket(values.index"));
     expect(workflowSource).not.toMatch(/gh release delete|gh api[^\n]*-X DELETE/);

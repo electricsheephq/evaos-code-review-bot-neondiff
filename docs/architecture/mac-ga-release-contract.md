@@ -134,11 +134,17 @@ identity. RC and stable require a distinct annotated tag object. An immutable
 beta release may instead use a lightweight tag that points directly to the
 exact source commit; in that case the packet's tag-object SHA equals its source
 SHA by construction. No other channel may use that equality, and every channel
-still revalidates the fixed tag ref, source, release target, artifact, and feed.
+still revalidates the fixed tag ref, source, immutable release, artifact, and
+feed. The product release's `target_commitish` is creation metadata rather than
+source authority; the fetched tag ref and its peeled commit are authoritative.
+An RC's product channel remains `rc`, while its exact retained appcast enclosure
+and enclosure-proof channel remain the observed `beta` feed ring.
 
 The workflow first runs a read-only resolver against the fixed canonical
 repository and evidence tag. It validates the canonical `main` and workflow
 identity, reports only `absent` or `present`, and fails closed on partial state.
+Before resolving prerelease evidence it also requires the exact selector in the
+protected append-only declaration history at the current `main` SHA.
 The canonical producer depends on that resolver and runs only for `absent`; it
 cryptographically verifies the exact artifact-source bundle before it emits
 either content-addressed name. The retention job has separate contents-write

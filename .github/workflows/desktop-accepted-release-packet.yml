@@ -175,10 +175,6 @@ jobs:
           test "$(jq -er '.draft' "$PACKET_ROOT/release.json")" = "false"
           test "$(jq -er '.prerelease' "$PACKET_ROOT/release.json")" = "$EXPECTED_PRERELEASE"
           test "$(jq -er '.immutable' "$PACKET_ROOT/release.json")" = "true"
-          if test "$EXPECTED_PRERELEASE" = "true"; then
-            test "$(jq -er '.target_commitish' "$PACKET_ROOT/release.json")" = "$SOURCE_SHA"
-          fi
-
           if test "$CHANNEL" = "stable"; then
             ARTIFACT_NAME="$(jq -er '[.assets[] | select(.name | test("^NeonDiff-1\\.1\\.0-build[0-9]+-macOS\\.zip$"))] | if length == 1 then .[0].name else error("one stable artifact is required") end' "$PACKET_ROOT/release.json")"
           else
