@@ -3,11 +3,6 @@ name: Desktop accepted release packet
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  id-token: write
-  attestations: write
-
 concurrency:
   group: desktop-accepted-release-packet-v1.1.0
   cancel-in-progress: false
@@ -15,6 +10,10 @@ concurrency:
 jobs:
   promote-stable-artifact:
     name: Verify source binding and build accepted packet
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: macos-15
     timeout-minutes: 30
@@ -39,10 +38,10 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 26
-          cache: npm
 
-      - name: Install exact dependencies
-        run: npm ci
+      - name: Install exact script-free dependencies
+        # The declaration validator needs Ajv, but promotion must never run package lifecycle scripts under OIDC authority.
+        run: npm ci --ignore-scripts --omit=dev
 
       - name: Resolve and verify exact stable artifact
         id: release
