@@ -105,7 +105,7 @@ import NeonDiffDesktopCore
         #expect(parsed == request)
     }
 
-    @Test func sealedWorkerDaemonRunsWithHeldPRLaneAfterExplicitNativeInstall() throws {
+    @Test func sealedWorkerDaemonArgumentsAreLiveAndSecretFree() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
         )
