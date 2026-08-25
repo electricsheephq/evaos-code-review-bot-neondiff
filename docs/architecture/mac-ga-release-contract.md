@@ -168,6 +168,28 @@ authority cannot substitute self-declared signer claims or pair a genuine
 artifact proof with a fabricated packet, and a later `main` SHA cannot replace
 or invalidate the accepted historical pair.
 
+Protected update/rollback authority is a separate source layer beneath
+`docs/releases/desktop/accepted-targets`. The deterministic
+`scripts/build-desktop-accepted-transition-target.mjs` producer invokes
+the retained-evidence verifier for the selected target, then derives the exact
+packet, source, tag-object, artifact, tree, and accepted Sparkle-key digests
+from those verified bytes. A requested transition action and input paths are
+selectors only. Current and optional previous-target packet records must be
+content addressed beneath that fixed directory and byte-equal immutable Git
+blobs at the authenticated protected-main SHA; declaration order comes only
+from the fixed protected index and its immutable prefix.
+
+The producer emits one canonical public-safe receipt named by its own SHA-256.
+It rejects ambiguous or missing records, a current target, a decreasing update,
+a non-distinct rollback, and a re-update relabeled as an update. The directory
+starts with a tracked empty convention; once records exist, the same
+base-to-candidate transition gate used for declaration history preserves every
+accepted packet and receipt byte across both pull requests and direct protected
+main pushes. No receipt authorizes quiescence, entitlement, staging, swap,
+restart, feed publication, or any runtime mutation; those remain later gates.
+`scripts/validate-desktop-release-declaration.mjs` validates the directory and
+its base-to-candidate byte prefix together with declaration history.
+
 A missing release and tag permits first publication; both present permits only
 verification. Partial or mismatched state fails closed. No workflow may
 overwrite, delete, or rotate retained evidence. Exceptional deletion is a

@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { parseAcceptedDesktopReleasePacket } from "./lib/desktop-accepted-release-packet.mjs";
+import { parseAcceptedDesktopTransitionTarget } from "./lib/desktop-accepted-transition-target.mjs";
 
 const BETA_FEED = "https://www.neondiff.com/updates/beta/appcast.xml", STABLE_FEED = "https://www.neondiff.com/updates/stable/appcast.xml";
 const MAX_SAFE = "9007199254740991";
@@ -43,7 +46,7 @@ function readRawRegular(path) {
   let fd;
   try {
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    if (!fstatSync(fd).isFile()) fail(`non-regular file: ${path}`);
+    const stat = fstatSync(fd); if (!stat.isFile() || stat.size > 4 * 1024 * 1024) fail(`non-regular or oversized file: ${path}`);
     const raw = readFileSync(fd, "utf8");
     if (/(?:"build"\s*:\s*(?!"[0-9]+")|"sequence"\s*:\s*(?!"[0-9]+"|null))/.test(raw)) fail("identity fields must be quoted decimal text or null sequence");
     rejectDuplicateKeys(raw);
@@ -70,6 +73,31 @@ function pathIn(directory, name) {
 }
 function check(value, valid, label) { if (!valid(value)) fail(`${label} schema invalid: ${ajv.errorsText(valid.errors)}`); }
 function buildCompare(a, b) { const left = BigInt(a), right = BigInt(b); return left < right ? -1 : left > right ? 1 : 0; }
+function targetFiles(directory, missingAllowed = false) {
+  if (!existsSync(directory)) { if (missingAllowed) return null; fail("accepted target history is missing"); }
+  const handle = openDirectory(directory), files = new Map(); let convention = false;
+  try {
+    const entries = readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || !entry.isFile()) fail(`invalid accepted target entry: ${entry.name}`);
+      const path = resolve(directory, entry.name), bytes = Buffer.from(readRawRegular(path), "utf8");
+      if (entry.name === ".gitkeep") { if (bytes.length !== 0) fail("accepted target empty convention must be empty"); convention = true; continue; }
+      const match = entry.name.match(/^([a-f0-9]{64})\.(packet|target)\.json$/); if (!match || createHash("sha256").update(bytes).digest("hex") !== match[1]) fail(`accepted target content address invalid: ${entry.name}`);
+      const value = match[2] === "packet" ? parseAcceptedDesktopReleasePacket(bytes) : parseAcceptedDesktopTransitionTarget(bytes); files.set(entry.name, { bytes, type: match[2], value });
+    }
+    if (convention !== (files.size === 0) || convention && entries.length !== 1) fail("accepted target .gitkeep is only valid for empty history");
+    if (!sameDirectory(directory, handle.stat)) fail("accepted target directory changed during validation"); return { files, convention };
+  } finally { closeSync(handle.fd); }
+}
+function validateTargetHistory(root, baseRoot, initial) {
+  const directory = resolve(root, "accepted-targets"), current = targetFiles(directory);
+  if (initial && !current.convention) fail("initial history requires empty accepted target history");
+  const packetNames = new Set([...current.files].filter(([, value]) => value.type === "packet").map(([name]) => name));
+  for (const { type, value } of current.files.values()) if (type === "target") for (const digest of [value.acceptedTarget.packetSHA256, value.current.packetSHA256, value.previouslyAcceptedTargetPacketSHA256].filter(Boolean)) if (!packetNames.has(`${digest}.packet.json`)) fail("accepted target receipt references missing packet history");
+  if (!baseRoot) return;
+  const base = targetFiles(resolve(baseRoot, "accepted-targets"), true); if (!base) return;
+  for (const [name, value] of base.files) { const retained = current.files.get(name); if (!retained || !retained.bytes.equals(value.bytes)) fail(`accepted target history rewritten: ${name}`); }
+}
 function validateTransition(index, directory, baseIndexPath) {
   const base = readRegular(baseIndexPath);
   check(base, validateIndex, "base index");
@@ -95,6 +123,7 @@ function parseArgs() {
 function main() {
   const { indexPath, baseIndexPath, initial } = parseArgs(), index = readRegular(indexPath);
   check(index, validateIndex, "index");
+  validateTargetHistory(dirname(indexPath), baseIndexPath ? dirname(baseIndexPath) : null, initial);
   if (initial && index.status !== "empty") fail("initial history requires the empty clean-checkout convention");
   const directory = resolve(dirname(indexPath), index.declarationDirectory), handle = openDirectory(directory);
   try {
