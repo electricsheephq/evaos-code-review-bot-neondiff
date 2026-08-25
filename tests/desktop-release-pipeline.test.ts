@@ -374,6 +374,13 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     expect(workflow).toMatch(/persist-credentials:\s*false/);
     expect(workflow).toMatch(/SOURCE_SHA:/);
     expect(workflow).toMatch(/SOURCE_REF:/);
+    const packageStep = job?.steps?.find(
+      (step) => step.name === "Package unsigned app bundle and metadata"
+    );
+    expect(packageStep?.env?.SOURCE_SHA).toBe("${{ github.sha }}");
+    expect(packageStep?.env?.SOURCE_REF).toBe(
+      "${{ startsWith(github.ref, 'refs/tags/') && github.ref || github.sha }}"
+    );
     expect(workflow).toMatch(/actions\/upload-artifact@[0-9a-f]{40}/);
     expect(workflow).not.toMatch(/actions\/checkout@v4/);
     expect(workflow).not.toMatch(/actions\/upload-artifact@v4/);

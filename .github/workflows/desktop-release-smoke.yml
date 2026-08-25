@@ -75,7 +75,7 @@ jobs:
       - name: Package unsigned app bundle and metadata
         env:
           SOURCE_SHA: ${{ github.sha }}
-          SOURCE_REF: ${{ github.ref }}
+          SOURCE_REF: ${{ startsWith(github.ref, 'refs/tags/') && github.ref || github.sha }}
           NEONDIFF_DESKTOP_ARTIFACT_CLASSIFICATION: unsigned-desktop-release-smoke
           NEONDIFF_DESKTOP_UI_LAUNCH: "false"
           NEONDIFF_DESKTOP_VISUAL_SMOKE_REQUIRED: "true"
