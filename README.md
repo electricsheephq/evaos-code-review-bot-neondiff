@@ -197,10 +197,16 @@ public App ID, config path, launchd label, the non-secret broker device ID used
 by the existing API-backed activation, and the signed app path—never a key
 value or key-file path. The headless app re-derives that device ID from its
 Keychain identity and rejects a mismatched plist before releasing credentials.
-Review and daemon readiness remain separate gates. The
-immutable published prerelease and clean-Mac artifact proof remain distribution
-gates. Unsigned development builds still require an executable global or
-checksum-managed worker before native first run
+Review and daemon readiness remain separate gates. The LaunchAgent's background
+PR review lane remains held: the daemon may run the independently admitted
+issue-enrichment lane, but a heartbeat proves service liveness only and never
+authorizes a PR post. Issue-enrichment success requires lane-specific result
+evidence. Native live PR posting uses only the exact scoped `review-pr` dry
+review plus explicit same-head confirmation; the matching approval is consumed
+atomically.
+The immutable published prerelease and clean-Mac artifact proof remain
+distribution gates. Unsigned development builds still require an executable
+global or checksum-managed worker before native first run
 exposes **Initialize Local Config** (non-destructive; never force-overwrites),
 **Add Repository**, **Apply Repository**, and **Verify App Access** without a
 terminal or operator config edit. **Apply Repository** writes both the selected

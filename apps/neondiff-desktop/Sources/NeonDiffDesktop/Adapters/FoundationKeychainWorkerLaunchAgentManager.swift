@@ -106,7 +106,7 @@ struct FoundationKeychainWorkerLaunchAgentManager:
                 }
                 throw error
             }
-            return "Installed and started the Keychain-backed local review worker without placing its private key in the LaunchAgent."
+            return "Installed and started the Keychain-backed background worker with its PR review lane held. Live PR posts still require an exact scoped dry review and same-head confirmation."
         }.value
     }
 

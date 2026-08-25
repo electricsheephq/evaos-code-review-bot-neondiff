@@ -105,7 +105,7 @@ import NeonDiffDesktopCore
         #expect(parsed == request)
     }
 
-    @Test func sealedWorkerDaemonRunsLiveAfterExplicitNativeInstall() throws {
+    @Test func sealedWorkerDaemonArgumentsAreLiveAndSecretFree() throws {
         let config = home.appending(
             path: "Library/Application Support/NeonDiffDesktop/Accounts/account-1/Bots/bot-1/config.local.json"
         )
@@ -237,6 +237,10 @@ import NeonDiffDesktopCore
             "RunAtLoad=true; KeepAlive=true; ProcessType=Background; Session=Aqua"
         ))
         #expect(preview.contains("stdout=/dev/null; stderr=/dev/null"))
+        #expect(preview.contains("Background PR review lane: held"))
+        #expect(preview.contains(
+            "Live PR posting: exact scoped review-pr dry review plus explicit same-head confirmation only."
+        ))
         #expect(preview.contains(
             "Repository allowlist: preserved unchanged (53 configured repositories)"
         ))

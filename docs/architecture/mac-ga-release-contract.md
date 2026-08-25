@@ -177,6 +177,14 @@ dry-before-live checks are required gates, but they are not installed-runtime
 proof. A checked-out tree, local build, or mutable channel pointer never
 supplies the accepted runtime bytes.
 
+The BYO Mac LaunchAgent's background PR review lane remains held. Its heartbeat
+proves service liveness only; issue-enrichment success requires lane-specific
+result evidence. The independently admitted issue-enrichment lane may run, but
+neither its admission nor the heartbeat authorizes a PR review or post. Native
+live PR posting uses only the exact scoped `review-pr` dry review plus explicit
+same-head confirmation; the matching approval is consumed atomically, and
+install/start/restart cannot create it.
+
 The tested promotion and rollback implementation is not yet established for
 this contract. Its absence is an active Mac GA release blocker, not an implied
 manual step. The later manifest and release-candidate canary successors are

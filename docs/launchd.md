@@ -2,14 +2,32 @@
 
 Launchd should stay disabled until GitHub App installation is complete and a real ZCode dry-run succeeds without rate limiting.
 
-Recommended first live command:
+For the BYO Mac path, the LaunchAgent's background PR review lane remains held,
+including when the daemon runs with `--dry-run false`. That live daemon mode may
+run the independently admitted issue-enrichment lane. A heartbeat proves service
+liveness only; issue-enrichment success requires lane-specific result evidence.
+Neither its admission nor the heartbeat authorizes PR work. Native live PR
+posting uses only the exact scoped `review-pr` dry review plus explicit
+same-head confirmation.
+
+Recommended first review proof:
 
 ```bash
 cd /path/to/neondiff
 export NEONDIFF_GITHUB_APP_ID="<github-app-id>"
 export NEONDIFF_GITHUB_APP_PRIVATE_KEY_PATH="/absolute/path/to/neondiff.private-key.pem"
-npm run run-once -- --config /absolute/path/to/config.local.json --dry-run true --repo owner/repo --pr 123
+npm run cli -- review-pr \
+  --config /absolute/path/to/config.local.json \
+  --repo owner/repo \
+  --pr 123 \
+  --expected-config-revision <verified-config-revision> \
+  --dry-run true \
+  --zcode true
 ```
+
+Use the exact `configRevision` from the successful provider verification. The
+returned exact head and this scoped dry receipt are prerequisites for the
+separate same-head live confirmation.
 
 After the GitHub App is installed, use app credentials and keep `--dry-run true` for the first observation window:
 
@@ -41,7 +59,12 @@ Minimum LaunchAgent environment block:
 </dict>
 ```
 
-Only switch to `--dry-run false` after:
+Switch the long-running daemon to `--dry-run false` only after its independently
+governed issue-enrichment work and configured maintenance side effects are both
+approved; the background PR review lane stays held. Non-dry daemon operation
+can also perform review-worktree cleanup when `worktreeCleanup.enabled` is
+`true`. Disable `worktreeCleanup` if issue enrichment must be the sole live
+operation. Before that transition:
 
 - current-head duplicate reruns post nothing,
 - review-plan JSON contains only valid current-diff lines,
