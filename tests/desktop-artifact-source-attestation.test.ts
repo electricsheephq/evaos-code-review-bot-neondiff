@@ -43,6 +43,7 @@ if (process.env.FAKE_GH_MODE === "fail") process.exit(1);
 const bundlePath = args[args.indexOf("--bundle") + 1], document = JSON.parse(readFileSync(bundlePath, "utf8")), statement = JSON.parse(Buffer.from(document.dsseEnvelope.payload, "base64").toString("utf8"));
 if (process.env.FAKE_GH_MODE === "wrong-result-source") statement.predicate.artifactSourceSHA = "9".repeat(40);
 if (process.env.FAKE_GH_MODE === "wrong-result-subject") statement.subject[0].digest.sha256 = "9".repeat(64);
+if (process.env.FAKE_GH_MODE === "wrong-result-packet") statement.predicate.acceptedPacketSHA256 = "8".repeat(64);
 process.stdout.write(JSON.stringify([{ verificationResult: { statement } }]));
 `); chmodSync(fakeGh, 0o755);
   const run = (mode = "success", env: Record<string, string> = {}, args = ["--artifact", artifact, "--bundle", bundle, "--tag-ref", tagRef, "--tag-object", tagObject, "--release", release, "--output-directory", output]) => spawnSync(process.execPath, ["scripts/verify-desktop-artifact-source-attestation.mjs", ...args], { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CAPTURE_PATH: capture, FAKE_GH_MODE: mode, GITHUB_ACTIONS: "true", GITHUB_REPOSITORY: repository, GITHUB_REF: sourceRef, GITHUB_SHA: workflowSHA, GITHUB_WORKFLOW_REF: `${workflow}@${sourceRef}`, RUNNER_ENVIRONMENT: "github-hosted", ...env } });
@@ -71,6 +72,7 @@ describe("Desktop artifact-source promotion attestation", () => {
     expect(fixture(sourceSHA).run("fail").status).not.toBe(0);
     expect(fixture(sourceSHA).run("wrong-result-source").status).not.toBe(0);
     expect(fixture(sourceSHA).run("wrong-result-subject").status).not.toBe(0);
+    expect(fixture(sourceSHA).run("wrong-result-packet").status).not.toBe(0);
     expect(fixture(sourceSHA).run("success", { RUNNER_ENVIRONMENT: "self-hosted" }).status).not.toBe(0);
     expect(fixture(sourceSHA).run("success", { GITHUB_REPOSITORY: "attacker/example" }).status).not.toBe(0);
     const linked = fixture(sourceSHA), alias = join(linked.root, "bundle-link.json"); symlinkSync(linked.bundle, alias); expect(linked.run("success", {}, ["--artifact", linked.artifact, "--bundle", alias, "--tag-ref", linked.tagRef, "--tag-object", linked.tagObject, "--release", linked.release, "--output-directory", linked.output]).status).not.toBe(0);
@@ -78,7 +80,7 @@ describe("Desktop artifact-source promotion attestation", () => {
     const extra = fixture(sourceSHA), document = JSON.parse(readFileSync(extra.bundle, "utf8")), statement = JSON.parse(Buffer.from(document.dsseEnvelope.payload, "base64").toString("utf8")); statement.predicate.synthetic = true; document.dsseEnvelope.payload = Buffer.from(JSON.stringify(statement)).toString("base64"); writeFileSync(extra.bundle, JSON.stringify(document)); expect(extra.run().status).not.toBe(0);
     const mutations = [(value: any) => { value.predicate.repository = "attacker/example"; }, (value: any) => { value.predicate.signerWorkflow = "attacker/example/.github/workflows/release.yml"; }, (value: any) => { value.predicate.workflowSourceSHA = "8".repeat(40); }, (value: any) => { value.predicate.releaseTag = "v1.1.0-rc.1"; }, (value: any) => { value.predicate.acceptedPacketSHA256 = "not-a-digest"; }, (value: any) => { value.predicate.developerIDTeamID = "ATTACKER00"; }, (value: any) => { value.predicateType = "https://slsa.dev/provenance/v1"; }];
     for (const mutate of mutations) { const changed = fixture(sourceSHA), raw = JSON.parse(readFileSync(changed.bundle, "utf8")), value = JSON.parse(Buffer.from(raw.dsseEnvelope.payload, "base64").toString("utf8")); mutate(value); raw.dsseEnvelope.payload = Buffer.from(JSON.stringify(value)).toString("base64"); writeFileSync(changed.bundle, JSON.stringify(raw)); expect(changed.run().status).not.toBe(0); }
-  });
+  }, 20_000);
 
   it("keeps promotion authority fixed and verifies before packet construction", () => {
     const workflowSource = readFileSync(".github/workflows/desktop-accepted-release-packet.yml", "utf8"), verifierSource = readFileSync("scripts/lib/desktop-artifact-source-attestation.mjs", "utf8"), builderSource = readFileSync("scripts/build-desktop-accepted-release-packet.mjs", "utf8");

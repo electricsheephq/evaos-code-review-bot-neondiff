@@ -309,6 +309,7 @@ jobs:
             BUNDLE_PATH="$TRANSIT_ROOT/$CURRENT_BUNDLE_NAME"
             test -f "$PACKET_PATH"
             test -f "$BUNDLE_PATH"
+            gh api "repos/$REPOSITORY/immutable-releases" --silent
             gh release create "$EVIDENCE_TAG" "$PACKET_PATH" "$BUNDLE_PATH" \
               --repo "$REPOSITORY" \
               --target "$CURRENT_ARTIFACT_SOURCE_SHA" \
