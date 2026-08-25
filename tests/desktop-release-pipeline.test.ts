@@ -330,6 +330,8 @@ describe("NeonDiff desktop release-smoke pipeline", () => {
     const job = parsed.jobs?.["unsigned-desktop-release-smoke"];
     expect(job?.["runs-on"]).toBe("macos-15");
     expect(job?.defaults?.run?.["working-directory"]).toBe("apps/neondiff-desktop");
+    const checkout = job?.steps?.find((step) => step.name === "Checkout");
+    expect(checkout?.with?.ref).toBe("${{ github.sha }}");
 
     for (const command of [
       "node-version: 26",
