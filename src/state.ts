@@ -341,6 +341,11 @@ export interface ProviderCooldownReviewRecord extends StoredProcessedReviewRecor
 
 export type DaemonHeartbeatEvent = "daemon_cycle_start" | "daemon_cycle_progress" | "daemon_cycle_complete" | "daemon_cycle_failed";
 export type DaemonHeartbeatFailureCode = "issue_enrichment_failed" | "daemon_cycle_failed";
+export type DaemonReviewLane = "active" | "held";
+
+export function normalizeDaemonReviewLane(value: unknown): DaemonReviewLane | undefined {
+  return value === "active" || value === "held" ? value : undefined;
+}
 
 export function normalizeDaemonHeartbeatError(event: DaemonHeartbeatEvent | string | null | undefined, error: unknown): DaemonHeartbeatFailureCode | undefined {
   if (error === "issue_enrichment_failed") return "issue_enrichment_failed";
@@ -354,6 +359,7 @@ export interface DaemonHeartbeatRecord {
   cycle: number;
   event: DaemonHeartbeatEvent;
   dryRun: boolean;
+  reviewLane?: DaemonReviewLane;
   runId?: string;
   recordedAt?: Date;
   error?: string;
@@ -363,6 +369,7 @@ export interface StoredDaemonHeartbeatRecord {
   cycle: number;
   event: DaemonHeartbeatEvent;
   dryRun: boolean;
+  reviewLane?: DaemonReviewLane;
   recordedAt: string;
   error?: string;
   startedCycle?: number;
@@ -677,6 +684,7 @@ export class ReviewStateStore {
         cycle integer,
         event text,
         dry_run integer,
+        review_lane text,
         recorded_at text,
         error text,
         started_cycle integer,
@@ -3322,6 +3330,7 @@ export class ReviewStateStore {
   recordDaemonHeartbeat(record: DaemonHeartbeatRecord): void {
     const recordedAt = (record.recordedAt ?? new Date()).toISOString();
     const error = normalizeDaemonHeartbeatError(record.event, record.error);
+    const reviewLane = normalizeDaemonReviewLane(record.reviewLane) ?? null;
     if (record.event === "daemon_cycle_start") {
       const runId = record.runId ?? null;
       const current = this.db.prepare(
@@ -3332,25 +3341,27 @@ export class ReviewStateStore {
       this.db
         .prepare(
           `insert into daemon_heartbeat
-            (id, started_cycle, started_at, run_id, last_progress_at, completed_at)
-           values (1, ?, ?, ?, null, null)
+            (id, started_cycle, started_at, run_id, review_lane, last_progress_at, completed_at)
+           values (1, ?, ?, ?, ?, null, null)
            on conflict(id) do update set
              started_cycle = excluded.started_cycle, started_at = excluded.started_at,
              run_id = excluded.run_id, cycle = null, event = null, dry_run = null,
-             recorded_at = null, error = null, last_progress_at = null, completed_at = null`
+             review_lane = excluded.review_lane, recorded_at = null, error = null,
+             last_progress_at = null, completed_at = null`
         )
-        .run(record.cycle, recordedAt, runId);
+        .run(record.cycle, recordedAt, runId, reviewLane);
       return;
     }
 
     if (record.event === "daemon_cycle_progress") {
       this.db.prepare(
         `update daemon_heartbeat set
-           cycle = ?, event = ?, dry_run = ?, recorded_at = ?, error = coalesce(?, error), last_progress_at = ?
+           cycle = ?, event = ?, dry_run = ?, review_lane = coalesce(?, review_lane),
+           recorded_at = ?, error = coalesce(?, error), last_progress_at = ?
          where id = 1 and (event is null or event not in ('daemon_cycle_complete', 'daemon_cycle_failed'))
            and run_id is ? and completed_at is null and started_at is not null
            and ? >= started_at and (last_progress_at is null or last_progress_at <= ?)`
-      ).run(record.cycle, record.event, record.dryRun ? 1 : 0, recordedAt, error ?? null, recordedAt,
+      ).run(record.cycle, record.event, record.dryRun ? 1 : 0, reviewLane, recordedAt, error ?? null, recordedAt,
         record.runId ?? null, recordedAt, recordedAt);
       return;
     }
@@ -3358,10 +3369,11 @@ export class ReviewStateStore {
     this.db
       .prepare(
         `insert into daemon_heartbeat
-          (id, cycle, event, dry_run, recorded_at, error, started_cycle, started_at, run_id, completed_at)
-         values (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, cycle, event, dry_run, review_lane, recorded_at, error, started_cycle, started_at, run_id, completed_at)
+         values (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(id) do update set
            cycle = excluded.cycle, event = excluded.event, dry_run = excluded.dry_run,
+           review_lane = coalesce(excluded.review_lane, daemon_heartbeat.review_lane),
            recorded_at = excluded.recorded_at, error = coalesce(excluded.error, daemon_heartbeat.error),
            completed_at = excluded.completed_at
          where (daemon_heartbeat.event is null or daemon_heartbeat.event not in ('daemon_cycle_complete', 'daemon_cycle_failed')) and daemon_heartbeat.run_id is excluded.run_id and daemon_heartbeat.completed_at is null
@@ -3373,6 +3385,7 @@ export class ReviewStateStore {
         record.cycle,
         record.event,
         record.dryRun ? 1 : 0,
+        reviewLane,
         recordedAt,
         error ?? null,
         record.cycle,
@@ -3386,7 +3399,7 @@ export class ReviewStateStore {
     const row = this.db
       .prepare(
         `select cycle, event, dry_run, recorded_at, error, started_cycle, started_at,
-                run_id, last_progress_at, completed_at
+                review_lane, run_id, last_progress_at, completed_at
          from daemon_heartbeat
          where id = 1 and recorded_at is not null
          limit 1`
@@ -3697,7 +3710,7 @@ export class ReviewStateStore {
     const names = new Set(columns.map((column) => column.name));
     const additions = [
       ["started_cycle", "integer"], ["started_at", "text"], ["run_id", "text"],
-      ["last_progress_at", "text"], ["completed_at", "text"]
+      ["last_progress_at", "text"], ["completed_at", "text"], ["review_lane", "text"]
     ].filter(([name]) => !names.has(name!));
     if (additions.length === 0) return;
     try {
@@ -4302,6 +4315,7 @@ interface DaemonHeartbeatRow {
   cycle: number | null;
   event: DaemonHeartbeatEvent | null;
   dry_run: number | null;
+  review_lane: string | null;
   recorded_at: string | null;
   error: string | null;
   started_cycle: number | null;
@@ -4655,10 +4669,12 @@ function readableQueueText(value: unknown): string {
 
 function mapDaemonHeartbeatRow(row: DaemonHeartbeatRow): StoredDaemonHeartbeatRecord {
   const error = normalizeDaemonHeartbeatError(row.event, row.error);
+  const reviewLane = normalizeDaemonReviewLane(row.review_lane);
   return {
     cycle: row.cycle!,
     event: row.event!,
     dryRun: row.dry_run === 1,
+    ...(reviewLane ? { reviewLane } : {}),
     recordedAt: row.recorded_at!,
     ...(error ? { error } : {}),
     ...(row.started_cycle !== null ? { startedCycle: row.started_cycle } : {}),

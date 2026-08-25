@@ -5004,9 +5004,56 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(status.gates).toContainEqual({
       name: "daemon_heartbeat_recent",
       ok: true,
-      detail: "fresh; age 1000ms; max 120000ms; event daemon_cycle_complete; cycle 5"
+      detail: "fresh; age 1000ms; max 120000ms; event daemon_cycle_complete; cycle 5; review lane held"
     });
     expect(status.database.skippedCount).toBe(16);
+  });
+
+  it("keeps held daemon liveness healthy without claiming background PR authority", () => {
+    const statusFor = (reviewLane: "held" | "active" | "unknown") => buildReleaseStatus({
+      repo: {
+        branch: "main",
+        head: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+        dirtyFiles: []
+      },
+      expectedHead: "fcb9484b904a5e4225dc0446b50d5dd83972bb5d",
+      configPath: "/config/live.json",
+      launchd: {
+        label: "com.electricsheephq.evaos-code-review-bot",
+        state: "running",
+        configPath: "/config/live.json",
+        dryRun: false,
+        usesSystemCa: true
+      },
+      database: { rowCount: 0, errorCount: 0 },
+      heartbeat: { ...freshHeartbeat(), reviewLane },
+      now: new Date("2026-07-01T00:00:00.000Z")
+    });
+
+    const held = statusFor("held");
+    expect(held.ok).toBe(true);
+    expect(held.gates).toContainEqual({
+      name: "background_pr_lane",
+      ok: true,
+      detail: "held; live PR posts require separate exact scoped review-pr proof"
+    });
+    expect(held.gates).toContainEqual(expect.objectContaining({
+      name: "daemon_heartbeat_recent",
+      ok: true,
+      detail: expect.stringContaining("review lane held")
+    }));
+
+    for (const reviewLane of ["active", "unknown"] as const) {
+      const status = statusFor(reviewLane);
+      expect(status.ok).toBe(false);
+      expect(status.gates).toContainEqual({
+        name: "background_pr_lane",
+        ok: false,
+        detail: reviewLane === "active"
+          ? "active background PR lane is not permitted; use exact scoped review-pr"
+          : "unknown background PR lane; wait for a classified heartbeat"
+      });
+    }
   });
 
   it("reports active provider cooldown skips without treating them as blocking DB errors", () => {
@@ -6955,6 +7002,7 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
         cycle: 5,
         event: "daemon_cycle_complete",
         dryRun: false,
+        reviewLane: "held",
         activeCycle: 6,
         activeStartedAt: "2026-06-30T23:59:00.000Z",
         activeAgeMs: 60_000
@@ -6966,11 +7014,63 @@ gui/502/com.electricsheephq.evaos-code-review-bot = {
     expect(status.gates).toContainEqual({
       name: "daemon_heartbeat_recent",
       ok: true,
-      detail: "active; active age 60000ms; max 420000ms; started cycle 6; last event daemon_cycle_complete; last cycle 5"
+      detail: "active; active age 60000ms; max 420000ms; started cycle 6; last event daemon_cycle_complete; last cycle 5; review lane held"
     });
   });
+
+  it("reads held heartbeat state and maps malformed or legacy lane state to unknown", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-status-review-lane-"));
+    roots.push(root);
+    const dbPath = join(root, "state.sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      create table processed_reviews (
+        repo text, pull_number integer, head_sha text, status text, error text, created_at text
+      );
+      create table daemon_heartbeat (
+        id integer primary key, cycle integer, event text, dry_run integer,
+        review_lane text, recorded_at text, error text, started_cycle integer,
+        started_at text, run_id text, last_progress_at text, completed_at text
+      );
+    `);
+    db.prepare(`insert into daemon_heartbeat
+      (id, cycle, event, dry_run, review_lane, recorded_at, started_cycle, started_at, run_id, completed_at)
+      values (1, 3, 'daemon_cycle_complete', 0, ?, ?, 3, ?, 'run-3', ?)`)
+      .run(
+        "held",
+        "2026-07-02T00:00:00.000Z",
+        "2026-07-01T23:59:00.000Z",
+        "2026-07-02T00:00:00.000Z"
+      );
+    db.close();
+
+    const collect = () => collectReleaseStatus({
+      cwd: repoRoot,
+      statePath: dbPath,
+      configPath: join(root, "missing.json"),
+      launchdLabel: "worker",
+      now: new Date("2026-07-02T00:00:01.000Z")
+    });
+    const held = collect();
+    expect(held.heartbeat).toMatchObject({ status: "fresh", reviewLane: "held" });
+    expect(held.gates).toContainEqual(expect.objectContaining({
+      name: "background_pr_lane",
+      ok: true
+    }));
+
+    const writer = new DatabaseSync(dbPath);
+    writer.prepare("update daemon_heartbeat set review_lane = ?").run("forged-active");
+    writer.close();
+    const malformed = collect();
+    expect(malformed.heartbeat.reviewLane).toBe("unknown");
+    expect(malformed.gates).toContainEqual(expect.objectContaining({
+      name: "background_pr_lane",
+      ok: false
+    }));
+  });
+
   it("keeps legacy history readable while newer starts are active", () => { const root = mkdtempSync(join(tmpdir(), "release-status-safe-heartbeat-")); roots.push(root); const dbPath = join(root, "state.sqlite"); const db = new DatabaseSync(dbPath); db.exec("create table processed_reviews (repo text, pull_number integer, head_sha text, status text, error text, created_at text); create table daemon_heartbeat (id integer primary key, cycle integer, event text, dry_run integer, recorded_at text, error text, started_cycle integer, started_at text, run_id text, last_progress_at text, completed_at text)"); db.prepare("insert into daemon_heartbeat values (1,?,?,?,?,?,?,?,?,?,?)").run(7, "daemon_cycle_failed", 0, "2026-07-01T23:57:00.000Z", "review failed for owner/private-repo PR-42", 7, "2026-07-01T23:57:00.000Z", null, null, null); db.close();
-    const collect = (at = "2026-07-02T00:00:00.000Z") => collectReleaseStatus({ cwd: repoRoot, statePath: dbPath, configPath: join(root, "missing.json"), launchdLabel: "worker", now: new Date(at) }); const history = collect(); expect(history.heartbeat).toMatchObject({ status: "fresh", error: "daemon_cycle_failed", completedAt: "2026-07-01T23:57:00.000Z" }); expect(JSON.stringify(history)).not.toContain("owner/private-repo");
+    const collect = (at = "2026-07-02T00:00:00.000Z") => collectReleaseStatus({ cwd: repoRoot, statePath: dbPath, configPath: join(root, "missing.json"), launchdLabel: "worker", now: new Date(at) }); const history = collect(); expect(history.heartbeat).toMatchObject({ status: "fresh", error: "daemon_cycle_failed", reviewLane: "unknown", completedAt: "2026-07-01T23:57:00.000Z" }); expect(history.gates).toContainEqual(expect.objectContaining({ name: "background_pr_lane", ok: false })); expect(JSON.stringify(history)).not.toContain("owner/private-repo");
     const writer = new DatabaseSync(dbPath); writer.prepare("update daemon_heartbeat set cycle=?, started_cycle=?, started_at=?, run_id=?").run(8, 8, "2026-07-01T23:59:00.000Z", "run-8"); writer.close(); const active = collect(); expect(active.heartbeat).toMatchObject({ status: "active", activeCycle: 8, activeRunId: "run-8", activeStartedAt: "2026-07-01T23:59:00.000Z", activeTotalAgeMs: 60_000, activeAgeMs: 60_000 }); expect(active.heartbeat.completedAt).toBeUndefined();
     const future = new DatabaseSync(dbPath); future.prepare("update daemon_heartbeat set recorded_at=?").run("2026-07-02T00:01:00.000Z"); future.close(); expect(collect().heartbeat.status).toBe("stale"); });
 });
@@ -6983,7 +7083,8 @@ function freshHeartbeat() {
     ageMs: 1_000,
     cycle: 5,
     event: "daemon_cycle_complete",
-    dryRun: false
+    dryRun: false,
+    reviewLane: "held" as const
   };
 }
 

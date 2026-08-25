@@ -278,7 +278,7 @@ describe("daemon cycle resilience", () => {
   });
 
   it("records start and completion heartbeat events for successful cycles", async () => {
-    const heartbeats: Array<{ event: string; runId?: string }> = [];
+    const heartbeats: Array<{ event: string; runId?: string; reviewLane?: string }> = [];
 
     const result = await runDaemonCycle({
       cycle: 2,
@@ -329,7 +329,9 @@ describe("daemon cycle resilience", () => {
           other: 0
         }
       }),
-      recordHeartbeatImpl: (event, _error, runId) => heartbeats.push({ event, runId }),
+      recordHeartbeatImpl: (event, _error, runId, reviewLane) => {
+        heartbeats.push({ event, runId, reviewLane });
+      },
       stdout: () => undefined,
       stderr: () => undefined
     });
@@ -337,6 +339,7 @@ describe("daemon cycle resilience", () => {
     expect(result.ok).toBe(true);
     expect(heartbeats.map(({ event }) => event)).toEqual(["daemon_cycle_start", "daemon_cycle_progress", "daemon_cycle_complete"]);
     expect(new Set(heartbeats.map(({ runId }) => runId)).size).toBe(1);
+    expect(new Set(heartbeats.map(({ reviewLane }) => reviewLane))).toEqual(new Set(["active"]));
     expect(heartbeats[0]?.runId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
@@ -530,6 +533,7 @@ describe("daemon cycle resilience", () => {
   it("holds PR review work while preserving live issue enrichment", async () => {
     const stdout: string[] = [];
     const calls = { review: 0, retry: 0, enrichment: 0 };
+    const heartbeatReviewLanes: Array<string | undefined> = [];
 
     const result = await runDaemonCycle({
       cycle: 13,
@@ -553,7 +557,9 @@ describe("daemon cycle resilience", () => {
         expect(options.dryRun).toBe(false);
         return successfulIssueEnrichmentCycleResult();
       },
-      recordHeartbeatImpl: () => undefined,
+      recordHeartbeatImpl: (_event, _error, _runId, reviewLane) => {
+        heartbeatReviewLanes.push(reviewLane);
+      },
       stdout: (line) => stdout.push(line),
       stderr: () => undefined
     });
@@ -583,6 +589,7 @@ describe("daemon cycle resilience", () => {
       }
     });
     expect(calls).toEqual({ review: 0, retry: 0, enrichment: 1 });
+    expect(new Set(heartbeatReviewLanes)).toEqual(new Set(["held"]));
     expect(stdout.map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
       expect.objectContaining({
         event: "daemon_review_lane_held",
