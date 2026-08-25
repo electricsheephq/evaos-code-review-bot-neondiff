@@ -32,6 +32,7 @@ export function shouldExitDaemonAfterFailedCycle(result: DaemonCycleResult, runO
 export interface RunDaemonCycleOptions {
   cycle: number;
   dryRun: boolean;
+  reviewLane?: "active" | "held";
   configPath?: string;
   pilotRepos: string[];
   monitoredRepos: string[];
@@ -137,6 +138,25 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     ? runIssueEnrichmentLane({ input, admissions, stdout, stderr, recordHeartbeat, heartbeatRunId })
     : Promise.resolve();
 
+  if (input.reviewLane === "held") {
+    stdout(formatDaemonLog({
+      event: "daemon_review_lane_held",
+      cycle: input.cycle,
+      dryRun: input.dryRun,
+      reason: "scoped_review_required"
+    }));
+    await issueEnrichmentPromise;
+    const result = emptyRunOnceResult();
+    stdout(formatDaemonLog({
+      event: "daemon_cycle_complete",
+      cycle: input.cycle,
+      dryRun: input.dryRun,
+      result
+    }));
+    recordHeartbeat("daemon_cycle_complete", undefined, heartbeatRunId);
+    return { ok: true, result };
+  }
+
   try {
     const result = await runOnceImpl({
       configPath: input.configPath,
@@ -200,6 +220,30 @@ export async function runDaemonCycle(input: RunDaemonCycleOptions): Promise<Daem
     recordHeartbeat("daemon_cycle_failed", "daemon_cycle_failed", heartbeatRunId);
     return { ok: false, failureKind: "runtime_failure", error: message };
   }
+}
+
+function emptyRunOnceResult(): RunOnceResult {
+  return {
+    reposScanned: 0,
+    pullsSeen: 0,
+    reviewed: 0,
+    failed: 0,
+    skippedDraft: 0,
+    skippedCanary: 0,
+    skippedPolicy: 0,
+    skippedLicenseGate: 0,
+    skippedCommandStop: 0,
+    skippedCommandExplain: 0,
+    skippedFinishingTouchDraft: 0,
+    commandReviewRequested: 0,
+    skippedProcessed: 0,
+    skippedCapacity: 0,
+    skippedContextBudget: 0,
+    skippedProviderCooldown: 0,
+    skippedStaleHead: 0,
+    baselinedExisting: 0,
+    policySkips: []
+  };
 }
 
 export function cleanupReviewWorktreesFromConfig(input: {
