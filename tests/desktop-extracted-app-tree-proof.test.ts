@@ -221,6 +221,8 @@ describe("authenticated exact-ZIP app tree and plist proof", () => {
       proofFixture("1.1.0", "", Buffer.from("bplist00hostile")),
       proofFixture("1.1.0", "", plist("1.1.0").replace(plistDoctype, '<!DOCTYPE plist [<!ENTITY x "hostile">]>')),
       proofFixture("1.1.0", "", Buffer.from(plist("1.1.0"), "utf16le")),
+      proofFixture("1.1.0", "", plist("1.1.0").replace('encoding="UTF-8"', 'encoding="ISO-8859-1"')),
+      proofFixture("1.1.0", "", plist("1.1.0").replace('encoding="UTF-8"', 'encoding="windows-1252"')),
       proofFixture("1.2.0"),
       proofFixture("1.1.0", "", plist("1.1.0").replace("com.electricsheephq.NeonDiffDesktop", "com.example.Wrong")),
       proofFixture("1.1.0", "", plist("1.1.0").replace("11091", "not-a-build"))

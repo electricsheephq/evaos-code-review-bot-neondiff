@@ -16,13 +16,17 @@ const SHA1 = /^[a-f0-9]{40}$/, SHA256 = /^[a-f0-9]{64}$/, TREE_KIND = "neondiff.
 const TREE_FIELDS = ["schemaVersion", "kind", "verified", "algorithm", "sourceSHA", "artifactSHA256", "artifactByteLength", "treeSHA256", "records", "bundleMarkers", "appleDouble"];
 const authenticatedTreeProofs = new WeakSet();
 const PLIST_PARSER = String.raw`
-import json, plistlib, sys, xml.etree.ElementTree as ET
+import json, plistlib, re, sys, xml.etree.ElementTree as ET
 raw = sys.stdin.buffer.read(1048577)
 if len(raw) > 1048576 or raw.startswith(b"bplist00"):
     raise ValueError("unsupported plist")
 try:
     text = raw.decode("utf-8")
 except UnicodeDecodeError:
+    raise ValueError("unsupported plist encoding")
+declaration = re.match(r"^\s*<\?xml\s+[^?]*\?>", text, re.IGNORECASE)
+encoding = re.search(r"\bencoding\s*=\s*(['\"])([^'\"]+)\1", declaration.group(0), re.IGNORECASE) if declaration else None
+if encoding and encoding.group(2).lower() != "utf-8":
     raise ValueError("unsupported plist encoding")
 doctype = '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
 if text.startswith("\ufeff") or "\x00" in text or "<!ENTITY" in text or ("<!DOCTYPE" in text and (text.count("<!DOCTYPE") != 1 or text.count(doctype) != 1)):
