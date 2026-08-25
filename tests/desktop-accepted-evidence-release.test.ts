@@ -224,7 +224,7 @@ describe("retained accepted Desktop evidence", () => {
     expect(workflowSource).toContain("[.assets[].name | select(test(\"^[a-f0-9]{64}");
     expect(workflowSource).toContain("test \"$PACKET_NAME\" = \"$CURRENT_PACKET_NAME\"");
     expect(workflowSource).toContain("test \"$(jq -er '.workflowSourceSHA' <<< \"$RETENTION_RESULT\")\" = \"$GITHUB_SHA\"");
-    const immutableSettingCheck = workflowSource.indexOf('gh api "repos/$REPOSITORY/immutable-releases" --silent'), releaseCreation = workflowSource.indexOf('gh release create "$EVIDENCE_TAG"'); expect(immutableSettingCheck).toBeGreaterThan(-1); expect(immutableSettingCheck).toBeLessThan(releaseCreation);
+    expect(workflowSource).not.toContain('gh api "repos/$REPOSITORY/immutable-releases" --silent');
     expect(workflowSource).toContain("gh release download \"$RELEASE_TAG\"");
     expect(workflowSource).toContain("--artifact \"$RETRIEVED_ROOT/$ARTIFACT_NAME\"");
     expect(workflowSource.indexOf("Verify artifact attestation and build accepted packet")).toBeLessThan(workflowSource.indexOf("Upload source-bound packet evidence"));
