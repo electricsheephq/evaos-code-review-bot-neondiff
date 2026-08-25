@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { parseAcceptedDesktopReleasePacket } from "./lib/desktop-accepted-release-packet.mjs";
+import { parseAcceptedDesktopTransitionTarget } from "./lib/desktop-accepted-transition-target.mjs";
 
 const BETA_FEED = "https://www.neondiff.com/updates/beta/appcast.xml", STABLE_FEED = "https://www.neondiff.com/updates/stable/appcast.xml";
 const MAX_SAFE = "9007199254740991";
+const MAX_INPUT = 4 * 1024 * 1024;
 const { default: Ajv } = createRequire(import.meta.url)("ajv/dist/2020.js");
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
 const ajv = new Ajv({ allErrors: true, strict: true });
@@ -39,19 +43,21 @@ function rejectDuplicateKeys(raw) {
     const keys = objects.at(-1); if (keys.has(key)) fail(`duplicate object key: ${key}`); keys.add(key);
   }
 }
+function sameFile(left, right) { return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs; }
 function readRawRegular(path) {
   let fd;
   try {
     fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    if (!fstatSync(fd).isFile()) fail(`non-regular file: ${path}`);
-    const raw = readFileSync(fd, "utf8");
+    const before = fstatSync(fd, { bigint: true }); if (!before.isFile() || before.size > BigInt(MAX_INPUT)) fail(`non-regular or oversized file: ${path}`);
+    const bytes = readFileSync(fd), after = fstatSync(fd, { bigint: true }); if (!after.isFile() || !sameFile(before, after) || BigInt(bytes.length) !== before.size) fail(`file changed during read: ${path}`);
+    const raw = bytes.toString("utf8"); if (!Buffer.from(raw, "utf8").equals(bytes)) fail(`invalid UTF-8 file: ${path}`);
     if (/(?:"build"\s*:\s*(?!"[0-9]+")|"sequence"\s*:\s*(?!"[0-9]+"|null))/.test(raw)) fail("identity fields must be quoted decimal text or null sequence");
     rejectDuplicateKeys(raw);
-    return raw;
+    return { bytes, raw };
   } catch (error) { if (error?.code === "ELOOP") fail(`symlink or non-regular file: ${path}`); throw error; }
   finally { if (fd !== undefined) closeSync(fd); }
 }
-function readRegular(path) { return JSON.parse(readRawRegular(path)); }
+function readRegular(path) { return JSON.parse(readRawRegular(path).raw); }
 function openDirectory(path) {
   let fd;
   try {
@@ -70,6 +76,48 @@ function pathIn(directory, name) {
 }
 function check(value, valid, label) { if (!valid(value)) fail(`${label} schema invalid: ${ajv.errorsText(valid.errors)}`); }
 function buildCompare(a, b) { const left = BigInt(a), right = BigInt(b); return left < right ? -1 : left > right ? 1 : 0; }
+function targetFiles(directory, missingAllowed = false) {
+  let handle;
+  try { handle = openDirectory(directory); }
+  catch (error) { if (missingAllowed && error?.code === "ENOENT") return null; throw error; }
+  const files = new Map(); let convention = false;
+  try {
+    const entries = readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || !entry.isFile()) fail(`invalid accepted target entry: ${entry.name}`);
+      const evidence = readRawRegular(resolve(directory, entry.name));
+      if (entry.name === ".gitkeep") { if (evidence.bytes.length !== 0) fail("accepted target empty convention must be empty"); convention = true; continue; }
+      const match = entry.name.match(/^([a-f0-9]{64})\.(packet|target)\.json$/);
+      if (!match || createHash("sha256").update(evidence.bytes).digest("hex") !== match[1]) fail(`accepted target content address invalid: ${entry.name}`);
+      const value = match[2] === "packet" ? parseAcceptedDesktopReleasePacket(evidence.bytes) : parseAcceptedDesktopTransitionTarget(evidence.bytes);
+      files.set(entry.name, { bytes: evidence.bytes, type: match[2], value });
+    }
+    if (convention !== (files.size === 0) || convention && entries.length !== 1) fail("accepted target .gitkeep is only valid for empty history");
+    if (!sameDirectory(directory, handle.stat)) fail("accepted target directory changed during validation");
+    return { files, convention };
+  } finally { closeSync(handle.fd); }
+}
+function packetRecord(history, digest, label) {
+  const record = history.files.get(`${digest}.packet.json`);
+  if (!record || record.type !== "packet") fail(`${label} references missing packet history`);
+  return record.value;
+}
+function comparePacketIdentity(receipt, packet, label) {
+  for (const field of ["tag", "version", "build", "channel", "sourceSHA", "tagObjectSHA", "artifactSHA256", "treeSHA256"]) if (receipt[field] !== packet[field]) fail(`${label} disagrees with referenced packet`);
+}
+function validateTargetHistory(root, baseRoot, initial) {
+  const current = targetFiles(resolve(root, "accepted-targets"));
+  if (initial && !current.convention) fail("initial history requires empty accepted target history");
+  for (const record of current.files.values()) if (record.type === "target") {
+    const target = packetRecord(current, record.value.acceptedTarget.packetSHA256, "accepted target"), currentPacket = packetRecord(current, record.value.current.packetSHA256, "accepted current release");
+    comparePacketIdentity(record.value.acceptedTarget, target, "accepted target"); comparePacketIdentity(record.value.current, currentPacket, "accepted current release");
+    if (record.value.previouslyAcceptedTargetPacketSHA256 !== null) packetRecord(current, record.value.previouslyAcceptedTargetPacketSHA256, "previous accepted target");
+  }
+  if (!baseRoot) return;
+  const base = targetFiles(resolve(baseRoot, "accepted-targets"), true);
+  if (!base) { if (current.files.size) fail("accepted target history comparison is unavailable"); return; }
+  for (const [name, value] of base.files) { const retained = current.files.get(name); if (!retained || !retained.bytes.equals(value.bytes)) fail(`accepted target history rewritten: ${name}`); }
+}
 function validateTransition(index, directory, baseIndexPath) {
   const base = readRegular(baseIndexPath);
   check(base, validateIndex, "base index");
@@ -79,7 +127,7 @@ function validateTransition(index, directory, baseIndexPath) {
   const baseDirectory = resolve(dirname(baseIndexPath), base.declarationDirectory), baseHandle = openDirectory(baseDirectory);
   try {
     for (const name of base.declarationPaths) {
-      if (readRawRegular(pathIn(directory, name)) !== readRawRegular(pathIn(baseDirectory, name))) fail(`retained declaration rewritten: ${name}`);
+      if (!readRawRegular(pathIn(directory, name)).bytes.equals(readRawRegular(pathIn(baseDirectory, name)).bytes)) fail(`retained declaration rewritten: ${name}`);
     }
     if (!sameDirectory(baseDirectory, baseHandle.stat)) fail("base declaration directory changed during validation");
   } finally { closeSync(baseHandle.fd); }
@@ -96,6 +144,7 @@ function main() {
   const { indexPath, baseIndexPath, initial } = parseArgs(), index = readRegular(indexPath);
   check(index, validateIndex, "index");
   if (initial && index.status !== "empty") fail("initial history requires the empty clean-checkout convention");
+  validateTargetHistory(dirname(indexPath), baseIndexPath ? dirname(baseIndexPath) : null, initial);
   const directory = resolve(dirname(indexPath), index.declarationDirectory), handle = openDirectory(directory);
   try {
     const entries = readdirSync(directory, { withFileTypes: true }), listed = new Set(index.declarationPaths);
