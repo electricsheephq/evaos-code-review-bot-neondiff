@@ -14,6 +14,10 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    outputs:
+      artifact_source_sha: ${{ steps.release.outputs.artifact_source_sha }}
+      packet_name: ${{ steps.packet.outputs.packet_name }}
+      bundle_name: ${{ steps.packet.outputs.bundle_name }}
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: macos-15
     timeout-minutes: 30
@@ -144,6 +148,7 @@ jobs:
             printf 'packet_root=%s\n' "$PACKET_ROOT"
             printf 'artifact_path=%s\n' "$ARTIFACT_PATH"
             printf 'predicate_path=%s\n' "$PREDICATE_PATH"
+            printf 'artifact_source_sha=%s\n' "$SOURCE_SHA"
           } >> "$GITHUB_OUTPUT"
 
       - name: Attest exact signed artifact source binding
@@ -179,6 +184,8 @@ jobs:
           {
             printf 'packet_path=%s\n' "$PACKET_PATH"
             printf 'bundle_path=%s\n' "$BUNDLE_PATH"
+            printf 'packet_name=%s\n' "$PACKET_NAME"
+            printf 'bundle_name=%s\n' "$BUNDLE_NAME"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload source-bound packet evidence
@@ -190,3 +197,113 @@ jobs:
             ${{ steps.packet.outputs.bundle_path }}
           if-no-files-found: error
           retention-days: 30
+
+  retain-accepted-packet:
+    name: Retain exact accepted packet in immutable release
+    needs: promote-stable-artifact
+    permissions:
+      contents: write
+      attestations: read
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REPOSITORY: electricsheephq/evaos-code-review-bot-neondiff
+      REPOSITORY_OWNER: electricsheephq
+      REPOSITORY_NAME: evaos-code-review-bot-neondiff
+      SOURCE_REF: refs/heads/main
+      SIGNER_WORKFLOW: electricsheephq/evaos-code-review-bot-neondiff/.github/workflows/desktop-accepted-release-packet.yml
+      EVIDENCE_TAG: neondiff-accepted-packet-v1.1.0
+      EVIDENCE_RELEASE_NAME: NeonDiff accepted packet evidence v1.1.0
+      ARTIFACT_SOURCE_SHA: ${{ needs.promote-stable-artifact.outputs.artifact_source_sha }}
+      PACKET_NAME: ${{ needs.promote-stable-artifact.outputs.packet_name }}
+      BUNDLE_NAME: ${{ needs.promote-stable-artifact.outputs.bundle_name }}
+    steps:
+      - name: Checkout exact retention verifier
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 26
+
+      - name: Download current-run accepted evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: desktop-source-bound-packet-v1.1.0-${{ github.sha }}
+          path: ${{ runner.temp }}/desktop-source-bound-packet
+
+      - name: Publish once and reload exact immutable evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_ACTIONS" = "true"
+          test "$RUNNER_ENVIRONMENT" = "github-hosted"
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REF" = "$SOURCE_REF"
+          test "$GITHUB_WORKFLOW_REF" = "$SIGNER_WORKFLOW@$SOURCE_REF"
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          [[ "$ARTIFACT_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PACKET_NAME" =~ ^[a-f0-9]{64}\.packet\.json$ ]]
+          [[ "$BUNDLE_NAME" =~ ^[a-f0-9]{64}\.artifact-source-attestation\.json$ ]]
+
+          TRANSIT_ROOT="$RUNNER_TEMP/desktop-source-bound-packet"
+          PACKET_PATH="$TRANSIT_ROOT/$PACKET_NAME"
+          BUNDLE_PATH="$TRANSIT_ROOT/$BUNDLE_NAME"
+          test -f "$PACKET_PATH"
+          test -f "$BUNDLE_PATH"
+
+          METADATA_ROOT="$RUNNER_TEMP/desktop-accepted-evidence-metadata"
+          RETRIEVED_ROOT="$RUNNER_TEMP/desktop-accepted-evidence-retrieved"
+          mkdir -p "$METADATA_ROOT" "$RETRIEVED_ROOT"
+          PRESENCE_PATH="$METADATA_ROOT/presence.json"
+          # GraphQL variables must remain literal for gh.
+          # shellcheck disable=SC2016
+          gh api graphql \
+            -f query='query($owner:String!,$name:String!,$tag:String!,$ref:String!){repository(owner:$owner,name:$name){release(tagName:$tag){tagName isDraft isPrerelease} ref(qualifiedName:$ref){target{oid}}}}' \
+            -f owner="$REPOSITORY_OWNER" \
+            -f name="$REPOSITORY_NAME" \
+            -f tag="$EVIDENCE_TAG" \
+            -f ref="refs/tags/$EVIDENCE_TAG" > "$PRESENCE_PATH"
+          PRESENCE_STATE="$(jq -er 'if (.data.repository.release == null and .data.repository.ref == null) then "absent" elif (.data.repository.release != null and .data.repository.ref != null) then "present" else "partial" end' "$PRESENCE_PATH")"
+          case "$PRESENCE_STATE" in
+            absent)
+              gh release create "$EVIDENCE_TAG" "$PACKET_PATH" "$BUNDLE_PATH" \
+                --repo "$REPOSITORY" \
+                --target "$ARTIFACT_SOURCE_SHA" \
+                --title "$EVIDENCE_RELEASE_NAME" \
+                --notes "Immutable retained evidence for the accepted NeonDiff Desktop 1.1.0 packet. This is evidence, not a product release." \
+                --prerelease \
+                --latest=false
+              ;;
+            present) ;;
+            *)
+              echo "evidence release/tag state is partial; destructive replacement is forbidden" >&2
+              exit 1
+              ;;
+          esac
+
+          gh api "repos/$REPOSITORY/releases/tags/$EVIDENCE_TAG" > "$METADATA_ROOT/release.json"
+          gh api "repos/$REPOSITORY/git/ref/tags/$EVIDENCE_TAG" > "$METADATA_ROOT/tag-ref.json"
+          gh release download "$EVIDENCE_TAG" \
+            --repo "$REPOSITORY" \
+            --dir "$RETRIEVED_ROOT" \
+            --pattern "$PACKET_NAME" \
+            --pattern "$BUNDLE_NAME"
+          RETENTION_RESULT="$(node scripts/verify-desktop-accepted-evidence-release.mjs \
+            --packet "$RETRIEVED_ROOT/$PACKET_NAME" \
+            --bundle "$RETRIEVED_ROOT/$BUNDLE_NAME" \
+            --release "$METADATA_ROOT/release.json" \
+            --tag-ref "$METADATA_ROOT/tag-ref.json")"
+          test "$(jq -er '.retained' <<< "$RETENTION_RESULT")" = "true"
+          test "$(jq -er '.artifactSourceSHA' <<< "$RETENTION_RESULT")" = "$ARTIFACT_SOURCE_SHA"
+          test "$(jq -er '.packetFileName' <<< "$RETENTION_RESULT")" = "$PACKET_NAME"
+          test "$(jq -er '.artifactAttestationBundleFileName' <<< "$RETENTION_RESULT")" = "$BUNDLE_NAME"
+          printf '%s\n' "$RETENTION_RESULT"

@@ -120,6 +120,31 @@ that archive into fresh staging, computes the tree identity, and rejects any
 mismatch, unavailable/changed reference, untrusted location, or changed config.
 It contains references to secrets rather than secret values.
 
+For Desktop `1.1.0`, the canonical retained-evidence location is the immutable,
+evidence-only GitHub prerelease/tag
+`neondiff-accepted-packet-v1.1.0`. It is not the product release and is excluded
+from latest-release selection. It targets the packet's exact artifact source
+commit and contains exactly two assets: the content-addressed accepted packet
+and its content-addressed verified artifact-source-attestation bundle. The
+30-day Actions artifact is transit and convenience evidence only; expiry cannot
+remove the canonical pair.
+
+The producer job keeps read, OIDC, and attestation-write authority. Only its
+dependent retention job receives release-content write and attestation-read
+authority. That job may create the fixed evidence release once or verify an
+already exact immutable release. It must download the published assets into a
+fresh directory and re-prove the fixed repository, tag, commit, workflow,
+packet/bundle names, digests, sizes, and GitHub release attestation. A partial or
+mismatched release/tag fails closed; automation never overwrites, deletes, or
+rotates retained evidence.
+
+No workflow has retained-evidence deletion authority. Exceptional deletion is
+a separately reviewed repository-administrator action. GitHub permanently
+retires an immutable release tag after deletion, so any approved successor uses
+a new fixed identity and records why the prior evidence became unavailable.
+This authority does not permit deleting the stable product release, changing
+feed bytes, or replacing accepted packet bytes.
+
 ## Gates and single implementation path
 
 Mac promotion requires one tested implementation path owning preflight,
