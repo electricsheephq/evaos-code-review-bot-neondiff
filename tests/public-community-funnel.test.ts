@@ -136,6 +136,10 @@ describe("NeonDiff public community funnel", () => {
       expect(normalized).toMatch(
         /live PR posting.*exact scoped `?review-pr`?.*dry review.*explicit same-head confirmation/i
       );
+      expect(normalized).toMatch(/heartbeat proves service liveness only/i);
+      expect(normalized).toMatch(
+        /issue-enrichment success requires lane-specific/i
+      );
     }
   });
 

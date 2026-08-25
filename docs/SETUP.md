@@ -362,13 +362,15 @@ unsafe app/config/worker path, unavailable Keychain item, device mismatch, or
 launchd failure fails closed. Do not replace this with a `security -w` wrapper,
 export the key to disk, or weaken its Keychain access control.
 
-The installed LaunchAgent's background PR review lane remains held. Its daemon
-heartbeat is service and independently admitted issue-enrichment liveness only;
-it never authorizes a PR review or post. Live PR posting uses only the exact
-scoped `review-pr` dry review plus explicit same-head confirmation, and that
-matching approval is consumed atomically. **Install & Start** and
-**Start/Restart** therefore manage the background service; they do not bypass
-the separate **Run Dry Review** and **Post Live Review** controls.
+The installed LaunchAgent's background PR review lane remains held. A heartbeat
+proves service liveness only; issue-enrichment success requires lane-specific
+result evidence. The independently admitted issue-enrichment lane may run, but
+neither its admission nor the daemon heartbeat authorizes a PR review or post.
+Live PR posting uses only the exact scoped `review-pr` dry review plus explicit
+same-head confirmation, and that matching approval is consumed atomically.
+**Install & Start** and **Start/Restart** therefore manage the background
+service; they do not bypass the separate **Run Dry Review** and **Post Live
+Review** controls.
 
 After Checkout displays the one-shot NeonDiff Activation Key, return to the
 native **License** pane, paste the key, and choose **Continue with this key**,
